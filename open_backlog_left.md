@@ -2696,8 +2696,27 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 **LH-034 · Compression is never configured anywhere and there is no decision record**
 `catalog, medallion` · med
 
-- *Why open:* Listed Medium in §O1 with no note and no work. The setting is schema-resident, so retrofitting it later costs a rewrite and gets dearer with corpus size.
-- *Closes when:* Choose a compression configuration on the create path and record it in `docs/DECISIONS.md`.
+- *Why open:* Listed Medium in §O1 with no note and no work. The setting is schema-resident, so
+  retrofitting it later costs a rewrite and gets dearer with corpus size.
+- **WHAT THE DEFAULT ACTUALLY IS, from the vendored spec.** `lance_docs/file_format.md:679` gives
+  `lance-encoding:compression` a default of **`none`** — "Opt-in to general compression" — and :699
+  repeats it ("No general compression applied (default)"). So the estate stores general data
+  uncompressed today. It is NOT unencoded: the same table shows `lance-encoding:bss` defaulting to
+  `auto`, `rle-threshold` to `0.5` and `dict-values-compression` to `lz4` (:682, :681, :685), and :743
+  records that BSS only engages when `compression` is set to something other than `none` — so choosing a
+  scheme turns on more than the scheme.
+- **AND THE URGENCY PREMISE IS FALSE TODAY, measured 2026-09-16.** The row's cost argument is that the
+  retrofit "gets dearer with corpus size". The whole object store is **9.07 GB across 28,983 objects in
+  111 buckets**, of which **9.02 GB is `rask-observability`** — telemetry under a 14-day TTL, not
+  governed data. The lakehouse corpus is therefore about **50 MB**, and no other bucket exceeds 50 MB.
+  A rewrite of that is minutes, so this is a decision to take deliberately rather than urgently, and the
+  row should stop implying an accumulating debt that has not started accumulating.
+- *(Worth its own attention elsewhere: telemetry outweighs the governed corpus ~180:1. That is the TTL
+  doing its job on a small estate, not a lakehouse problem — but it is why "the estate's storage" and
+  "the lakehouse's storage" must never be quoted as one number.)*
+- *Closes when:* a scheme is chosen on the create path — noting that a non-`none` value also switches on
+  BSS — and recorded in `docs/DECISIONS.md` with the measured corpus size, so the next reader knows
+  whether the cost argument applied when it was taken.
 
 **LH-035 · The query door serves only the blob DESCRIPTOR shape with no `all_binary` opt-in, and `read_blob_ranges` is undocumented as the batched byte-fetch path**
 
