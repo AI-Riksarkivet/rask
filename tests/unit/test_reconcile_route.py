@@ -19,7 +19,16 @@ from pydantic import SecretStr
 
 from maintenance.api import routes
 from maintenance.core.config import MaintenanceSettings
+from maintenance.services.reconcile import ReconcileReport
 from service_kit.control_emit import NoopControlEmitter
+
+
+#: A HAND-ROLLED MIRROR OF THE REPORT DRIFTED, so these stubs return the real model. `_orphans_by_dataset`
+#: reads `orphan_files`, a field the mirror did not have, and both stubs raised `AttributeError` the day
+#: the summary grew — a double that must be edited whenever the thing it doubles grows is a double that
+#: will eventually not be. Any fixed stamp: the route never reads it, and a clock would make this
+#: non-deterministic.
+_CHECKED_AT = "2026-09-16T14:30:00+00:00"
 
 
 def _settings(**over: Any) -> MaintenanceSettings:
@@ -107,17 +116,7 @@ def test_the_route_hands_the_app_state_clients_to_the_reconciler(monkeypatch: py
         seen["control_root"] = kw.get("control_root")
         seen["fga_root_object"] = kw.get("fga_root_object")
 
-        class _R:
-            total = 0
-            counts: dict[str, int] = {}
-            unavailable: list[Any] = []
-            skipped: list[Any] = []
-            incomplete: list[Any] = []
-
-            def model_dump(self, **_kw: Any) -> dict[str, Any]:
-                return {"total": 0}
-
-        return _R()
+        return ReconcileReport(checked_at=_CHECKED_AT)
 
     monkeypatch.setattr(routes, "reconcile", fake_reconcile)
     settings = _settings(warehouses_enabled=True, fga_root_object="warehouse:custom")
@@ -344,17 +343,7 @@ def test_the_reconcile_route_is_reachable_over_http() -> None:
     app.dependency_overrides[require_dapr_token] = lambda: None
 
     async def stub(*_a: Any, **_kw: Any) -> Any:
-        class _R:
-            total = 0
-            counts: dict[str, int] = {}
-            unavailable: list[Any] = []
-            skipped: list[Any] = []
-            incomplete: list[Any] = []
-
-            def model_dump(self, **_kw: Any) -> dict[str, Any]:
-                return {"total": 0, "counts": {}}
-
-        return _R()
+        return ReconcileReport(checked_at=_CHECKED_AT)
 
     original = routes.reconcile
     routes.reconcile = cast(Any, stub)

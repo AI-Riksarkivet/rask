@@ -4464,6 +4464,17 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   already computes one (`DatasetOrphanScan.orphans`) and logs nothing on the success path — only
   `orphan_scan_skipped` / `unreadable` / `listing_failed` — so 932 findings across an unknown number of
   datasets is as far as any reader can get. That, not the bounded ten-name sample, is the gap.
+- **THAT GAP IS CLOSED: the drift summary now carries `orphans_by_dataset`.** Largest holder first,
+  because that is the order an operator works in; ten named and the tail as ONE entry carrying its own
+  count, so the shown numbers still sum to `counts["orphan_files"]` and a truncation cannot hide how
+  much it hid. Same bound and same argument as `_drift_names` — a drifting estate can carry thousands
+  of datasets and one WARNING must not become the report.
+  *It is diagnostic and not merely tidier*, which is why it belongs to this row rather than to a
+  logging cleanup: "44 datasets, the largest holding 300" separates newly-VISIBLE from newly-CREATED
+  where a single total cannot, and that is the exact question the 0 -> 932 jump left open. Gated by
+  `services/maintenance/tests/test_the_orphan_count_says_which_datasets_hold_them.py`, including that
+  the truncated tail's own count is right — a bounded list that does not admit its bound repeats the
+  failure one level up.
 - **`maintenance_refused_protected_base` is still half the estate's warnings — re-measured: 738 of
   1,356 WARN-or-worse lines in 25 minutes, 54%.** The row's 2026-09-11 position (10,461 of 20,740)
   holds unchanged on a different image and a different window, so it is structural rather than a spike.

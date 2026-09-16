@@ -21,6 +21,7 @@ default (`MAINTENANCE_TRASH_PURGE_ENABLED`), so the shipped configuration is sti
 
 import asyncio
 import logging
+from collections import Counter
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -170,6 +171,11 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             # an operator cannot act on, and the only place the identities existed was a cron response
             # body that nothing stores.
             "findings": _drift_names(report),
+            # The DISTRIBUTION beside the identities, because for this one category a bounded sample of
+            # NAMES answers neither "how bad is any of them" nor "how many are there" — see
+            # `_orphans_by_dataset`. Omitted entirely when the scan found nothing, so a clean tick does
+            # not carry an empty key that reads like a category nobody looked at.
+            **({"orphans_by_dataset": distribution} if (distribution := _orphans_by_dataset(report)) else {}),
         }
         # A category that could not be checked is NOT clean, so an unavailable/incomplete run is as
         # loud as a drifting one — otherwise a permanently-broken FGA connection reads as "no drift".
@@ -240,6 +246,37 @@ def _drift_names(report: ReconcileReport) -> dict[str, list[str]]:
         if len(findings) > _DRIFT_NAMES_PER_CATEGORY:
             ids.append(f"… {len(findings) - _DRIFT_NAMES_PER_CATEGORY} more (truncated)")
         named[category] = ids
+    return named
+
+
+#: How many datasets the orphan distribution names before it starts counting the rest. Same bound and
+#: same reason as `_DRIFT_NAMES_PER_CATEGORY`: a drifting estate can carry thousands and one WARNING
+#: must not become the report.
+_ORPHAN_DATASETS_NAMED = 10
+
+
+def _orphans_by_dataset(report: ReconcileReport) -> dict[str, int]:
+    """How many unreferenced files each dataset holds, largest first, with the tail COUNTED.
+
+    [[LH-094]]. `orphan_files: 932` with ten file paths out of 932 identifies neither the scale of any
+    one dataset's problem nor how many datasets are involved, and the per-dataset counts the scan
+    already computes (`DatasetOrphanScan.orphans`) reach no log on the success path. The distribution
+    is what makes the number actionable — and what makes it DIAGNOSTIC: measured 2026-09-16,
+    `orphan_files` went 0 -> 932 in one tick, and "44 datasets, the largest holding 300" separates
+    newly-VISIBLE from newly-CREATED where a single total cannot.
+
+    Largest first, because that is the order an operator works in. The tail is one entry carrying its
+    own count rather than silence: a truncation that hides how much it hid is the failure this summary
+    exists to end, and the shown numbers still sum to `counts["orphan_files"]` so a reader can
+    reconcile the two.
+    """
+    tally = Counter(orphan.dataset for orphan in report.orphan_files)
+    if not tally:
+        return {}
+    ranked = tally.most_common()
+    named = dict(ranked[:_ORPHAN_DATASETS_NAMED])
+    if remainder := ranked[_ORPHAN_DATASETS_NAMED:]:
+        named[f"… {len(remainder)} more datasets (truncated)"] = sum(count for _, count in remainder)
     return named
 
 
