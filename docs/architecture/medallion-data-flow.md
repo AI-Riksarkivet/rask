@@ -162,6 +162,58 @@ payload, so the probe reads a bounded window (64 rows, `_DERIVE_PROBE_ROWS`) rat
 When a deriver *matches*, the full read follows — and that read is unbounded by design, which is why
 derivation at corpus scale belongs on the distributed Ray lane rather than the in-process fallback.
 
+## 6a. The provenance recipe — what a NEW lane must stamp
+
+[[LH-014]]. This existed only in the code, so a lane author had to reconstruct it from
+`service_kit.lakehouse.stage_stamp` and `medallion/schemas/tier.py`. It is one function and three
+rules.
+
+**Every governed tier row is `{id, payload, stage, lineage, source_rowid}`**, and `payload` is OPAQUE —
+the transform declares its shape, the tier does not. Each of the other four earns its place:
+
+| column | why it is generic |
+| --- | --- |
+| `id` | selection is BY id, never by position — `read_blobs`/`take_blobs` drop null rows, so positional pairing misattributes every row after the first gap |
+| `stage` | the cascade multiplexes lanes onto shared topics; a row that cannot say which tier it is in cannot be routed or audited |
+| `lineage` | the producing run's provenance, as Lance JSONB. Gold is what an external consumer takes away, and provenance is unrecoverable once the row leaves the platform |
+| `source_rowid` | row-level provenance to the upstream's stable `_rowid`, **rooted at bronze** — what makes a gold row traceable to its bytes without a join through the graph |
+
+**Call one function.** `stamp_stage(table, *, stage, lineage="", dataset_id="")` threads `source_rowid`,
+(re)stamps `stage`, re-stamps the `lineage` document and re-declares the destination's canonical name.
+
+**Rule 1 — an absent value DROPS, it does not inherit.** The parent's document describes the parent's
+run and the parent's id names the parent's dataset, so leaving either on a child is a claim about the
+wrong object, and a reader cannot tell an inherited value from a declared one. All three fields follow
+this, which is why they are one function rather than three.
+
+**Rule 2 — `source_rowid` is minted once, at the first derive off bronze, and never re-minted.** An
+upstream that already carries it keeps it; re-minting from the immediate parent would silently reroot
+the chain one tier down, so a gold row would name a silver row rather than the bronze one it descends
+from. Minting requires the caller to have read with `with_row_id=True`. Head detection is the ABSENCE of
+`source_rowid`, which is exact in the steady state and self-heals after a mixed-version rollout.
+
+**Rule 3 — the stamp owns COLUMN ORDER, and a destination schema is derived from it.** `lance_ray`
+casts blocks to the destination by POSITION: on 2026-08-30 two hand-built orders for one dataset killed
+every tabular cascade at gold with `LanceError(Arrow): … field names are not matching`. Do not rebuild
+the order beside the stamp.
+
+**The trap that the stamp alone does not close.** `merge_insert` does not carry the source table's
+schema metadata onto the dataset (pylance 10.0.0), and the cascade's steady-state write is deliberately
+that merge — an overwrite re-mints every `_rowid` and the tier above resolves `source_rowid` against
+them. So a corrected `lineage.dataset_id` would land only on tiers created after it. `ensure_declared_
+dataset_id(uri, dataset_id)` fixes an existing dataset in place with a metadata-only commit: it touches
+one key, rewrites no data, re-mints no row id, and is idempotent, so the estate self-heals on every tick
+instead of needing a backfill.
+
+**Cardinality is declared, and an unknown one is refused rather than defaulted.** `ONE_TO_ONE` (`1:1`)
+is every default stage runner; `ONE_TO_MANY` (`1:N`) is a video into frames, a recording into speaker
+turns, a document into chunks — and `source_rowid` is what keeps such a child attached to its parent.
+
+*Known divergence, stated rather than glossed:* rule 3 holds for the Ray driver
+(`scripts/ray_stage_job.py`). The in-process driver's blob path still builds the order by hand
+(`medallion/services/compute.py`), so one media lane can yield two silver schemas depending on
+`MEDALLION_RAY_ENABLED`.
+
 ## 7. Backfill
 
 Backfill and the cascade are the same mechanism: `add_columns`.

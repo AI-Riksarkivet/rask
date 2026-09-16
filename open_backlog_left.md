@@ -2522,6 +2522,24 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 
 - *Why open:* Marked Doc in §O1 — anyone writing a new lane has to reconstruct the contract from the code.
 - *Closes when:* Write the recipe (`stamp_stage`, `source_rowid`, the `{id, payload, stage, lineage, source_rowid}` tier contract) into `docs/architecture/` or the `rask-lance-catalog` skill.
+- **RE-MEASURED 2026-09-16: the premise HOLDS.** `stamp_stage` appears in no document at all — only in
+  `.claude/skills/rask-lance-catalog/SKILL.md`, and there inside an incident narrative rather than as a
+  recipe; `source_rowid` is scattered across seven files; and the tier contract string
+  `{id, payload, stage, lineage, source_rowid}` appears in none of them.
+- **WRITTEN 2026-09-16** as `docs/architecture/medallion-data-flow.md` § 6a, beside § 6 "What a stage
+  actually writes", which is where a lane author is already reading. One function and three rules, each
+  with the measurement that makes it a rule rather than a style: an absent value DROPS rather than
+  inherits (a child publishing its parent's id is a claim about the wrong object); `source_rowid` is
+  minted once at the first derive off bronze and never re-minted (re-minting reroots the chain one tier
+  down, so gold would name silver); and the STAMP owns column order, because `lance_ray` casts by
+  POSITION and two hand-built orders for one dataset killed every tabular cascade at gold on
+  2026-08-30.
+- *It also carries the trap the stamp alone does not close* — `merge_insert` does not carry schema
+  metadata, so `ensure_declared_dataset_id` is the metadata-only repair that lets the estate self-heal
+  — and the divergence that is still real: rule 3 holds for the Ray driver, while the in-process blob
+  path builds the order by hand, so one media lane can yield two silver schemas depending on
+  `MEDALLION_RAY_ENABLED`. Stated rather than glossed, so the document does not read as more settled
+  than the code.
 
 ### Catalog is correct for lance-ns
 
