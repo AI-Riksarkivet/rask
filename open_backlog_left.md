@@ -3159,9 +3159,23 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Why it is low and not med:* no data is lost and no wrong answer is served; the gap is observability
   of a mid-cascade stop. It becomes med the moment a tenant expects gold and nothing says why it is
   absent.
-- *Closes when:* the publish state of a written-but-unpublished tier is established (held vs never
-  attempted), and whichever surface should name it — the lag detector's own report, the promotions
-  door, or the tier board — does.
+- **ESTABLISHED 2026-09-16: NEVER ATTEMPTED, not held.** Every `Run` the graph holds for advref31 is
+  `create_table`, `register_table`, `reconcile` or `compaction` — there is **no `silver-to-gold` job in
+  any state**, failed or otherwise, so nothing was refused, held or retried. The silver tier itself was
+  written by `embed_features` four times beside a `create_table` and a `compaction`.
+- *The contrast is what makes it a defect rather than a configuration:* five other tenants DO have a
+  gold tier in the same graph — `acme-gold$catalog`, `bind86-gold$catalog`, `c6t115034-gold$catalog`,
+  `durproof-gold$catalog`, `gateprobe-gold$catalog`. So this is not "gold is not in use here"; it is one
+  lane that stopped, beside five that did not.
+- *The honest limit on that evidence:* the graph can only prove that no silver->gold run EMITTED
+  lineage. For a lane whose every other step emitted — bronze register, bronze ingest, silver create,
+  four silver writes, two compactions — that is strong, but it is not the same as proving no process
+  ran. Distinguishing "no trigger was published" from "a trigger was published and refused" needs the
+  DLQ, and is the same question [[LH-151]]/[[LH-166]] answer.
+- *Closes when:* a surface names a written-but-unpublished tier — the lag detector's own report, the
+  promotions door, or the tier board. The publish state no longer needs establishing; one of those
+  three has to say it out loud, because from every surface the estate has today this is still
+  indistinguishable from a lane nobody ran.
 
 **LH-151 · The DLQ parking plane assumes every park is retry exhaustion, and Dapr parks on at least two other paths — one invisibly, one as a false page**
 `medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2 · **blocked:** owner decision — the parking shape; shares its answer with [[LH-166]]'s refusal-ack ruling
