@@ -42,7 +42,6 @@ from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
-from service_kit.lakehouse.lance_session import bound_lance_thread_pools
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 from storage import s3_client
@@ -104,10 +103,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.startup_complete = False
     app.state.shutting_down = False
     settings = get_settings()
-    # BEFORE the first Lance open, because the pool is built on first use and reads the variable then.
-    # `lance_docs/guide.md:2989-2996`: the compute pool sizes to the MACHINE's cores — measured in these
-    # pods 2026-09-16, 64 against a one-CPU quota, throttling at idle.
-    bound_lance_thread_pools()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # Fail closed if behind a Dapr sidecar but the app-token is unset — the cron route would otherwise be an
     # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).

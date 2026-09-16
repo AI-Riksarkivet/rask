@@ -77,8 +77,9 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**10 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
-`LH-172` and `LH-159` workable. That number is the one worth watching: the column above says how much
+**11 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094` and
+`LH-159` workable — [[LH-172]] joined them once its remedy was measured to be inert and the only lever
+that works became a trade nobody has ruled on. That number is the one worth watching: the column above says how much
 is written down, and this says how much of the priority anyone can pick up without a ruling. It moved
 here by measurement rather than by attrition — four rows that were decision-gated in their bodies
 carried no `**blocked:**` marker, so the workable count read optimistic until they were marked. Gated
@@ -4912,70 +4913,53 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   cheap, because the whole set is 10 records and 9 of them share one shape. Then make an unparseable
   control record louder than a WARN, or prove the set empty and keep it so with a gate.
 
-**LH-172 · Every lakehouse pod builds a 64-thread Lance compute pool on a one-CPU quota, and the thread count is also a memory multiplier**
-`catalog, lineage, medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-16 · measured in the running pods
+**LH-172 · Every lakehouse pod builds a 64-wide Lance thread pool against a one-CPU quota, and the documented override is ignored**
+`catalog, lineage, medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-16 · **blocked:** the only lever that works is CPU affinity, and pinning a latency-sensitive service to one core is a trade nobody has ruled on
 
-- *Why open:* `lance_docs/guide.md:2989-2996` — the compute pool "is determined by the number of cores
-  on the machine", overridable by `LANCE_CPU_THREADS`, and the guide says doing so "is commonly done
-  when running multiple Lance processes on the same machine". A container is that case wearing
-  different clothes, and nothing in this estate set the variable: grep over `.py`/`.yaml`/`.sh`
-  returned zero hits for `LANCE_CPU_THREADS`, `LANCE_IO_THREADS` and `LANCE_LOG`.
-- **MEASURED FROM INSIDE THE RUNNING CONTAINERS 2026-09-16**, which is the only place the two numbers
-  can be compared:
+- **THE PREMISE IS MEASURED NOW, not inferred from the docs — and the first two versions of this row
+  were wrong in opposite directions, so the measurement is given in full.**
+  Varying only CPU affinity and the environment variable, same dataset, same host, threads created by
+  one scan:
 
-      rask-catalog      /sys/fs/cgroup/cpu.max = "100000 100000"  (1 CPU)   nproc = 64
-      rask-lineage      same                                                nproc = 64
-      rask-maintenance  same                                                nproc = 64
-      rask-medallion-producer same                                          nproc = 64
+      visible CPUs   LANCE_CPU_THREADS   threads
+           4              unset             11
+           8              unset             16
+          64              unset             71
+           4                32              11     <- the override is ignored
+          64                 1              69     <- and ignored in the other direction
 
-  And it is already costing, at idle: `nr_throttled` 21 of 3,738 periods on the catalog, **116 of
-  3,761 on maintenance**.
-- *It is a MEMORY bound too, which is what makes it this row rather than a tuning note.*
-  `guide.md:3288` sizes a write at `io_readahead_buffer + num_cpu_threads * batch_size *
-  (raw_vector_size + transformed_vector_size)` — the thread count multiplies the very ceiling
-  [[LH-096]]'s `affordable_cache_bytes` clamp exists to hold, against the same 512Mi tier.
-- *WIRED, and the shape is the one the memory half already proved.* `lance_session.cpu_budget_cores`
-  reads the container's own `cpu.max` (the CPU twin of `cache_budget_bytes`), and
-  `bound_lance_thread_pools()` `setdefault`s `LANCE_CPU_THREADS` to it at each of the five lakehouse
-  entrypoints. An unconstrained process (a laptop, a CI runner) is left at Lance's own default, and an
-  operator who set the variable keeps their number. Deployed and **observed applying** — all four pods
-  log `lance_compute_pool_bound_to_container cpu_threads=1 quota_cores=1.0`.
-- **BUT THE EFFECT IS UNVERIFIED, AND I COULD NOT DEMONSTRATE ONE. Stated here because a control that
-  cannot fire is this row's own failure mode.** Driven offline against the installed pylance 11.0.0,
-  same dataset, varying only the variable — three probes, none of which could tell 1 from 64:
-
-      LANCE_CPU_THREADS=<unset>  wall=0.14s  cpu=7.16s  threads=140
-      LANCE_CPU_THREADS=1        wall=0.16s  cpu=7.31s  threads=137
-      LANCE_CPU_THREADS=64       wall=0.14s  cpu=7.47s  threads=137
-      LANCE_CPU_THREADS=1        wall=0.21s  cpu=7.33s  threads=137
-      LANCE_CPU_THREADS=64       wall=0.15s  cpu=7.40s  threads=137
-
-  (3x `to_table(filter=…)` over 4,000,000 rows on a 64-core host; a plain scan and a thread count at
-  open time were equally flat.) The name IS in the shipped binary — `strings lance.abi3.so` finds
-  `LANCE_CPU_THREADS` — so it is read somewhere; what is missing is any workload here where setting it
-  changes wall time, CPU time or thread count.
-- **WHICH MAKES THE PREMISE DOC-DERIVED, NOT MEASURED, and the row is corrected to say so.** What was
-  measured is `cpu.max = 1 CPU` against `nproc = 64` and a low idle throttle rate. That the compute
-  pool is therefore 64 threads is `guide.md`'s claim, not this estate's observation — and the throttle
-  figures (0.6% catalog, 3.1% maintenance, at idle) are unremarkable for a Python service beside a
-  sidecar and implicate nothing in particular.
-- *The wiring is KEPT rather than reverted:* it is what the vendor's own documentation prescribes, it is
-  a `setdefault` an operator can override, and it is a no-op at worst. It is not claimed as a fix.
-- *THE IO POOL IS DELIBERATELY UNTOUCHED.* The same page calls the cloud-store default of 64 IO threads
-  "a fairly conservative default" and says you "may need 128 or 256 … to saturate network bandwidth".
-  IO threads are not CPU-bound; shrinking them to the CPU quota would trade a measured contention
-  problem for an unmeasured throughput one.
-- *A near-miss worth recording, because it would have been silent:* inserting this function above
-  `lance_session` orphaned that function's `@cache` onto the new one — so `lance_session` would have
-  minted a FRESH session per call, which is exactly the defect the module exists to prevent, while
-  every test that asserts a `session=` kwarg kept passing. Caught by a test whose second assertion used
-  a different quota.
-- *Closes when:* a workload is found where `LANCE_CPU_THREADS` demonstrably changes behaviour on
-  pylance 11 — then the bound can be shown to help, or shown to be decoration and removed. Until then
-  this row is a MEASUREMENT (1-CPU quota, 64 visible cores) with an unproven remedy, and should not be
-  worked as though the remedy were known to work. The obvious next probes: a vector-index build or an
-  `optimize_indices` pass, which the guide's own memory formula (`num_cpu_threads * batch_size * …`)
-  describes and a filtered scan may simply not exercise.
+  A core-tracking pool exists — 4 -> 11, 8 -> 16, 64 -> 71 is linear in visible CPUs — and
+  `LANCE_CPU_THREADS` does not reach it on pylance 11.0.0, in either direction.
+- **WHY THE POD SEES 64 AT ALL is the fact that makes this a resilience row.** A cgroup CPU *quota*
+  does not reduce visible CPUs. Measured inside the running containers: `/sys/fs/cgroup/cpu.max` reads
+  `100000 100000` — one CPU — while `nproc` reads 64, on catalog, lineage, maintenance and
+  medallion-producer alike. So every lakehouse process builds a 64-wide pool against a one-CPU budget.
+- *And it is a MEMORY bound, not only a contention one:* `lance_docs/guide.md:3288` sizes a write at
+  `io_readahead_buffer + num_cpu_threads * batch_size * (raw_vector_size + transformed_vector_size)`,
+  so the thread count multiplies the ceiling `affordable_cache_bytes` exists to hold, against the same
+  512Mi tier.
+- **THE DOCUMENTED FIX WAS BUILT, DEPLOYED, OBSERVED APPLYING, AND THEN REMOVED.**
+  `bound_lance_thread_pools()` read the container's quota and `setdefault`-ed `LANCE_CPU_THREADS` at
+  all five lakehouse entrypoints; every pod logged
+  `lance_compute_pool_bound_to_container cpu_threads=1 quota_cores=1.0`. It still did nothing, because
+  the variable is ignored. **A control that provably does nothing is the failure this estate keeps
+  finding, not a harmless default**, so the wiring is gone rather than kept with a caveat.
+  `cpu_budget_cores` survives — reading the container's own quota is correct and useful — and
+  `tests/unit/test_lance_sizes_its_compute_pool_to_the_container_not_the_host.py` asserts the companion
+  does NOT come back without the measurement being redone.
+- *The citation was spot-checked, which [[LH-047]] requires and I had not done.* `guide.md` is one of
+  the five tool-generated bundles `lance_docs/PROVENANCE.md` marks as unverifiable — "a citation from
+  these is weaker than one from `spec.yaml` and should be spot-checked against the live docs when it is
+  load-bearing". Fetched upstream `docs/src/guide/performance.md` 2026-09-16: it says the same thing
+  the bundle says, word for word on both variables. **The bundle is accurate; the software does not
+  match its own documentation.**
+- *Closes when:* the owner rules on the only lever that demonstrably works. Three options and none is
+  free: (1) a **cpuset** on the pods, or `os.sched_setaffinity` at startup — makes every pool that sizes
+  by visible CPUs agree with the quota, and pins a latency-sensitive service to one core; (2) a
+  **pylance upgrade or upstream report** — the variable is documented and does not work, which is
+  theirs to fix; (3) **accept it** and record that the pools are host-sized, which is honest and costs
+  the memory multiplier above. Re-measure the affinity table before choosing: this row has been wrong
+  twice already.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule · **blocked:** its own ruling — "Phase 2 — do not work ahead of the lakehouse"; counted here, worked after phase 1

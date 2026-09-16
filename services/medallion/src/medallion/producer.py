@@ -45,7 +45,6 @@ from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
-from service_kit.lakehouse.lance_session import bound_lance_thread_pools
 from service_kit.lance_app import build_lance_service_app
 from service_kit.obs import configure_app_logging
 
@@ -74,10 +73,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # `@lru_cache`d settings IN PLACE — deliberately, so every later `get_settings()` read sees the key;
     # `apply_dapr_secrets` carries why a copy would break this silently.
     await run_in_threadpool(apply_dapr_secrets, get_settings())
-    # BEFORE the first Lance open, because the pool is built on first use and reads the variable then.
-    # `lance_docs/guide.md:2989-2996`: the compute pool sizes to the MACHINE's cores — measured in these
-    # pods 2026-09-16, 64 against a one-CPU quota, throttling at idle.
-    bound_lance_thread_pools()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # WHAT THIS ESTATE'S RAY PLANE CAN RUN, asserted by a plane that can actually run it. The catalog
     # consults `_tasks/` when a transform is declared, so a task nobody registered is refused at the
