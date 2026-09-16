@@ -23,7 +23,15 @@ memory half this way and left the thread half unmeasured.
 THE IO POOL IS LEFT ALONE, and that is a decision rather than an oversight. The same page says the
 cloud-store default of 64 IO threads is "a fairly conservative default and you may need 128 or 256 …
 to saturate network bandwidth" — IO threads are not CPU-bound, so shrinking them to the CPU quota
-would trade a measured contention problem for an unmeasured throughput one.
+would trade a contention problem for an unmeasured throughput one.
+
+WHAT THESE TESTS DO AND DO NOT ASSERT. They pin the BOUND — that the number handed to Lance comes from
+this container's quota, never asks for zero, and never overwrites an operator's choice. They do NOT
+assert that Lance acts on it, and [[LH-172]] records why: driven against the installed pylance 11.0.0,
+`LANCE_CPU_THREADS` at 1 versus 64 was indistinguishable in wall time, CPU time and thread count across
+a filtered scan of 4,000,000 rows. The name is in the shipped binary, so it is read somewhere; no
+workload here shows it changing anything. A test that claimed otherwise would be the control-that-
+cannot-fire this estate keeps finding.
 """
 
 from __future__ import annotations

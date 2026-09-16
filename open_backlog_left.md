@@ -4889,12 +4889,33 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `guide.md:3288` sizes a write at `io_readahead_buffer + num_cpu_threads * batch_size *
   (raw_vector_size + transformed_vector_size)` — the thread count multiplies the very ceiling
   [[LH-096]]'s `affordable_cache_bytes` clamp exists to hold, against the same 512Mi tier.
-- *FIXED, and the shape is the one the memory half already proved.* `lance_session.cpu_budget_cores`
+- *WIRED, and the shape is the one the memory half already proved.* `lance_session.cpu_budget_cores`
   reads the container's own `cpu.max` (the CPU twin of `cache_budget_bytes`), and
   `bound_lance_thread_pools()` `setdefault`s `LANCE_CPU_THREADS` to it at each of the five lakehouse
-  entrypoints — before the first open, because Lance builds the pool on first use and reads the
-  variable then. An unconstrained process (a laptop, a CI runner) is left at Lance's own default, and
-  an operator who set the variable keeps their number.
+  entrypoints. An unconstrained process (a laptop, a CI runner) is left at Lance's own default, and an
+  operator who set the variable keeps their number. Deployed and **observed applying** — all four pods
+  log `lance_compute_pool_bound_to_container cpu_threads=1 quota_cores=1.0`.
+- **BUT THE EFFECT IS UNVERIFIED, AND I COULD NOT DEMONSTRATE ONE. Stated here because a control that
+  cannot fire is this row's own failure mode.** Driven offline against the installed pylance 11.0.0,
+  same dataset, varying only the variable — three probes, none of which could tell 1 from 64:
+
+      LANCE_CPU_THREADS=<unset>  wall=0.14s  cpu=7.16s  threads=140
+      LANCE_CPU_THREADS=1        wall=0.16s  cpu=7.31s  threads=137
+      LANCE_CPU_THREADS=64       wall=0.14s  cpu=7.47s  threads=137
+      LANCE_CPU_THREADS=1        wall=0.21s  cpu=7.33s  threads=137
+      LANCE_CPU_THREADS=64       wall=0.15s  cpu=7.40s  threads=137
+
+  (3x `to_table(filter=…)` over 4,000,000 rows on a 64-core host; a plain scan and a thread count at
+  open time were equally flat.) The name IS in the shipped binary — `strings lance.abi3.so` finds
+  `LANCE_CPU_THREADS` — so it is read somewhere; what is missing is any workload here where setting it
+  changes wall time, CPU time or thread count.
+- **WHICH MAKES THE PREMISE DOC-DERIVED, NOT MEASURED, and the row is corrected to say so.** What was
+  measured is `cpu.max = 1 CPU` against `nproc = 64` and a low idle throttle rate. That the compute
+  pool is therefore 64 threads is `guide.md`'s claim, not this estate's observation — and the throttle
+  figures (0.6% catalog, 3.1% maintenance, at idle) are unremarkable for a Python service beside a
+  sidecar and implicate nothing in particular.
+- *The wiring is KEPT rather than reverted:* it is what the vendor's own documentation prescribes, it is
+  a `setdefault` an operator can override, and it is a no-op at worst. It is not claimed as a fix.
 - *THE IO POOL IS DELIBERATELY UNTOUCHED.* The same page calls the cloud-store default of 64 IO threads
   "a fairly conservative default" and says you "may need 128 or 256 … to saturate network bandwidth".
   IO threads are not CPU-bound; shrinking them to the CPU quota would trade a measured contention
@@ -4904,8 +4925,12 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   minted a FRESH session per call, which is exactly the defect the module exists to prevent, while
   every test that asserts a `session=` kwarg kept passing. Caught by a test whose second assertion used
   a different quota.
-- *Closes when:* the fix is deployed and a running pod reports `lance_compute_pool_bound_to_container`
-  with `cpu_threads` matching its quota, and the throttle counters are re-read against today's numbers.
+- *Closes when:* a workload is found where `LANCE_CPU_THREADS` demonstrably changes behaviour on
+  pylance 11 — then the bound can be shown to help, or shown to be decoration and removed. Until then
+  this row is a MEASUREMENT (1-CPU quota, 64 visible cores) with an unproven remedy, and should not be
+  worked as though the remedy were known to work. The obvious next probes: a vector-index build or an
+  `optimize_indices` pass, which the guide's own memory formula (`num_cpu_threads * batch_size * …`)
+  describes and a filtered scan may simply not exercise.
 
 **LH-129 · The Ray job reads `S3_KEY`/`S3_SECRET` from process env while the work order's `RASK_CREDENTIAL_REF` seam is consumed by nobody**
 `medallion, ray-kit, chart, service-kit` · **HIGH** · phase 2 (compute), but it is the standing SECRETS rule
