@@ -85,6 +85,39 @@ here by measurement rather than by attrition — four rows that were decision-ga
 carried no `**blocked:**` marker, so the workable count read optimistic until they were marked. Gated
 too, for the same reason the CLOSED count is: a progress number nobody re-derives is a claim.
 
+
+## Owner rulings and the evidence behind them (2026-09-16)
+
+**R1–R11 STAND — owner, 2026-09-16.** The nine rows citing them are workable as written, five of them
+HIGH (`LH-004`, `LH-018`, `LH-019` among them). No re-litigation; the R-numbers are the contract.
+
+**The FGA vocabulary: NARROW THE ROWS, not one edit — evidenced against Lakekeeper.** `LH-055`,
+`LH-056` and `LH-058` ask `model.fga` to grow `branch` / `column` / `base` / `estate` types. Read the
+reference implementation rather than deciding by taste: Lakekeeper — the Iceberg catalog whose
+OpenFGA integration is the closest thing to a standard — declares exactly
+`Role, Tag, Server, Project, Warehouse, Namespace, Table, View, GenericTable` (+ `User`), and
+`crates/authz-openfga/src/relations.rs` contains **zero** occurrences of `column`, `branch`,
+`base_path` or `storage_location`. A mature catalog authorizes at CONTAINER and OBJECT granularity
+only. `estate` has a precedent there (`Server`); the other three do not.
+*So the recommendation is the third option:* re-measure each row against what the estate actually
+enforces and narrow or strike, rather than growing four types the reference deliberately lacks. A model
+this estate cannot enforce at the door is a vocabulary, not a control.
+
+**The permanently-refused ack: Lakekeeper does NOT settle it, and saying so is the finding.** Its event
+plane is fire-and-forget — `service/events/dispatch.rs:390-391`: *"If the listener fails, it will be
+logged, but the request will continue to process."* There is no consumer, no ack vocabulary and no DLQ;
+`lakekeeper-events-nats` is a publish backend only. rask's bus door AUTHORIZES what it records, which is
+strictly more than the reference does, so this question is rask's own and has no borrowed answer.
+
+**The governed-tier home: the recommendation is YES — the catalog-vended path only.** Iceberg catalogs
+(Lakekeeper included) do not let a table live at a location the catalog does not govern: the location
+IS catalog state, which is why its FGA vocabulary needs no `storage_location` type at all. rask's
+composed `medallion/<tier>` datasets are the exception to that rule, and every crossing measured today
+sits in one — three of the four [[LH-141]] refusals name a composed path. Adopting the rule makes the
+composed population either registered or reaped, which is a bounded job ([[LH-164]] already measures
+it); keeping both homes means teaching the catalog to govern a second layout, which is the coupling the
+vended path exists to remove.
+
 ## The five conditions, MEASURED against the running estate (2026-09-15)
 
 Row counts say how much is written down; they do not say how close the goal is. Every line below was
@@ -4691,7 +4724,19 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `control_root_backup.py` writes `_backups/control/<timestamp>/…`, which nests past
   `discovery_max_depth`. The walk records an `IncompleteScan`; `report_is_clean` refuses to certify an
   estate with anything incomplete; the #79 purge is gated on `report_is_clean`. **So the estate's own
-  backup snapshots were blocking reclamation of 932 orphan files across 8 datasets.**
+  backup snapshots were blocking the TRASH PURGE.**
+- **AND THE CLAIM I FIRST WROTE HERE WAS WRONG — corrected by continuing to measure rather than by
+  stopping at the fix.** I said the backups were "blocking reclamation of 932 orphan files". They were
+  not, because **no orphan reclaimer exists**: `orphans.py:3` states it outright — *"NOTHING DELETES.
+  NOTHING MUTATES. Every path here is read-only"* — and `purge.py:8` records the sequencing as
+  deliberate: *"Trash purge first, orphan reclaim later."* The 932 were never going to be reclaimed by
+  anything. What `report_is_clean` gates is the trash purge, which is a different and real thing.
+- *Deployed and measured 2026-09-16: `incomplete=[]`.* The three backup entries are gone, so ONE of the
+  gate's four conditions is now satisfied. **The purge is still blocked**, because `report_is_clean`
+  requires no findings at all and the tick reports `total=964` — including the 932 orphan files, which
+  is circular only in appearance: the orphan count is a REPORT that no reclaimer consumes, so it will
+  gate the trash purge until either a reclaimer exists or the gate stops counting a read-only category.
+  That is the next question on this row, and it is a design question rather than a defect.
 - *The fix is one entry in a list that already existed.* `_CONTROL_PREFIXES` skips the control-plane
   registries because "no dataset ever lives under them"; `_backups` is exactly that kind of directory
   and was missing. Gated by `tests/unit/test_the_backup_directory_does_not_gate_reclamation.py`, which

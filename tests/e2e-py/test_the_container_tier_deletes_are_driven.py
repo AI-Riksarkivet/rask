@@ -5,10 +5,15 @@ is exactly where `force` and cascade interact. Measured 2026-09-16: `test_wareho
 isolation, deactivate/activate and two auth legs and NO delete at all, and no e2e anywhere drives
 project delete, the namespace cascade or `projects_claiming_bucket`.
 
-EVERY CONTAINER THIS FILE DESTROYS IS ONE IT CREATED. The refusal legs are non-destructive by
-construction — they assert a 409 or a 404 — and the one leg that really deletes does so against a
-warehouse minted seconds earlier in a bucket named for this suite. `purge_bucket` is never sent: a
-customer's bucket is not recoverable, and the rule worth pinning here is the refusal, not the purge.
+EVERY CONTAINER THIS FILE DESTROYS IS ONE IT CREATED, in a bucket it named seconds earlier. The
+refusal legs are non-destructive by construction — they assert a 409 or a 404.
+
+`purge_bucket` IS SENT, but only in cleanup and only against those buckets. The first version withheld
+it on the principle that a customer's bucket is not recoverable, which is right for a bucket someone
+else owns and wrong for one this fixture minted: withholding it left the record deleted and the bucket
+behind, so every run added orphan buckets to the estate's own drift report — a test manufacturing the
+finding it is meant to be independent of. The cleanup is ASSERTED rather than best-effort for the same
+reason.
 
 THE ORDER IS THE POINT, not just the outcomes. The doors authorize BEFORE they disclose — a 409 naming
 another tenant's namespaces is a disclosure a 403 must beat to — and `force` overrides deletion
@@ -67,8 +72,16 @@ def warehouse(catalog: str) -> Iterator[str]:
     if created.status_code not in (200, 201, 409):
         pytest.skip(f"cannot provision a warehouse to delete ({created.status_code}): {created.text[:200]}")
     yield name
-    # Best effort, cascade so a leg that left a namespace behind still cleans up. Never purge_bucket.
-    requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true", headers=_auth(), timeout=60)
+    # PURGE THE BUCKET, because this suite made it. The first version deleted the record and left the
+    # bucket, so every run added one orphan bucket to the estate's drift report — measured 2026-09-16,
+    # 18 `e2edel-*` buckets from four runs, which is a test that manufactures the finding it is meant to
+    # be independent of. `purge_bucket` is safe here and nowhere else in this file: the bucket was
+    # created by this fixture seconds earlier and holds nothing else.
+    removed = requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
+    # ASSERTED, not best-effort. A cleanup nobody checks is how this suite added orphan buckets to the
+    # estate's drift report on every run before anyone looked — a test that manufactures the finding it
+    # is meant to be independent of.
+    assert removed.status_code in (200, 404), f"the fixture leaked bucket {name!r}: {removed.status_code} {removed.text[:300]}"
 
 
 def test_deleting_a_warehouse_that_does_not_exist_is_404(catalog: str) -> None:
@@ -162,8 +175,10 @@ def test_a_purge_refuses_bytes_a_SIBLING_warehouse_still_claims(catalog: str) ->
         still_there = requests.get(f"{catalog}/v1/warehouses/{first}", headers=_auth(), timeout=30)
         assert still_there.status_code == 200, "the refusal was not free — the warehouse went anyway"
     finally:
-        for name in (second, first):
-            requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true", headers=_auth(), timeout=60)
+        # The SECOND first, so the shared bucket has exactly one claimant when the purge runs — the same
+        # rule the refusal above proves, used forwards.
+        requests.delete(f"{catalog}/v1/warehouses/{second}?cascade=true&force=true", headers=_auth(), timeout=60)
+        requests.delete(f"{catalog}/v1/warehouses/{first}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
 
 
 def test_deletion_protection_refuses_and_force_overrides_exactly_it(catalog: str) -> None:
@@ -179,4 +194,4 @@ def test_deletion_protection_refuses_and_force_overrides_exactly_it(catalog: str
         forced = requests.delete(f"{catalog}/v1/warehouses/{name}?force=true", headers=_auth(), timeout=60)
         assert forced.status_code == 200, f"force did not override deletion protection: {forced.status_code} {forced.text[:300]}"
     finally:
-        requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&force=true", headers=_auth(), timeout=60)
+        requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
