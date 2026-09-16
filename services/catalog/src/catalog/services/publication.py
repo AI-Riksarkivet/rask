@@ -359,6 +359,7 @@ def gate(
         key_column=key_column,
         required_columns=tuple(required_columns),
         version=version,
+        session=shared_lance_session(),
     )
     refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)
     # THE SAME REFUSAL `publish` RAISES, and it belongs here for the reason the docstring above gives:
@@ -441,6 +442,7 @@ def publish(
             # the dataset bare and scanned `latest`, so this gate answered for a version it was not
             # publishing — in both directions, and silently in the one that matters.
             version=version,
+            session=shared_lance_session(),
         )
         # BEFORE the verdict, so an unrunnable gate can never reach the tag move below.
         refuse_a_gate_that_cannot_run(assertions, key_column=key_column, version=version, declared_by=declared_by)

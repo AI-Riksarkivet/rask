@@ -4171,11 +4171,26 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Sized rather than attempted, deliberately:* this is the shared data-access seam of all four lakehouse
   services, and this row's own record is a pod OOMKilled by session caps set above its headroom. Getting
   the injection wrong is cheap; getting the sizing wrong is an outage.
-- *Closes when:* the six service-kit helpers take a `session` and their callers pass the one they
-  already hold; then the residue the row bundles — the three `LANCE_*` vars in the Ray `runtime_env`,
-  one `instrument_lance_metrics` call per process, door-side branch/tag validation, pinned blob
-  thresholds, `allow_http` derived from the endpoint scheme, HTTPX timeouts. The per-service conversion
-  and the per-pod sizing clauses are both DONE and should not be re-attempted.
+- **THE SESSION HALF IS DONE 2026-09-16.** All six helpers take an injected `session` and the five
+  lakehouse call sites that hold one pass it — `catalog/services/publication.py` (2 x `assert_quality`)
+  and `medallion/services/compute.py` (3 x `ensure_declared_dataset_id`). `table_dataset`, `table_info`,
+  `load_declared` and `LanceFragmentSource` have no caller in the four lakehouse services; theirs are in
+  ingest, viewer and search, so the parameter is there for when those convert.
+- *`session=None` is pylance's OWN default* (`lance.dataset(..., session: Optional[Session] = None)`), so
+  a caller that passes nothing behaves exactly as before — the change is strictly additive.
+- *Gated by `tests/unit/test_a_lakehouse_open_shares_the_process_session.py`*, an AST walk over the four
+  lakehouse services plus service-kit. It NAMES its exemptions (ingest = phase 2, viewer/search =
+  parked) and asserts they are still exempt, so a green run cannot be read as "the estate shares one
+  session" and an exemption cannot rot silently once that area converts.
+- *One test double had to be corrected rather than worked around:* `test_not_found_classifier.py`'s
+  stand-in for `lance.dataset` omitted `session`, so threading it made the test fail with a TypeError
+  for a reason unrelated to the classifier it pins. A double that does not mirror the real signature is
+  a test that passes for the wrong reason.
+- *Closes when:* the residue the row bundles lands — the three `LANCE_*` vars in the Ray `runtime_env`,
+  one `instrument_lance_metrics` call per process (ingest, viewer and search still never call it),
+  door-side branch/tag validation, pinned blob thresholds, `allow_http` derived from the endpoint
+  scheme, HTTPX timeouts. The per-service conversion, the per-pod sizing and the shared-helper
+  injection are all DONE and should not be re-attempted.
 
 **LH-097 · Tiers re-materialise managed blob bytes per tier instead of silver being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · med · **blocked:** owner acknowledgement of R9 plus the storage-vs-coupling trade, and the recorded clone→source edge

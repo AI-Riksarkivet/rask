@@ -28,6 +28,12 @@ exactly one of its two callers.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    import lance
+
 from typing import Final
 
 import pyarrow as pa
@@ -143,7 +149,7 @@ def stamp_stage(table: pa.Table, *, stage: str, lineage: str = "", dataset_id: s
     return declare_dataset_id(out, dataset_id)
 
 
-def ensure_declared_dataset_id(uri: str, dataset_id: str, storage_options: dict[str, str] | None = None) -> bool:
+def ensure_declared_dataset_id(uri: str, dataset_id: str, storage_options: dict[str, str] | None = None, *, session: lance.Session | None = None) -> bool:
     """Correct an EXISTING dataset's declared name in place. Returns whether it wrote.
 
     THE STAMP ALONE IS NOT ENOUGH, and measuring the destination rather than the call is what showed
@@ -163,7 +169,7 @@ def ensure_declared_dataset_id(uri: str, dataset_id: str, storage_options: dict[
 
     if not dataset_id:
         return False
-    dataset = lance.dataset(uri, storage_options=storage_options)
+    dataset = lance.dataset(uri, storage_options=storage_options, session=session)
     current = (dataset.schema.metadata or {}).get(LINEAGE_DATASET_ID_KEY.encode())
     if current == dataset_id.encode():
         return False

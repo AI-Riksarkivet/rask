@@ -138,7 +138,7 @@ class DatasetRegistry:
         return self.get(self._default_id)
 
 
-def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
+def table_dataset(handle: DatasetHandle, table: str, *, session: lance.Session | None = None) -> lance.LanceDataset:
     """Open one table of the dataset as a ``lance.LanceDataset`` (blob-capable).
 
     Opens over the object store when the dataset is S3-backed
@@ -153,7 +153,7 @@ def table_dataset(handle: DatasetHandle, table: str) -> lance.LanceDataset:
     if handle.storage_options is None and not (handle.path / f"{table}.lance").is_dir():
         raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}")
     try:
-        ds = lance.dataset(uri, storage_options=handle.storage_options)
+        ds = lance.dataset(uri, storage_options=handle.storage_options, session=session)
     except (ValueError, OSError) as e:
         if reads_as_absent(e):
             raise NotFoundError(f"table {table!r} missing from dataset {handle.id!r}") from e

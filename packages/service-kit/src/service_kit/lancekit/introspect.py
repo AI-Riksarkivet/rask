@@ -71,9 +71,9 @@ def _index_type(type_url: str) -> str:
     return type_url.rsplit(".", 1)[-1].removesuffix("IndexDetails") or "?"
 
 
-def table_info(uri: str | Path, storage_options: dict[str, str] | None = None) -> TableInfo:
+def table_info(uri: str | Path, storage_options: dict[str, str] | None = None, *, session: lance.Session | None = None) -> TableInfo:
     """Introspect one Lance table (schema, vector dims, blob columns, indexes)."""
-    ds = lance.dataset(str(uri), storage_options=storage_options)
+    ds = lance.dataset(str(uri), storage_options=storage_options, session=session)
     indexes = [IndexInfo(name=ix.name, index_type=_index_type(ix.type_url), columns=list(ix.field_names)) for ix in ds.describe_indices()]
     return TableInfo(
         name=Path(uri).stem,

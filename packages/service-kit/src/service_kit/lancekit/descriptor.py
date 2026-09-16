@@ -213,6 +213,8 @@ def load_declared(
     dataset_id: str,
     descriptor_dir: str | Path,
     storage_options: dict[str, str] | None = None,
+    *,
+    session: lance.Session | None = None,
 ) -> Declared | None:
     """Config-file override first, else the schema-metadata stamp on any table."""
     override = Path(descriptor_dir) / f"{dataset_id}.json"
@@ -220,7 +222,7 @@ def load_declared(
         return Declared.model_validate_json(override.read_text())
     for stem in store.list_lance_stems(db_path, storage_options):
         uri = store.join(db_path, f"{stem}.lance")
-        metadata = lance.dataset(uri, storage_options=storage_options).schema.metadata or {}
+        metadata = lance.dataset(uri, storage_options=storage_options, session=session).schema.metadata or {}
         raw = metadata.get(DESCRIPTOR_METADATA_KEY)
         if raw:
             return Declared.model_validate(json.loads(raw.decode()))

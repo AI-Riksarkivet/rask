@@ -8,6 +8,12 @@ behind the small ``SourceAdapter`` protocol so no provider code leaks into the p
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+
+if TYPE_CHECKING:
+    import lance
+
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any, Protocol
@@ -187,14 +193,18 @@ class LanceFragmentSource:
     a module-level import would put pylance in every service that imports anything from it.
     """
 
-    def __init__(self, uri: str, storage_options: dict[str, str] | None = None) -> None:
+    def __init__(self, uri: str, storage_options: dict[str, str] | None = None, *, session: lance.Session | None = None) -> None:
         self._uri = uri
         self._storage_options = storage_options
+        # INJECTED, never fetched: `shared_lance_session()` is defined once per SERVICE from that
+        # service's own caps, and this library has no settings to read. `None` is pylance's own default,
+        # so a caller without one behaves exactly as before.
+        self._session = session
 
     def _dataset(self) -> Any:  # noqa: ANN401 — lance.LanceDataset, unimportable at module scope by design
         import lance
 
-        return lance.dataset(self._uri, storage_options=self._storage_options)
+        return lance.dataset(self._uri, storage_options=self._storage_options, session=self._session)
 
     def _key(self, fragment_id: int) -> str:
         """``<uri>#fragment=<id>`` — the dataset names the provenance, the fragment names the unit."""
