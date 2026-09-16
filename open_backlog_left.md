@@ -6031,9 +6031,30 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     `use_ray = await engine_choice.engine_for_async(...) == RAY_ENGINE` and branches at :832 and :877.
     So the port has two adapters and nothing dispatches through it: the port is not yet the only door.
     That is [[LH-158]]'s remaining scope, and this row should not be worked separately for it.
-  * The Ray-lane-runs-only-through-Dapr-Workflow product limit is still **not written down**. Each axis
-    reads independent and the product of them is not, which is exactly the shape that needs a matrix
-    rather than a reader's inference.
+  * ~~The Ray-lane-runs-only-through-Dapr-Workflow product limit is still **not written down**.~~
+    **WRITTEN DOWN 2026-09-16, as a matrix that is a TEST rather than prose** —
+    `services/medallion/tests/test_the_supported_engine_and_workflow_combinations.py`. A document would
+    have described the product; a test makes adding or removing a combination silently impossible,
+    which is what the clause is for.
+
+        ray_enabled   declared engine   outcome
+          false          (none)         in-process — the chart default
+          false          inprocess      in-process
+          false          ray            REFUSED, and the message names MEDALLION_RAY_ENABLED
+          true           (none)         ray — the chart default
+          true           inprocess      in-process  <- the cell that carries the decoupling
+          true           ray            ray
+
+    *And it is ONE FLAG DOING THREE JOBS, which is why the product was invisible.*
+    `engine_choice.hosted_engines`' own docstring says `ray_enabled` "is read here for the SECOND of
+    its two jobs"; measured, there are three — `stage_runner.py:91` starts the Dapr Workflow runtime,
+    `producer.py:119` starts it for `quality_review_enabled OR ray_enabled`, and `engine_choice` both
+    gates `hosted_engines` and supplies the chart default.
+    *The unsupported cell, stated so nobody derives it again:* **Ray WITHOUT a workflow engine is not
+    expressible** — no setting yields the Ray compute engine with the runtime off, because one flag
+    starts both. The converse IS expressible and is honoured, and that asymmetry is the decoupling
+    working in the direction it currently works in. A last assertion reads both gates off the SOURCE,
+    so a second flag that ever splits them fails this test and forces a new row in the matrix.
   * The in-process lane has still **never run in-cluster**, so the second engine that would prove the
     abstraction still has no live evidence behind it.
 
