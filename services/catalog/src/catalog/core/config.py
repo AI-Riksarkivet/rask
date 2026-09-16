@@ -108,6 +108,26 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
         """The registered external-blob base URIs (parsed from the comma-separated allowlist)."""
         return [b.strip() for b in self.external_blob_bases.split(",") if b.strip()]
 
+    @property
+    def vend_sanctioned_bases(self) -> list[str]:
+        """Every approved-base allowlist the VEND door honours, unioned.
+
+        The estate keeps two: ``LANCE_MULTIBASE_DATA_BASES`` (where a create may spread fragments) and
+        ``LANCE_EXTERNAL_BLOB_BASES`` (which external ``Blob.from_uri`` pointers a create may reference).
+        The create door enforces both; the vend door was given only the first, so a base the estate had
+        already approved was dropped from the session policy it issued.
+
+        Measured on the deployed catalog 2026-09-16: the pod carries
+        ``LANCE_EXTERNAL_BLOB_BASES=s3://lance-catalog/models/`` and logged 1,836
+        ``vend_base_path_unsanctioned`` warnings in three hours, all for that base, all with
+        ``sanctioned_count=0``. ``vending.py`` states the cost — the drop "surfaces later as a read denial
+        at the object store, on whoever used the credential, with nothing naming the base".
+
+        This widens nothing an operator did not already declare: both lists default empty, and an
+        unlisted foreign base stays refused, which is the data-exfil door the guard exists to close.
+        """
+        return [*self.multibase_data_base_list, *self.external_blob_base_list]
+
     # #3-B Lance multi-base DATA distribution: a comma-separated ALLOWLIST of approved data-base URIs a
     # create may spread its fragments across (the Uber pattern — one table's data round-robins over N
     # buckets, manifest stays in the primary root, reads fan out). A per-request ``data_base`` MUST be on
