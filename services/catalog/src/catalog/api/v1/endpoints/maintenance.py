@@ -23,12 +23,16 @@ rather than written door by door — a fifth verb inherits it without an edit.
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Request, Response, status
+from fastapi import APIRouter, Header, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api import lineage_deps
+from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier
+from catalog.core.lineage_emit import COMPACT_TABLE, CREATE_INDEX
 from catalog.core.namespace import open_dataset
 from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
 from catalog.services import dataplane, index_specs, maintenance
@@ -122,6 +126,9 @@ async def compact_maintenance(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    token: CurrentToken,
+    emitter: LineageEmitterDep,
+    authorization: Annotated[str | None, Header()] = None,
     branch: str | None = None,
 ) -> CompactResult | CompactAccepted:
     """Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
@@ -182,6 +189,20 @@ async def compact_maintenance(
         storage_options=so,
         protected=protected,
     )
+    # The QUEUED lane above is answered by an executor that emits; this lane has no such partner, and it
+    # is the lane the deployed estate runs (`maintenance.workTopic` is empty on the release's values).
+    # `pin_version` is None because `compact_now` reports fragment counts and no version — the trailer
+    # reads the snapshot the rewrite just committed. `branch` is not threaded: this door refuses one above.
+    await lineage_deps.emit_measured_write(
+        emitter,
+        segments,
+        ns=ns,
+        so=so,
+        settings=settings,
+        token=token,
+        operation=COMPACT_TABLE,
+        authorization=authorization,
+    )
     return CompactResult(**result)
 
 
@@ -202,6 +223,9 @@ async def reindex_maintenance(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
+    token: CurrentToken,
+    emitter: LineageEmitterDep,
+    authorization: Annotated[str | None, Header()] = None,
     branch: str | None = None,
 ) -> ReindexResult | ReindexAccepted:
     """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
@@ -263,4 +287,19 @@ async def reindex_maintenance(
         )
 
     outcome = await run_in_threadpool(maintenance.rebuild_index_now, ds, item)
+    # `CREATE_INDEX` because a replace IS the create door's commit under another name — the two spec index
+    # doors emit it, and a rebuild that reported nothing would leave the graph claiming the index still
+    # dates from whichever build last went through `indices.py`. The version is in hand here, so it is
+    # pinned rather than re-read.
+    await lineage_deps.emit_measured_write(
+        emitter,
+        segments,
+        ns=ns,
+        so=so,
+        settings=settings,
+        token=token,
+        operation=CREATE_INDEX,
+        pin_version=outcome,
+        authorization=authorization,
+    )
     return ReindexResult(index_name=spec.name, column=spec.column, kind=spec.kind, index_type=spec.index_type, version=outcome)
