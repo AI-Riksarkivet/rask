@@ -4638,10 +4638,22 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   It also needs to interact with whatever happens when a tick outruns its interval — overlap or skip —
   which is not established. A budget cut mid-dataset must stop BETWEEN work items, never inside a
   compaction.
-- *Closes when:* Give the sweep an explicit per-tick time budget — checked between work items, with its
-  value a chart setting rather than a literal — and report MAINTENANCE coverage per bucket (discovery
-  coverage already logs). Rotation is done; do not replace the dataset shuffle with a coarser bucket
-  rotation.
+- **THE BUDGET LANDED 2026-09-16, on the lane the estate actually runs.** `execute_within_budget`
+  (`sweep.py`) stops BETWEEN work items — never inside one, because a cut mid-compaction leaves a
+  rewrite half-done — and exhausting it logs `sweep_budget_exhausted` with the executed and remaining
+  counts, since stopping quietly would be this row's own starvation with a setting attached.
+  `MAINTENANCE_SWEEP_BUDGET_SECONDS` / `maintenance.sweepBudgetSeconds` defaults to **0 = unlimited**,
+  so an estate that sets nothing behaves exactly as before; the row is right that the VALUE is an
+  operator decision and inferring one would be guessing.
+- *WHICH LANE it bounds, measured rather than assumed:* `routes.py` has two. With `workTopic` set it
+  PLANS and enqueues, and execution is distributed across subscriptions that ack for themselves — a
+  per-tick budget is meaningless there. Without one (line 115) it calls `run_sweep`, which executes
+  every planned dataset serially. The deployed estate runs the serial lane, because `workTopic` is empty
+  — the same fact [[LH-153]] turned on and [[LH-127]]'s `maintenance-durable` residue records.
+  The setting is therefore plumbed into the maintenance Deployment only; it was briefly added to the
+  worker template and removed, because the worker executes queued units and never runs a tick.
+- *Closes when:* the second half lands — report MAINTENANCE coverage per bucket (discovery coverage
+  already logs). Rotation is done; do not replace the dataset shuffle with a coarser bucket rotation.
 
 **LH-102 · Storage reclamation has never been run live — trash purge must go first, and it is gated on a clean drift report**
 `maintenance` · med · **blocked:** a clean, complete drift report (the zero-tuple detector plus the `incomplete` rows)

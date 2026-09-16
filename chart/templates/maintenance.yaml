@@ -228,6 +228,7 @@ spec:
             {{- end }}
             - { name: MAINTENANCE_BINDING_NAME, value: {{ .Values.maintenance.bindingName | quote }} }
             - { name: MAINTENANCE_OLDER_THAN_DAYS, value: {{ .Values.maintenance.olderThanDays | quote }} }
+            - { name: MAINTENANCE_SWEEP_BUDGET_SECONDS, value: {{ hasKey .Values.maintenance "sweepBudgetSeconds" | ternary .Values.maintenance.sweepBudgetSeconds 0 | quote }} }
             - { name: MAINTENANCE_SCAN_BATCH_SIZE, value: {{ .Values.maintenance.scanBatchSize | quote }} }
             - { name: MAINTENANCE_COMPACT_THREADS, value: {{ .Values.maintenance.compactThreads | quote }} }
             - { name: MAINTENANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }

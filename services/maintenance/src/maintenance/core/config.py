@@ -343,6 +343,12 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # foot-gun, because `sweep.py::_protected_roots` opens every discovered dataset in every bucket
     # before one is compacted, so the walk is the sweep's dominant cost.
     discovery_max_depth: int = Field(default=3, ge=1, le=16, alias="MAINTENANCE_DISCOVERY_MAX_DEPTH")
+    #: [[LH-101]]. Wall-clock ceiling for ONE sweep tick, checked BETWEEN work items — never inside one,
+    #: because a budget that interrupted a compaction would leave a rewrite half-done. 0 (the default)
+    #: means unlimited, so an estate that sets nothing behaves exactly as it did before. The value is an
+    #: operator decision: too small and a large estate never completes a pass, too large and the bound is
+    #: decorative, and exhausting it logs what was executed and what remains rather than stopping quietly.
+    sweep_budget_seconds: float = Field(default=0.0, ge=0.0, alias="MAINTENANCE_SWEEP_BUDGET_SECONDS")
 
     # The reconciler reads the catalog's registries (`_projects/`, `_warehouses/`) off the control root.
     # Defaults to the primary bucket, matching the catalog's own LANCE_CONTROL_ROOT default; override

@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable, Mapping
+import time
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter
@@ -46,6 +47,7 @@ from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 
 
 log = logging.getLogger(__name__)
+
 
 #: Per-tick cap on FAIL-event publishes. Each publish is already bounded by the emitter's 5s timeout and
 #: the batch is gathered concurrently, but an unbounded fan-out over a bucket where EVERYTHING is failing
@@ -776,6 +778,45 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     return items, decided
 
 
+def execute_within_budget[T, R](
+    items: Iterable[T],
+    *,
+    run: Callable[[T], R],
+    budget_seconds: float,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> Iterator[R]:
+    """Run each item, stopping BETWEEN items once ``budget_seconds`` is spent.
+
+    [[LH-101]]. The tick executes every planned dataset in one serial pass, so at estate scale the tail
+    is maintained only if the pass happens to have time left. The dataset shuffle above rotates WHICH
+    datasets sit behind that point; it does not bound the pass.
+
+    THE CUT IS BETWEEN ITEMS, NEVER INSIDE ONE. A budget that interrupted a compaction would leave a
+    rewrite half-done — worse than an unmaintained dataset — so the check runs before starting the next
+    unit and the one already started always finishes.
+
+    ZERO IS UNLIMITED AND IS THE DEFAULT: an estate that sets no budget behaves exactly as before. The
+    VALUE is an operator decision, not something to infer — too small and a large estate never completes
+    a pass, too large and the bound is decorative.
+
+    AND IT SAYS WHAT IT DID NOT REACH. Stopping quietly would be the same silent starvation with a
+    setting attached, so exhaustion logs the executed and remaining counts.
+    """
+    if budget_seconds <= 0:
+        yield from (run(item) for item in items)
+        return
+
+    remaining = list(items)
+    started = monotonic()
+    executed = 0
+    while remaining:
+        if monotonic() - started >= budget_seconds:
+            log.warning("sweep_budget_exhausted", extra={"executed": executed, "remaining": len(remaining), "budget_seconds": budget_seconds})
+            return
+        yield run(remaining.pop(0))
+        executed += 1
+
+
 def plan_one(uri: str, settings: MaintenanceSettings) -> DatasetWorkItem | None:
     """Plan ONE dataset, named by a write event — the event lane's half of :func:`plan_sweep`.
 
@@ -850,7 +891,13 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
     items, results = plan_sweep(settings)
     options = settings.storage_options()
     now = datetime.now(UTC)
-    results.extend(execute_unit(item, settings=settings, options=options, now=now) for item in items)
+    results.extend(
+        execute_within_budget(
+            items,
+            run=lambda item: execute_unit(item, settings=settings, options=options, now=now),
+            budget_seconds=settings.sweep_budget_seconds,
+        )
+    )
     # The completion half of the `record_run_started` pair the planner opened. Started minus completed
     # is the lost-pass count, so this fires once per tick and only after every unit has been executed.
     record_run()

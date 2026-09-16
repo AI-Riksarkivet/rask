@@ -1751,6 +1751,12 @@ maintenance:
   # every discovered dataset in every bucket before one is compacted). MEASURE before moving it — the
   # report names the prefixes it stopped at, which is where that measurement starts.
   discoveryMaxDepth: 3
+  # LH-101: wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside a compaction.
+  # 0 = unlimited, which is today's behaviour and stays the default: the right value depends on the
+  # estate's dataset count and the tick interval, and inferring one would be guessing. Set it and the
+  # tick logs `sweep_budget_exhausted` with what it executed and what it did not reach, which is the
+  # starvation this exists to make visible.
+  sweepBudgetSeconds: 0
   # Announce each reclamation on the catalog's control topic (catalog.control.v1). Requires
   # dapr.sidecars — and the component's `scopes` must list this app-id, which the chart does below;
   # without it the sidecar rejects every publish SILENTLY (emission is best-effort by design).
