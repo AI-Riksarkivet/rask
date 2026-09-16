@@ -4314,11 +4314,20 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   question is one log field away from being answerable and is not yet answered.
 - **`orphan_files` went 0 -> 932 in the same tick, and the 0 was not a clean estate.** The scan is
   gated (`orphan_scan_enabled`) and a skipped scan is recorded as SKIPPED, never as zero — so this is a
-  scan that ran both times and saw more. The likely reason is the vend fix in the same image: the
-  maintainer could not read the `s3://lance-catalog/models/` base before, and that refusal is now gone
-  from every tick. **Stated as correlation.** Whether these 932 are newly-VISIBLE pre-existing orphans
-  or newly-CREATED ones decides whether this is the fix working or a regression, and one tick cannot
-  tell them apart.
+  scan that ran both times and saw more.
+- *The obvious explanation is measured NOT to hold.* With the naming fix deployed the findings name
+  their datasets, and the first ten are all ONE dataset —
+  `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` — in `lance-catalog`, a bucket the maintainer
+  could always read. So this is **not** the `s3://lance-catalog/models/` vend fix making a base visible,
+  which is what the same image's other change would have suggested. Recorded because the correlation
+  was tempting and is wrong.
+- *What the 932 ARE is still open, and the honest reasons are two.* The `0` was measured six days
+  earlier (2026-09-10) over an estate that has run e2e traffic since, so newly-CREATED is live; and the
+  same image carries [[LH-100]]'s discovery narrowing that took `incomplete` 65 -> 3, so newly-VISIBLE
+  is live too. One tick distinguishes neither. **What would:** a per-dataset orphan count. The scan
+  already computes one (`DatasetOrphanScan.orphans`) and logs nothing on the success path — only
+  `orphan_scan_skipped` / `unreadable` / `listing_failed` — so 932 findings across an unknown number of
+  datasets is as far as any reader can get. That, not the bounded ten-name sample, is the gap.
 - **`maintenance_refused_protected_base` is still half the estate's warnings — re-measured: 738 of
   1,356 WARN-or-worse lines in 25 minutes, 54%.** The row's 2026-09-11 position (10,461 of 20,740)
   holds unchanged on a different image and a different window, so it is structural rather than a spike.
