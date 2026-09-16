@@ -3798,6 +3798,45 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - *Why open:* The owner delegated the decision 2026-09-02 and the row explicitly stays in the backlog — the bus door is the integrity of the lakehouse's write record. The decided shape (mTLS SPIFFE app-id policy while Dapr is the transport, a transport-independent producer signature that survives a Dapr retreat, `enforce_output_authz` stamping the subject either way) is a design, not landed code.
 - *Closes when:* Add the Dapr `accessControl` policy naming the permitted producer app-ids on the lineage subscription, verify a producer signature over the CloudEvent in the bus door, and stamp the subject through `enforce_output_authz`.
+- **THE FIRST CLAUSE IS MISPRESCRIBED — `accessControl` CANNOT SEE A PUB/SUB DELIVERY. Verified against
+  the Dapr documentation 2026-09-16, not inferred.** `docs.dapr.io/operations/configuration/invoke-allowlist`
+  states the block's scope verbatim: it restricts "what the operations *calling* applications can
+  perform, **via service invocation**, on the *called* application", and it names a different mechanism
+  for the one other case it covers (`WorkflowAccessPolicy` for cross-app workflow scheduling). Pub/sub
+  delivery is not in its scope. So building this clause as written would ship a control that cannot
+  fire — the defect class this register keeps finding — and the row's "zero `accessControl` hits in the
+  tree" is a true grep supporting a wrong conclusion.
+- **AND THE TOPIC IS ALREADY CLOSED TO FIRST-PARTY APP-IDS, which the row's grep could not see because
+  it looked for the wrong thing.** Every lineage pub/sub Component carries a top-level `scopes:` naming
+  exactly one app-id (measured off the render): `lineage-pubsub` -> `[catalog, maintenance]`, plus
+  per-app copies for `lineage`, `medallion-producer`, `bronze-to-silver`, `silver-to-gold`,
+  `media-to-silver`, `notifications` and the DLQ. **A Dapr component is not loaded for an app outside
+  its `scopes`**, so an arbitrary pod in the mesh has no lineage pub/sub component at all and cannot
+  publish through one. *Corrected in this row because I first read `scopes` at the wrong YAML level —
+  it is a document-level key, not `spec.scopes` — and reported "no scoping" before re-reading.*
+- *THE RESIDUAL IS NARROWER AND REAL:* within those eight scoped app-ids there is no per-TOPIC
+  restriction, so a consumer-only identity (`notifications`, or `lineage` itself) can publish a forged
+  `lineage.events.v1` event through its own component. The mechanism that closes that is
+  **`protectedTopics` + `publishingScopes`**, verified on
+  `docs.dapr.io/developing-applications/building-blocks/pubsub/pubsub-scopes`: *"If a topic is marked as
+  protected then an application must be explicitly granted publish or subscribe permissions through
+  `publishingScopes` or `subscriptionScopes`"*, with the doc's own example spelling out that an
+  unlisted `app3` "cannot interact with these topics". **`publishingScopes` ALONE does not deny** — the
+  same page says an unspecified field means "all apps can publish to all topics" — so `protectedTopics`
+  is the half that makes it deny-by-default and omitting it would be the third control-that-cannot-fire
+  in this row's history.
+- *NOT IMPLEMENTED TONIGHT, and the reason is this row's own subject.* Writing `publishingScopes`
+  requires the exact set of app-ids that genuinely publish `lineage.events.v1`, and naming it wrong
+  silently stops a producer's provenance — the failure [[LH-141]] exists for. A grep for publish call
+  sites returns twelve modules across control-plane, work-queue and lineage topics together and does
+  not separate them. **The one remaining measurement is: which of the eight scoped app-ids publish to
+  `lineage.events.v1` specifically** — answerable from the live bus or by reading each publish's topic
+  argument, and it must be answered before the scopes are written.
+- *Closes when (rewritten):* `protectedTopics: lineage.events.v1` plus a `publishingScopes` naming the
+  measured producer set on the lineage pub/sub components, a producer signature verified in the bus
+  door (still genuinely open — `_StampedAuthor`'s own docstring says "nothing proves the stamp"), and
+  the subject stamped through `enforce_output_authz` (DONE, `35fcabb4`). **Do NOT add an `accessControl`
+  block: it governs service invocation and would never see this traffic.**
 
 **LH-065 · ~~Prod vending is `mode_b` everywhere, so the tenant-isolation machinery is dormant on every shipped estate (and no `/refresh-credentials` door exists for the alternative)~~ — STRUCK 2026-09-10 (PREMISE FALSIFIED)**
 
