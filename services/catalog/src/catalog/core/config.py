@@ -84,12 +84,6 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
     #: BOOTSTRAP-ONLY. It spells every OpenFGA object id, so changing it on a running estate renames
     #: every governed object and denies every check — see `service_kit.lakehouse.naming`.
     delimiter: str = Field(default=CATALOG_DELIMITER, alias="LANCE_NS_DELIMITER")
-    #: The bounded Lance caches this process is willing to hold (#102 / [[LH-096]]). Lance's own defaults
-    #: are 1 GiB metadata + 6 GiB index, which dwarf the 512 Mi limit every lakehouse pod runs under —
-    #: and a bare `lance.dataset()` mints those ceilings per open and discards them WITH the handle, so
-    #: the cache never engages at all. Named settings rather than literals because a literal cannot
-    #: track `resources.limits.memory`: raise the pod and these should follow, lower it and they must.
-    #: `shared_lance_session` clamps them to the container on top of whatever is set here.
     #: OFF by default. It defaulted to True and NO deployment path ever set it — `grep -rn DOCS
     #: chart/ .docker/ scripts/` matched nothing — so the flag documented a choice nobody was making
     #: and the schemas shipped openly. A security default every deployment must remember to disable is
@@ -521,6 +515,18 @@ def get_settings() -> Settings:
     return Settings()  # required fields are read from the environment
 
 
+@lru_cache
+def _session_caps() -> LanceSessionCaps:
+    """The cache ceilings, read from the environment ONCE.
+
+    CACHED FOR THE SAME REASON `get_settings` IS, and the omission was measurable: a `BaseSettings`
+    constructor re-reads and re-validates the environment on every call, and `shared_lance_session` runs
+    on every Lance open — which in the catalog is per request. Measured 2026-09-16 at **80.4 us per
+    construction against ~0 us for the cached settings**, so leaving it uncached put an environment scan
+    on the open path that the model it replaced had never had."""
+    return LanceSessionCaps()
+
+
 def shared_lance_session() -> lance.Session:
     """The process-wide bounded Lance session every catalog open threads ([[LH-096]]).
 
@@ -540,7 +546,7 @@ def shared_lance_session() -> lance.Session:
     """
     from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
 
-    caps = LanceSessionCaps()
+    caps = _session_caps()
     # Clamped from the cgroup rather than by lowering the defaults, so the caps track the pod's real
     # limit instead of a literal somebody has to remember to change.
     metadata, index = affordable_cache_bytes(caps.lance_metadata_cache_mb << 20, caps.lance_index_cache_mb << 20)
