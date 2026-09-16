@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 75 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 50 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 49 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -5804,11 +5804,22 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 - *Why open:* They are leaf permissions so nothing inherits through them, and `api/fga_deps.py` picks only between `can_describe` and `can_set_status`; the removal cannot ship without `fga model test` green.
 - *Closes when:* Run the dependency scan, delete both relations from `packages/service-kit/src/service_kit/governed/auth/model.fga` (or grow `alter_transaction` into the property/cancel actions), run `fga model test`, regenerate `model.json`.
 
-**XC-021 · The OpenFGA subchart is pinned at 0.3.9 while the running image is v1.18.3, which is 0.3.12's appVersion**
+**XC-021 · ~~The OpenFGA subchart is pinned at 0.3.9 while the running image is v1.18.3, which is 0.3.12's appVersion~~ — CLOSED 2026-09-16**
 `openfga, chart` · low
 
 - *Why open:* Every value key the chart sets was verified present in 0.3.12, but `Chart.lock` carries a digest over the dependency set, so hand-editing the version desyncs it and the `helm dependency build` run by `make k3s-install` and both `scripts/*_e2e_stack.sh` fails outright.
-- *Closes when:* Run `helm dependency update ./chart` to move the openfga dependency 0.3.9 → 0.3.12 and commit the regenerated `Chart.lock`.
+- **CLOSED.** `Chart.yaml` moves to 0.3.12 and `Chart.lock` is regenerated, so the chart now DECLARES
+  the binary it runs. Verified against the upstream index rather than the row: 0.3.12's appVersion is
+  exactly `v1.18.3`, the image on the live Deployment. 0.3.13 and 0.3.14 exist (v1.19.0, v1.20.0) and
+  were deliberately not taken — this aligns the declaration with what is deployed, it does not bump the
+  binary.
+- *The lock diff is the evidence the pins held:* three lines — the version, the digest and the
+  timestamp. All nine dependencies are EXACT pins with no ranges, so a regenerate could not quietly
+  move anything else, which is the risk that made this a "MUST be done with helm on PATH" follow-up
+  rather than a hand edit.
+- *And the operation the row warns about was driven:* `helm dependency build` — what `make k3s-install`
+  and both `scripts/*_e2e_stack.sh` run, and what a desynced lock breaks outright — completes cleanly,
+  as do `helm lint` and `scripts/prod_render_check.sh`.
 
 **XC-022 · NATS HA, a nack operator under GitOps, and a query engine are owner-parked with no ruling**
 `chart, nats` · low · **blocked:** owner decision — the park has never been lifted

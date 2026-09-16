@@ -80,7 +80,7 @@ dependencies:
     # `helm dependency update ./chart` does it; verified 2026-08-08 that every value key we set
     # (datastore.existingSecret / secretKeys.uriKey / applyMigrations / waitForMigrations) still
     # exists in 0.3.12, so the bump itself is a non-event once the lock is regenerated.
-    version: "0.3.9"
+    version: "0.3.12"
     repository: https://openfga.github.io/helm-charts
     condition: openfga.enabled
   # CNPG operator. Its CRDs stay VENDORED at chart/crds/ (installed in Helm's CRD phase, before

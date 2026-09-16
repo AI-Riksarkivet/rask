@@ -16,7 +16,7 @@ dependencies:
   version: 0.18.1
 - name: openfga
   repository: https://openfga.github.io/helm-charts
-  version: 0.3.9
+  version: 0.3.12
 - name: cloudnative-pg
   repository: https://cloudnative-pg.github.io/charts
   version: 0.28.3
@@ -26,5 +26,5 @@ dependencies:
 - name: perses
   repository: https://perses.github.io/helm-charts
   version: 0.22.0
-digest: sha256:2f124f820290c2f63cae819dce5bc8cac4eeed32f13e36520b8acabb60bdc3bc
-generated: "2026-09-11T13:01:03.958484334+02:00"
+digest: sha256:089f0ffbf61506aa03c0580c8ae893cf145194bea7f95e6ca67dc95908433aa6
+generated: "2026-09-16T13:38:28.321152902+02:00"
