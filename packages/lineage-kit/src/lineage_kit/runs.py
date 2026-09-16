@@ -125,7 +125,17 @@ class LineageRun:
         raises is contained and logged, because the alternative is an observability path that can end
         a run that already succeeded.
         """
-        if self.emitter.emit(event) or self._on_undelivered is None:
+        if self.emitter.emit(event):
+            return
+        if self._on_undelivered is None:
+            # NOTHING WILL RECOVER THIS EVENT, and saying nothing made that indistinguishable from a
+            # successful emit — the same silence the lakehouse outbox was built to end, one layer up.
+            # The emitter has already counted the TRANSPORT drop, so a second counter here would
+            # double-count one event; what was missing is the severity and the finality.
+            log.error(
+                "lineage_event_unrecoverable",
+                extra={"run_id": self.run_id, "job": self.job_name, "state": getattr(event, "event_type", "")},
+            )
             return
         try:
             self._on_undelivered(event)

@@ -85,3 +85,24 @@ def test_a_THROWING_hook_never_fails_the_run() -> None:
 def test_no_hook_is_the_previous_behaviour() -> None:
     """Every producer that already stages, and every one that has opted out of lineage, is untouched."""
     _run(_RefusingEmitter()).start()  # must not raise
+
+
+def test_a_refused_event_with_NO_hook_says_so_instead_of_returning_silently(caplog: Any) -> None:
+    """The hook is injected because only the producer knows whether it has durability — which means a
+    producer with none reaches a path where the event is simply gone.
+
+    That path returned without a word, so it read exactly like a successful emit: the branch
+    `if self.emitter.emit(event) or self._on_undelivered is None: return` cannot be told from the
+    success branch by any caller or any log. A producer wiring lineage-kit for the first time, seeing
+    ingest's durability, would reasonably believe it inherited it. The emitter has already counted the
+    TRANSPORT drop by this point, so what is owed here is not another counter — it is the severity, and
+    the statement that nothing will recover this one.
+    """
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="lineage_kit.runs"):
+        run = _run(_RefusingEmitter())
+        run.start()
+
+    unrecoverable = [r for r in caplog.records if r.message == "lineage_event_unrecoverable"]
+    assert unrecoverable, f"a refused event with no recovery hook logged nothing at ERROR: {[r.message for r in caplog.records]}"
