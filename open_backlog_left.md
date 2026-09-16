@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**220 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 74 | 16 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 72 | 16 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -4918,7 +4918,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 ---
 
-**LH-153 · The "compact now" button's in-process lane commits a Rewrite and emits no lineage event**
+**LH-153 · ~~The "compact now" button's in-process lane commits a Rewrite and emits no lineage event~~ — CLOSED 2026-09-16, observed live**
 `catalog` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 12) before that file was deleted
 
 - *Why open:* Re-measured 2026-09-15: `services/catalog/src/catalog/api/v1/endpoints/maintenance.py` returns
@@ -4932,8 +4932,23 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   a defect rather than a choice.
 - *Closes when:* the in-pod branch emits COMPACT_TABLE like its three siblings, with a test that fails if the
   emit is removed from the lane that has no work topic configured.
+- **CLOSED, and the fix carried a SECOND SITE the row did not name.** `reindex`'s in-pod lane was silent
+  too, while the two spec index doors at `indices.py:95` emit `CREATE_INDEX` for the same act — it commits
+  a version through `rebuild_index_now` and reported nothing. Both doors now emit (`5f507c3c`); compact
+  passes no `pin_version` because `compact_now` reports fragment counts and none, reindex pins the version
+  it already holds.
+- *The gate is route-derived*, like `test_the_maintenance_doors_refuse_a_branch_they_cannot_honour` beside
+  it: every POST under `/{id}/maintenance/` must be classified as minting a version or not, so a fifth verb
+  is decided about rather than inheriting the silence reindex inherited. `preview` and `run` are exempt with
+  the reason recorded, and whether reclaiming history deserves its own event is left open — no operation in
+  `catalog.core.lineage_emit` carries it.
+- **OBSERVED LIVE 2026-09-16** on `lance-rest-catalog:main-9e5ff5b3`: a real
+  `POST /v1/table/aud1ns$t1/maintenance/compact` with a Dex-minted bearer answered 200, and AGE then held
+  `(:Run {operation:'compact_table', author:'CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs'})-[:WROTE {version:7}]->(:Dataset {name:'aud1ns$t1'})`.
+  The pre-existing `compaction` run on the same dataset carries an EMPTY author — that is the sweep — so the
+  presser's identity is exactly what this row was missing.
 
-**LH-154 · A failed outbox stage skips the publish entirely and is swallowed by both emitters**
+**LH-154 · ~~A failed outbox stage skips the publish entirely and is swallowed by both emitters~~ — CLOSED 2026-09-16, observed in the deployed pod**
 `service-kit, catalog, maintenance` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 14)
 
 - *Why open:* Re-measured 2026-09-15: `packages/service-kit/src/service_kit/lakehouse/outbox.py:361` runs
@@ -4950,6 +4965,16 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *Distinct from [[LH-004]]*, which is about the kernel swallowing transport failures, not about staging order.
 - *Closes when:* a stage failure still attempts the publish, and a test drives a raising `stage_event` and
   asserts the publish was attempted.
+- **CLOSED (`bcf156b2`).** The stage moved inside the try, so a stage failure degrades the call to the
+  pre-#4 plain publish instead of raising past it. The blindness the row names is closed with it:
+  `outbox.stage.failed` is a new instrument, and because
+  `test_every_FIRST_PARTY_INSTRUMENT_is_read_by_some_alert_rule` refuses an instrument no rule reads and
+  `test_every_alert_rule_has_a_promtool_case` refuses a rule with no fire-proof, `LineageOutboxStagingFailing`
+  landed with both a firing and a staying-quiet promtool case.
+- **OBSERVED IN THE DEPLOYED POD 2026-09-16**, by driving the running `rask-catalog` image's own
+  `_publish_staged` with a raising `stage_event` and a fake publisher: the publish was attempted, the failure
+  was counted, and `outbox_stage_failed` was logged. Driving a real object-store failure was declined — it
+  would mean breaking the store under a shared cluster.
 
 **LH-155 · ~~Undrop and trash purge race with no arbitration on either side — LATENT~~ — PURGE HALF CLOSED 2026-09-16**
 `catalog, maintenance` · med · migrated 2026-09-15 from `open_lakehouse_audit_2026-09-11.md` (finding 9)

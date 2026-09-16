@@ -107,7 +107,7 @@ def main() -> int:
             print("!! --recount closes nothing; pass it alone")
             return 1
         REGISTER.write_text(_retotal(text), encoding="utf-8")
-        print(f"phase table re-derived; {len(_ITEM_START.findall(text))} open items")
+        print(f"phase table re-derived; {len(_OPEN_ITEM.findall(text))} open items")
         return 0
 
     if not args.ids:
@@ -133,7 +133,7 @@ def main() -> int:
         text = text[:s] + text[e:]
 
     text = _retotal(text)
-    total = len(_ITEM_START.findall(text))
+    total = len(_OPEN_ITEM.findall(text))
     REGISTER.write_text(text, encoding="utf-8")
     print(f"\n{total} open items remain")
     return 0
