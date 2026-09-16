@@ -61,14 +61,14 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**215 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**214 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
-| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 48 | 10 |
+| **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 47 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
@@ -6147,11 +6147,21 @@ _These are the estate's edge and its identity plane — the IdP every governed s
   passes". There is no prod cluster to run it against, and the dev release does not use this overlay.
   That verification belongs to the first prod install.
 
-**XC-029 · The ingress carries no `nginx.ingress.kubernetes.io/proxy-read-timeout`, so the controller's 60 s cut severs every idle `query.live` SSE feed**
+**XC-029 · ~~The ingress carries no `nginx.ingress.kubernetes.io/proxy-read-timeout`, so the controller's 60 s cut severs every idle `query.live` SSE feed~~ — CLOSED 2026-09-16 (already landed and gated)**
 `chart, gateway` · med
 
 - *Why open:* Confirmed live: the running controller has `proxy_read_timeout 60s`, no override annotation exists, and SvelteKit's SSE transport emits no keepalive (kit 2.70.1 — `runtime/server/remote.js:90` is the only `enqueue`, no timer in `runtime/server`). Each reconnect re-primes the whole 200-event window and writes an audit record, so replicating `query.live` 15× without this makes the estate slower while looking faster.
-- *Closes when:* Add the `nginx.ingress.kubernetes.io/proxy-read-timeout` annotation to the chart's ingress template before any `query.live` expansion.
+- **CLOSED — the annotation is there and has a gate.** `chart/values.yaml:2326-2327` sets
+  `nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"` AND `proxy-send-timeout: "3600"`, and both
+  reach the rendered Ingress (verified by `helm template … -s templates/ingress.yaml` 2026-09-16). It is
+  pinned by `tests/unit/test_invariants.py::test_ingress_holds_a_live_stream_open_longer_than_nginx_default`,
+  which passes — so a values edit that dropped it would fail rather than silently re-sever the feeds.
+- *The send side moves with the read side deliberately*, and the values comment says why: leaving
+  `proxy-send-timeout` at 60s reaps the same connection from the other end, so the pair is one setting
+  in practice.
+- *A trap worth recording for anyone re-checking this:* the Ingress template keys off `ingress.host`,
+  not an `ingress.enabled` flag. Rendering with `--set ingress.enabled=true` and no host produces NO
+  Ingress at all and greps clean — which reads exactly like the annotation being absent.
 
 ### Build, test and release infrastructure
 
