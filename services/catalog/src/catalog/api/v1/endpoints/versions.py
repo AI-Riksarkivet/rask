@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Annotated
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -16,9 +17,11 @@ from lance_namespace import (
     BatchDeleteTableVersionsResponse,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
+    DescribeTableRequest,
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
     InvalidInputError,
+    LanceNamespace,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
     ServiceUnavailableError,
@@ -128,7 +131,7 @@ async def batch_create_table_versions(
     # operation answers 406 on the dir backend today, which is not a reason to let the field through
     # unchecked: the guard belongs with the route, not with whichever backend happens to be mounted.
     for entry in body.entries or []:
-        _refuse_a_manifest_this_table_does_not_own(getattr(entry, "manifest_path", None))
+        await _refuse_a_manifest_this_table_does_not_own(ns, list(getattr(entry, "id", None) or []), getattr(entry, "manifest_path", None))
     return await run_in_threadpool(native.call, ns, "batch_create_table_versions", body)
 
 
@@ -248,7 +251,58 @@ def list_table_versions(
     return answer
 
 
-def _refuse_a_manifest_this_table_does_not_own(manifest_path: str | None) -> None:
+def _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path: str) -> None:
+    """Shape refusals that need no knowledge of where the table lives, so they cost no round trip.
+
+    Traversal is the one that matters: ``_versions/../../victim.lance/...`` is relative, so it escapes
+    the containment test below by never being absolute, and it reaches a sibling all the same.
+    """
+    unsafe = (
+        not manifest_path
+        or "\\" in manifest_path
+        or ".." in manifest_path.split("/")
+        or any(character.isspace() or ord(character) < 0x20 for character in manifest_path)
+    )
+    if unsafe:
+        raise InvalidInputError(
+            f"manifest_path {manifest_path!r} is not a path inside a single table — it contains a traversal, "
+            f"a backslash or a control character, and creating a version MOVES the file it names"
+        )
+
+
+def _is_absolute(manifest_path: str) -> bool:
+    """A path the backend resolves on its own, rather than against some base it is given."""
+    return manifest_path.startswith("/") or "://" in manifest_path
+
+
+def _refuse_a_manifest_outside(manifest_path: str, *, table_location: str | None) -> None:
+    """Refuse an absolute ``manifest_path`` that is not inside ``table_location``.
+
+    FAIL-CLOSED ON AN UNKNOWN LOCATION: with nothing to compare against there is no way to tell this
+    table's manifest from a sibling's, and the failure mode is a destructive move rather than a refused
+    read.
+
+    CONTAINMENT IS TESTED AGAINST ``<location>/``, never as a bare string prefix, and the scheme and
+    authority must match exactly — otherwise ``/srv/lakehouse/attacker.lance-evil`` passes for
+    ``/srv/lakehouse/attacker.lance``. That near-miss is reachable by anyone who can choose a table
+    name, which is every writer. The same reasoning and the same shape as
+    :func:`catalog.core.vending._location_within`; it is not reused directly because that one splits an
+    ``s3://`` location and this field is also a bare filesystem path on a ``dir`` namespace.
+    """
+    if not table_location:
+        raise InvalidInputError(f"manifest_path {manifest_path!r} is absolute and this table's location is unknown, so there is nothing to confine it to")
+    outer, inner = urlsplit(table_location.rstrip("/")), urlsplit(manifest_path)
+    stem = outer.path.rstrip("/")
+    within = (outer.scheme, outer.netloc) == (inner.scheme, inner.netloc) and (inner.path == stem or inner.path.startswith(f"{stem}/"))
+    if not within:
+        raise InvalidInputError(
+            f"manifest_path {manifest_path!r} is outside this table's own location ({table_location!r}); "
+            f"creating a version MOVES that file, so naming one this table does not own both destroys it "
+            f"and grafts its rows here"
+        )
+
+
+async def _refuse_a_manifest_this_table_does_not_own(ns: LanceNamespace, segments: list[str], manifest_path: str | None) -> None:
     """Refuse a ``manifest_path`` that can name a file outside the table it is being created for.
 
     ``create_table_version`` MOVES the file at this path into the table's version slot — it is not a
@@ -258,35 +312,36 @@ def _refuse_a_manifest_this_table_does_not_own(manifest_path: str | None) -> Non
     attacker [1] -> [1, 2]). The FGA gate above is sound and does not reach this: it authorises the table
     in ``id``, while the reach came from a field nothing inspected.
 
+    THE BACKEND RESOLVES THIS FIELD AS AN ABSOLUTE PATH, which is what decides the shape of the guard.
+    Measured 2026-09-16 against a real ``dir`` namespace, driving every spelling against ONE staged
+    manifest that was present on disk each time::
+
+        '_versions/<n>.manifest-<uuid>'          -> InvalidInput "Staging manifest not found"
+        't.lance/_versions/<n>.manifest-<uuid>'  -> InvalidInput "Staging manifest not found"
+        '/<root>/t.lance/_versions/<n>.manifest-<uuid>' -> OK, version 2 committed
+
+    So there is no base to resolve a relative path against and confinement BY CONSTRUCTION is not
+    available here: the only spelling that can commit is the one that names a place directly. The guard
+    therefore compares — one ``describe_table`` for the table's own location, and only when the path is
+    absolute, so the ordinary refusals still cost nothing.
+
+    THE SPEC DOCUMENTS THE RELATIVE FORM and the backend does not accept it (``namespace.md``'s "Table
+    Version Metadata Schema" example is ``"_versions/9223372036854775806.manifest"``). That divergence is
+    not this door's to settle, so a relative path is passed through to the backend's own answer rather
+    than refused here — it cannot escape the table by construction once traversal is rejected, so
+    admitting it costs nothing and keeps the door conformant if a backend ever resolves it.
+
     THE VERSION CAS IS NOT THIS GUARD, which is why the door looked safe. The backend refuses any version
     but ``latest + 1``, so an arbitrary slot cannot be written — but aimed at the version the CAS demands,
     the cross-table move succeeds.
-
-    RELATIVE IS THE SPEC'S OWN SHAPE, so this confines rather than restricts: ``namespace.md``'s "Table
-    Version Metadata Schema" defines the field as "Path to the manifest file for this version" and its
-    worked example is ``"_versions/9223372036854775806.manifest"``. Both relative spellings the backend
-    accepts — a bare filename and ``_versions/<name>`` — were driven and reach its CAS.
-
-    CONFINEMENT BY CONSTRUCTION rather than by comparison: a relative path with no ``..`` is resolved by
-    the backend inside the table's own directory, so there is no base to resolve here, nothing to compare,
-    and no second ``describe_table`` round-trip whose answer could disagree with the one the backend uses.
     """
     if manifest_path is None:
         return
-    escapes = (
-        not manifest_path
-        or manifest_path.startswith("/")
-        or "://" in manifest_path
-        or "\\" in manifest_path
-        or ".." in manifest_path.split("/")
-        or any(character.isspace() or ord(character) < 0x20 for character in manifest_path)
-    )
-    if escapes:
-        raise InvalidInputError(
-            f"manifest_path must be relative to this table's own directory, as the spec's own example "
-            f"(`_versions/<n>.manifest`) is — {manifest_path!r} can name a file this table does not own, "
-            f"and creating a version MOVES that file"
-        )
+    _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path)
+    if not _is_absolute(manifest_path):
+        return
+    described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
+    _refuse_a_manifest_outside(manifest_path, table_location=getattr(described, "location", None))
 
 
 @router.post("/{id}/version/create", response_model_exclude_none=True)
@@ -311,10 +366,26 @@ async def create_table_version(
     `restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion
     control, and two ops the dir backend answers 406) and stay quiet on purpose — an emit from those
     would be provenance for work that never happened.
+
+    NO `Idempotency-Key` SEAM HERE, DELIBERATELY: the version CAS already converges a replay, and
+    wiring `catalog.api.idempotency` on top would add a second answer to a question the spec has
+    settled. Measured 2026-09-16 against a real `dir` namespace — a staged manifest committed at version
+    2, then the identical request replayed::
+
+        attempt 1 -> OK, version 2
+        attempt 2 -> ConcurrentModificationError (code 14)
+
+    which is precisely the error set `lance_docs/namespace.md:1772` declares for this operation
+    (1 NamespaceNotFound, 4 TableNotFound, 14 ConcurrentModification). That is the seam's own bar and it
+    is met without it: the replay is non-destructive (the slot is occupied, so nothing moves), it maps to
+    409 rather than a bare 500, and the caller can tell its own commit from a competing writer's by
+    reading `DescribeTableVersion` and comparing the `e_tag` of the manifest it staged. Contrast
+    `create_table`, which the seam DOES wrap: there a replay's `AlreadyExists` is indistinguishable from
+    a name collision and the caller cannot learn whether its own write landed.
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
-    _refuse_a_manifest_this_table_does_not_own(body.manifest_path)
+    await _refuse_a_manifest_this_table_does_not_own(ns, segments, body.manifest_path)
     response = await run_in_threadpool(native.call, ns, "create_table_version", body)
     await lineage_deps.emit_measured_write(
         emitter,

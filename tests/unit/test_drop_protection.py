@@ -21,7 +21,7 @@ import asyncio
 from typing import Any
 
 import pytest
-from lance_namespace import NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
@@ -136,7 +136,11 @@ def test_guard_refuses_protected_and_force_overrides(tmp_path: Any) -> None:
     so = settings.storage_options()
     _protect(settings, "table", "bronze$pages")
     record = protection.get_protection(settings.registry_root, so, "table", "bronze$pages") or {}
-    with pytest.raises(NamespaceNotEmptyError, match="protected against deletion"):
+    # A TABLE refuses table-shaped: spec code 19, "Table is in an invalid state for the operation"
+    # (`lance_docs/ns_catalog/spec.yaml:2431`). Code 3 is NamespaceNotEmpty, which told a generated
+    # client to empty a container that was never full and retry. Containers keep 3 — see the namespace,
+    # warehouse and project legs below, and `fga_deps.require_not_protected` for the scope line.
+    with pytest.raises(InvalidTableStateError, match="protected against deletion"):
         fga_deps.require_not_protected(record, kind="table", obj_id="bronze$pages", force=False)
     fga_deps.require_not_protected(record, kind="table", obj_id="bronze$pages", force=True)  # no raise
 
@@ -167,7 +171,7 @@ def test_a_protected_table_refuses_drop_and_the_native_call_never_ran(tmp_path: 
     settings = _settings(tmp_path)
     _protect(settings, "table", "bronze$pages")
     ns: Any = _RecordingNamespace()
-    with pytest.raises(NamespaceNotEmptyError, match="protected against deletion"):
+    with pytest.raises(InvalidTableStateError, match="protected against deletion"):
         _drop_table(settings, ns)
     assert ns.calls == [], "the guard must run BEFORE the native call — bytes were touched"
 
@@ -197,7 +201,7 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
     settings = _settings(tmp_path)
     _protect(settings, "table", "bronze$pages")
     ns: Any = _RecordingNamespace()
-    with pytest.raises(NamespaceNotEmptyError, match="protected against deletion"):
+    with pytest.raises(InvalidTableStateError, match="protected against deletion"):
         asyncio.run(
             t_ep.deregister_table(
                 id="bronze$pages",
@@ -474,7 +478,13 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
     """A cascade destroys children INSIDE one native call — they never reach a door. Before this, a
     protected table under a cascade-dropped namespace died silently while the docstring claimed
     otherwise. The refusal must NAME the protected descendant: "something in here is protected" is
-    not an answer anyone can act on."""
+    not an answer anyone can act on.
+
+    IT REFUSES AS A TABLE (code 19) THOUGH THE DOOR IS A NAMESPACE'S, and the cascade is where that
+    matters most. Here the namespace genuinely IS non-empty, so `NamespaceNotEmpty` would be a
+    well-founded instruction: a generated client would empty the container and retry, dropping every
+    unprotected sibling on the way, and still never pass the one protected table. The code names the
+    OBSTRUCTION, not the door."""
     from lance_namespace import DropNamespaceRequest
 
     from catalog.api.v1.endpoints import namespaces as n_ep
@@ -482,7 +492,7 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
     settings = _settings(tmp_path)
     _protect(settings, "table", "bronze$pages")
     ns: Any = _RecordingNamespace()
-    with pytest.raises(NamespaceNotEmptyError, match="bronze\\$pages"):
+    with pytest.raises(InvalidTableStateError, match="bronze\\$pages"):
         asyncio.run(
             n_ep.drop_namespace(
                 id="bronze",

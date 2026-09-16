@@ -16,23 +16,32 @@ THE VERSION CAS IS A REAL GUARD AND NOT THIS ONE. The backend refuses any versio
 ("requested 9, expected 2"), which stops an arbitrary-slot write — and is exactly why this looked safe.
 Aimed at the version the CAS demands, the cross-table move succeeds.
 
-THE SPEC ALREADY SAYS WHAT THE FIELD IS. `lance_docs/namespace.md`, "Table Version Metadata Schema",
-defines `manifest_path` as "Path to the manifest file for this version" and its worked example is
-`"_versions/9223372036854775806.manifest"` — relative to the table's own directory. An absolute path
-into a sibling table is outside what the spec contemplates, so refusing it is conformance rather than a
-local restriction.
+THE SPEC AND THE BACKEND DISAGREE ABOUT THIS FIELD, and that is what decides the guard's shape.
+`lance_docs/namespace.md`, "Table Version Metadata Schema", defines `manifest_path` as "Path to the
+manifest file for this version" with the worked example `"_versions/9223372036854775806.manifest"` —
+table-relative. The backend resolves it ABSOLUTELY. Measured 2026-09-16 against a real `dir` namespace,
+driving every spelling against ONE staged manifest present on disk each time:
+
+    '_versions/<n>.manifest-<uuid>'                 -> InvalidInput "Staging manifest not found"
+    't.lance/_versions/<n>.manifest-<uuid>'         -> InvalidInput "Staging manifest not found"
+    '/<root>/t.lance/_versions/<n>.manifest-<uuid>' -> OK, version 2 committed
+
+(the `-<uuid>` spelling is the spec's own staging shape — `file_format.md:5391` stages at
+`{dataset}/_versions/{version}.manifest-{uuid}` and finalises by copy.)
+
+SO CONFINEMENT IS BY COMPARISON, NOT BY CONSTRUCTION. There is no base a relative path is resolved
+against, so "relative therefore confined" buys nothing a caller can use: the only spelling that commits
+is the one that names a place directly, and the only way to judge it is against this table's own
+location — one `describe_table`, and only when the path is absolute. A relative path is still passed
+through, because it cannot escape once traversal is refused and the spec documents it.
 
 THE BACKEND GUARDS THE OTHER PATH FIELD AND NOT THIS ONE, which is the reason this guard belongs here
 and the reason it must not be removed as redundant. Measured 2026-09-11 against the same `dir` namespace:
 `register_table` refuses an absolute location ("Absolute paths are not allowed for register_table") and
 refuses traversal ("Path traversal is not allowed"). `create_table_version` refuses neither for
-`manifest_path` — the cross-table move above went through it. Anyone reasoning "the backend validates
-paths" from the first door would be right about that door and wrong about this one.
-
-CONFINEMENT BY CONSTRUCTION, not by comparison. A relative path with no `..` is resolved by the backend
-inside the table's own directory, so there is nothing left to compare against and no second round-trip
-to `describe_table` to get wrong. Both relative spellings the backend accepts — bare filename and
-`_versions/<name>` — were driven and reach its CAS, so the legitimate caller is unaffected.
+`manifest_path` — the cross-table move above went through it, and was re-driven 2026-09-16 with an
+absolute path into a sibling: the victim's slot took the attacker's manifest and the victim's dataset
+then failed to open at all ("Not found"), its manifest naming data files in a directory it does not own.
 """
 
 from __future__ import annotations
@@ -61,9 +70,14 @@ class _Namespace:
 def spy(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     reached: list[str] = []
 
+    class _Described:
+        #: Where the attacker's OWN table lives. The guard compares against this, so the fixture has to
+        #: supply it: an absolute `manifest_path` is only judgeable against the table it is claimed for.
+        location = "/srv/lakehouse/attacker.lance"
+
     def _call(_ns: object, operation: str, _request: object) -> object:
         reached.append(operation)
-        return object()
+        return _Described() if operation == "describe_table" else object()
 
     monkeypatch.setattr(versions_endpoint.native, "call", _call)
 
@@ -107,27 +121,98 @@ def _create(manifest_path: str, spy: list[str]) -> object:
 @pytest.mark.parametrize(
     "manifest_path",
     [
-        "/srv/lakehouse/victim.lance/_versions/18446744073709551613.manifest",
-        "s3://lakehouse/victim.lance/_versions/18446744073709551613.manifest",
         "../victim.lance/_versions/18446744073709551613.manifest",
         "_versions/../../victim.lance/_versions/18446744073709551613.manifest",
     ],
 )
-def test_a_manifest_path_that_can_leave_this_table_is_refused(manifest_path: str, spy: list[str]) -> None:
-    """THE GATE. Each of these names a file the caller was never authorised to move."""
+def test_a_TRAVERSAL_is_refused_without_asking_the_backend_anything(manifest_path: str, spy: list[str]) -> None:
+    """THE GATE, cheap half. A traversal reaches a sibling while never being absolute, so it would slip
+    past a containment test that only judges absolute paths — and it needs no knowledge of where the
+    table lives, so it costs no round trip."""
     with pytest.raises(InvalidInputError):
         _create(manifest_path, spy)
 
-    assert spy == [], "the refusal must happen before the backend is asked — reaching it is the move itself"
+    assert spy == [], "a shape refusal must not pay for a location read"
+
+
+@pytest.mark.parametrize(
+    "manifest_path",
+    [
+        "/srv/lakehouse/victim.lance/_versions/18446744073709551613.manifest",
+        "s3://lakehouse/victim.lance/_versions/18446744073709551613.manifest",
+    ],
+)
+def test_an_ABSOLUTE_path_into_another_table_is_refused_after_one_location_read(manifest_path: str, spy: list[str]) -> None:
+    """THE GATE, comparing half. An absolute path cannot be judged by its shape — only against the
+    location of the table it is claimed for — so exactly one `describe_table` READ happens first. That
+    read is not the move: the move is `create_table_version`, and it must not appear."""
+    with pytest.raises(InvalidInputError):
+        _create(manifest_path, spy)
+
+    assert spy == ["describe_table"], "the version door was reached, which IS the move this guard exists to stop"
 
 
 @pytest.mark.parametrize("manifest_path", ["_versions/18446744073709551613.manifest", "18446744073709551613.manifest"])
-def test_the_spec_s_own_relative_form_still_reaches_the_backend(manifest_path: str, spy: list[str]) -> None:
+def test_the_spec_s_own_relative_form_is_passed_through_to_the_backend(manifest_path: str, spy: list[str]) -> None:
     """The other half: a guard that refused the legitimate shape would just break the door.
 
-    Both spellings were driven against a real `dir` namespace and reach its version CAS, so these are
-    the forms a caller actually sends.
+    THESE DO NOT COMMIT ON THIS BACKEND, and the test deliberately does not pretend otherwise. Driven
+    2026-09-16 against a real `dir` namespace, both spellings answer `InvalidInput: Staging manifest not
+    found` with the file present at exactly that relative path — the backend resolves this field
+    absolutely. But the form is the SPEC's (`namespace.md`, "Table Version Metadata Schema"), the
+    divergence is not this door's to settle, and a relative path with no traversal cannot leave the
+    table. So it is passed through to the backend's own answer rather than refused here, which also
+    keeps the door correct if a backend ever resolves it.
     """
     _create(manifest_path, spy)
 
-    assert spy == ["create_table_version"], "a table-relative manifest is confined by construction and must pass"
+    assert spy == ["create_table_version"], "a relative manifest cannot escape, so the door must not stand in its way"
+
+
+# ---------------------------------------------------------------- the form that actually commits
+
+
+@pytest.mark.parametrize(
+    "manifest_path",
+    [
+        "/srv/lakehouse/attacker.lance/_versions/18446744073709551613.manifest",
+        "/srv/lakehouse/attacker.lance/_versions/18446744073709551613.manifest-0e1f2a3b",
+    ],
+)
+def test_an_absolute_manifest_INSIDE_this_table_reaches_the_backend(manifest_path: str, spy: list[str]) -> None:
+    """THE HALF THAT WAS BROKEN. `manifest_path` is resolved by the backend as an ABSOLUTE path — measured
+    2026-09-16 against a real `dir` namespace, driving every spelling against one staged manifest:
+
+        '_versions/<n>.manifest-<uuid>'            -> InvalidInput "Staging manifest not found"
+        't.lance/_versions/<n>.manifest-<uuid>'    -> InvalidInput "Staging manifest not found"
+        '/tmp/<root>/t.lance/_versions/<n>...'     -> OK, version 2 committed
+
+    the file being present at the relative path each time. So refusing every absolute path did not
+    confine this door, it CLOSED it: the only form that can commit was the one being rejected.
+
+    The second case is the spec's staged shape — `file_format.md:5391` stages at
+    `{dataset}/_versions/{version}.manifest-{uuid}` and finalises by copy — which is what a
+    client-direct writer actually holds when it calls this door.
+    """
+    _create(manifest_path, spy)
+
+    assert spy == ["describe_table", "create_table_version"], "an absolute manifest inside this table's own location must commit"
+
+
+def test_an_absolute_manifest_in_a_SIBLING_table_is_still_refused(spy: list[str]) -> None:
+    """The attack, re-driven against the guard that now admits absolute paths. Measured on a real `dir`
+    namespace 2026-09-16: an absolute path into a sibling table moved that table's staged manifest into
+    the victim's version slot, and the victim's dataset then failed to read at all ("Not found") because
+    its manifest names data files in a directory it does not own."""
+    with pytest.raises(InvalidInputError):
+        _create("/srv/lakehouse/victim.lance/_versions/18446744073709551613.manifest", spy)
+
+    assert spy == ["describe_table"], "the location read is a READ; the move must not have been attempted"
+
+
+def test_a_NEAR_MISS_sibling_name_does_not_pass_as_containment(spy: list[str]) -> None:
+    """`attacker.lance-evil` starts with `attacker.lance`, and a bare string prefix would admit it. The
+    containment test is against `<location>/`, the same near-miss `vending._location_within` documents —
+    reachable by anyone who can choose a table name."""
+    with pytest.raises(InvalidInputError):
+        _create("/srv/lakehouse/attacker.lance-evil/_versions/18446744073709551613.manifest", spy)

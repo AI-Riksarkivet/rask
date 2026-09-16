@@ -77,11 +77,16 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**9 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
-`LH-159`, `LH-172` and `LH-004` workable. Two rulings moved it the same day: `LH-172`'s remedy was
-measured inert and the owner ruled "accept it for now" (a decision that CLOSES a question rather than
-unblocking work), and **R1-R11 were acknowledged as standing**, which cleared `LH-004`'s marker and
-makes the other eight R-citing rows workable as written. That number is the one worth watching: the column above says how much
+**7 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
+`LH-159`, `LH-172`, `LH-004`, `LH-018` and `LH-019` workable. Three rulings moved it the same day:
+`LH-172`'s remedy was measured inert and the owner ruled "accept it for now" (a decision that CLOSES a
+question rather than unblocking work), and **R1-R11 were acknowledged as standing**, which cleared
+`LH-004`'s marker and makes the other eight R-citing rows workable as written. Two of those were then
+picked up and their markers dropped on evidence rather than on the ruling alone: `LH-018` (R1 — the
+`CREATE_TABLE_VERSION` emit shipped; replay marker and the `/commit` retirement remain) and `LH-019`
+(R2 — the protection code decided ON THE SPEC, `spec.yaml:2431`, not on the owner tie the row assumed:
+table 19, containers 3). Both stay OPEN with their remaining clauses named, because a row whose gate
+lifts is not a row that closed. That number is the one worth watching: the column above says how much
 is written down, and this says how much of the priority anyone can pick up without a ruling. It moved
 here by measurement rather than by attrition — four rows that were decision-gated in their bodies
 carried no `**blocked:**` marker, so the workable count read optimistic until they were marked. Gated
@@ -2633,7 +2638,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   calls the unbind door for that namespace. with a human bearer holding `project:lakehouse#can_administer`.
 
 **LH-018 · The governed commit door is the non-spec `/commit`; `CreateTableVersion`/`BatchCommitTables` carry no lineage, gate, protection or replay marker**
-`catalog` · **HIGH** · **blocked:** owner acknowledgement of R1
+`catalog` · **HIGH** · *unblocked 2026-09-16 — R1 acknowledged and the lineage half shipped; the replay marker and the `/commit` retirement remain*
 
   **RE-MEASURED 2026-09-11 — EVERY CLAUSE IS TRUE AND THE ASK IS STILL WRONG.** Measured by hand
   against the deployed catalog as well as by audit: of the three ops the title names, **two answer 406
@@ -2681,14 +2686,71 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   door with its new dependencies is live and behaving; what is unproven is the emit, because it runs
   only on SUCCESS and a successful version-create needs a genuinely staged manifest (the client-direct
   write path), which this drive did not construct. Catalog logs: 0 errors since the roll.
-- *What is left of this row, with the dangerous clauses struck:* the replay marker, and the
+- **THE 2026-09-11 GUARD BROKE THE DOOR IT PROTECTED, found and fixed 2026-09-16 while working the
+  replay clause.** `manifest_path` is resolved by the backend as an **ABSOLUTE** path. Measured against
+  a real `dir` namespace, driving every spelling against ONE staged manifest present on disk each time:
+  `_versions/<n>.manifest-<uuid>` -> `InvalidInput "Staging manifest not found"`;
+  `t.lance/_versions/<n>.manifest-<uuid>` -> the same; `/<root>/t.lance/_versions/<n>.manifest-<uuid>`
+  -> **OK, version 2 committed**. The guard refused every absolute path and demanded the relative form,
+  so it did not confine this door — it CLOSED it: the only spelling that can commit was the one being
+  rejected 400, and the relative form it insisted on can never succeed. The earlier live drive recorded
+  exactly this symptom (*"answering 400 InvalidInputError: Staging manifest not found … a real domain
+  answer rather than a routing failure"*) and it was read as the drive's own missing manifest rather
+  than as the door being shut.
+  **The remedy's own premise was the error**: "confinement by construction, no `describe_table`
+  round-trip to get wrong" only holds if relative paths resolve inside the table, and they resolve
+  nowhere. Confinement is now BY COMPARISON — shape refusals first (traversal, control characters) at no
+  cost, then one `describe_table` for the table's own location, and only when the path is absolute.
+  Near-miss containment is tested against `<location>/`, the same shape `vending._location_within`
+  documents, so `attacker.lance-evil` does not pass for `attacker.lance`. The relative form is passed
+  through to the backend's own answer rather than refused, because the SPEC documents it
+  (`namespace.md`, "Table Version Metadata Schema") and the divergence is not this door's to settle.
+  **The attack is real and was re-driven** with an absolute path into a sibling: the victim's slot took
+  the attacker's staged manifest and the victim's dataset then failed to open at all ("Not found"), its
+  manifest naming data files in a directory it does not own. Pinned by 10 legs in
+  `services/catalog/tests/test_a_version_entry_cannot_adopt_another_tables_manifest.py`, now split by
+  what a refusal COSTS (a traversal is refused with the backend untouched; an absolute path costs one
+  location read, and `create_table_version` must not appear).
+- **THE REPLAY-MARKER CLAUSE IS CLOSED BY MEASUREMENT, NOT BY BUILDING IT.** The version CAS already
+  converges a replay, and the spec says so: `lance_docs/namespace.md:1772` declares this operation's
+  whole error set as **1 (NamespaceNotFound), 4 (TableNotFound), 14 (ConcurrentModification)**. Driven
+  2026-09-16 — a staged manifest committed at version 2, then the identical request replayed —
+  `attempt 1 -> OK, version 2`, `attempt 2 -> ConcurrentModificationError (code 14)`. That meets the
+  `catalog.api.idempotency` bar without the seam: the replay is non-destructive (the slot is occupied,
+  nothing moves), it maps to 409 rather than a bare 500, and the caller can tell its own commit from a
+  competing writer's by reading `DescribeTableVersion` and comparing the `e_tag` of the manifest it
+  staged. Contrast `create_table`, which the seam DOES wrap and must: there a replay's `AlreadyExists`
+  is indistinguishable from a name collision and the caller cannot learn whether its write landed.
+  Wiring the seam here would add a second answer to a question the spec has settled. Rationale recorded
+  at the door.
+- *What is left of this row, with the dangerous clauses struck:* ~~the replay marker~~ **(closed
+  2026-09-16 — the CAS converges it; see above)**, and the
   `/commit` alias-then-remove. **`managed_versioning=true` is NOT to be advertised** — the row's own
   re-measure says it invites clients onto a catalog-mediated commit pointer, the Iceberg shape the
   permanent LANCE-ONLY ruling exists to avoid — and `batch_commit_tables` stays 406 rather than being
   backed by a rask-only staged-manifest KV.
 
 **LH-019 · rask-only governance side effects still run inside spec handlers (warehouse-scoped namespace refusal, trash soft-delete, protection 409, lineage keys in schema metadata, implicit BTREE, insert pre-coercion, maintenance 503 on POST reads)**
-`catalog` · **HIGH** · **blocked:** the management-API carve, plus an owner ruling on the protection error code
+`catalog` · **HIGH** · *unblocked 2026-09-16 — R2 acknowledged and the protection code decided; three clauses of four remain*
+
+  **THE PROTECTION CLAUSE IS CLOSED 2026-09-16, and it closed on the spec rather than on taste.**
+  `lance_docs/ns_catalog/spec.yaml:2431` defines code 19 as *"InvalidTableState: Table is in an invalid
+  state for the operation"* — which is what protected IS — so the 19-vs-3 "undecided tie" below was
+  never a tie: one of the two options is the spec's own answer for this exact rung. `require_not_protected`
+  now raises `InvalidTableStateError` for `kind="table"` and keeps `NamespaceNotEmptyError` for the
+  container kinds, and the scope line is written at the site: `warehouse` and `project` are rask's own
+  hierarchy, absent from the spec, so every code is an approximation there.
+  **THE HTTP STATUS DID NOT MOVE** — `ns_errors._STATUS` maps both codes to 409, so nothing reading
+  status alone observes this; what changed is the `code` a generated client dispatches on. The cascade
+  path (`namespaces.py::_require_descendants_unprotected`) was the sharpest case and is covered by the
+  same dispatch: there the namespace genuinely IS non-empty, so code 3 was a well-founded instruction to
+  empty it — a client would drop every unprotected sibling and still never pass the protected table.
+  Pinned by `services/catalog/tests/test_a_protected_table_refuses_as_a_TABLE_not_a_namespace.py` (10
+  legs, incl. the scope guard and the unchanged-status leg); four legs of `tests/unit/test_drop_protection.py`
+  moved with it.
+  **STILL OPEN, and this row does not close on the above:** the management-API carve (R2 is acknowledged,
+  so the carve is sanctioned — but moving the 25 route groups is LH-021's work, unstarted), the remaining
+  refusals' spec codes, and `branch` on the eight refusing ops.
 
   **RE-MEASURED 2026-09-11 — SIX of the seven side effects confirmed, and the remedy is aimed past
   its doors.** Confirmed executing inside spec handlers: the warehouse-scoped namespace refusal
@@ -2710,7 +2772,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   the error invites a destructive retry against exactly the object protection exists to keep. That is a
   stronger argument than code tidiness and it is what makes this worth an owner minute rather than a
   backlog entry.
-- *Closes when:* Move the rask-only side effects behind the management API, re-express each remaining refusal with the spec's own code, decide the protection code (3 vs `InvalidTableStateError` 19) for all four protected object kinds, and honour `branch` on the eight refusing ops via the plumbing at `dataplane.py:1085`.
+- *Closes when:* Move the rask-only side effects behind the management API, re-express each remaining refusal with the spec's own code, ~~decide the protection code (3 vs `InvalidTableStateError` 19) for all four protected object kinds~~ **(done 2026-09-16 — table 19, containers 3, on the spec's own definition)**, and honour `branch` on the eight refusing ops via the plumbing at `dataplane.py:1085`.
 
 **LH-020 · Two of the three stock Lance clients still do not drive the deployed catalog: lancedb cannot address a nested namespace, lance-ray is untested**
 `catalog` · **HIGH** · **blocked:** lancedb upstream fix; the lance-ray leg waits for the compute pass

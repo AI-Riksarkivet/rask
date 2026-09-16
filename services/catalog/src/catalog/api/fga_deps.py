@@ -32,6 +32,7 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InvalidInputError,
+    InvalidTableStateError,
     LanceNamespace,
     NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
@@ -1021,12 +1022,28 @@ def require_not_protected(record: dict[str, str], *, kind: str, obj_id: str, for
     (and runs identically with or without it), so a caller who may not delete this object cannot
     delete it by forcing. Two independent locks, and force turns exactly one.
 
-    Refusal is ``NamespaceNotEmptyError`` (spec code 3 → HTTP 409) — the spec's own "this container will
-    not be deleted right now" error, reused rather than minting a status the client SDKs do not map.
+    THE REFUSAL IS SHAPED LIKE THE OBJECT IT REFUSES, because a client acts on the code and not on the
+    sentence. A protected TABLE raises ``InvalidTableStateError`` — `lance_docs/ns_catalog/spec.yaml:2431`
+    defines code 19 as "Table is in an invalid state for the operation", which is exactly what protected
+    is. Everything else raises ``NamespaceNotEmptyError`` (code 3), the spec's container-shaped "this
+    will not be deleted right now".
+
+    THE TABLE CASE USED TO RAISE CODE 3 TOO, and that is a live defect rather than a cosmetic one:
+    ``NamespaceNotEmpty`` tells a generated client the container has contents, so the correct response
+    to it is to empty the container and retry — against a table that was never full, and whose refusal
+    no amount of emptying changes. The cascade path (`namespaces.py::_require_descendants_unprotected`)
+    makes it worse, because there the namespace genuinely IS non-empty: the client's retry is
+    well-founded, it drops every unprotected sibling, and it still cannot pass the one protected table.
+
+    ``warehouse`` and ``project`` keep code 3 by SCOPE, not by oversight: they are rask's own hierarchy
+    and appear nowhere in the lance-ns spec, so every code is an approximation there and the
+    container-shaped one is the closest. The table is the rung the spec covers and the rung clients are
+    generated against, so it is the one where a wrong code has a reader.
     """
     if force or (record.get("protected") or "false").lower() != "true":
         return
-    raise NamespaceNotEmptyError(
+    refusal = InvalidTableStateError if kind == "table" else NamespaceNotEmptyError
+    raise refusal(
         f"{kind} '{obj_id}' is protected against deletion. Pass force=true to override "
         f"(protection only — the same authorization is still required), or clear the flag first."
     )
