@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**210 open items**, deduped from 325 raw rows mined out of the seven files above. A further 97 rows
+**209 open items**, deduped from 325 raw rows mined out of the seven files above. A further 98 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 69 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -3679,7 +3679,7 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 - *Why open:* The nine data doors were fixed and pinned; the governance half is untouched. `model.fga:349,357` has only `can_create_branch: owner`, so branch writes fall through to the table's `can_write_data`, and `canonical_object_id` joins the table's path segments only — the FGA object is `table:<ns>$<table>` whatever branch a request names, so a `can_write_data` holder writes ANY branch and no grant can cover main alone. Vending is not scoped to `tree/<b>/`, protection and trash have no per-branch records, `parent_branch`/`parent_version` facets are absent, and driven against the deployed catalog `tags/create` and `branches/create` both answered 200 with zero control events because `ControlAction` is a 38-value `Literal` with no tag or branch action. The branch refusal on `stats`, `index/list` and `index/{n}/stats` was added as a QUERY parameter while those routes declare no body, so the spec's `{"branch": …}` body is still dropped.
 - *Closes when:* Add `type branch { parent:[table]; reader/writer; can_write_data }` to `model.fga` with `.fga.yaml` cases; make `canonical_object_id` branch-aware; scope vended STS prefixes to `tree/<b>/` via `vending.build_session_policy`; add per-branch protection and trash records; emit `parent_branch`/`parent_version` facets; add tag/branch values to `ControlAction` in `control_events.py` and regenerate `docs/catalog-openapi.json` + the TS client; land A1 so stats/index read `branch` from a declared body.
 
-**LH-057 · Per-base credential vending is unimplemented — the vendor refuses any table whose fragments carry a `base_id` instead of vending a union of bases**
+**LH-057 · ~~Per-base credential vending is unimplemented — the vendor refuses any table whose fragments carry a `base_id` instead of vending a union of bases~~ — CLOSED 2026-09-16 (the short-circuit is narrowed to the bases the policy misses; a SECOND door was vending blind)**
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* The union vend LANDED — the manifest's base_paths are read and granted READ in the session policy — leaving only the `has_external_bases` short-circuit and the per-base write/deny split the code declined on the record.
   **Evidence:** IMPLEMENTED: /home/gabriel/Desktop/rask/services/catalog/src/catalog/core/vending.py:129,180-201 — `build_session_policy(bucket, prefix, tier, bases)` emits a `ListBase<n>` + `BaseObjects<n>` pair per base (own bucket ARN each), with `_reject_iam_metacharacters("base path", base)` applied to the manifest-sourced path at :180. The manifest read is reused, not doubled: /home/gabriel/Desktop/rask/services/catalog/src/catalog/api/v1/endpoints/credentials.py:138-163 `_dataset_facts` returns `(version, base_paths)` off one `lance.dataset` open (it replaced `_current_version`, which no longer exists), and :113 passes `bases=declared_bases` into `vendor.vend`; every vendor signature now takes `bases` (vending.py:82,208,279,353). The §H12 maintainer-probe cost is addressed there. STILL REAL, and narrower than the row: /home/gabriel/Desktop/rask/services/catalog/src/catalog/api/v1/endpoints/credentials.py:104-106 still returns `mode="server_mediated"` when `settings.multibase_data_base_list` is set and `has_external_bases` (/home/gabriel/Desktop/rask/services/catalog/src/catalog/core/vending.py:424-448) is true — that is the only remaining refusal, and it is latent behind an empty deployed list. DECLINED ON THE RECORD: vending.py:143-146 states every base gets READ ONLY and that write-on-target_bases / deny-on-reference-only 'need evidence a manifest read does not yet distinguish'; vending.py:148-155 states one grant shape covers both layouts deliberately so the policy need NOT consult `BasePath.is_dataset_root`.
@@ -3688,6 +3688,41 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 
 - *Why open:* Two of three clauses closed (the `session_token` seam and `expires_at_millis` on both vend paths) and the falsy-zero guard is fixed, but `endpoints/credentials.py:76-130` and `core/vending.py:213,278` still refuse rather than vend. §H12 is the measured cost: 69 datasets a tick refused compaction because the vended session policy cannot reach a base the manifest declares. Latent behind `settings.multibase_data_base_list` (deployed empty), so it fails on the first estate that enables the feature.
 - *Closes when:* In `core/vending.py`, vend the union of the manifest's `base_paths` with per-base rights — read on inherited bases, write on `target_bases`, never on reference-only bases — resolving each path by `BasePath.is_dataset_root`, reusing the manifest `credentials.py::_current_version` already reads, and applying `build_session_policy`'s `*`/`?` metacharacter refusal to manifest-sourced paths.
+- **CLOSED in the sense this row's own re-measure names: "if `credentials.py:104-106` were removed (or
+  narrowed to the bases the policy cannot cover) the row would close in its useful sense."** Narrowed,
+  not removed. `vending.unsanctioned_bases(location, declared_bases, sanctioned)` asks the question with
+  the SAME predicate the policy uses (`_base_is_sanctioned`), so the door and the policy can no longer
+  disagree about a base — proxying what the policy would have granted, or direct-vending what it would
+  have dropped. Only a base the policy genuinely cannot grant forces `server_mediated`, and it says which
+  one (`vend_server_mediated_unreachable_bases`).
+- **A SECOND DOOR WAS VENDING BLIND, found while wiring the first — measured 2026-09-16.**
+  `has_external_bases`'s own docstring says the vend door and describe-with-vending "must answer it
+  identically"; `tables.py:418` called `vendor.vend(table_location=…, tier="read")` with **no `bases=`
+  at all**, so every multi-base table that passed its guard got a credential scoped to less than the
+  table is — § H12's shortfall on the door nobody re-checked. Both doors now read the manifest through
+  one shared `vending.dataset_facts` and vend with the bases it returns.
+- *The fragment scan is DELETED, not left beside its replacement.* `has_external_bases` walked every
+  fragment's data files to answer "does any byte live in a base", which was the pre-union premise; with
+  both doors converted it had no caller, and a function nothing calls whose tests still pass reads as
+  live code. Its one durable lesson — `base_id` 0 is a real base while a root-local file reads `None`,
+  so a truthy test called a shallow clone and a branch "not multi-base" — moved into
+  `unsanctioned_bases`, which retires the trap rather than restating it: the manifest's declared
+  `base_paths` are a SUPERSET of what fragments resolve through (`base_id` INDEXES them), so the scan
+  is not needed to be safe. `test_base_id_zero_is_a_real_base.py` went with it; the real-Lance
+  multi-base write in `tests/unit/test_multibase.py` was converted onto the live path instead of
+  deleted.
+- *NEW BRANCH, fail-closed and pinned:* a location `split_s3_location` cannot parse — a local `dir`-
+  backend path, a spelling this module does not know — is never vouched for, whatever the allowlist
+  says. The policy is written in S3 ARNs, so a base it cannot address is one a direct client could not
+  reach, and the honest answer is the fallback rather than a `ValueError` out of the vend door.
+- *The declined clause STAYS declined, and it is the only part that ever needed R4.* Every base is
+  granted READ ONLY (`vending.py:143-146`); write-on-`target_bases` and deny-on-reference-only "need
+  evidence a manifest read does not yet distinguish", and the row's own re-measure says the
+  `is_dataset_root` clause "should be struck, not built". Nothing here pre-empts that ruling — the
+  change narrows an existing guard with an existing predicate.
+- *No feature flag any more.* The old short-circuit was gated on `multibase_data_base_list` so a
+  single-bucket estate "never pays the fragment scan". There is no scan: a single-bucket table declares
+  no bases, so the check costs one tuple comparison on a manifest read the door already did.
 
 **LH-058 · No column-level classification or policy exists: `columns.py` has no FGA check and `pii` survives only as a key in seed data**
 `catalog, lineage, openfga` · **HIGH** · **blocked:** the FGA model-shape decision (the `column` relation is part of it)

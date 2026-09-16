@@ -17,7 +17,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-import lance
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
@@ -31,15 +30,12 @@ from lance_namespace import (
 
 from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentToken, RawBearerToken
-from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import parse_identifier
-from catalog.core.vending import Tier, has_external_bases
+from catalog.core.vending import Tier, dataset_facts, unsanctioned_bases
 from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
-from service_kit.lakehouse.features import manifest_base_path_refs
-from service_kit.lakehouse.objectfs import same_store_uri
 
 
 log = logging.getLogger(__name__)
@@ -98,15 +94,19 @@ async def vend_credentials(
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if described.location is None:  # no object-store location to scope to → fall back to server-mediated
         return CredentialResponse(mode="server_mediated")
-    # #3-B ⊥ #2: a multi-base table's fragments live in registered DATA bases the vended STS session policy
-    # (scoped to the primary root bucket only) cannot reach — a direct-vended client would be DENIED at the
-    # object store reading/writing them. Fall back to server-mediated IO (the catalog's root creds reach all
-    # bases). Gated on the feature flag so a single-bucket deployment never pays the fragment scan.
-    if settings.multibase_data_base_list and await run_in_threadpool(has_external_bases, described.location, settings.storage_options()):
-        return CredentialResponse(mode="server_mediated")
     # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
     # A tiny ROOT-cred manifest read to learn the version — not the byte-proxy (no data bytes move).
-    read_version, declared_bases = await run_in_threadpool(_dataset_facts, described.location, settings.storage_options())
+    read_version, declared_bases = await run_in_threadpool(dataset_facts, described.location, settings.storage_options())
+    # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). A multi-base table
+    # whose every declared base is sanctioned IS direct-vendable: `build_session_policy` grants each one
+    # a `ListBase<n>`/`BaseObjects<n>` pair, so the client reaches its own bytes. Only a base
+    # `_base_is_sanctioned` refuses is unreachable, and only that justifies proxying the whole table
+    # through the catalog's root credential. Asked off the manifest read above rather than by walking
+    # every fragment's data files, and no feature flag is needed: a single-bucket table declares no
+    # bases and this costs nothing.
+    if missed := unsanctioned_bases(described.location, declared_bases, settings.vend_sanctioned_bases):
+        log.info("vend_server_mediated_unreachable_bases", extra={"location": described.location, "bases": list(missed)})
+        return CredentialResponse(mode="server_mediated")
     # The blocking STS call (AssumeRole / AssumeRoleWithWebIdentity) runs in the threadpool. A rejected
     # exchange is most often the caller's token (web_identity: expired / untrusted issuer) → 401; otherwise
     # the STS backend is unavailable/misconfigured → 503. Either way a meaningful 4xx/5xx, never a bare 500.
@@ -134,34 +134,3 @@ async def vend_credentials(
             tier=tier,
         )
     return CredentialResponse(mode=mode, credentials=creds, location=described.location, read_version=read_version)
-
-
-def _dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, tuple[str, ...]]:
-    """``(current version, declared base paths)`` from ONE root-cred manifest read.
-
-    The version is the client's optimistic-append base; 0 for a declared-only/new table with no
-    readable dataset yet. The bases are what the vended policy must also be able to READ — a table
-    whose fragments carry a ``base_id`` resolves them through those paths, so a credential scoped to
-    the table prefix alone is scoped to less than the table is (§ H12, measured: 69 datasets a tick
-    refused compaction because the maintainer could not probe a declared base).
-
-    Both facts come off the same handle deliberately: this read already existed for the version, and a
-    second open to learn the bases would double the manifest reads on every vend.
-
-    Base spellings are normalised through :func:`same_store_uri` because a manifest states a base in
-    the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
-    """
-    try:
-        ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
-    except (ValueError, OSError):
-        return 0, ()
-    bases: list[str] = []
-    try:
-        for ref in manifest_base_path_refs(ds):
-            bases.append(same_store_uri(location, ref.path))
-    except Exception:
-        # A base we cannot SPELL is one the policy must not guess at. Vending without it yields exactly
-        # today's behaviour — the narrower credential — rather than a wrong grant.
-        log.warning("vend_base_paths_unreadable", extra={"location": location}, exc_info=True)
-        bases = []
-    return int(ds.version), tuple(bases)

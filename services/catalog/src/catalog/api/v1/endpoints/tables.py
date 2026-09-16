@@ -66,7 +66,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
-from catalog.core.vending import has_external_bases
+from catalog.core.vending import dataset_facts, unsanctioned_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, warehouses
 from service_kit.control_emit import emit_control
@@ -414,9 +414,14 @@ def describe_table(
             log.warning("describe_schema_metadata_read_failed", extra={"table": "/".join(segments)})
 
     if vend_credentials and response.location:
-        if settings.multibase_data_base_list and has_external_bases(response.location, so):
-            return response  # multi-base: a root-scoped credential cannot reach the data bases
-        creds = vendor.vend(table_location=response.location, tier="read")
+        # THE SAME QUESTION THE VEND DOOR ASKS, off the same read ([[LH-057]]). This door fell back on
+        # "does any fragment live in a base", which was the pre-union premise, and then vended with NO
+        # `bases=` at all — so every multi-base table that passed the guard got a credential scoped to
+        # less than the table is, which is § H12's shortfall on the door nobody re-checked.
+        _, declared_bases = dataset_facts(response.location, so)
+        if unsanctioned_bases(response.location, declared_bases, settings.vend_sanctioned_bases):
+            return response  # a base the session policy cannot grant — only the catalog's root creds reach it
+        creds = vendor.vend(table_location=response.location, tier="read", bases=declared_bases)
         if creds is not None:
             # THE EXPIRY GOES INSIDE `storage_options`, which is where the spec puts it and the only
             # place a stock client looks: `lance_docs/ns_catalog/spec.yaml:2878-2880` — *"If the vended

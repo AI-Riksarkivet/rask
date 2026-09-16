@@ -135,15 +135,22 @@ def test_duplicate_data_base_is_deduped() -> None:
     assert len(captured["initial_bases"]) == 1
 
 
-def test_has_external_bases_detects_multibase(tmp_path: Any) -> None:
-    # audit follow-up (#3-B ⊥ #2): the vend path must DETECT a multi-base table (data in a registered base)
-    # so it can fall back to server-mediated instead of handing out a root-scoped STS policy that can't reach
-    # the base. Real local Lance writes, no mocks.
-    from catalog.core.vending import has_external_bases
+def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(tmp_path: Any) -> None:
+    """Real local Lance writes, no mocks: the vend door must decide from the MANIFEST'S declared bases.
+
+    [[LH-057]]. It used to ask "does any fragment carry a `base_id`" and fall back to server-mediated
+    for every table that answered yes, which was right while the session policy reached only the
+    primary bucket. `build_session_policy` grants each sanctioned base now, so the question is whether
+    a base exists that it could NOT grant — and that is answered off the same manifest read the door
+    already does for the optimistic-commit version.
+    """
+    from catalog.core.vending import dataset_facts, unsanctioned_bases
 
     single = str(tmp_path / "single")
     lance.write_dataset(_table(), single, data_storage_version="2.2")
-    assert has_external_bases(single, {}) is False  # single-location → no external bases
+    version, bases = dataset_facts(single, {})
+    assert version >= 1 and bases == (), f"a single-location table declared bases: {bases}"
+    assert unsanctioned_bases(single, bases) == ()
 
     mb = str(tmp_path / "mb")
     base = str(tmp_path / "base")
@@ -154,7 +161,15 @@ def test_has_external_bases_detects_multibase(tmp_path: Any) -> None:
         target_bases=["b1"],
         data_storage_version="2.2",
     )
-    assert has_external_bases(mb, {}) is True  # data lands in the registered base → detected
+    _, mb_bases = dataset_facts(mb, {})
+    assert mb_bases, "the registered base is absent from the manifest read, so the policy would be scoped to less than the table"
+
+    # Nobody sanctioned it → the door must proxy, exactly as it always did for this shape.
+    assert unsanctioned_bases(mb, mb_bases) == mb_bases
+    # AND a local path can never be sanctioned, whatever the allowlist says: the session policy is
+    # written in S3 ARNs, so a location it cannot address is one a direct client could not reach. The
+    # allowlist is not a way to vouch for a spelling the policy cannot express.
+    assert unsanctioned_bases(mb, mb_bases, sanctioned_bases=[str(tmp_path)]) == mb_bases
 
 
 def test_config_allowlist_parsing() -> None:

@@ -205,6 +205,89 @@ def _base_is_sanctioned(base: tuple[str, str], table: tuple[str, str], sanctione
     return any(_location_within(split_s3_location(entry), base) for entry in sanctioned_bases)
 
 
+def unsanctioned_bases(table_location: str, bases: Sequence[str], sanctioned_bases: Sequence[str] = ()) -> tuple[str, ...]:
+    """The declared bases a vended session policy would NOT be able to grant.
+
+    [[LH-057]]. The vend door refuses a direct credential to any multi-base table, which was right
+    while the policy was scoped to the primary bucket alone: a client would be denied at the object
+    store on the first fragment that lived elsewhere. The policy grants every sanctioned base now
+    (:func:`build_session_policy`), so the question is no longer "does this table have bases" but
+    "is there a base this credential could not reach" — and only the second justifies proxying the
+    table through the catalog's root credential.
+
+    Empty answer = direct-vendable. A table declaring no bases, which is the overwhelming majority,
+    costs nothing here.
+
+    THE DECLARED LIST SUPERSEDES THE FRAGMENT SCAN THIS REPLACED, and it is the safe direction:
+    ``base_id`` INDEXES ``base_paths``, so every base a fragment resolves through is in the manifest's
+    declared list, and "every declared base is sanctioned" implies every fragment is covered. It also
+    retires a trap the scan carried — the first registered base is ``0`` while a file under the
+    dataset's own root reads ``None``, so a truthy test called those two identical and answered "no
+    external bases" for the very shapes it was written to catch (a shallow clone and a branch, measured
+    on pylance 10.0.0). Reading the manifest asks no such question.
+
+    THE SAME PREDICATE THE POLICY USES, deliberately: :func:`_base_is_sanctioned` decides what
+    ``build_session_policy`` grants, so asking anything else would let the door and the policy disagree
+    about the same base — the door proxying what the policy would have covered, or direct-vending what
+    it would have dropped.
+    """
+    return tuple(base for base in bases if not _covered(table_location, base, sanctioned_bases))
+
+
+def _covered(table_location: str, base: str, sanctioned_bases: Sequence[str]) -> bool:
+    """Would the policy grant this one base? A location it cannot SPLIT is one it must not vouch for.
+
+    ``split_s3_location`` raises on anything that is not ``s3://bucket/key`` — a local ``dir``-backend
+    path, a spelling this module does not know. The policy is written in S3 ARNs, so a base it cannot
+    address is a base a direct client could not reach, and the honest answer is the fallback rather than
+    an exception out of the vend door. Fail-closed, the same direction ``sanctioned_bases`` defaults in.
+    """
+    try:
+        return _base_is_sanctioned(split_s3_location(base), split_s3_location(table_location), sanctioned_bases)
+    except ValueError:
+        return False
+
+
+def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, tuple[str, ...]]:
+    """``(current version, declared base paths)`` from ONE root-cred manifest read.
+
+    The version is the client's optimistic-append base; 0 for a declared-only/new table with no
+    readable dataset yet. The bases are what the vended policy must also be able to READ — a table
+    whose fragments carry a ``base_id`` resolves them through those paths, so a credential scoped to
+    the table prefix alone is scoped to less than the table is (§ H12, measured: 69 datasets a tick
+    refused compaction because the maintainer could not probe a declared base).
+
+    Both facts come off the same handle deliberately: this read already existed for the version, and a
+    second open to learn the bases would double the manifest reads on every vend.
+
+    HERE RATHER THAN IN AN ENDPOINT MODULE, for the reason :func:`unsanctioned_bases` states: the vend
+    door and describe-with-vending must answer from the same read, and a private copy in each is how
+    their two answers came to differ.
+
+    Base spellings are normalised through :func:`same_store_uri` because a manifest states a base in
+    the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
+    """
+    import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
+
+    from service_kit.lakehouse.features import manifest_base_path_refs
+    from service_kit.lakehouse.objectfs import same_store_uri
+
+    try:
+        ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
+    except (ValueError, OSError):
+        return 0, ()
+    bases: list[str] = []
+    try:
+        for ref in manifest_base_path_refs(ds):
+            bases.append(same_store_uri(location, ref.path))
+    except Exception:
+        # A base we cannot SPELL is one the policy must not guess at. Vending without it yields exactly
+        # today's behaviour — the narrower credential — rather than a wrong grant.
+        log.warning("vend_base_paths_unreadable", extra={"location": location}, exc_info=True)
+        bases = []
+    return int(ds.version), tuple(bases)
+
+
 def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[str] = (), *, sanctioned_bases: Sequence[str] = ()) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
@@ -536,30 +619,3 @@ def make_vendor(
             sanctioned_bases=sanctioned_bases,
         )
     assert_never(mode)
-
-
-def has_external_bases(location: str, storage_options: dict[str, str]) -> bool:
-    """True if the table's data physically lives in registered NON-root bases (#3-B multi-base) — any data
-    file with a ``base_id`` set. Such a table cannot be safely direct-vended: the STS session policy is scoped
-    to the primary root bucket only, so a data-base fragment would be denied at the object store. Short-
-    circuits on the first external file; only called when the multi-base feature is enabled.
-
-    A VENDING question, which is why it lives here rather than in an endpoint module: both the vend
-    door (``credentials.py``) and describe-with-vending (``tables.py``) must answer it identically,
-    and a helper shared across endpoint modules belongs in the layer they both already import.
-    """
-    import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
-
-    try:
-        ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
-        # `is not None`, NOT a truthy test, and the difference is the whole check. `base_id` INDEXES
-        # `base_paths`, so the first registered base is **0** — while a file living under the dataset's
-        # own root carries `None`. Measured on pylance 10.0.0: a plain dataset reads `None`, and a
-        # shallow clone and a branch — the canonical multi-base shapes this function exists to catch —
-        # both read `0`. A truthy test calls those two identical and answers False for the very case it
-        # was written for, so the table is direct-vended with a session policy that cannot reach where
-        # its bytes are. Nothing goes red: the VEND succeeds, and the denial lands later at the object
-        # store, on whoever used the credential.
-        return any(getattr(df, "base_id", None) is not None for frag in ds.get_fragments() for df in frag.data_files())
-    except (ValueError, OSError):
-        return False
