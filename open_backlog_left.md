@@ -5673,13 +5673,32 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
 
 ---
 
-**LH-156 · Six places still describe the deleted `RayJobExecutor` as live**
-`medallion, docs` · low · filed 2026-09-15 with the deletion that caused it
+**LH-156 · ~~Six places still describe the deleted `RayJobExecutor` as live~~ — CLOSED 2026-09-16**
+`medallion, docs` · was low · filed 2026-09-15 with the deletion that caused it
 
 - *Why open:* [[LH-083]] deleted the RayJob-CR adapter. The prose naming it did not go with it:
   `engine_names.py:24`, `engine_registry.py:13-16`, `dapr_saga.py:4`, `ray_jobs_api.py:11-12`,
   `ray_submit.py:~183` ("the port's Ray adapter renders `to_env()` into the CR's runtime_env") and
   `docs/DECISIONS.md:1451-1486`, which still reads "a port, TWO adapters".
+- **RE-MEASURED 2026-09-16: THE COUNT WAS RIGHT AND THREE OF THE SIX NAMED SITES WERE ALREADY CLEAN.**
+  `dapr_saga.py`, `ray_jobs_api.py` and `ray_submit.py` carry no reference at all. Three OTHERS the row
+  never named did: `engine_registry.py`'s construction-arguments paragraph (wrong class AND wrong facts
+  — it said the adapter needs "the deployment facts KubeRay's webhook requires", while
+  `RayJobsApiExecutor.__init__` takes one optional `httpx.AsyncClient` and nothing else),
+  `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py:10`, and
+  `services/medallion/tests/test_the_chosen_engine_is_the_engine_that_runs.py:7` — the latter also
+  asserting "There is no registry", which `engine_registry` has since falsified.
+- *The class is confirmed gone:* no `class RayJobExecutor` and no `rayjob_executor.py` anywhere in the
+  tree. The live adapter is `rayjobs_api_executor.RayJobsApiExecutor`, submitting to a STANDING cluster
+  through the dashboard Jobs API.
+- *`DECISIONS.md` was SUPERSEDED, not rewritten*, because a decision record is where history is supposed
+  to live (CLAUDE.md says so) — the dated 2026-09-04 entry stands as what was decided then, and a new
+  2026-09-15 entry records the deletion, its two reasons (zero production callers; and the wire gate's
+  0-of-6 env overlap, which means the adapter could not have worked against the jobs it would launch)
+  and what replaced it.
+- *The three references that remain are all dated past-tense provenance recording the deletion* —
+  `engine_registry.py:86`, `test_no_service_depends_on_a_compute_engine.py:8` and
+  `test_a_declared_ray_task_is_refused_where_no_ray_runtime_runs.py:132`. None describes it as live.
 - *Why it is worth a row rather than a sweep-when-convenient:* the estate's rule is that falsified prose
   is REWRITTEN, and a decision record describing an architecture the code no longer has is exactly what
   sends the next reader to re-derive a deleted class. It is low only because nothing branches on it.

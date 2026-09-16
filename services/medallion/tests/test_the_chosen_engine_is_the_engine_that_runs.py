@@ -4,12 +4,16 @@ Q17-1..4, and G1b of the standing goal: "the two seams stay BYO, and the deploye
 
 WHAT IS ACTUALLY MISSING, measured 2026-09-07 rather than inferred from the import count.
 `engine_choice.engine_for` answers with a STRING — `"ray"` or `"inprocess"` — and nothing in the
-estate turns that string into an `Executor`. There is no registry. `InProcessExecutor` is constructed
-by hand at `transform.py:760`, `RayJobExecutor` is constructed NOWHERE outside tests, and the lane the
-estate actually runs reaches Ray through `ray_submit` — a second, older submission seam that the port
-does not sit in front of. So the choice and the execution are two unconnected mechanisms that happen
-to agree, and a port with two adapters of which one is dead is a decoupling claim rather than a
-decoupled system.
+estate turned that string into an `Executor`. There was no registry: `InProcessExecutor` was
+constructed by hand at `transform.py:760`, the port's Ray adapter was constructed NOWHERE outside
+tests, and the lane the estate actually runs reached Ray through `ray_submit` — a second, older
+submission seam the port did not sit in front of. So the choice and the execution were two unconnected
+mechanisms that happened to agree, and a port with two adapters of which one is dead is a decoupling
+claim rather than a decoupled system.
+
+THAT IS THE STATE THIS TEST WAS WRITTEN AGAINST, AND IT IS NOT THE CURRENT ONE — kept because it is
+what the gate exists to prevent recurring. `engine_registry` now resolves both names, and the dead
+adapter was deleted 2026-09-15 rather than wired.
 
 THE NAME IS DEFINED THREE TIMES, which is the same defect one layer down. `RAY_ENGINE` is declared in
 `task_register.py`, `rayjob_executor.py` AND `engine_choice.py`; `IN_PROCESS_ENGINE` in

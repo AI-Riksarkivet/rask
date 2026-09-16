@@ -1,9 +1,10 @@
 """Name -> adapter. The seam that turns a chosen engine into the thing that runs it.
 
-`engine_choice.engine_for` answers with a STRING, and nothing turned that string into an `Executor`:
-`InProcessExecutor` was constructed by hand at one call site, `RayJobExecutor` was constructed
-nowhere outside tests, and the deployed lane reached Ray through a second, older submission seam the
-port did not sit in front of. Choice and execution were two mechanisms that happened to agree.
+`engine_choice.engine_for` answers with a STRING, and until this module landed nothing turned that
+string into an `Executor`: measured 2026-09-07, `InProcessExecutor` was constructed by hand at one call
+site, the port's Ray adapter was constructed nowhere outside tests, and the deployed lane reached Ray
+through a second, older submission seam the port did not sit in front of. Choice and execution were two
+mechanisms that happened to agree.
 
 A REGISTRY RATHER THAN A CONDITIONAL, because a conditional is the thing a port exists to stop: with
 one, adding an engine means editing a branch every caller shares. Here a new engine is a new adapter
@@ -11,9 +12,10 @@ and a new row, and `resolve_task_registration` already refuses a task registered
 deployment does not host — the refusal path existed and only the resolution was missing.
 
 CONSTRUCTION ARGUMENTS DIFFER PER ADAPTER AND THAT IS NOT A LEAK. `InProcessExecutor` needs the
-credential resolver because it holds the Lance handle itself; `RayJobExecutor` needs the deployment
-facts KubeRay's webhook requires (which cluster, which queue) and no credential at all, because the
-Ray pods carry their own. So each adapter is built from what IT needs, and the caller passes both.
+credential resolver because it holds the Lance handle itself; `RayJobsApiExecutor` needs neither — it
+addresses one dashboard host and carries no credential, because the Ray pods hold their own. Its only
+constructor argument is an optional `httpx.AsyncClient`, injected for tests and pooled in production so
+a client per submission cannot leak connections. So each adapter is built from what IT needs.
 """
 
 from __future__ import annotations

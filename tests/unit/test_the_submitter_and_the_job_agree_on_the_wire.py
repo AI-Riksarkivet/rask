@@ -6,11 +6,14 @@ Nothing tied them together, and they disagree today. Measured 2026-09-07:
     scripts/ray_stage_job.py reads FROM_URI, TO_URI, STAGE, STAGE_CARDINALITY, BASE_VERSION, LINEAGE_JSON
     overlap                        0 of 6
 
-THIS IS WHY THE PORT'S RAY ADAPTER WAS NEVER WIRED, and it is a better explanation than the one the
-goal file carries. `RayJobExecutor` renders `order.to_env()` into the RayJob's `runtime_env`, so a job
-submitted through the port would start with none of its inputs bound and read every one of them as
-absent — an empty `FROM_URI` is not a crash, it is a job that scans nothing and writes nothing. The
-adapter is not merely unused; against these scripts it could not have worked, which no test said.
+THIS IS WHY THE PORT'S FIRST RAY ADAPTER WAS NEVER WIRED, and it is a better explanation than the
+one the goal file carried. That adapter rendered `order.to_env()` into a `RayJob` CR's `runtime_env`,
+so a job submitted through the port would have started with none of its inputs bound and read every one
+of them as absent — an empty `FROM_URI` is not a crash, it is a job that scans nothing and writes
+nothing. It was not merely unused; against these scripts it could not have worked, which no test said.
+It was deleted 2026-09-15 (owner decision) and `RayJobsApiExecutor` replaced it, submitting to the
+STANDING cluster through the dashboard Jobs API — the same path `scripts/ray_stage_job.py` is launched
+by, which is why this parity gate still has something to hold.
 
 `test_ray_job_wire_parity.py` is the neighbouring gate and does NOT cover this: it compares the
 Python and TypeScript declarations of the `RayJob` **schema** — what the jobs board parses — not the

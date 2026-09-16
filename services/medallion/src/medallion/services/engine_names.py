@@ -21,7 +21,8 @@ from __future__ import annotations
 from typing import Final
 
 
-#: A stage submitted to Ray. The adapter is `rayjob_executor.RayJobExecutor`.
+#: A stage submitted to Ray. The adapter is `rayjobs_api_executor.RayJobsApiExecutor`, which submits
+#: to a STANDING cluster through the dashboard Jobs API — the path the cascade actually runs.
 RAY_ENGINE: Final = "ray"
 
 #: A stage run in the calling process. The adapter is `inprocess_executor.InProcessExecutor`.
