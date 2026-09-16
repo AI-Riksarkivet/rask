@@ -358,8 +358,18 @@ async def _publish_staged(
 
     staged = bool(outbox_uri)
     if staged:
-        await run_in_threadpool(stage_event, outbox_uri, storage_options, key, event_json)
-        outbox_metrics.record_staged()
+        try:
+            await run_in_threadpool(stage_event, outbox_uri, storage_options, key, event_json)
+        except Exception as exc:
+            # A stage failure degrades this call to the pre-#4 plain publish instead of raising past the
+            # publish. Both callers catch and continue, so raising here loses the event outright — whereas
+            # an unstaged event that reaches the bus is still delivered. Counted because every other outbox
+            # signal describes objects that exist and is blind to this path by construction.
+            outbox_metrics.record_stage_failed()
+            log.warning("outbox_stage_failed", extra={"outbox_uri": outbox_uri, "error": str(exc)})
+            staged = False
+        else:
+            outbox_metrics.record_staged()
     try:
         await dapr_publish.publish_event(
             publisher,

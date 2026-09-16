@@ -37,6 +37,20 @@ groups:
             The outbox relay is lagging; the oldest undrained event exceeds 300s.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
+      - alert: LineageOutboxStagingFailing
+        expr: sum(rate(outbox_stage_failed_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "Lineage events are publishing without a durable copy"
+          description: >-
+            The outbox stage is failing, so events reach the bus with the crash window OPEN: if the publish
+            then fails the event is gone, and no other outbox signal can see it — depth and oldest-age
+            describe staged objects, and publish_failed only counts a publish that HAD been staged.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
       - alert: LineageIngestDeadLettering
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
         for: 5m

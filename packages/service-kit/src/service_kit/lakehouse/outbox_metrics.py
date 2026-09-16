@@ -44,6 +44,16 @@ _publish_failed = _meter.create_counter(
         "rising depth is the real alarm."
     ),
 )
+_stage_failed = _meter.create_counter(
+    "outbox.stage.failed",
+    unit="{event}",
+    description=(
+        "Stages that failed, after which the event was published ANYWAY without a durable copy. This is "
+        "the only path that delivers with the crash window open: `staged` never counts it, `publish_failed` "
+        "is gated on having staged, and depth/oldest-age describe objects that exist. Non-zero means the "
+        "object store refused a write the lineage lane did not need in order to deliver."
+    ),
+)
 _drained = _meter.create_counter(
     "outbox.events.drained",
     unit="{event}",
@@ -121,6 +131,10 @@ def record_published() -> None:
 
 def record_publish_failed() -> None:
     _publish_failed.add(1)
+
+
+def record_stage_failed() -> None:
+    _stage_failed.add(1)
 
 
 def record_drained(count: int) -> None:

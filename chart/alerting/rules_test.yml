@@ -1214,3 +1214,30 @@ tests:
       - eval_time: 35m
         alertname: CompactionSigningWithAmbientCredential
         exp_alerts: []
+
+  # A failing stage publishes WITHOUT a durable copy, which no other outbox signal can see: depth and
+  # oldest-age describe objects that exist, and publish_failed is gated on having staged.
+  - interval: 1m
+    input_series:
+      - series: "outbox_stage_failed_total"
+        values: "0+1x11"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LineageOutboxStagingFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+            exp_annotations:
+              summary: "Lineage events are publishing without a durable copy"
+              description: "The outbox stage is failing, so events reach the bus with the crash window OPEN: if the publish then fails the event is gone, and no other outbox signal can see it — depth and oldest-age describe staged objects, and publish_failed only counts a publish that HAD been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # A healthy stage must NOT page — the counter is flat, not absent, once the series exists.
+  - interval: 1m
+    input_series:
+      - series: "outbox_stage_failed_total"
+        values: "0+0x11"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: LineageOutboxStagingFailing
+        exp_alerts: []

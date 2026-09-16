@@ -91,6 +91,57 @@ def test_publish_failure_leaves_event_staged_for_the_relay(tmp_path: Any) -> Non
     assert dict(outbox.list_events(uri, {})) == {"r1": event}  # survived
 
 
+def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: Any) -> None:
+    # Staging is a DURABILITY aid, not a precondition for delivery. Raising past the publish turns a
+    # transient object-store blip into the one outcome the outbox exists to prevent: an event that
+    # reaches nobody. An unstaged event that reaches the bus is delivered; an unstaged event that is
+    # never published is gone, so publishing anyway strictly dominates.
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("outbox bucket unreachable")
+
+    monkeypatch.setattr(outbox, "stage_event", _boom)
+    dapr = _Dapr()
+    event = '{"run":{"runId":"r1"}}'
+    asyncio.run(
+        outbox.publish_lineage_with_outbox(
+            dapr,
+            outbox_uri=_uri(tmp_path),
+            storage_options={},
+            run_id="r1",
+            event_json=event,
+            pubsub_name="p",
+            topic_name="t",
+            timeout_seconds=5,
+        )
+    )
+    assert dapr.published == [event]
+
+
+def test_a_failed_stage_is_counted_so_the_one_unwatched_loss_path_is_visible(tmp_path: Any, monkeypatch: Any) -> None:
+    # The outbox's four signals are blind to a stage failure by construction: `staged` never increments,
+    # `publish_failed` is gated on having staged, and depth/oldest-age describe objects that exist. Without
+    # its own counter the single path that publishes WITHOUT a durable copy is the one path nothing watches.
+    def _boom(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("outbox bucket unreachable")
+
+    counted: list[int] = []
+    monkeypatch.setattr(outbox, "stage_event", _boom)
+    monkeypatch.setattr(outbox.outbox_metrics, "record_stage_failed", lambda: counted.append(1))
+    asyncio.run(
+        outbox.publish_lineage_with_outbox(
+            _Dapr(),
+            outbox_uri=_uri(tmp_path),
+            storage_options={},
+            run_id="r1",
+            event_json='{"run":{"runId":"r1"}}',
+            pubsub_name="p",
+            topic_name="t",
+            timeout_seconds=5,
+        )
+    )
+    assert counted == [1]
+
+
 def test_no_outbox_uri_degrades_to_plain_publish(tmp_path: Any) -> None:
     dapr = _Dapr()
     asyncio.run(
