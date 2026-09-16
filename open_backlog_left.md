@@ -4475,6 +4475,33 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   `services/maintenance/tests/test_the_orphan_count_says_which_datasets_hold_them.py`, including that
   the truncated tail's own count is right — a bounded list that does not admit its bound repeats the
   failure one level up.
+- **DEPLOYED AND OBSERVED 2026-09-16 (`main-fef0e10d`), and the first tick answers more than it was
+  built to.** EIGHT datasets hold all 932, and they sum to exactly that:
+
+      s3://acme-bucket/e41135a5_acme-silver$features            293
+      s3://acme-bucket/medallion/bronze                         243
+      s3://bind86-wh/medallion/silver                           160
+      s3://acme-bucket/3c099c25_acme-gold$catalog               148
+      s3://lance-catalog/medallion/bronze                        30
+      s3://lakehouse-wh/medallion/bronze-media                   26
+      s3://c6t115034-wh/medallion/bronze                         19
+      s3://lance-catalog/m2proof_silver$m2-proof-1788537252       13
+
+  So it was never a diffuse estate-wide condition — it is four datasets carrying 90% of it, and the
+  register can now say which.
+- **AND THE CROSS-REFERENCE IS THE SHARPER FINDING: seven of the eight are swept every tick, refuse
+  NOTHING, and reclaim NOTHING.** Every one carries `refused=None old_versions_removed=0` while
+  holding unreferenced files — 759 between them. The eighth,
+  `s3://bind86-wh/medallion/silver`, produces no outcome line at all, which is [[LH-141]]'s crossing
+  guard stopping the unit before `_maintain_one` runs; that one is expected.
+- *What that points at, stated as a reading and not a root cause:* version cleanup reclaims files a
+  SUPERSEDED VERSION referenced. A file no manifest ever referenced — the shape an aborted or partial
+  write leaves, and the `_transactions/*.txn` + `data/*.lance` pairs in the sample look exactly like it
+  — is not a superseded version's file, so `cleanup_old_versions` has nothing to reclaim and reports 0
+  honestly. That is precisely the population the orphan scan exists to find and the #79 purge exists to
+  act on, and the purge is gated on `report_is_clean`, which an `incomplete` list of 3 currently blocks.
+  Naming the chain rather than asserting it: a second tick over time is what separates "these stopped
+  growing" from "these are still accumulating".
 - **`maintenance_refused_protected_base` is still half the estate's warnings — re-measured: 738 of
   1,356 WARN-or-worse lines in 25 minutes, 54%.** The row's 2026-09-11 position (10,461 of 20,740)
   holds unchanged on a different image and a different window, so it is structural rather than a spike.
