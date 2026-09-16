@@ -2967,6 +2967,29 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   stopped updating" about a quality gate doing exactly its job and holding the batch for a human. Every
   deterministic DROP in `transform.py` — malformed payload, authz denial, undeclared transform — has
   the same consequence.
+  **A THIRD SITE, AND THE UPSTREAM ANSWER — both established 2026-09-16.**
+  `service_kit/draining.py:20` justified its RETRY answer with *"DROP is final and these topics carry no
+  DLQ"*. Measured on the running estate, that is false for most of its own call sites:
+  `bronze_arrival.py:42,100` and `promotions.py:340` pass `dead_letter_topic=settings.dlq_topic`, and the
+  medallion producer carries `MEDALLION_DLQ_TOPIC=dlq.medallion-producer`; only
+  `maintenance/api/index_work.py:114` resolves to `None`. The RETRY answer stands — what was wrong is the
+  alternative it was weighed against, since a DROP there would PARK a good trigger rather than discard
+  it. Corrected in place; behaviour unchanged.
+  *Confirmed at the DEPLOYED version rather than master:* daprd is `ghcr.io/dapr/daprd:1.18.1`, where the
+  routing is `subscription.go:362-372` and `postman/http/http.go:142-146` (this row previously cited
+  master's 365-368 / 143-147, which are correct for master and not for what runs here).
+  **AND UPSTREAM HAS ALREADY ANSWERED THE OPEN QUESTION.** `dapr/dapr#6282`, maintainer artursouza:
+  *"I agree to make DROP move message to deadletter. Creating a new response type when SUCCESS and DROP
+  have same behavior would be confusing IMO. So, for customers that don't want a message to be processed
+  ever, SUCCESS is still there."* Implemented by `dapr/dapr#7097`, merged 2023-10-27. So **SUCCESS is the
+  sanctioned ack for a message the app can never accept** — option (a) is not a workaround, it is the
+  upstream-intended pattern. The reason nobody in this estate knew is that #7097 shipped with its
+  "Extended the documentation" box unticked: the pubsub API reference still describes DROP as only
+  *"Warning is logged and message is dropped"*, and the dead-letter page does not mention DROP at all.
+  *The two sites do NOT have the same blast radius, so one decision does not mean one edit:* medallion's
+  cascade components are `deliverPolicy=new` + durable and hold ~23 DLQ messages; lineage's is the
+  estate's only `deliverPolicy=all` + ephemeral component and holds ~8,274 of the DLQ's ~8,305. The loop
+  is lineage's alone.
   **THE SAME SHAPE HAS A SECOND SITE, AND ITS COMMENT MADE THE SAME FALSE CLAIM — `lineage`, corrected
   2026-09-16 (`8c44e7d8`).** `consumer.handle_cloud_event` returns `_DROP` on `PermissionDeniedError`
   and its docstring gave the reason as avoiding exactly this: retrying "only burns the delivery budget

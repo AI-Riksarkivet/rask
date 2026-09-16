@@ -17,10 +17,21 @@ TWO DOORS, TWO ANSWERS, and they are not interchangeable:
   a `Retry-After` turns that into "come back" rather than a backoff guess. A 4xx would tell the caller
   its request was wrong, which is a lie about a pod that is merely leaving.
 * :func:`retry_when_draining` — a sidecar-delivered route gets **RETRY**, never DROP and never
-  SUCCESS. DROP is final and these topics carry no DLQ, so dropping a trigger because this replica
-  happened to be draining silently cancels a cascade; a SUCCESS ack is worse, being indistinguishable
-  from having done the work. RETRY hands the message back to the broker, which redelivers it to a
-  replica that is still alive.
+  SUCCESS. A SUCCESS ack is indistinguishable from having done the work, and DROP does not mean what
+  it looks like: on a subscription that declares a `deadLetterTopic`, daprd routes a DROP to that topic
+  rather than discarding it (v1.18.1, `pkg/runtime/subscription/subscription.go:362-372` ->
+  `sendToDeadLetter`; the HTTP postman turns the app's DROP into `ErrMessageDropped` at
+  `postman/http/http.go:142-146`). So dropping a trigger because this replica happened to be draining
+  would PARK a perfectly good message for a human to find, not cancel it quietly — which is worse for
+  an operator and no better for the cascade. RETRY hands the message back to the broker, which
+  redelivers it to a replica that is still alive.
+
+  MOST OF THIS GATE'S ROUTES DO DECLARE ONE, measured on the running estate 2026-09-16:
+  `bronze_arrival.py:42,100` and `promotions.py:340` pass `dead_letter_topic=settings.dlq_topic`, and
+  the medallion producer carries `MEDALLION_DLQ_TOPIC=dlq.medallion-producer`. Only
+  `maintenance/api/index_work.py:114` resolves to `None`, its `index_dlq_topic` being unset there. The
+  RETRY answer is right either way; what changes is that "the message just vanishes" was never the
+  alternative it was being weighed against.
 
 Both are pure reads of one boolean. Neither may touch a resource — a drain gate that opened a client
 would fail during exactly the window it exists for, which is the rule `/readyz` already states:
