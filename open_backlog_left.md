@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**212 open items**, deduped from 325 raw rows mined out of the seven files above. A further 95 rows
+**211 open items**, deduped from 325 raw rows mined out of the seven files above. A further 96 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 72 | 16 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 71 | 15 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -2232,9 +2232,35 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   logged — an UNTRACKED dataset has every retained version as a hole, and an uncapped tick would make
   its cost a function of the largest history in the estate. The REPORT is never truncated.
 
-**LH-137 · Two live faults block real cascade work and appear in no backlog row: `unconfined_uri` refuses every `bind86` silver→gold hop, and `/compaction_plan` answers 404 for medallion tier ids**
+**LH-137 · ~~Two live faults block real cascade work and appear in no backlog row: `unconfined_uri` refuses every `bind86` silver→gold hop, and `/compaction_plan` answers 404 for medallion tier ids~~ — CLOSED 2026-09-16 (both halves premise-falsified by measurement; (b)'s residue is [[LH-141]])**
 `medallion, catalog` · **HIGH** · found by the 2026-09-11 audit, observed but NOT root-caused
 
+- **CLOSED — RE-MEASURED 2026-09-16 on `main-17aae203`. Neither half survives, and (b) turns out to be
+  a row this register already has.**
+  * **(a) is falsified by the outcome it predicted.** `bind86-gold$catalog` EXISTS, at
+    `s3://bind86-wh/c1c79484_bind86-gold$catalog`, beside eight other projects' gold tables — so the
+    silver→gold hop this row says is stopped has run. The current stage-runner pod records **0**
+    `unconfined_uri` refusals. And the two sides of the confinement check are now measured to AGREE:
+    `read_root` comes from `describe_table_location(identity.from_dataset)` =
+    `describe_table_location('bind86-silver$features')`, and the sweep reads that table at
+    `s3://bind86-wh/78de8931_bind86-silver$features`; `supplied` is `publication_trigger`'s
+    `extra["location"]` — the catalog's vended location for the SAME id. Two catalog answers for one
+    table, which is what the row's own narrowing said they should be.
+  * *Which makes the 2026-09-10 condition a STALENESS question, not a composition one* — the two
+    answers differed at two different times — and it is not reproducible without driving a real
+    publication, which writes a tenant's gold tier. Named rather than done.
+  * *Recurrence is already loud, which is why this closes rather than waiting for a drive.*
+    `chart/alerting/rules.yml:160` fires on every `medallion_stage_refused_total` reason except
+    `routing_disabled`, `unconfined_uri` included; and `DiagnosticFormatter` now renders `extra`, so the
+    next refusal names its own `supplied` and `root` on the line — the diagnosability blocker this row
+    records is gone and the alert will say when to look.
+  * **(b) is not a route fault and its residue belongs to [[LH-141]].** The row says "0 distributed
+    commits against 24 in-pod fallbacks in 24 h". Measured: **980 `mode='distributed'` outcomes against
+    1,124 `in_pod` estate-wide, and 28 of the 124 composed `medallion/<tier>` datasets run
+    distributed** — the door drives medallion tier ids fine. Every `/compaction_plan` 404 in the window
+    is one of exactly TWO ids, `lakehouse$bronze$events` and `lakehouse-bronze$events`, both
+    `TableNotFoundError` — the stale-stamp pair [[LH-141]] already names, tracks and now guards. A
+    second row for the same two ids is how one defect gets fixed twice and closed neither time.
 - *Why open:* Both were seen on the live estate and neither is tracked. (a) Every one of the 8
   silver→gold triggers for project `bind86` on 2026-09-10 was DROPped with
   `medallion_stage_from_uri_refused` and parked on `dlq.silver-to-gold` within a second of publish —
