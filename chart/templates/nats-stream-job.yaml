@@ -238,6 +238,29 @@ spec:
               # EXP_BOFF's 30s,60s,120s,300s; the index lane's is `indexAckWait` repeated). Comparing
               # them to EXP would find a mismatch every run and delete the queue out from under
               # in-flight maintenance work. Walking them needs per-stream expected values, not this list.
+              # ORPHAN PASS (LH-127), beside the drift pass rather than inside it: the two answer different
+              # questions. Drift asks "is this durable's config still the one the component requests"; an
+              # orphan's config matches forever, because a Dapr sidecar created it from those same templated
+              # values before its app was removed. So the one class of stale durable the comparison can never
+              # see is the class that never changes — measured: `lance-ray` holds four and `pages-to-gold-htr`
+              # two, all reporting the expected MaxDeliver/Backoff, all bound to apps that do not exist.
+              #
+              # KEYED ON THE RENDERED NAME SET, never on app-ids. Three durables this chart owns are not
+              # `<app-id>-durable` — the dead-letter consumer and both control lanes — so an app-id test
+              # deletes them. `lance.chartDurables` is the single derivation; the chart-owns-it test asserts
+              # it against the rendered Components, so a new durable that forgets the list fails there.
+              EXP_DURABLES="{{ include "lance.chartDurables" . }}"
+              for st in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
+                for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
+                  case " $EXP_DURABLES " in
+                    *" $c "*) ;;
+                    *)
+                      echo "ORPHAN DURABLE $st/$c: no component in this release renders it — deleting"
+                      nats --server "$S" consumer rm "$st" "$c" -f
+                      ;;
+                  esac
+                done
+              done
               for st in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 for c in $(nats --server "$S" consumer ls "$st" --names 2>/dev/null | grep -- '-durable$'); do
                   info=$(nats --server "$S" consumer info "$st" "$c" --json 2>/dev/null | tr -d ' \n')

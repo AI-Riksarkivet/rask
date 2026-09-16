@@ -245,9 +245,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *The gate is already half-written:* `tests/unit/test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py`
   has `_durables(rendered)` returning `{durableName: (maxDeliver, backOff)}` off a real `helm template`,
   which IS the expected set. An orphan-pass assertion reuses it rather than restating it.
-- *Closes when:* The reconcile loop gains an orphan pass beside its drift pass, keyed on the rendered
-  `durableName` set rather than on app-ids, emitted by one shared template, with `MAINTENANCE_WORK` and
-  the index lane still excluded for the reason already recorded above. **Still fully open:**
+- **LANDED 2026-09-16.** `chart/templates/_durables.tpl` emits `lance.chartDurables` — every durable
+  this chart renders, under each component's own conditional — and `nats-stream-job.yaml` templates it
+  into `EXP_DURABLES`, deleting any `*-durable` on a walked stream that is not in it. DRY-RUN AGAINST
+  THE LIVE RELEASE'S OWN VALUES: it removes `lance-ray-durable`, `pages-to-gold-htr-durable` and
+  `maintenance-durable`, and spares all eight chart-owned durables — including the three a naive
+  app-id rule would have destroyed. `maintenance-durable` falls out for free, because it leaves the
+  rendered set exactly when `workTopic` empties, which is the conditional this row asked for.
+- *Gated by four assertions in `test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py`*,
+  the load-bearing one being that `EXP_DURABLES` equals the durable set read off the rendered
+  Components — so a component that grows a durable the helper does not emit fails a test rather than
+  losing its consumer at the next release. (The first version of the existence check passed against a
+  chart with no orphan pass at all: it matched `MAINTENANCE_ORPHAN_SCAN_ENABLED` from an unrelated
+  template. It is anchored on `EXP_DURABLES` now.)
+- *STILL OPEN:* not yet deployed, so the eight orphans are still on the streams — the pass runs on the
+  next release. `MAINTENANCE_WORK` and the index lane stay excluded for the reason recorded above. **Still fully open:**
   re-measured 2026-09-14, all EIGHT orphans are present and unchanged in kind (`lance-ray` x4,
   `pages-to-gold-htr` x2, `maintenance-durable`, `maintenance-work-durable`), with retention moving
   the depths beneath them — LINEAGE/`lance-ray-durable` now reads 1,330 unprocessed, which is the

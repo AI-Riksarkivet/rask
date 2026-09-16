@@ -101,3 +101,55 @@ def test_a_durable_whose_backoff_is_sized_by_its_own_WORK_is_deliberately_NOT_wa
             "walking MAINTENANCE_WORK would delete it every run, taking in-flight maintenance units with it"
         )
     assert "INGEST" not in streams, "the ingest work queue is a raw nats-py pull consumer; its config can never match EXP"
+
+
+def _job_expected_durables(rendered: str) -> list[str]:
+    """The durable set the orphan pass spares, read out of the rendered Job script."""
+    match = re.search(r'EXP_DURABLES="([^"]*)"', rendered)
+    assert match, "the orphan pass's `EXP_DURABLES=` line is not in the rendered Job — [[LH-127]]"
+    return match.group(1).split()
+
+
+@pytest.mark.parametrize("resiliency", [True, False])
+def test_the_orphan_pass_spares_EVERY_durable_the_chart_renders(resiliency: bool) -> None:
+    """[[LH-127]]. The orphan pass deletes a durable nothing here created; the set it compares against
+    therefore has to BE the set the chart creates, exactly.
+
+    Keying on app-ids instead — the form the row originally asked for — is destructive, and measured so
+    on 2026-09-16: three chart-owned durables are not named `<app-id>-durable`
+    (`lineage-dlq-durable`, `medallion-producer-control-durable`, `notifications-control-durable`), so
+    stripping the suffix yields names that appear in no app-id set and the pass deletes the dead-letter
+    consumer along with both control lanes. That is the 2026-07-13 dead-subscription failure produced by
+    the loop built to prevent it.
+
+    This asserts the two derivations AGREE. A component gaining a durable whose name the helper does not
+    emit fails here, rather than at the next release when the pass removes it.
+    """
+    rendered = _helm_template("dapr.enabled=true", f"dapr.resiliency.enabled={str(resiliency).lower()}")
+
+    assert set(_job_expected_durables(rendered)) == set(_durables(rendered))
+
+
+def test_the_orphan_pass_spares_a_durable_that_appears_only_under_a_values_flag() -> None:
+    """`maintenance-work-durable` renders only when `workTopic` is set, and it is the one durable the
+    drift pass must never touch. The orphan pass must not touch it either — for the opposite reason: it
+    IS chart-owned, so it is not an orphan, whatever stream it sits on."""
+    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=false", "maintenance.workTopic=maintenance.work.unit")
+
+    spared = set(_job_expected_durables(rendered))
+    assert "maintenance-work-durable" in spared
+    assert spared == set(_durables(rendered))
+
+
+def test_the_orphan_pass_actually_deletes_something_and_is_guarded_by_the_set() -> None:
+    """A spare-set with no consumer of it is decoration, and an unguarded delete is the destructive form.
+
+    Anchored on `EXP_DURABLES` rather than on the word "orphan": a first version of this matched
+    `MAINTENANCE_ORPHAN_SCAN_ENABLED` from an unrelated template and then any later `consumer rm`, so it
+    passed against a chart with no orphan pass at all.
+    """
+    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=false")
+    guarded = re.search(r"EXP_DURABLES(.|\n)*?consumer rm", rendered)
+
+    assert guarded, "no `consumer rm` is reached from the EXP_DURABLES guard — the orphan pass removes nothing [[LH-127]]"
+    assert "ORPHAN DURABLE" in rendered, "the orphan pass logs no distinguishable line, so an operator cannot tell it from the drift pass"
