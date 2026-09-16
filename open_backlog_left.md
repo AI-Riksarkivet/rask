@@ -3874,11 +3874,28 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
       lineage-pubsub-media-to-silver     protect=lineage.events.v1  pub=media-to-silver       sub=-
       lineage-pubsub-notifications       protect=lineage.events.v1  pub=-                     sub=notifications
 
-  Gated by `tests/unit/test_only_a_producer_may_publish_on_the_provenance_bus.py`, which asserts the
-  protection is present on every component (without it the scopes grant nothing), that each app holds
-  exactly the directions it uses, that `notifications` is the one denial, and — the blast-radius
-  assertion — that **no other topic was swept into the protection**, so `medallion.*`, `training.jobs`
-  and every `dlq.*` keep today's behaviour and this cannot stop a cascade trigger or a dead-letter.
+- **AND IT WAS REVERTED WITHIN THE HOUR, because rolling it BROKE DELIVERY. The live estate refuted a
+  reading of the Dapr documentation, and this is the finding worth keeping:**
+
+      Retry failed for subscription pubsub lineage-pubsub-notifications, topic dlq.notifications:
+      subscription to topic 'dlq.notifications' ... is not allowed
+
+  `dlq.notifications` was **never in `protectedTopics`**. **`subscriptionScopes` is NOT ADDITIVE:**
+  naming an app in it makes that list the app's COMPLETE allowlist for that component, including topics
+  the protection never mentions. The docs' framing — "if a topic is marked as protected then an
+  application must be explicitly granted" — reads as though unprotected topics are unaffected. They are
+  not. Measured before the revert: **47 denials on medallion-producer, 16 on notifications, 4 on
+  lineage**; after reverting the template, re-applying and restarting the eight app-ids, **0 denials in
+  4 minutes** and notifications' three subscriptions all back.
+- *My gate asserted the wrong invariant, which is why it passed.* It checked that no topic other than
+  `lineage.events.v1` appeared in any `protectedTopics` — true, and irrelevant: the harm came through
+  the SCOPES list, not the protection list. A blast-radius test has to bound the mechanism that can
+  actually do harm. The test is deleted rather than left encoding a rule that is wrong.
+- *What a future attempt needs, recorded in the template itself so it is found at the edit site:*
+  enumerate EVERY topic each app uses on its component, in BOTH directions — measured off
+  `/v1.0/metadata` and the publish call sites — not merely the one topic being protected. The scoping
+  the estate already has is the document-level `scopes:`, which closes each component to one app-id and
+  is what makes an arbitrary pod unable to publish at all.
 - *Closes when (rewritten):* `protectedTopics: lineage.events.v1` plus a `publishingScopes` naming the
   measured producer set on the lineage pub/sub components, a producer signature verified in the bus
   door (still genuinely open — `_StampedAuthor`'s own docstring says "nothing proves the stamp"), and

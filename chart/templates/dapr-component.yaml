@@ -16,21 +16,6 @@ spec:
   metadata:
     - { name: natsURL, value: "{{ include "lance.natsUrl" . }}" }
     - { name: name, value: "lance-dapr" }
-    {{- /* DENY-BY-DEFAULT ON THE PROVENANCE TOPIC (LH-064). `publishingScopes` ALONE grants nothing:
-         docs.dapr.io/developing-applications/building-blocks/pubsub/pubsub-scopes — "If nothing is
-         specified in publishingScopes (default behavior), all apps can publish to all topics", and an
-         app merely omitted from it keeps full access. `protectedTopics` is the half that makes the
-         topic deny-by-default: "If a topic is marked as protected then an application must be
-         explicitly granted publish or subscribe permissions". Both are required; either alone is a
-         control that cannot fire.
-         Scoped to `lineage.events.v1` ONLY, so every other topic on these components (medallion.*,
-         dlq.*, training.jobs) keeps today's behaviour untouched. */}}
-    - { name: protectedTopics, value: "{{ .Values.pubsub.topic }}" }
-    {{- /* This component is PUBLISH-ONLY for both its apps — measured off the running sidecars'
-         /v1.0/metadata 2026-09-16: catalog registers only `catalog.control.v1` and maintenance registers
-         NO subscriptions at all. So it needs no `subscriptionScopes`, and adding one would advertise a
-         direction neither app uses. */}}
-    - { name: publishingScopes, value: "{{ .Values.services.catalog.daprAppId }}={{ .Values.pubsub.topic }}{{ if .Values.maintenance.lineageEmit }};{{ .Values.maintenance.daprAppId }}={{ .Values.pubsub.topic }}{{ end }}" }
 scopes:
   - {{ .Values.services.catalog.daprAppId }}
 {{- if .Values.maintenance.lineageEmit }}
@@ -184,17 +169,11 @@ scopes:
      errors (that orphan failure applies to durables WITHOUT a queue group, not this combination).
      lineage stays ephemeral ON PURPOSE — a durable cursor would defeat its replay-rebuilds-the-graph
      recovery story. */}}
-{{- /* `pubLineage` / `subLineage` say which DIRECTIONS each app uses on `lineage.events.v1`, and both
-     were MEASURED off the running sidecars' /v1.0/metadata on 2026-09-16 rather than read off the
-     templates — an env-var scan gets this wrong. `lineage` publishes: `api/reconcile_cron.py:470-474`
-     is the outbox relay's drain re-publishing a recovered event, and no environment variable says so.
-     The stage runners publish but do NOT subscribe (they take `medallion.bronze|silver|media`).
-     `notifications` is the one consumer-only identity, which is the whole denial this buys. */}}
-{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all" "pubLineage" true "subLineage" true) }}
+{{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
 {{- if .Values.medallion.enabled }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new" "pubLineage" true "subLineage" true) }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new") }}
 {{- range .Values.medallion.stageRunners }}
-{{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new" "pubLineage" true "subLineage" false) }}
+{{- $subscribers = append $subscribers (dict "appId" .daprAppId "deliverPolicy" "new") }}
 {{- end }}
 {{- end }}
 {{- /* The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`
@@ -209,7 +188,7 @@ scopes:
      name already in use", a silently dead subscription the drift reconcile cannot see because
      maxDeliver/backOff still match). `notifications-durable` on LINEAGE is new; the reconcile loop
      (nats-stream-job.yaml) adopts it by its `-durable` suffix from the first tick. */}}
-{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new" "pubLineage" false "subLineage" true) }}
+{{- $subscribers = append $subscribers (dict "appId" "notifications" "deliverPolicy" "new") }}
 {{- /* MAINTENANCE's write-event subscription — the primary maintenance trigger, replacing the sweep's
      120s whole-estate walk. Gated on `workTopic` because the route is: the subscription plans a unit
      and publishes it to the work queue, so without a queue there is nowhere to put the result.
@@ -220,8 +199,20 @@ scopes:
      backstop re-plans it anyway. A missed window costs at most one backstop tick; a replayed one costs
      the walk this lane exists to avoid. */}}
 {{- if and .Values.maintenance.enabled .Values.maintenance.workTopic }}
-{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId "deliverPolicy" "new" "pubLineage" false "subLineage" true) }}
+{{- $subscribers = append $subscribers (dict "appId" .Values.maintenance.daprAppId "deliverPolicy" "new") }}
 {{- end }}
+{{- /* NO `protectedTopics` / `publishingScopes` / `subscriptionScopes` HERE, and the reason is a
+     measurement rather than an omission ([[LH-064]]). Deny-by-default on `lineage.events.v1` was
+     built, applied and rolled on 2026-09-16 and BROKE DELIVERY: `subscriptionScopes` is NOT additive.
+     Naming an app in it makes that list the app's COMPLETE allowlist for the component — including
+     topics that are not protected at all. The live refusal, on a topic `protectedTopics` never named:
+     "Retry failed for subscription pubsub lineage-pubsub-notifications, topic dlq.notifications:
+     subscription to topic 'dlq.notifications' ... is not allowed". 47 denials on medallion-producer,
+     16 on notifications, 4 on lineage before the revert.
+     So a future attempt must enumerate EVERY topic each app uses on its component, in BOTH
+     directions, measured off `/v1.0/metadata` and the publish call sites — not just the one topic
+     being protected. The scoping the estate already has is the document-level `scopes:` below, which
+     closes each component to one app-id. */}}
 {{- range $subscribers }}
 ---
 apiVersion: dapr.io/v1alpha1
@@ -237,19 +228,6 @@ spec:
     - { name: name, value: "lance-dapr-{{ .appId }}" }
     - { name: queueGroupName, value: {{ .appId | quote }} }
     - { name: deliverPolicy, value: {{ .deliverPolicy | quote }} }
-    {{- /* The same deny-by-default pair as the publish component above, per app. Only
-         `lineage.events.v1` is protected, so this app's OTHER topics on this component —
-         `medallion.*`, its `dlq.*`, `training.jobs` — are unaffected. BOTH directions are granted
-         explicitly where the app uses them: `protectedTopics` gates subscribe as well as publish, so an
-         omitted `subscriptionScopes` would silently stop delivering the provenance stream to a
-         subscriber that needs it. */}}
-    - { name: protectedTopics, value: "{{ $.Values.pubsub.topic }}" }
-    {{- if .pubLineage }}
-    - { name: publishingScopes, value: "{{ .appId }}={{ $.Values.pubsub.topic }}" }
-    {{- end }}
-    {{- if .subLineage }}
-    - { name: subscriptionScopes, value: "{{ .appId }}={{ $.Values.pubsub.topic }}" }
-    {{- end }}
     {{- if eq .deliverPolicy "new" }}
     # Durable cursor for the trigger consumers (stage runners + cascade head): survives pod death and redeploys,
     # so a trigger published while the app is down is DELIVERED on recovery instead of skipped (see the
