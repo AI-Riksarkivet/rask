@@ -216,7 +216,26 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   incorrect one, and the new gate pins the RULE — a durable whose config the comparison understands
   must be walked, a bespoke one must not — mutation-proven in both directions, including against the
   naive over-fix.
-- *Closes when:* The reconcile loop gains an orphan pass beside its drift pass. **Still fully open:**
+- **THE ROW'S OWN RULE IS DESTRUCTIVE AS WRITTEN — measured 2026-09-16 before implementing it.** It says
+  "a durable whose app-id is not in the release's rendered app-id set is pure residue and is deleted".
+  The live release renders 12 app-ids (`annotator bronze-to-silver catalog compute flows ingest lineage
+  maintenance medallion-producer media-to-silver notifications silver-to-gold`) and THREE chart-owned
+  durables are not named `<app-id>-durable`: `lineage-dlq-durable` (`lineage-pubsub-lineage-dlq`),
+  `medallion-producer-control-durable` and `notifications-control-durable`
+  (`catalog-control-pubsub-*`). Strip `-durable` from those and you get `lineage-dlq`,
+  `medallion-producer-control`, `notifications-control` — none of them an app-id, so the rule as stated
+  deletes all three, including the dead-letter consumer. That is the 2026-07-13 failure this loop was
+  built to prevent, caused by the loop.
+- *THE SAFE FORMULATION IS SIMPLER AND THE CHART ALREADY HAS IT:* compare against the set of
+  `durableName` values the CHART RENDERS, not against app-ids. The chart writes every durable it owns —
+  eight of them today, readable straight off the rendered Components — so "not in that set" is exactly
+  "nothing here created this", with no name-shape inference in between. It also fixes the row's other
+  half for free: `maintenance-durable` names a LIVE app-id and so survives an app-id test, while it is
+  absent from the rendered set the moment `workTopic` is empty, which is the conditional the row asks
+  for.
+- *Closes when:* The reconcile loop gains an orphan pass beside its drift pass, keyed on the rendered
+  `durableName` set rather than on app-ids, with `MAINTENANCE_WORK` and the index lane still excluded
+  for the reason already recorded above. **Still fully open:**
   re-measured 2026-09-14, all EIGHT orphans are present and unchanged in kind (`lance-ray` x4,
   `pages-to-gold-htr` x2, `maintenance-durable`, `maintenance-work-durable`), with retention moving
   the depths beneath them — LINEAGE/`lance-ray-durable` now reads 1,330 unprocessed, which is the
