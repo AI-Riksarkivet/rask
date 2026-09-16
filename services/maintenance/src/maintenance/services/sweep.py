@@ -817,6 +817,38 @@ def execute_within_budget[T, R](
         executed += 1
 
 
+def report_bucket_coverage(*, planned: Iterable[str], maintained: Iterable[str]) -> None:
+    """Log what the tick MAINTAINED per bucket, beside what discovery already reports it found.
+
+    [[LH-101]]. `_discover_all` logs `compaction_bucket_discovered` so an operator can see what a tick
+    FOUND; nothing said what it maintained, and the two differ for reasons that matter — a refusal, a
+    failure, or a pass that stopped before reaching the bucket at all.
+
+    THE GAP IS THE SIGNAL, which is why a bucket with nothing maintained still reports rather than being
+    omitted: absence reads as "no such bucket", and that is precisely what made the starvation
+    invisible. With a budget set, the buckets at the tail of a truncated pass report their planned count
+    against `maintained=0`.
+
+    Per BUCKET because that is the unit an operator reasons about when a whole warehouse looks stale —
+    and because the dataset shuffle deliberately breaks bucket ordering, so a truncated tick starves
+    buckets PARTIALLY and only a per-bucket count shows it.
+    """
+    counts: dict[str, list[int]] = {}
+    for uri in planned:
+        counts.setdefault(_bucket_of(uri), [0, 0])[0] += 1
+    for uri in maintained:
+        entry = counts.get(_bucket_of(uri))
+        if entry is not None:
+            entry[1] += 1
+    for bucket, (planned_n, maintained_n) in sorted(counts.items()):
+        log.info("compaction_bucket_maintained", extra={"bucket": bucket, "planned": planned_n, "maintained": maintained_n})
+
+
+def _bucket_of(uri: str) -> str:
+    """The bucket an s3 URI names; the whole string for anything else, so a local path still groups."""
+    return uri.removeprefix("s3://").split("/", 1)[0] if uri.startswith("s3://") else uri
+
+
 def plan_one(uri: str, settings: MaintenanceSettings) -> DatasetWorkItem | None:
     """Plan ONE dataset, named by a write event — the event lane's half of :func:`plan_sweep`.
 
@@ -898,6 +930,9 @@ def run_sweep(settings: MaintenanceSettings) -> list[DatasetResult]:
             budget_seconds=settings.sweep_budget_seconds,
         )
     )
+    # Coverage is reported from the PLANNED list against what actually came back, so a tick the budget
+    # truncated shows its untouched buckets at `maintained=0` rather than omitting them.
+    report_bucket_coverage(planned=[item.uri for item in items], maintained=[r.uri for r in results])
     # The completion half of the `record_run_started` pair the planner opened. Started minus completed
     # is the lost-pass count, so this fires once per tick and only after every unit has been executed.
     record_run()

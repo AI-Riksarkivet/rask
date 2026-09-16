@@ -4652,8 +4652,17 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   — the same fact [[LH-153]] turned on and [[LH-127]]'s `maintenance-durable` residue records.
   The setting is therefore plumbed into the maintenance Deployment only; it was briefly added to the
   worker template and removed, because the worker executes queued units and never runs a tick.
-- *Closes when:* the second half lands — report MAINTENANCE coverage per bucket (discovery coverage
-  already logs). Rotation is done; do not replace the dataset shuffle with a coarser bucket rotation.
+- **THE COVERAGE HALF LANDED 2026-09-16, and it is the budget's other end.** `report_bucket_coverage`
+  logs `compaction_bucket_maintained` with `planned` and `maintained` per bucket, beside the
+  `compaction_bucket_discovered` line discovery already emits. A bucket with nothing maintained STILL
+  reports, at `maintained=0`, because absence reads as "no such bucket" — which is exactly what made
+  the starvation invisible.
+- *Per BUCKET, and the shuffle is why:* rotation deliberately breaks bucket ordering, so a truncated
+  tick starves buckets PARTIALLY. Only a per-bucket count shows that; a tick-level "stopped early"
+  cannot say whose datasets went unmaintained.
+- *Closes when:* nothing further — both halves are in. Rotation was already done and must not be
+  replaced with a coarser bucket rotation. What remains is an operator choosing a budget VALUE, which
+  this row correctly refuses to infer.
 
 **LH-102 · Storage reclamation has never been run live — trash purge must go first, and it is gated on a clean drift report**
 `maintenance` · med · **blocked:** a clean, complete drift report (the zero-tuple detector plus the `incomplete` rows)
