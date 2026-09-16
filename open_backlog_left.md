@@ -77,10 +77,11 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**10 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
-`LH-159` and `LH-172` workable — the last of those came back once the owner ruled "accept it for now",
-which is a decision that CLOSES a question rather than unblocking work, and the R1-R11 ruling the same
-day made nine more rows workable without changing this count (they are gated on nothing). That number is the one worth watching: the column above says how much
+**9 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
+`LH-159`, `LH-172` and `LH-004` workable. Two rulings moved it the same day: `LH-172`'s remedy was
+measured inert and the owner ruled "accept it for now" (a decision that CLOSES a question rather than
+unblocking work), and **R1-R11 were acknowledged as standing**, which cleared `LH-004`'s marker and
+makes the other eight R-citing rows workable as written. That number is the one worth watching: the column above says how much
 is written down, and this says how much of the priority anyone can pick up without a ruling. It moved
 here by measurement rather than by attrition — four rows that were decision-gated in their bodies
 carried no `**blocked:**` marker, so the workable count read optimistic until they were marked. Gated
@@ -773,7 +774,7 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `name` and no re-link statement exists.
 
 **LH-004 · Four OpenLineage emit kernels and three `RunEvent` builders, all swallowing transport failures, with no outbox**
-`lineage, catalog, maintenance, medallion, service-kit` · **HIGH** · **blocked:** owner acknowledgement of R10
+`lineage, catalog, maintenance, medallion, service-kit` · **HIGH** · **R10 ACKNOWLEDGED 2026-09-16 (owner): the R-series stands**
 
 - *Why open:* Measured at HEAD 2026-09-09: builders are `lineage_kit/runs.py`, `medallion/schemas/events.py`, `lineage/seed.py`; kernels are `lineage_kit/{emitter,runs}.py`, `service_kit/lancekit/lineage_emit.py`, `catalog/core/lineage_emit.py`, `maintenance/core/lineage_emit.py`. Only the producer-URI defect was fixed. The bronze-write emit is the cascade head, so a swallowed emit means the whole bronze→silver→gold run never happens and nothing reports it.
   **WHAT SWALLOWING COSTS, measured 2026-09-10 rather than argued:** ingest is the estate's only HTTP lineage producer, and `POST /api/v1/lineage` had served TWO requests in lineage's retained log and refused both — a 100% failure rate — while 806 events reached the graph over the Dapr topic from producers that never take that path. Every ingest run landed its rows with no provenance and reported COMPLETE. Two distinct causes, both now fixed (`d5cd2af1`, `06302b7f`): the emitter could present only the shared bearer at a door that refuses it from a privileged name, and the run's external INPUT was authorized as a governed table. Neither was visible from the suite; both came from driving the lane.
@@ -791,6 +792,27 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   (2) a narrower residual the catalog's own header already names: it has no TRANSACTIONAL outbox, so a
   crash between the Lance write and the publish still loses the event. That one is not fixable by
   consolidation — it needs a durable producer, and the architecture has no DB to give it.
+  **AND THE OUTBOX IS NOT EMPTY — measured on the live estate 2026-09-16, which is what re-measuring
+  this row found.** `lineage_outbox_drained drained=0 stranded=6`, unchanged across every tick. Six
+  events were staged — so the write happened and its provenance WAS captured — and the graph refuses
+  every one of them:
+
+      lineage_outbox_event_unauthorized  outbox_key='36944760-…@COMPLETE'  author='e2e'
+        reason='can_write_data required to amend run 36944760-…: e2e_outbox_ds'
+
+  42 refusals across 6 distinct `run_id`s, all `author='e2e'`, against two datasets — `e2e_crash_ds`
+  (35) and `e2e_outbox_ds` (7). **The drain is behaving exactly as designed**: a refusal is not poison
+  and not transient, so it strands rather than drops, because destroying the only durable copy of a
+  committed write's provenance is the wrong answer to "you may not record this".
+  *What the estate has no answer for is the AFTER.* These six will strand forever, be re-refused every
+  tick, and hold `outbox.events.stranded` permanently non-zero — which a dashboard reads as an ongoing
+  fault rather than a settled one. That is [[LH-148]]/[[LH-151]]/[[LH-166]]'s question — what a
+  permanently-refused message resolves to — seen from the OUTBOX side, and it now has live evidence
+  instead of an abstraction: six events, 42 refusals, no door that can retire them.
+  *They are e2e residue rather than tenant provenance* (`author='e2e'`, `e2e_*_ds`), which lowers the
+  severity and does not change the shape: an unprivileged producer staged provenance and the estate
+  cannot clear it.
+
   **THE CP-007 BLOCKER IS CLEARED (2026-09-11).** Ingest can write the outbox — the credential is vended through the catalog's outbox door and the whole path was observed end to end (`lineage_outbox_drained drained=1 stranded=0`), so staging is worth something now. What remains is the CONSOLIDATION, and it is a LATENT trap rather than present loss: `lineage_kit/emitter.py` swallows a transport failure with `log.warning("lineage_emit_failed")` and stages nothing, while the backstop that saves ingest (`_stage_undelivered`) lives in ingest rather than in the kernel. Today that costs nothing, because ingest is the kernel's only service importer. It costs a silently-lost event the day a second HTTP producer is added by someone who reasonably expects the emitter to be durable — which is precisely the duplication R10 exists to end.
 - *Closes when:* Delete `service_kit.lancekit.openlineage`/`lineage_emit` and the per-service `lineage_emit.py` copies, route every producer through `packages/lineage-kit`'s emitter and one `RunEvent` builder, and stage each event in an outbox before transport so a failed emit is retried rather than dropped.
 - **MEASURED 2026-09-16 AT HEAD, AND R10's PRESCRIPTION IS WRONG FOR THIS ESTATE.** R10 reads "every
