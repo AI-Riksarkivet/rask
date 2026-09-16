@@ -72,16 +72,29 @@ def warehouse(catalog: str) -> Iterator[str]:
     if created.status_code not in (200, 201, 409):
         pytest.skip(f"cannot provision a warehouse to delete ({created.status_code}): {created.text[:200]}")
     yield name
-    # PURGE THE BUCKET, because this suite made it. The first version deleted the record and left the
-    # bucket, so every run added one orphan bucket to the estate's drift report — measured 2026-09-16,
-    # 18 `e2edel-*` buckets from four runs, which is a test that manufactures the finding it is meant to
-    # be independent of. `purge_bucket` is safe here and nowhere else in this file: the bucket was
-    # created by this fixture seconds earlier and holds nothing else.
+    _purge(catalog, name)
+
+
+def _purge(catalog: str, name: str) -> None:
+    """Remove the warehouse AND the bucket it minted, whichever of the two still exists.
+
+    THE 404 IS THE LEAK. Several legs delete the warehouse themselves, so the fixture's own delete then
+    answers 404 — and a 404 means the record is gone and `purge_bucket` never ran, leaving the bucket
+    behind. Measured 2026-09-16: orphan buckets in the estate's drift report went 13 -> 40 across four
+    runs of this file, a test manufacturing the finding it is meant to be independent of. Accepting the
+    404 as success was the bug; re-creating a record over the same bucket so the purge has something to
+    delete through is the fix, and it uses only the doors this suite already drives.
+    """
     removed = requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
-    # ASSERTED, not best-effort. A cleanup nobody checks is how this suite added orphan buckets to the
-    # estate's drift report on every run before anyone looked — a test that manufactures the finding it
-    # is meant to be independent of.
-    assert removed.status_code in (200, 404), f"the fixture leaked bucket {name!r}: {removed.status_code} {removed.text[:300]}"
+    if removed.status_code == 200:
+        return
+    # The record went with a leg's own delete; the bucket did not. Re-register it just long enough to
+    # purge through the door, so no leg has to know whether it was the one that deleted the record.
+    again = requests.post(f"{catalog}/v1/warehouses", json={"id": name, "project": PROJECT, "bucket": name}, headers=_auth(), timeout=30)
+    if again.status_code not in (200, 201, 409):
+        return
+    final = requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
+    assert final.status_code == 200, f"the fixture leaked bucket {name!r}: {final.status_code} {final.text[:300]}"
 
 
 def test_deleting_a_warehouse_that_does_not_exist_is_404(catalog: str) -> None:
@@ -177,8 +190,10 @@ def test_a_purge_refuses_bytes_a_SIBLING_warehouse_still_claims(catalog: str) ->
     finally:
         # The SECOND first, so the shared bucket has exactly one claimant when the purge runs — the same
         # rule the refusal above proves, used forwards.
+        # The SECOND first, so the shared bucket has exactly one claimant when the purge runs — the same
+        # rule the refusal above proves, used forwards.
         requests.delete(f"{catalog}/v1/warehouses/{second}?cascade=true&force=true", headers=_auth(), timeout=60)
-        requests.delete(f"{catalog}/v1/warehouses/{first}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
+        _purge(catalog, first)
 
 
 def test_deletion_protection_refuses_and_force_overrides_exactly_it(catalog: str) -> None:
@@ -194,4 +209,4 @@ def test_deletion_protection_refuses_and_force_overrides_exactly_it(catalog: str
         forced = requests.delete(f"{catalog}/v1/warehouses/{name}?force=true", headers=_auth(), timeout=60)
         assert forced.status_code == 200, f"force did not override deletion protection: {forced.status_code} {forced.text[:300]}"
     finally:
-        requests.delete(f"{catalog}/v1/warehouses/{name}?cascade=true&purge_bucket=true&force=true", headers=_auth(), timeout=90)
+        _purge(catalog, name)
