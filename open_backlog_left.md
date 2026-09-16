@@ -61,7 +61,7 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**219 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
+**218 open items**, deduped from 325 raw rows mined out of the seven files above. A further 50 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
@@ -69,7 +69,7 @@ opening — and are not counted here.
 | --- | --- | --- |
 | **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 73 | 17 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 51 | 10 |
-| **2 · Compute** (compute, ingest, ray-kit) | 30 | 6 |
+| **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
 | **Frontend** (opportunistic) | 13 | 1 |
 | **Low priority** (flows, search, viewer, annotator) | 28 | 1 |
@@ -6184,17 +6184,30 @@ _Every batch job the platform runs goes through a Ray head that today accepts un
 - *Why open:* One question wearing four register ids. The dependency-graph half is done (catalog/lineage/maintenance/service-kit/medallion carry zero ray imports; `32ff50cb` converged three job programs plus `runners/dummy` onto `WorkOrder.to_env()`), and `engine_registry.executor_for('ray', …)` constructs the adapter — but the deployed path still calls `medallion.services.ray_submit` (verified: `workflow.py:486,527,707,977` import it; `executor_for` is defined at `engine_registry.py:52` and called nowhere on that path). `kubectl get rayjobs,rayclusters,rayservices -A` answers "No resources found"; the live Ray is `ray-lance-head`, a hand-applied plain Deployment with no ownerReferences. Because nothing goes through the CRD, Kueue's two chart-owned ClusterQueues (`rask`, `htr-batch-cq`) are structurally bypassed, and job history lives only in the head's memory — a host `ray stop --force` took the dashboard from 7 jobs to 0.
 - *Closes when:* Owner picks chart-owned `RayCluster` vs ephemeral per-job clusters vs deleting the adapter. If kept: add the CR to the chart, select it from `services/medallion/src/medallion/services/rayjob_executor.py`, route the medallion's submission through `service_kit.lakehouse.executor.executor_for` instead of `ray_submit`, bring the hand-applied `ray-lance-head` under the chart, configure the Ray history server so job records survive a head restart, and set Kueue gang + priority policy on the `rask` ClusterQueue. If dropped: delete that module and `chart/templates/medallion-rayjob-rbac.yaml`.
 
-**CP-013 · `RayJobExecutor.status()` maps only `status.jobStatus`, so a RayJob whose cluster never came up reports PENDING forever and can never be resubmitted**
+**CP-013 · ~~`RayJobExecutor.status()` maps only `status.jobStatus`, so a RayJob whose cluster never came up reports PENDING forever and can never be resubmitted~~ — CLOSED 2026-09-16 (SUBJECT DELETED)**
 `medallion, ray-kit` · med
 
 - *Why open:* Verified in `services/medallion/src/medallion/services/rayjob_executor.py`: line 152 reads `status.jobStatus` alone, and `jobDeploymentStatus` is consulted only at line 161 to fill a message once `jobStatus` already says FAILED. KubeRay records a cluster that never came up, an `activeDeadlineSeconds` expiry or a Kueue eviction in `jobDeploymentStatus` and leaves `jobStatus` empty, which `_JOB_STATUS` maps to PENDING — and `DURABLE_RECORD` then forbids resubmitting it. Real today as library code; reaches production only if the adapter is kept.
 - *Closes when:* Map `jobDeploymentStatus` in `RayJobExecutor.status()` so a cluster-provision failure, deadline expiry or Kueue eviction reports FAILED, pinned by a test feeding a status with an empty `jobStatus`.
+- **CLOSED because the file is gone, and — unlike its neighbour — the DEFECT went with it.**
+  `services/medallion/src/medallion/services/rayjob_executor.py` was deleted by `b3a10799`
+  ("delete the RayJob CR adapter nothing called"). `jobDeploymentStatus` is a RayJob **CR** field; the
+  surviving submission path is the Ray Jobs API, whose status model has no such field, so there is
+  nothing left to map. Contrast [[CP-014]], filed against the same deleted file, whose defect DID
+  survive onto the Jobs-API path — a deletion closes a row only when the defect was a property of the
+  thing deleted.
 
 **CP-014 · `RayJobExecutor` treats any 409 as REATTACHED without reading the CR, and the CR name omits `code_version`**
 `medallion, ray-kit` · med
 
 - *Why open:* Verified in the same file: line 136-137 returns `SubmitOutcome.REATTACHED` on any `409` without fetching the object. A 409 may mean a DIFFERENT job holds that name, and omitting `code_version` from the derived name makes that reachable — a same-token re-run after a deploy reattaches to the previous build's job.
 - *Closes when:* Read the CR on 409 and compare identity before declaring REATTACHED, and include `code_version` in the RayJob CR name derivation.
+- **THE CITATION IS DEAD AND THE ROW IS NOT.** `rayjob_executor.py` was deleted (`b3a10799`), so the
+  `line 136-137` evidence above resolves to nothing — but BOTH halves of the ask survive on
+  `ray_submit`, the Ray Jobs API path that the same commit message calls "the submission path the
+  cascade actually uses" and which is now the ONLY one. Re-cite against that module before working it.
+  Adversarially verified 2026-09-16: three independent lenses each refuted the proposal to close this
+  as done-by-deletion, two of them catching that the closing grep read a different module.
 
 **CP-015 · `POST /train` on the medallion producer does not resolve the `$n` form of `features[].dataset`**
 `medallion` · med
