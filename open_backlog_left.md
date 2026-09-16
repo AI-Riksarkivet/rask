@@ -5905,7 +5905,23 @@ _This is the machinery that decides whether a change can be proved and shipped �
 `chart` · med
 
 - *Why open:* Verified 2026-09-10: `grep -rl imagePullSecrets chart/templates/` matches 3 files (controlplane.yaml, frontends.yaml) of 56, so most pod specs cannot pull from a private registry at all. The plumbing exists; it is simply not applied everywhere, and it blocks any non-k3s cluster.
-- *Closes when:* Add the `{{- with .Values.imagePullSecrets }}` block to every remaining pod spec in `chart/templates/` (or hoist it into `_helpers.tpl` and call it once per template), and set registry-qualified `image.*.repository` values in `chart/values-prod.yaml`.
+- **THE FIRST-PARTY HALF LANDED 2026-09-16, and the row's own count is why the scope changed.** "3 of
+  56 templates" is true and reads as 53 gaps; measured, only SIX pod-spec templates render an image
+  through the chart's own helpers without the block — `bootstrap-admin`, `explorer`,
+  `maintenance-worker`, `maintenance`, `medallion`, `services` (8 pod specs between them). The other 17
+  pod specs run PINNED third-party images (busybox, minio, dex, openbao, otel-collector, greptimedb,
+  postgres) from public registries; giving those a pull secret is the airgap/mirror question, which has
+  a different answer — mirror every upstream image — and folding it in here made the row unclosable.
+- *Measured both directions:* with `imagePullSecrets` set, 21 pods now carry it; with it unset the
+  `with` block renders nothing, so the default posture is byte-unchanged. `$.Values` and not `.Values`,
+  deliberately — several of these pod specs sit inside a `range`, where `.` is the loop item.
+- *Gated by `tests/unit/test_a_first_party_pod_can_pull_from_a_private_registry.py`*, which derives the
+  family from the templates so a seventh first-party pod inherits the rule, and reads the SOURCE
+  because a render under one set of values cannot tell a skipped conditional pod spec from a compliant
+  one. RED for exactly the six before the fix.
+- *Closes when:* the second half — registry-qualified `image.*.repository` values in
+  `chart/values-prod.yaml` — lands, and the airgap question above is answered separately if it is ever
+  asked.
 
 **XC-033 · Two `test_lineage_e2e.py` cases fail, and nothing routinely points the 111 e2e functions at k3s**
 `lineage, e2e` · med

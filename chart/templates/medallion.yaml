@@ -40,6 +40,10 @@ spec:
       {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-medallion-producer
       {{- end }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: medallion-producer
           image: {{ $img | quote }}
@@ -407,6 +411,10 @@ spec:
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if $root.Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" $root }}-sa-{{ .name }}
+      {{- end }}
+      {{- with $.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: stage-runner
