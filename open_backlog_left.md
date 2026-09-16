@@ -233,9 +233,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   half for free: `maintenance-durable` names a LIVE app-id and so survives an app-id test, while it is
   absent from the rendered set the moment `workTopic` is empty, which is the conditional the row asks
   for.
+- *AND THE SET MUST BE RENDERED ONCE, NOT TWICE.* `dapr-component.yaml` derives durable names FIVE
+  different ways — `{{ .appId }}-durable` (:223), `<producer>-control-durable` (:88),
+  `notifications-control-durable` hardcoded (:139), `<lineage>-dlq-durable` (:273) and
+  `<maintenance>-work-durable` (:381). A Job that rebuilds that set inline is a second file computing
+  the same truth, which is precisely how this loop already shipped one defect: the stream was excluded
+  on the written ground that "Consumers are EPHEMERAL (no durableName)" while two chart-owned durables
+  sat on it, two files asserting opposite things and the live stream agreeing with neither. The set
+  belongs in one named template both consume — a new `_durables.tpl` rather than `_helpers.tpl`, which
+  carries unrelated uncommitted edits.
+- *The gate is already half-written:* `tests/unit/test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py`
+  has `_durables(rendered)` returning `{durableName: (maxDeliver, backOff)}` off a real `helm template`,
+  which IS the expected set. An orphan-pass assertion reuses it rather than restating it.
 - *Closes when:* The reconcile loop gains an orphan pass beside its drift pass, keyed on the rendered
-  `durableName` set rather than on app-ids, with `MAINTENANCE_WORK` and the index lane still excluded
-  for the reason already recorded above. **Still fully open:**
+  `durableName` set rather than on app-ids, emitted by one shared template, with `MAINTENANCE_WORK` and
+  the index lane still excluded for the reason already recorded above. **Still fully open:**
   re-measured 2026-09-14, all EIGHT orphans are present and unchanged in kind (`lance-ray` x4,
   `pages-to-gold-htr` x2, `maintenance-durable`, `maintenance-work-durable`), with retention moving
   the depths beneath them — LINEAGE/`lance-ray-durable` now reads 1,330 unprocessed, which is the
