@@ -4144,7 +4144,38 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 - *MEASURED 2026-09-10 — copying the one worked example would have OOMed the whole lakehouse.* Live per-container memory against the uniform 512Mi limit: maintenance 269Mi, catalog 214Mi, lineage 200Mi, medallion-producer 189Mi, ingest 165Mi, viewer 157Mi. Add maintenance's configured 384 MB of session cache to ANY of them — 653, 598, 584, 573, 549, 541 — and every one exceeds 512Mi. This row's Closes-when says to size each service the same way, and maintenance is the only existing implementation, so the pattern the other five would be copied from is the one that OOMKilled its own pod.
   **OBSERVED ENGAGING ON THE LIVE ESTATE 2026-09-10 17:48:42**, not merely deployed: `lance_cache_clamped_to_container requested_bytes=402653184 granted_bytes=214748364 container_budget_bytes=214748364 fraction=0.4` — 384 MB asked for, 205 MB granted, read from the pod's own cgroup. The fresh pod's baseline is 139Mi (down from the 269Mi that included a partly-warm session under the old caps), so the steady state is ~344/512 against the 537 that killed it.
   **Fixed generically instead of per service** (`1ee04aa0`, `6ca5bec9`): `service_kit.lakehouse.lance_session.affordable_cache_bytes` reads the container's own cgroup and reduces the requested caps PROPORTIONALLY (preserving the caller's ratio) when their sum exceeds an affordable share, default 0.4 of the limit. So the converting services need no per-pod arithmetic — they state a ratio and call it. Verified on the real host: `/sys/fs/cgroup/memory.max` = 536870912 in `rask-maintenance`, v1 path absent. At 0.4 the budget is ~205MB, which every service above clears; maintenance is the tightest at 474/512 and its 269Mi includes a partly-warm session under the OLD caps, so the post-deploy baseline should fall.
-- *Closes when:* One coupled change per Lance-serving service: a shared session/dataset handle with an explicit refresh policy at `viewer/api/v1/endpoints/pages.py:90`, `medallion/services/compute.py`, `lineage/core/reconcile.py` and `catalog/core/namespace.py:48`, AND in the same change `index_cache_size_bytes` (+ `io_buffer_size` if `LANCE_IO_THREADS` is raised) sized to each pod's cgroup limit; then the three `LANCE_*` vars in the Ray `runtime_env`, one `instrument_lance_metrics` call per process, door-side branch/tag validation, pinned blob thresholds, `allow_http` derived from the endpoint scheme and HTTPX timeouts.
+- **RE-MEASURED BY AST 2026-09-16, AND EVERY SERVICE THIS ROW NAMES IS DONE.** The counts above are
+  stale in a way that misdirects: they were taken by grep, which counts the prose too — five of the
+  "bare" hits are docstrings in `config.py` files explaining why a bare open is bad. Walking the ASTs
+  instead, `lance.dataset(...)` resolves to **44 calls that pass a session and 21 that do not**, and
+  the split by service is:
+
+      catalog     11 / 0 bare        medallion   15 / 0 bare
+      lineage      8 / 0 bare        maintenance  9 / 0 bare
+      ingest       0 / 9 bare        viewer       0 / 5 bare
+      service-kit  1 / 6 bare        search       0 / 1 bare
+
+  ALL FOUR LAKEHOUSE SERVICES CARRY ZERO BARE OPENS. The row's own locators — "medallion 15, lineage 6,
+  catalog 12 bare", `compute.py`, `reconcile.py`, `namespace.py` — name work that has already landed.
+- *What is left in PHASE 1 is six shared helpers in one package*, not 39 sites across five services:
+  `lakehouse/sources.py:197` (`_dataset`, 4 callers), `lakehouse/stage_stamp.py:166`
+  (`ensure_declared_dataset_id`, 1), `lakehouse/quality.py:165` (`assert_quality`, 2),
+  `lancekit/descriptor.py:223` (`load_declared`, 0), `lancekit/introspect.py:76` (`table_info`, 1) and
+  `lancekit/registry.py:156` (`table_dataset`, 11). The rest — ingest 9, viewer 5, search 1 — are phase 2
+  and parked-zone work.
+- **AND THEY NEED AN INJECTED SESSION, WHICH IS WHY THEY WERE LEFT.** `lance_session()` is process-wide
+  and int-keyed, but `shared_lance_session()` is defined FOUR TIMES, once per service, each from its own
+  settings' caps (`catalog/core/config.py:550`, `lineage/:289`, `medallion/:648`, `maintenance/:422`).
+  A shared helper in service-kit has no service settings to read, so it cannot call one — the session
+  has to arrive as a parameter from the caller that has it. That is ~19 call sites plus six signatures.
+- *Sized rather than attempted, deliberately:* this is the shared data-access seam of all four lakehouse
+  services, and this row's own record is a pod OOMKilled by session caps set above its headroom. Getting
+  the injection wrong is cheap; getting the sizing wrong is an outage.
+- *Closes when:* the six service-kit helpers take a `session` and their callers pass the one they
+  already hold; then the residue the row bundles — the three `LANCE_*` vars in the Ray `runtime_env`,
+  one `instrument_lance_metrics` call per process, door-side branch/tag validation, pinned blob
+  thresholds, `allow_http` derived from the endpoint scheme, HTTPX timeouts. The per-service conversion
+  and the per-pod sizing clauses are both DONE and should not be re-attempted.
 
 **LH-097 · Tiers re-materialise managed blob bytes per tier instead of silver being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · med · **blocked:** owner acknowledgement of R9 plus the storage-vs-coupling trade, and the recorded clone→source edge
