@@ -2437,6 +2437,32 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Closes when:* a driven publication's silver→gold hop is observed COMPLETING — the positive
   observation, not the absence of a refusal, since absence is what closed this row wrongly once. Half
   (b) stays closed; its residue is [[LH-141]] and nothing here touches it.
+- **ESTATE AUDIT 2026-09-17 (owner asked for the blast radius before any write; NOTHING was changed).**
+  The cause is one row in the warehouse binding registry, and the tier namespaces are inconsistent:
+
+      bronze        -> (unbound)        silver       -> bind86-wh      gold       -> (unbound)
+      bronze-media  -> lakehouse-wh     silver-media -> lakehouse-wh   gold-media -> (unbound)
+
+  `silver` bound to a TENANT's warehouse is what makes `project_for_namespace('silver')` answer
+  `bind86`, which is the first link of the chain above. It is accidental: `alpha`, `beta`, `media` and
+  `zz-probe` are bound to `bind86-wh` the same way and are plainly test residue.
+  * *Scanned all 195 bindings against 90 warehouses.* Suspect = the namespace does not start with its
+    warehouse's project. Only TWO suspects are medallion tier names: `silver` -> `bind86-wh` and
+    `silver-media` -> `lakehouse-wh`. The rest are test namespaces (`sec*`/`gov*` -> `acme-bucket`,
+    `track*`, `zz-probe`) that name no tier and drive no cascade.
+  * **A PREDICTION WAS MADE AND REFUTED, which is why the rule is now stated correctly.** If a
+    tier bound to a project were sufficient, the media chain would fail identically — `silver-media`
+    is bound to `lakehouse-wh`. It does not: `rask-media-to-silver` has ZERO `from_uri_refused` in its
+    whole life. The reason is that no `gold-media` stage runner is deployed, so nothing CONSUMES a
+    silver-media publication. **The defect needs BOTH a tier namespace bound to a project AND a
+    deployed downstream consumer**, and only the tabular silver→gold hop has both today. Deploying a
+    `gold-media` runner would light up the second instance.
+  * *A second, independent difference the audit exposed, and it dates the two registrations to
+    different code paths:* `silver-media$features` sits at a catalog-VENDED location
+    (`s3://lakehouse-wh/a76d1ca5_silver-media$features` — the `<hash>_<ns>$<name>` shape) while
+    `silver$features` sits at a COMPOSED one (`s3://bind86-wh/medallion/silver`). That is
+    `catalog_register.py:301`'s own recorded defect — "the stage runner composed `{root}/medallion/{tier}`"
+    — visible in one lane and not the other.
 - **WHICH FIX IS AN OWNER DECISION, because the three candidates are not variations of one change:**
   (i) `publication_extra` must not infer a tenant for an id carrying no tenant prefix — the tenant
   would then be absent and the gold runner would read the lane table it was actually told about;
