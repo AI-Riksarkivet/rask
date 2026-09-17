@@ -113,6 +113,52 @@ carried no `**blocked:**` marker, so the workable count read optimistic until th
 too, for the same reason the CLOSED count is: a progress number nobody re-derives is a claim.
 
 
+## RIPE DECISIONS — evidence complete, work starts the moment each is answered (2026-09-17)
+
+124 rows carry a decision marker. This section does NOT rank them — the other 121 were not assessed —
+it lists the three that were driven far enough TODAY that only the ruling is missing, each naming what
+happens either way. They are here because a decision buried in row 7,200 is a decision nobody makes.
+Adding a fourth means driving it to the same point first, not promoting it from the list below.
+
+**1 · Does an ESO-written Secret delivered by `secretKeyRef` satisfy the secrets rule?**
+*Blocks [[XC-002]]; defines what [[LH-160]]'s "baseline reaches 0" even means.*
+The estate currently says both things. `.claude/skills/rask-dapr/SKILL.md:152-154` and
+`tests/unit/test_the_ray_credential_has_one_source.py:4-8` (3 tests, green) say an ESO-backed
+`secretKeyRef` IS the sanctioned path for a sidecar-less pod. `test_secret_env_delivery_only_shrinks.py`
+counts every `secretKeyRef` as the banned path. Both read plausibly from the rule as written — ESO is
+named as a path, but the rule's subject is "never secret through envs".
+*If NO:* the Ray head's six entries move to a projected file mount (`S3_SECRET` to STS), and the skill
+line plus that test are rewritten in the same commit. *If YES:* XC-002 closes and LH-160's baseline
+excludes ESO-written refs explicitly, so the number keeps meaning something.
+
+**2 · May the maintenance sweep reclaim a BRANCH?** *Unblocks [[LH-094]]'s residue and 6 of
+[[LH-019]]'s 15 branch doors.* The change is one line — skip the refusal when
+`containment_of(uri, root) == "branch"` — and the EQUALITY refusals are untouched by it, which is the
+half that must keep refusing: an external shallow clone in another dataset is invisible to Lance, so
+only the estate-wide pre-pass can see it.
+Safety is measured three ways and pinned by `tests/unit/test_base_refs_guard.py` (15 pass): Lance's
+`cleanup_old_versions` IS branch-aware (3 files -> 4 -> 1 without a branch; 3 -> 4 -> 4 with); a branch
+still opens from a COLD interpreter after its parent is compacted AND reclaimed; and in the PRODUCTION
+shape — parent + external shallow clone + branch — maintaining the branch leaves the external clone
+intact (parent 9 rows, clone 3, branch 10).
+*It is an owner call because it makes reclamation DELETE MORE on a live estate*, and the guard's own
+comment sets that asymmetry deliberately ("a wrong refusal costs disk … a wrong permit costs a clone its
+entire reason to exist"). Live pressure, re-measured 2026-09-17 on the current image over 10 minutes: **105
+`relation='branch'` refusals against 94 `relation='is'`** — so roughly half of what the sweep refuses is
+the class this decision would release.
+
+**3 · Is the operator-readable Ray job name worth a shared-contract change?** *Blocks the last clause of
+[[LH-159]], the BYO contract.* Wiring `RayJobsApiExecutor` into `workflow.py` renames every Ray job,
+because the adapter submits under `order.idempotency_key` and the deployed submitter uses
+`stage_submission_id`. **The correctness worry does not apply:** `workflow.py:490` returns what the
+submitter posted and the poller reads `payload.submission_id`, so submitter and watcher agree by
+construction and cannot desynchronise. Measured on the live head 2026-09-17: 176 jobs, 48 readable
+(27%), **0 PENDING or RUNNING**.
+*Recommendation: take the rename.* It changes no shared `service-kit` contract, it is free today, and a
+log field carrying stage+token restores the legibility if it turns out to matter. The alternatives widen
+`WorkOrder` or the `Executor.submit` signature to buy back a naming convenience.
+
+
 ## Owner rulings and the evidence behind them (2026-09-16)
 
 **R1–R11 STAND — owner, 2026-09-16.** The nine rows citing them are workable as written, five of them
@@ -169,7 +215,7 @@ a docstring, which is how three claims had to be retracted the same day.
 
 | # | Condition | Status | The measurement |
 | --- | --- | --- | --- |
-| 1 | Provenance survives a write | **verified END TO END, one residual** | Driven literally: a real `POST /v1/table/{id}/create` (3 rows, Arrow IPC) answered 200 at `s3://lakehouse-wh/916cee62_lakehouse$prov-probe`, and the graph then held `(:Run {operation:'create_table'})-[:WROTE]->(:Dataset {name:'lakehouse$prov-probe'})` — the write's provenance survived the write. Probe table purged afterwards. Standing totals: 7,107 `Run`, 1,444 `Dataset`, 7,093 `WROTE`. `/runs` is governed on read: **0** rows for an identity holding no rung on the outputs, **10** for one that does. Residual: [[LH-166]]. **ADVANCED 2026-09-16:** the in-pod maintenance lanes now record the versions they mint ([[LH-153]] closed, OBSERVED — a real compact on `aud1ns$t1` put `(:Run {operation:'compact_table', author:'CiQwOGE4…'})-[:WROTE {version:7}]->` in the graph, where the sweep's own run carries an EMPTY author), and `lineage-kit` no longer returns in silence when nothing will recover an event. |
+| 1 | Provenance survives a write | **verified END TO END, incl. the BRANCH path, one residual** | **Re-driven 2026-09-17 on `main-6a3a376e` for the ref-carrying case, which the earlier probe did not cover:** a branch write's provenance must say WHICH ref it landed on, because a branch and main keep independent version sequences and a bare version names two different snapshots. Driven as alice through project->warehouse->namespace->table->branch: `add_columns?branch=work` and `insert?branch=work` each emitted COMPLETE carrying `lance.ref: "work"`, while the `create_table` on main carried NO `ref` — presence itself answers "was this a branch write?", which is why the field is set only when non-empty (`core/lineage_emit.py:223-235`, measured against the installed pylance). Author on all four events was alice's real Dex subject, not a role literal. Scratch objects dropped afterwards. Earlier main-path drive:  a real `POST /v1/table/{id}/create` (3 rows, Arrow IPC) answered 200 at `s3://lakehouse-wh/916cee62_lakehouse$prov-probe`, and the graph then held `(:Run {operation:'create_table'})-[:WROTE]->(:Dataset {name:'lakehouse$prov-probe'})` — the write's provenance survived the write. Probe table purged afterwards. Standing totals: 7,107 `Run`, 1,444 `Dataset`, 7,093 `WROTE`. `/runs` is governed on read: **0** rows for an identity holding no rung on the outputs, **10** for one that does. Residual: [[LH-166]]. **ADVANCED 2026-09-16:** the in-pod maintenance lanes now record the versions they mint ([[LH-153]] closed, OBSERVED — a real compact on `aud1ns$t1` put `(:Run {operation:'compact_table', author:'CiQwOGE4…'})-[:WROTE {version:7}]->` in the graph, where the sweep's own run carries an EMPTY author), and `lineage-kit` no longer returns in silence when nothing will recover an event. |
 | 2 | Catalog correct for lance-ns + authz | **partial** | 381 catalog tables across 97 warehouse roots, 0 unreadable. `ungoverned_tables` = 0 against a denominator of 381 — **and that parenthesis is load-bearing: it counts every table the CATALOG KNOWS, so a dataset that exists on storage and in lineage but was never REGISTERED is outside the count entirely** (re-measured 2026-09-16: `research-bronze$events` and `bind86-bronze$events` answer 404 at the catalog while carrying lineage nodes — see [[LH-144]]). `maintainer` now on all 97 warehouses — repaired by the boot backfill, `warehouses=96 tuples=1344 failures=0`. **Spec conformance DRIVEN, not merely test-covered**: all **54/54** operations in the vendored `spec.yaml` are served by the running catalog (zero missing), beside 106 rask control-plane operations that are correctly not spec ops; and a stubbed one answers the spec's own status — `POST /v1/table/{id}/backfill_column` -> **406 `UnsupportedOperationError`** in RFC 9457 form. Residuals: [[LH-037]], [[LH-164]]. **AND A LIVE AUTHZ DEFECT THIS ROW NEVER COUNTED, found and fixed 2026-09-16:** the vend door honoured only ONE of the estate's two approved-base allowlists, so it dropped `s3://lance-catalog/models/` — a base the create door accepts — from every session policy it issued: **1,836 `vend_base_path_unsanctioned` refusals in three hours** — re-measured later the same day at **1,254 in thirty minutes**, i.e. ~2,500/hour and ONGOING — each surfacing later as a read denial at the object store with nothing naming the base. Fixed `6d923a40`, built as `main-38b85684`, and NOT YET DEPLOYED: the running catalog is `main-9e5ff5b3`, so the refusals continue until the stem is rolled ([[LH-169]]). |
 | 3 | Not coupled to a workflow engine or Ray | **DONE and pinned** | In the running `rask-medallion-producer`: `dapr-ext-workflow` is absent from the unconditional `Requires-Dist` and present only as `extra == 'workflow'`; `import ray` FAILS in the image; zero module-level `import ray` across the four services; none declares `ray`/`ray-kit`. Both halves gated by `test_the_lakehouse_does_not_depend_on_a_workflow_engine.py`. |
 | 4 | Events are correct | **partial, and the plane itself is healthy** | The bus DELIVERS, measured over two windows: **586 deliveries / 1 parked** in 20 min, **1,313 / 53** in 60 min — every one answering HTTP 200, because a park is an ACK (the DLQ route acks after logging, so 200 is the correct status for both outcomes and cannot be read as success on its own). Streams: LINEAGE 1,311 / MEDALLION 190 / CATALOG_CONTROL 908 / INGEST 32, all with recent traffic. DLQ is 9,887 msgs / 29 MiB, `dlq.lineage.events` 9,856, dominated by TEST identities (`data_eng` 30, `e2e` 14, `ray` 10 over 3 h against `service-stage-runner` 3 + `service-maintenance` 2). So the failure is a CLASS of message, not the transport. **And the DLQ's GROWTH is not a loss rate at all (measured 2026-09-16): the ingest consumer is ephemeral with `deliverPolicy: all`, so every lineage RESTART re-presents the retained stream, the gate refuses the same unrepairable events again, and each refusal appends a NEW DLQ message about an event already in it.** Driven deliberately — rolling lineage produced 49 parks inside two minutes of pod start and zero before it; run `188ab99f…` sits at seq 5000 parked 2026-09-10 and was parked again 2026-09-15. **No production event newer than 2026-09-14T19:14 has ever been parked.** So DLQ depth is restart-count x backlog-size over a roughly FIXED, OLD set — not an accelerating bleed, **and it is BOUNDED: the stream is `max_age` 168 h / `discard: old`, so it holds a rolling 7-day window and has gone DOWN across today's four rolls (10,011 -> 8,255)**. Residual: [[LH-166]], [[LH-148]]. **ADVANCED 2026-09-16:** a failed outbox stage no longer skips the publish it was meant to protect ([[LH-154]] closed, driven against the deployed pod), and the loop's MECHANISM is finally attributed — [[LH-170]] records that `lineage-pubsub-lineage` is the one subscription of eight with no `durableName` and `deliverPolicy: all`, so the replay is idempotent for events the graph ACCEPTS and not for events the gate REFUSES. One ruling on refusal-ack semantics closes that, [[LH-166]] and [[LH-151]] together. |
@@ -3333,6 +3379,19 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
     refusal, and factoring `describe`'s two-channel refusal into a local helper hid it. The gate now
     follows ONE hop and verifies the delegate itself refuses — mutation-checked: a delegate that stops
     refusing re-flags the door, so the allowance cannot become the loophole it closes.
+  * **DEPLOYED AND OBSERVED 2026-09-17, as a BEFORE/AFTER on the running estate rather than a green
+    test.** The same script drove both images through the full governance chain — a Dex bearer for
+    alice, then project -> warehouse -> namespace -> table -> branch -> `add_columns` on the branch ->
+    insert naming the branch-only column — with the read-back through VENDED per-table credentials,
+    because the catalog holds no ambient bucket keys and the read had to ask for them the way any
+    client would. (The read cannot go through `/query`: that door is one of the fifteen that refuse a
+    branch, which is the fix above working.)
+
+        main-467904ae   insert -> 200   branch rows note: [None, None]        DROPPED
+        main-6a3a376e   insert -> 200   branch rows note: [None, 'KEEPME']    KEPT
+
+    The 200 in the first row is the whole defect: nothing errored and nothing logged. Both drives'
+    scratch objects were dropped afterwards — 0 remaining, 96 warehouses, the pre-drive count.
 - *Clause 1 is [[LH-021]] verbatim and cannot be done inside this row* — measured unstarted: `grep -rn
   '/management' services/catalog/src --include=*.py` returns nothing and every rask-only router still
   mounts on a spec prefix.
@@ -7198,9 +7257,14 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   reads `payload.submission_id` (`:530`) rather than calling `stage_submission_id` again. So switching
   the derivation cannot desynchronise the two the way the extraction docstring warns about; it can only
   orphan a job that is ALREADY IN FLIGHT across the cut, and 0 were PENDING or RUNNING when measured.
-  What remains permanently is the operator-readable `ray-<stage>-<token>-…` name that 48 of 170 live
-  jobs carry — a real cost, but a legibility one rather than a correctness one, and it should be priced
-  as such when the choice is made.
+  What remains permanently is the operator-readable `ray-<stage>-<token>-…` name. Re-measured on the
+  live head 2026-09-17: **176 jobs, 48 of them readable (27%), and 0 PENDING or RUNNING** — so path 3 is
+  still operationally free, and what it costs is legibility on historical job names rather than
+  correctness.
+  *Recommendation, so the owner chooses between PRICED options rather than open ones:* take the rename.
+  It changes no shared `service-kit` contract, it is free today, and a log field carrying stage+token
+  would restore the legibility later if it turns out to matter. Paths 1 and 2 both widen a shared model
+  or a port signature to buy back a naming convenience.
 - **RE-MEASURED 2026-09-16 AND THREE OF THIS ROW'S FOUR CLOSES-WHEN CLAUSES ARE ALREADY SATISFIED.
   Corrected here because a HIGH row that overstates what is missing is how phase-2 planning starts from
   the wrong place.**
