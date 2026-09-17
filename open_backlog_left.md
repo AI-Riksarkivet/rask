@@ -5533,11 +5533,25 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   stand-in for `lance.dataset` omitted `session`, so threading it made the test fail with a TypeError
   for a reason unrelated to the classifier it pins. A double that does not mirror the real signature is
   a test that passes for the wrong reason.
-- *Closes when:* the residue the row bundles lands — the three `LANCE_*` vars in the Ray `runtime_env`,
+- *Closes when:* the residue the row bundles lands — ~~the three `LANCE_*` vars in the Ray `runtime_env`~~
+  **(one of the three is falsified — see below)**,
   one `instrument_lance_metrics` call per process (ingest, viewer and search still never call it),
   door-side branch/tag validation, pinned blob thresholds, `allow_http` derived from the endpoint
   scheme, HTTPX timeouts. The per-service conversion, the per-pod sizing and the shared-helper
   injection are all DONE and should not be re-attempted.
+- **`LANCE_CPU_THREADS` MUST NOT BE ADDED, and [[LH-172]] already did this work and reverted it —
+  cross-checked 2026-09-17.** That row measured the variable on pylance 11.0.0 by varying CPU affinity
+  and the env var together: 4 visible CPUs with `LANCE_CPU_THREADS=32` still built an 11-thread pool,
+  and 64 visible CPUs with `LANCE_CPU_THREADS=1` still built 69 — **ignored in both directions**. A
+  `bound_lance_thread_pools()` helper that set it at all five lakehouse entrypoints was written,
+  deployed and OBSERVED APPLYING (`lance_compute_pool_bound_to_container cpu_threads=1 quota_cores=1.0`
+  on every pod) and then **removed**, because "a control that provably does nothing is the failure this
+  estate keeps finding, not a harmless default". Adding it to the Ray `runtime_env` would re-introduce
+  exactly that. The other two (`LANCE_IO_THREADS`, `LANCE_LOG`) are untested here and may well work;
+  only the thread-pool one is falsified.
+- *Also worth reading before picking this up:* of the three services missing `instrument_lance_metrics`,
+  **two are on the do-not-work list** (viewer, search) and the third (ingest) is phase 2 — so that clause
+  contributes nothing to phase 1 and should not be what keeps this row open.
 
 **LH-097 · Tiers re-materialise managed blob bytes per tier instead of silver being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · med · **blocked:** owner acknowledgement of R9 plus the storage-vs-coupling trade, and the recorded clone→source edge
