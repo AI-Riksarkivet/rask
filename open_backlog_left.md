@@ -837,6 +837,20 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   turning into a permanent no-page, which is strictly worse. Pinned by three new promtool cases: stuck
   with counters ABSENT still pages, the measured live scenario (depth 6, refused each tick, aging 2.1
   days) does not, and a deep-but-draining backlog does not.
+  **OBSERVED ON THE LIVE ESTATE 2026-09-17 — all three halves, none of them inferred.** Rolled as
+  `main-bba6b3a3` to `rask-lineage` and `rask-catalog` (they share the `lance-rest-catalog` image and
+  lineage was two commits behind). (1) The first tick after the roll read
+  `lineage_outbox_drained drained=0 stranded=0 refused=6`, against `drained=0 stranded=6` before it,
+  and it has held every 300 s since (09:41 through 10:06 sampled). (2) `outbox_events_refused_total`
+  exists in the live GreptimeDB `information_schema` — RE-QUERIED rather than assumed, because the
+  OTLP exporter mangles the name and `outbox.events.refused` could have landed under any suffix — and
+  reads `6` for `service_name='lineage'` while `outbox_events_stranded_total` reads `0`.
+  (3) **THE COUNTER ACCUMULATES, and that is the leg that decides whether the alert guard works at
+  all:** it read `6` at 22:06 and `12` at 22:11, so `rate(outbox_events_refused_total[15m]) > 0` and
+  the `and ... == 0` guard genuinely suppresses `LineageOutboxNotDraining`. Had `record_refused`
+  reported a per-tick CONSTANT instead, the rate would be 0, the guard would pass, and the alert would
+  page on the settled-refusal condition exactly as before the fix — a guard that looks right in the
+  rules file and is inert in the store. Measuring the second tick is what separated the two.
   *So the fix is to change what COUNTS, not to move the object:* report `refused` as its own number and
   its own metric rather than folding it into `stranded`, which needs no write permission, destroys
   nothing, and leaves the event recoverable if the grant ever lands. The drain already NAMES the
@@ -6817,7 +6831,14 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 `chart, lineage, frontend-zones` · **HIGH**
 
 - *Why open:* Measured live: `rask-web-lakehouse` polled `GET /events` with a `LINEAGE_SERVICE_TOKEN` (hash `1b55ba766c3e962c`) matching no key in `rask-infra-credentials`, and 2,627 requests — 46% of all lineage traffic — were refused 401 while the zone rendered the 401 as an empty feed. A restart fixed that instance; nothing prevents the next rotation, because the Deployment reference and the render were both correct and only the running pod was wrong.
-- *Closes when:* Add a `checksum/secret` pod-template annotation (sha256sum of the rendered Secret) beside every `secretKeyRef` env in `chart/templates/`, and pin it with a rendered-manifest test that fails when a template adds a `secretKeyRef` without the annotation.
+- **RE-MEASURED 2026-09-17 — THE SYMPTOM IS BACK, WHICH IS THE ROW'S OWN POINT.** The restart that
+  "fixed that instance" bought nothing durable: `rask-web-lakehouse` (10.42.0.186) is again polling
+  `GET /events?limit=1&summary=true` against lineage and being refused **401**, observed in the
+  lineage access log alongside `rask-notifications` (10.42.0.245) succeeding **200** on the same door
+  with `limit=500`. So the discriminator is the CALLER's credential, not the door — notifications
+  holds a working one and the zone does not. A second recurrence after a restart is the evidence that
+  the missing `checksum/secret` annotation is the defect rather than one unlucky pod.
+- *Closes when:* Add a `checksum/secret` pod-template annotation (sha256sum of the rendered Secret) beside every `secretKeyRef` env in `chart/templates/`, and pin it with a rendered-manifest test that fails when a template adds a `secretKeyRef` without the annotation. **Note the ordering against [[XC-004]]:** the zone's `LINEAGE_SERVICE_TOKEN` arrives by `secretKeyRef` — a k8s Secret through env, which is not one of the three sanctioned paths — so the annotation makes the CURRENT path survive rotation while XC-004 removes the path. Doing the annotation first is still right: it is a one-line-per-template render change with a gate, and it stops the bleeding without a release that rotates live credentials.
 
 **XC-002 · The chart fix moving the Ray head's S3 credential onto the sanctioned ESO path is committed and never deployed**
 `chart, medallion, storage` · **HIGH** — the cascade half is CLOSED 2026-09-14; what remains is the ESO switch
