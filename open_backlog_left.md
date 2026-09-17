@@ -4448,7 +4448,29 @@ _Multi-tenancy is the product claim; every item here is a place where one tenant
 `lineage` · med
 
 - *Why open:* The owner delegated the decision 2026-09-02 and the row explicitly stays in the backlog — the bus door is the integrity of the lakehouse's write record. The decided shape (mTLS SPIFFE app-id policy while Dapr is the transport, a transport-independent producer signature that survives a Dapr retreat, `enforce_output_authz` stamping the subject either way) is a design, not landed code.
-- *Closes when:* Add the Dapr `accessControl` policy naming the permitted producer app-ids on the lineage subscription, verify a producer signature over the CloudEvent in the bus door, and stamp the subject through `enforce_output_authz`.
+- *Closes when:* ~~Add the Dapr `accessControl` policy naming the permitted producer app-ids on the lineage subscription~~ **(names the wrong mechanism — see below)**, verify a producer signature over the CloudEvent in the bus door, and stamp the subject through `enforce_output_authz`.
+- **RE-MEASURED 2026-09-17: THE PRODUCER-RESTRICTION CLAUSE WAS SOLVED ON 2026-09-16 BY A DIFFERENT
+  MECHANISM, and this row still asks for `accessControl`.** The 2026-09-10 evidence ("grep -rn
+  accessControl returns zero hits") is still literally true and now misleading — the estate did not
+  reach for `accessControl`; it used the pub/sub component's own keys.
+  * *Applied and live, on the one consumer-only identity:* `chart/templates/dapr-component.yaml:238-245`
+    sets `protectedTopics: lineage.events.v1`, `publishingScopes: notifications=dlq.notifications` and
+    `subscriptionScopes: notifications=dlq.notifications,lineage.events.v1` on the notifications
+    component — denying `notifications` PUBLISH to the provenance topic while leaving it able to
+    subscribe. The comment cites this row by number.
+  * **A FLEET-WIDE VERSION WAS BUILT, ROLLED AND REVERTED THE SAME DAY, and the measurement is the
+    reason a future attempt must be app-by-app.** `subscriptionScopes` is **not additive**: naming an
+    app makes that list its COMPLETE allowlist for the component, including topics nothing protects. The
+    live refusal was on a topic `protectedTopics` never named — *"subscription to topic
+    'dlq.notifications' … is not allowed"* — with **47 denials on medallion-producer, 16 on
+    notifications, 4 on lineage** before the revert.
+  * *So the remaining work is not "add accessControl":* it is to extend the notifications pattern to the
+    other producer identities, enumerating EVERY topic each app uses on its component in BOTH
+    directions, measured off `/v1.0/metadata` and the publish call sites. The chart states that
+    requirement at the site.
+  * *And the OTHER clause is untouched by any of this:* no producer signature exists
+    (`_StampedAuthor`'s own docstring — "nothing proves the stamp"), so the bus door still trusts an
+    app-id it cannot verify. That half is the row's real remainder.
 - **THE FIRST CLAUSE IS MISPRESCRIBED — `accessControl` CANNOT SEE A PUB/SUB DELIVERY. Verified against
   the Dapr documentation 2026-09-16, not inferred.** `docs.dapr.io/operations/configuration/invoke-allowlist`
   states the block's scope verbatim: it restricts "what the operations *calling* applications can
