@@ -25,7 +25,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from service_kit.lakehouse.base_refs import protected_roots
+from service_kit.lakehouse.base_refs import containment_of, protected_roots
 from service_kit.lakehouse.features import manifest_base_paths, manifest_feature_flags
 
 
@@ -86,6 +86,40 @@ def test_containment_not_equality_so_a_SUBDIRECTORY_is_refused_too(tmp_path: Pat
     refs = protected_roots([src, clone], {})
 
     assert refs.is_protected(f"{src}/data") is not None, "the guard would allow deleting the referenced data directory"
+
+
+def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_path: Path) -> None:
+    """THE REFUSAL IS RIGHT AND ITS STATED REASON IS BACKWARDS, which is half the estate's warnings.
+
+    Measured on the live estate 2026-09-17 over 60 minutes: 1,399 `maintenance_refused_protected_base`
+    lines covering 246 distinct datasets — **116 by equality** (the dataset IS a referenced root, and
+    the reason is exactly right) and **129 `<root>/tree/<name>` branches**, which is 100% of the
+    "lies under a protected root" class.
+
+    A branch is not a subdirectory of the referent — it is the REFERRER. `file_format.md:2744`:
+    *"Each branch dataset is technically a shallow clone of the source dataset"*, and the layout at
+    `:2746-2761` gives `tree/{branch}/` its own `_versions/`, `_transactions/`, `_deletions/` and
+    `_indices/` and **no `data/`** — so a branch resolves its data through the parent's files, which is
+    precisely what makes the PARENT protected.
+
+    So the message "another dataset resolves its files through <root>" describes the parent's
+    situation, not the branch's, and an operator reading it about `.../tree/mb` is told the opposite of
+    what is true. This pins the DIAGNOSIS; it deliberately changes no GC behaviour, because whether a
+    branch may be compacted at all depends on what pylance scopes `cleanup_old_versions` to, which the
+    spec does not state and which this file's own subprocess reproduction is the way to settle.
+    """
+    src, clone = _source_and_clone(tmp_path)
+    refs = protected_roots([src, clone], {})
+    branch = f"{src}/tree/mb"
+
+    assert refs.is_protected(branch) is not None, "a branch inside a referenced root must still be refused"
+    assert containment_of(branch, str(refs.is_protected(branch))) == "branch", (
+        "the branch is the REFERRER — reporting it as a referenced root tells an operator the opposite of what is true"
+    )
+    assert containment_of(src, str(refs.is_protected(src))) == "is", "the source IS the referenced root"
+    assert containment_of(f"{src}/data", str(refs.is_protected(f"{src}/data"))) == "under", (
+        "a real subdirectory of the referent is neither the root nor a branch"
+    )
 
 
 def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:

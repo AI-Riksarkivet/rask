@@ -110,6 +110,34 @@ class BaseRefs(BaseModel):
         return None
 
 
+#: The directory a named branch's own files live under — `file_format.md:2763`, "Named branches store
+#: their version-specific files under `tree/{branch_name}/`".
+_BRANCH_SEGMENT = "/tree/"
+
+
+def containment_of(location: str, root: str) -> str:
+    """How ``location`` sits against the protected ``root``: ``is`` | ``branch`` | ``under`` | ``ancestor``.
+
+    DIAGNOSIS ONLY — every one of these is still refused, and this function decides no GC behaviour.
+    It exists because the four are not the same situation and one sentence described all of them:
+    measured on the live estate 2026-09-17, 129 of 246 refused datasets were ``branch`` and were told
+    "another dataset resolves its files through <root>", which is the PARENT's situation stated about
+    the child.
+
+    A branch is the REFERRER, not part of the referent. `file_format.md:2744` — "Each branch dataset is
+    technically a shallow clone of the source dataset" — and the layout at `:2746-2761` gives
+    ``tree/{branch}/`` its own ``_versions/``/``_transactions/``/``_deletions/``/``_indices/`` and no
+    ``data/``, so it resolves its data through the parent. That is what makes the parent protected, and
+    it is why naming the branch as a referenced root inverts the fact an operator needs.
+    """
+    here, there = _normalise(location), _normalise(root)
+    if here == there:
+        return "is"
+    if here.startswith(f"{there}/"):
+        return "branch" if _BRANCH_SEGMENT in here[len(there) :] else "under"
+    return "ancestor"
+
+
 def normalise(uri: str) -> str:
     """Compare paths, not spellings: drop the scheme and any trailing slash.
 

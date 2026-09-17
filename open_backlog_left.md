@@ -4958,6 +4958,36 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Both halves the row prescribes have landed — `incomplete`/`excluded` are defined and the depth-limit inflation is fixed, and flag 16 no longer blanket-refuses because the gate now parses `BasePath.is_dataset_root`; what is left is only the narrower `is_protected` containment question.
   **Evidence:** The definitions the row says to establish FIRST are stated in code: services/maintenance/src/maintenance/services/reconcile.py:236-244 — `excluded_datasets` is 'datasets the unreferenced-file method does not APPLY to … Deliberately not in `incomplete`, which gates the purge', and `incomplete` is fed from reconcile.py:546/569/582/642/834/841/848/859 (the `storage:lance-catalog` entries the row asks to trace come from `_read_registry` at 559-569 and the bucket walk at 841-848). The `incomplete=65` cause is closed by LH-100's fix, present at HEAD: services/maintenance/src/maintenance/services/optimize.py:143-170 `_may_hide_a_dataset` plus its call at optimize.py:236 — a truncation is now recorded only where a subdirectory actually exists below the bound. The flag-16 half of the 'original plan' has landed too: services/maintenance/src/maintenance/services/optimize.py:602-620 records that refusing on flag 16 alone was over-broad and that the gate now 'asks about the BASES, not about the FLAG', wired at optimize.py:626-640 via `gather_compaction_bases(ds, dataset_root_probe(uri, storage_options))`, which reads `BasePath.is_dataset_root` (packages/service-kit/src/service_kit/lakehouse/features.py:384,404,508). The residue: NO per-base `managed`/`reference-only` field exists — packages/service-kit/src/service_kit/lakehouse/base_refs.py:84-89 `BaseRefs` carries only `protected: set[str]` and `unreadable`, and the refusal at optimize.py:651-653 is driven by `is_protected`'s two-way containment rule (base_refs.py:96-110), which refuses a branch at `<dataset>/tree/<name>` because it lies UNDER a protected root. The smaller true fix is: decide whether `is_protected` should exempt an `is_dataset_root=False` (reference-only) base, and record that distinction on the base — not a new warehouse-record schema plus scoped cleanup credentials.
+  **THE RESIDUE IS MEASURED 2026-09-17, AND IT IS NOT THE SHAPE THIS ROW GUESSED.** The row proposes
+  deciding "whether `is_protected` should exempt an `is_dataset_root=False` (reference-only) base".
+  Read off the live estate over 60 minutes: **1,399 `maintenance_refused_protected_base` lines across
+  246 distinct datasets**, splitting
+
+      116  equality  — the dataset IS a referenced root, and the refusal reason is exactly right
+      129  `<root>/tree/<name>` BRANCHES — 100% of the "lies under a protected root" class
+        1  other
+
+  So the refusals are not about a base's dataset-root-ness at all; they are about CONTAINMENT, and the
+  whole "under" class is branches.
+  * **A BRANCH IS THE REFERRER, NOT PART OF THE REFERENT**, which is what makes the old message wrong.
+    `lance_docs/file_format.md:2744` — *"Each branch dataset is technically a shallow clone of the
+    source dataset"* — and the layout at `:2746-2761` gives `tree/{branch}/` its own `_versions/`,
+    `_transactions/`, `_deletions/` and `_indices/` and **no `data/`**, so a branch resolves its data
+    through the parent. That is precisely what makes the PARENT protected. Telling an operator that a
+    branch is a root "another dataset resolves its files through" states the parent's situation about
+    the child.
+  * **FIXED 2026-09-17 — the diagnosis, deliberately NOT the GC behaviour.** `base_refs.containment_of`
+    classifies `is` / `branch` / `under` / `ancestor`, and `optimize.py` renders one sentence per
+    relation plus a `relation` field on the log line so the four can be counted apart. Every one of the
+    four is still REFUSED; nothing about what may be reclaimed changed.
+  * *Why the behaviour was left alone, stated so it is a decision rather than an omission:* whether a
+    branch may be compacted at all depends on what pylance scopes `cleanup_old_versions` to, and
+    `file_format.md` does not say. The row's own Closes-when already prescribes the right instrument —
+    "a RED test pinning what pylance does … before changing any GC behaviour" — and
+    `tests/unit/test_base_refs_guard.py`'s subprocess reproduction is the established way to settle it,
+    because Lance caches dataset state per process and an in-process assertion reports on its own
+    memory. **Until that test exists, a permit here risks a clone's entire reason to exist, and the
+    gate's own comment says it fails closed on purpose.**
   **DISCOVERY TRUNCATION IS RESOLVED BY THE DEPLOY, observed 2026-09-11:**
   `maintenance_discovery_truncated` is **0** in a five-minute window on `main-b641103f`, against 47 WARN
   lines / 64 prefixes per tick before. The evidence-based `_may_hide_a_dataset` narrowing was written

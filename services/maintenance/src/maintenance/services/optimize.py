@@ -23,7 +23,7 @@ from maintenance.core.config import shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
 from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome, MaintenanceDenied
 from maintenance.services.index_health import inspect_indices
-from service_kit.lakehouse.base_refs import BaseRefs
+from service_kit.lakehouse.base_refs import BaseRefs, containment_of
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
     describe_compaction_unsupported_flags,
@@ -260,6 +260,17 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
 
     _walk(bucket, 1)
     return found
+
+
+#: Why a dataset inside the protected set is refused, per `base_refs.containment_of` relation. Each is
+#: the SAME refusal; they differ only in what they tell an operator is true, and a single sentence for
+#: all four described the referent's situation even when the subject was the referrer.
+_WHY_PROTECTED = {
+    "is": "another dataset resolves its files through {root} (shallow clone / multi-base) — compacting or reclaiming here would break it",
+    "branch": "this is a BRANCH of {root} and therefore a shallow clone of it — its own data resolves through the parent, so compacting or reclaiming here is refused until a branch-scoped reclaim is proven safe",
+    "under": "this lies inside {root}, whose files another dataset resolves through — deleting or rewriting anything at or beneath it breaks the referrer",
+    "ancestor": "{root} lies beneath this location and another dataset resolves its files through it — reclaiming here would take the referenced bytes with it",
+}
 
 
 def _compact_files(
@@ -669,8 +680,13 @@ def compact_one(
     # function runs compact -> optimize_indices -> cleanup as one pass, the refusal belongs here, in
     # front of all three, rather than in front of compaction alone.
     if protected is not None and (root := protected.is_protected(uri)) is not None:
-        why = f"another dataset resolves its files through {root} (shallow clone / multi-base) — compacting or reclaiming here would break it"
-        log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why})
+        # THE REFUSAL IS THE SAME FOR ALL FOUR; ONLY THE DIAGNOSIS DIFFERS. Measured on the live estate
+        # 2026-09-17, 129 of 246 refused datasets were BRANCHES told "another dataset resolves its
+        # files through <root>" — the parent's situation stated about the child. A branch is the
+        # REFERRER (`file_format.md:2744`: "Each branch dataset is technically a shallow clone of the
+        # source dataset"), so that sentence inverts the fact an operator needs to act on.
+        why = _WHY_PROTECTED[containment_of(uri, root)].format(root=root)
+        log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": containment_of(uri, root), "root": root})
         return DatasetResult(uri=uri, refused=why)
     # Read the producer's DECLARED name while the dataset is open — the emit path downstream holds only
     # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
