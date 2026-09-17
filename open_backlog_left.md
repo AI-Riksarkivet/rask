@@ -4980,6 +4980,12 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     classifies `is` / `branch` / `under` / `ancestor`, and `optimize.py` renders one sentence per
     relation plus a `relation` field on the log line so the four can be counted apart. Every one of the
     four is still REFUSED; nothing about what may be reclaimed changed.
+  * **OBSERVED LIVE 2026-09-17** on `lance-rest-catalog:main-472ed48f`, Dagger-built and rolled to
+    `rask-maintenance`. In a 20-minute window the sweep reports `relation='is'` **57** and
+    `relation='branch'` **57** — the two classes are countable apart on the estate for the first time,
+    and a branch now reads *"this is a BRANCH of `branchaud1-wh/74aba457_branchaud1ns$t5` and therefore
+    a shallow clone of it — its own data resolves through the parent"* instead of being named as a root
+    other datasets resolve through. Sample of each kind read off the running pod, not inferred.
   * *Why the behaviour was left alone, stated so it is a decision rather than an omission:* whether a
     branch may be compacted at all depends on what pylance scopes `cleanup_old_versions` to, and
     `file_format.md` does not say. The row's own Closes-when already prescribes the right instrument —
