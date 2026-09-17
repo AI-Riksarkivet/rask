@@ -681,15 +681,35 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   lakehouse deployments the same afternoon: the ingest consumer is ephemeral + `deliverPolicy: all`, so a
   restart re-reads the retained LINEAGE stream and re-parks everything that still fails. **A deployment
   produces a parking burst.** That is this row's own documented mechanism, caught in the act.
-- *A SECOND CAUSE EXISTS AND IS NOT IDENTIFIED:* seq 12000 and 11990 carry `sub='service-maintenance'`
-  and `sub='service-stage-runner'` — real service identities, not role literals — so they park for some
-  other reason. Whoever works (b) must not assume the `data_eng` explanation covers the stream.
+- **THE ROLE-LITERAL CAUSE COVERS ~86% OF THE STREAM, widened from 7 samples to 14 spread across the
+  whole live sequence range:**
+
+      data_eng                6  |  role name
+      ray                     3  |  role name
+      analyst                 3  |  role name
+      service-stage-runner    1  |  identity
+      service-maintenance     1  |  identity
+
+  Twelve of fourteen are ROLE NAMES, and `events.py:161-169` names two of the three outright
+  (`ingest_denied sub='ray'`, `sub='data_eng'`). So this is one cause, not a scatter.
+- *The small remainder carries real identities and at least one is explained too:* seq 12000 is
+  `compact_table.bronze$lh018probe` authored by `service-maintenance` — a maintenance compaction of a
+  SCRATCH PROBE TABLE that was dropped after its drive. Provenance for an object that no longer exists
+  has no tuples to authorize against, so it parks permanently. Whether the graph SHOULD record history
+  for a dropped table is a real question and is not answered here; it is flagged because it is a
+  different shape from the role-literal class and a replay would not help it either.
 - **WHICH MAKES (b) GATED RATHER THAN MERELY UNSTARTED.** A replay door that re-presents these to the
   ingest handler is only a recovery if they would now be ACCEPTED; if they park for a reason that still
   holds, the door re-parks them and manufactures exactly the flood this row measured — the hazard the
   Closes-when already names for the outbox-relay route, arriving by the other door. So the first unit of
-  (b) is to establish WHY a representative parked event is refused today, not to build the replay. Until
-  that is known, building (b) is a coin flip between a recovery and a flood.
+  (b) is to establish WHY a representative parked event is refused today, not to build the replay.
+  **That question is now ANSWERED (above), and the answer re-scopes (b) rather than unblocking it:** for
+  the ~86% role-literal population a replay is not a recovery at all — those events are unauthorizable by
+  construction and would re-park on every attempt. What that population needs is a DISPOSITION decision
+  (drain the subject and record the loss, or grant a historical-replay identity), not a door. Only the
+  ~14% remainder is a candidate for replay, and one of those two is a dropped table that would also
+  refuse. So (b) as written — "the DLQ stream becomes replayable" — would buy very little of what this
+  row is actually about.
 
 - **RE-MEASURED 2026-09-15: the interim doc clause is DONE, so (b) is the whole remainder.**
   `on_dead_letter`'s docstring now states it outright — *"That bounds what recovery can reach: a dead
