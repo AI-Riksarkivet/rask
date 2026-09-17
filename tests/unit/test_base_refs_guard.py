@@ -122,6 +122,80 @@ def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_
     )
 
 
+def test_LANCE_ITSELF_protects_a_BRANCH_which_is_what_the_cross_dataset_pre_pass_is_not_for(tmp_path: Path) -> None:
+    """THE LINE BETWEEN WHAT LANCE CAN SEE AND WHAT ONLY THE ESTATE CAN — measured, not argued.
+
+    [[LH-094]] and [[LH-019]] both stall on the same unknown: may a branch be compacted or reclaimed at
+    all? `file_format.md` does not say, and both rows prescribe exactly this instrument — "a RED test
+    pinning what pylance does … before changing any GC behaviour".
+
+    The control is the whole test. Reclaim deletes superseded files when nothing references them, and
+    stops when a BRANCH does:
+
+        no branch   data files 3 -> compact 4 -> cleanup 1   (the originals are reclaimed)
+        a branch    data files 3 -> compact 4 -> cleanup 4   (nothing is reclaimed)
+
+    So `cleanup_old_versions` is BRANCH-AWARE: a branch's manifest lives under `tree/{name}/` inside the
+    same dataset root (`file_format.md:2746-2761`) and carries no `data/` of its own, so Lance resolves
+    its files through the parent — and, seeing the reference, protects them.
+
+    THAT IS THE DISTINCTION THE ESTATE'S PRE-PASS EXISTS FOR, and it is narrower than the guard
+    currently acts on. A shallow clone in ANOTHER dataset is invisible to Lance — nothing in the source's
+    own directory records it, which is why `base_refs.protected_roots` walks the estate and why the
+    tests above it are RED without that walk. A branch is the opposite case: it is inside the root Lance
+    already reads.
+    """
+    zero = timedelta(seconds=0)
+
+    def build(*, with_branch: bool) -> str:
+        uri = str(tmp_path / ("withbranch.lance" if with_branch else "plain.lance"))
+        for chunk in range(3):
+            rows = pa.table({"id": pa.array(range(chunk * 3, chunk * 3 + 3), pa.int64())})
+            lance.write_dataset(rows, uri, mode="overwrite" if chunk == 0 else "append")
+        if with_branch:
+            lance.dataset(uri).create_branch("work")
+        return uri
+
+    def files(uri: str) -> int:
+        return len(list((Path(uri) / "data").iterdir()))
+
+    plain = build(with_branch=False)
+    lance.dataset(plain).optimize.compact_files()
+    lance.dataset(plain).cleanup_old_versions(older_than=zero, delete_unverified=True)
+    reclaimed = files(plain)
+
+    branched = build(with_branch=True)
+    lance.dataset(branched).optimize.compact_files()
+    after_compact = files(branched)
+    lance.dataset(branched).cleanup_old_versions(older_than=zero, delete_unverified=True)
+
+    assert reclaimed < after_compact, "the control did not reclaim anything, so the comparison below proves nothing"
+    assert files(branched) == after_compact, "a branch's referenced files were reclaimed — Lance is not branch-aware and the estate must protect them itself"
+
+
+def test_a_BRANCH_still_opens_in_a_FRESH_PROCESS_after_its_parent_is_maintained(tmp_path: Path) -> None:
+    """The cold-interpreter half, for the same reason this file opens subprocesses everywhere else:
+    an in-process read after a delete can keep succeeding off cached state, so it reports on this
+    process's memory rather than on the dataset."""
+    uri = str(tmp_path / "parent.lance")
+    for chunk in range(3):
+        lance.write_dataset(pa.table({"id": pa.array(range(chunk * 3, chunk * 3 + 3), pa.int64())}), uri, mode="overwrite" if chunk == 0 else "append")
+    lance.dataset(uri).create_branch("work")
+
+    lance.dataset(uri).optimize.compact_files()
+    lance.dataset(uri).cleanup_old_versions(older_than=timedelta(seconds=0), delete_unverified=True)
+
+    read = textwrap.dedent(f"""
+        import lance
+        ds = lance.dataset({uri!r}).checkout_version(("work", None))
+        print(ds.count_rows())
+    """)
+    done = subprocess.run([sys.executable, "-c", read], capture_output=True, text=True, check=False)
+
+    assert done.returncode == 0, f"the branch no longer opens after its parent was maintained: {done.stderr.strip()[-300:]}"
+    assert done.stdout.strip() == "9"
+
+
 def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:
     """The manifest states `/bucket/x.lance`; a caller holds `s3://bucket/x.lance`.
 

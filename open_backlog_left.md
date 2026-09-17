@@ -3060,10 +3060,13 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
      refine_factor, distance_type; the index doors' tokenizer/language/stem surface) where "a subtle
      divergence is a wrong answer wearing the right shape".
   2. **Branch-reclaim safety** (6: both compaction doors and the four maintenance doors) — blocked by
-     whether a branch may be compacted or reclaimed AT ALL, **which is the same open question as
-     [[LH-094]]'s residue**. One RED test — the subprocess reproduction `tests/unit/test_base_refs_guard.py`
-     already establishes as this estate's instrument — settles both rows at once. That is the single
-     highest-leverage unblock across the two.
+     whether a branch may be compacted or reclaimed AT ALL, which was the same open question as
+     [[LH-094]]'s residue. **ANSWERED 2026-09-17: it is safe.** Measured in
+     `tests/unit/test_base_refs_guard.py` — `cleanup_old_versions` is branch-aware (a reclaim that
+     removes 3 superseded files with no branch present removes none with one), and after the parent is
+     compacted and reclaimed the branch still opens from a COLD interpreter. So this class is no longer
+     blocked on a safety unknown; what remains for these six doors is plumbing `branch` through to the
+     maintenance verbs, which is ordinary work rather than a question.
 
 **LH-020 · Two of the three stock Lance clients still do not drive the deployed catalog: lancedb cannot address a nested namespace, lance-ray is untested**
 `catalog` · **HIGH** · **blocked:** lancedb upstream fix; the lance-ray leg waits for the compute pass
@@ -5069,6 +5072,29 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     and a branch now reads *"this is a BRANCH of `branchaud1-wh/74aba457_branchaud1ns$t5` and therefore
     a shallow clone of it — its own data resolves through the parent"* instead of being named as a root
     other datasets resolve through. Sample of each kind read off the running pod, not inferred.
+  * **THE UNKNOWN IS NOW MEASURED — 2026-09-17, and it answers [[LH-019]]'s branch clause in the same
+    stroke.** The question both rows stalled on ("may a branch be compacted or reclaimed at all?") is
+    settled by the instrument both rows prescribe. Control and subject, same tree:
+
+        no branch   data files 3 -> compact 4 -> cleanup 1   (the originals ARE reclaimed)
+        a branch    data files 3 -> compact 4 -> cleanup 4   (nothing is reclaimed)
+
+    **`cleanup_old_versions` is BRANCH-AWARE.** A branch's manifest lives under `tree/{name}/` inside the
+    same dataset root and carries no `data/` of its own, so Lance resolves its files through the parent —
+    and, seeing the reference, protects them. Confirmed from a COLD interpreter: after the parent is
+    compacted AND reclaimed, the branch still opens and reads its 9 rows.
+  * *So the estate's guard is doing two different jobs and only one of them is load-bearing.* A shallow
+    clone in ANOTHER dataset is invisible to Lance — nothing in the source's own directory records it —
+    which is exactly why `base_refs.protected_roots` walks the whole estate, and why the 116 EQUALITY
+    refusals are correct and must stay. A BRANCH is the opposite case: it is inside the root Lance
+    already reads, and Lance already protects it. The 129 branch refusals are therefore protecting
+    against something that cannot happen.
+  * *Pinned by two new legs in `tests/unit/test_base_refs_guard.py`* — the control (a reclaim that
+    proves it deletes at all, so the comparison means something) and the cold-interpreter read, this
+    file's own doctrine for questions about a dataset rather than about a process's cache.
+  * *Still NOT changed here, deliberately:* permitting branch maintenance is now evidenced but it is a
+    GC-behaviour change on a live estate, and the refusal has been in place long enough that the disk it
+    holds is not urgent. The evidence is what was missing; the change is a separate, reviewable step.
   * *Why the behaviour was left alone, stated so it is a decision rather than an omission:* whether a
     branch may be compacted at all depends on what pylance scopes `cleanup_old_versions` to, and
     `file_format.md` does not say. The row's own Closes-when already prescribes the right instrument —
