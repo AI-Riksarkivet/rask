@@ -2574,6 +2574,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     case passes — and the defect still ran unobserved for a day, purely because no evaluator exists.
     That is the strongest available case for the `observability.alerting.enabled` decision, and it is
     evidence rather than preference.
+  * **ONE ALERT OF THE 44 IS UNVERIFIED AND SHOULD BE CHECKED BEFORE ANYONE RELIES ON IT — flagged for
+    phase 2, not fixed here.** Three of the four metrics absent from the live store have real
+    instrumentation in this repo (`catalog_writes_shed_total` -> `catalog/api/load_shed.py`,
+    `flows_nodes_total` -> `flows/metrics.py`, `outbox_stage_failed_total` -> `lakehouse/outbox.py`), so
+    their absence means the bad thing has not happened — the healthy reading.
+    **`ray_memory_manager_worker_eviction_total` has NO source match anywhere in `packages/`,
+    `services/` or `scripts/`**, because it is Ray's OWN metric rather than one rask emits. Ray's
+    telemetry does reach the store — **289 `ray_*` tables**, memory metrics among them
+    (`ray_object_store_used_memory`, `ray_data_memory_budget`, `ray_data_issue_detector_high_memory`) —
+    but the `ray_memory_manager_*` family is absent entirely. So `RayWorkerOOMKills` either has simply
+    never fired, or names a metric this Ray version does not export, and nothing in the repo can tell
+    the two apart.
+    *Why it is worth a line rather than a shrug:* OOM is the one failure this estate deliberately
+    separates from the rest — `executor.RunFailure` splits `oom` from `driver_error` because "they need
+    opposite operator responses" — so an OOM alert that cannot fire is the costliest one to be wrong
+    about. Settling it needs Ray's own metric list for the deployed version, which is phase-2 work.
   * **(b) is not a route fault and its residue belongs to [[LH-141]].** The row says "0 distributed
     commits against 24 in-pod fallbacks in 24 h". Measured: **980 `mode='distributed'` outcomes against
     1,124 `in_pod` estate-wide, and 28 of the 124 composed `medallion/<tier>` datasets run
