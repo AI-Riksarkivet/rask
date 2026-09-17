@@ -639,6 +639,34 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   principal can be authorized for, so they park on every redelivery. That is tracked separately
   because it is a PRODUCER defect rather than the replay gap this row is about — but it also raises
   this row's stakes: a replay door that re-presents those events would park them again.
+- **RE-MEASURED 2026-09-17 — THE TERMINAL-LOSS RATE THIS ROW IS PRICED ON HAS ROUGHLY TRIPLED, AND THAT
+  RATE IS THE STATED REASON IT IS `med`.** The row says "17 of 21 present, 4 absent … the ~19% measured
+  here … much narrower than the parked count suggests". Re-sampled with the same method — 26 evenly
+  spread `stream get`s across the DLQ's whole live sequence range, 22 distinct run ids — and checked
+  against the AGE **graph** (`MATCH (r:Run) WHERE r.run_id = …`, 7,263 Run nodes), not the
+  `lineage_events` table, which is pruned and would have answered 0 for everything:
+
+      present in the graph   10 / 22
+      ABSENT                 12 / 22   = 55% terminal loss (row: 19%)
+
+- *And the window is at its limit, so the loss is ONGOING rather than historical.* `DLQ` holds 6,605
+  messages with `Maximum Age 7d`, first seq 5,399 @ 2026-09-10 14:59:58, last seq **12,003 @ 2026-09-17
+  14:39:52 — twelve minutes before the reading**. Last-minus-held puts **~5,398 parked deliveries
+  already aged out permanently**. So "not currently bleeding" in this row's own header is false in two
+  ways: parking is live, and the retention boundary is discarding the only copy.
+- *The parked population CONCENTRATES, which is the lead worth following:* the sampled events name a
+  small number of outputs — `acme-silver$features` (namespace `acme-silver`) and `silver$features`
+  (namespace `silver`, the [[LH-137]] table). **The cause is NOT established here and is not claimed.**
+  The refusals visible in the lineage log right now are a different population — the six permanently
+  refused e2e-residue events (`sub='e2e'`, `outputs=['e2e_outbox_ds']`, `lineage_outbox_drained
+  drained=0 stranded=0 refused=6`), which sit in the OUTBOX rather than this stream.
+- **WHICH MAKES (b) GATED RATHER THAN MERELY UNSTARTED.** A replay door that re-presents these to the
+  ingest handler is only a recovery if they would now be ACCEPTED; if they park for a reason that still
+  holds, the door re-parks them and manufactures exactly the flood this row measured — the hazard the
+  Closes-when already names for the outbox-relay route, arriving by the other door. So the first unit of
+  (b) is to establish WHY a representative parked event is refused today, not to build the replay. Until
+  that is known, building (b) is a coin flip between a recovery and a flood.
+
 - **RE-MEASURED 2026-09-15: the interim doc clause is DONE, so (b) is the whole remainder.**
   `on_dead_letter`'s docstring now states it outright — *"That bounds what recovery can reach: a dead
   letter older than the stream's retention has no path back, because nothing re-ingests the DLQ stream
