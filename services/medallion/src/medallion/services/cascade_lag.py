@@ -74,6 +74,25 @@ STORES_DISAGREE: Final = "stores_disagree"
 BLIND_REASONS: Final = frozenset({DESTINATION_INVISIBLE, STORES_DISAGREE})
 
 
+class StalledTier(BaseModel):
+    """One cell whose source exists, has never published, and whose destination cannot be measured.
+
+    A SEPARATE TYPE FROM `BlindEdge` rather than a `reason` on it, because the two carry opposite
+    evidence and a shared type would invite a shared series. A blind cell has a PUBLISHED source, so the
+    lane is running and the detector owes a lag it cannot give; this cell's source has published
+    nothing, so there is no lag to owe — what it has instead is a table that was created and written and
+    then went no further, which is a finding about the CASCADE rather than about the detector.
+
+    No `reason` field: there is exactly one way to arrive here, so a label whose vocabulary has one
+    member would be noise on every point.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    edge: str
+    project: str
+
+
 class BlindEdge(BaseModel):
     """One declared cell the detector could not state a lag for, and WHY.
 
@@ -267,6 +286,23 @@ class LagTickReport(BaseModel):
     #: differently. Bounded — a cell reaches it only when the source answered with a published version,
     #: which on the live estate 2026-09-11 was 15 of 267 cells.
     blind: list[BlindEdge] = Field(default_factory=list)
+    #: Cells whose source EXISTS and has never published — a tier that ran far enough to create and
+    #: write a table and then stopped before publishing. SEPARATE FROM `unmeasurable` because that
+    #: field's own definition excludes it ("the SOURCE is not visible"), and because the two are
+    #: opposite findings reached down two different paths: the source reader RAISING is a lane this
+    #: project does not run, the source ANSWERING with no published version is a lane that stopped.
+    #: Folded together, a stalled tenant is one part in 252 silent cells and says nothing — the same
+    #: argument this class already makes for `blind`, one field over.
+    #:
+    #: IDENTITIES RATHER THAN A COUNT, for `BlindEdge`'s reason: the operator's first question is WHOSE
+    #: tier stopped, and a count cannot answer it. Bounded by the same construction — a cell reaches
+    #: here only when the source ANSWERED, which on the live estate 2026-09-11 was 15 of 267 cells;
+    #: the other 252 raise and land in `unmeasurable`.
+    #:
+    #: Measured 2026-09-17: `advref31-silver$features` answers `tags/list` 200 with an empty tag map
+    #: after eight WROTE edges while `advref31-gold$catalog` has no node at all, beside five tenants
+    #: that DO have gold — one lane that stopped next to five that did not.
+    unpublished_source: list[StalledTier] = Field(default_factory=list)
     #: Cells NOT asked about this tick because :class:`AbsentEdgeMemo` has seen them refuse
     #: repeatedly. Counted rather than silent for the same reason `unmeasurable` is separate from
     #: `failed`: a detector that quietly stops asking looks exactly like one with nothing to report.
@@ -402,9 +438,12 @@ def run_lag_tick(
             consumed_ranges = consumed(edge, project)
         except EdgeNotMeasurable:
             if published_version is None:
-                # A source that exists and has never published has nothing to fall behind, so its
-                # destination's absence is the expected shape of a lane nobody has run yet.
-                report.unmeasurable += 1
+                # A SOURCE THAT ANSWERED. It has nothing to fall behind, so publishing no lag is still
+                # right — but it is NOT the same finding as a source nobody can see, and counting it
+                # there spent the only number that could tell a tenant why their gold is absent. The
+                # source reader answered rather than raising, which means the table exists and is
+                # readable; the lane reached it and stopped before publishing.
+                report.unpublished_source.append(StalledTier(edge=edge, project=project))
                 if memo is not None:
                     memo.record_absent(cell)
                 continue

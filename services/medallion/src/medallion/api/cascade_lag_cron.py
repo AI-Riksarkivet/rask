@@ -72,6 +72,13 @@ async def _on_cron(settings: SettingsDep, _: Annotated[None, Depends(require_dap
     # report to the sidecar, so the identities are on the wire either way; the series is what an alert
     # can reach. Pinned by `test_the_lag_cron_publishes_the_blind_lanes_it_found`.
     record_blind_edges(report.blind)
+    # `report.unpublished_source` is deliberately NOT published as a series ([[LH-167]]). A cell reaches
+    # it when the source exists and has never published, and this detector cannot tell a tier that
+    # stopped from a lane created five minutes ago — so a series would fire on every freshly created
+    # lane, which is the objection
+    # `test_a_source_that_exists_but_never_published_is_not_reported` already makes and which still
+    # holds. The identities travel in the report instead, where somebody ASKING gets an answer and
+    # nobody is paged for a new lane.
     return report
 
 

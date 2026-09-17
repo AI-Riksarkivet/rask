@@ -110,7 +110,15 @@ def test_both_stores_refusing_is_still_unmeasurable() -> None:
 
 def test_a_source_that_exists_but_never_published_is_not_reported() -> None:
     """A source table with no ``published`` tag has nothing to fall behind, so its destination's
-    absence is expected rather than a loss. Reporting it would fire on every freshly created lane."""
+    absence is expected rather than a loss. Reporting it would fire on every freshly created lane, and
+    that objection still stands — which is why this cell publishes no series and raises no blind entry.
+
+    WHAT CHANGED IS THE BUCKET, NOT THE SILENCE ([[LH-167]]). The cell used to be counted
+    `unmeasurable`, whose own definition is "the SOURCE is not visible" — and this source ANSWERED. So
+    a tier written eight times and then stopped was indistinguishable from a lane nobody runs. It now
+    lands in `unpublished_source`, carrying its identity, where somebody asking the report gets an
+    answer; nothing is pushed, so no freshly created lane pages anyone.
+    """
     report = run_lag_tick(
         edges=[("silver->gold", "brand-new")],
         published=lambda edge, project: None,
@@ -119,7 +127,8 @@ def test_a_source_that_exists_but_never_published_is_not_reported() -> None:
     )
 
     assert report.blind == []
-    assert report.unmeasurable == 1
+    assert report.unmeasurable == 0, "the source answered, so it is not the 'source not visible' state"
+    assert [(c.edge, c.project) for c in report.unpublished_source] == [("silver->gold", "brand-new")]
 
 
 def test_the_reported_cell_keeps_being_asked() -> None:

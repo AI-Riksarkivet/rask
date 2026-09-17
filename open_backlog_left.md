@@ -4266,10 +4266,29 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   by this same runner, so it resolves the tenant from the trigger payload rather than from the path. Why
   advref31's silver produced no trigger, or produced one that resolved nowhere, needs that payload —
   which the rolling window no longer holds.
-- *Closes when:* a surface names a written-but-unpublished tier — the lag detector's own report, the
-  promotions door, or the tier board. The publish state no longer needs establishing; one of those
-  three has to say it out loud, because from every surface the estate has today this is still
-  indistinguishable from a lane nobody ran.
+- **THE FIRST OF THE THREE SURFACES LANDED 2026-09-17 — the lag detector's own report now names it.**
+  The tick reached `unmeasurable` down TWO paths that are opposite findings: the source reader RAISING
+  (403/404 — the source is not visible, 252 of 267 cells) and the source ANSWERING with no published
+  version (a 200 with an empty tag map — a table that was created and written and then stopped). They
+  incremented one counter, and `unmeasurable`'s own docstring excludes the second outright: *"UNMEASURABLE
+  means the SOURCE is not visible."* So the collapse was a defect in the module's own terms.
+  `LagTickReport.unpublished_source` now carries those cells as IDENTITIES, for `BlindEdge`'s stated
+  reason — the operator's first question is WHOSE tier stopped and a count cannot answer it — bounded by
+  the same construction (a cell reaches it only when the source answered: 15 of 267).
+  *Deliberately NOT a metric series, and the reason is an objection this row should keep:*
+  `test_a_source_that_exists_but_never_published_is_not_reported` argues that reporting would *"fire on
+  every freshly created lane"*, and that still holds — this detector cannot tell a tier that stopped
+  from a lane created five minutes ago. Pushing a point would page somebody for a new lane. The
+  identities travel in the report, where asking gets an answer and nothing is pushed. A series becomes
+  correct only once the detector can date the source, which it cannot today.
+  RED-first, 3 tests in `services/medallion/tests/test_a_tier_that_stopped_is_not_a_lane_nobody_ran.py`,
+  one of them pinning that an INVISIBLE source still counts `unmeasurable` so the fix cannot be "rename
+  the counter".
+- *Closes when:* one of the remaining two surfaces makes it reachable without someone already asking the
+  right question — the promotions door gaining an enumeration (*"what is held?"*, which this row
+  measured as impossible today: two routes, both keyed by an instance id, no list endpoint anywhere), or
+  the tier board naming a written-but-unpublished tier. The report distinction above is the prerequisite
+  both would read; on its own it answers a reader who already suspects.
 
 **LH-151 · The DLQ parking plane assumes every park is retry exhaustion, and Dapr parks on at least two other paths — one invisibly, one as a false page**
 `medallion, chart, notifications, lineage` · med · found 2026-09-14 while driving [[LH-106]] gap #2 · **blocked:** owner decision — the parking shape; shares its answer with [[LH-166]]'s refusal-ack ruling
