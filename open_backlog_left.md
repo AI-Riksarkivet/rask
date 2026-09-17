@@ -3814,7 +3814,31 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   (an endpoint-only delimiter would let the router-level FGA gate authorize a differently-parsed object).
 
 **LH-167 · A tenant's silver tier has been WRITTEN eight times and PUBLISHED never, and nothing reports a tier that stopped mid-cascade**
-`medallion, catalog` · low · found 2026-09-16 while refuting [[LH-143]]'s worked example
+`medallion, catalog` · **med** · found 2026-09-16 while refuting [[LH-143]]'s worked example · **RAISED low -> med 2026-09-17 on this row's own criterion**
+
+- **RE-MEASURED 2026-09-17 AND RAISED, on the escalation rule the row itself states** ("it becomes med
+  the moment a tenant expects gold and nothing says why it is absent"). Live through the catalog:
+  `advref31-silver$features` still answers `tags/list` **200 `{"tags":{}}`**, `advref31-gold$catalog`
+  still **404s**, and the contrast holds — `bind86-silver$features` answers
+  `{"published":{"version":3,…}}`.
+- **THERE ARE THREE DISTINCT MID-CASCADE STOPS ON THIS ESTATE, and no surface tells them apart:**
+  1. *never published* — `advref31`: silver written 8x, no `published` tag, gold table absent.
+  2. *published, downstream REFUSED* — `bind86`: silver published at v3, gold table EXISTS (so the hop
+     ran once), and every current silver->gold trigger is refused and dead-lettered ([[LH-137]], root-
+     caused 2026-09-17). Visible only on `dlq.silver-to-gold`, which nothing surfaces.
+  3. *published, downstream never reached* — the default lane: `silver$features` publishes and
+     `gold$catalog` resolves to `None`.
+- **THE ROW'S OPEN QUESTION CANNOT BE ANSWERED FROM ANY SURFACE, and that is a stronger finding than
+  the missing report.** It asks whether the publish "was ATTEMPTED and held … or never attempted at
+  all", and attributes the gap to a short log window ("absence of a log over a window is not absence of
+  the event"). Measured: the promotions surface is exactly TWO routes — `POST /promotions/{instance_id}/decision`
+  and `GET /promotions/{instance_id}` — both keyed by an instance id, with **no list endpoint anywhere
+  in the estate** (`list_holds`, `holds/list`, `list_promotions`: zero matches across `services/`). So a
+  HELD promotion is discoverable only by someone who already holds the workflow instance id. The
+  question is unanswerable by construction, not by retention.
+- *Which reframes the fix:* the row reads as "add a report for a stalled tier". The measurement says the
+  prerequisite is an ENUMERATION — a way to ask "what is held?" and "what was refused downstream?" —
+  because today a hold, a refusal and a lane nobody ran are the same observation: nothing.
 
 - *Why open:* `advref31-silver$features` has **8 `WROTE`** edges in the lineage graph and the catalog
   answers its `tags/list` **200 with `{'tags': {}}`** — the table exists, is readable, has been written
