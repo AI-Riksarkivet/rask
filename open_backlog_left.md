@@ -565,9 +565,13 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   reuse and is a trap: `reconcile_cron._drain_outbox` re-PUBLISHES after ingesting (deliberately — the
   cascade's `/bronze-arrival` reacts to that announcement), so staging a dead letter there would put it
   back on `lineage.events.v1`, re-park it, and manufacture the flood this row measured. The replay must
-  ingest without re-publishing. Until (b),
+  ingest without re-publishing. ~~Until (b),
   `dapr.py`'s "recovery story stays replay-from-stream" should say what it actually means: a dead letter
-  older than the stream's retention is lost.
+  older than the stream's retention is lost.~~ **THAT CLAUSE IS ALREADY SATISFIED — measured
+  2026-09-17.** `dapr.py:85-87` already states the bound in the same breath as the recovery story:
+  *"That bounds what recovery can reach: a dead letter older than the stream's retention has no path
+  back, because nothing re-ingests the DLQ stream itself."* So the prose fix this row asks for exists,
+  and **(b) is the whole of what is left** — a replay that ingests without re-publishing.
 - **"NOT CURRENTLY BLEEDING" IS FALSE AS OF 2026-09-15 — see [[LH-166]].** The DLQ has grown from the
   8,612 this row measured to **9,887**, with `dlq.lineage.events` at 9,856 and a delivery 11 minutes
   before that reading. The cause is events naming an output that carries no FGA tuples, which no
