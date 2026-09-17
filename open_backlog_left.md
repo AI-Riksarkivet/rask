@@ -2820,7 +2820,32 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   `services/catalog/tests/test_a_version_entry_cannot_adopt_another_tables_manifest.py`, and the same
   guard is applied to `batch_create_table_versions`, whose entries carry the identical field.
 - *Why open:* Version routes at `endpoints/versions.py` are mounted and FGA-gated (`_BATCH_PATHS`, `_action_relation` → `can_write_data`) but nothing else runs on them, and `managed_versioning` is never advertised in `DescribeTable`, so a stock Lance client's commit bypasses the whole governance chain. `batch_commit_tables` is `UnsupportedOperationError` on the dir backend and always will be.
-- *Closes when:* Owner acknowledges R1 (the governed commit path IS the spec's managed-versioning path); then attach lineage emit, the quality gate, the replay marker and protection to `CreateTableVersion` in `endpoints/versions.py`, advertise `managed_versioning=true` in `DescribeTable`, alias then remove `/commit` (data.py:326-364, dataplane.py:556-637), and back `batch_commit_tables` with rask's own staged-manifest KV.
+- *Closes when:* Owner acknowledges R1 (the governed commit path IS the spec's managed-versioning path); then attach lineage emit, the quality gate, the replay marker and protection to `CreateTableVersion` in `endpoints/versions.py`, ~~advertise `managed_versioning=true` in `DescribeTable`~~, ~~alias then remove `/commit` (data.py:326-364, dataplane.py:556-637)~~, and back `batch_commit_tables` with rask's own staged-manifest KV.
+- **TWO OF THOSE CLAUSES ARE STRUCK BECAUSE THEY DESCRIBE THE WRONG THING — measured 2026-09-17.**
+  * *`managed_versioning=true`* was already struck by this row's own re-read: advertising it invites
+    clients onto a catalog-mediated commit pointer, the Iceberg shape CLAUDE.md's permanent LANCE-ONLY
+    ruling exists to avoid.
+  * **`alias then remove /commit` must NOT be done, and the reason is that the two doors are different
+    PROTOCOLS rather than duplicates.** `/commit` (`data.py:142`) is a client-DIRECT append: the client
+    wrote fragments to object storage with vended table-scoped credentials and sends only the tiny
+    serialized `FragmentMetadata` + `read_version`, which the catalog folds into a metadata-only Lance
+    commit **under root creds** and then emits INSERT lineage for. `version/create` moves a manifest the
+    CLIENT authored into a version slot. The first keeps the catalog the commit coordinator; the second
+    does not.
+  * *And lance-ns specifies no `/commit` at all* — the spec's write ops are `InsertIntoTable`
+    (`POST /v1/table/{id}/insert`, `namespace.md:1256-1258`) and `MergeInsertIntoTable`, both of which
+    take an Arrow IPC stream THROUGH the server. So `/commit` is a rask EXTENSION whose whole purpose is
+    that "no data byte transits the catalog — the byte-proxy's scaling + OOM liability is gone for the
+    bulk-append path". Removing it forces its caller onto either the spec's byte-proxying `insert`
+    (reintroducing exactly that liability) or onto `version/create` (a different trust model in which
+    the client authors manifests).
+  * *It also has a LIVE production caller:* `services/ingest/catalog_service.py:438`, whose own module
+    docstring states the contract — "APPENDS ARE CLIENT-DIRECT. Workers write fragments straight to
+    object storage with scoped credentials". Removing the door breaks ingest.
+  * *The duplication argument that motivated the clause is spent:* it rested on "two doors onto one
+    table, one of them silent" (`versions.py:386`). Both emit now — `/commit` through
+    `emit_measured_write`, `version/create` through the `CREATE_TABLE_VERSION` emit observed above — so
+    the silence the clause was written against is gone.
 - **R1 ACKNOWLEDGED 2026-09-16 (owner: the R-series stands), and the LINEAGE HALF LANDED.**
   `POST /v1/table/{id}/version/create` now emits `CREATE_TABLE_VERSION` after the native call, pinned to
   the version just minted — the same shape as `restore_table`, for the same reason: the version state
