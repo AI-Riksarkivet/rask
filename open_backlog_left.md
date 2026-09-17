@@ -681,6 +681,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   lakehouse deployments the same afternoon: the ingest consumer is ephemeral + `deliverPolicy: all`, so a
   restart re-reads the retained LINEAGE stream and re-parks everything that still fails. **A deployment
   produces a parking burst.** That is this row's own documented mechanism, caught in the act.
+- **THE PRODUCER LEAK IS CLOSED — measured 2026-09-17, and this is the check the row never made.** All
+  TEN of the newest parkings carry an `eventTime` DAYS older than their parking:
+
+      seq 12003  parked 14:39:52  event 2026-09-16T00:10   seq 12001  parked 14:39:09  event 2026-09-11T16:34
+      seq 12002  parked 14:39:29  event 2026-09-14T19:14   seq 11997  parked 14:39:08  event 2026-09-10T15:00
+
+  **Zero new parkings.** Every arrival is a re-delivery of a historical event, so nothing is currently
+  being lost that was not already lost — which is the claim "not currently bleeding" was reaching for and
+  could not support, because a count of arrivals cannot distinguish the two.
+- **AND THE OVERCOUNT IS NOW DIRECTLY OBSERVED rather than inferred from `8,515 > 5,860`.** In those same
+  ten parkings there are only FIVE distinct events, and one — `eventTime 2026-09-11T16:34:30` — is parked
+  **three times in 42 minutes** (13:57:07, 13:59:57, 14:39:09), each following a pod restart. One event,
+  three rows in the DLQ, all on one afternoon.
+- *A THIRD AUTHOR SHAPE appears here and is not explained:* seq 12002 and 11975 carry
+  `sub='CiQwOGE4Njg0Yi1kYjg4…'` — a real Dex subject, neither a role literal nor a service identity — and
+  still park. Flagged, not diagnosed.
 - **THE ROLE-LITERAL CAUSE COVERS ~86% OF THE STREAM, widened from 7 samples to 14 spread across the
   whole live sequence range:**
 
