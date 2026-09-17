@@ -134,10 +134,19 @@ def test_a_matching_body_id_is_accepted(client: TestClient, fake_ns: MagicMock, 
 def test_a_non_main_branch_is_refused_rather_than_answered_off_main(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
     # The body carries a `branch` this door cannot honour: the native describe takes no branch selector and
     # the branch-aware read lives in the dataplane. Answering off main anyway would hand a caller who pinned
-    # a branch a confident, wrong answer — the failure mode the refusal exists to prevent — so this must stay
-    # a 400 and not drift back into a silent success.
+    # a branch a confident, wrong answer — the failure mode the refusal exists to prevent — so this must
+    # stay a refusal and not drift back into a silent success.
+    #
+    # 406 `Unsupported` (spec code 0), NOT 400 `InvalidInput` (13), and the change is a correction rather
+    # than a relaxation: fifteen sibling doors already answered 0 for this exact condition via
+    # `refuse_a_branch_this_door_cannot_honour`, and the spec decides which is right —
+    # `lance_docs/ns_catalog/spec.yaml:2412` defines 0 as "Operation not supported by this backend" and
+    # `:2425` defines 13 as "Malformed request or invalid parameters". A well-formed branch name this
+    # backend does not serve is the first. Clients dispatch on these codes, so one door disagreeing with
+    # fifteen about what KIND of thing happened was a contract defect. The refusal itself is unchanged.
     resp = client.post("/v1/table/db$t/describe", json={"branch": "dev"})
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 406, resp.text
+    assert resp.json()["code"] == 0, resp.text
     assert "branch" in resp.text
 
 

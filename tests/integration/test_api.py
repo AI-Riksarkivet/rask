@@ -365,7 +365,7 @@ def test_insert_stamps_the_real_version_on_lineage(client: TestClient, fake_ns: 
     monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
     # Schema coercion (real Arrow parse + live-schema open) is orthogonal to lineage version-stamping and
     # has its own coverage (test_insert_coerce.py); pass the placeholder bytes through to the mocked native.
-    monkeypatch.setattr("catalog.services.dataplane.coerce_insert_arrow", lambda _ns, _so, _seg, data: data)
+    monkeypatch.setattr("catalog.services.dataplane.coerce_insert_arrow", lambda _ns, _so, _seg, data, _branch=None: data)
     captured = _capture_measured_emit(monkeypatch)
 
     resp = client.post("/v1/table/db$t/insert", content=b"ARROWSTREAM", headers=ARROW_STREAM)

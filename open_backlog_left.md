@@ -77,8 +77,11 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**9 of the 12 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-094`,
-`LH-159` and `LH-019` workable. Both numbers moved on the same day, and by MEASUREMENT rather than by
+**10 of the 12 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-159` and
+`LH-019` workable. `LH-094` joined the gated list without anything changing about it: its own closing
+bullet already said *"flipping it is an owner call, not a test result"*, and it simply carried no
+`**blocked:**` marker — so the header counted as pickable a row that says in its own body that it is
+not. That is the failure mode this count exists to prevent, found by trying to work the row. Both numbers moved on the same day, and by MEASUREMENT rather than by
 anything going wrong: all ten unblocked HIGH rows across phases 1-2 were re-measured against HEAD and
 the live estate in parallel, and every verdict that would REMOVE work was handed to an adversarial
 refuter. `LH-018` CLOSED (its refuter agreed, and says so in the row). `LH-004` and `LH-137` moved to
@@ -3296,11 +3299,40 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   `tables.py:362`/`:382`, raising `InvalidInputError` (13) for the condition its 15 siblings answer as
   `UnsupportedOperationError` (0) — and the replacement locator "`open_dataset(..., branch=...)` at five
   dataplane sites" measures **15** sites.
-- *Clause 2 has two concrete mis-codes, measured rather than asserted:* `coerce_insert_arrow`
-  (`dataplane.py:1547`,`:1553`) raises `InvalidInputError` (13) for an insert schema mismatch while
-  `_write_schema_errors` (`:1058`) raises `TableSchemaValidationError` (20) for the same condition on the
-  branch path — and that function's own docstring says the branchless door already decided 20; and the
-  `describe_table` pair above.
+- **CLAUSE 2, WORKED 2026-09-17 — one half was real, the other half was WRONG and re-measuring it found
+  something worse than either.**
+  * *REAL, and FIXED:* `describe_table` refused a branch with `InvalidInputError` (13) at both its body
+    and query channels while its fifteen siblings answer `UnsupportedOperationError` (0) for the
+    identical condition. The spec settles it rather than taste — `spec.yaml:2412` calls 0 *"Operation
+    not supported by this backend"* and `:2425` calls 13 *"Malformed request or invalid parameters"*,
+    and a well-formed branch name this backend does not serve is the first. Clients dispatch on those
+    codes, so two answers for one condition was a contract defect. `describe` now delegates to the
+    shared helper, which gained an optional door-specific `remedy` so the CODE stays one expression
+    while the guidance stays per-door. `branch="main"` is still accepted — naming the branch you are
+    already on is not a request the door cannot honour.
+  * **WRONG: the `coerce_insert_arrow` (13) vs `_write_schema_errors` (20) pair is NOT "the same
+    condition".** Measured: `coerce_insert_arrow` runs at the DOOR (`data.py:294`), before
+    `insert_into_table` splits on `branch`, so 13 is what BOTH arms answer for a payload that cannot be
+    aligned at all; 20 is what the branch arm answers for a mismatch that SURVIVES coercion and reaches
+    pylance. Reconciling them as this row asked would have made two different conditions
+    indistinguishable to a client. **Do not work that half.**
+  * **AND THE RE-MEASUREMENT FOUND SILENT DATA LOSS, which is the part that mattered.** The coercion
+    opened the table with NO branch: `branch` is in scope at `data.py:285` and passed to
+    `InsertIntoTableRequest` on the very next line, but was not passed to `coerce_insert_arrow`, which
+    aligned to MAIN's schema. Because that alignment *"select[s] the table's columns BY NAME (extra
+    columns dropped)"*, a branch whose schema has evolved — the whole reason a branch exists — had any
+    branch-only column stripped from the payload, and the insert then SUCCEEDED, reporting rows it had
+    quietly rewritten. Same family as `update`/`delete` rewriting main; it survived because the
+    door-level gate walks doors that build a branched request model and this is a helper. Fixed
+    (`branch` threaded through), pinned by
+    `services/catalog/tests/test_insert_coercion_reads_the_branch_the_request_names.py` — four legs
+    including a control that proves the branch really has a column main does not, and a leg pinning that
+    an extra column against MAIN is still dropped so the over-fix reds.
+  * *The sibling gate caught the refactor, and was strengthened rather than exempted:*
+    `test_siblings_agree.py::test_a_branch_carrying_request_reaches_open_dataset` reads the AST for a
+    refusal, and factoring `describe`'s two-channel refusal into a local helper hid it. The gate now
+    follows ONE hop and verifies the delegate itself refuses — mutation-checked: a delegate that stops
+    refusing re-flags the door, so the allowance cannot become the loophole it closes.
 - *Clause 1 is [[LH-021]] verbatim and cannot be done inside this row* — measured unstarted: `grep -rn
   '/management' services/catalog/src --include=*.py` returns nothing and every rask-only router still
   mounts on a spec prefix.
@@ -5327,6 +5359,7 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   producer to mark its own non-person authors rather than for the platform to list them.
 
 **LH-094 · The reconcile scan reports 65 incomplete units and reclaims nothing, but its recorded numbers and stated cause are both STALE — re-measure before working it**
+`maintenance, service-kit` · **HIGH** · **blocked:** an owner call on GC BEHAVIOUR — the row's own closing bullet says so ("flipping it is an owner call, not a test result"); it carried no marker, so the header counted it pickable
 
 - *RE-MEASURED 2026-09-10 — THE ASK IS LARGER THAN THE DEFECT.* Both halves the row prescribes have landed — `incomplete`/`excluded` are defined and the depth-limit inflation is fixed, and flag 16 no longer blanket-refuses because the gate now parses `BasePath.is_dataset_root`; what is left is only the narrower `is_protected` containment question.
   **Evidence:** The definitions the row says to establish FIRST are stated in code: services/maintenance/src/maintenance/services/reconcile.py:236-244 — `excluded_datasets` is 'datasets the unreferenced-file method does not APPLY to … Deliberately not in `incomplete`, which gates the purge', and `incomplete` is fed from reconcile.py:546/569/582/642/834/841/848/859 (the `storage:lance-catalog` entries the row asks to trace come from `_read_registry` at 559-569 and the bucket walk at 841-848). The `incomplete=65` cause is closed by LH-100's fix, present at HEAD: services/maintenance/src/maintenance/services/optimize.py:143-170 `_may_hide_a_dataset` plus its call at optimize.py:236 — a truncation is now recorded only where a subdirectory actually exists below the bound. The flag-16 half of the 'original plan' has landed too: services/maintenance/src/maintenance/services/optimize.py:602-620 records that refusing on flag 16 alone was over-broad and that the gate now 'asks about the BASES, not about the FLAG', wired at optimize.py:626-640 via `gather_compaction_bases(ds, dataset_root_probe(uri, storage_options))`, which reads `BasePath.is_dataset_root` (packages/service-kit/src/service_kit/lakehouse/features.py:384,404,508). The residue: NO per-base `managed`/`reference-only` field exists — packages/service-kit/src/service_kit/lakehouse/base_refs.py:84-89 `BaseRefs` carries only `protected: set[str]` and `unreadable`, and the refusal at optimize.py:651-653 is driven by `is_protected`'s two-way containment rule (base_refs.py:96-110), which refuses a branch at `<dataset>/tree/<name>` because it lies UNDER a protected root. The smaller true fix is: decide whether `is_protected` should exempt an `is_dataset_root=False` (reference-only) base, and record that distinction on the base — not a new warehouse-record schema plus scoped cleanup credentials.
@@ -7158,6 +7191,16 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   The estate's own precedent routes 1 and 2 to the owner — [[LH-158]]'s `Capability.RESULT` was filed as
   a decision "because it is a shared-package port and the ruling is the owner's". So design and a RED
   test can start today; landing needs one ruling or a deliberate acceptance of 3.
+- **THE EXPOSURE IS NARROWER THAN THIS ROW STATES, re-measured 2026-09-17, and it makes path 3 cheaper
+  than the row prices it.** The submitter/watcher agreement is already held BY CONSTRUCTION rather than
+  by the derivation matching: `workflow.py:490-492` returns what the submitter posted with the rule
+  written at the line ("RETURN WHAT THE SUBMITTER POSTED — never re-derive it"), and the poll activity
+  reads `payload.submission_id` (`:530`) rather than calling `stage_submission_id` again. So switching
+  the derivation cannot desynchronise the two the way the extraction docstring warns about; it can only
+  orphan a job that is ALREADY IN FLIGHT across the cut, and 0 were PENDING or RUNNING when measured.
+  What remains permanently is the operator-readable `ray-<stage>-<token>-…` name that 48 of 170 live
+  jobs carry — a real cost, but a legibility one rather than a correctness one, and it should be priced
+  as such when the choice is made.
 - **RE-MEASURED 2026-09-16 AND THREE OF THIS ROW'S FOUR CLOSES-WHEN CLAUSES ARE ALREADY SATISFIED.
   Corrected here because a HIGH row that overstates what is missing is how phase-2 planning starts from
   the wrong place.**

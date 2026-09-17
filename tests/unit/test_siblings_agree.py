@@ -144,15 +144,18 @@ def _open_dataset_calls(fn: Function) -> list[ast.Call]:
     return [call for call in _calls(fn) if _callee(call) == "open_dataset"]
 
 
-def _branch_population() -> list[tuple[str, Function, list[str], list[ast.Call]]]:
+def _branch_population() -> list[tuple[str, Function, list[str], list[ast.Call], dict[str, Function]]]:
     """Every catalog function that is HANDED a branch and opens a dataset."""
     population = []
     for path, tree in _modules(CATALOG_SRC):
+        #: The module's own top-level functions, so `_decides_about_the_branch` can follow a refusal that
+        #: was factored out into a local helper — see its docstring for why one hop and no more.
+        siblings = {fn.name: fn for fn in _functions(tree)}
         for fn in _functions(tree):
             sources = _branch_sources(fn)
             opens = _open_dataset_calls(fn)
             if sources and opens:
-                population.append((_name(path, fn), fn, sources, opens))
+                population.append((_name(path, fn), fn, sources, opens, siblings))
     return population
 
 
@@ -207,20 +210,33 @@ def test_a_route_with_an_UNTYPED_body_still_reads_its_branch() -> None:
 _BRANCH_DECIDED = ("refuse_a_branch_this_door_cannot_honour", "`branch` is not supported by")
 
 
-def _decides_about_the_branch(fn: Function) -> bool:
+def _decides_about_the_branch(fn: Function, *, siblings: dict[str, Function] | None = None) -> bool:
     """Does this function REFUSE the branch rather than drop it?
 
     Read off the AST rather than the source text, so an unrelated mention of the marker in a docstring
     or a comment cannot excuse a door that in fact drops the branch — a source-substring check would
     have been satisfied by this very module's own prose.
+
+    ONE LEVEL OF DELEGATION COUNTS, and only when the delegate ITSELF decides. `describe` refuses on two
+    channels — the body and the query string — and a door that must refuse twice will factor the refusal
+    out; the first version of this gate read that factoring as a door that had stopped refusing. The
+    recursion is bounded at one hop and verifies the callee rather than trusting its name, so it cannot
+    become the loophole it is closing: a helper that DROPS the branch excuses nobody, which is a
+    property a name-pattern allowance would not have.
     """
+    siblings = siblings or {}
     for node in ast.walk(fn):
         if isinstance(node, ast.Call):
             called = node.func
             if isinstance(called, ast.Attribute) and called.attr == _BRANCH_DECIDED[0]:
                 return True
-            if isinstance(called, ast.Name) and called.id == _BRANCH_DECIDED[0]:
-                return True
+            if isinstance(called, ast.Name):
+                if called.id == _BRANCH_DECIDED[0]:
+                    return True
+                delegate = siblings.get(called.id)
+                # `siblings=None` on the recursive call is what bounds it to one hop.
+                if delegate is not None and delegate is not fn and _decides_about_the_branch(delegate):
+                    return True
         if isinstance(node, ast.Raise):
             for message in ast.walk(node):
                 if isinstance(message, ast.Constant) and isinstance(message.value, str) and _BRANCH_DECIDED[1] in message.value:
@@ -234,10 +250,10 @@ def test_a_branch_carrying_request_reaches_open_dataset() -> None:
     assert population, "no branch-carrying dataset opens found — the walk is looking in the wrong place"
 
     violations = []
-    for name, fn, sources, opens in population:
+    for name, fn, sources, opens, siblings in population:
         if name in BRANCH_EXEMPT:
             continue
-        if _decides_about_the_branch(fn):
+        if _decides_about_the_branch(fn, siblings=siblings):
             continue
         for call in opens:
             if not any(kw.arg == "branch" for kw in call.keywords):
@@ -248,7 +264,7 @@ def test_a_branch_carrying_request_reaches_open_dataset() -> None:
 
 def test_the_branch_allowlist_carries_no_stale_exemption() -> None:
     """An exemption must still name a live function that still USES the branch it is excused from forwarding."""
-    live = {name: fn for name, fn, _sources, _opens in _branch_population()}
+    live = {name: fn for name, fn, _sources, _opens, _siblings in _branch_population()}
     stale = []
     for name, reason in BRANCH_EXEMPT.items():
         assert reason.strip(), f"{name} is exempt with no reason"

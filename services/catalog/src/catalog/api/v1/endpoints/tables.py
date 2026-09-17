@@ -292,6 +292,35 @@ async def declare_table(
     return response
 
 
+def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
+    """Refuse a branch this door cannot describe — with the code its fifteen siblings use.
+
+    THIS DOOR DESCRIBES MAIN. `describe_table` answers off the namespace manifest, which has no branch
+    selector, and the branch-aware read lives in the dataplane (`open_dataset(branch=...)`). Refusing is
+    the point: SILENTLY describing main for a caller who pinned a branch is the same class of
+    wrong-but-plausible answer as the ignored `version` this door used to give.
+
+    IT DELEGATES RATHER THAN RAISING ITS OWN, and that is the substance rather than tidiness. Refusing
+    inline here answered `InvalidInputError` (spec code 13) while the fifteen doors on
+    `refuse_a_branch_this_door_cannot_honour` answered `UnsupportedOperationError` (code 0) for the
+    identical condition — and the spec settles which is right: 13 is "Malformed request or invalid
+    parameters" (`lance_docs/ns_catalog/spec.yaml:2425`), 0 is "Operation not supported by this backend"
+    (`:2412`). A well-formed branch name this backend does not serve is the second. Clients dispatch on
+    those codes, so two answers for one condition is a contract defect, not a wording one.
+
+    ONE FUNCTION FOR BOTH CHANNELS. `branch` reaches this door through the body AND the query string,
+    and the query channel was added later precisely because a refusal covering one of two is why this
+    door read as settled while `?branch=work` still answered 200 for main (measured 2026-08-31).
+
+    `main` is permitted: naming the branch you are already on is not a request this door cannot honour.
+    """
+    if branch is None or branch == _MAIN_BRANCH:
+        return
+    dataplane.refuse_a_branch_this_door_cannot_honour(
+        branch, door="describe", remedy=f"Use the branch operations under /v1/table/{{id}}/branches, or read the branch through `count_rows`. (got {branch!r})"
+    )
+
+
 @router.post("/{id}/describe", response_model_exclude_none=True)
 def describe_table(
     id: str,
@@ -354,12 +383,7 @@ def describe_table(
         # actually carried, which is the only thing that can tell "sent false" from "not sent".
         sent = body.model_fields_set
         segments = reconcile_body_id(segments, body.id)
-        if body.branch is not None and body.branch != _MAIN_BRANCH:
-            # This door describes main: `describe_table` answers off the namespace manifest, which has no
-            # branch selector, and the branch-aware read lives in the dataplane (`open_dataset(branch=...)`).
-            # Refusing is the point — SILENTLY describing main for a caller who pinned a branch is the same
-            # class of wrong-but-plausible answer as the ignored `version` this door used to give.
-            raise InvalidInputError(f"`branch` is not supported by describe (got {body.branch!r}); use the branch operations under /v1/table/{{id}}/branches")
+        _refuse_a_branch_describe_cannot_honour(body.branch)
         # `identity` and `context` are deliberately NOT honoured: the caller is the bearer token the router
         # already verified, and letting a request body name a principal would be an impersonation door.
         if "with_table_uri" in sent:
@@ -378,8 +402,7 @@ def describe_table(
     # who wrote `?branch=work` reached a route that does not declare it: FastAPI dropped it and the door
     # answered for MAIN with a 200 — including for a branch that had never been created (verified live
     # 2026-08-31). A refusal that covers one of two channels is why this door read as settled.
-    if branch is not None and branch != _MAIN_BRANCH:
-        raise InvalidInputError(f"`branch` is not supported by describe (got {branch!r}); use the branch operations under /v1/table/{{id}}/branches")
+    _refuse_a_branch_describe_cannot_honour(branch)
     if tag is not None:
         if version is not None:
             raise InvalidInputError("`tag` cannot be used together with `version` (spec 0.9)")

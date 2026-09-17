@@ -63,3 +63,9 @@ chart/charts/
 # Ignored rather than left loose because Dagger snapshots the HOST, not git: an untracked root file
 # enters every image build context, and this estate already carries one uncited 102 KB root artefact.
 sbom-*.cdx.json
+
+# Scratch directories `test_conftest_otlp_strip.py` creates AT THE REPO ROOT, which is deliberate: the
+# root conftest is the thing under test, and pytest only applies it to paths inside the repo. The
+# fixture removes them on exit, so these survive only a KILLED run — and then `git add -A` would commit
+# them, which is how this line came to exist.
+.otlp-probe-*/

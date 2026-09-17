@@ -1256,7 +1256,7 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
     )
 
 
-def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str) -> None:
+def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None) -> None:
     """Refuse a branch-scoped read the upstream implementation answers from MAIN.
 
     `query_table`, `explain_table_query_plan` and `analyze_table_query_plan` all declare `branch` and
@@ -1294,10 +1294,18 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str) ->
     smuggled in behind a door that currently lies.
     """
     if branch is not None:
+        # ONE EXPRESSION DECIDES THE CODE, and `remedy` exists so that staying inside it costs a door
+        # nothing. `describe_table` refused this same condition inline with `InvalidInputError` (13)
+        # while fifteen doors answered `UnsupportedOperationError` (0) — the spec calls 13 "Malformed
+        # request or invalid parameters" (`spec.yaml:2425`) and 0 "Operation not supported by this
+        # backend" (`:2412`), and a well-formed branch name this backend does not serve is the second.
+        # A client dispatching on the 24 codes cannot tell two answers apart as one condition, so the
+        # divergence was a contract defect rather than a wording one. Doors differ in what the caller
+        # should do INSTEAD; they must not differ in what kind of thing happened.
         raise UnsupportedOperationError(
             f"{door} cannot be scoped to a branch: the underlying implementation answers from the main "
             f"branch regardless of `branch`, so honouring the parameter here would return main's rows "
-            f"labelled as {branch!r}. Read the branch through `count_rows`, or query it directly."
+            f"labelled as {branch!r}. " + (remedy or "Read the branch through `count_rows`, or query it directly.")
         )
 
 
@@ -1522,7 +1530,7 @@ def update_schema_metadata(
     return {k: v for k, v in result.items() if not k.startswith("lineage.")}
 
 
-def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes) -> bytes:
+def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the native append.
 
     A client that INFERS types loosely — most importantly the browser's apache-arrow, which infers
@@ -1539,7 +1547,14 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     which is every non-browser client — for zero behavioural difference (#141).
     """
     incoming = pa.ipc.open_stream(data).read_all()
-    target = open_dataset(ns, so, table_id).schema
+    # THE REF THE REQUEST NAMES, never main. This alignment DROPS columns the target does not have, so
+    # aligning a branch-targeted insert to main's schema silently deletes any column the branch has and
+    # main does not — and then the insert succeeds, reporting rows it quietly rewrote. A branch whose
+    # schema has evolved is the whole reason a branch exists, so this is the ordinary case rather than a
+    # corner. Same defect family as `update`/`delete` rewriting main
+    # (`test_branch_scoped_mutations_hit_the_branch.py`); it survived here because the door-level gate
+    # walks doors that build a branched request model, and this is a helper.
+    target = open_dataset(ns, so, table_id, branch=branch).schema
     if [(f.name, f.type, f.nullable) for f in incoming.schema] == [(f.name, f.type, f.nullable) for f in target]:
         return data
     present = set(incoming.column_names)
