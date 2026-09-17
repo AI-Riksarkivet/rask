@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**209 open items**, deduped from 325 raw rows mined out of the seven files above. A further 99 rows
+**210 open items**, deduped from 325 raw rows mined out of the seven files above. A further 98 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 69 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 14 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -77,8 +77,11 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**7 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-16), leaving `LH-094`,
-`LH-159`, `LH-172`, `LH-004`, `LH-018` and `LH-019` workable. Three rulings moved it the same day:
+**7 of the 14 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-094`,
+`LH-159`, `LH-172`, `LH-004`, `LH-018`, `LH-019` and `LH-137` workable. The denominator moved 13 -> 14
+on 2026-09-17 when [[LH-137]] was REOPENED: it was closed on "the current stage-runner pod records 0
+refusals", and driving a real publication — the thing its own closure said had not been done —
+reproduced the refusal twice within a second of a silver write. Three rulings moved it the same day:
 `LH-172`'s remedy was measured inert and the owner ruled "accept it for now" (a decision that CLOSES a
 question rather than unblocking work), and **R1-R11 were acknowledged as standing**, which cleared
 `LH-004`'s marker and makes the other eight R-citing rows workable as written. Two of those were then
@@ -2365,12 +2368,46 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   logged — an UNTRACKED dataset has every retained version as a hole, and an uncapped tick would make
   its cost a function of the largest history in the estate. The REPORT is never truncated.
 
-**LH-137 · ~~Two live faults block real cascade work and appear in no backlog row: `unconfined_uri` refuses every `bind86` silver→gold hop, and `/compaction_plan` answers 404 for medallion tier ids~~ — CLOSED 2026-09-16 (both halves premise-falsified by measurement; (b)'s residue is [[LH-141]])**
-`medallion, catalog` · **HIGH** · found by the 2026-09-11 audit, observed but NOT root-caused
+**LH-137 · Half (a) REOPENED 2026-09-17 — the silver→gold refusal reproduces on the live estate, and the drive the closure asked for is the thing that found it**
+`medallion, catalog` · **HIGH** · found by the 2026-09-11 audit; closed 2026-09-16; REOPENED 2026-09-17 by driving a real publication
 
-- **CLOSED — RE-MEASURED 2026-09-16 on `main-17aae203`. Neither half survives, and (b) turns out to be
-  a row this register already has.**
-  * **(a) is falsified by the outcome it predicted.** `bind86-gold$catalog` EXISTS, at
+- **THE CLOSURE RESTED ON TWO CLAIMS AND A DRIVE NOBODY HAD DONE. The drive has now been done, and it
+  refutes both claims.** The 2026-09-16 entry closes (a) on *"the current stage-runner pod records 0
+  `unconfined_uri` refusals"* and on `supplied` and `root` being *"now measured to AGREE"*, while
+  recording that the remaining condition *"is not reproducible without driving a real publication…
+  Named rather than done."* Driving one is exactly what produced the evidence.
+- *Measured 2026-09-17, on pods created that morning from `main-e3139b71`:* two `/produce` cascades, and
+  each silver write was followed within ~1s by
+
+      medallion_stage_from_uri_refused transition='silver->gold' project='bind86'
+        supplied='s3://bind86-wh/medallion/silver'
+        root='s3://bind86-wh/78de8931_bind86-silver$features'
+
+  then `dapr_dead_letter_parked app='silver-to-gold' dlq_topic='dlq.silver-to-gold'`. 10:57:02.792
+  followed a silver write at 10:57:02.617; 10:58:58.182 followed one at 10:58:57.972. A pod that had
+  existed for two minutes carried one, so "0 refusals on the current pod" measured a pod that had not
+  yet seen a publication rather than a fault that had stopped.
+- **`supplied` AND `root` DO NOT AGREE, and the shape is the one the closure said was falsified.**
+  `supplied` is the TIER DIRECTORY (`…/medallion/silver`); `root` is the TABLE
+  (`…/78de8931_bind86-silver$features`). The confinement check cannot pass, so this is not a staleness
+  window between two catalog answers — it is two different KINDS of path, which is the composed-path
+  reading the row originally had.
+- *WHAT IS NOT ESTABLISHED, stated so the next person does not inherit a guess:* the refused trigger
+  names project `bind86` while the driving producer is configured `MEDALLION_PRODUCE_ADMIN_PROJECT=acme`
+  and neither `/produce` passed `?project=`, so the refused event is NOT demonstrably the one my
+  cascade emitted. The correlation is tight (two drives, two refusals, ~1s each) and the most likely
+  mechanism is that a publish wakes a relay that redelivers a permanently-stuck `bind86` trigger — but
+  that is a HYPOTHESIS. What is measured is that the refusal is live today, not historical.
+- *Also not established:* whether the driving cascade's OWN silver→gold hop ran at all. No
+  `medallion_stage_moved transition='silver->gold'` appeared for either token. Either the gold hop did
+  not fire or it fired somewhere this drive did not read.
+- *Closes when:* a driven publication's silver→gold hop is observed COMPLETING — the positive
+  observation, not the absence of a refusal, since absence is what closed this row wrongly once. Half
+  (b) stays closed; its residue is [[LH-141]] and nothing here touches it.
+
+- **THE 2026-09-16 READING, KEPT BECAUSE ITS EVIDENCE IS STILL EVIDENCE — but (a)'s conclusion is
+  overturned by the drive above and only (b) remains settled.**
+  * **(a) — the gold table EXISTS, and that part holds.** `bind86-gold$catalog` is at
     `s3://bind86-wh/c1c79484_bind86-gold$catalog`, beside eight other projects' gold tables — so the
     silver→gold hop this row says is stopped has run. The current stage-runner pod records **0**
     `unconfined_uri` refusals. And the two sides of the confinement check are now measured to AGREE:
@@ -2379,9 +2416,10 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     `s3://bind86-wh/78de8931_bind86-silver$features`; `supplied` is `publication_trigger`'s
     `extra["location"]` — the catalog's vended location for the SAME id. Two catalog answers for one
     table, which is what the row's own narrowing said they should be.
-  * *Which makes the 2026-09-10 condition a STALENESS question, not a composition one* — the two
-    answers differed at two different times — and it is not reproducible without driving a real
-    publication, which writes a tenant's gold tier. Named rather than done.
+  * *The STALENESS reading it drew from that is what 2026-09-17 refutes:* the drive shows `supplied`
+    and `root` are different KINDS of path, not one path read at two times. That a gold table exists
+    means the hop ran at SOME point, which is compatible with it being broken now — an existing
+    artefact is not a working pipeline, and reading it as one is what closed this row early.
   * *Recurrence is already loud, which is why this closes rather than waiting for a drive.*
     `chart/alerting/rules.yml:160` fires on every `medallion_stage_refused_total` reason except
     `routing_disabled`, `unconfined_uri` included; and `DiagnosticFormatter` now renders `extra`, so the
@@ -6334,6 +6372,24 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   MUTATION-CHECKED rather than merely observed passing: restoring the hand-built
   `InProcessExecutor(settings.storage_options)` kills 3 of its 4 legs, and the 4th (the two shipped
   adapters disagree about `RESULT`) correctly survives because it tests the adapters, not the lane.
+- **OBSERVED ON THE DEPLOYED ESTATE 2026-09-17, on the changed path itself rather than beside it.**
+  Built with Dagger as `lance-rest-catalog:main-e3139b71` and rolled to all SEVEN deployments sharing
+  that image (catalog, lineage, maintenance, medallion-producer and the three stage runners).
+  * *Driving it needed a deliberate step, because the deployed cascade does not exercise this lane at
+    all:* all four medallion deployments run `MEDALLION_RAY_ENABLED=true`, so a plain `/produce` proves
+    nothing about the in-process engine. `rask-bronze-to-silver` was switched to the in-process lane for
+    one drive and RESTORED immediately after; all four are back to `ray=true`, verified by reading them
+    back.
+  * *What ran:* `POST /produce?rows=17` → `202`, and the stage runner logged
+    `medallion_stage_moved transition='bronze->silver' token='lh158b-1789642736' to='silver$features'
+    duration_seconds=0.23` — a governed silver write against the estate's real S3-backed Lance datasets,
+    through the registry-resolved executor.
+  * **The proof of WHICH LANE is a span attribute, not the absence of a Ray log line.** Queried from
+    GreptimeDB's `opentelemetry_traces` over the 15-minute window covering both drives:
+    `lance.medallion.compute` = `in_process` ×1 and `ray` ×2, and the `in_process` row is
+    `service_name='bronze-to-silver'`, `span_name='medallion.transform'`, timestamped 10:58:57 UTC —
+    the same second as the log line above. The `ray` ×2 is the first drive, which is also the
+    regression check: the Ray lane still dispatched to its workflow and its job reported `SUCCEEDED`.
 - *The re-derive arm is not taken by the shipped adapter and is deliberately kept:* `InProcessExecutor`
   claims `RESULT`, so production reads it. The arm is what makes the lane describe the PORT rather than
   the class it used to name, it is covered by a test driving a no-`RESULT` engine, and an in-process
