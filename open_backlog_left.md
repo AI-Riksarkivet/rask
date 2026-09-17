@@ -6714,8 +6714,39 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     starts both. The converse IS expressible and is honoured, and that asymmetry is the decoupling
     working in the direction it currently works in. A last assertion reads both gates off the SOURCE,
     so a second flag that ever splits them fails this test and forces a new row in the matrix.
-  * The in-process lane has still **never run in-cluster**, so the second engine that would prove the
-    abstraction still has no live evidence behind it.
+  * ~~The in-process lane has still **never run in-cluster**.~~ **IT HAS NOW — 2026-09-17, and this
+    was the row's own stated evidence bar** (*"A second engine that has actually run in-cluster is the
+    evidence this row is really closed"*). `rask-bronze-to-silver` was switched to the in-process lane
+    for one drive on `main-e3139b71`: `POST /produce?rows=17` → `202`, then
+    `medallion_stage_moved transition='bronze->silver' token='lh158b-1789642736' to='silver$features'
+    duration_seconds=0.23`, a governed silver write against the estate's real S3-backed Lance datasets.
+    Which lane ran is read from `opentelemetry_traces`, not inferred:
+    `lance.medallion.compute='in_process'`, `service_name='bronze-to-silver'`,
+    `span_name='medallion.transform'`. The toggle was restored; all four medallion deployments read
+    back `ray=true`.
+- **RE-MEASURED 2026-09-17. ONE CLAUSE IS LEFT, AND THE REASON IT WAS LEFT IS A STALE FACT.**
+  * *The bypass this row names is HALF closed.* [[LH-158]] shipped: `transform.py` resolves the
+    in-process lane through `executor_for` and no longer imports `inprocess_executor`. **The Ray lane's
+    CALLER still bypasses the port** — `medallion/workflow.py` imports `ray_submit.submit_stage_job`,
+    `ray_jobs_api.job_status` and `ray_jobs_api.job_failure` directly (lines 487, 527-528, 707-708,
+    978-979), while `RayJobsApiExecutor` wraps exactly those three and has zero production callers.
+    That direct import IS the Ray coupling goal condition 3 names.
+  * **THE STATED REASON NOT TO WIRE IT IS FALSIFIED.** `docs/DECISIONS.md`'s 2026-09-15 entry justifies
+    the split with *"`WorkOrder.to_env()` supplies `RASK_SOURCE_URI`/`RASK_DEST_URI`/… and
+    `scripts/ray_stage_job.py` reads `FROM_URI`/`TO_URI`/… — 0 of 6 overlap"*. Measured at HEAD, the
+    script reads the PLATFORM's vocabulary and says so in its own comment (`:441` *"THE PLATFORM'S OWN
+    VOCABULARY — `WorkOrder.to_env()`"*), taking
+    `os.environ["RASK_SOURCE_URI"], os.environ["RASK_DEST_URI"], os.environ["RASK_STAGE"]` at `:449`,
+    plus `RASK_LINEAGE_DOCUMENT`, `RASK_VERSION_FLOOR`, `RASK_CARDINALITY`, `RASK_DEST_TABLE` and
+    `RASK_IDEMPOTENCY_KEY` — all emitted by `to_env()`. The S3 credentials the job also reads come from
+    the Ray pod's own environment and were never the order's to supply. The correction is recorded in
+    `DECISIONS.md` beside the entry it corrects.
+  * *So the real remaining gap is ONE specific thing, not a vocabulary mismatch:* `ray_submit.py:167`
+    falls back to `settings.ray_entrypoint` when no task is DECLARED, while
+    `RayJobsApiExecutor.submit` takes its entrypoint from `registration.command` and has no undeclared
+    path. Wiring the adapter needs an answer for the undeclared case and nothing else.
+  * *NOT attempted here on purpose:* this rewires the live cascade's submission path, and the estate is
+    mid-investigation on [[LH-137]]. Named rather than half-done.
 
 **LH-163 · ~~The sweep's base probe is permanently denied on `lance-catalog/models/`, and answers with a full traceback every pass~~ — CLOSED 2026-09-15, observed live**
 `maintenance, chart` · med · measured 2026-09-15 on the running `rask-maintenance`
