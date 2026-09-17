@@ -5092,9 +5092,24 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   * *Pinned by two new legs in `tests/unit/test_base_refs_guard.py`* — the control (a reclaim that
     proves it deletes at all, so the comparison means something) and the cold-interpreter read, this
     file's own doctrine for questions about a dataset rather than about a process's cache.
-  * *Still NOT changed here, deliberately:* permitting branch maintenance is now evidenced but it is a
-    GC-behaviour change on a live estate, and the refusal has been in place long enough that the disk it
-    holds is not urgent. The evidence is what was missing; the change is a separate, reviewable step.
+  * **THE PRODUCTION SHAPE IS MEASURED TOO, which is the leg that completes the case.** The two legs
+    above build a dataset with NO external clone — the very condition that makes the estate's pre-pass
+    unnecessary — so neither could answer the question that matters: on the estate a root is protected
+    BECAUSE something external resolves through it. Driven with parent + external shallow clone + a
+    branch, maintaining the BRANCH (append, compact, reclaim):
+
+        src data files  3 before -> 3 after
+        cold reads      parent 9   EXTERNAL CLONE 3   branch 10
+
+    The clone survives. So a `branch`-relation refusal is refusing an operation that cannot reach what
+    the gate protects, and that is now measured in the shape the gate actually meets.
+  * *Still NOT changed, and this is the one thing left on this row:* permitting branch maintenance is a
+    GC-behaviour change on a live estate — it makes reclamation DELETE more — and the gate's own comment
+    sets the asymmetry deliberately ("a wrong refusal costs disk … a wrong permit costs a clone its
+    entire reason to exist"). The evidence the fail-closed posture was waiting for now exists and is
+    pinned by three legs; flipping it is an owner call, not a test result.
+    **The change itself is one line** — skip the refusal when `containment_of(uri, root) == "branch"` —
+    and the 116 equality refusals are untouched by it.
   * *Why the behaviour was left alone, stated so it is a decision rather than an omission:* whether a
     branch may be compacted at all depends on what pylance scopes `cleanup_old_versions` to, and
     `file_format.md` does not say. The row's own Closes-when already prescribes the right instrument —

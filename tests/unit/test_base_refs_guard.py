@@ -196,6 +196,43 @@ def test_a_BRANCH_still_opens_in_a_FRESH_PROCESS_after_its_parent_is_maintained(
     assert done.stdout.strip() == "9"
 
 
+def test_maintaining_a_BRANCH_leaves_an_EXTERNAL_CLONE_of_its_parent_intact(tmp_path: Path) -> None:
+    """THE PRODUCTION SHAPE, and the one the other two legs do not cover.
+
+    On the estate a root is in the protected set BECAUSE another dataset resolves through it — so the
+    honest question is not "is branch maintenance safe" in isolation but "is it safe while an external
+    referrer exists". Both other legs build a dataset with no external clone, which is exactly the
+    condition that makes the pre-pass unnecessary, so neither can answer this.
+
+    Measured: parent + external shallow clone + a branch; the BRANCH is appended to, compacted and
+    reclaimed. The parent's `data/` is untouched (3 files before and after) and, from cold interpreters,
+    the parent still reads 9, the CLONE still reads its 3, and the branch reads its own 10.
+
+    So the refusal at `optimize.py`'s protected-base gate, when the relation is `branch`, is refusing an
+    operation that cannot reach what the gate protects. The EQUALITY relation is a different matter and
+    the legs above keep it: there the dataset being maintained IS the referenced root.
+    """
+    src, clone = _source_and_clone(tmp_path)
+    lance.dataset(src).create_branch("work")
+    data_dir = Path(src) / "data"
+    before = len(list(data_dir.iterdir()))
+
+    branch = lance.dataset(src).checkout_version(("work", None))
+    branch = lance.write_dataset(pa.table({"id": pa.array([99], pa.int64())}), branch, mode="append")
+    branch.optimize.compact_files()
+    lance.dataset(src).checkout_version(("work", None)).cleanup_old_versions(older_than=timedelta(seconds=0), delete_unverified=True)
+
+    assert len(list(data_dir.iterdir())) == before, "maintaining the branch rewrote the PARENT's data files"
+
+    read = textwrap.dedent(f"""
+        import lance
+        print(lance.dataset({clone!r}).count_rows())
+    """)
+    done = subprocess.run([sys.executable, "-c", read], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, f"the external clone no longer opens after its parent's BRANCH was maintained: {done.stderr.strip()[-300:]}"
+    assert done.stdout.strip() == "3"
+
+
 def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:
     """The manifest states `/bucket/x.lance`; a caller holds `s3://bucket/x.lance`.
 
