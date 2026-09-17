@@ -2537,6 +2537,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     `routing_disabled`, `unconfined_uri` included; and `DiagnosticFormatter` now renders `extra`, so the
     next refusal names its own `supplied` and `root` on the line — the diagnosability blocker this row
     records is gone and the alert will say when to look.
+    **THAT SENTENCE IS THE REASON THIS ROW WAS CLOSED WRONGLY, and it is false on this estate —
+    measured 2026-09-17.** `MedallionStageRefused` is DEFINED and would match `unconfined_uri`, but
+    nothing evaluates it: `observability.alerting.enabled` is `false` (`values.yaml:2898`) and there are
+    **zero vmalert and zero alertmanager pods** running. Estate-wide that is **44 alert rules and 88
+    promtool cases, 19 of them naming a lakehouse service, none of them evaluated by anything.** So
+    "the alert will say when to look" was a control that cannot fire, and closing a row on it meant the
+    refusal ran unobserved from 2026-09-16 until it was driven by hand the next day.
+    *The general lesson, recorded because this is the second time the shape appears in one day:* a
+    closure may not rest on an alert while the alerting chain is disabled. Either the drive is done, or
+    the row stays open. The fact itself is not new — [[LH-004]] and two other rows note "no vmalert pod"
+    locally — but nothing had drawn the consequence that EVERY such argument is void here.
   * **(b) is not a route fault and its residue belongs to [[LH-141]].** The row says "0 distributed
     commits against 24 in-pod fallbacks in 24 h". Measured: **980 `mode='distributed'` outcomes against
     1,124 `in_pod` estate-wide, and 28 of the 124 composed `medallion/<tier>` datasets run
