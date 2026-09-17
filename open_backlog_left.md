@@ -824,6 +824,22 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   (2) a narrower residual the catalog's own header already names: it has no TRANSACTIONAL outbox, so a
   crash between the Lance write and the publish still loses the event. That one is not fixable by
   consolidation — it needs a durable producer, and the architecture has no DB to give it.
+  **AND THE BUILDABLE HALF OF (2) IS ALREADY BUILT AND RUNNING — measured 2026-09-17.** The estate's
+  answer is reconcile-not-transact, and `lineage/api/reconcile_cron.py`'s own header states it: the
+  sweep "reconciles every dataset the graph knows against on-disk Lance and **back-fills** any write
+  whose lineage event was lost (the outbox gap) — the buildable half of the outbox problem, since a
+  stateless catalog over object storage has no DB to host a transactional outbox".
+  * *Observed on the live estate:*
+    `lineage_reconcile_sweep checked=420 backfilled=0 storage_loss=0 ungoverned=12 graph_ahead=35
+    unreadable=24 dangling_blobs=0 stale=361` — the mechanism runs every tick, and **nothing is
+    currently lost**.
+  * *`stale=361` of 420 is NOT a lineage defect and is recorded here so nobody reads it as one:*
+    `reconcile.py:448` sets it from `age > freshness_budget_hours`, i.e. "this dataset has not been
+    WRITTEN recently". On an estate whose datasets are mostly one-shot test tables that is the expected
+    reading of a freshness axis, not a provenance gap.
+  * *So the honest residue is narrower than "loses the event":* the window is not ATOMIC, and a loss in
+    it is RECOVERED on the next sweep rather than permanent. What is genuinely unfixed is the atomicity,
+    which needs a durable producer the architecture deliberately does not have.
   **AND THE OUTBOX IS NOT EMPTY — measured on the live estate 2026-09-16, which is what re-measuring
   this row found.** `lineage_outbox_drained drained=0 stranded=6`, unchanged across every tick. Six
   events were staged — so the write happened and its provenance WAS captured — and the graph refuses
