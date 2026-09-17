@@ -3789,7 +3789,7 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *What would reopen it:* Name a catalog route with `{id}` in its path whose request body model has an `id` field and whose handler body contains no `reconcile_body_id` call.
 
 **LH-037 · `POST /v1/namespace/{id}/create` and `POST /v1/table/{id}/register` accept `mode` and answer 409 whatever it says**
-`catalog` · med
+`catalog` · med · **blocked:** two owner calls, both named in this row's own body — whether the gate may admit an idempotent no-op against an id with no tuples (the existence-oracle CLASS rule, not a per-door choice), and whether `Overwrite` on the namespace door is implemented against the cascade/trash interaction. Three of the four doors LANDED and are deployed; what remains is decisions, and the row says so itself: *"Both are decisions; neither is a patch."* It carried no marker, so the pickable count read it as available work — the same miss found on [[LH-094]] the same day.
 
 - *Why open:* Classed silently-weaker in the dropped-parameter sweep: a caller asking for an idempotent or overwrite mode gets the same 409 as a caller asking for strict create.
 - **MEASURED 2026-09-13, driven rather than classed.** Against a real `dir` namespace, a second
