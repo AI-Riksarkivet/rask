@@ -2548,6 +2548,21 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     closure may not rest on an alert while the alerting chain is disabled. Either the drive is done, or
     the row stays open. The fact itself is not new — [[LH-004]] and two other rows note "no vmalert pod"
     locally — but nothing had drawn the consequence that EVERY such argument is void here.
+  * **AND THE RULES THEMSELVES ARE SOUND — audited 2026-09-17, so "enable alerting" carries no hidden
+    second problem.** Parsed all 44 expressions and checked their 40 distinct metric names against the
+    live GreptimeDB `information_schema` (818 tables):
+    - **35 present, 4 absent** (`catalog_writes_shed_total`, `flows_nodes_total`,
+      `outbox_stage_failed_total`, `ray_memory_manager_worker_eviction_total`). Every one of the four
+      sits in a plain `sum(rate(...)) > 0` rule with NO `and` conjunct — the safe shape: an absent
+      series yields an empty vector, the rule does not fire, and it begins firing the moment the bad
+      thing first happens. **No rule is inert because of a missing series**, and an absent error counter
+      is the healthy reading, not a defect.
+    - **Only 2 of the 44 use an `and` conjunct, and both are guarded** with `or vector(0)` — they are
+      the two repaired earlier today. A sweep for unguarded conjuncts comparing to a constant returns
+      **zero**, so the and-against-an-empty-vector trap (which silently turned a fix for a false page
+      into a permanent no-page) exists nowhere else in the file.
+    *So the alerting surface is 44 structurally-sound rules with 88 promtool cases behind them, and the
+    single thing wrong with it is that nothing evaluates it.*
   * **(b) is not a route fault and its residue belongs to [[LH-141]].** The row says "0 distributed
     commits against 24 in-pod fallbacks in 24 h". Measured: **980 `mode='distributed'` outcomes against
     1,124 `in_pod` estate-wide, and 28 of the 124 composed `medallion/<tier>` datasets run
