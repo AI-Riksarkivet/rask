@@ -2563,6 +2563,17 @@ _Every governance promise the lakehouse makes rests on the run record being emit
       into a permanent no-page) exists nowhere else in the file.
     *So the alerting surface is 44 structurally-sound rules with 88 promtool cases behind them, and the
     single thing wrong with it is that nothing evaluates it.*
+  * **AND THE SPECIFIC ALERT FOR THIS ROW WOULD HAVE CAUGHT IT — the counter is live, correct and
+    correctly labelled.** Queried against the live store:
+    `medallion_stage_refused_total{lance_medallion_reason='unconfined_uri', lance_medallion_transition='silver->gold'}`
+    = **1.0** across 1,362 scrape samples in three hours. The value of exactly 1 is the right answer
+    rather than a stuck counter: this stage-runner pod has logged precisely ONE `from_uri_refused` in
+    its life (10:58:58), which was verified independently from its own logs. So the metric increments
+    per refusal and carries the label `MedallionStageRefused` selects on.
+    *Which completes the argument:* the instrumentation is correct, the rule is correct, the promtool
+    case passes — and the defect still ran unobserved for a day, purely because no evaluator exists.
+    That is the strongest available case for the `observability.alerting.enabled` decision, and it is
+    evidence rather than preference.
   * **(b) is not a route fault and its residue belongs to [[LH-141]].** The row says "0 distributed
     commits against 24 in-pod fallbacks in 24 h". Measured: **980 `mode='distributed'` outcomes against
     1,124 `in_pod` estate-wide, and 28 of the 124 composed `medallion/<tier>` datasets run
