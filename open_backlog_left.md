@@ -3030,7 +3030,40 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   the error invites a destructive retry against exactly the object protection exists to keep. That is a
   stronger argument than code tidiness and it is what makes this worth an owner minute rather than a
   backlog entry.
-- *Closes when:* Move the rask-only side effects behind the management API, re-express each remaining refusal with the spec's own code, ~~decide the protection code (3 vs `InvalidTableStateError` 19) for all four protected object kinds~~ **(done 2026-09-16 — table 19, containers 3, on the spec's own definition)**, and honour `branch` on the eight refusing ops via the plumbing at `dataplane.py:1085`.
+- *Closes when:* Move the rask-only side effects behind the management API, re-express each remaining refusal with the spec's own code, ~~decide the protection code (3 vs `InvalidTableStateError` 19) for all four protected object kinds~~ **(done 2026-09-16 — table 19, containers 3, on the spec's own definition)**, and ~~honour `branch` on the eight refusing ops via the plumbing at `dataplane.py:1085`~~ **(re-measured 2026-09-17 — see below; the clause is wrong in all three of its particulars)**.
+- **THE `branch` CLAUSE IS MISDESCRIBED IN EVERY PARTICULAR, measured 2026-09-17 before working it.**
+  * *"eight refusing ops"* — there are **FIFTEEN call sites across FIVE modules, covering 15 distinct
+    doors**: `query_table`, `explain_table_query_plan`, `analyze_table_query_plan`,
+    `plan_table_compaction`, `commit_table_compaction`, `get_table_stats`, the five index doors
+    (`create_table_index`, `create_table_scalar_index`, `drop_table_index`, `list_table_indices`,
+    `describe_table_index_stats`) and the four maintenance doors (`maintenance/preview`, `/run`,
+    `/compact`, `/reindex`).
+  * *"the plumbing at `dataplane.py:1085`"* — that line is `_column_op`, a schema-evolution ERROR
+    TRANSLATOR, and has nothing to do with branches. The real plumbing is `open_dataset(…, branch=…)`,
+    used at five dataplane sites and genuinely working.
+  * *"honour … via the plumbing"* — and this is the substantive error: **opening the dataset is not the
+    blocker; assembling an honest RESPONSE is.** Every refusal carries its own measured reason.
+    `get_table_stats` says it outright — the response "cannot be assembled honestly from a branch
+    handle: `FragmentStats.lengths` and the per-index `status`/`size_bytes` are not what
+    `dataset_stats()` reports, and inventing them to fill a required field is the same failure in
+    miniature". `count_rows` IS honoured, and the contrast is the rule: a count is one documented
+    operation over a handle; a stats blob, a query and an index build are not.
+- *THE REFUSALS ARE THE CORRECT BEHAVIOUR TODAY and the row should stop reading as though they are the
+  defect.* Each answers `Unsupported` rather than a wrong 200, against measured evidence that the
+  parameter was previously accepted and disregarded — live 2026-08-31, `/query` returned main's 3 rows
+  for `branch=work` AND for a branch that never existed, and `create_scalar_index` with `branch=work`
+  advanced MAIN's version and indexed the wrong dataset. A 501 is the fix at those doors, not a
+  deferral of it.
+- **THE 15 DOORS SPLIT INTO TWO BLOCKER CLASSES, and naming them is what makes this actionable:**
+  1. **Response-assembly** (9: the three query/plan doors, the five index doors, `get_table_stats`) —
+     blocked by having to re-derive a whole option surface (vector search, FTS, prefilter, nprobes,
+     refine_factor, distance_type; the index doors' tokenizer/language/stem surface) where "a subtle
+     divergence is a wrong answer wearing the right shape".
+  2. **Branch-reclaim safety** (6: both compaction doors and the four maintenance doors) — blocked by
+     whether a branch may be compacted or reclaimed AT ALL, **which is the same open question as
+     [[LH-094]]'s residue**. One RED test — the subprocess reproduction `tests/unit/test_base_refs_guard.py`
+     already establishes as this estate's instrument — settles both rows at once. That is the single
+     highest-leverage unblock across the two.
 
 **LH-020 · Two of the three stock Lance clients still do not drive the deployed catalog: lancedb cannot address a nested namespace, lance-ray is untested**
 `catalog` · **HIGH** · **blocked:** lancedb upstream fix; the lance-ray leg waits for the compute pass
