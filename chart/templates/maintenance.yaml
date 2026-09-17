@@ -116,9 +116,8 @@ spec:
             # Gated on the sidecar because that is what it VERIFIES — the token exists to check the
             # `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
             # to check and the reference dangles: the Secret is not rendered and the pod never starts.
-            - name: APP_API_TOKEN  # verify the Dapr-stamped header on the cron route (forged-sweep guard)
-              valueFrom:
-                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            # verify the Dapr-stamped header on the cron route (forged-sweep guard)
+{{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 12 }}
             {{- end }}
             {{- if $root.Values.maintenance.vendWriteCredentials }}
             # THE REWRITE IS SIGNED PER TABLE, not by the root key. A compaction is a WRITE, so this

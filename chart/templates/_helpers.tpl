@@ -1315,3 +1315,87 @@ Usage: {{ include "lance.dedicatedServiceToken" (list . "service-trainer") }}
 {{- $secret := required "dapr.appToken must be set — it is the SECRET half of every dedicated service token, and without it the credential is a hash of a public identity name that anyone reading the chart can compute" $root.Values.dapr.appToken -}}
 {{- printf "%s-%s" $identity $secret | sha256sum | trunc 40 -}}
 {{- end -}}
+
+{{/*
+The app-ids `lance-secrets` admits — ONE derivation, consumed by the Component that enforces it and by
+every workload that decides whether it may read from it.
+
+IT LIVES HERE BECAUSE IT HAS TWO READERS AND THEY MUST NOT DRIFT. The Component's `scopes:` is what
+daprd enforces; `lance.appTokenEnv` below decides a pod's credential path from the same membership. A
+pod told to read the store while its app-id is absent from `scopes:` gets
+ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot — a whole service down, from two lists that
+agreed when they were written. The estate already paid for this once in the other direction: the
+state-store scope was derived from `stateStore.scopes` rather than restated for exactly this reason.
+
+Usage: {{ splitList "," (include "lance.secretScopes" .) }}
+*/}}
+{{- define "lance.secretScopes" -}}
+{{- $scopes := list .Values.services.catalog.daprAppId .Values.services.lineage.daprAppId -}}
+{{- if .Values.maintenance.enabled -}}
+{{- $scopes = append $scopes .Values.maintenance.daprAppId -}}
+{{- end -}}
+{{- if .Values.medallion.enabled -}}
+{{- /* The medallion plane consumes the store too (MEDALLION_SECRETS_FROM_DAPR fetches the S3 secret at
+       boot when a store is configured) — unscoped, every compute-on + openbao-on medallion pod
+       fail-closed with ERR_SECRET_STORES_NOT_CONFIGURED (found live 2026-07-24). */ -}}
+{{- $scopes = append $scopes .Values.medallion.producer.daprAppId -}}
+{{- range .Values.medallion.stageRunners -}}
+{{- $scopes = append $scopes .daprAppId -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.explorer.enabled -}}
+{{- /* The media plane resolves PER-STORE S3 credentials through this component: a registry store may
+       name its own `secret`, and raw lives on an external backend whose keys are not the deployment's.
+       Unscoped, the sidecar answers "component not found" and the object browser 500s on that store —
+       which is what happened the moment the first external store was declared. Credentials are
+       secret-store ONLY; there is deliberately no env fallback to fall back TO. */ -}}
+{{- range $name, $svc := .Values.explorer.services -}}
+{{- $scopes = append $scopes ($svc.daprAppId | default $name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.stateStore.enabled -}}
+{{- /* Anything scoped to the STATE store must also be scoped here, because that component resolves its
+       connection string through this one (`auth.secretStore`). Miss it and the sidecar logs
+       "references a secret store that isn't loaded: lance-secrets", the state store silently does not
+       load, and — the part that is easy to miss — "Actor state store not configured - actor hosting
+       disabled". Derived from stateStore.scopes rather than restated, so the two lists cannot drift;
+       found live 2026-07-26 when the annotator was scoped to the state store but not to this. */ -}}
+{{- $scopes = concat $scopes .Values.stateStore.scopes -}}
+{{- end -}}
+{{- join "," ($scopes | uniq) -}}
+{{- end -}}
+
+{{/*
+A workload's app-API-token credential: the STORE when the pod can reach it, the env row when it cannot.
+
+THE ENV ROW IS THE BANNED PATH AND THIS IS WHERE IT ENDS. `APP_API_TOKEN` as a `secretKeyRef` is a
+Kubernetes Secret injected as an environment variable, which the estate's rule refuses outright
+(owner, verbatim: *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
+trust."*). A pod that already carries a Dapr sidecar and is in `lance.secretScopes` has the sanctioned
+path IN it — `GET /v1.0/secrets/lance-secrets/lance` — so what ships here is which source to read,
+which is configuration, while the value stays in OpenBao. `expected_app_token()` is the one accessor
+all three doors go through (`require_dapr_token`, `service_principal`,
+`assert_app_token_configured`), so the switch moves every door on the pod together.
+
+THE FALLBACK IS NOT A FALLBACK CHAIN, and the distinction matters because the rule bans those too. It
+is a RENDER-TIME branch on a fact that is fixed at deploy: either there is a Vault to read and this
+app-id may read it, or there is not. The pod gets exactly one credential path and no runtime choice
+between them — `expected_app_token()` reads the store or reads env, never one then the other.
+
+A pod OUTSIDE the scope list still gets the env row on purpose. Flipping it without adding its app-id
+to `lance.secretScopes` would make `assert_app_token_configured` fail its boot fetch and crash-loop
+the service: loud, but a service down. Widening the scope is the fix; this branch is what keeps the
+two edits from being separable.
+
+Usage: {{- include "lance.appTokenEnv" (list $root "catalog") | nindent 12 }}
+*/}}
+{{- define "lance.appTokenEnv" -}}
+{{- $root := index . 0 -}}{{- $appId := index . 1 -}}
+{{- if and (include "lance.secretsViaDapr" $root) (has $appId (splitList "," (include "lance.secretScopes" $root))) -}}
+- { name: RASK_APP_TOKEN_FROM_STORE, value: "true" }
+{{- else -}}
+- name: APP_API_TOKEN
+  valueFrom:
+    secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
+{{- end -}}
+{{- end -}}

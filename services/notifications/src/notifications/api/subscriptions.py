@@ -42,17 +42,20 @@ from service_kit.governed import fga
 if TYPE_CHECKING:  # no runtime cost, and it breaks no import cycle
     from openfga_sdk import OpenFgaClient
 from service_kit.draining import retry_when_draining
-from service_kit.governed.dapr_auth import assert_app_token_configured, require_dapr_token
+from service_kit.governed.dapr_auth import require_dapr_token
 
 
 def register_subscriptions(app: FastAPI) -> None:
     """Wire this service's Dapr-delivered routes onto `app`."""
     settings = get_ingress_settings()
-    # Fail closed at build time: with Dapr ingest on, this route is live and MUST be authenticated, so
-    # an unset APP_API_TOKEN is a misconfiguration rather than the dev default. Refusing to start is
-    # the only answer that cannot be missed — the alternative is an unauthenticated ingest path that
-    # looks configured.
-    assert_app_token_configured(dapr_enabled=settings.dapr_enabled)
+    # THE FAIL-CLOSED CHECK IS IN THE LIFESPAN, NOT HERE, and this module's siblings are why. With the
+    # app token taken from the Dapr secret store, `assert_app_token_configured` performs a SIDECAR READ
+    # — and this function runs at IMPORT (`notifications/__init__.py` calls it at module scope), where
+    # there is no sidecar to read from and nothing to retry against. That makes the module unimportable
+    # anywhere without a daprd: the probe gate, tooling, any test that constructs the app. The lifespan
+    # is where a store read belongs (`lifespan.py` says so for the OIDC verifier and the feed client's
+    # credential, for the same reason) and it carries the boot retry budget that a store still seeding
+    # needs. Nothing is weakened: the routes below are not serving until the lifespan has run.
     dapr_app = DaprApp(app)
     if settings.dlq_topic:
         register_dlq_route(dapr_app, pubsub=settings.pubsub, dlq_topic=settings.dlq_topic, app_label=settings.dlq_topic.removeprefix("dlq."))

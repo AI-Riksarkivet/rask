@@ -30,7 +30,7 @@ from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
 from service_kit.governed.actor_warmup import warm_actor_proxy_factory
 from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.dapr_auth import guard_actor_routes
+from service_kit.governed.dapr_auth import assert_app_token_configured, guard_actor_routes
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.schemas.health import Readiness, ReadinessStatus
 
@@ -76,6 +76,14 @@ def make_lifespan(settings: Settings) -> Callable[[FastAPI], AbstractAsyncContex
         # Putting that one object on app.state keeps the routes on DI without a second construction.
         app.state.notifications_settings = get_notifications_settings()
         notifications_settings = app.state.notifications_settings
+
+        # FAIL CLOSED ON THE APP TOKEN BEFORE ANY SUBSCRIBED ROUTE CAN SERVE. With Dapr ingest on,
+        # `/lineage-events` and the cron reconciler are live and MUST be authenticated, so a token that
+        # resolves to nothing is a misconfiguration and not the dev default — refusing to start is the
+        # only answer that cannot be missed. Here rather than in `register_subscriptions`, which runs at
+        # import: in store mode this reads the sidecar, which does not exist at import time, and this is
+        # where the boot retry budget applies.
+        assert_app_token_configured(dapr_enabled=get_ingress_settings().dapr_enabled)
 
         # Authn/authz, the fleet's shape: both default OFF and the service behaves as it would without
         # them. Built here, never at import (an OIDCVerifier fetches discovery). A failure to BUILD is

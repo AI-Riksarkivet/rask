@@ -206,9 +206,7 @@ spec:
             {{- if .Values.dapr.sidecars }}
             # Same rule as the medallion's and maintenance's: this verifies the header the SIDECAR
             # stamps, so without one there is nothing to verify and the Secret is not rendered.
-            - name: APP_API_TOKEN
-              valueFrom:
-                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+{{- include "lance.appTokenEnv" (list $root $root.Values.services.catalog.daprAppId) | nindent 12 }}
             {{- end }}
             {{- end }}
             # Bound the DaprClient gRPC deadline (the SDK env) — the lineage publish is awaited INLINE in
@@ -484,9 +482,7 @@ spec:
             # Gated on the sidecar for the reason the guard exists: with no sidecar nothing stamps the
             # header, so there is nothing to verify — and the Secret is not rendered, so the reference
             # would dangle and the pod would never start.
-            - name: APP_API_TOKEN
-              valueFrom:
-                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+{{- include "lance.appTokenEnv" (list $root $root.Values.services.lineage.daprAppId) | nindent 12 }}
             {{- end }}
             {{- if not (include "lance.secretsViaDapr" .) }}
             - { name: LINEAGE_DATABASE_URL, value: "postgresql://{{ .Values.age.user }}:{{ .Values.age.password }}@{{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }}/{{ .Values.age.lineageDb }}" }

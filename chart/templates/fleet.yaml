@@ -268,9 +268,7 @@ spec:
                  conditions still drifted apart — because nothing RENDERED them together. Prose next to a
                  condition does not hold two conditions in agreement; only one expression does. That is
                  why `$needsAppToken` is computed once above rather than repeated per arm. */}}
-            - name: APP_API_TOKEN
-              valueFrom:
-                secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
+{{- include "lance.appTokenEnv" (list $root $name) | nindent 12 }}
             {{- end }}
             {{- if and $root.Values.auth.enabled $svc.governedAuth }}
             {{- /* The USER door, for services that declare `governedAuth` — NOT every frontDoor

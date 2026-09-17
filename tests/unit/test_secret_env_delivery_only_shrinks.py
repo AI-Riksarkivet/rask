@@ -5,10 +5,14 @@ secret store dapr and STS for zero trust."* A `secretKeyRef` is a Kubernetes Sec
 environment variable — it is the banned path, and ESO syncing the VALUE from OpenBao does not change
 that: it fixes where the secret comes FROM, not how it is DELIVERED.
 
-WHY A RATCHET AND NOT A BAN. There are 39 of these in the render today. A test demanding zero would be
-red from the moment it lands and would be skipped or deleted within a week, which is how a rule with
-no gate becomes a rule with no effect. A ratchet fails on the FORTIETH while the existing 39 migrate,
-so the number can only fall.
+WHY A RATCHET AND NOT A BAN. There are 30 of these in the render (measured 2026-09-17). A test demanding
+zero would be red from the moment it lands and would be skipped or deleted within a week, which is how a
+rule with no gate becomes a rule with no effect. A ratchet fails on the THIRTY-FIRST while the rest
+migrate, so the number can only fall.
+
+THE RATCHET ALONE WOULD SIT STILL AND STAY GREEN, which is why it is not the only thing here. A budget
+nobody is obliged to spend down is a budget; `test_a_pod_that_CAN_read_the_store_does_not_take_its_app_token_through_env`
+below states the RULE for the subset with nothing left to build, and that is what moves the number.
 
 WHY IT DID NOT EXIST AND WHY THAT MATTERS. Several tests already pin SPECIFIC `secretKeyRef` entries as
 CORRECT — the Ray pod's `S3_SECRET`, the app token — each guarding its own plane. Nothing counted them
@@ -32,13 +36,14 @@ import yaml
 from tests.unit.test_invariants import _helm_template
 
 
-#: The rendered count on 2026-09-15, measured not guessed. **This number may only go DOWN.**
+#: The rendered count on 2026-09-17, measured not guessed. **This number may only go DOWN.**
 #: Lowering it is the point; raising it means a workload took the banned path and the rule lost ground.
-SECRET_ENV_BASELINE = 39
+SECRET_ENV_BASELINE = 30
 
 #: Entries whose pod carries a Dapr sidecar, so the Dapr secret store is available to it and is the
-#: path the rule names. These are the cheapest to migrate: the mechanism is already in the pod.
-WITH_SIDECAR_BASELINE = 10
+#: path the rule names. These are the cheapest to migrate: the mechanism is already in the pod. The one
+#: that remains is `compute`, which is NOT in `lance-secrets`' `scopes:` — see `_UNREACHABLE_STORE`.
+WITH_SIDECAR_BASELINE = 1
 
 
 def _secret_env_entries() -> list[tuple[str, str, bool]]:
@@ -104,8 +109,8 @@ def test_the_sidecar_bearing_entries_are_tracked_separately() -> None:
     """These are the cheapest to migrate, so they are counted apart from the rest.
 
     A pod with a sidecar already has the Dapr secret store reachable — no new mechanism, no chart
-    plumbing, just a different read. Collapsing them into one total would hide the fact that a quarter
-    of the violation needs no infrastructure at all.
+    plumbing, just a different read. Collapsing them into one total would hide the fact that part of the
+    violation needs no infrastructure at all.
     """
     with_sidecar = [(w, v) for w, v, car in _secret_env_entries() if car]
 
@@ -150,4 +155,96 @@ def test_no_workload_takes_a_whole_secret_through_envFrom(banned: str) -> None:
         f"the set of workloads pulling a WHOLE secret via {banned} changed.\n"
         f"  found:    {sorted(offenders)}\n  recorded: {sorted(_ENVFROM_EXCEPTIONS)}\n"
         "A new one is the banned path; a removed one means lowering the recorded set in this commit."
+    )
+
+
+def _lance_secrets_scopes() -> list[str]:
+    """The app-ids the `lance-secrets` Component admits, read off the render.
+
+    Read from the COMPONENT rather than recomputed from values, because the question this file asks is
+    whether a pod can reach the store — and the Component's `scopes:` is what daprd enforces. A
+    reimplementation here would answer about the chart's intent instead of about the deployed control.
+    """
+    for doc in yaml.safe_load_all(_helm_template("dapr.enabled=true", "medallion.enabled=true")):
+        if doc and doc.get("kind") == "Component" and doc["metadata"]["name"] == "lance-secrets":
+            return sorted(doc.get("scopes") or [])
+    return []
+
+
+def test_the_secret_store_is_scoped_to_someone() -> None:
+    """Without this the rule below would pass by measuring an empty scope list."""
+    assert _lance_secrets_scopes(), "`lance-secrets` renders with no scopes — the rule below would then be vacuous"
+
+
+def test_a_pod_that_CAN_read_the_store_does_not_take_its_app_token_through_env() -> None:
+    """THE RULE, not the count: where the sanctioned path is already in the pod, it must be the one used.
+
+    `WITH_SIDECAR_BASELINE` above counts these and lets them fall; it does not say they are wrong, so a
+    ratchet alone would sit at ten forever and stay green. This asserts the thing the owner's rule
+    actually says — *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
+    trust"* — for the subset where there is nothing left to build: a pod with a Dapr sidecar whose
+    app-id is in `lance-secrets`' `scopes:` can already `GET /v1.0/secrets/lance-secrets/lance`, and
+    `expected_app_token()` reads exactly that when `RASK_APP_TOKEN_FROM_STORE` is set.
+
+    SCOPED, AND THAT BOUND IS THE POINT. A pod that is NOT in `scopes:` cannot be fixed by flipping a
+    flag — its sidecar answers `ERR_SECRET_STORES_NOT_CONFIGURED` and the app fails closed at boot
+    (`assert_app_token_configured`). `compute` is measured in exactly that state, which is why it is
+    named here rather than silently passing: adding it to the scope list is a separate edit, and this
+    test is where that edit gets recorded when it happens.
+    """
+    scoped = set(_lance_secrets_scopes())
+    offenders = []
+    for doc in yaml.safe_load_all(_helm_template("dapr.enabled=true", "medallion.enabled=true")):
+        if not doc or doc.get("kind") not in ("Deployment", "StatefulSet"):
+            continue
+        template = doc["spec"].get("template")
+        if not template:
+            continue
+        annotations: dict[str, Any] = (template.get("metadata") or {}).get("annotations") or {}
+        app_id = annotations.get("dapr.io/app-id")
+        if annotations.get("dapr.io/enabled") != "true" or app_id not in scoped:
+            continue
+        for container in (template.get("spec") or {}).get("containers", []) or []:
+            for env in container.get("env") or []:
+                if env["name"] == "APP_API_TOKEN" and "secretKeyRef" in (env.get("valueFrom") or {}):
+                    offenders.append((doc["metadata"]["name"], app_id))
+
+    assert offenders == [], (
+        f"{len(offenders)} workloads are scoped to `lance-secrets` and still take APP_API_TOKEN through the environment: {sorted(offenders)}. "
+        'Render `RASK_APP_TOKEN_FROM_STORE: "true"` instead — the token stays in OpenBao and what ships is which source to read.'
+    )
+
+
+#: Sidecar-bearing workloads that are NOT scoped to `lance-secrets`, so the flag alone would crash-loop
+#: them. Recorded rather than ignored: this is the list of edits the rule still needs, and it shrinks by
+#: adding an app-id to the Component's `scopes:` — never by deleting a row from here.
+_UNREACHABLE_STORE = [("rask-compute", "compute")]
+
+
+def test_the_pods_that_CANNOT_reach_the_store_are_named() -> None:
+    """A workload the rule cannot yet reach is a recorded gap, not an absence.
+
+    The test above passes for `compute` by construction — it is out of scope, so it is not examined —
+    and that is exactly how a violation becomes invisible. This names the population the other test
+    skips, so growing it reds here.
+    """
+    scoped = set(_lance_secrets_scopes())
+    unreachable = []
+    for doc in yaml.safe_load_all(_helm_template("dapr.enabled=true", "medallion.enabled=true")):
+        if not doc or doc.get("kind") not in ("Deployment", "StatefulSet"):
+            continue
+        template = doc["spec"].get("template")
+        if not template:
+            continue
+        annotations: dict[str, Any] = (template.get("metadata") or {}).get("annotations") or {}
+        if annotations.get("dapr.io/enabled") != "true":
+            continue
+        app_id = annotations.get("dapr.io/app-id")
+        names = [env["name"] for container in (template.get("spec") or {}).get("containers", []) or [] for env in container.get("env") or []]
+        if "APP_API_TOKEN" in names and app_id not in scoped:
+            unreachable.append((doc["metadata"]["name"], app_id))
+
+    assert sorted(unreachable) == sorted(_UNREACHABLE_STORE), (
+        f"the set of sidecar pods that cannot reach `lance-secrets` changed.\n  found:    {sorted(unreachable)}\n  recorded: {sorted(_UNREACHABLE_STORE)}\n"
+        "A new one needs its app-id in the Component's `scopes:`; a removed one means deleting its row here in the same commit."
     )

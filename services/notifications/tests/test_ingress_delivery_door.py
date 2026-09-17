@@ -170,16 +170,51 @@ async def test_a_route_without_the_door_would_put_a_forged_run_in_a_named_person
 
 
 def test_enabling_dapr_ingest_without_a_token_refuses_to_start(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail closed at BUILD time. The alternative — starting with an unauthenticated ingest route —
-    looks configured from every angle: the subscription registers, `/dapr/subscribe` advertises it, and
-    deliveries are handled. Refusing to start is the only answer that cannot be missed."""
+    """Fail closed at STARTUP. The alternative — serving an unauthenticated ingest route — looks
+    configured from every angle: the subscription registers, `/dapr/subscribe` advertises it, and
+    deliveries are handled. Refusing to start is the only answer that cannot be missed.
+
+    THE LIFESPAN, NOT `register_subscriptions`, and the move is not a weakening: routes do not serve
+    until the lifespan has run, so a lifespan that raises is a pod that never answers. What it buys is
+    that the module IMPORTS without a sidecar — mandatory once the token can come from the Dapr secret
+    store, because that check performs a store read and `notifications/__init__.py` registers at module
+    scope. An import-time store read makes the module unimportable by the probe gate and by this file.
+    """
     monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.delenv("RASK_APP_TOKEN_FROM_STORE", raising=False)
     get_ingress_settings.cache_clear()
 
-    with pytest.raises(RuntimeError, match="APP_API_TOKEN must be set"):
-        subscriptions_module.register_subscriptions(FastAPI())
+    # Imported here so the refusal is observed through the same lifespan the pod runs, rather than
+    # through a re-implementation of it.
+    from notifications.lifespan import make_lifespan
+    from service_kit.config import Settings
 
+    # `TestClient` as a context manager RUNS the lifespan, which is what a pod's startup does — so the
+    # refusal is observed through the real startup path rather than through an async re-enactment of it.
+    with pytest.raises(RuntimeError, match="APP_API_TOKEN must be set"), TestClient(FastAPI(lifespan=make_lifespan(Settings()))):
+        pass
+
+    get_ingress_settings.cache_clear()
+
+
+def test_registering_the_subscriptions_needs_no_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The property the move exists for: wiring the routes performs NO store read.
+
+    `notifications/__init__.py` calls `register_subscriptions` at module scope, so anything it does is
+    done at import. With `RASK_APP_TOKEN_FROM_STORE` set and no daprd reachable, a store read here
+    would raise and the module would be unimportable — which is exactly how this surfaced.
+    """
+    monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
+    monkeypatch.setenv("RASK_APP_TOKEN_FROM_STORE", "true")
+    monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    get_ingress_settings.cache_clear()
+    app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
+
+    subscriptions_module.register_subscriptions(app)
+
+    assert "/lineage-events" in {getattr(route, "path", "") for route in app.routes}
     get_ingress_settings.cache_clear()
 
 

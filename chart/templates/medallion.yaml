@@ -78,9 +78,8 @@ spec:
             # otherwise be an open forged-trigger path (symmetric with the stage runners).
             - { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
             {{- if .Values.dapr.sidecars }}
-            - name: APP_API_TOKEN  # verify the Dapr-stamped header on /bronze-arrival (forged-trigger guard)
-              valueFrom:
-                secretKeyRef: { name: {{ .Release.Name }}-dapr-app-token, key: token }
+            # verify the Dapr-stamped header on /bronze-arrival (forged-trigger guard)
+{{- include "lance.appTokenEnv" (list $root $root.Values.medallion.producer.daprAppId) | nindent 12 }}
             {{- end }}
             # medallion-producer's OWN subscriber component (queueGroupName=medallion-producer, deliverPolicy=new) — it
             # subscribes on /bronze-arrival AND publishes through the same handle (same NATS subjects).
@@ -456,9 +455,8 @@ spec:
             - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- if $root.Values.dapr.sidecars }}
-            - name: APP_API_TOKEN  # verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
-              valueFrom:
-                secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
+            # verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
+{{- include "lance.appTokenEnv" (list $root .daprAppId) | nindent 12 }}
             {{- end }}
             - { name: MEDALLION_FROM_NAMESPACE, value: {{ .fromNamespace | quote }} }
             - { name: MEDALLION_FROM_DATASET, value: {{ .fromDataset | quote }} }

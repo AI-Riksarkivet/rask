@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**209 open items**, deduped from 325 raw rows mined out of the seven files above. A further 99 rows
+**208 open items**, deduped from 325 raw rows mined out of the seven files above. A further 100 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 69 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 68 | 12 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -77,8 +77,20 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**7 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-094`,
-`LH-159`, `LH-004`, `LH-018`, `LH-019` and `LH-137` workable. `LH-172` left this list by CLOSING on
+**9 of the 12 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-094`,
+`LH-159` and `LH-019` workable. Both numbers moved on the same day, and by MEASUREMENT rather than by
+anything going wrong: all ten unblocked HIGH rows across phases 1-2 were re-measured against HEAD and
+the live estate in parallel, and every verdict that would REMOVE work was handed to an adversarial
+refuter. `LH-018` CLOSED (its refuter agreed, and says so in the row). `LH-004` and `LH-137` moved to
+decision-gated on evidence written into their rows — `LH-004`'s outbox clause is done and wired live
+while its other two clauses were measured as work that should not be done, and `LH-137`'s defect
+recurred unattended, leaving a three-way choice one of whose options is a live-estate write. TWO
+verdicts were REFUTED and their rows stay open with the refutation recorded: `XC-002` ("already done" —
+the Ray head still carries six `secretKeyRef` env entries live, so ESO fixed where the credential comes
+FROM, not how it is DELIVERED) and `XC-001` ("describes the wrong thing" — the diagnosis is right, but
+the prescription would have dropped a live defect, because the checksum gate does not catch a
+helm-path rotation of the helm-owned `rask-frontend-session`). That is the refuter earning its place:
+two rows that a single confident pass would have deleted. `LH-172` left this list by CLOSING on
 2026-09-17 — its ruling (option 3, accept) and the recording that ruling asks for both exist, the
 latter in `lance_session.cpu_budget_cores`'s docstring rather than in prose here. The denominator moved 13 -> 14
 on 2026-09-17 when [[LH-137]] was REOPENED: it was closed on "the current stage-runner pod records 0
@@ -788,7 +800,36 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   `name` and no re-link statement exists.
 
 **LH-004 · Four OpenLineage emit kernels and three `RunEvent` builders, all swallowing transport failures, with no outbox**
-`lineage, catalog, maintenance, medallion, service-kit` · **HIGH** · **R10 ACKNOWLEDGED 2026-09-16 (owner): the R-series stands**
+`lineage, catalog, maintenance, medallion, service-kit` · **HIGH** · **R10 ACKNOWLEDGED 2026-09-16 (owner): the R-series stands** · **blocked:** an owner ruling on DURABILITY — see the re-measurement below
+
+- **RE-MEASURED 2026-09-17 AT HEAD AND ON THE LIVE ESTATE. Clause 3 is DONE; clauses 1 and 2 are work
+  that should not be done; what is left is a ruling.**
+  * *Clause 3 (an outbox before transport) is shipped and EFFECTIVE, not merely present.*
+    `outbox.py:336-392` stages before publishing and re-raises on failure with the event still staged;
+    `KNOWN_BARE_LINEAGE` is empty over 15 observed publish sites; and six live Deployments — catalog,
+    lineage, maintenance, medallion-producer, bronze-to-silver, ingest — all carry an outbox URI equal
+    to `s3://lance-catalog/_lineage_outbox`, the exact prefix the relay drains.
+  * *Clauses 1 and 2 (delete the kernels, route everything through one emitter and one builder) would
+    BREAK A RUNNING SERVICE and merge four different things.* All four kernels were read rather than
+    counted: `lineage_kit/emitter.py` is HTTP-only; the catalog's carries httpx AND DaprClient behind a
+    transport selector and is the only component that knows the verified principal on every write;
+    maintenance's is Dapr jetstream with a DETERMINISTIC run id as a FAIL-flood guard while its COMPLETE
+    path uses `uuid4`; `service_kit.lancekit.lineage_emit` has no transport at all — it is a log sink by
+    design, and `annotator/annotations/commit.py:16` imports it in a pod that is Running. Merging them
+    means one kernel with four transports selected by configuration, and a merged builder still needs
+    both run-id branches plus the `author_subject` FGA fix. The row's own "27-importer refactor" is now
+    68 files, 32 of them non-test src — the blast radius grew.
+  * *Two corrections to the row, found by measuring:* its stated blocker ("lineage-kit runs inside
+    sealed Ray runners with no catalog access") is NOT observed — no runner declares lineage-kit and no
+    runner source imports it; `lineage_kit.stage`/`.actor` have zero consumers outside the package.
+  * *The genuine residual is ATOMICITY,* not duplication: the window between the Lance commit and
+    `stage_event` is not atomic, and a loss in it is recovered by the reconcile sweep on the next tick
+    rather than lost. Closing it needs a durable producer the architecture deliberately does not have —
+    `RESILIENCE.md:83-84`'s "make the Ray job the durable producer" is forbidden by this row's own
+    condition 3, and LANCE-ONLY leaves no relational store to host a transactional outbox.
+  * *Which is the ruling that blocks this row:* the recommended answer — treat the Lance commit log as
+    source of truth and the lineage graph as a projection — appears at line 957 of this file and NOWHERE
+    in `docs/DECISIONS.md`. Either it is ratified there, or the non-atomic window is accepted in writing.
 
 - *Why open:* Measured at HEAD 2026-09-09: builders are `lineage_kit/runs.py`, `medallion/schemas/events.py`, `lineage/seed.py`; kernels are `lineage_kit/{emitter,runs}.py`, `service_kit/lancekit/lineage_emit.py`, `catalog/core/lineage_emit.py`, `maintenance/core/lineage_emit.py`. Only the producer-URI defect was fixed. The bronze-write emit is the cascade head, so a swallowed emit means the whole bronze→silver→gold run never happens and nothing reports it.
   **WHAT SWALLOWING COSTS, measured 2026-09-10 rather than argued:** ingest is the estate's only HTTP lineage producer, and `POST /api/v1/lineage` had served TWO requests in lineage's retained log and refused both — a 100% failure rate — while 806 events reached the graph over the Dapr topic from producers that never take that path. Every ingest run landed its rows with no provenance and reported COMPLETE. Two distinct causes, both now fixed (`d5cd2af1`, `06302b7f`): the emitter could present only the shared bearer at a door that refuses it from a privileged name, and the run's external INPUT was authorized as a governed table. Neither was visible from the suite; both came from driving the lane.
@@ -2440,7 +2481,33 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   its cost a function of the largest history in the estate. The REPORT is never truncated.
 
 **LH-137 · Half (a) REOPENED 2026-09-17 — the silver→gold refusal reproduces on the live estate, and the drive the closure asked for is the thing that found it**
-`medallion, catalog` · **HIGH** · found by the 2026-09-11 audit; closed 2026-09-16; REOPENED 2026-09-17 by driving a real publication
+`medallion, catalog` · **HIGH** · found by the 2026-09-11 audit; closed 2026-09-16; REOPENED 2026-09-17 by driving a real publication · **blocked:** the owner picks among (i)/(ii)/(iii) — they are NOT equivalent
+
+- **RE-MEASURED 2026-09-17: worse than "live", and the causal chain the row left as a hypothesis is now
+  CLOSED.** The refusal RECURRED at 12:58:32 with nobody driving it —
+  `medallion_stage_refused_total` stepped 1.0 -> 2.0 on the live `silver-to-gold` pod — and two pod logs
+  156 ms apart join the chain end to end: `bronze-to-silver` published `silver$features` (200), the
+  `silver-to-gold` consumer described `bind86-silver$features` (200) and then refused
+  `supplied='s3://bind86-wh/medallion/silver'` against `root='s3://bind86-wh/78de8931_bind86-silver$features'`,
+  parking the trigger on the DLQ. No redelivery hypothesis is needed: the refused trigger IS the live
+  publication's. The Closes-when is measured UNMET positively — `medallion_stage_transitions_total` has
+  no series at all for that pod over 2h09m, and `gold$catalog` still has no location, so this lane's hop
+  has never once completed.
+- **THE ROW HAS ONE ARGUMENT BACKWARDS, and it matters because it is the argument for option (ii).**
+  The row says the `_confine_from_uri` docstring describes the behaviour that would work and the code
+  drifted from it. The reverse is true: the narrowing at `transform.py:636` is the LATER, DELIBERATE
+  decision — `test_the_stage_runner_reads_where_the_catalog_says.py:92` asserts `roots.read_root ==
+  VENDED_FROM` and the module docstring argues for it in words ("not a connection root, not a bucket,
+  but the location the catalog states for THIS stage's own upstream table"). The stale prose is the
+  docstring at `:657`. So (ii) is not a free cosmetic fix: it would revert a security narrowing whose
+  rationale is written down, fail a green test, and make the refusal vanish by admitting an un-vended
+  path — the opposite of what the guard exists for.
+- *Population re-counted:* 195 bindings (matches) but **96** warehouses, not 90, and **three** medallion
+  tier names are mis-bound, not two — `silver -> bind86-wh`, `silver-media -> lakehouse-wh` and
+  `bronze-media -> lakehouse-wh`. The row's own table lists the third; the bullet undercounts it.
+- *Writable without the ruling, and worth doing first:* a RED test for the chain "a tenant-less lane id
+  publishes -> `publication_extra` infers a tenant from the namespace binding -> the consumer composes
+  `<project>-<lane>` -> confinement refuses", plus rewriting the falsified `_confine_from_uri` docstring.
 
 - **THE CLOSURE RESTED ON TWO CLAIMS AND A DRIVE NOBODY HAD DONE. The drive has now been done, and it
   refutes both claims.** The 2026-09-16 entry closes (a) on *"the current stage-runner pod records 0
@@ -2915,8 +2982,32 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
 - *Closes when:* Owner decides drop-or-relocate for `silver-media$features` (both spellings), then
   calls the unbind door for that namespace. with a human bearer holding `project:lakehouse#can_administer`.
 
-**LH-018 · The governed commit door is the non-spec `/commit`; `CreateTableVersion`/`BatchCommitTables` carry no lineage, gate, protection or replay marker**
-`catalog` · **HIGH** · *unblocked 2026-09-16 — R1 acknowledged and the lineage half shipped; the replay marker and the `/commit` retirement remain*
+**LH-018 · ~~The governed commit door is the non-spec `/commit`; `CreateTableVersion`/`BatchCommitTables` carry no lineage, gate, protection or replay marker~~ — CLOSED 2026-09-17, every clause shipped or measured to describe the wrong thing**
+`catalog` · **HIGH**
+
+- **CLOSED on a re-measurement of all seven clauses at HEAD and on the running estate, then
+  ADVERSARIALLY RE-VERIFIED.** Two independent passes agreed; the second was sent to refute the first
+  and could not. (1) R1 acknowledged (line 102-104, `f1dc8d96`). (2) The `CREATE_TABLE_VERSION` emit is
+  attached at `versions.py:413-425` and OBSERVED in AGE — seq 308441/308443, 2026-09-17 12:05/12:07 UTC,
+  authored by a real Dex subject. (3) The quality gate belongs at PUBLICATION by owner ruling D-R1
+  (`publication.py:1-13`, 2026-08-04): `catalog.services.publication` is imported by exactly one module
+  and runs on NEITHER commit door, so the clause had nothing to move. (4) The replay marker is answered
+  by the spec rather than by code — `namespace.md:1772` declares CreateTableVersion's whole error set as
+  1/4/14, and the version CAS converges a replay; the reasoning is written at the door
+  (`versions.py:395-410`). (5) `alias then remove /commit` was struck by `0a3baca2` and must not be
+  done. (6) `batch_commit_tables`/`batch_create_table_versions` raise `UnsupportedOperationError` in the
+  locked SDK (`lance_namespace/__init__.py:909,931`) and the estate runs `impl=dir`, so governance there
+  would be decoration. (7) Protection is a DELETION control — 7 `require_not_protected` sites, all
+  drop/deregister/rename — so wiring it to a version-create would mint a "protected means immutable"
+  semantic that exists nowhere else.
+- *The deployed catalog IS HEAD for this tree:* pod image `main-e3139b71`, an ancestor of HEAD, and
+  `git diff --stat e3139b71 HEAD -- services/catalog` is empty.
+- **ONE THING IS NAMED RATHER THAN BURIED, because it is an owner's to reopen if they want it:** the
+  strike of *advertise `managed_versioning=true`* landed 2026-09-17, one day AFTER the owner ruled
+  "R1–R11 stand". The strike rests on this row's own engineering argument — advertising it invites
+  clients onto a catalog-mediated commit pointer, the Iceberg shape the permanent LANCE-ONLY ruling
+  exists to avoid — and that argument was in the row when the owner ruled. It is not a decision taken
+  behind the ruling, but it is a clause of an acknowledged recommendation narrowed on our judgement.
 
   **RE-MEASURED 2026-09-11 — EVERY CLAUSE IS TRUE AND THE ASK IS STILL WRONG.** Measured by hand
   against the deployed catalog as well as by audit: of the three ops the title names, **two answer 406
@@ -3191,6 +3282,31 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
      compacted and reclaimed the branch still opens from a COLD interpreter. So this class is no longer
      blocked on a safety unknown; what remains for these six doors is plumbing `branch` through to the
      maintenance verbs, which is ordinary work rather than a question.
+- **RE-MEASURED 2026-09-17. THE TITLE NAMES ONE THING THAT IS ALREADY FIXED — do not work it.**
+  *"maintenance 503 on POST reads"* is false at HEAD and on the estate: `maintenance_mode.py`'s
+  `is_mutating` classifies by action SUFFIX against a 13-entry `_READ_ACTIONS` allowlist
+  (describe/exists/list/count_rows/query/stats/explain_plan/analyze_plan/...), landed in `064020a2`, and
+  that allowlist was read out of the RUNNING pod rather than off disk. All four reads the audit named as
+  broken resolve to allowlisted suffixes. Likewise B7's *"honour `branch` in update/delete"* is DONE —
+  `dataplane.py:1151` and `:1167` both pass `branch=req.branch` — so anyone chasing this row's struck
+  `dataplane.py:1085` locator lands in `_column_op`, a schema-evolution error translator with nothing to
+  do with branches. Neither is destructive, but both burn a HIGH slot on closed work.
+- *Two populations in this row are wrong and should be corrected before anyone works it:* the
+  branch-refusing door count is **16, not 15** — a sixteenth refuses outside the shared helper, at
+  `tables.py:362`/`:382`, raising `InvalidInputError` (13) for the condition its 15 siblings answer as
+  `UnsupportedOperationError` (0) — and the replacement locator "`open_dataset(..., branch=...)` at five
+  dataplane sites" measures **15** sites.
+- *Clause 2 has two concrete mis-codes, measured rather than asserted:* `coerce_insert_arrow`
+  (`dataplane.py:1547`,`:1553`) raises `InvalidInputError` (13) for an insert schema mismatch while
+  `_write_schema_errors` (`:1058`) raises `TableSchemaValidationError` (20) for the same condition on the
+  branch path — and that function's own docstring says the branchless door already decided 20; and the
+  `describe_table` pair above.
+- *Clause 1 is [[LH-021]] verbatim and cannot be done inside this row* — measured unstarted: `grep -rn
+  '/management' services/catalog/src --include=*.py` returns nothing and every rask-only router still
+  mounts on a spec prefix.
+- *The branch-reclaim class is under LIVE pressure, which is the argument for doing it next:*
+  `rask-maintenance` logged **650 `relation='branch'` refusals in 40 minutes**, each carrying
+  `reason='...refused until a branch-scoped reclaim is proven safe'` — a precondition now met.
 
 **LH-020 · Two of the three stock Lance clients still do not drive the deployed catalog: lancedb cannot address a nested namespace, lance-ray is untested**
 `catalog` · **HIGH** · **blocked:** lancedb upstream fix; the lance-ray leg waits for the compute pass
@@ -7019,6 +7135,29 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   than a hard dependency; and either the Ray/workflow product is decoupled or the limit is WRITTEN DOWN
   as a supported-combination matrix instead of being inferred from two independent-looking flags.
   A second engine that has actually run in-cluster is the evidence this row is really closed.
+- **RE-MEASURED 2026-09-17: FOUR OF FIVE CLAUSES HOLD; THE FIFTH IS HALF DONE AND IS THE WHOLE ROW.**
+  [[LH-158]] is CLOSED and hands the rest back here. `RayJobsApiExecutor` exists and conforms — and has
+  **zero production callers**: `medallion/workflow.py` still imports `ray_submit.submit_stage_job`
+  (`:487`), `ray_jobs_api.job_status` (`:527`, `:978`) and `ray_jobs_api.job_failure` (`:707`) directly,
+  which are exactly the three functions the adapter wraps. The only production `executor_for` call is
+  `transform.py:793` with `IN_PROCESS_ENGINE`.
+- **THE BLOCKER IS REAL AND WAS REPRODUCED, not inferred.** The two lanes derive different submission
+  ids from identical input: driven with `stage='silver', token='tok-1', s3://a -> s3://b`,
+  `stage_submission_id` answers `ray-silver-tok-1-25f6c1c9c7f3` and `derive_idempotency_key` answers
+  `70ba6f36481b312bef7cd53719823bd18efe1b69`. `RayJobsApiExecutor.submit` posts under
+  `order.idempotency_key`; the deployed submitter posts under `stage_submission_id`. Wiring the adapter
+  in as-is renames every Ray job and orphans anything in flight — the exact defect
+  `stage_submission_id`'s own docstring says it was extracted to prevent. The adapter cannot derive the
+  deployed shape instead: `WorkOrder` has no `token` field and neither does `WorkStamp`.
+- *The three ways out are not equivalent, and only one needs no ruling:*
+  1. carry `token` on `WorkOrder` — a shared `service-kit` MODEL change;
+  2. add a caller-supplied handle to `Executor.submit` — a shared PORT-SIGNATURE change;
+  3. accept the rename behind a drain — **operationally free right now** (measured: 0 PENDING/RUNNING
+     jobs on the live head), but its cost is PERMANENT: **48 of 170 live jobs carry the
+     operator-readable `ray-<stage>-<token>-…` name**, and that readability is what is traded away.
+  The estate's own precedent routes 1 and 2 to the owner — [[LH-158]]'s `Capability.RESULT` was filed as
+  a decision "because it is a shared-package port and the ruling is the owner's". So design and a RED
+  test can start today; landing needs one ruling or a deliberate acceptance of 3.
 - **RE-MEASURED 2026-09-16 AND THREE OF THIS ROW'S FOUR CLOSES-WHEN CLAUSES ARE ALREADY SATISFIED.
   Corrected here because a HIGH row that overstates what is missing is how phase-2 planning starts from
   the wrong place.**
@@ -7435,7 +7574,44 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
     reloader), or have the zone read its token per request instead of binding it at boot. Both are
     real; a checksum annotation is not. Note the second also removes the env binding [[XC-004]] wants
     gone, so it is one change rather than two.
-- *Closes when:* Add a `checksum/secret` pod-template annotation (sha256sum of the rendered Secret) beside every `secretKeyRef` env in `chart/templates/`, and pin it with a rendered-manifest test that fails when a template adds a `secretKeyRef` without the annotation. **Note the ordering against [[XC-004]]:** the zone's `LINEAGE_SERVICE_TOKEN` arrives by `secretKeyRef` — a k8s Secret through env, which is not one of the three sanctioned paths — so the annotation makes the CURRENT path survive rotation while XC-004 removes the path. Doing the annotation first is still right: it is a one-line-per-template render change with a gate, and it stops the bleeding without a release that rotates live credentials.
+- **RE-MEASURED 2026-09-17, AND A VERDICT OF "describes the wrong thing" WAS REFUTED. The row is
+  REWRITTEN, not dropped — the defect is live and still fixable.** A first pass concluded the headline
+  and the Closes-when should both be deleted because the annotation and its gate exist and are inert; an
+  adversarial second pass agreed with every fact and refuted the conclusion. The deciding measurement:
+  `rask-frontend-session` — which carries `OIDC_CLIENT_SECRET` and `SESSION_SECRET` on all seven zones —
+  has **no ownerReferences and one manager, `helm`**. It is helm-rendered, not ESO-owned. So a
+  `helm upgrade` that rotates `frontend.oidc.sessionSecret` or `dex.clientSecret` changes that Secret,
+  changes nothing in the zone's pod template, rolls no pod, and reds no gate. That is precisely the
+  mechanism this row asks for, on a path where it WOULD work and is absent. Running the existing gate's
+  own logic against the live release manifest's `rask-web-lakehouse` returns PASS while that hole is
+  open — so "the gate already does what the Closes-when asks" is false.
+- *What the row must now carry, in two parts that need different mechanisms:*
+  1. **The ESO-written half cannot be fixed by any checksum, and more annotations there are a control
+     that cannot fire.** Proven by render rather than argued: the live release runs
+     `externalSecrets.enabled: true`, `infra-credentials.yaml:16` is `{{- if not .Values.externalSecrets.enabled }}`,
+     so with ESO on the whole template renders nothing and `checksum/infra-credentials` is the constant
+     `b189d3f854d8cf95…` — rendering HEAD with ESO on and then ALSO rotating `age.password` and
+     `minio.secretKey` yields that same literal all three times. The working shapes are a Secret-OBJECT
+     watcher that restarts consumers (no reloader is installed — `kubectl get deploy -A | grep -i reloader`
+     is empty) or a projected Secret VOLUME read per request, because the kubelet refreshes mounted
+     Secret volumes and does not refresh env. `$env/dynamic/private` does NOT solve it: all seven zones
+     already import it and still hold the dead token, because it reads `process.env`, frozen too.
+  2. **The helm-written half IS what the annotation is for, and is unguarded.** `rask-frontend-session`
+     above; the gate renders DEFAULT values, where `externalSecrets.enabled: false` and the Secret does
+     render, so it measures a configuration nobody deploys.
+- *Two coverage gaps to carry with it:* `rask-annotator` and `rask-search` consume a Secret with no
+  checksum under the LIVE values but are absent from the default render, so they escape the gate
+  entirely and are not in its `_UNCOVERED` list; and the live `rask-catalog`/`rask-lineage`/
+  `rask-medallion-producer` Deployment OBJECTS carry no checksum annotation at all although release
+  v166's own stored manifest puts `checksum/dapr-app-token: ccc10ca6c3ed…` on them — those objects have
+  diverged from the release.
+- *The ordering note against [[XC-004]] is inverted and is dropped:* it argued "annotation first, it
+  stops the bleeding without a release that rotates live credentials", but ESO is already the live
+  writer of `rask-infra-credentials`, so there is no pre-ESO window left to stop the bleeding in.
+- *Closes when:* the helm-written Secrets (`rask-frontend-session` first) carry a checksum that TRACKS
+  their content, pinned by a gate that renders the LIVE values rather than the defaults; and the
+  ESO-written half is answered by a Secret-object watcher or a projected volume — never by another
+  annotation. Do not close this row by deleting the Closes-when.
 
 **XC-002 · The chart fix moving the Ray head's S3 credential onto the sanctioned ESO path is committed and never deployed**
 `chart, medallion, storage` · **HIGH** — the cascade half is CLOSED 2026-09-14; what remains is the ESO switch
@@ -7459,16 +7635,73 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 - *WHAT IS STILL OPEN IS THE ROW'S TITLE, not its symptom.* The credential now WORKS but still arrives
   by `secretKeyRef` — a k8s Secret through env, which is not one of the three sanctioned paths. ESO is
   built and switched off ([[XC-004]]), so "onto the sanctioned ESO path" is unmet.
-- *Closes when:* `externalSecrets.enabled=true` with an ExternalSecret for the Ray head's S3
-  credential, so it stops arriving through env — the same switch [[XC-004]] tracks for the other 43
-  refs. The rotation and the cascade verification this row was blocked on are done; it is no longer
-  blocked on an owner go-ahead.
+- **RE-MEASURED 2026-09-17, AND A VERDICT OF "already done" WAS REFUTED. The row stays OPEN.** A first
+  pass measured the ESO mechanism correctly — `values-local.yaml:110-111` ships `externalSecrets:
+  enabled: true`, `Makefile:741` passes that file to the `k3s-up` upgrade, `SecretStore/rask-vault` is
+  Valid/ReadWrite, `ExternalSecret/rask-infra-credentials` is SecretSynced, and the Secret carries an
+  ESO `ownerReference` — and concluded the row was closed. The refuter confirmed every one of those
+  facts and then measured the clause the first pass skipped, which is the operative one: **"so it stops
+  arriving through env."** Live, `deploy/ray-lance-head`'s container has SIX `secretKeyRef` env entries
+  off `rask-infra-credentials` (`S3_SECRET` <- `ray-compute-secret-key`, `LINEAGE_SERVICE_TOKEN`, 4x
+  `RASK_LINEAGE_TOKEN_SERVICE_*`), `envFrom: []`, and its only volumeMount is `/dev/shm`. No file mount,
+  no STS session. ESO fixed where the credential comes FROM; it did not change how it is DELIVERED, and
+  this row's own body says exactly that.
+- **THE UNDERLYING QUESTION IS AN OWNER'S AND IT IS NOT WRITTEN DOWN ANYWHERE.** Two in-tree statements
+  say an ESO-backed `secretKeyRef` IS the sanctioned path for a sidecar-less pod —
+  `.claude/skills/rask-dapr/SKILL.md:152-154` and `tests/unit/test_the_ray_credential_has_one_source.py:4-8`,
+  whose three tests pass and pin that shape as correct. [[LH-160]]'s gate counts every `secretKeyRef` as
+  the banned path regardless of who writes the Secret. Both readings are defensible from the owner's
+  verbatim rule (*"Either from ESO, secret store dapr and STS"* — ESO is named as a path, but the rule's
+  subject is "never secret through envs"). **These two cannot both be right, and the answer decides
+  whether this row is one line of work or none.** It is also why [[LH-160]]'s "baseline reaches 0" is
+  ambiguous for the no-sidecar population.
+- *Residue, both safe and both real:* the hand-applied `Secret/rask-ray-compute-s3` is referenced by no
+  pod and no repo file — and its `last-applied-configuration` annotation still carries the base64
+  secret, so it is a live copy of a scoped credential in an annotation rather than clutter; and
+  `deploy/ray-lance-demo.yaml` is one image tag ahead of the live head (`main-88ccfa2c` vs
+  `main-7a2de41a`), which `scripts/ray_e2e_stack.sh:121` would apply. That is an image question, not a
+  credential one.
+- *Closes when:* the owner rules whether an ESO-written Secret delivered by `secretKeyRef` satisfies the
+  rule. If NO: the Ray head's six entries move to a projected file mount (and `S3_SECRET` to STS), and
+  `test_the_ray_credential_has_one_source.py` plus `rask-dapr/SKILL.md:152-154` are rewritten in the same
+  commit. If YES: this row closes and [[LH-160]]'s baseline excludes ESO-written refs explicitly, so the
+  number keeps meaning something.
 
 **XC-003 · `lance.audit` shares `opentelemetry_logs` with all telemetry: 14-day TTL, and an unauthenticated in-cluster `DELETE` on the audit stream is accepted**
 `catalog, lineage, medallion` · **HIGH**
 
 - *Why open:* Confirmed against the live store 2026-09-07: audit lands in GreptimeDB `opentelemetry_logs` (477,096 rows) beside every other signal, that table declares `ttl = '14days'`, a `DELETE` on the audit stream is accepted, and both queries reached `:4000/v1/sql` with no credentials from inside the cluster. Sharing one table means the catalog's authn/authz/credential-issuance records can carry neither their own retention nor their own access policy. (The correlation half of this row was refuted — `CorrelationFilter` stamps request_id/trace_id on the root handler.)
-- *Closes when:* Split `lance.audit` out of the shared `opentelemetry_logs` pipeline in `chart/templates/otel-collector.yaml` into its own append-only sink with non-14-day retention, and put authentication in front of GreptimeDB's `:4000/v1/sql` so a DELETE is not accepted from any in-cluster pod.
+- **RE-MEASURED 2026-09-17 AT HEAD AND ON THE LIVE RELEASE: both clauses UNMET, and the numbers are two
+  orders of magnitude off.** `opentelemetry_logs` holds **109,571,787** rows (the row cites 477,096),
+  **7,537,117** of them audit (`body='audit'`, 6.9%). The TTL is not merely declared — the audit rows
+  span 2026-09-03T17:23:32Z to 2026-09-17T13:08:02Z = **13.82 days**, so the compliance trail is
+  actively being truncated right now.
+- *Three corrections the row must carry, because each changes the fix:*
+  1. **Retention is DATABASE-level, not in the Collector template.** `SHOW CREATE DATABASE public`
+     returns `ttl='14days'`, applied by `chart/templates/greptimedb-ttl-job.yaml:65` from
+     `values.yaml:2888` `observability.retention: 14d` — so a split table inherits 14 days AGAIN unless
+     it carries its own TTL. Splitting the pipeline alone does not satisfy clause 1.
+  2. *The append-only half is ALREADY true of the shared sink* (`append_mode = 'true'`). What is missing
+     is separation and retention, not append-only.
+  3. **The split has a live consumer the row does not name.**
+     `frontend/microfrontends/home/src/lib/server/audit-core.ts:143` is the estate's admin audit viewer
+     and hardcodes `SELECT * FROM opentelemetry_logs WHERE body = 'audit'` — moving the stream BLANKS
+     that viewer unless the query moves in the same change.
+- *On auth, clause 2 under-specifies its own outcome:* there is no `--user-provider` on the StatefulSet
+  args, no auth section in the greptime config ConfigMap, no NetworkPolicy in the namespace, and an
+  unauthenticated in-cluster `POST /v1/sql` from the catalog pod answers **200** — while the chart's own
+  TTL hook issues an unauthenticated `ALTER DATABASE` DDL write from an in-cluster pod on every upgrade.
+  **11+ in-cluster consumers dial `:4000` with no credential** (2 Collector OTLP exporters, the TTL hook,
+  vmalert at `alerting.yaml:15`, Perses at `values.yaml:3070`, `GREPTIME_API` on all 7 live `rask-web-*`
+  Deployments), and GreptimeDB OSS auth is a static username/password — so authentication alone does not
+  make a DELETE refused unless it ALSO splits read from write.
+- *Feasibility is not the blocker:* the running collector (`otel/opentelemetry-collector-contrib:0.157.0`)
+  already ships the `routing` connector plus `basicauth`/`bearertokenauth`.
+- *Closes when:* unchanged in intent, written against the real mechanism — route `lance.audit` to its own
+  GreptimeDB table in `otel-collector.yaml`, give THAT table an explicit non-14d TTL (the DB knob is
+  estate-wide), repoint `audit-core.ts` at it in the same change, and put a credential in front of
+  `:4000/v1/sql` that the Collector, the TTL hook, vmalert, Perses and all seven zones carry, with
+  read-only separated from write.
 
 **XC-004 · 43 secret refs still arrive through env (APP_API_TOKEN ×10, the zones' OIDC/session/lineage tokens, `ray-lance-head`) while ESO is built, provisioned and switched off**
 `chart, viewer, lineage, catalog` · **HIGH** · **blocked:** owner decision — a `helm upgrade` release with `externalSecrets.enabled=true`; the estate carries seven hand-deployed images a values-mismatched upgrade would revert to chart defaults
@@ -8076,7 +8309,58 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
   (outbound, guarded by `dapr-api-token`), while `APP_API_TOKEN` guards sidecar->app (inbound). The
   boot fetch completes in the lifespan before the first request is served, so there is no circularity —
   only the accessor problem above.
-- *Closes when:* the baseline reaches 0 (excluding [[LH-161]]), with the sidecar-bearing twelve first.
+- **THE NINE THAT WERE A CHART FLIP ARE FLIPPED — 2026-09-17. Baseline 39 -> 30, sidecar 10 -> 1.**
+  `catalog`, `lineage`, `maintenance`, `medallion-producer` and the three stage runners, plus `ingest`
+  and `notifications`, now render `RASK_APP_TOKEN_FROM_STORE: "true"` and no `APP_API_TOKEN` row at all.
+  The value stays in OpenBao; what ships is which source to read, which is configuration.
+  * *One helper, not six edits.* The identical five-line `secretKeyRef` block was repeated at six render
+    sites; it is now `lance.appTokenEnv`, which decides from ONE derivation of the scope list
+    (`lance.secretScopes`) that the `lance-secrets` Component itself now consumes. That is the whole
+    point of extracting it: a pod pointed at a store its app-id cannot reach gets
+    ERR_SECRET_STORES_NOT_CONFIGURED and fails closed at boot, so the two lists agreeing by construction
+    is a correctness property, not tidiness. The Component's rendered `scopes:` is byte-identical before
+    and after, so that half is a proven no-op.
+  * **THE RATCHET ALONE WOULD NEVER HAVE MOVED THIS, which is the lesson worth keeping.** A budget
+    nobody is obliged to spend down is a budget. What moved it is a test that states the RULE for the
+    subset with nothing left to build —
+    `test_a_pod_that_CAN_read_the_store_does_not_take_its_app_token_through_env`: a pod with a sidecar
+    whose app-id is in `lance-secrets`' `scopes:` must not take `APP_API_TOKEN` through env. It was RED
+    at exactly the nine.
+  * *A cross-service break the invariant layer caught, and the fix is the root cause rather than an
+    exemption:* `notifications` called `assert_app_token_configured` at IMPORT (`__init__.py` registers
+    subscriptions at module scope), and in store mode that check reads the sidecar — so the module
+    became unimportable without a daprd, which is how the probe-path gate found it. The assert moved to
+    the lifespan, where every sibling already puts it and where the boot retry budget applies; the two
+    tests that pinned it at build time now drive the real startup path through `TestClient`. Nothing is
+    weakened: routes do not serve until the lifespan has run.
+  * *And the fail-closed invariant got STRONGER, not widened.*
+    `test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one` now accepts either credential
+    path but CHECKS the store arm against the Component's scopes, so it refuses a flip that was never
+    plumbed. Mutation-checked: dropping the scope arm from the helper reds it with
+    `rask-compute: reads the store but app-id 'compute' is not in lance-secrets scopes`.
+- **FOUR CORRECTIONS TO THIS ROW, all measured 2026-09-17, because they change what "reaches 0" means.**
+  1. *`compute` is NOT a chart flip* — it carries `APP_API_TOKEN` with a sidecar but `lance-secrets` is
+     scoped to it neither in the chart nor live, so flipping it crash-loops the service at
+     `compute/lifespan.py:45` and takes `/api/ray/*` and `/api/serve/*` down. It is the one sidecar
+     entry left, recorded in the gate's `_UNREACHABLE_STORE`; closing it needs a scope line first.
+  2. *The table above classifies the wrong population.* Its 12+22+7=41 is the LIVE Deployments; the gate
+     ratchets the RENDER (Deployment+StatefulSet+Job+CronJob). Seven of the rendered entries are
+     infra-server rows the table never mentions — `POSTGRES_PASSWORD` (age), `MINIO_ROOT_USER`/
+     `MINIO_ROOT_PASSWORD`, two Job `MINIO_SECRET_KEY`s and a second `OPENFGA_DATASTORE_URI`. Those pods
+     run no daprd by construction (`infra-credentials.yaml:37`) and are what the store itself sits on,
+     so the Dapr path is closed to them and their only sanctioned route is a file mount — whether each
+     third-party image accepts one is UNVERIFIED.
+  3. *The "sidecar twelve" were ten in the gate's population:* the 2 `MEDIA_S3_ACCESS_KEY_ID` entries are
+     live but invisible to the ratchet, because `explorer.enabled` defaults false.
+  4. **SIX LIVE VIOLATIONS ARE OUTSIDE THE GATE ENTIRELY** — `ray-lance-head` carries `S3_SECRET`,
+     `LINEAGE_SERVICE_TOKEN` and 4x `RASK_LINEAGE_TOKEN_SERVICE_*`, all from `deploy/ray-lance-demo.yaml`,
+     a raw manifest the chart does not render. Fixing them moves the baseline by nothing and a NEW one
+     added there reds nothing. **A green 0 would therefore read as "the rule is enforced" while the
+     out-of-chart plane is uncounted** — which is precisely the regime this row exists to close, still
+     open. This is the same population [[XC-002]] is about, seen from the count's side.
+- *Closes when:* the baseline reaches 0 (excluding [[LH-161]]) AND the out-of-chart plane is counted by
+  something. Next unit: add `compute` to the `lance-secrets` scopes and flip it (10 -> 0 sidecar), then
+  the no-sidecar 22, whose path is a MOUNTED FILE rather than a flag and is therefore real work.
 
 **LH-161 · The GreptimeDB subchart pulls a whole Secret into its environment via `envFrom`**
 `chart` · med · found 2026-09-15 by the [[LH-160]] gate
@@ -8227,7 +8511,39 @@ _Every batch job the platform runs goes through a Ray head that today accepts un
 `runners/htr, medallion, compute` · **HIGH**
 
 - *Why open:* Verified still present today: `runners/htr/src/runner/pipeline.py` imports `PrefetchActor`, `PageLoaderActor` and `AltoWriterActor` from `htr.actors.io`, defines `prefetch_pipeline` (line 143) and registers it as the `"prefetch"` entry (line 230); `runners/htr/src/runner/main.py` declares no subparsers at all. The register's cited seam is itself stale — `medallion/schemas/htr.py::GOLD_CONTRACT_COLUMNS` was deleted 2026-08-17 — so the re-cut must be re-anchored on `medallion/schemas/tier.py`'s opaque `{id, payload, stage, lineage, source_rowid}`.
-- *Closes when:* Give `runners/htr/src/runner/main.py` a `stage` subcommand, run layout/lines and transcribe as `medallion.bronze`/`medallion.silver` stage runners driven by `MEDALLION_RAY_ENTRYPOINT`, delete the prefetch and endcap actors, and get the bronze→silver→gold cascade e2e green with lineage populated.
+- **RE-MEASURED 2026-09-17 — EVERY FACT HOLDS, THE PRESCRIPTION DOES NOT.** The three code claims are
+  true at the exact lines cited (a rarity): `pipeline.py:10` imports the three actors, `prefetch_pipeline`
+  is still line 143, the `"prefetch"` entry is still line 230, and `main.py` is one `@app.command()`
+  typer app with no subcommands. The estate agrees: three stage runners run, **none** sets
+  `MEDALLION_RAY_ENTRYPOINT`, and **0 of 170 jobs** on the live head name htr.
+- **THE NAMED MECHANISM IS A DEAD END, which is why this must be re-anchored before it is worked.**
+  `MEDALLION_RAY_ENTRYPOINT` can only name a script BAKED INTO `.docker/ray-cluster.dockerfile`
+  (`core/config.py:51-54` says so; pinned by `test_invariants.py:4360`,`:4398`). That image installs no
+  runner (`ray-cluster.dockerfile:55-59`), and
+  `test_invariants.py::test_the_shared_ray_image_carries_NO_WORKLOAD_dependencies` keeps it that way.
+  There is **no per-job image seam**: `ray_submit.py:303`,`:358` post `runtime_env: {env_vars}` only,
+  `grep -rn image_uri services/ packages/ scripts/` is empty, and neither `TaskDeclaration` nor
+  `TransformSpec` has an image field. `image_uri` exists solely for Serve applications
+  (`chart/templates/rayservice.yaml:43`), and that template renders for nobody.
+  *So the implementer must FIRST pick one:* (a) add per-lane `runtime_env.image_uri` to the Jobs-API
+  submit path and the task/spec record; (b) bake a thin platform-side job that calls a `/htrflow` Serve
+  door — which needs a Serve app deployed nowhere; (c) bake htr into the head image, forbidden by the
+  2026-08-25 seal ruling and RED under the invariant above. **`chart/values.yaml:1491` still prescribes
+  (c)** — stale guidance sitting exactly where an implementer will read it; fix it in the same commit.
+- *One clause is already true and does not discriminate:* "get the bronze→silver→gold cascade e2e green
+  with lineage populated" is satisfied today WITHOUT htr — `ray-silver-*`/`ray-gold-*` jobs SUCCEEDED on
+  the live head, most recently 2026-09-17 05:58. Re-scope it to "the HTR lane's cascade".
+- **DELETING THE ACTORS BREAKS NOTHING LIVE, BUT TAKES IIIF WITH IT — say so rather than letting it fall
+  out of a refactor.** No chart template, script, Makefile target or workflow invokes the batch CLI, and
+  neither Serve service imports `pipeline.py`; only three runner-local test files pin them, invisible to
+  the root suite. But `PrefetchActor` is the sole consumer of `htr/iiif.py::IIIFCachedSource`, which was
+  deliberately MOVED into this runner on 2026-08-17 (`80f9382d`, pinned by
+  `packages/storage/tests/test_packaging.py:70-72`) rather than deleted. Retiring prefetch retires IIIF.
+- *Closes when:* Merged with [[LH-010]] (same P7b re-cut; LH-010 carries the better anchor). Then: decide
+  the image seam above, give the htr runner an env-parameterised stage entrypoint shaped like
+  `runners/dummy/src/dummy_runner/job.py` (`RASK_SOURCE_URI`/`RASK_DEST_URI`/`RASK_VERSION_FLOOR`, not a
+  typer subcommand), declare the lane as a `TransformSpec` + `TaskDeclaration`, retire prefetch and the
+  ALTO endcaps (and IIIF with them, deliberately), and prove the HTR lane green with lineage on the head.
 
 **CP-012 · The RayJob CRD path is built but off the deployed path — submission goes through the Jobs API, zero RayJob/RayCluster/RayService CRs exist, and Kueue admits nothing**
 `medallion, compute, ray-kit, chart` · **HIGH** · **blocked:** owner decision — chart-owned RayCluster vs ephemeral per-job clusters vs delete the adapter (a job-record durability question); Q17-54 was additionally deferred by instruction until the lakehouse phase finished, which it now has

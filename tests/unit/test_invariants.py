@@ -2099,13 +2099,22 @@ def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:
 
 
 def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> None:
-    """A pod running code that REFUSES TO START without APP_API_TOKEN must be rendered one.
+    """A pod running code that REFUSES TO START without an app token must be rendered a WORKING source.
 
     `service_kit.governed.dapr_auth.assert_app_token_configured` raises at startup when Dapr ingest is
-    on and the token is unset — deliberately, because the alternative is a live sidecar-delivered route
+    on and no token resolves — deliberately, because the alternative is a live sidecar-delivered route
     with no authentication. That makes the token a startup PRECONDITION for those apps, and a
     precondition the chart can omit silently: the render is valid YAML, `helm upgrade` succeeds, and the
     pod CrashLoopBackOffs with the reason buried in container logs.
+
+    **TWO SOURCES SATISFY IT, AND ONLY ONE OF THEM IS SELF-CONTAINED.** `APP_API_TOKEN` is a
+    `secretKeyRef` — the env path the estate's secrets rule refuses — and a pod rendered
+    `RASK_APP_TOKEN_FROM_STORE` reads the value from `lance-secrets` instead. Accepting either would be
+    the obvious widening and would be WRONG: the store path only works if that pod's app-id is in the
+    Component's `scopes:`, and when it is not, daprd answers ERR_SECRET_STORES_NOT_CONFIGURED, the boot
+    fetch fails, and the pod CrashLoopBackOffs for a DIFFERENT reason with the same symptom. So the
+    store arm is checked against the scope list rather than trusted, which makes this guard stronger
+    than the env-only version it replaces: it now also refuses a flip that was never plumbed.
 
     `notifications` shipped exactly that. It writes no Lance, and in fleet.yaml the token had only ever
     been reachable from inside `if $svc.lanceWriter` — an unrelated STORAGE flag — so the first fleet
@@ -2117,6 +2126,12 @@ def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> Non
     a list is the thing that drifts, which is the lesson the lineage-allowlist gate already encodes.
     """
     rendered = _helm_template()
+    secret_scopes = {
+        scope
+        for doc in yaml.load_all(rendered, Loader=FAST_LOADER)
+        if isinstance(doc, dict) and doc.get("kind") == "Component" and (doc.get("metadata") or {}).get("name") == "lance-secrets"
+        for scope in (doc.get("scopes") or [])
+    }
 
     fail_closed = {path.relative_to(SERVICES).parts[0] for path in SERVICES.rglob("*.py") if "assert_app_token_configured(" in path.read_text(errors="ignore")}
     assert fail_closed, "no service calls assert_app_token_configured — this guard has nothing to check"
@@ -2125,7 +2140,10 @@ def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> Non
     # name the import root, which is the services/ directory name.
     module_re = re.compile(r'^\s*-\s+"?([a-z_]+)(?:\.[a-z_.]+)?:app"?\s*$', re.MULTILINE)
     checked = 0
-    missing: list[str] = []
+    #: (workload, why) — the REASON travels with the name because the two failures land the pod in the
+    #: same CrashLoopBackOff from opposite causes, and an operator reading only a list of names has to
+    #: rediscover which one this is.
+    missing: list[tuple[str, str]] = []
     for doc in yaml.load_all(rendered, Loader=FAST_LOADER):
         if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
             continue
@@ -2133,14 +2151,20 @@ def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> Non
         if not {m.group(1) for m in module_re.finditer(raw)} & fail_closed:
             continue
         checked += 1
-        if "APP_API_TOKEN" not in raw:
-            missing.append((doc.get("metadata") or {}).get("name", "?"))
+        app_id = ((doc["spec"]["template"].get("metadata") or {}).get("annotations") or {}).get("dapr.io/app-id")
+        if "APP_API_TOKEN" in raw:
+            continue
+        if "RASK_APP_TOKEN_FROM_STORE" not in raw:
+            missing.append(((doc.get("metadata") or {}).get("name", "?"), "no token source at all"))
+        elif app_id not in secret_scopes:
+            missing.append(((doc.get("metadata") or {}).get("name", "?"), f"reads the store but app-id {app_id!r} is not in lance-secrets scopes"))
 
     assert checked, "no rendered Deployment runs a fail-closed module — the module parse has drifted"
     assert not missing, (
-        f"{sorted(missing)} run code that calls assert_app_token_configured but are rendered WITHOUT "
-        "APP_API_TOKEN. The chart installs cleanly and the pod CrashLoopBackOffs on startup. Give the "
-        "service `daprIngest: true` in values.yaml (fleet.yaml) or render the token in its own template."
+        f"{sorted(missing)} run code that calls assert_app_token_configured and cannot resolve a token. "
+        "The chart installs cleanly and the pod CrashLoopBackOffs on startup. Either render the store "
+        "path (`RASK_APP_TOKEN_FROM_STORE`, with the app-id in the `lance-secrets` Component's scopes) "
+        "or give the service `daprIngest: true` in values.yaml so fleet.yaml renders it a source."
     )
 
 

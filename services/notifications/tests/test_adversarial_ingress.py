@@ -160,15 +160,24 @@ def test_the_sidecars_own_delivery_is_accepted(authenticated_bus: TestClient, pl
     assert len(plane.boxes["alice"]) == 1
 
 
-def test_enabling_dapr_ingest_without_an_app_token_refuses_to_build_the_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Fail closed at build time. An unauthenticated ingest path that LOOKS configured is the one
-    outcome that cannot be noticed, so the pod refuses to start instead."""
+def test_enabling_dapr_ingest_without_an_app_token_refuses_to_start_the_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed at startup. An unauthenticated ingest path that LOOKS configured is the one outcome
+    that cannot be noticed, so the pod refuses to serve instead.
+
+    Observed through the LIFESPAN because that is where the check now runs — `register_subscriptions`
+    executes at import, and in secret-store mode the check reads the sidecar, which no importer has.
+    """
     monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
+    monkeypatch.delenv("RASK_APP_TOKEN_FROM_STORE", raising=False)
     get_ingress_settings.cache_clear()
+
+    from notifications.lifespan import make_lifespan
+    from service_kit.config import Settings
+
     try:
-        with pytest.raises(RuntimeError, match="APP_API_TOKEN"):
-            subscriptions_module.register_subscriptions(FastAPI())
+        with pytest.raises(RuntimeError, match="APP_API_TOKEN"), TestClient(FastAPI(lifespan=make_lifespan(Settings()))):
+            pass
     finally:
         get_ingress_settings.cache_clear()
 
