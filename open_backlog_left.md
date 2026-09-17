@@ -797,8 +797,30 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   whose `_publish_staged` writes the event to the outbox BEFORE the publish and lets a publish failure
   propagate, leaving the staged copy for the relay. catalog, maintenance, medallion and lineage all
   route through it.
-  **WHAT IS GENUINELY LEFT is two things, neither of them data loss on transport:** (1) the
-  CONSOLIDATION — four kernels and three builders, which is duplication rather than a defect, and
+  **THE CONSOLIDATION HALF IS NOT DUPLICATION — measured 2026-09-17, and it should not be built.**
+  The row calls the four kernels and three builders "duplication". Read, they are different jobs:
+  * *Kernels differ by TRANSPORT, AUTHORITY and FAILURE POSTURE.* `lineage_kit/emitter.py` is the
+    transport core whose one guarantee is that "emission never crashes compute" (degrades to a no-op);
+    `catalog/core/lineage_emit.py` is inline-awaited best-effort over HTTP and is the only component
+    that "knows the *verified* principal on every write"; `maintenance/core/lineage_emit.py` publishes
+    over **Dapr `pubsub.jetstream`** with deterministic per-dataset run ids as a flood guard;
+    `service_kit/lancekit/lineage_emit.py` is the annotation path with a log-only sink and no external
+    dependency. Merging them means one kernel with four flags.
+  * *Builders differ by PURPOSE.* `lineage/seed.py::build_events` generates a realistic demo history;
+    `medallion/schemas/events.py::build_run_event` is the production builder carrying a measured FGA
+    fix (`author_subject`, because a role name is not an identity and every cascade run was refused);
+    `lineage_kit/runs.py` is the kit's `LineageRun` helper.
+  * **The ONE genuine mirror is already gated.** `service_kit/lancekit/openlineage.py` parallels
+    `service_kit/openlineage.py` — 10 constants against 7, four shared. Driven at HEAD: **zero drift**,
+    and `tests/unit/test_openlineage_spec_conformance.py::test_lancekit_mirror_shares_the_shared_constants`
+    already pins all four, recording that they "used to hand-copy them and had already drifted in both
+    directions". SK-11 went further and deleted the duplicate `columnLineage` builder outright, so that
+    one "cannot diverge at all rather than being asserted equal".
+  * *So the owner's 2026-09-17 permission to touch the annotator minimally is not needed for this*, and
+    the 27-importer refactor the row implies has no defect behind it.
+  **WHAT IS GENUINELY LEFT is ONE thing, and it is not data loss on transport:** (1) ~~the
+  CONSOLIDATION — four kernels and three builders~~ **(struck: measured above as different jobs, and the
+  one real mirror is gated)**, and
   (2) a narrower residual the catalog's own header already names: it has no TRANSACTIONAL outbox, so a
   crash between the Lance write and the publish still loses the event. That one is not fixable by
   consolidation — it needs a durable producer, and the architecture has no DB to give it.
