@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**210 open items**, deduped from 325 raw rows mined out of the seven files above. A further 98 rows
+**209 open items**, deduped from 325 raw rows mined out of the seven files above. A further 99 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 14 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 69 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -77,8 +77,10 @@ opening — and are not counted here.
 Counts are re-derived by `tests/unit/test_the_backlog_counts_itself.py`, which counts OPEN rows and
 checks the HIGH column too, so neither can drift from the rows below.
 
-**7 of the 14 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-094`,
-`LH-159`, `LH-172`, `LH-004`, `LH-018`, `LH-019` and `LH-137` workable. The denominator moved 13 -> 14
+**7 of the 13 phase-1 lakehouse HIGH rows are decision-gated** (2026-09-17), leaving `LH-094`,
+`LH-159`, `LH-004`, `LH-018`, `LH-019` and `LH-137` workable. `LH-172` left this list by CLOSING on
+2026-09-17 — its ruling (option 3, accept) and the recording that ruling asks for both exist, the
+latter in `lance_session.cpu_budget_cores`'s docstring rather than in prose here. The denominator moved 13 -> 14
 on 2026-09-17 when [[LH-137]] was REOPENED: it was closed on "the current stage-runner pod records 0
 refusals", and driving a real publication — the thing its own closure said had not been done —
 reproduced the refusal twice within a second of a silver write. Three rulings moved it the same day:
@@ -5648,8 +5650,24 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   cheap, because the whole set is 10 records and 9 of them share one shape. Then make an unparseable
   control record louder than a WARN, or prove the set empty and keep it so with a gate.
 
-**LH-172 · Every lakehouse pod builds a 64-wide Lance thread pool against a one-CPU quota, and the documented override is ignored**
+**LH-172 · ~~Every lakehouse pod builds a 64-wide Lance thread pool against a one-CPU quota, and the documented override is ignored~~ — CLOSED 2026-09-17 (option 3 ruled, and everything option 3 asks for exists)**
 `catalog, lineage, medallion, maintenance, service-kit` · **HIGH** · filed 2026-09-16 · **RULED 2026-09-16 (owner): accept it for now** — the pools stay host-sized and the memory multiplier is a recorded cost, not a defect to chase
+
+- **CLOSED on a re-read 2026-09-17: the Closes-when asks for a RULING plus a RECORDING, and both are in
+  place.** The ruling is option 3 ("accept it and record that the pools are host-sized"), made
+  2026-09-16. The recording is not a note in this file — it is in the code, at the one place a reader
+  hits the question: `lance_session.cpu_budget_cores`'s docstring carries the measurement outright,
+  including that "a cgroup CPU *quota* does not reduce visible CPUs, so the pod sees 64 and sizes to 64
+  whatever this function reports" and that a `LANCE_CPU_THREADS`-setting companion "was written,
+  deployed and then removed" because the variable is ignored on pylance 11.0.0.
+- *The dead function's retention is itself justified rather than accidental*, which is what keeps this
+  from being the "declared and used by nobody" shape: `cpu_budget_cores` has ZERO production callers by
+  measurement, and `tests/unit/test_lance_sizes_its_compute_pool_to_the_container_not_the_host.py`
+  states why in its own header — it "PINS THE MEASUREMENT, not a remedy", and asserts the ineffective
+  companion does not come back without the measurement being redone.
+- *Nothing is left to build.* The revisit trigger is external: a pylance release in which
+  `LANCE_CPU_THREADS` reaches the core-tracking pool, or a decision to take option 1 (cpuset /
+  `sched_setaffinity`) and accept pinning a latency-sensitive service to one core.
 
 - **THE PREMISE IS MEASURED NOW, not inferred from the docs — and the first two versions of this row
   were wrong in opposite directions, so the measurement is given in full.**
