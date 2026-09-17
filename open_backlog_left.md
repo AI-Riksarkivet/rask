@@ -1638,6 +1638,23 @@ _Every governance promise the lakehouse makes rests on the run record being emit
       research-bronze$events    404   not a registered table
       bind86-bronze$events      404   not a registered table
       uiproof-gold$catalog      403   the no-existence-oracle answer
+
+- **RE-MEASURED 2026-09-17 — ALL THREE THAT MATTER ARE STILL UNGOVERNED, and the LINEAGE sweep names
+  the whole population every tick.** `lineage_reconcile_ungoverned` reports `count=12`:
+
+      bind86-bronze$events      research-bronze$events      uiproof-gold$catalog     <- the three
+      acme-bronze$zzprobe8926   aud1ns$sub3$tt              casc9$inner$t
+      e2e-ns$t178b2dda          e2e-ns$t74eff1b3            probe$nonexistent
+      uidemo-ns$recoverme       undropns$demo               undropns$demo2
+
+  The other nine are test/probe residue by name. So the defect population this row identified is
+  unchanged a week on, and whoever fixes it has the exact target list rather than a count.
+- *The two sweeps' disagreement is this row's own finding, now shown with both numbers side by side and
+  NOT a contradiction:* the MAINTENANCE reconciler reports `ungoverned_tables=0` against 381 REGISTERED
+  tables, while LINEAGE reports 12 against 420 GRAPH-KNOWN datasets. Both are right — the three that
+  matter answer 404/403 at the catalog, so a sweep whose denominator is "tables the catalog knows"
+  cannot see them by construction. **The reporting gap is therefore already closed on the lineage
+  side**: these are named in a WARN line on every tick, which the row's framing does not credit.
       bind86-silver$features    200   registered and readable
 
   Two of the three tables this row says "matter" are **not catalog tables at all**. They have lineage
