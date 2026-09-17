@@ -939,6 +939,16 @@ _Every governance promise the lakehouse makes rests on the run record being emit
     (`services/annotator/src/annotator/annotations/commit.py`), collapse the 805-line catalog and
     337-line maintenance kernels and the three `RunEvent` builders. Note `lineage_kit.emitter` has NO
     Dapr transport at HEAD, so "route every producer through it" is a rewrite, not a move.
+    **SUPERSEDED 2026-09-17 — it is workable and it should NOT be worked, and this bullet's own last
+    sentence is the reason.** "A rewrite, not a move" understates it: `lineage_kit.emitter` would have
+    to grow Dapr pub/sub (maintenance's transport), HTTP-with-verified-principal (the catalog's),
+    a log-only sink (the annotation path's) and the never-crash-compute degradation it already has —
+    four transports behind one kernel, selected by configuration. That is not consolidation, it is a
+    strategy object with four branches replacing four modules that each do one thing. The measurement
+    behind this is above: the kernels differ by TRANSPORT, AUTHORITY and FAILURE POSTURE, the builders
+    by PURPOSE, and the single genuine mirror is already gated at zero drift. **M-L effort was the
+    right estimate for the wrong work**, and removing it from the workable queue is worth more than
+    doing it.
   * *The DURABILITY half needs a ruling*, and it is not a procedural ack: does the catalog's
     commit->publish crash window stay permanently residual, or does it get a transactional producer?
     The only design written down is "make the Ray job the durable producer" (`docs/RESILIENCE.md:83`),
