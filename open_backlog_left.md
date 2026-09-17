@@ -6745,8 +6745,32 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     falls back to `settings.ray_entrypoint` when no task is DECLARED, while
     `RayJobsApiExecutor.submit` takes its entrypoint from `registration.command` and has no undeclared
     path. Wiring the adapter needs an answer for the undeclared case and nothing else.
+  * **AND THE ACTUAL BLOCKER IS NEITHER OF THOSE — it is the JOB ID, measured 2026-09-17.** The two
+    lanes derive the Ray submission id from the SAME four axes ([[LH-157]] unified the axes) and
+    produce DIFFERENT STRINGS. Driven with identical input:
+
+        ray_submit.stage_submission_id    -> ray-silver-tok-1-a71b9b7999ac-9b15d9e0
+        work_order.derive_idempotency_key -> 7bd99c7109b5821494f51a169b8cc23b106d6817
+
+    `RayJobsApiExecutor.submit` posts under `order.idempotency_key`, so wiring it as-is renames every
+    Ray job: in-flight work is orphaned — the poller watches an id the submitter never used, which is
+    the exact defect `stage_submission_id`'s docstring says it was extracted to prevent — and the
+    operator-readable `ray-<stage>-<token>-…` form the Ray dashboard is searched by is lost.
+  * *And the adapter CANNOT simply derive the deployed shape, which is what makes this structural
+    rather than a one-line fix:* `stage_submission_id` keys on `token`, and **`WorkOrder` has no token
+    field** — it is consumed into `idempotency_key` at construction and never carried. So the adapter
+    is missing an axis it would need.
+  * *Which leaves three ways to close it, none free:* carry the token on the `WorkOrder` (a shared
+    `service-kit` model change, and the token is a credential-shaped value to think twice about
+    putting on a queued order); accept the id change behind a drain of in-flight jobs; or have the
+    workflow pass the handle it already owns rather than letting the adapter mint one. The last is
+    smallest and fits the port — `RunHandle` already separates `engine` from `handle` precisely because
+    a handle is the ENGINE's id, not the platform's.
   * *NOT attempted here on purpose:* this rewires the live cascade's submission path, and the estate is
-    mid-investigation on [[LH-137]]. Named rather than half-done.
+    mid-investigation on [[LH-137]]. Named rather than half-done — and the naming is now exact, which
+    it was not before: the obstacle is the id derivation, not the wire vocabulary and not the
+    undeclared entrypoint (that one is solvable with the synthesized-registration pattern
+    `transform.py` already uses for the in-process lane).
 
 **LH-163 · ~~The sweep's base probe is permanently denied on `lance-catalog/models/`, and answers with a full traceback every pass~~ — CLOSED 2026-09-15, observed live**
 `maintenance, chart` · med · measured 2026-09-15 on the running `rask-maintenance`
