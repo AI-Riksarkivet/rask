@@ -52,14 +52,15 @@ from medallion.services import catalog_register, engine_choice, promotion_band, 
 from medallion.services import gate as gate_svc
 from medallion.services.compute import WriteResult, existing_row_count, measure_stage, read_upstream
 from medallion.services.derivers import UnderivableMediaError
+from medallion.services.engine_names import IN_PROCESS_ENGINE
+from medallion.services.engine_registry import executor_for
 from medallion.services.gate_decision import GateOutcome, gate_decision, promotion_status_for, refusal_message
-from medallion.services.inprocess_executor import IN_PROCESS_ENGINE, InProcessExecutor
 from medallion.services.promotion import promotion_lineage
 from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform_async
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
-from service_kit.lakehouse.executor import RunState
+from service_kit.lakehouse.executor import Capability, RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.quality import Assertion, assert_quality
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
@@ -777,15 +778,19 @@ async def _run_in_process(
     A failure is RAISED, so the stage runner's own RETRY path owns it exactly as it did when the writer was
     called directly. The port classifies the error; it does not change who handles it.
 
-    The result is read back through the adapter rather than measured a second time. `result()` is
-    beyond the port and says so — the platform's contract is to RE-DERIVE what was written (§2.5), and
-    that re-derivation belongs at the acceptance door, where it gates something. Re-measuring here
-    would gate nothing and cost real IO: `transform_stage` already calls `measure(to_uri)` internally,
-    so a `measure_stage` here would be a second stats read plus an upstream open, for numbers
-    identical by construction — both build from `measure(to_uri)` + the prior count + `_column_map`
-    over the same blob-field expression.
+    THE ENGINE IS RESOLVED BY NAME, NEVER CONSTRUCTED BY CLASS. `executor_for` is what turns the
+    chosen engine into the thing that runs it; naming `InProcessExecutor` here would make the registry
+    a mechanism nothing consults and the port a description of an architecture the code does not have.
+
+    The result is read from the adapter only when it advertises `Capability.RESULT`, and re-derived
+    otherwise. Reading it is an OPTIMISATION over §2.5's actual contract, which is that the platform
+    re-derives what was written: `transform_stage` already calls `measure(to_uri)` internally, so
+    measuring again here would be a second stats read plus an upstream open for numbers identical by
+    construction — both build from `measure(to_uri)` + the prior count + `_column_map` over the same
+    blob-field expression. The capability is what makes that saving conditional on the engine having
+    made the measurement, rather than on which class this line happened to name.
     """
-    executor = InProcessExecutor(settings.storage_options)
+    executor = executor_for(IN_PROCESS_ENGINE, storage_options=settings.storage_options)
     order = _work_order(settings, identity=identity, from_uri=from_uri, to_uri=to_uri, lineage_doc=lineage_doc, token=token, declared=declared, project=project)
     # The command an in-process engine runs is its own call, NAMED rather than parsed — the rule the
     # registry states for every engine: the platform forwards a command and never interprets one.
@@ -797,10 +802,13 @@ async def _run_in_process(
         # operator reads to diagnose — a prefix would push the cause behind a label. The port's
         # classification (`detail.kind`) is a machine's field and rides the executor's own log line.
         raise RuntimeError(detail.message if detail else f"the in-process engine reported {state}")
-    written = executor.result(handle)
-    if written is None:  # pragma: no cover - SUCCEEDED with no measurement would be an adapter defect
-        raise RuntimeError("the in-process engine reported success and produced no measurement")
-    return written
+    if Capability.RESULT in executor.capabilities:
+        return await executor.result(handle)
+    # THE ENGINE PROMISED NOTHING, SO THE PLATFORM RE-DERIVES — §2.5's actual contract, and what the Ray
+    # lane does on every run. The shipped in-process adapter DOES claim `RESULT`, so this arm is not
+    # taken today; it is what makes this lane read the port rather than the class it used to name, and
+    # an in-process adapter that streamed to disk without measuring would take it.
+    return await run_in_threadpool(measure_stage, from_uri, to_uri, settings.storage_options())
 
 
 async def _write_stage(

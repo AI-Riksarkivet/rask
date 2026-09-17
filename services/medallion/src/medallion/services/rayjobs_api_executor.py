@@ -142,3 +142,17 @@ class RayJobsApiExecutor:
     async def cancel(self, handle: RunHandle) -> None:
         """Stop the job by deleting it, which is what `CANCEL` promises."""
         await (await self._http()).delete(f"/api/jobs/{handle.handle}")
+
+    async def result(self, handle: RunHandle) -> Any:  # noqa: ANN401 — the port's own return shape; see executor.py
+        """Refused, because this engine does not advertise `Capability.RESULT`.
+
+        The job writes the destination in ANOTHER process on another node; nothing here ever holds the
+        table, so there is no measurement to hand back and never was. The caller reads the capability
+        and measures the destination instead — which is what this lane has always done
+        (`measure_stage` reconstructs the column edges from the on-disk schemas precisely because this
+        process never saw the write).
+
+        Raising rather than returning `None` keeps the two answers distinguishable: `None` would read
+        as "the run produced nothing", and a caller cannot branch on a value carrying two meanings.
+        """
+        raise NotImplementedError(f"{RAY_ENGINE} writes out-of-process and advertises no RESULT capability; measure the destination for run {handle.handle}")

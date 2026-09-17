@@ -60,9 +60,12 @@ class InProcessExecutor:
     """
 
     name = IN_PROCESS_ENGINE
-    #: `FAILURE_DETAIL` only. No `CANCEL` — the work is over before `submit` returns, so there is
-    #: nothing to stop; no `DURABLE_RECORD` — see the class docstring.
-    capabilities = frozenset({Capability.FAILURE_DETAIL})
+    #: `FAILURE_DETAIL` and `RESULT`. No `CANCEL` — the work is over before `submit` returns, so there
+    #: is nothing to stop; no `DURABLE_RECORD` — see the class docstring. `RESULT` is claimable here and
+    #: on no out-of-process engine: this adapter holds the Lance handle and `transform_stage` measures
+    #: the table as it writes it, so the measurement already exists and re-reading it would be IO for
+    #: numbers identical by construction.
+    capabilities = frozenset({Capability.FAILURE_DETAIL, Capability.RESULT})
 
     def __init__(self, storage_options: Callable[[], dict[str, str]]) -> None:
         #: A CALLABLE, not a dict: credentials are resolved per run, and a value captured at
@@ -132,13 +135,27 @@ class InProcessExecutor:
         """
         raise NotImplementedError(f"{IN_PROCESS_ENGINE} runs synchronously and advertises no CANCEL capability; run {handle.handle} is already over")
 
-    def result(self, handle: RunHandle) -> Any:  # noqa: ANN401 — a WriteResult; typing it here would pull the medallion's model into the port's shape
-        """This run's measured output, for a caller that wants it without a second read.
+    async def result(self, handle: RunHandle) -> Any:  # noqa: ANN401 — a WriteResult; typing it here would pull the medallion's model into the port's shape
+        """This run's measured output — the port's `Capability.RESULT`, which this engine claims.
 
-        BEYOND the port, and only ever an optimisation: the platform's contract is to re-derive what
-        was written from the dataset (§2.5), and a caller that ignores this is not weaker for it.
+        An OPTIMISATION and never a requirement: the platform's contract is to re-derive what was
+        written from the dataset (§2.5), and a caller reading the capability and measuring instead is
+        not weaker for it. What this saves is a second stats read plus an upstream open.
+
+        `async` to match every other outcome-reading method on the port. This engine answers from a
+        dict and needs no await; an engine that had to fetch its result would, and a port whose shape
+        depended on which kind implemented it first would not be a port.
+
+        RAISES for an unknown handle rather than answering `None`, because `None` cannot be told apart
+        from a run that measured nothing — the overloaded-`None` defect `RunState.UNKNOWN` exists to
+        name. A handle this process has no record of is the same condition `status` reports as
+        `UNKNOWN`, and it is the caller's cue to re-derive.
         """
-        return self._results.get(handle.handle)
+        if handle.handle not in self._results:
+            raise KeyError(
+                f"{IN_PROCESS_ENGINE} holds no measurement for run {handle.handle}; this process did not run it, and its status is {RunState.UNKNOWN}"
+            )
+        return self._results[handle.handle]
 
 
 def _lineage_of(order: WorkOrder) -> Any:  # noqa: ANN401 — a LineageDoc, imported lazily to keep this module's import cheap

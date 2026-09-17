@@ -1887,4 +1887,43 @@ optimisation is consumed as a requirement, and routing the in-process lane throu
 choice between re-deriving (a second stats read for numbers identical by construction), narrowing back
 to the concrete type (which defeats resolving), or widening the port with an optional result capability
 (honest, and a `service-kit` change every future adapter inherits). That is an open decision, tracked as
-LH-158, not a thing this entry settles.
+LH-158, not a thing this entry settles. **It was settled on 2026-09-17 — see the next entry.**
+
+## `RESULT` is a capability, and both lanes now go through the port (2026-09-17)
+
+Settles the open decision the entry above leaves standing, by the third of the three options it names:
+widen the port. Owner ruling, 2026-09-17.
+
+**The tension, restated so the choice is legible.** `transform.py` hand-built `InProcessExecutor`
+because it then called `executor.result(handle)`, and `result()` was not on the port — so resolving
+through `executor_for` would have returned an `Executor` that, per the contract, could not answer. The
+other two options were rejected on their own terms: re-deriving unconditionally costs a second stats
+read plus an upstream open for numbers identical by construction, and narrowing back to the concrete
+type defeats the point of resolving (and needs a `cast` the estate does not want here).
+
+**What widening actually cost, and why the objection against it dissolved.** The objection recorded
+against option 3 was that it needed "an answer for what 'the result' means to an engine that writes
+asynchronously". The port already had that answer, twice: `Capability` is a `StrEnum` whose docstring
+says *"Absence is the default, so a new adapter is assumed to promise nothing"*, and `CANCEL` /
+`FAILURE_DETAIL` are already optional methods gated on a declared capability. So the change is one
+`RESULT` member, one `result()` on the protocol, claimed by `InProcessExecutor` and declined by
+`RayJobsApiExecutor` — the same way the latter already declines `DURABLE_RECORD`. What "the result"
+means to an asynchronous engine is *that it does not claim the capability, and the caller re-derives*.
+
+**The method is on the protocol; only the CAPABILITY is optional.** `Executor` is `runtime_checkable`,
+so a method absent from an adapter makes `isinstance` answer False and that adapter unreachable through
+the registry. Every adapter therefore implements `result()`, and one with nothing to return raises —
+exactly the shape `InProcessExecutor.cancel` already uses for the capability it declines. Both raise
+rather than answering `None`, because `None` cannot be told apart from a run that measured nothing;
+that is the overloaded-`None` defect `RunState.UNKNOWN` exists in this port to name.
+
+**The return type is `Any`, and that is measured rather than lazy.** `service-kit` must not import a
+service's model, and the two candidate types are not interchangeable: the medallion's `WriteResult`
+carries a `previous_row_count` the promotion band reads, which lance-ns's same-named wire model
+(`service_kit.lancekit.openlineage.WriteResult`, shaped to match theirs on purpose) does not have.
+Narrowing to either would drop a field or pull the medallion into the port's shape.
+
+**The asymmetry this makes explicit was already real.** `RayJobsApiExecutor` writes out-of-process and
+never holds the table — `measure_stage` reconstructs its column edges from on-disk schemas precisely
+because this process never saw the write. Before this, that fact lived in a comment at one call site;
+it is now a property of the port, which any third engine inherits without being told.

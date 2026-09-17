@@ -61,13 +61,13 @@ claim it works first. **Push every commit.**
 
 ## What is left, counted
 
-**210 open items**, deduped from 325 raw rows mined out of the seven files above. A further 98 rows
+**209 open items**, deduped from 325 raw rows mined out of the seven files above. A further 99 rows
 are CLOSED and still rendered — struck through, keeping the measurements that made them worth
 opening — and are not counted here.
 
 | Phase | Items | High |
 | --- | --- | --- |
-| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 70 | 13 |
+| **1 · Lakehouse** (catalog, lineage, medallion, maintenance) | 69 | 13 |
 | **1 · Cross-cutting** (service-kit, storage, chart, build, tests) | 46 | 10 |
 | **2 · Compute** (compute, ingest, ray-kit) | 29 | 6 |
 | **3 · Controlplane** (controlplane, gateway, notifications) | 24 | 5 |
@@ -6307,8 +6307,45 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
   the same stage/token/from/to with `build-1` and `build-2` mint DIFFERENT keys, and both lanes import
   the shared derivation. The in-process lane can no longer re-attach to a previous build's outcome.
 
-**LH-158 · The `Executor` port is declared, documented and used by neither lane**
-`medallion, service-kit` · med · found 2026-09-15 by an adversarial workflow · **blocked:** which of the three named options — the row's own text calls it "a decision rather than an edit", and it carried no marker
+**LH-158 · ~~The `Executor` port is declared, documented and used by neither lane~~ — RULED AND SHIPPED 2026-09-17**
+`medallion, service-kit` · med · found 2026-09-15 by an adversarial workflow · **RULED 2026-09-17 (owner): option 3, widen the port**
+
+- **DONE. The owner chose option 3 and it landed.** `Capability.RESULT` joins the port's existing
+  `StrEnum`; `result()` joins the `Executor` protocol; `InProcessExecutor` claims the capability and
+  `RayJobsApiExecutor` declines it and raises, exactly as `InProcessExecutor` already declines `CANCEL`.
+  `transform.py` now calls `executor_for(IN_PROCESS_ENGINE, storage_options=...)` and reads the result
+  only when the resolved engine promises one, re-deriving with `measure_stage` otherwise. It no longer
+  imports `inprocess_executor` at all — the lane names an ENGINE, never an adapter class.
+- *The method is on the protocol and only the CAPABILITY is optional, which is not a style choice:*
+  `Executor` is `runtime_checkable`, so a method missing from an adapter makes `isinstance` answer False
+  and that adapter unreachable through the registry. Both decliners therefore implement it and RAISE —
+  `None` would be indistinguishable from a run that measured nothing, the overloaded-`None` defect this
+  very port's `RunState.UNKNOWN` exists to name.
+- *The return stays `Any`, and that was measured before settling for it:* the two candidate types are
+  NOT interchangeable. The medallion's `WriteResult` carries `previous_row_count` (the promotion band's
+  comparison point) and `service_kit.lancekit.openlineage.WriteResult` — deliberately shaped to mirror
+  lance-ns's wire model — does not. Narrowing to either drops a field the band reads or pulls the
+  medallion into the port's shape, which the port's own header forbids.
+- **THE TEST LAYER IS NEW BECAUSE THE EXISTING ONE STRUCTURALLY COULD NOT CATCH THIS.**
+  `test_the_chosen_engine_is_the_engine_that_runs` and `test_the_ray_lane_reaches_the_port` both call
+  `executor_for` FROM THE TEST and assert what it returns — green against a registry with zero callers,
+  which is exactly the state this row described.
+  `test_the_inprocess_lane_reaches_the_port.py` asserts the PRODUCTION lane resolves through it, and was
+  MUTATION-CHECKED rather than merely observed passing: restoring the hand-built
+  `InProcessExecutor(settings.storage_options)` kills 3 of its 4 legs, and the 4th (the two shipped
+  adapters disagree about `RESULT`) correctly survives because it tests the adapters, not the lane.
+- *The re-derive arm is not taken by the shipped adapter and is deliberately kept:* `InProcessExecutor`
+  claims `RESULT`, so production reads it. The arm is what makes the lane describe the PORT rather than
+  the class it used to name, it is covered by a test driving a no-`RESULT` engine, and an in-process
+  adapter that streamed to disk without measuring would take it. It is a capability read, not a guard
+  against something structurally impossible — the "control that cannot fire" shape does not apply.
+- *`docs/DECISIONS.md` no longer states the falsehood:* its 2026-09-15 entry said "WHAT THIS ENTRY DOES
+  NOT CLAIM: that both lanes go through the port. They do not." A dated 2026-09-17 entry settles it and
+  the old paragraph points forward, per this file's own supersedes convention.
+- *NOT in scope and deliberately untouched:* collapsing the `use_ray` branch at `transform.py:828`. That
+  is the ORCHESTRATION axis (Dapr Workflow dispatch), not the compute axis, and the Ray lane does not
+  call `_run_in_process` at all — making that function engine-generic would create a second path nothing
+  takes. [[LH-159]] requirement 2 is what this closes.
 
 - **THE HEADLINE THIS ROW WAS FILED WITH WAS WRONG, AND IS CORRECTED RATHER THAN QUIETLY DROPPED.** It
   claimed a task registered for a THIRD engine would silently run in-process because `transform.py:828`
@@ -6417,12 +6454,14 @@ _The cascade, the inbox and every downstream consumer are driven by events, so a
     (`ray_submit.py`, `ray_jobs_api.py`). Both medallion entrypoints BOOT with `ray`, `ray_kit`,
     `dapr.ext.workflow` and `durabletask` all blocked. The in-process engine is a real second engine,
     not a fallback, and its tests are green.
-  * *Clear abstractions — NO.* `service_kit.lakehouse.executor.Executor` is the declared port, and the
-    Ray lane does not go through it: `transform.py:828` branches `use_ray = engine_for_async(...) ==
-    RAY_ENGINE` and dispatches to the workflow directly, while `transform.py:786` hand-builds
-    `InProcessExecutor`. `executor_for` has ZERO production callers. So the port exists, is documented
-    in `docs/DECISIONS.md` as "a port, TWO adapters", and is honoured by neither lane. Tracked as
-    [[LH-158]].
+  * *Clear abstractions — **NOW HOLDS, 2026-09-17.*** This bullet read "NO" on the measurement that
+    `executor_for` had ZERO production callers while `transform.py` hand-built `InProcessExecutor`. That
+    is no longer the code: [[LH-158]] shipped the owner's option-3 ruling, the in-process lane resolves
+    through `executor_for`, and the result read is gated on `Capability.RESULT` so an engine promising
+    nothing re-derives instead of being special-cased. **The Ray lane still dispatches via `use_ray` at
+    `transform.py:828` and that is correct rather than outstanding** — it is the ORCHESTRATION axis
+    (Dapr Workflow), a different seam from the compute port, and `RayJobsApiExecutor` is what sits in
+    front of the compute half. Requirement 2 is met for the axis this requirement is about.
   * *Not-the-only-citizens — NO, and this is the sharp end.* Because in-process is the implicit `else`
     at `transform.py:828`, a task registered for a THIRD engine does not fail — it silently runs
     in-process. An estate that cannot REFUSE an engine it does not host cannot honestly claim to
@@ -6831,13 +6870,32 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 `chart, lineage, frontend-zones` · **HIGH**
 
 - *Why open:* Measured live: `rask-web-lakehouse` polled `GET /events` with a `LINEAGE_SERVICE_TOKEN` (hash `1b55ba766c3e962c`) matching no key in `rask-infra-credentials`, and 2,627 requests — 46% of all lineage traffic — were refused 401 while the zone rendered the 401 as an empty feed. A restart fixed that instance; nothing prevents the next rotation, because the Deployment reference and the render were both correct and only the running pod was wrong.
-- **RE-MEASURED 2026-09-17 — THE SYMPTOM IS BACK, WHICH IS THE ROW'S OWN POINT.** The restart that
-  "fixed that instance" bought nothing durable: `rask-web-lakehouse` (10.42.0.186) is again polling
-  `GET /events?limit=1&summary=true` against lineage and being refused **401**, observed in the
-  lineage access log alongside `rask-notifications` (10.42.0.245) succeeding **200** on the same door
-  with `limit=500`. So the discriminator is the CALLER's credential, not the door — notifications
-  holds a working one and the zone does not. A second recurrence after a restart is the evidence that
-  the missing `checksum/secret` annotation is the defect rather than one unlucky pod.
+- **RE-MEASURED 2026-09-17 — THE SYMPTOM IS BACK, THE HEADLINE IS FALSE, AND THE PRESCRIBED FIX CANNOT
+  WORK. Do not implement this row's Closes-when as written.**
+  * *The symptom recurred:* `rask-web-lakehouse` (10.42.0.186) is again refused **401** on
+    `GET /events?limit=1&summary=true` while `rask-notifications` (10.42.0.245) succeeds **200** on the
+    same door with `limit=500`. So the discriminator is the CALLER's credential, not the door.
+  * *"No `checksum/secret` pod-template annotation anywhere" is FALSE.* Twelve `checksum/` annotations
+    render today, and `frontends.yaml:111` carries `checksum/infra-credentials` on this very zone. The
+    deployment's annotation and the RUNNING POD's annotation are the same value
+    (`b189d3f854d8cf95…`), so the pod is current against its own template — and it is still 401ing.
+    The row's "a rotation is never re-read because nothing annotates it" theory cannot explain that.
+  * *WHAT IS ACTUALLY WRONG, measured:* the pod's `LINEAGE_SERVICE_TOKEN` hashes to `482611fb9ab8c057`
+    and the `service-token-service-web` key its own `secretKeyRef` names hashes to `35f668f0c818070d`.
+    The pod started 2026-09-11T11:17:21Z; the Secret's managers are **`kubectl` AND
+    `externalsecrets.external-secrets.io/rask-infra-credentials`**, and that ExternalSecret reported
+    `SecretSynced` **5m52s** before this measurement.
+  * **SO THE ANNOTATION IS STRUCTURALLY INCAPABLE OF CATCHING THIS, and adding more of them is the
+    estate's signature defect — a control that cannot fire.** `checksum/infra-credentials` hashes the
+    RENDERED TEMPLATE (`include (print $root.Template.BasePath "/infra-credentials.yaml") $root |
+    sha256sum`). ESO rewrites the Secret OBJECT out of band on its refresh interval, with no helm
+    render involved, so the object changes while the hash of the template does not. The annotation
+    would only ever catch a rotation that arrived through `helm upgrade` — which is the one path that
+    already rolls the pods.
+  * *The honest fixes are a different shape:* watch the Secret OBJECT and restart its consumers (a
+    reloader), or have the zone read its token per request instead of binding it at boot. Both are
+    real; a checksum annotation is not. Note the second also removes the env binding [[XC-004]] wants
+    gone, so it is one change rather than two.
 - *Closes when:* Add a `checksum/secret` pod-template annotation (sha256sum of the rendered Secret) beside every `secretKeyRef` env in `chart/templates/`, and pin it with a rendered-manifest test that fails when a template adds a `secretKeyRef` without the annotation. **Note the ordering against [[XC-004]]:** the zone's `LINEAGE_SERVICE_TOKEN` arrives by `secretKeyRef` — a k8s Secret through env, which is not one of the three sanctioned paths — so the annotation makes the CURRENT path survive rotation while XC-004 removes the path. Doing the annotation first is still right: it is a one-line-per-template render change with a gate, and it stops the bleeding without a release that rotates live credentials.
 
 **XC-002 · The chart fix moving the Ray head's S3 credential onto the sanctioned ESO path is committed and never deployed**
@@ -6876,7 +6934,19 @@ _These cross-cutting rows sit directly under the catalog, lineage and the medall
 **XC-004 · 43 secret refs still arrive through env (APP_API_TOKEN ×10, the zones' OIDC/session/lineage tokens, `ray-lance-head`) while ESO is built, provisioned and switched off**
 `chart, viewer, lineage, catalog` · **HIGH** · **blocked:** owner decision — a `helm upgrade` release with `externalSecrets.enabled=true`; the estate carries seven hand-deployed images a values-mismatched upgrade would revert to chart defaults
 
-- *Why open:* Re-measured 2026-09-08: the 43 refs sort into ~34 ESO / ~5 STS / ~4 Dapr-store, the ESO auth half (bao kubernetes backend + bound `lance-infra` role) landed and the operator runs with 3 pods — but `externalSecrets.enabled` is still false and zero ExternalSecret/SecretStore/ClusterSecretStore objects exist, so nothing is migrated. Separately `MEDIA_S3_ACCESS_KEY_ID` on `rask-viewer` is the RustFS ROOT pair (`rask-app`/`AWS_ACCESS_KEY_ID`) wearing a scoped name, findable only by following the secretKeyRef.
+- **RE-MEASURED 2026-09-17 — "zero ExternalSecret/SecretStore/ClusterSecretStore objects exist" IS
+  FALSE, and this row is further along than it says.** Live: `SecretStore/rask-vault` has been `Valid`
+  / `ReadWrite` for **8 days**, and TWO ExternalSecrets are syncing against it —
+  `rask-infra-credentials` (`SecretSynced True`, refreshed 5m52s before the measurement) and
+  `rask-observability-s3` (21m). So ESO is not "built and switched off"; it is running and is the
+  live writer of the estate's main credential Secret. Re-count the 43 refs before planning against
+  them — an unknown number are already on the ESO path.
+  *And it has a consequence this row should carry, found while re-measuring [[XC-001]]:* because ESO
+  rewrites a Secret OBJECT out of band, every consumer that binds a value at boot is exposed to a
+  silent rotation, and a helm-rendered `checksum/` annotation cannot see it. That is the live cause of
+  the lakehouse zone's 401 against lineage. Migrating a ref to ESO without also fixing how the
+  consumer READS it converts a startup failure into a silent stale-credential failure.
+- *Why open:* Re-measured 2026-09-08 (SUPERSEDED IN PART — see above): the 43 refs sort into ~34 ESO / ~5 STS / ~4 Dapr-store, the ESO auth half (bao kubernetes backend + bound `lance-infra` role) landed and the operator runs with 3 pods — but `externalSecrets.enabled` is still false, so the migration was never driven from the chart. Separately `MEDIA_S3_ACCESS_KEY_ID` on `rask-viewer` is the RustFS ROOT pair (`rask-app`/`AWS_ACCESS_KEY_ID`) wearing a scoped name, findable only by following the secretKeyRef.
 - *Closes when:* Set `externalSecrets.enabled=true` in `chart/values.yaml`, add ExternalSecret entries in `chart/templates/external-secrets.yaml` for the ten `APP_API_TOKEN` refs plus the seven zones' `OIDC_CLIENT_SECRET`/`SESSION_SECRET`/`LINEAGE_SERVICE_TOKEN` and `ray-lance-head`, and deploy via `make k3s-up` rather than `kubectl set image`; separately replace `rask-viewer`'s `MEDIA_S3_ACCESS_KEY_ID` with a catalog-vended STS credential (`catalog.core.vending.build_session_policy`). Check `apply_dapr_secrets` does not already overwrite a ref at boot before migrating it.
 
 **XC-005 · The OpenBao seed Job and the three ExternalSecrets carry no `helm.sh/hook`, so adding one property to an ExternalSecret destroys the whole Secret for ~12 minutes**

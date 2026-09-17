@@ -22,7 +22,7 @@ rather than a rule each caller must remember.
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Final, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -53,6 +53,11 @@ class Capability(StrEnum):
     DURABLE_RECORD = "durable_record"
     CANCEL = "cancel"
     FAILURE_DETAIL = "failure_detail"
+    #: This engine can hand back what the run measured, so the caller need not read the destination a
+    #: second time. It is an OPTIMISATION and never a requirement: §2.5's rule is that the platform
+    #: re-derives what was written, so an engine declining this is not weaker, it is ordinary. An engine
+    #: that writes out-of-process has nothing to return and must not claim it.
+    RESULT = "result"
 
 
 class RunFailure(BaseModel):
@@ -150,3 +155,23 @@ class Executor(Protocol):
     async def failure(self, handle: RunHandle) -> RunFailure | None: ...
 
     async def cancel(self, handle: RunHandle) -> None: ...
+
+    async def result(self, handle: RunHandle) -> Any:  # noqa: ANN401 — see below
+        """What the run measured, for an engine that advertises `Capability.RESULT`.
+
+        GATED ON THE CAPABILITY, NOT OPTIONAL ON THE PROTOCOL, and the distinction is load-bearing:
+        `Executor` is `runtime_checkable`, so a method missing from an adapter makes `isinstance` answer
+        False and the adapter unreachable through the registry. Every adapter therefore HAS this
+        method, and one that has nothing to return raises — the same shape `cancel` already uses for
+        the capability `InProcessExecutor` declines.
+
+        `Any` because the measurement is the platform's own model and `service-kit` must not import a
+        service's: the medallion's `WriteResult` carries a `previous_row_count` that lance-ns's
+        same-named wire model does not, so neither spelling can stand for the other here. Narrowing it
+        would either drop a field the promotion band reads or pull the medallion into the port's shape.
+
+        RAISING RATHER THAN RETURNING `None` is the `UNKNOWN` argument in this docstring's own module:
+        `None` would be indistinguishable from a run that measured nothing, and a caller cannot branch
+        on a value that means two things. Read the capability, then call this.
+        """
+        ...

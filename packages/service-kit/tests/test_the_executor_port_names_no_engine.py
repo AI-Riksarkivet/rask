@@ -98,6 +98,12 @@ def test_the_protocol_is_runtime_checkable_so_conformance_is_ASKED_not_assumed()
         async def cancel(self, handle: RunHandle) -> None:
             return None
 
+        async def result(self, handle: RunHandle) -> object:
+            # PRESENT even though this engine promises no `RESULT`. The protocol is
+            # `runtime_checkable`, so a missing method makes `isinstance` answer False and the adapter
+            # unreachable through the registry — the capability is what is optional, never the method.
+            raise NotImplementedError
+
     assert isinstance(_Conforming(), Executor)
 
 
