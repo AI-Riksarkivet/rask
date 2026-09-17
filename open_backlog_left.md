@@ -660,6 +660,30 @@ _Every governance promise the lakehouse makes rests on the run record being emit
   The refusals visible in the lineage log right now are a different population — the six permanently
   refused e2e-residue events (`sub='e2e'`, `outputs=['e2e_outbox_ds']`, `lineage_outbox_drained
   drained=0 stranded=0 refused=6`), which sit in the OUTBOX rather than this stream.
+- **THE CAUSE IS NOW ESTABLISHED FOR THE DOMINANT POPULATION — 2026-09-17, and it changes what (b) is.**
+  Pulled full payloads from the parked stream: **6 of 7 sampled carry `author.sub = "data_eng"`**, a
+  ROLE NAME rather than an identity. `medallion/schemas/events.py:161-169` states exactly why that can
+  never be authorized — *"a role holds no tuple because it is not an identity — so every cascade run was
+  refused and its provenance discarded (measured on the live estate 2026-09-10: `ingest_denied
+  sub='ray'`, `sub='data_eng'`, nothing stored)"* — and `:304` shows the fallback that produced it,
+  `sub=author_subject or author`. **The producer fix is wired**: seven production sites now pass
+  `author_subject=settings.fga_service_identity`. So this population is PRE-FIX RESIDUE that is
+  unauthorizable by construction, and no replay can land it.
+- **AND THE RECENT ARRIVALS ARE RE-PARKS, NOT NEW LOSSES — measured by comparing park time to event
+  time**, which is the check that separates the two and which the "not currently bleeding" line never
+  made:
+
+      seq 12003   parked 2026-09-17 14:39:52   eventTime 2026-09-16T00:10
+      seq 12000   parked 2026-09-17 14:39:09   eventTime 2026-09-11T13:17
+      seq 11990   parked 2026-09-17 13:59:56   eventTime 2026-09-10T15:02
+
+  Every one is days older than its parking. Those 14:39 parks are ~9 minutes after a stem roll of the
+  lakehouse deployments the same afternoon: the ingest consumer is ephemeral + `deliverPolicy: all`, so a
+  restart re-reads the retained LINEAGE stream and re-parks everything that still fails. **A deployment
+  produces a parking burst.** That is this row's own documented mechanism, caught in the act.
+- *A SECOND CAUSE EXISTS AND IS NOT IDENTIFIED:* seq 12000 and 11990 carry `sub='service-maintenance'`
+  and `sub='service-stage-runner'` — real service identities, not role literals — so they park for some
+  other reason. Whoever works (b) must not assume the `data_eng` explanation covers the stream.
 - **WHICH MAKES (b) GATED RATHER THAN MERELY UNSTARTED.** A replay door that re-presents these to the
   ingest handler is only a recovery if they would now be ACCEPTED; if they park for a reason that still
   holds, the door re-parks them and manufactures exactly the flood this row measured — the hazard the
