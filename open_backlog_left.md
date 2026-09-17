@@ -2401,9 +2401,51 @@ _Every governance promise the lakehouse makes rests on the run record being emit
 - *Also not established:* whether the driving cascade's OWN silver→gold hop ran at all. No
   `medallion_stage_moved transition='silver->gold'` appeared for either token. Either the gold hop did
   not fire or it fired somewhere this drive did not read.
+- **ROOT-CAUSED 2026-09-17 by following the refused event back to its publisher. The chain is
+  complete and every link is measured.**
+  1. `/produce` → bronze→silver completes and publishes the lane table `silver$features`
+     (`medallion_publication_trigger dataset='silver$features' from_version=326 to_version=328`, then
+     `328 -> 331` on the second drive).
+  2. The catalog's `publication_extra` resolves the publication's TENANT through the registry binding
+     (namespace → warehouse → project) and answers **`bind86`** — for a table whose id carries no
+     tenant prefix at all.
+  3. The trigger therefore travels as `project='bind86'` + `location='s3://bind86-wh/medallion/silver'`
+     (`publication_trigger.py:147` carries `extra["location"]` verbatim).
+  4. The gold runner takes the LANE (`silver$features`) and the project (`bind86`) and composes the
+     catalog identity `bind86-silver$features` — which EXISTS and is a **different dataset**.
+  5. Confinement then compares the published table's path against the composed table's path and
+     refuses, correctly, because they are not the same table.
+  *Catalog locations, read through the service's own helper:*
+
+      silver$features         -> s3://bind86-wh/medallion/silver
+      bind86-silver$features  -> s3://bind86-wh/78de8931_bind86-silver$features
+      gold$catalog            -> None
+
+  **`gold$catalog` resolving to `None` is the confirmation that this hop has never once completed**
+  for the lane the deployed cascade actually runs — not a window, a permanent state.
+- **A SECOND, INDEPENDENT DEFECT FOUND IN THE SAME READ, and it is the sharper one because it makes
+  the `from_uri` feature unable to do anything but no-op or refuse.** `transform.py:636` is
+  `from_uri = read_root = vended`, so `read_root` is narrowed from the tenant's WAREHOUSE to the single
+  vended TABLE. `_confine_from_uri`'s own docstring states the opposite invariant — *"That root is the
+  TENANT'S WAREHOUSE for a project trigger, which is what makes I2 work — the vended
+  `<root>/<hash>_<ns>$<name>` sits directly under it."* With the window narrowed to one exact string,
+  `uri_within(read_root, supplied)` can pass ONLY when `supplied` is byte-identical to `vended` — in
+  which case honouring the trigger's `from_uri` changes nothing. So I2's permissive branch is
+  unreachable: every case where the trigger's location DIFFERS (the only case the feature exists for)
+  is refused. Code and its documented invariant disagree, and the docstring is the one describing the
+  behaviour that would work.
 - *Closes when:* a driven publication's silver→gold hop is observed COMPLETING — the positive
   observation, not the absence of a refusal, since absence is what closed this row wrongly once. Half
   (b) stays closed; its residue is [[LH-141]] and nothing here touches it.
+- **WHICH FIX IS AN OWNER DECISION, because the three candidates are not variations of one change:**
+  (i) `publication_extra` must not infer a tenant for an id carrying no tenant prefix — the tenant
+  would then be absent and the gold runner would read the lane table it was actually told about;
+  (ii) `transform.py:636` must stop narrowing `read_root`, restoring the invariant the guard documents
+  — this alone does not fix (i), it stops the guard being a one-string window;
+  (iii) estate config — `silver$features` is registered under `bind86-wh` while the runner's own
+  `MEDALLION_TO_URI` is `s3://lance-catalog/medallion/silver`, so the registration may simply be stale
+  dev residue and neither code path is wrong. (ii) is defensible on its own merits regardless of (i)
+  and (iii), since a documented invariant and its code disagreeing is a defect either way.
 
 - **THE 2026-09-16 READING, KEPT BECAUSE ITS EVIDENCE IS STILL EVIDENCE — but (a)'s conclusion is
   overturned by the drive above and only (b) remains settled.**
