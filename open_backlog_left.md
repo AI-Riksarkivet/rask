@@ -2840,6 +2840,31 @@ _The catalog is the estate's only door to Lance, so a spec deviation, an unregis
   door with its new dependencies is live and behaving; what is unproven is the emit, because it runs
   only on SUCCESS and a successful version-create needs a genuinely staged manifest (the client-direct
   write path), which this drive did not construct. Catalog logs: 0 errors since the roll.
+- **THE EMIT IS NOW OBSERVED — 2026-09-17, end to end on the deployed estate, which is the one thing
+  this row said was unproven.** Driven as an OUTSIDE client would: `lance_namespace.connect("rest", …)`
+  with a real Dex bearer for `alice@example.com`, a scratch namespace created through its warehouse, and
+  the manifest staged with credentials the catalog VENDED (`/credentials?tier=write` → `mode='direct'`,
+  Lance `storage_options`) — the sanctioned STS path, not an ambient key.
+  * *The faithful shape matters and the first attempt did not have it.* A staged copy of version 1's
+    manifest commits (200) but is internally inconsistent — pylance then answers `version 2 not found`
+    while the dataset still opens at 1. The honest reproduction lets **Lance write a real version 2**,
+    copies THAT manifest to `…/_versions/18446744073709551613.manifest-<uuid>`, deletes the final slot
+    and asks the catalog to finalise it. Result: `version/create` **200**, the returned `manifest_path`
+    carries no staging suffix (finalised by copy, `file_format.md:5391`), and the readback is
+    **version 2, 5 rows**.
+  * **The provenance survives it.** In the graph:
+
+        seq 308443  COMPLETE  job='lance-catalog/create_table_version.lh018ok5da060$t1'
+                    author='CiQwOGE4Njg0Yi1kYjg4…'  outputs=['lh018ok5da060$t1']
+
+    The author is alice's own Dex subject, the same principal the audit line records — so a version
+    minted through the spec's own door now names who minted it. **Condition 1 holds on this door.**
+  * *A suspicion was raised and REFUTED rather than filed:* the inconsistent-manifest drive logged
+    `lineage_readback_failed … table has no readable dataset at its declared location`, which looked
+    like the emit being lost on the failure path. It is not — that drive's table carries a
+    `create_table_version` event too. The readback failure degrades the event's DETAIL and does not
+    cost the record. No row was opened for it.
+  * *Scratch state removed:* both namespaces and tables dropped through the stock client.
 - **THE 2026-09-11 GUARD BROKE THE DOOR IT PROTECTED, found and fixed 2026-09-16 while working the
   replay clause.** `manifest_path` is resolved by the backend as an **ABSOLUTE** path. Measured against
   a real `dir` namespace, driving every spelling against ONE staged manifest present on disk each time:
