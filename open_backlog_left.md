@@ -8338,6 +8338,32 @@ _The telemetry plane is what turns 'it looks fine' into a measurement — and to
     path but CHECKS the store arm against the Component's scopes, so it refuses a flip that was never
     plumbed. Mutation-checked: dropping the scope arm from the helper reds it with
     `rask-compute: reads the store but app-id 'compute' is not in lance-secrets scopes`.
+- **DEPLOYED AND OBSERVED 2026-09-17 — release v167, and the observation is a real delivery rather than a
+  boot log.** The estate ran 39/10; it now runs 30/1, with ten app containers on the store path and one
+  (`compute`) on env.
+  * *The secret no longer travels through the app's environment, read from inside the running pod:*
+    `rask-lineage`'s app container has `RASK_APP_TOKEN_FROM_STORE=true`, and `APP_API_TOKEN in
+    os.environ` is **False** in the PROCESS. The `daprd` sidecar still carries it — correct and
+    necessary, because that is what it stamps the header from (`dapr.io/app-token-secret`).
+  * **THE DOOR IS ARMED, WHICH IS THE FAILURE THIS COULD HAVE HAD AND DID NOT.** A store read that
+    silently returned nothing would leave `expected` unset, and the estate's own measured defect is
+    that an unset expected value makes the comparison SKIP — an open door that looks configured. Probed
+    directly: `POST /lineage-events` with no `dapr-api-token` answers **403**
+    `PermissionDeniedError: invalid or missing Dapr app-api-token` (code 15). Nothing in the chart sets
+    `RASK_ALLOW_UNAUTHENTICATED_DAPR` (0 occurrences), so that 403 is the guard, not the hatch.
+  * *And legitimate traffic still works, which the 403 alone does not prove:* over the ten minutes after
+    the roll, `/lineage-events` answered **1085 x 200 and 1 x 403** — the single refusal being the
+    forged probe above. A token resolved from the store that did NOT match what daprd stamps would have
+    refused all 1085 identically, so this is the positive half. (The volume is the ingest component's
+    `deliverPolicy=all` replay rebuilding the graph after the restart, which is why it is large.)
+  * *Pre-flight that made it safe to try:* OpenBao's `secret/lance` field `dapr-app-token` and the k8s
+    Secret `rask-dapr-app-token` hash identically (`sha256[:16] = 5f4f7a4726b042ba`), compared without
+    disclosure. Nine services fail closed at boot on a missing field, so this was checked FIRST.
+  * *Getting there needed the stem converged.* `make k3s-up` refused while `lance-rest-catalog` ran
+    three tags (`main-472ed48f` maintenance, `main-b2d08df6` annotator/search/viewer, `main-e3139b71`
+    the catalog plane) — [[LH-169]]'s guard working. All three were ancestors of HEAD, so convergence
+    was pure roll-forward: one Dagger-built `main-467904ae` rolled onto all ten, plus `notifications`.
+    Zero unhealthy pods throughout.
 - **FOUR CORRECTIONS TO THIS ROW, all measured 2026-09-17, because they change what "reaches 0" means.**
   1. *`compute` is NOT a chart flip* — it carries `APP_API_TOKEN` with a sidecar but `lance-secrets` is
      scoped to it neither in the chart nor live, so flipping it crash-loops the service at
