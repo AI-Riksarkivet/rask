@@ -190,10 +190,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
   carries neither): `read_lance(table_id=[NS, TBL], namespace_impl="rest", namespace_properties=…,
   storage_options=<vended>)` read the same **36 rows** distributed. So all THREE stock clients —
   `lance_namespace`, lancedb and lance-ray — drive the deployed catalog.
-- *What is left:* wire the two new cases into `make e2e-spec-conformance` so the proof is repeatable rather
-  than a drive somebody did once. They are marked `spec_conformance` and already collected by that target;
-  what they need is a runner that HAS these clients and can resolve the vended endpoint — the catalog pod
-  has lancedb but not lance-ray, the Ray head the reverse.
+- *The wiring is DONE and measured, not assumed:* `pytest tests/e2e-py -m spec_conformance --collect-only`
+  collects all three new cases, so `make e2e-spec-conformance` already runs them.
+- **WHAT IS LEFT IS ONE QUESTION, not code:** the target runs from the HOST, and the vended `endpoint` is
+  the catalog's in-cluster address — so from outside, resolution and the vend pass and the byte read skips.
+  Either an external client receives an externally-resolvable endpoint (a real decision about what vending
+  means off-cluster), or the conformance target runs from inside the cluster. Until one of those, the
+  repeatable proof covers resolution + credential issuance, and the READ is proven only by the in-cluster
+  drives recorded above.
 - *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
 - *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `grep -rn 'lancedb|lance_ray' tests/e2e-py — no match` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
 
