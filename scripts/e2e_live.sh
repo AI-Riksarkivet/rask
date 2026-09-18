@@ -159,6 +159,10 @@ if [ -n "$FGA" ]; then
   STORE_ID="$(curl -s -m 10 "http://$FGA/stores" | uv run python -c "
 import sys, json
 print((json.load(sys.stdin).get('stores') or [{}])[0].get('id',''))" 2>/dev/null || true)"
+  # EXPORTED so a suite reads the SAME store this runner picked. Two independent "first store" picks
+  # agree until an estate holds two, and then they disagree silently — which is the shape of every
+  # drift this file's other notes record.
+  [ -n "$STORE_ID" ] && export LANCE_E2E_FGA_STORE_ID="$STORE_ID"
   sub_of() { TOK="$1" uv run python -c "
 import base64, json, os
 b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)

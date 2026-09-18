@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**211 open items**, of which **99 are blocked on a decision** and **112 can be picked up today**.
+**210 open items**, of which **99 are blocked on a decision** and **111 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 67 | 28 | 16 |
+| **PHASE 1 · LAKEHOUSE** | 66 | 27 | 15 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -295,13 +295,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - **OBSERVED on the deployed release 2026-09-18.** A cascade drive put `START: 3` in the lineage feed where there were 0 — two of them cascade hops (`lance-medallion/aggregate_gold`, `embed_features`) — and every started run CLOSED: grouped by `runId`, all three carry a START and a COMPLETE under ONE id, so the consumer's `MERGE (r:Run {run_id})` closes the run the START opened rather than adding a node. The START also cannot inflate the retry counter, which is guarded on `$et = 'FAIL'` (`cypher.py:102`).
 - *Closes when:* The remaining clause only: a test that asserts a run exists in the graph WHILE the Ray job is still RUNNING (the emit, the shared `runId` and the merge are all pinned and observed).
 - *Evidence:* `grep -rn '"START"' services/ scripts/ runners/ packages/lineage-kit/src | grep -v test` → only `services/ingest/src/ingest/lineage.py:366` and `scripts/ray_train_job.py:524` · `grep -rn 'event_type=' services/medallion/src/` → only `workflow.py:761`, `workflow.py:1468`, `transform.py:304` (all FAIL or promotion) · `services/medallion/src/medallion/schemas/events.py:192` (`event_type: str = "COMPLETE"` default) · `services/medallion/src/medallion/services/transform.py:836-880` (DISPATCHED, nothing emitted) · `services/medallion/src/medallion/services/rayjobs_api_executor.py:20-25`
-
-**LH-174 · The OpenFGA authorization model has NO deployment path, so the store runs a model 9 relations behind the repo and a bootstrap hook fails on every upgrade**
-`chart, service-kit` · **HIGH**
-- *What is left:* Nothing in the chart writes the authorization model. `grep -rn 'authorization-models|write_authorization_model' chart/templates/` returns nothing; `rask-openfga-migrate` is OpenFGA's DATABASE migration, not a model upload; and `make fga-test` only diffs `model.json` against `model.fga` — a repo-internal check between two of the three copies, where the third is the store and is checked by nothing. Measured live 2026-09-18: the store holds 50 models and its newest defines **26** relations on `warehouse`, **27** on `namespace` and **26** on `table`, against **30 / 29 / 29** in `packages/service-kit/src/service_kit/governed/auth/model.fga` — so `warehouse#maintainer`, `#publisher` and six siblings exist in the repo, are referenced by the code's `can_*` derivations, and cannot be written. The consequence is not theoretical: `rask-bootstrap-admin` CrashLoops on every `make k3s-up` with `Invalid tuple 'warehouse:lance_catalog#maintainer@user:service-maintenance'. Reason: relation 'warehouse#maintainer' not found`, which is a Helm HOOK — so the upgrade blocks on it. Add a model-write step (hook Job or an idempotent step in the existing migrate Job), and extend `fga-test`'s drift check to the deployed store so the third copy is covered.
-- **THE HOOK IS IN AND OBSERVED 2026-09-18:** `rask-openfga-model` completed in 3 s and wrote model `01M2TVK6XPEJZNVKR35ZZFGA8D`; the store went from 26/27/26 relations on warehouse/namespace/table to **30/29/29** with `warehouse#maintainer` present, and `rask-bootstrap-admin` completed instead of CrashLooping. The write logic lives in `service_kit.governed.auth.write_model` with its own suite, because the idempotency — write always and the store grows a model per upgrade, compare too loosely and it never converges — cannot be tested from a chart render.
-- *Closes when:* A drift check compares the DEPLOYED model against `model.fga`, which is the third copy `make fga-test` still does not see (the write and the hook ordering are done and observed).
-- *Evidence:* `grep -rn 'authorization-models|write_authorization_model' chart/templates/*.yaml → none` · `Makefile:255-263 (fga-test diffs model.json vs model.fga only)` · `live store newest model: warehouse 26 / namespace 27 / table 26 relations` vs `model.fga: 30 / 29 / 29` · `kubectl logs rask-bootstrap-admin → relation 'warehouse#maintainer' not found`
 
 **LH-034 · No Lance compression scheme is set on the create path and no decision record exists**
 `catalog, medallion` · **MED**

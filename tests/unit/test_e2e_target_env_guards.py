@@ -41,6 +41,11 @@ REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     # supply what the script exists to derive.
     "live": (),
     "cas": ("LANCE_E2E_S3_ENDPOINT",),
+    # `LANCE_E2E_FGA` alone: the suite's fixture skips on that and on the store being unreachable, and
+    # the store id is derived when it is not pinned. Keyed on exactly what the skip is keyed on — the
+    # point of this file is that a target fails rather than reporting a proof it never ran, and this
+    # suite's first live run SKIPPED all three legs while reading as green.
+    "fga-model": ("LANCE_E2E_FGA",),
     # Only the CATALOG url gates it: the suite's own skipif is keyed on that alone, and
     # `LANCE_E2E_DEX` has a working default, so demanding it would refuse a legitimate invocation.
     "spec-conformance": ("LANCE_E2E_CATALOG_URL",),
