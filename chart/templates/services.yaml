@@ -382,12 +382,18 @@ spec:
   # subscribes to `catalog.control.v1` with NO queueGroupName (broadcast), so every replica keeps its
   # own ring buffer and its own monotonic counter (`core/control_buffer.py`). Round-robined across the
   # two replicas `values-prod.yaml` runs, the console hands replica A's cursor to replica B, which
-  # reads it against a counter that never issued it and answers `reset=True` — so the admin console
-  # re-reads authoritative state on roughly every other poll.
+  # reads it against a counter that never issued it.
+  #
+  # MEASURED 2026-09-18 on two live replicas, and the symptom is worse than a reset. Thirty polls from
+  # one pod with affinity OFF returned cursors `0, 0, 0, 0, 18, 18, 18, 0` and `reset=0` — a cursor
+  # AHEAD of a replica's counter is not off-the-end, so that replica answers an EMPTY PAGE rather than
+  # a reset. The console is not told to re-read; it is told there is nothing new, and the events that
+  # replica holds are silently skipped. With affinity on, the same thirty polls held cursor 18
+  # throughout.
   #
   # AFFINITY RATHER THAN A SHARED BUFFER: the events are hints and the audit trail is the durable
-  # record, so a reset is wasteful, not wrong. Paying for a shared buffer to fix a wasteful reset is
-  # the wrong trade.
+  # record, so the console can always re-read authoritative state. Paying for a shared buffer to fix a
+  # polling artefact is the wrong trade.
   #
   # `ClientIP` works here because every caller is a POD with a stable address — the console's poll
   # runs server-side in the home zone and reaches this Service directly (`CATALOG_API`), never through

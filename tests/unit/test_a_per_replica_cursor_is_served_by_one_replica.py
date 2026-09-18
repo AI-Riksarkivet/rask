@@ -3,12 +3,18 @@
 [[LH-107]]. `control_buffer.py` states the shape: each catalog replica subscribes to
 `catalog.control.v1` WITHOUT a queueGroupName, so every replica holds its OWN ring buffer and its own
 monotonic cursor. `values-prod.yaml` runs two of them. Round-robined, the console hands replica A's
-cursor to replica B, which reads it against a counter that never produced it — so the poll answers
-`reset=True`, the console `invalidateAll()`s and re-reads authoritative state.
+cursor to replica B, which reads it against a counter that never produced it.
 
-WASTEFUL, NOT INCORRECT, and that is why the fix is affinity rather than a shared buffer. The events
-are hints; the durable record is the audit trail. A client whose cursor falls off the end is supposed
-to reset — the defect is that it resets constantly for a reason unrelated to the buffer filling up.
+MEASURED ON TWO LIVE REPLICAS 2026-09-18, and the row's stated symptom was the milder one. Thirty
+polls from a single pod with affinity OFF returned cursors `0, 0, 0, 0, 18, 18, 18, 0` and
+**`reset=0`** — a cursor AHEAD of a replica's counter has not fallen off the end, so that replica
+answers an EMPTY PAGE. The console is never told to re-read; it is told there is nothing new, and
+whatever that replica holds is silently skipped. The same thirty polls with affinity ON held cursor
+18 throughout.
+
+RECOVERABLE, NOT CORRUPTING, which is why the fix is affinity rather than a shared buffer: the events
+are hints and the audit trail is the durable record, so nothing is lost that cannot be re-read. What
+is wrong is that the console cannot tell a quiet estate from a replica it is not talking to.
 
 THE CALLER IS A POD, which is what makes `ClientIP` the right key here and is worth pinning because
 it is the assumption the whole fix rests on. The console's `/v1/events` poll runs in a SvelteKit

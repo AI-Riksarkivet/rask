@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**192 open items**, of which **96 are blocked on a decision** and **96 can be picked up today**.
+**191 open items**, of which **96 are blocked on a decision** and **95 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 66 | 27 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 65 | 26 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 28 | 14 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -364,12 +364,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Write `tests/e2e-py/test_chaos_e2e.py` driving the pull-a-service rows, including lineage scale-0 → three events published while it is down → restart-replay, against a uuid-suffixed throwaway namespace (the `test_maintenance_s3_e2e.py` shape). Gate it behind an env-gated `make e2e-chaos` target kept OUT of `e2e-ci`'s suite list, the way the other per-suite targets are gated. Hand-driving replay on the live estate is not acceptable: a synthetic author is refused by `enforce_bus_authz` and bumps a watched refusal counter, and an authorized one injects fabricated provenance. DLQ poison parking and the cascade retry window are already driven and gated; do not redo them.
 - *Closes when:* `make e2e-chaos` runs the harness against a throwaway namespace and asserts replay after a lineage scale-0, and `e2e-ci` does not list it.
 - *Evidence:* `ls tests/e2e-py/ → no test_chaos_e2e.py` · `grep -c -i chaos Makefile → 0` · `Makefile:888 (`e2e-ci` suite list), :940-946 (env-gated per-suite target pattern)` · `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py (exists — retry window already gated)`
-
-**LH-107 · The catalog Service has no session affinity while prod runs 2 catalog replicas, so the console's `/v1/events` poll cursor degrades to noisy resets**
-`catalog, chart` · **MED** · **REWRITTEN — the original ask would be wrong**
-- *What is left:* Add `sessionAffinity: ClientIP` to the catalog Service (`chart/templates/services.yaml:376-383`). Do not build a shared buffer, and do not tie this to `medallion.stageRunnerReplicas`: the per-replica ring buffer and cursor serve only the admin console's `GET /v1/events` poll (an out-of-window cursor answers `reset=True` and the client re-reads authoritative state, so the failure is wasteful, not incorrect), and stage runners hit describe/create/vend, which hold no per-replica state. The trigger the row waits for has already happened: `chart/values-prod.yaml:36` sets `services.catalog.replicas: 2`.
-- *Closes when:* The catalog Service renders with `sessionAffinity: ClientIP` and a load-balanced console poll no longer produces `reset` churn.
-- *Evidence:* `services/catalog/src/catalog/core/control_buffer.py:1-12 (per-replica buffer, per-replica cursor, reset semantics)` · `chart/values-prod.yaml:34-36 (catalog replicas: 2)` · `chart/templates/services.yaml:376-383 (catalog Service, no sessionAffinity)` · `grep -rn sessionAffinity chart/templates/*.yaml → empty`
 
 **LH-110 · The control-root backup has no scheduled lane — the tool ships in no image and no CronJob invokes it**
 `catalog, chart` · **MED** · PARTIAL
