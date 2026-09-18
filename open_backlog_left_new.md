@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**208 open items**, of which **99 are blocked on a decision** and **109 can be picked up today**.
+**207 open items**, of which **99 are blocked on a decision** and **108 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 64 | 25 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 63 | 24 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -340,12 +340,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* The session half is complete and gated: catalog 10, lineage 8, medallion 15, maintenance 9, service-kit 7 opens all thread a session, zero bare (AST count this session; pinned by tests/unit/test_a_lakehouse_open_shares_the_process_session.py). Remaining bare opens are ingest 9 (adapters.py:207, lander.py:121/170/174/266, catalog.py:174/250, workflow.py:1122 — phase 2), viewer 5 and search 1 (do-not-work list); ingest also never calls `instrument_lance_if_available`. Of the bundled residue: the catalog's `allow_http` is a settings bool (`LANCE_S3_ALLOW_HTTP`, default True, catalog/core/config.py:242) rather than derived from the endpoint scheme as service_kit/media/config.py:299 does; `create_tag` (dataplane.py:1834) has no door-side name refusal while branches have `refuse_a_branch_name_the_backend_cannot_use` (:1737, called :1914); pooled HTTPX clients in notifications/lifespan.py:102 and service_kit/media/lifespan.py:59 set no timeout (ingest/http.py is per-call by design, :19). No blob-threshold setting exists anywhere in the tree, so that clause has nothing to pin. Do NOT add `LANCE_CPU_THREADS` (falsified, [[LH-172]]); `LANCE_IO_THREADS`/`LANCE_LOG` are untested here.
 - *Closes when:* ingest's 9 opens thread a session and it calls `instrument_lance_if_available`; the catalog derives `allow_http` from the endpoint scheme; tag names are refused at the door like branch names; every pooled HTTPX client carries a timeout; the AST gate's ingest exemption is removed.
 - *Evidence:* `AST walk this session: ingest 0/9 bare, viewer 0/5, search 0/1; catalog/lineage/medallion/maintenance/service-kit all 0 bare` · `grep -rn 'instrument_lance_if_available(' → catalog/main.py:102, lineage/main.py:51, medallion/producer.py:76, stage_runner.py:61, maintenance/service.py:106 only` · `services/catalog/src/catalog/core/config.py:242 `s3_allow_http: bool = Field(default=True, alias="LANCE_S3_ALLOW_HTTP")`; packages/service-kit/src/service_kit/media/config.py:299 derives from `startswith("http://")`` · `services/catalog/src/catalog/services/dataplane.py:1737 branch-name refusal, :1834-1838 `create_tag` without one`
-
-**LH-098 · Maintenance's reclamation trail is not yet observed on a deployed compact_dataset audit row carrying duration_seconds**
-`maintenance, lineage` · **MED** · PARTIAL
-- *What is left:* Only the observation remains; the code is in. duration_seconds is timed at _maintain_one's choke point and travels to the lance.audit record (sweep.py:659-660,1015); the guarded attempts counter and last_attempt_at live on the single MERGE_RUN node (lineage/services/cypher.py:102-105) and are exposed on RunStatus. Place one reclaimable multi-fragment dataset in a registered, swept warehouse long enough for a deployed tick to compact it, then read the resulting compact_dataset audit row and confirm it carries duration_seconds. That is an estate mutation with cleanup, not a code change; it cannot be verified from this session. Do not replace the deterministic FAIL run id with one id per attempt — it is the flood guard.
-- *Closes when:* A deployed compact_dataset audit row on the lance.audit stream is read carrying a non-null duration_seconds.
-- *Evidence:* `services/maintenance/src/maintenance/services/sweep.py:659-660,1015` · `services/lineage/src/lineage/services/cypher.py:102-105 (guarded attempts increment)` · `services/lineage/src/lineage/schemas.py:404 and services/repository.py:794 (attempts on RunStatus)` · `tests/unit/test_a_run_state_does_not_regress.py; services/maintenance/tests/test_a_work_item_is_self_contained.py`
 
 **LH-102 · Storage reclamation (trash purge, then the reclaiming sweep) has never been run live**
 `maintenance` · **MED** · PARTIAL
