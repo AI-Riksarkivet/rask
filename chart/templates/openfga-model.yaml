@@ -70,53 +70,10 @@ spec:
             {{- with .Values.auth.fgaStoreId }}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
-          command: ["python", "-c"]
-          args:
-            - |
-              import json, os, sys, time, urllib.error, urllib.request
-              from importlib.resources import files
-
-              api = os.environ["FGA_API_URL"].rstrip("/")
-
-              def call(path, body=None):
-                  data = json.dumps(body).encode() if body is not None else None
-                  headers = {"content-type": "application/json"} if data else {}
-                  req = urllib.request.Request(f"{api}{path}", data=data, headers=headers)
-                  with urllib.request.urlopen(req, timeout=30) as response:
-                      return json.loads(response.read() or b"{}")
-
-              # The store may still be coming up behind the migrate hook.
-              for attempt in range(60):
-                  try:
-                      stores = call("/stores").get("stores") or []
-                      break
-                  except Exception as exc:  # noqa: BLE001 — any transport error here is "not ready yet"
-                      if attempt == 59:
-                          print(f"openfga never became reachable: {exc}", file=sys.stderr)
-                          raise
-                      time.sleep(2)
-
-              pinned = os.environ.get("RASK_FGA_STORE_ID", "")
-              store = pinned or (stores[0]["id"] if stores else "")
-              if not store:
-                  print("no OpenFGA store exists yet and none is pinned; nothing to write a model into", file=sys.stderr)
-                  raise SystemExit(1)
-
-              # THE SAME BYTES THE SERVICES IMPORT, read from the installed package.
-              model = json.loads((files("service_kit.governed.auth") / "model.json").read_text())
-              model.pop("id", None)
-
-              def shape(m):
-                  """What makes two models EQUAL for this purpose: the types and their relation names.
-                  Comparing whole documents would differ on server-assigned ids and re-write every
-                  upgrade, which is what grows a store to fifty models."""
-                  return {t["type"]: sorted(t.get("relations") or {}) for t in m.get("type_definitions", [])}
-
-              existing = call(f"/stores/{store}/authorization-models?page_size=1").get("authorization_models") or []
-              if existing and shape(existing[0]) == shape(model):
-                  print(f"model already current in store {store} ({len(shape(model))} types); nothing to write")
-                  raise SystemExit(0)
-
-              written = call(f"/stores/{store}/authorization-models", model)
-              print(f"wrote authorization model {written.get('authorization_model_id')} to store {store}")
+          {{- /* A MODULE, not a heredoc. The comparison that decides whether to write is the part
+                 that matters — write always and the store grows a model per upgrade, compare too
+                 loosely and it never converges — and a script inlined here is covered by nothing.
+                 `service_kit.governed.auth.write_model` lives beside the model it writes and has its
+                 own suite. */}}
+          command: ["python", "-m", "service_kit.governed.auth.write_model"]
 {{- end }}
