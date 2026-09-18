@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**192 open items**, of which **95 are blocked on a decision** and **97 can be picked up today**.
+**192 open items**, of which **96 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 67 | 29 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 67 | 28 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 27 | 13 | 6 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -578,7 +578,9 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **ZT-001 · Every privileged service's "dedicated" credential is derived from the shared app token, so holding one yields all of them**
 `chart, service-kit` · **HIGH**
+- **blocked:** a deployment-policy call — either the prod values enable ESO so an operator's own material reaches OpenBao, or each dedicated token must be supplied and the render FAILS without it. Both make a prod estate undeployable in a way it is not today, which is the owner's to choose; the property itself is now pinned and measured either way.
 - *What is left:* `lance.dedicatedServiceToken` computes `sha256("<identity>-<dapr.appToken>")[:40]`, so any holder of the shared `dapr.appToken` — which 13 pods carry — can compute the dedicated credential of every privileged identity. That defeats the control `dapr_auth.py` describes it as being: a subject off the privileged allowlist authenticates with the shared token, and the dedicated pair exists precisely so "any holder of that one token may claim ANY allowlisted service" stops being true. The helper's defence is that the prod path supplies independent material through ESO — but `externalSecrets.enabled` is `false` by default and `chart/values-prod.yaml` carries NO uncommented `externalSecrets:` stanza at all, only comments suggesting it, so a prod render from that file gets derived tokens. Either make the prod values enable ESO (and fail the render when a privileged identity has no independent secret), or stop deriving and require each token to be supplied. **Shares its mechanism with [[XC-004]]** — that row is the ESO default itself; this one is what the default costs. Work them together or the fix lands on one side only.
+- *Measured:* **5 privileged identities render a dedicated token and all 5 are derivable** — `service-bronze-to-silver`, `service-media-to-silver`, `service-silver-to-gold`, `service-trainer`, `service-web`. Pinned by `tests/unit/test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py`, which derives each exactly as the chart does and reds if the helper changes shape. That file is deleted, not inverted, when the fix lands.
 - *Closes when:* A privileged identity's credential cannot be computed from `dapr.appToken`, and a prod render refuses rather than silently deriving one.
 - *Evidence:* `chart/templates/_helpers.tpl — lance.dedicatedServiceToken: printf "%s-%s" $identity $secret | sha256sum | trunc 40` · `chart/values.yaml:2811 externalSecrets.enabled: false` · `grep -nE '^externalSecrets:' chart/values-prod.yaml → no match` · `packages/service-kit/src/service_kit/governed/dapr_auth.py — service_principal binds a privileged subject to service-token-<identity>`
 
