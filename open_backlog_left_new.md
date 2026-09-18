@@ -156,7 +156,18 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
   `read_version=5, tasks=1` (its four branch-only fragments). Before the fix this door refused
   outright; without it the door would have answered main's version and an empty task list labelled
   as the branch's work. Scratch objects dropped afterwards.
-- *What is left:* Plumb `branch` through `maintenance/reindex`; the reclaim is proven branch-safe (`tests/unit/test_base_refs_guard.py`) and `rask-maintenance` logs ~650 `relation='branch'` refusals per 40 minutes. Leave the ten response-assembly refusals (`query_table`, `explain_table_query_plan`, `analyze_table_query_plan`, `get_table_stats`, the five index doors, `describe_table`) as `UnsupportedOperationError` — a 501 is correct there, not a wrong 200. Move the rask-only side effects (warehouse-scoped namespace refusal, trash soft-delete, protection refusals, lineage keys in schema metadata, implicit BTREE, insert pre-coercion) behind a management API — that carve is LH-021, unstarted: `grep -rn '/management' services/catalog/src` returns nothing. The protection code (table → 19, containers → 3) and the maintenance-503-on-POST-reads clause are done; do not rework them.
+- **`maintenance/reindex` IS NOT PLUMBING EITHER, measured — it needs a QUEUE CONTRACT change.** The door
+  does not rebuild anything: it publishes an `IndexWorkItem` and answers 202, so the WORKER does the
+  build. `IndexWorkItem` (`service_kit/lakehouse/work_items.py`) carries `uri`, `table_id`, `column`,
+  `kind`, `index_type`, `name`, `replace`, `params` and NO `branch` — and `uri` cannot express one,
+  because a branch lives at `tree/{branch}/` with its own `_versions/` and no `data/`
+  (`lance_docs/file_format.md:2746-2761`), so it is not openable by path. Accepting `branch` at the
+  door without carrying it would have the worker rebuild MAIN's index while the API reported the
+  branch's — the wrong-but-plausible answer this row exists to remove. So it needs a field on a SHARED
+  service-kit model that a separate service consumes, which is a different size of change from the
+  compaction pair (self-contained in the catalog).
+- *What is left:* Add `branch` to `IndexWorkItem` and honour it in the maintenance index worker, then
+  open `maintenance/reindex`; the reclaim is proven branch-safe (`tests/unit/test_base_refs_guard.py`) and `rask-maintenance` logs ~650 `relation='branch'` refusals per 40 minutes. Leave the ten response-assembly refusals (`query_table`, `explain_table_query_plan`, `analyze_table_query_plan`, `get_table_stats`, the five index doors, `describe_table`) as `UnsupportedOperationError` — a 501 is correct there, not a wrong 200. Move the rask-only side effects (warehouse-scoped namespace refusal, trash soft-delete, protection refusals, lineage keys in schema metadata, implicit BTREE, insert pre-coercion) behind a management API — that carve is LH-021, unstarted: `grep -rn '/management' services/catalog/src` returns nothing. The protection code (table → 19, containers → 3) and the maintenance-503-on-POST-reads clause are done; do not rework them.
 - *Closes when:* The six reclaim doors accept `branch` end to end, and every rask-only side effect lives behind a management prefix rather than a spec handler.
 - *Evidence:* `grep -rn 'refuse_a_branch_this_door_cannot_honour(' services/catalog/src → 15 call sites + tables.py:295/386/405 (describe) = 16 doors` · `services/catalog/src/catalog/api/v1/endpoints/maintenance.py:71-93 (preview/run declare `branch` only to refuse it)` · `services/catalog/src/catalog/api/fga_deps.py:1013-1045 (require_not_protected: InvalidTableStateError for table, NamespaceNotEmptyError otherwise)` · `grep -rn '/management' services/catalog/src --include=*.py → empty`
 
