@@ -99,6 +99,36 @@ groups:
             describe staged objects, and publish_failed only counts a publish that HAD been staged.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
+      # A CATALOG WRITE WHOSE PROVENANCE DID NOT GET RECORDED, which nothing else in this file can see.
+      # The outbox rules above describe events that REACHED the outbox; this counts the emits that never
+      # did. `lineage_emit.py` increments it on both transports and the two mean different things — on
+      # `http` the event is gone unless reconcile back-fills it, on `dapr` the publish goes through the
+      # staged outbox so a failure after staging still leaves a durable copy. The counter cannot tell
+      # them apart, so this pages on any sustained increase and the transport label says which to read.
+      #
+      # `_total` because the OTLP->Prometheus exporter suffixes counters — the identical defect this file
+      # records twice already, where a rule naming the bare form matches nothing and can never fire.
+      # Verified against the live store 2026-09-18: `catalog_control_emit_failed_total` is present under
+      # exactly that spelling, and this counter's series is ABSENT because it has never been incremented
+      # (an OTel counter exports nothing until its first `add`). A rule over an absent series is inert
+      # rather than broken — it starts evaluating the moment the first failure creates it, which is the
+      # moment it matters.
+      - alert: CatalogLineageEmitFailing
+        expr: sum(rate(catalog_lineage_emit_failed_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Catalog writes are committing without recording their provenance"
+          description: >-
+            A catalog mutation committed to Lance and its lineage emit failed terminally, so the graph does
+            not know the write happened. The drop path is the sharpest case: `dropped_at` derives from a
+            `drop_table` run, so a lost drop leaves a destroyed table looking live to the reconcile sweep
+            forever. Read the `lance.catalog.transport` label — `http` means the event is gone unless
+            reconcile back-fills it, `dapr` means it may still be staged in the outbox.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
       - alert: LineageIngestDeadLettering
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="dead_lettered"}[5m])) > 0
         for: 5m

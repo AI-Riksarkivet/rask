@@ -61,8 +61,10 @@ _meter = metrics.get_meter("lance.catalog")
 _emit_failed = _meter.create_counter(
     "catalog.lineage_emit.failed",
     unit="{event}",
-    description="Best-effort catalog lineage emits that failed terminally (the catalog has no outbox — "
-    "each failure is a lost event unless reconcile back-fills it), by transport.",
+    description="Best-effort catalog lineage emits that failed terminally, by transport. On `http` the "
+    "event is simply gone unless reconcile back-fills it; on `dapr` the publish goes through the staged "
+    "outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a failure "
+    "at staging does not. The counter cannot tell those apart, which is why any increase is worth a look.",
 )
 
 #: Operation markers carried in the OpenLineage ``lance`` run facet. The lineage service keys the

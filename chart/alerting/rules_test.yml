@@ -1277,6 +1277,34 @@ tests:
               summary: "Lineage events are publishing without a durable copy"
               description: "The outbox stage is failing, so events reach the bus with the crash window OPEN: if the publish then fails the event is gone, and no other outbox signal can see it — depth and oldest-age describe staged objects, and publish_failed only counts a publish that HAD been staged. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
+  # A catalog emit that fails terminally must page: nothing else in this file sees an event that never
+  # reached the outbox at all.
+  - interval: 1m
+    input_series:
+      - series: "catalog_lineage_emit_failed_total"
+        values: "0+1x11"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CatalogLineageEmitFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "catalog"
+            exp_annotations:
+              summary: "Catalog writes are committing without recording their provenance"
+              description: "A catalog mutation committed to Lance and its lineage emit failed terminally, so the graph does not know the write happened. The drop path is the sharpest case: `dropped_at` derives from a `drop_table` run, so a lost drop leaves a destroyed table looking live to the reconcile sweep forever. Read the `lance.catalog.transport` label — `http` means the event is gone unless reconcile back-fills it, `dapr` means it may still be staged in the outbox. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # A healthy catalog must NOT page. Flat, not absent — the series exists and simply stops increasing,
+  # which is the state every working estate is in.
+  - interval: 1m
+    input_series:
+      - series: "catalog_lineage_emit_failed_total"
+        values: "0+0x11"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: CatalogLineageEmitFailing
+        exp_alerts: []
+
   # A healthy stage must NOT page — the counter is flat, not absent, once the series exists.
   - interval: 1m
     input_series:
