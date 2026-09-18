@@ -16,10 +16,16 @@ fetched 2026-08-04):
 * `_indices/<uuid>/` directories absent from every live manifest;
 * `_transactions/*.txn` files from failed or rolled-back commits — a conflict leaves them behind
   ("transaction files remain in storage describing each commit attempt"), so a busy table accrues
-  them. They are RECLAIMABLE, not permanent: measured on pylance 11.0.0, `cleanup_old_versions`
-  reports `transaction_files_removed: 6` on a six-version dataset and takes a planted unreferenced
-  8-day-old txn with it, because a file older than the unverified threshold is no longer held back.
-  What this scan adds is the window BEFORE that — and the datasets whose cleanup never runs;
+  them. Whether Lance will ever take one depends on the LISTING FLOOR, not on its age:
+  `cleanup_old_versions` clamps its unreferenced-file listing to the commit timestamp of the earliest
+  RETAINED manifest (`rust/lance/src/dataset/cleanup.rs:332-341`, applied to `_transactions/`, `data/`
+  and `_deletions/` alike at :721-731) before the 7-day unverified rule (:345) filters what was
+  listed. Measured against pylance 11.0.0 with `delete_unverified=True` bypassing the age filter, the
+  flip is at that timestamp to the second: offsets -3600/-60/-1/0 s are removed, +1/+60/+3600 s are
+  kept. So a file written AFTER the last surviving commit is invisible to cleanup at any `older_than`
+  and with any flag — permanently, once a dataset has collapsed to one live version — while a file
+  below the floor clears itself as soon as it passes 7 days. `OrphanFile.reclaimable_by_lance` carries
+  which, because only the second class justifies a reclaimer;
 * manifests of versions that were deleted;
 * `_versions/latest_version_hint.json`, which the spec calls "purely an optimization" and "always
   safe to delete".
@@ -107,6 +113,18 @@ class OrphanFile(BaseModel):
     #: Which Lance-owned area it sits in: data / deletions / indices / transactions / versions / other.
     kind: str
     size_bytes: int = 0
+    #: True when `cleanup_old_versions` can still SEE this file, so time alone clears it; False when it
+    #: sits above the listing floor and no Lance call will ever enumerate it; None when the floor could
+    #: not be read.
+    #:
+    #: The distinction is what makes the purge gate meaningful. Measured on the deployed estate
+    #: 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes as the ordinary sweep took 979 files at
+    #: the +7-day anniversary of the writes that made them — so a gate that counts both classes together
+    #: blocks the trash purge on a number that clears itself, and only the residue is a real finding.
+    reclaimable_by_lance: bool | None = None
+    #: The file's own mtime as an epoch, which is what the floor is compared against. Kept on the
+    #: finding so the classification is reproducible from the report alone, without re-listing.
+    mtime_epoch: float = 0.0
 
 
 class DatasetOrphanScan(BaseModel):
@@ -399,6 +417,40 @@ def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: 
     return None
 
 
+def _classify_against_floor(orphans: list[OrphanFile], ds: lance.LanceDataset, dataset_uri: str) -> None:
+    """Stamp each orphan with whether `cleanup_old_versions` can still LIST it.
+
+    CALLED ONLY WHEN SOMETHING IS ORPHANED, which is why it is a second pass rather than work inside
+    the listing loop. `version_refs()` is used above precisely because it answers without
+    deserializing a manifest (18.4x, per its own comment) and `versions()` is the opposite — it reads
+    all of them. Most datasets have no orphans, and those pay nothing.
+
+    THE FLOOR is the EARLIEST RETAINED manifest's commit timestamp. `cleanup.rs:332-341` clamps the
+    unreferenced-file listing to it — for `_versions/`, `_transactions/`, `data/` and `_deletions/`
+    alike (:721-731) — BEFORE the 7-day unverified rule (:345) filters what was listed. A file above
+    this instant is invisible to cleanup at any `older_than` and with `delete_unverified=True`;
+    measured against pylance 11.0.0, the flip is at the manifest timestamp to the second.
+
+    BOTH SIDES GO THROUGH `.timestamp()`, and that is the care this function takes. Measured on this
+    host: `versions()[i]["timestamp"]` is NAIVE LOCAL (`2026-09-19 00:04:01`) while
+    `pyarrow.fs.FileInfo.mtime` is TZ-AWARE UTC (`2026-09-18 22:04:01+00:00`) — the same instant
+    written two hours apart. Comparing the datetimes raises on the mix, and stamping UTC onto the naive
+    one to silence that misclassifies every file within the host's offset of a commit, one way only.
+
+    An unreadable floor leaves the class None. "We could not tell" and "Lance will take it" must stay
+    distinguishable, for the same reason `checked=False` is not `orphans=[]`.
+    """
+    if not orphans:
+        return
+    try:
+        floor = min(v["timestamp"].timestamp() for v in ds.versions())
+    except Exception as exc:  # noqa: BLE001 — an unreadable floor leaves the class UNKNOWN, never guessed
+        log.warning("orphan_floor_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
+        return
+    for orphan in orphans:
+        orphan.reclaimable_by_lance = orphan.mtime_epoch <= floor
+
+
 def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_options: dict[str, str] | None = None) -> DatasetOrphanScan:
     """List one dataset's files and subtract what any live version references.
 
@@ -461,6 +513,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     # every listed file that was not an exact match — O(files x referenced) Python-level work per
     # dataset, on the same hot path as the probe batching above (the audit's HOUSE-RULE-16 addendum).
     referenced_dirs = tuple(d for d in referenced if d.endswith("/"))
+
     for info in entries:
         if info.type != pafs.FileType.File:
             continue
@@ -475,8 +528,17 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         # explicitly disposable. Reporting either every run would bury the findings that matter.
         if rel.startswith(f"{_VERSIONS_DIR}/") or rel.startswith(f"{_REFS_DIR}/") or rel == _RESERVED_MARKER:
             continue
-        orphans.append(OrphanFile(dataset=dataset_uri, path=rel, kind=_kind_of(rel), size_bytes=info.size or 0))
+        orphans.append(
+            OrphanFile(
+                dataset=dataset_uri,
+                path=rel,
+                kind=_kind_of(rel),
+                size_bytes=info.size or 0,
+                mtime_epoch=info.mtime.timestamp() if info.mtime is not None else 0.0,
+            )
+        )
 
+    _classify_against_floor(orphans, ds, dataset_uri)
     return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions)
 
 
