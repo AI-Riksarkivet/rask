@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**210 open items**, of which **99 are blocked on a decision** and **111 can be picked up today**.
+**211 open items**, of which **99 are blocked on a decision** and **112 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 66 | 27 | 15 |
+| **PHASE 1 · LAKEHOUSE** | 67 | 28 | 16 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -294,6 +294,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* `grep -rn '"START"' services/ scripts/ runners/` returns `services/ingest/src/ingest/lineage.py:366` and `scripts/ray_train_job.py:524` and nothing else — the medallion emits only `event_type="FAIL"` (`transform.py:304`, `workflow.py:761`) and the `build_run_event` default `COMPLETE`. On the Ray lane this compounds: `transform.py:836-880` dispatches the watcher and returns `None  # DISPATCHED`, acking the trigger having emitted nothing, and the ONE event for the whole run is the COMPLETE that pass 2 emits after the workflow's wake-up publish. So between dispatch and terminal — the entire runtime of the job — the question "is this hop running or did it die?" is answerable only from the Dapr workflow instance and the Ray dashboard, both of which are per-head/per-pod state the Ray adapter explicitly refuses to call durable (`rayjobs_api_executor.py:20-25`). It also means the notifications plane, which targets on run events, has nothing that says a run started, and a run that is abandoned before its terminal is indistinguishable in the graph from one that never began. Fix: emit a START at the point the run id is minted (`resolve_stage_identity` already holds the four names, and `_dispatch_stage_workflow` already carries `run_id`), so the terminal MERGEs onto an open run rather than creating one. Emit it through the outbox, like the COMPLETE.
 - *Closes when:* A stage run appears in the lineage graph as an open run from dispatch, and its COMPLETE or FAIL closes that same `runId` — pinned by a test that asserts a run exists in the graph while the Ray job is still RUNNING.
 - *Evidence:* `grep -rn '"START"' services/ scripts/ runners/ packages/lineage-kit/src | grep -v test` → only `services/ingest/src/ingest/lineage.py:366` and `scripts/ray_train_job.py:524` · `grep -rn 'event_type=' services/medallion/src/` → only `workflow.py:761`, `workflow.py:1468`, `transform.py:304` (all FAIL or promotion) · `services/medallion/src/medallion/schemas/events.py:192` (`event_type: str = "COMPLETE"` default) · `services/medallion/src/medallion/services/transform.py:836-880` (DISPATCHED, nothing emitted) · `services/medallion/src/medallion/services/rayjobs_api_executor.py:20-25`
+
+**LH-174 · The OpenFGA authorization model has NO deployment path, so the store runs a model 9 relations behind the repo and a bootstrap hook fails on every upgrade**
+`chart, service-kit` · **HIGH**
+- *What is left:* Nothing in the chart writes the authorization model. `grep -rn 'authorization-models|write_authorization_model' chart/templates/` returns nothing; `rask-openfga-migrate` is OpenFGA's DATABASE migration, not a model upload; and `make fga-test` only diffs `model.json` against `model.fga` — a repo-internal check between two of the three copies, where the third is the store and is checked by nothing. Measured live 2026-09-18: the store holds 50 models and its newest defines **26** relations on `warehouse`, **27** on `namespace` and **26** on `table`, against **30 / 29 / 29** in `packages/service-kit/src/service_kit/governed/auth/model.fga` — so `warehouse#maintainer`, `#publisher` and six siblings exist in the repo, are referenced by the code's `can_*` derivations, and cannot be written. The consequence is not theoretical: `rask-bootstrap-admin` CrashLoops on every `make k3s-up` with `Invalid tuple 'warehouse:lance_catalog#maintainer@user:service-maintenance'. Reason: relation 'warehouse#maintainer' not found`, which is a Helm HOOK — so the upgrade blocks on it. Add a model-write step (hook Job or an idempotent step in the existing migrate Job), and extend `fga-test`'s drift check to the deployed store so the third copy is covered.
+- *Closes when:* A chart upgrade writes the repo's model to the store, `rask-bootstrap-admin` completes, and a drift check compares the deployed model against `model.fga`.
+- *Evidence:* `grep -rn 'authorization-models|write_authorization_model' chart/templates/*.yaml → none` · `Makefile:255-263 (fga-test diffs model.json vs model.fga only)` · `live store newest model: warehouse 26 / namespace 27 / table 26 relations` vs `model.fga: 30 / 29 / 29` · `kubectl logs rask-bootstrap-admin → relation 'warehouse#maintainer' not found`
 
 **LH-034 · No Lance compression scheme is set on the create path and no decision record exists**
 `catalog, medallion` · **MED**
