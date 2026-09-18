@@ -31,29 +31,23 @@ REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left_new.md"
 
 _ITEM_START = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
 
-#: An item that is still OPEN, with its body up to the next item. A closed row STAYS RENDERED, struck
-#: through, because the measurements that made it worth opening are worth keeping — so counting every
-#: rendered item reports finished work as work that is left. Measured 2026-09-16: 302 rows are
-#: rendered and 220 are open, and `--recount` reading the former would have written "302 open items".
-_OPEN_ITEM = re.compile(r"^\*\*[A-Z]+-\d+ · (?!~~)[^\n]*\n(.*?)(?=^\*\*[A-Z]+-\d+ · |\Z)", re.MULTILINE | re.DOTALL)
-
-#: A row's metadata: backticked service tags, priority, sometimes `**blocked:**`. FOUND BY SCANNING the
-#: row rather than by taking the line under its title — 13 open rows carry a multi-line RE-MEASURED
-#: block between the two, and a section-wide `· **HIGH**` search counts struck rows besides.
-#: `tests/unit/test_the_backlog_counts_itself.py` holds this file to the same reading.
-_METADATA = re.compile(r"^`[^`\n]+`[^\n]*·[^\n]*$", re.MULTILINE)
-_SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^\n]*)$", re.MULTILINE)
-_TABLE_ROW = re.compile(r"^(\| \*\*([^*]+)\*\*[^|]*\| )(\d+)( \| )(\d+)( \|)$", re.MULTILINE)
-_TOTAL = re.compile(r"^\*\*(\d+) open items\*\*", re.MULTILINE)
-
-_LABEL_TO_SECTION = {
-    "1 · Lakehouse": "PHASE 1 · LAKEHOUSE",
-    "1 · Cross-cutting": "PHASE 1 · CROSS-CUTTING",
-    "2 · Compute": "PHASE 2 · COMPUTE",
-    "3 · Controlplane": "PHASE 3 · CONTROLPLANE",
-    "Frontend": "FRONTEND",
-    "Low priority": "LOW PRIORITY",
-}
+#: EVERY `##` heading, not only the six the table names — because that is how
+#: `tests/unit/test_the_backlog_counts_itself.py` attributes a row, and the two readings have to be the
+#: same one. Restricted to the six, this counted rows sitting under an intervening heading (`RIPE
+#: DECISIONS`, `Dropped as ALREADY DONE`) as belonging to the phase above them, so the gate and the
+#: writer disagreed by exactly those rows.
+_SECTION = re.compile(r"^## (.+)$", re.MULTILINE)
+#: `| **NAME** | open | workable | high |` — THREE counts. Written against a two-column table, this
+#: matched no line at all, so `--recount` printed "phase table re-derived" and rewrote nothing;
+#: the numbers stayed right only for as long as nothing moved. The label is the section heading, so
+#: there is no name map to drift either.
+_TABLE_ROW = re.compile(r"^\| \*\*(.+?)\*\* \| (\d+) \| (\d+) \| (\d+) \|$", re.MULTILINE)
+#: All three numbers in the headline sentence, not just the first: a total that stays honest beside a
+#: stale blocked count is the harder error to notice.
+#: A row that needs a decision before anyone can finish it — on its OWN line, so a mention in prose is
+#: not a gate. Same reading as the counts test.
+_BLOCKED_LINE = re.compile(r"^- \*\*blocked:\*\*", re.MULTILINE)
+_TOTAL = re.compile(r"^\*\*(\d+) open items\*\*, of which \*\*(\d+) are blocked on a decision\*\* and \*\*(\d+) can be picked up today\*\*", re.MULTILINE)
 
 
 def _blocks(text: str) -> list[tuple[str, int, int]]:
@@ -66,26 +60,43 @@ def _blocks(text: str) -> list[tuple[str, int, int]]:
     return out
 
 
+def _walk(text: str) -> list[tuple[str, str]]:
+    """(section, body) for every rendered row — THE GATE'S OWN READING, deliberately.
+
+    A row's body runs to the next row or the next `##`, whichever comes first, and its section is the
+    nearest heading above it. Deriving the counts any other way is how a writer and its gate end up
+    disagreeing about the same file.
+    """
+    sections = [(m.start(), m.group(1).strip()) for m in _SECTION.finditer(text)]
+    heads = list(_ITEM_START.finditer(text))
+    out = []
+    for i, m in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        nxt = next((pos for pos, _ in sections if pos > m.start()), len(text))
+        out.append((next((n for pos, n in reversed(sections) if pos < m.start()), "?"), text[m.start() : min(end, nxt)]))
+    return out
+
+
 def _retotal(text: str) -> str:
-    """Re-derive the phase table and the grand total from the rows that are actually present."""
-    bounds = [(m.start(), m.group(1)) for m in _SECTION.finditer(text)] + [(len(text), None)]
-    per_section: dict[str, tuple[int, int]] = {}
-    for i, (start, name) in enumerate(bounds[:-1]):
-        body = text[start : bounds[i + 1][0]]
-        if name:
-            rows = [_METADATA.search(row) for row in _OPEN_ITEM.findall(body)]
-            per_section[name] = (len(rows), sum(1 for meta in rows if meta and "**HIGH**" in meta.group(0)))
+    """Re-derive the phase table and the headline from the rows that are actually present."""
+    rows = _walk(text)
 
     def _row(m: re.Match[str]) -> str:
-        prefix = _LABEL_TO_SECTION.get(m.group(2).strip())
-        match = [k for k in per_section if prefix and k.startswith(prefix)]
-        if len(match) != 1:
+        mine = [body for section, body in rows if section.startswith(m.group(1))]
+        if not mine:
             return m.group(0)
-        n, h = per_section[match[0]]
-        return f"{m.group(1)}{n}{m.group(4)}{h}{m.group(6)}"
+        workable = sum(1 for body in mine if not _BLOCKED_LINE.search(body))
+        high = sum(1 for body in mine if "**HIGH**" in body)
+        return f"| **{m.group(1)}** | {len(mine)} | {workable} | {high} |"
 
     text = _TABLE_ROW.sub(_row, text)
-    return _TOTAL.sub(f"**{len(_OPEN_ITEM.findall(text))} open items**", text, count=1)
+    bodies = [body for _, body in _walk(text)]
+    blocked = sum(1 for body in bodies if _BLOCKED_LINE.search(body))
+    return _TOTAL.sub(
+        f"**{len(bodies)} open items**, of which **{blocked} are blocked on a decision** and **{len(bodies) - blocked} can be picked up today**",
+        text,
+        count=1,
+    )
 
 
 def main() -> int:
@@ -106,8 +117,9 @@ def main() -> int:
         if args.ids:
             print("!! --recount closes nothing; pass it alone")
             return 1
-        REGISTER.write_text(_retotal(text), encoding="utf-8")
-        print(f"phase table re-derived; {len(_OPEN_ITEM.findall(text))} open items")
+        text = _retotal(text)
+        REGISTER.write_text(text, encoding="utf-8")
+        print(f"phase table re-derived; {len(_walk(text))} open items")
         return 0
 
     if not args.ids:
@@ -133,7 +145,7 @@ def main() -> int:
         text = text[:s] + text[e:]
 
     text = _retotal(text)
-    total = len(_OPEN_ITEM.findall(text))
+    total = len(_walk(text))
     REGISTER.write_text(text, encoding="utf-8")
     print(f"\n{total} open items remain")
     return 0

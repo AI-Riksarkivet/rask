@@ -25,7 +25,9 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterator
+from urllib.parse import quote
 
+import pyarrow as pa
 import pytest
 import requests
 
@@ -190,8 +192,6 @@ def test_a_purge_refuses_bytes_a_SIBLING_warehouse_still_claims(catalog: str) ->
     finally:
         # The SECOND first, so the shared bucket has exactly one claimant when the purge runs — the same
         # rule the refusal above proves, used forwards.
-        # The SECOND first, so the shared bucket has exactly one claimant when the purge runs — the same
-        # rule the refusal above proves, used forwards.
         requests.delete(f"{catalog}/v1/warehouses/{second}?cascade=true&force=true", headers=_auth(), timeout=60)
         _purge(catalog, first)
 
@@ -210,3 +210,127 @@ def test_deletion_protection_refuses_and_force_overrides_exactly_it(catalog: str
         assert forced.status_code == 200, f"force did not override deletion protection: {forced.status_code} {forced.text[:300]}"
     finally:
         _purge(catalog, name)
+
+
+#: The identifier delimiter this estate serves, matching `test_catalog_live.py`'s table ids. A nested
+#: namespace and a table under it are both `parent<DELIM>child`, so one constant spells both.
+DELIM = "$"
+
+
+def _empty_arrow_stream() -> bytes:
+    schema = pa.schema([pa.field("id", pa.int64())])
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, schema) as writer:
+        writer.write_table(pa.table({"id": pa.array([], pa.int64())}, schema=schema))
+    return sink.getvalue().to_pybytes()
+
+
+def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehouse: str) -> None:
+    """The plural undrop (`namespaces.py:678`), driven against the deployed release.
+
+    THE UNIT OF A CASCADE IS THE SUBTREE, so the unit of its recovery is too — and a leg that drops
+    one flat namespace proves neither half of that. What has to hold is the shallowest-first
+    re-create, the re-registration of a table at a depth the drop was never given, and the trash
+    record clearing as its object comes back. So the subtree here is two deep and carries a table at
+    EACH level, and every id is asserted on its own rather than through the top one's 200.
+
+    THE LOCATION IS ASSERTED, not just the id. A table re-registered somewhere else is still a 200 on
+    describe and is not a recovery — the door's contract is the old id pointing at the still-present
+    bytes, and only comparing the pre-drop location says which one happened.
+
+    Everything this leg destroys it created seconds earlier, in this test's own warehouse; the drop is
+    the recoverable kind by construction (no `mode`), and the `finally` purges what recovery left.
+    """
+    top = f"e2eundrop{uuid.uuid4().hex[:6]}"
+    child = f"{top}{DELIM}kids"
+    bound = requests.post(f"{catalog}/v1/warehouses/{warehouse}/namespaces", json={"namespace": top}, headers=_auth(), timeout=30)
+    assert bound.status_code in (200, 201), f"cannot bind the subtree's root: {bound.status_code} {bound.text[:300]}"
+    made = requests.post(f"{catalog}/v1/namespace/{quote(child, safe='')}/create", json={"id": [top, "kids"]}, headers=_auth(), timeout=30)
+    assert made.status_code in (200, 201), f"cannot nest a child namespace: {made.status_code} {made.text[:300]}"
+
+    tables = {f"{top}{DELIM}top_rows": [top, "top_rows"], f"{child}{DELIM}kid_rows": [top, "kids", "kid_rows"]}
+    namespaces = {top: [top], child: [top, "kids"]}
+    for table_id in tables:
+        created = requests.post(
+            f"{catalog}/v1/table/{quote(table_id, safe='')}/create",
+            data=_empty_arrow_stream(),
+            headers={**_auth(), "content-type": "application/vnd.apache.arrow.stream"},
+            timeout=60,
+        )
+        assert created.status_code == 200, f"cannot create {table_id!r} in the subtree: {created.status_code} {created.text[:300]}"
+
+    try:
+        before = {}
+        for table_id, identifier in tables.items():
+            described = requests.post(f"{catalog}/v1/table/{quote(table_id, safe='')}/describe", json={"id": identifier}, headers=_auth(), timeout=30)
+            assert described.status_code == 200, f"{table_id!r} is not there before the drop: {described.status_code}"
+            before[table_id] = described.json().get("location")
+            assert before[table_id], f"{table_id!r} describes with no location, so recovery cannot be checked against one"
+
+        dropped = requests.post(f"{catalog}/v1/namespace/{quote(top, safe='')}/drop", json={"id": [top], "behavior": "CASCADE"}, headers=_auth(), timeout=120)
+        assert dropped.status_code == 200, f"the recoverable cascade did not run: {dropped.status_code} {dropped.text[:300]}"
+
+        for namespace_id, identifier in namespaces.items():
+            gone = requests.post(f"{catalog}/v1/namespace/{quote(namespace_id, safe='')}/describe", json={"id": identifier}, headers=_auth(), timeout=30)
+            assert gone.status_code == 404, f"the cascade left namespace {namespace_id!r} resolvable ({gone.status_code}) — it dropped less than it claimed"
+        for table_id, identifier in tables.items():
+            gone = requests.post(f"{catalog}/v1/table/{quote(table_id, safe='')}/describe", json={"id": identifier}, headers=_auth(), timeout=30)
+            assert gone.status_code == 404, f"the cascade left table {table_id!r} resolvable ({gone.status_code})"
+
+        # The deadline the owner has to act within. An undrop window nobody can see is not a safety
+        # feature, so the door that shows it is driven here rather than assumed.
+        queued = requests.get(f"{catalog}/v1/namespace/{quote(top, safe='')}/tasks", headers=_auth(), timeout=30)
+        assert queued.status_code == 200, f"the trash door did not answer: {queued.status_code} {queued.text[:200]}"
+        assert queued.json(), "a recoverable cascade queued no expiry, so the owner cannot see how long recovery is open"
+        assert queued.json()[0].get("expires_at"), f"the queued entry names no deadline: {queued.text[:300]}"
+
+        recovered = requests.post(f"{catalog}/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
+        assert recovered.status_code == 200, f"the plural undrop failed: {recovered.status_code} {recovered.text[:400]}"
+
+        for namespace_id, identifier in namespaces.items():
+            back = requests.post(f"{catalog}/v1/namespace/{quote(namespace_id, safe='')}/describe", json={"id": identifier}, headers=_auth(), timeout=30)
+            assert back.status_code == 200, f"namespace {namespace_id!r} did not come back at its old id: {back.status_code} {back.text[:300]}"
+        for table_id, identifier in tables.items():
+            back = requests.post(f"{catalog}/v1/table/{quote(table_id, safe='')}/describe", json={"id": identifier}, headers=_auth(), timeout=30)
+            assert back.status_code == 200, f"table {table_id!r} did not come back at its old id: {back.status_code} {back.text[:300]}"
+            assert back.json().get("location") == before[table_id], (
+                f"{table_id!r} re-registered at {back.json().get('location')!r}, not at its pre-drop {before[table_id]!r} — "
+                "the id resolves but not to the bytes it named"
+            )
+
+        # Each table under the namespace that owned it, not all of them under the root: the listing is
+        # what proves the subtree's SHAPE returned, where four describes only prove its members did.
+        for namespace_id, expected in ((top, "top_rows"), (child, "kid_rows")):
+            listed = requests.get(f"{catalog}/v1/namespace/{quote(namespace_id, safe='')}/table/list", headers=_auth(), timeout=30)
+            assert listed.status_code == 200, f"cannot list {namespace_id!r} after recovery: {listed.status_code}"
+            assert expected in listed.json().get("tables", []), f"{namespace_id!r} came back without {expected!r}: {listed.text[:300]}"
+
+        settled = requests.get(f"{catalog}/v1/namespace/{quote(top, safe='')}/tasks", headers=_auth(), timeout=30)
+        assert settled.json() == [], f"the trash record survived the recovery it completed: {settled.text[:300]}"
+    finally:
+        # RECOVER FIRST, then purge — in that order, because a failure ANYWHERE above can leave the
+        # subtree sitting in the trash, and a purge-drop of a namespace that is not live answers 404
+        # and clears nothing. Measured 2026-09-18: a deliberately broken variant of this leg left a
+        # trash record that then could not be recovered at all, because the fixture had already
+        # deleted its warehouse and `undrop`'s deactivation gate reads a missing warehouse as
+        # not-active (403). Seven days of a dead record pointing at a destroyed bucket is exactly the
+        # residue `conftest`'s session cleanup exists to stop this suite manufacturing.
+        requests.post(f"{catalog}/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
+        # PURGE, not a second recoverable drop — and `purge` is a QUERY parameter, which is the whole
+        # trap. The body's `mode` is the orthogonal Fail/Skip field for a namespace that is not there,
+        # and `DropMode.parse` folds anything it does not recognise to `FAIL` (`core/modes.py:80`), so
+        # spelling the opt-out as `{"mode": "PURGE"}` is accepted, drops recoverably, and writes a
+        # FRESH trash record. Measured 2026-09-18: four stale records accumulated on the live estate
+        # that way, each reading as a successful purge.
+        purged = requests.post(
+            f"{catalog}/v1/namespace/{quote(top, safe='')}/drop?purge=true",
+            json={"id": [top], "behavior": "CASCADE"},
+            headers=_auth(),
+            timeout=120,
+        )
+        # ASSERTED, not best-effort: a purge that quietly failed leaves a record alive for the whole
+        # grace window, and the only reader who would notice is a future run of this file. The removal
+        # itself is checked at the `settled` assertion above rather than here — a purge revokes the
+        # subtree's grants along with its bytes, so reading `tasks` afterwards answers 403 on a
+        # namespace that no longer has an owner, which says nothing about the record.
+        assert purged.status_code in (200, 404), f"the cleanup purge left the subtree in the trash: {purged.status_code} {purged.text[:300]}"

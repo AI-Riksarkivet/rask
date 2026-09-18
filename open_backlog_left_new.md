@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**192 open items**, of which **96 are blocked on a decision** and **96 can be picked up today**.
+**191 open items**, of which **96 are blocked on a decision** and **95 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 67 | 28 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 66 | 27 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 27 | 13 | 6 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -288,12 +288,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* In a scratch environment (not this resolution — 0.12 rejects a bare string, so the bump is all-or-nothing), establish whether pylance 11.0.0's Rust `merge_insert_into_table` accepts a list for `on` once lance-namespace 0.12's model stops refusing one. If it does, lift the `<0.12` ceiling on the pins (root `pyproject.toml:48-49`, `packages/service-kit/pyproject.toml:42,44,54-55`, `services/medallion/pyproject.toml:23`), change `on: str | None` at `data.py:330` to `list[str]`, add per-column index coverage, and re-run the catalog and integration suites. Installed stack is lance-namespace 0.11.1 + pylance 11.0.0.
 - *Closes when:* A composite `on` (repeated query parameter per spec.yaml:3063) merges through `POST /{id}/merge_insert` on the pinned stack.
 - *Evidence:* `pyproject.toml:17-47 (override-dependencies rationale, 'one experiment')` · `services/catalog/src/catalog/api/v1/endpoints/data.py:315-330 (`on: str | None = None`)` · `uv pip list → lance-namespace 0.11.1, pylance 11.0.0`
-
-**LH-028 · The plural namespace undrop is not driven against the deployed catalog**
-`catalog` · **MED** · PARTIAL
-- *What is left:* Nine live legs in `tests/e2e-py/test_the_container_tier_deletes_are_driven.py:100-199` cover warehouse delete, cascade, non-disclosure, project delete, bucket-purge refusal and force-vs-protection. The one unshipped clause is `POST /v1/namespace/{id}/undrop` (`namespaces.py:678`), which has only a unit test (`tests/unit/test_drop_protection.py:670`). Add a live leg that cascade-drops a subtree the suite created, undrops it, and asserts every namespace and table is re-registered at its old id, run through `scripts/e2e_live.sh`.
-- *Closes when:* A live e2e leg drives cascade-drop then plural undrop against the deployed release and passes.
-- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/namespaces.py:678` · `tests/e2e-py/test_the_container_tier_deletes_are_driven.py:100-199 (9 tests, none undrop)` · `tests/unit/test_drop_protection.py:670`
 
 **LH-034 · No Lance compression scheme is set on the create path and no decision record exists**
 `catalog, medallion` · **MED**
