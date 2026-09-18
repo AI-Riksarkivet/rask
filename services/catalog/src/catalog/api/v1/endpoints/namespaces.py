@@ -6,8 +6,9 @@ import asyncio
 import logging
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
+from typing import Annotated
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Header, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
@@ -37,12 +38,13 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep, namespace_for_root
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, namespace_for_root
 from catalog.api.pagination import paginate
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
+from catalog.core.lineage_emit import DROP_TABLE, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
@@ -533,9 +535,11 @@ async def drop_namespace(
     token: CurrentToken,
     client: FgaClientDep,
     control: ControlEmitterDep,
+    emitter: LineageEmitterDep,
     body: DropNamespaceRequest | None = None,
     force: bool = False,
     purge: bool = False,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> DropNamespaceResponse:
     """Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every
     dropped child's — so a reused id can't inherit stale grants.
@@ -645,6 +649,40 @@ async def drop_namespace(
     # the namespace's own tuples, then every cascaded descendant's. NOT on a recoverable cascade (#96,
     # the #75 rule): the owner is the one person who needs to undrop it, and the grants die with the
     # bytes — at purge, or when the sweep's expiry reclaims the trash.
+    # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DESTROYED, exactly as the single-table door does
+    # ("the dataset node persists in the graph, named a `drop_table` run"). Those children die inside the
+    # one native call and never reach that door, so without this nothing records that they went.
+    #
+    # `repository.dropped_at` derives from run history rather than a stored flag — the most recent
+    # SUCCESSFUL run being a `drop_table` — so a table with no such run stays indistinguishable from a
+    # live one and `lineage_reconcile_ungoverned` names it every tick, forever, for bytes that no longer
+    # exist. Measured 2026-09-18: 20 datasets reported ungoverned on the live estate, 8 of them tables
+    # this repo's own suites had cascade-dropped hours earlier.
+    #
+    # BEFORE THE REVOKE, the ordering the table door states and for its reason: on the http transport
+    # the caller's bearer authorizes ingest against their still-live write grant, so revoking first
+    # would 403 the very event that records who dropped the table. Emitted for a recoverable drop too,
+    # matching that door — an undrop re-registers the table and a later successful run flips the
+    # derivation back.
+    # GUARDED PER TABLE, which the single-table door does not need and this does. That door emits once;
+    # this emits N times and the FGA revoke runs AFTER. An exception escaping mid-loop would skip both
+    # the remaining tables' records and the revoke — trading a missing lineage row for orphan grants,
+    # which is the worse of the two. Each failure is logged rather than swallowed silently.
+    for resource, child_segments in descendants:
+        if resource != "table":
+            continue
+        try:
+            await emit_write_event(
+                emitter,
+                child_segments,
+                delimiter=settings.delimiter,
+                author=token.sub if token is not None else None,
+                version=None,
+                operation=DROP_TABLE,
+                authorization=authorization,
+            )
+        except Exception as exc:  # noqa: BLE001 — provenance must never fail the drop it records
+            log.warning("cascade_drop_lineage_emit_failed", extra={"table": child_segments, "error": str(exc)})
     if not recoverable:
         await fga_deps.revoke_ownership(client, settings, resource="namespace", segments=segments, token=token)
         for resource, child_segments in descendants:

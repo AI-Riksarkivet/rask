@@ -96,6 +96,7 @@ async def _drop(
         token=None,
         client=None,
         control=cast(Any, None),
+        emitter=cast(Any, None),
         body=DropNamespaceRequest(id=["ghost"], mode=mode, behavior=behavior),
     )
 

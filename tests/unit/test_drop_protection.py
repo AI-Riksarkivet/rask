@@ -18,7 +18,7 @@ the native namespace is a recording stand-in so a refusal can assert the native 
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from lance_namespace import InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
@@ -233,6 +233,7 @@ def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
                 token=None,
                 client=None,
                 control=NoopControlEmitter(),
+                emitter=cast(Any, None),
                 body=None,
             )
         )
@@ -501,6 +502,7 @@ def test_a_CASCADE_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
                 token=None,
                 client=None,
                 control=NoopControlEmitter(),
+                emitter=cast(Any, None),
                 body=DropNamespaceRequest(behavior="Cascade"),
             )
         )
@@ -524,6 +526,7 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
             token=None,
             client=None,
             control=NoopControlEmitter(),
+            emitter=cast(Any, None),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=True,
         )
@@ -580,6 +583,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
             token=None,
             client=None,
             control=NoopControlEmitter(),
+            emitter=cast(Any, None),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=force,
             purge=purge,
