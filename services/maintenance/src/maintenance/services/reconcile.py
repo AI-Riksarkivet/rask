@@ -264,6 +264,12 @@ class ReconcileReport(BaseModel):
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
     #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
     orphan_files: list[OrphanFile] = Field(default_factory=list)
+    #: How many of `orphan_files` the purge GATES on — those Lance can never reclaim, plus any whose
+    #: class could not be decided. Its own field because it is not `len(orphan_files)`: an orphan below
+    #: its dataset's listing floor clears itself on the ordinary sweep, and blocking on those is a delay
+    #: rather than a control. Measured 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes when
+    #: 979 of them passed 7 days; the 32 that stayed are the finding.
+    orphan_files_blocking: int = 0
     #: Datasets the unreferenced-file method does not APPLY to — a shallow clone, a branch, an
     #: unsupported feature flag. Reported so the coverage stays visible: "we correctly excluded 419"
     #: and "we scanned everything" are different facts. Deliberately not in `incomplete`, which gates
@@ -957,7 +963,13 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         return
     report.orphan_files = scan.orphans
     report.counts["orphan_files"] = len(scan.orphans)
-    report.total += len(scan.orphans)
+    # THE COUNT IS EVERY ORPHAN; THE GATE IS ONLY WHAT LANCE CANNOT TAKE. `reclaimable_by_lance is True`
+    # means the file sits below its dataset's listing floor, so the ordinary sweep collects it once it
+    # passes the 7-day unverified rule — waiting on that is a delay, not a control. `None` gates with
+    # the blocking class: an unreadable floor is "we could not tell", and the purge deletes bytes on the
+    # strength of this report.
+    report.orphan_files_blocking = sum(1 for orphan in scan.orphans if orphan.reclaimable_by_lance is not True)
+    report.total += report.orphan_files_blocking
     for note in scan.incomplete:
         report.incomplete.append(IncompleteScan(source="storage:datasets", reason=note))
     # Its OWN field, never `incomplete` (which gates the purge — see `DatasetOrphanScan.structural`)

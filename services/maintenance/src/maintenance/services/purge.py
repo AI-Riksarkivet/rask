@@ -257,7 +257,11 @@ def report_is_clean(report: ReconcileReport) -> str | None:
         # own exclusion exists to prevent: the categories that DO matter hidden behind ones that never
         # fall. Measured live 2026-09-10, where 13 findings were reported "across" four categories and
         # two of them contributed zero.
-        drifting = sorted(name for name, count in report.counts.items() if count and name not in NON_GATING_CATEGORIES)
+        # `orphan_files` is named by its BLOCKING count, not its total: the category can carry hundreds
+        # of findings that the ordinary sweep will collect on its own, and naming it on those would send
+        # an operator to work that time does for free while the real residue hides behind the number.
+        blocking = {**report.counts, "orphan_files": report.orphan_files_blocking}
+        drifting = sorted(name for name, count in blocking.items() if count and name not in NON_GATING_CATEGORIES)
         return f"the drift report is NOT clean: {report.total} finding(s) across {drifting}"
     if report.unavailable:
         return f"the drift report could not check {sorted(u.category for u in report.unavailable)} — a category nobody looked at is not a clean one"
