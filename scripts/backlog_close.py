@@ -1,4 +1,4 @@
-"""Close items in `open_backlog_left.md`: remove them and re-derive the counts.
+"""Close items in `open_backlog_left_new.md`: remove them and re-derive the counts.
 
 `uv run python scripts/backlog_close.py LH-005 LH-013 -m "already implemented"`.
 
@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 
-REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left.md"
+REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left_new.md"
 
 _ITEM_START = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
 

@@ -492,6 +492,12 @@ def run_lag_tick(
             "published": report.published_points,
             "failed": report.failed,
             "unmeasurable": report.unmeasurable,
+            # A TIER THAT STOPPED, counted apart from a lane nobody runs ([[LH-167]]). Printed here
+            # because the report is the only surface that names it: it is deliberately not a metric
+            # series, since this detector cannot tell a stalled tier from a lane created minutes ago and
+            # a pushed point would page somebody for a new lane. A field in the report that the tick
+            # does not print is a count nobody can reach.
+            "unpublished_source": len(report.unpublished_source),
             "skipped": report.skipped,
             # Per REASON, not a single total: the two are diagnosed and repaired differently, and a
             # summed "blind" count would hide one rising while the other fell.

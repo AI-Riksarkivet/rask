@@ -1,0 +1,1402 @@
+# open_backlog_left_new — only what is LEFT
+
+Replaces `open_backlog_left.md`, which grew to 9,378 lines because every row accumulated its own
+history — "re-measured on DATE", "this landed", "DEPLOYED", "the row's own estimate was wrong". That
+history is what made it unusable, so **this file does not carry it.** Each row states the defect, what is
+left, and what ends it. Nothing else.
+
+**Every row here was re-measured against HEAD on 2026-09-18** by 16 parallel agents reading the code
+rather than the prose. The old file stays in git history; a row's full story is recoverable from
+`git log -S'<ID>' -- open_backlog_left.md`.
+
+**HOW TO READ A ROW.** `blocked:` means a person cannot finish it without a decision — those are not
+available work, and the count below separates them. `PARTIAL` means some clauses shipped and only the
+named remainder is left. `REWRITTEN` means implementing the original ask would be wrong; the row says
+what to do instead.
+
+<!-- FOCUS:START -->
+## FOCUS NOW
+
+**FINISH THE LAKEHOUSE. It is the priority and nothing else competes with it.**
+The lakehouse is four services: **catalog, lineage, medallion, maintenance.**
+
+It is done when all five hold (owner, 2026-09-10):
+
+1. **Provenance/lineage is correct** — a write's provenance survives it.
+2. **The catalog is correct for lance-ns**, and correct for **auth / authz / governance**.
+3. **It is NOT coupled to a workflow engine or to Ray.** Dapr Workflow and Ray are things the
+   lakehouse can be driven BY, never things it depends ON.
+4. **Events are correct.**
+5. **It is resilient.**
+
+**THEN phase 2 — COMPUTE:** compute, ingest, ray-kit, and maintenance's Ray half. This is where BYO
+lives: bring your own workflow engine (here Dapr Workflow) and your own distributed engine (here Ray).
+
+**THEN phase 3 — CONTROLPLANE:** controlplane, gateway, notifications.
+
+**LOW PRIORITY — do not work these:** flows, search, viewer, annotator.
+**FRONTEND:** fix opportunistically, in the same change as the service it belongs to. Never a
+frontend-only campaign.
+
+### Standing constraints
+
+**Secrets reach a workload by exactly three paths and no others** (owner, verbatim): *"Never secret
+through envs. Either from ESO, secret store dapr and STS for zero trust."* — Dapr secret store
+(OpenBao) for a pod with a sidecar; ESO for a pod without one (Ray lane, web zones, runners); STS for
+STORAGE (`vending.build_session_policy`, bucket+prefix, 900 s). **Never through env** — not process
+env, not a k8s Secret via `envFrom`, not a chart value, never a fallback chain. A scoped static key is
+not a fix. Read the running pod, and never one spelling of a mount.
+
+**Never Docker — Dagger builds every image. Never mypy, never `# type: ignore` — narrow or cast.
+Idiomatic to lance-ns, never Iceberg; read `lance_docs/` and cite it. No backward compat. Read skill
+REFERENCES, not the index. Verify external claims against the source. Comments carry rationale and
+provenance, never history.**
+
+**A VERDICT IS NOT EVIDENCE IT IS STILL TRUE — re-measure before working a row.** Of 17 rows settled
+on 2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing.
+
+### Verification, per commit
+
+`uvx ty check`, `uv run ruff check`, the TESTPATHS the change touches — **and always the invariant +
+integration layers**, where a one-service change breaks another. Full suite ~8m30s, backgrounded, once
+per batch. Anything deployable is **BUILT with Dagger, DEPLOYED to k3s and OBSERVED working** — never
+claim it works first. **Push every commit.**
+<!-- FOCUS:END -->
+
+## RIPE DECISIONS — evidence complete, work starts the moment each is answered (2026-09-17)
+
+124 rows carry a decision marker. This section does NOT rank them — the other 121 were not assessed —
+it lists the three that were driven far enough TODAY that only the ruling is missing, each naming what
+happens either way. They are here because a decision buried in row 7,200 is a decision nobody makes.
+Adding a fourth means driving it to the same point first, not promoting it from the list below.
+
+**1 · Does an ESO-written Secret delivered by `secretKeyRef` satisfy the secrets rule?**
+*Blocks [[XC-002]]; defines what [[LH-160]]'s "baseline reaches 0" even means.*
+The estate currently says both things. `.claude/skills/rask-dapr/SKILL.md:152-154` and
+`tests/unit/test_the_ray_credential_has_one_source.py:4-8` (3 tests, green) say an ESO-backed
+`secretKeyRef` IS the sanctioned path for a sidecar-less pod. `test_secret_env_delivery_only_shrinks.py`
+counts every `secretKeyRef` as the banned path. Both read plausibly from the rule as written — ESO is
+named as a path, but the rule's subject is "never secret through envs".
+*If NO:* the Ray head's six entries move to a projected file mount (`S3_SECRET` to STS), and the skill
+line plus that test are rewritten in the same commit. *If YES:* XC-002 closes and LH-160's baseline
+excludes ESO-written refs explicitly, so the number keeps meaning something.
+
+**2 · May the maintenance sweep reclaim a BRANCH?** *Unblocks [[LH-094]]'s residue and 6 of
+[[LH-019]]'s 15 branch doors.* The change is one line — skip the refusal when
+`containment_of(uri, root) == "branch"` — and the EQUALITY refusals are untouched by it, which is the
+half that must keep refusing: an external shallow clone in another dataset is invisible to Lance, so
+only the estate-wide pre-pass can see it.
+Safety is measured three ways and pinned by `tests/unit/test_base_refs_guard.py` (15 pass): Lance's
+`cleanup_old_versions` IS branch-aware (3 files -> 4 -> 1 without a branch; 3 -> 4 -> 4 with); a branch
+still opens from a COLD interpreter after its parent is compacted AND reclaimed; and in the PRODUCTION
+shape — parent + external shallow clone + branch — maintaining the branch leaves the external clone
+intact (parent 9 rows, clone 3, branch 10).
+*It is an owner call because it makes reclamation DELETE MORE on a live estate*, and the guard's own
+comment sets that asymmetry deliberately ("a wrong refusal costs disk … a wrong permit costs a clone its
+entire reason to exist"). Live pressure, re-measured 2026-09-17 on the current image over 10 minutes: **105
+`relation='branch'` refusals against 94 `relation='is'`** — so roughly half of what the sweep refuses is
+the class this decision would release.
+
+**3 · Is the operator-readable Ray job name worth a shared-contract change?** *Blocks the last clause of
+[[LH-159]], the BYO contract.* Wiring `RayJobsApiExecutor` into `workflow.py` renames every Ray job,
+because the adapter submits under `order.idempotency_key` and the deployed submitter uses
+`stage_submission_id`. **The correctness worry does not apply:** `workflow.py:490` returns what the
+submitter posted and the poller reads `payload.submission_id`, so submitter and watcher agree by
+construction and cannot desynchronise. Measured on the live head 2026-09-17: 176 jobs, 48 readable
+(27%), **0 PENDING or RUNNING**.
+*Recommendation: take the rename.* It changes no shared `service-kit` contract, it is free today, and a
+log field carrying stage+token restores the legibility if it turns out to matter. The alternatives widen
+`WorkOrder` or the `Executor.submit` signature to buy back a naming convenience.
+
+## Counted
+
+**190 open items**, of which **95 are blocked on a decision** and **95 can be picked up today**.
+18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
+
+| Section | Open | Workable now | High |
+| --- | --- | --- | --- |
+| **PHASE 1 · LAKEHOUSE** | 65 | 27 | 12 |
+| **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
+| **PHASE 2 · COMPUTE** | 27 | 13 | 6 |
+| **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
+| **FRONTEND** | 9 | 8 | 0 |
+| **LOW PRIORITY** | 20 | 15 | 0 |
+
+
+## PHASE 1 · LAKEHOUSE
+
+**LH-019 · rask-only governance side effects still run inside spec handlers, and 16 doors refuse `branch`, 6 of which are safe to honour now**
+`catalog` · **HIGH** · PARTIAL
+- *What is left:* Plumb `branch` through the six branch-reclaim doors (`plan_table_compaction`, `commit_table_compaction`, `maintenance/preview`, `/run`, `/compact`, `/reindex`) to the maintenance verbs; the reclaim is proven branch-safe (`tests/unit/test_base_refs_guard.py`) and `rask-maintenance` logs ~650 `relation='branch'` refusals per 40 minutes. Leave the ten response-assembly refusals (`query_table`, `explain_table_query_plan`, `analyze_table_query_plan`, `get_table_stats`, the five index doors, `describe_table`) as `UnsupportedOperationError` — a 501 is correct there, not a wrong 200. Move the rask-only side effects (warehouse-scoped namespace refusal, trash soft-delete, protection refusals, lineage keys in schema metadata, implicit BTREE, insert pre-coercion) behind a management API — that carve is LH-021, unstarted: `grep -rn '/management' services/catalog/src` returns nothing. The protection code (table → 19, containers → 3) and the maintenance-503-on-POST-reads clause are done; do not rework them.
+- *Closes when:* The six reclaim doors accept `branch` end to end, and every rask-only side effect lives behind a management prefix rather than a spec handler.
+- *Evidence:* `grep -rn 'refuse_a_branch_this_door_cannot_honour(' services/catalog/src → 15 call sites + tables.py:295/386/405 (describe) = 16 doors` · `services/catalog/src/catalog/api/v1/endpoints/maintenance.py:71-93 (preview/run declare `branch` only to refuse it)` · `services/catalog/src/catalog/api/fga_deps.py:1013-1045 (require_not_protected: InvalidTableStateError for table, NamespaceNotEmptyError otherwise)` · `grep -rn '/management' services/catalog/src --include=*.py → empty`
+
+**LH-020 · The lance-ray client is undriven against the deployed catalog and the conformance suite covers only pylance's RestNamespace**
+`catalog, tests/e2e-py` · **HIGH** · PARTIAL
+- *What is left:* Do NOT file the lancedb upstream issue: lancedb 0.34.0 exposes `open_table(name, namespace_path=[...])`, so a multi-segment identifier is expressible and the issue has no bug behind it. Drive `lance_ray.read_lance(table_id=[...], namespace_impl="rest")` (lance-ray 0.5.0 in uv.lock) against the catalog with vended creds and `ray.init(address="local", _temp_dir=...)`. Extend `tests/e2e-py/test_the_stock_lance_client_drives_the_catalog.py` / `make e2e-spec-conformance` (Makefile:953-955) from lance_namespace-only to all three clients; nothing under `tests/e2e-py` imports lancedb or lance_ray.
+- *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
+- *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `grep -rn 'lancedb|lance_ray' tests/e2e-py — no match` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
+
+**LH-004 · The catalog's Lance-commit→lineage-publish window is not atomic and no ruling records whether that is accepted as view lag or needs a durable producer**
+`lineage, catalog, service-kit` · **HIGH** · **REWRITTEN — the original ask would be wrong**
+- **blocked:** Owner ruling on DURABILITY: ratify 'the Lance commit log is the source of truth and the lineage graph is a projection' (a lost publish is view lag, recovered by the reconcile sweep) in docs/DECISIONS.md, or accept the non-atomic window in writing
+- *What is left:* Do not do the row's closing clause: the four emit kernels differ by transport, authority and failure posture, the three builders by purpose, the one real mirror is pinned at zero drift by `test_openlineage_spec_conformance.py`, and the outbox-before-transport half is shipped (`service_kit/lakehouse/outbox.py`; `reconcile_cron.py` back-fills and reports `refused` separately; both alert rules guarded in `chart/alerting/rules.yml:33,52`). What remains is one ruling. Once ratified, add a COMPLETENESS gate on the reconcile sweep: every committed Lance version reaches the graph within a measured lateness bound. `docs/DECISIONS.md` carries no projection/source-of-truth entry today.
+- *Closes when:* docs/DECISIONS.md records the ruling and, if projection is chosen, a test asserts the sweep's completeness bound.
+- *Evidence:* `packages/service-kit/src/service_kit/lakehouse/outbox.py (exists)` · `services/lineage/src/lineage/api/reconcile_cron.py:71-84 (refused counted apart from stranded)` · `chart/alerting/rules.yml:33,52` · `grep -i 'projection|source of truth|commit log' docs/DECISIONS.md: no hits`
+
+**LH-016 · `silver-media$features` still occupies a medallion namespace in `lakehouse-wh` under two spellings, and the unbind door refuses a non-empty namespace**
+`catalog` · **HIGH**
+- **blocked:** Owner decision: drop or relocate `silver-media$features` (both spellings, `a76d1ca5_silver-media$features/` and `fa8bff0d_lakehouse$silver-media$features/`) — destructive on a real table, and no service identity holds `project:lakehouse#can_administer` by design.
+- *What is left:* Take the drop-or-relocate decision for `silver-media$features` in `lakehouse-wh`. Then a human bearer holding `project:lakehouse#can_administer` calls `DELETE /v1/warehouses/{id}/namespaces/silver-media`, which answers 409 `NamespaceNotEmptyError` until the table is gone. `bronze-media` has no object left in the bucket and needs no decision. The live store is not re-measured this session (no cluster access); the register's 2026-09-16 conditions table still lists `lakehouse$silver-media` among live composed paths.
+- *Closes when:* `lakehouse-wh` lists no `silver-media` namespace and the unbind door answers 200 for it.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/warehouses.py:624-685 (unbind door, `NamespaceNotEmptyError` refusal)` · `open_backlog_left.md:222 (2026-09-16 live measurement names `lakehouse$silver-media`)`
+
+**LH-055 · The FGA model has no branch/column/base/estate type, can_set_protection collapses onto can_drop, and project has no security_admin/data_admin/role_creator split or machine identity**
+`catalog, service-kit, openfga` · **HIGH**
+- **blocked:** Owner decision on the model shape: what a branch-scoped grant means when a branch is a whole parallel dataset; the column classification vocabulary (LH-058); the security_admin/data_admin/role_creator split and a machine identity; an `estate` type versus documenting warehouse-as-root; and whether can_set_protection splits from can_drop (a recorded design at fga_deps.py:209-213: disarming protection clears the drop bar).
+- *What is left:* With the ruling in hand, edit model.fga once: add a can_set_protection rung and remap it out of _OWNER_SUFFIX_RELATION (fga_deps.py:158,237); add the project role split plus a machine/operator identity; add the branch type, a column-policy relation, and an estate root carrying can_create_project, moving can_observe_events/can_browse_storage (model.fga:244,271) off warehouse onto it and repointing fga_root_object (catalog/core/config.py:320) with its one seeded tuple. Add .fga.yaml cases and _CHILD_EDGE_PARENT_TYPES entries (service_kit/governed/fga.py) for each new type. Coordinate with the role->project edge so the model changes once.
+- *Closes when:* model.fga declares branch, column and estate types and a project role split, every new rung has a .fga.yaml case, and fga_root_object names the estate object.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types: no branch/column/estate)` · `packages/service-kit/src/service_kit/governed/auth/model.fga:55-88 (project: team/admin/member only)` · `services/catalog/src/catalog/api/fga_deps.py:158,237 ('protection': 'can_drop')` · `services/catalog/src/catalog/core/config.py:320 (fga_root_object)`
+
+**LH-056 · Branch-scoped governance is missing: no FGA branch type, canonical_object_id and vending are branch-blind, protection/trash have no per-branch record, and tag/branch creation emits no control event**
+`catalog, lineage, notifications` · **HIGH** · PARTIAL
+- **blocked:** Owner acknowledgement of R5, plus an owner decision on who is TARGETED by a tag/branch control event (an event naming nobody is undeliverable).
+- *What is left:* Add `type branch { parent: [table]; reader/writer; can_write_data }` to model.fga with .fga.yaml cases (today the only branch rung is can_create_branch: owner at model.fga:434). Make the FGA object chosen in authorize branch-aware, since canonical_object_id joins path segments only and the object is `table:<ns>$<table>` whatever branch the request names. Scope vended STS prefixes to `tree/<b>/` in catalog/core/vending.py, add per-branch protection and trash records, and emit parent_branch/parent_version as lineage facets (they exist only as list_branches response fields, dataplane.py:1892-1893). Add tag and branch values to ControlAction in service_kit/control_events.py:36 (45 values, none for tag or branch) and regenerate docs/catalog-openapi.json plus the TS client. The stats/index body clause and the branches/delete rung are shipped.
+- *Closes when:* A can_write_data holder on main cannot write another branch, tags/create and branches/create emit a targeted control event, and a vended write credential cannot reach a sibling branch prefix.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:434 (can_create_branch: owner; no type branch)` · `services/catalog/src/catalog/api/fga_deps.py:164,175 (branches/create -> can_create_branch, branches/delete -> can_drop)` · `services/catalog/src/catalog/api/v1/endpoints/tables.py:1188-1205 and indices.py:142-157 (branch read from body)` · `packages/service-kit/src/service_kit/control_events.py:36 (ControlAction: no tag/branch value)`
+
+**LH-058 · No column-level classification exists: `model.fga` has ten types and no `column` relation, and credential vending bypasses any query-door masking**
+`catalog, lineage, openfga` · **HIGH** · **REWRITTEN — the original ask would be wrong**
+- **blocked:** The FGA model-shape decision (whether a `column` relation joins the model and how classified tables constrain credential vending)
+- *What is left:* The gap stands: `model.fga` declares user/team/role/project/warehouse/namespace/table/materialized_view/transaction/annotation_project and nothing column-shaped, and no classification field exists. `columns.py` IS gated at table level via the router-wide `authorize` (`api/v1/router.py:47`, writer tier), so the title's 'no FGA check' is only true per column. Do not implement 'masking on query' as written: `credentials` is a data-read action (`fga_deps.py:88`) that vends a whole-prefix S3 session, so a reader gets raw bytes without passing any query door. Once the model shape is ruled, put classification on column metadata, add the relation, and enforce at the credential-vending door (refuse or narrow the session for tables carrying classified columns) rather than at `query`.
+- *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types, no column)` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
+
+**LH-094 · Branch-relation refusals and the read-only `orphan_files` count keep the sweep from reclaiming and the trash purge from ever running**
+`maintenance, service-kit, chart` · **HIGH** · PARTIAL
+- **blocked:** owner call on GC BEHAVIOUR: (1) permit maintenance on a `branch`-relation base — skip the refusal when `containment_of(uri, root) == "branch"` at optimize.py:688, which makes reclamation DELETE more; (2) whether `orphan_files`, a read-only category no reclaimer consumes, keeps gating the trash purge in `report_is_clean`
+- *What is left:* Diagnosis (`containment_of` relations on the log line), discovery truncation, the `_backups` control-prefix skip, per-dataset orphan naming and `orphans_by_dataset` are shipped. Three items remain. (1) Once ruled, apply the branch permit: `optimize.py:688-689` refuses every relation `containment_of` returns (`is`/`branch`/`under`/`ancestor`, base_refs.py:118-137); the evidence that maintaining a branch cannot reach an external clone is pinned in `tests/unit/test_base_refs_guard.py`, and the equality refusals stay. (2) Decide the purge gate: `purge.py:219-262` counts `orphan_files` in `report.total` (only `unbound_namespaces` and `orphaned_annotation_tasks` are `NON_GATING_CATEGORIES`) while `orphans.py` states nothing deletes, so 932 orphan files across 8 datasets block the trash purge indefinitely — either an orphan reclaimer lands or the category leaves the gate. (3) Operator-experience call: `maintenance_refused_protected_base` logs at WARNING per dataset per tick (optimize.py:689) and is ~50-54% of every WARN the estate emits while `compaction_datasets_refused_total` already carries the count — demote the per-dataset line to DEBUG and emit one WARNING per sweep with the count. Live numbers were not re-measured this session.
+- *Closes when:* The branch ruling is applied or recorded as refused, `report_is_clean` reaches `None` on a tick with orphan findings under a decided rule, and one sweep-level WARNING replaces the per-dataset refusal line.
+- *Evidence:* `services/maintenance/src/maintenance/services/optimize.py:160,265,688-689` · `packages/service-kit/src/service_kit/lakehouse/base_refs.py:98,118-137` · `services/maintenance/src/maintenance/services/purge.py:219-262` · `services/maintenance/src/maintenance/api/routes.py:184,264; tests/unit/test_base_refs_guard.py; tests/unit/test_the_backup_directory_does_not_gate_reclamation.py`
+
+**LH-129 · The three Ray job scripts read `S3_KEY`/`S3_SECRET` from process env, `RASK_CREDENTIAL_REF` has no consumer, and nothing gates dead work-order fields**
+`medallion, ray-kit, service-kit, chart, scripts` · **HIGH**
+- **blocked:** The row's own phase ruling — 'Phase 2, do not work ahead of the lakehouse'
+- *What is left:* Wire the trust chain: the catalog accepts the cluster's OIDC issuer for the Ray identity; that identity gets `can_write_data`/`can_maintain` tuples on the tables a write-tier vend checks; `scripts/ray_stage_job.py:87-88`, `ray_train_job.py:64-65` and `ray_lance_job.py:45-46` read `RASK_CREDENTIAL_REF` plus the projected service-account token FILE and vend a 900 s triple through the catalog's STS door (`lance_storage_options` already takes `session_token`, `objectfs.py:35`); `deploy/ray-lance-demo.yaml` drops `S3_KEY` (:64) and `S3_SECRET` (:83) and moves the five `RASK_LINEAGE_TOKEN_SERVICE_*` secretKeyRefs (:101-126) to a mounted file. A scoped static key in env is not an acceptable interim. Add a gate over `work_order.to_env` (`work_order.py:126`) asserting every emitted name has a consumer — `RASK_TASK`, `RASK_MERGE_KEY`, `RASK_WRITE_MODE`, `RASK_CODE_VERSION`, `RASK_CREDENTIAL_REF` have zero (`RASK_IDEMPOTENCY_KEY` has one at `ray_stage_job.py:832`); `test_the_submitter_and_the_job_agree_on_the_wire.py:107` covers only the reverse direction. The head is hand-applied, so a chart-only fix cannot reach it.
+- *Closes when:* The Ray job vends its storage credential keyed on RASK_CREDENTIAL_REF, no secret rides pod env, and the to_env consumer gate is green.
+- *Evidence:* `scripts/ray_stage_job.py:87-88; scripts/ray_train_job.py:64-65; scripts/ray_lance_job.py:45-46` · `grep -rn RASK_CREDENTIAL_REF services packages scripts runners --include=*.py — only work_order.py:159` · `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py:107` · `deploy/ray-lance-demo.yaml:64,83,101-126`
+
+**LH-137 · silver→gold refuses every tabular-lane publication — the catalog stamps a tenant on a tenant-less lane id from the namespace binding, the gold runner composes a different table, and a confinement window narrowed to one vended string refuses the trigger's location**
+`medallion, catalog` · **HIGH** · PARTIAL
+- **blocked:** Owner picks among three NON-equivalent fixes: (i) `publication_extra` stops stamping `project` on a table id that carries no `<project>-` prefix (the binding lookup stays; only the emit is gated); (ii) `transform.py:636` stops narrowing `read_root` to the vended table — this reverts a deliberate narrowing pinned by `test_the_stage_runner_reads_where_the_catalog_says.py:92` and fixes nothing on its own; (iii) treat the `silver -> bind86-wh` registry binding as dev residue and repair estate config with no code change.
+- *What is left:* Drive one tabular-lane publication on the live estate and observe its silver→gold hop complete: a `medallion_stage_moved transition='silver->gold'` line (or any `medallion_stage_transitions_total` series on the `silver-to-gold` pod) and `gold$catalog` gaining a catalog location; absence of an `unconfined_uri` refusal is not closure. The chain at HEAD: `publication.py:165` stamps `project` from `warehouses.project_for_namespace` (namespace `silver` → `bind86-wh` → `bind86`) on lane id `silver$features`; `publication_trigger.py:127,147` carry that project plus `location=s3://bind86-wh/medallion/silver`; `transform.py:243` composes `bind86-silver$features`, `:636` narrows `read_root` to that table's vended path, and `:690` refuses because the two are different tables. Writable before the ruling: a RED test for that chain (none exists — `test_publish_names_the_tenant.py` covers only tenant-carrying and unbound namespaces, and no medallion test publishes an un-prefixed lane into a bound namespace) and a rewrite of the `_confine_from_uri` docstring at `transform.py:657`, which still claims the root is the tenant's warehouse when the code makes it the single vended table. Registry state (195 bindings, 96 warehouses; tier mis-bindings `silver -> bind86-wh`, `silver-media -> lakehouse-wh`, `bronze-media -> lakehouse-wh`) and the live recurrence are unverified this session (no cluster access); a deployed `gold-media` runner would light the second instance. Half (b) is closed — its residue is LH-141/LH-164 and must not be carried here; the side-flagged `RayWorkerOOMKills` (`chart/alerting/rules.yml:711`) names `ray_memory_manager_worker_eviction_total`, which nothing in-repo emits and the live store lacks, and belongs with the alerting row.
+- *Closes when:* A driven publication's silver→gold hop is observed completing on the live estate (a `medallion_stage_moved transition='silver->gold'` line and `gold$catalog` resolving to a catalog location) — a positive observation, not the absence of a refusal and not an alert, since `observability.alerting.enabled` is false (`chart/values.yaml:2898`) and nothing evaluates the 44 rules.
+- *Evidence:* `services/medallion/src/medallion/services/transform.py:243,636,657,690 (pinned via `git show HEAD:`; composes `project_namespace(project, settings.from_dataset)`; `from_uri = read_root = vended`; docstring "TENANT'S WAREHOUSE for a project trigger"; `if not uri_within(read_root, supplied)` refusal)` · `services/catalog/src/catalog/api/v1/endpoints/publication.py:165 → services/catalog/src/catalog/services/warehouses.py:345 (`project_for_namespace`: binding → warehouse → project, no prefix check by design)` · `services/medallion/src/medallion/services/publication_trigger.py:127,147 (`project` and `from_uri` read verbatim from the publication's `extra`)` · ``uv run pytest services/medallion/tests/test_the_stage_runner_reads_where_the_catalog_says.py -q` → 5 passed (asserts `roots.read_root == VENDED_FROM` at :92); `chart/values.yaml:2898` `alerting: enabled: false`; `git log --grep=LH-137` shows docs-only commits, no fix landed`
+
+**LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
+`medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
+- **blocked:** Owner ruling: may the catalog re-assert a dataset's location/id through a lineage event no run produced (a synthetic assertion restamping via the existing `SET_DATASET_SRC` path), or must lineage instead gain a catalog client and accept a catalog↔lineage cycle? LH-146 closed by exempting last-writer datasets from retention and never ruled on synthetic assertions.
+- *What is left:* The guard is shipped and pinned (9 tests pass in `tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py` + `services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py`). Only the repair remains. (a) Rewrite the relative `source_uri` on the 60 Dataset nodes: 58 are governed and resolvable through the catalog, 2 hold no tuple and are removals, 24 reach the sweep every tick as MISSING_ON_STORAGE. (b) Restamp the composed `medallion/<tier>` datasets the guard now refuses by name (`s3://bind86-wh/medallion/silver`→`bronze$events`, `s3://lance-catalog/medallion/gold`→`bronze$events`, `s3://lance-catalog/medallion/silver`→`silver$features`, and the flat `s3://acme-bucket/4750a5b9_acme-bronze$events`); `ensure_declared_dataset_id` runs only from compute.py write paths (251, 368, 392) and `table_id_from_location` and lineage's durable feed cannot supply the value. Implement option 1 or 3 per the ruling; lineage holds no catalog client today. Pin that a corrected dataset keeps its `_rowid`s (`update_schema_metadata` is metadata-only) and diagnose the 94-count `lakehouse-bronze$events` (names no catalog table) under LH-164, not here. Live counts are from the row, not re-measured this session.
+- *Closes when:* No Dataset node carries a relative `source_uri` except the two ungoverned removals, and the sweep's location-mismatch refusal fires zero times across a full tick.
+- *Evidence:* `uv run pytest tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py -q → 9 passed` · `services/medallion/src/medallion/services/compute.py:251,368,392` · `services/lineage/src/lineage/services/cypher.py:212 + repository.py:410` · `rg -n 'describe_table|catalog_url' services/lineage/src → no hits`
+
+**LH-159 · The Ray lane's caller bypasses the `Executor` port — `workflow.py` imports `ray_submit`/`ray_jobs_api` directly and `RayJobsApiExecutor` has zero production callers**
+`medallion, service-kit` · **HIGH** · PARTIAL
+- **blocked:** Which job-id path to take when wiring `RayJobsApiExecutor` into `workflow.py`: (1) carry `token` on `WorkOrder` (shared service-kit model change), (2) add a caller-supplied handle to `Executor.submit` (shared port-signature change), or (3) accept the `ray-<stage>-<token>-…` -> `idempotency_key` rename behind a drain of in-flight jobs (recommended: 0 PENDING/RUNNING jobs measured, cost is the operator-readable name on 27% of historical jobs).
+- *What is left:* Wire `RayJobsApiExecutor` in place of the direct imports at `workflow.py:488` (`submit_stage_job`), `:528`/`:979` (`job_status`) and `:708` (`job_failure`); the adapter wraps exactly those three and is reachable only through `engine_registry.executor_for`, whose sole production caller is `transform.py:793` for the in-process lane. Handle the undeclared-task case: `ray_submit.py:167` falls back to `settings.ray_entrypoint` while the adapter takes `registration.command` — synthesize a registration as `transform.py:797` does. Resolve the job-id split: the adapter posts under `order.idempotency_key` (`rayjobs_api_executor.py:105-110`) while the deployed submitter posts `stage_submission_id`, and `WorkOrder` carries `idempotency_key` but no `token`, so the adapter cannot derive the deployed shape. Design and a RED test can start now; landing needs the ruling. The refusal of unhosted engines, the `workflow` extra, the combination matrix test and an in-cluster in-process run are all shipped.
+- *Closes when:* `workflow.py` reaches Ray only through `executor_for(RAY_ENGINE)` and a test fails if `ray_submit`/`ray_jobs_api` are imported there again.
+- *Evidence:* `services/medallion/src/medallion/workflow.py:488,528,708,979 (direct ray_submit/ray_jobs_api imports)` · `services/medallion/src/medallion/services/rayjobs_api_executor.py:95-110 (submit posts order.idempotency_key)` · `packages/service-kit/src/service_kit/lakehouse/work_order.py:69,124 (stage, idempotency_key; no token field)` · `rg 'executor_for\(' services packages --glob '!*/tests/*' -> only transform.py:793`
+
+**LH-010 · The htr runner drives `build_source`/`build_sink` into ALTO writers, never reads bronze Lance or emits gold rows, and no geometry stage exists**
+`runners/htr, medallion, chart` · **MED** · PARTIAL
+- *What is left:* The in-dataset `lineage` column clause is shipped end-to-end (`transform.py:750` → `work_order.py:74,155` → `ray_stage_job.py:450` → `stage_stamp.py:146`); drop it. Re-cut the htr runner's stage job to read bronze Lance and emit gold rows: `runners/htr/src` imports no `lance` at all, `main.py:22,107` still drives `build_source`/`build_sink`, and `pipeline.py:8,180-186` still ends in `AltoExportActor`. Add the bronze→silver geometry stages under the placement constraint: the platform's stage runners are the three config rows at `chart/values.yaml:1472-1480` over a generic transform, and `medallion/schemas/htr.py` was removed for carrying a workload shape — so geometry stages live inside the sealed runner (its own Ray job/image) and surface to the platform as stage-runner config, never as a module under `services/medallion`. The owner-directed P7b shape is recorded nowhere in `docs/DECISIONS.md`.
+- *Closes when:* `runners/htr` opens a bronze Lance dataset and writes gold rows through the governed stamp, and the geometry stages run as stage-runner config rows with no workload-named module under `services/medallion`.
+- *Evidence:* `runners/htr/src/runner/main.py:22,107; runners/htr/src/runner/pipeline.py:8,180-186` · `grep -rln 'import lance\|from lance' runners/htr/src → empty` · `chart/values.yaml:1462-1480 (three stageRunners rows, no geometry)` · `scripts/ray_stage_job.py:450; packages/service-kit/src/service_kit/lakehouse/stage_stamp.py:146`
+
+**LH-021 · 25 rask-only route groups still sit on the spec prefixes instead of a versioned management API**
+`catalog` · **MED**
+- *What is left:* Move the rask-only route groups off the spec surface onto a separate versioned management prefix (Lakekeeper's `/management` vs `/catalog` split); the full list is `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md` §4 (lines 157-186). None has moved: `/v1/warehouses` (`endpoints/warehouses.py:87`), `/v1/projects` (`projects.py:74`, `members.py:49`, `access.py:71`, `policies.py:69`), `/v1/model` (`models.py:46`), `/v1/me` (`me.py:46`), `/v1/events` (`events.py:38`), `/v1/access` (`access_admin.py:204`), `/v1/user-state` (`user_state.py:71`) still mount under `/v1`, and `/commit`, `/credentials`, `/publish`, `/protection`, `/undrop`, `/maintenance/*`, `/policy/*`, `/access/*`, `/history`, `/blobs` still hang off `/v1/{namespace,table}`. Also strip the non-spec query params, headers (`X-Lance-Run-Facets`, `x-lance-originator`) and envelope dialects from the spec routes. The R2 acknowledgement this row waits on is recorded as standing in the register's owner-rulings section (R1-R11 stand), so the `blocked` marker is stale and the work is available.
+- *Closes when:* No rask-only route mounts under `/v1/{namespace,table,materialized_view,transaction}` and a spec client observes only spec-shaped responses there.
+- *Evidence:* `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:157-186` · `services/catalog/src/catalog/api/v1/endpoints/warehouses.py:87, projects.py:74, me.py:46, access_admin.py:204, user_state.py:71` · ``grep -rn '/management' services/catalog/src` → no route prefix` · `open_backlog_left.md:164 (R1–R11 STAND)`
+
+**LH-022 · `merge_insert`'s `on` is a single string because lance-namespace is pinned `<0.12`, so a composite merge key is inexpressible**
+`catalog` · **MED**
+- *What is left:* In a scratch environment (not this resolution — 0.12 rejects a bare string, so the bump is all-or-nothing), establish whether pylance 11.0.0's Rust `merge_insert_into_table` accepts a list for `on` once lance-namespace 0.12's model stops refusing one. If it does, lift the `<0.12` ceiling on the pins (root `pyproject.toml:48-49`, `packages/service-kit/pyproject.toml:42,44,54-55`, `services/medallion/pyproject.toml:23`), change `on: str | None` at `data.py:330` to `list[str]`, add per-column index coverage, and re-run the catalog and integration suites. Installed stack is lance-namespace 0.11.1 + pylance 11.0.0.
+- *Closes when:* A composite `on` (repeated query parameter per spec.yaml:3063) merges through `POST /{id}/merge_insert` on the pinned stack.
+- *Evidence:* `pyproject.toml:17-47 (override-dependencies rationale, 'one experiment')` · `services/catalog/src/catalog/api/v1/endpoints/data.py:315-330 (`on: str | None = None`)` · `uv pip list → lance-namespace 0.11.1, pylance 11.0.0`
+
+**LH-028 · The plural namespace undrop is not driven against the deployed catalog**
+`catalog` · **MED** · PARTIAL
+- *What is left:* Nine live legs in `tests/e2e-py/test_the_container_tier_deletes_are_driven.py:100-199` cover warehouse delete, cascade, non-disclosure, project delete, bucket-purge refusal and force-vs-protection. The one unshipped clause is `POST /v1/namespace/{id}/undrop` (`namespaces.py:678`), which has only a unit test (`tests/unit/test_drop_protection.py:670`). Add a live leg that cascade-drops a subtree the suite created, undrops it, and asserts every namespace and table is re-registered at its old id, run through `scripts/e2e_live.sh`.
+- *Closes when:* A live e2e leg drives cascade-drop then plural undrop against the deployed release and passes.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/namespaces.py:678` · `tests/e2e-py/test_the_container_tier_deletes_are_driven.py:100-199 (9 tests, none undrop)` · `tests/unit/test_drop_protection.py:670`
+
+**LH-034 · No Lance compression scheme is set on the create path and no decision record exists**
+`catalog, medallion` · **MED**
+- *What is left:* `lance-encoding:compression` appears nowhere in `services/catalog/src`, `services/medallion/src` or `packages/service-kit/src` (the only `lance-encoding` hit is the blob key at `medallion/services/compute.py:482`), so tables store general data uncompressed (vendored default `none`, `lance_docs/file_format.md:679`); choosing a scheme also engages BSS. `docs/DECISIONS.md` has no compression entry. Choose a scheme on the create path and record it with the measured corpus size (~50 MB governed; the object store total is dominated by `rask-observability`), so the retrofit cost is on record. Not urgent while the corpus is that small.
+- *Closes when:* A compression scheme is set where the catalog creates tables and docs/DECISIONS.md records the choice and the corpus size it was taken at.
+- *Evidence:* `grep -rn 'lance-encoding' services/catalog/src services/medallion/src packages/service-kit/src: only medallion/services/compute.py:482 (blob)` · `grep -i compression docs/DECISIONS.md: no hits`
+
+**LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
+`lineage, lineage-kit, chart` · **MED** · PARTIAL
+- *What is left:* Add a transport-independent producer signature over the CloudEvent and verify it in the bus door (`on_lineage_event` / `enforce_bus_authz`), with the signing seam in `packages/lineage-kit` so it survives a Dapr retreat; `_StampedAuthor` states the gap ("nothing proves the stamp"). Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
+- *Closes when:* A bus event whose signature does not verify is refused at `/lineage-events`, pinned by a unit test, with no `accessControl` in the tree.
+- *Evidence:* `services/lineage/src/lineage/api/fga_deps.py:237-275 (`_StampedAuthor` "nothing proves the stamp"; `enforce_bus_authz` delegates to `enforce_output_authz`)` · `grep -rniE 'signature|hmac' services/lineage/src packages/lineage-kit/src → prose only, no verification code` · `chart/templates/dapr-component.yaml:204-245 (scopes only on notifications; comment records the non-additive breakage)` · `tests/unit/test_the_inbox_may_read_the_provenance_bus_but_never_write_it.py (exists)`
+
+**LH-066 · The maintenance identity is one key across every warehouse rather than a per-warehouse scoped credential**
+`maintenance, chart` · **MED** · **REWRITTEN — the original ask would be wrong**
+- *What is left:* Close the row. The write path is already finer than per-warehouse: maintenance.vendWriteCredentials defaults true, so every rewrite signs with a per-TABLE 900 s credential from the catalog's vending door, and the ambient key is the scoped rask-maintenance user (policy: rewrite data, never the governing records), not the tenant root. The reads that stay ambient — discovery and the whole-estate protection pre-pass — must open every manifest in every bucket, because a shallow clone in bucket B is what marks bucket A's dataset unrewritable; a per-warehouse key would silently turn that guard off. Do not scope the ambient identity per warehouse.
+- *Closes when:* Closed: the write path vends per table and the ambient read key is scoped by policy, not by warehouse.
+- *Evidence:* `chart/values.yaml:1584 (vendWriteCredentials: true), :2103 (maintenanceAccessKey: rask-maintenance)` · `chart/templates/maintenance.yaml:122-137 (per-table vend), :245-248 (scoped pair wins)` · `services/maintenance/src/maintenance/services/credentials.py:1-25` · `chart/templates/minio-scoped-users.yaml:204-265 (rask-maintenance policy)`
+
+**LH-067 · Warehouse storage cannot be expressed as bases: one endpoint and one key for the whole estate, and a warehouse-rooted connection swaps only `root`**
+`catalog, storage` · **MED** · PARTIAL
+- *What is left:* Add per-warehouse endpoint/credential fields to the warehouse record (`warehouses.py:117` `_CALLER_OWNED` is `{id, bucket, root_uri, project}` only) and stop `build_namespace_for_root` (`namespace.py:28-35`) swapping only `root` off the single-endpoint `namespace_properties()` (`config.py:466-476`). Compose per-base credentials on the write door via `base_store_params`/`base_<id>.<key>` instead of the same `so` dict for every base (`dataplane.py:224-228`), and pass `base_store_params` on the READ path too (pylance 11.0.0 `lance.dataset()` accepts it) so a base with different creds is readable. `initial_bases` and `target_bases` are already passed (`dataplane.py:236-237`) and there is no storage-profile code path to delete. The `aws_provider_scheme` sub-clause stays upstream-blocked: it is absent from the installed pylance. Owner acknowledgement of R3 is given (R1–R11 stand).
+- *Closes when:* A warehouse record can declare its own endpoint/credentials, a write door names its target base with per-base creds, and a table in a base needing different creds reads back through the catalog.
+- *Evidence:* `services/catalog/src/catalog/services/warehouses.py:117 (_CALLER_OWNED has no endpoint/credential field)` · `services/catalog/src/catalog/core/namespace.py:28-35 (swaps only root)` · `services/catalog/src/catalog/services/dataplane.py:218-237 (same so for every base; initial_bases/target_bases already passed)` · `open_backlog_left.md:164 (R1–R11 STAND); grep aws_provider_scheme services/catalog → none`
+
+**LH-073 · Right to erasure is a Lance row delete only — it reaches no blob sidecar, clone/branch or version-pinning tag**
+`catalog, maintenance, notifications` · **MED**
+- *What is left:* `delete_from_table` (`data.py:447`) is a predicate delete plus a DELETE lineage event and propagates nowhere. Propagate a row delete to clones/branches through the referrer registry (`service_kit.lakehouse.base_refs` / `work_items`, consumed by maintenance `sweep.py` and `purge.py`) and to tags pinning old versions, and add a delete-subject door in notifications (no erasure/delete-subject code exists there). For blob sidecars, check whether `orphans.py:221`'s per-data-file `.blob` accounting already reclaims them once old versions are cleaned up; if so the sidecar clause reduces to making erasure trigger version cleanup past the retention floor.
+- *Closes when:* A row erasure removes the subject from every clone, branch and pinned version and its sidecar bytes, and the notifications plane has a delete-subject door.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:447-462 (predicate delete + DELETE event only)` · `services/maintenance/src/maintenance/services/orphans.py:221 (blob sidecar accounting)` · `rg -l referrer services/maintenance/src packages -> sweep.py, purge.py, base_refs.py, work_items.py` · `rg -i 'delete.subject|erasure' services/notifications/src -> no hits`
+
+**LH-074 · No quotas or storage accounting per project/warehouse**
+`catalog, maintenance` · **MED**
+- *What is left:* No accounting or quota exists: `grep -rni quota services/catalog/src services/maintenance/src` hits only cgroup CPU quota in `service_kit/lakehouse/lance_session.py` and prose. Roll per-file `size_bytes` (already computed at `maintenance/services/orphans.py:109,478`) up to project and warehouse totals, expose them, and enforce a byte quota at the create/write doors with a typed refusal. The row's claim that "branch-by-root gives per-directory cost for free" is unverified — no `by_root` symbol exists in `services/maintenance/src`.
+- *Closes when:* A project or warehouse over its byte quota is refused at create/write and its current usage is readable from the catalog.
+- *Evidence:* ``grep -rni quota services/catalog/src services/maintenance/src` → no quota logic` · `services/maintenance/src/maintenance/services/orphans.py:109,478 (per-file size_bytes only)` · ``grep -rn by_root services/maintenance/src` → 0 hits`
+
+**LH-085 · The media write lane is driver-only because `ray_stage_job.py` assumes `lance_ray`'s write strips blob typing, and that assumption is unmeasured on the pinned image**
+`medallion` · **MED**
+- *What is left:* `scripts/ray_stage_job.py:13-17,168` route every blob-v2 upstream through a driver-side pylance round-trip (`MEDIA_BATCH_ROWS` chunks) on the stated ground that `lance_ray.write_lance` exposes plain LargeBinary. Re-derive that inside the ray-lance image via Dagger at the current pins — `.docker/ray-lance.dockerfile:67`: lance-ray==0.5.0, pylance==11.0.0, pyarrow==25.0.0, held equal to the venv by `tests/unit/test_ray_job_images.py:104`. If a distributed `write_lance` preserves blob-v2 typing, delete the MEDIA branch and let media take the tabular read→map_batches(stamp)→write path; if it strips, record the measurement beside the branch so it stops reading as an assumption. Not measured this session.
+- *Closes when:* The blob-typing behaviour of `lance_ray.write_lance` at the pinned versions is recorded, and the media lane is distributed or its driver-only branch cites that measurement.
+- *Evidence:* `scripts/ray_stage_job.py:13-17,168` · `.docker/ray-lance.dockerfile:67` · `tests/unit/test_ray_job_images.py:104`
+
+**LH-096 · Outside the four lakehouse services, Lance is still opened bare per request and the bundled runtime-hygiene clauses are unfinished**
+`ingest, viewer, search, catalog, service-kit` · **MED** · PARTIAL
+- *What is left:* The session half is complete and gated: catalog 10, lineage 8, medallion 15, maintenance 9, service-kit 7 opens all thread a session, zero bare (AST count this session; pinned by tests/unit/test_a_lakehouse_open_shares_the_process_session.py). Remaining bare opens are ingest 9 (adapters.py:207, lander.py:121/170/174/266, catalog.py:174/250, workflow.py:1122 — phase 2), viewer 5 and search 1 (do-not-work list); ingest also never calls `instrument_lance_if_available`. Of the bundled residue: the catalog's `allow_http` is a settings bool (`LANCE_S3_ALLOW_HTTP`, default True, catalog/core/config.py:242) rather than derived from the endpoint scheme as service_kit/media/config.py:299 does; `create_tag` (dataplane.py:1834) has no door-side name refusal while branches have `refuse_a_branch_name_the_backend_cannot_use` (:1737, called :1914); pooled HTTPX clients in notifications/lifespan.py:102 and service_kit/media/lifespan.py:59 set no timeout (ingest/http.py is per-call by design, :19). No blob-threshold setting exists anywhere in the tree, so that clause has nothing to pin. Do NOT add `LANCE_CPU_THREADS` (falsified, [[LH-172]]); `LANCE_IO_THREADS`/`LANCE_LOG` are untested here.
+- *Closes when:* ingest's 9 opens thread a session and it calls `instrument_lance_if_available`; the catalog derives `allow_http` from the endpoint scheme; tag names are refused at the door like branch names; every pooled HTTPX client carries a timeout; the AST gate's ingest exemption is removed.
+- *Evidence:* `AST walk this session: ingest 0/9 bare, viewer 0/5, search 0/1; catalog/lineage/medallion/maintenance/service-kit all 0 bare` · `grep -rn 'instrument_lance_if_available(' → catalog/main.py:102, lineage/main.py:51, medallion/producer.py:76, stage_runner.py:61, maintenance/service.py:106 only` · `services/catalog/src/catalog/core/config.py:242 `s3_allow_http: bool = Field(default=True, alias="LANCE_S3_ALLOW_HTTP")`; packages/service-kit/src/service_kit/media/config.py:299 derives from `startswith("http://")`` · `services/catalog/src/catalog/services/dataplane.py:1737 branch-name refusal, :1834-1838 `create_tag` without one`
+
+**LH-098 · Maintenance's reclamation trail is not yet observed on a deployed compact_dataset audit row carrying duration_seconds**
+`maintenance, lineage` · **MED** · PARTIAL
+- *What is left:* Only the observation remains; the code is in. duration_seconds is timed at _maintain_one's choke point and travels to the lance.audit record (sweep.py:659-660,1015); the guarded attempts counter and last_attempt_at live on the single MERGE_RUN node (lineage/services/cypher.py:102-105) and are exposed on RunStatus. Place one reclaimable multi-fragment dataset in a registered, swept warehouse long enough for a deployed tick to compact it, then read the resulting compact_dataset audit row and confirm it carries duration_seconds. That is an estate mutation with cleanup, not a code change; it cannot be verified from this session. Do not replace the deterministic FAIL run id with one id per attempt — it is the flood guard.
+- *Closes when:* A deployed compact_dataset audit row on the lance.audit stream is read carrying a non-null duration_seconds.
+- *Evidence:* `services/maintenance/src/maintenance/services/sweep.py:659-660,1015` · `services/lineage/src/lineage/services/cypher.py:102-105 (guarded attempts increment)` · `services/lineage/src/lineage/schemas.py:404 and services/repository.py:794 (attempts on RunStatus)` · `tests/unit/test_a_run_state_does_not_regress.py; services/maintenance/tests/test_a_work_item_is_self_contained.py`
+
+**LH-102 · Storage reclamation (trash purge, then the reclaiming sweep) has never been run live**
+`maintenance` · **MED** · PARTIAL
+- *What is left:* Drive `purge_expired_trash` and then the reclaiming sweep against the live estate, and record the bytes actually reclaimed. The purge route refuses unless `report_is_clean` passes (any `total`, `unavailable` or `incomplete` rows block it), so first get the live drift report clean. The zero-tuple detector the row named as missing exists: `ungoverned_tables` and the project-with-no-tuples category are reconcile categories. Whether the live report still carries `incomplete` rows is unverified here (no cluster access this session).
+- *Closes when:* A live purge followed by the sweep completes with `report_is_clean` green and a recorded reclaimed-bytes figure.
+- *Evidence:* `services/maintenance/src/maintenance/services/purge.py:219 (report_is_clean), :727 (purge_expired_trash)` · `services/maintenance/src/maintenance/api/routes.py:170-192 (purge gated on a clean report)` · `services/maintenance/src/maintenance/services/reconcile.py:122,146,161 (ungoverned_tables / zero-tuple categories)`
+
+**LH-106 · No automated chaos harness exists; the pull-a-service rows and lineage scale-0→restart-replay are hand-driven only**
+`lineage, chart, tests` · **MED**
+- *What is left:* Write `tests/e2e-py/test_chaos_e2e.py` driving the pull-a-service rows, including lineage scale-0 → three events published while it is down → restart-replay, against a uuid-suffixed throwaway namespace (the `test_maintenance_s3_e2e.py` shape). Gate it behind an env-gated `make e2e-chaos` target kept OUT of `e2e-ci`'s suite list, the way the other per-suite targets are gated. Hand-driving replay on the live estate is not acceptable: a synthetic author is refused by `enforce_bus_authz` and bumps a watched refusal counter, and an authorized one injects fabricated provenance. DLQ poison parking and the cascade retry window are already driven and gated; do not redo them.
+- *Closes when:* `make e2e-chaos` runs the harness against a throwaway namespace and asserts replay after a lineage scale-0, and `e2e-ci` does not list it.
+- *Evidence:* `ls tests/e2e-py/ → no test_chaos_e2e.py` · `grep -c -i chaos Makefile → 0` · `Makefile:888 (`e2e-ci` suite list), :940-946 (env-gated per-suite target pattern)` · `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py (exists — retry window already gated)`
+
+**LH-107 · The catalog Service has no session affinity while prod runs 2 catalog replicas, so the console's `/v1/events` poll cursor degrades to noisy resets**
+`catalog, chart` · **MED** · **REWRITTEN — the original ask would be wrong**
+- *What is left:* Add `sessionAffinity: ClientIP` to the catalog Service (`chart/templates/services.yaml:376-383`). Do not build a shared buffer, and do not tie this to `medallion.stageRunnerReplicas`: the per-replica ring buffer and cursor serve only the admin console's `GET /v1/events` poll (an out-of-window cursor answers `reset=True` and the client re-reads authoritative state, so the failure is wasteful, not incorrect), and stage runners hit describe/create/vend, which hold no per-replica state. The trigger the row waits for has already happened: `chart/values-prod.yaml:36` sets `services.catalog.replicas: 2`.
+- *Closes when:* The catalog Service renders with `sessionAffinity: ClientIP` and a load-balanced console poll no longer produces `reset` churn.
+- *Evidence:* `services/catalog/src/catalog/core/control_buffer.py:1-12 (per-replica buffer, per-replica cursor, reset semantics)` · `chart/values-prod.yaml:34-36 (catalog replicas: 2)` · `chart/templates/services.yaml:376-383 (catalog Service, no sessionAffinity)` · `grep -rn sessionAffinity chart/templates/*.yaml → empty`
+
+**LH-110 · The control-root backup has no scheduled lane — the tool ships in no image and no CronJob invokes it**
+`catalog, chart` · **MED** · PARTIAL
+- *What is left:* Backup, verify, restore and retention are shipped in `scripts/control_root_backup.py` (`do_prune` at :173, `--keep N` at :273, default 0 = unbounded) and documented in `docs/runbooks/RUNBOOK-restore.md`. What remains is the scheduled run: `scripts/` is copied into no image (`.docker/rest-catalog.dockerfile:46-48` copies only `pyproject.toml`, `uv.lock`, `packages/`, `services/`) and `chart/templates/` has no CronJob for the control root. Pick one of: bake `scripts/` into an image, mount the script from a ConfigMap, or re-implement backup+prune in shell with `mc` the way `backup-pg.yaml` does; then add the CronJob with a `keep` value and an off-bucket `--dest`.
+- *Closes when:* A chart-rendered CronJob runs the control-root backup with retention on a schedule and its manifest is verifiable from the runbook.
+- *Evidence:* `scripts/control_root_backup.py:173-201,273 (do_prune, --keep)` · `.docker/rest-catalog.dockerfile:46-48 (no scripts/ copied)` · `grep -rn control_root chart/templates → no CronJob, only comments in services/maintenance/medallion.yaml` · `docs/runbooks/RUNBOOK-restore.md (exists)`
+
+**LH-113 · One 464-line catalog `Settings` class carries every domain's configuration**
+`catalog` · **MED**
+- *What is left:* `Settings` is services/catalog/src/catalog/core/config.py:66-529 — 464 lines, 62 annotated fields, in a 573-line module, deriving from `GovernedAuthSettings`, `LanceSessionCaps` and `BaseSettings`. Exactly one block has been lifted out so far: `LanceSessionCaps` (config.py:31-63, 2 fields) is a mixin the way the split should look. Continue that shape: carve the remaining fields into per-domain settings blocks and compose them, the pattern the eight services already share via `GovernedAuthSettings`.
+- *Closes when:* `Settings` is a composition of per-domain blocks and no single class in config.py exceeds a domain's own fields.
+- *Evidence:* `AST measure this session: `class Settings: lines 66-529 (464 lines), annotated fields=62, bases=['GovernedAuthSettings','LanceSessionCaps','BaseSettings']`` · `services/catalog/src/catalog/core/config.py:31 `class LanceSessionCaps(BaseSettings)` (2 fields) — the one block already split` · `wc -l services/catalog/src/catalog/core/config.py → 573`
+
+**LH-127 · Eight orphaned Dapr durables sit on six streams until the chart-durables orphan pass runs, and nothing surfaces an unexpected consumer**
+`lineage, compute, chart` · **MED** · PARTIAL
+- *What is left:* The orphan pass is written: `chart/templates/_durables.tpl` renders `lance.chartDurables`, `nats-stream-job.yaml:255-258` deletes any `*-durable` on a walked stream absent from `EXP_DURABLES`, and `tests/unit/test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py` pins the set. Deploy it and confirm the eight orphans (`lance-ray` x4, `pages-to-gold-htr` x2, `maintenance-durable`, `maintenance-work-durable`) are gone — not verifiable this session (no cluster access). Then surface the inverse signal: the lakehouse admin `/streams` view shows `num_pending` and `push_bound` and flags an EXPECTED group that is unbound (`jetstream.ts:113-122`), but nothing flags a consumer that is NOT in the expected set, so the next orphan is still invisible without a NATS client. `MAINTENANCE_WORK` and the index lane stay excluded from the walk by design (work-sized backoff).
+- *Closes when:* `nats consumer ls` on LINEAGE, MEDALLION, TRAINING, DLQ and CATALOG_CONTROL shows only chart-rendered durables, and the admin streams view marks any consumer outside the expected set.
+- *Evidence:* `chart/templates/_durables.tpl (exists); chart/templates/nats-stream-job.yaml:255-258 (EXP_DURABLES)` · `tests/unit/test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py (exists)` · `frontend/microfrontends/lakehouse/src/lib/admin/jetstream.ts:39-44,113-122 (push_bound; expected-but-unbound only)` · `frontend/microfrontends/lakehouse/src/lib/admin/StreamsPanel.svelte:181-182`
+
+**LH-144 · Three live datasets carry no FGA tuples and no drop run, and a lost drop-event emit pages nobody**
+`catalog, lineage` · **MED** · PARTIAL
+- *What is left:* The drop's lineage emit now rides the staged outbox (`catalog/core/lineage_emit.py:690-710`; chart sets `LANCE_LINEAGE_TRANSPORT=dapr` and `LANCE_LINEAGE_OUTBOX_URI` at `chart/templates/services.yaml:149,162`) and a failed emit increments the `_emit_failed` counter (`lineage_emit.py:61`), so the loss mechanism is closed at the emitter. Still open: no alert rule reads that counter (`grep lineage_emit chart/alerting/rules.yml` → 0), and the three named datasets `uiproof-gold$catalog`, `research-bronze$events`, `bind86-bronze$events` must each be governed to their real owner or recorded as dropped so `repository.dropped_at` (`lineage/services/repository.py:708`) recognises them; the lineage reconcile names them in `lineage_reconcile_ungoverned` (`reconcile_cron.py:161`) every tick. The drop stays best-effort (`tables.py:563-575`). The 47 dropped ones need nothing. Live population not re-verified (no cluster access).
+- *Closes when:* The three named datasets no longer appear in `lineage_reconcile_ungoverned` and a failed catalog lineage emit fires an alert.
+- *Evidence:* `services/catalog/src/catalog/core/lineage_emit.py:61,690-712` · `chart/templates/services.yaml:149,162` · `services/lineage/src/lineage/api/reconcile_cron.py:161` · ``grep -n lineage_emit chart/alerting/rules.yml` → 0 hits`
+
+**LH-167 · A tier written and then stopped is reachable only by a reader who already suspects it: the promotions door has no enumeration and no board names a written-but-unpublished tier**
+`medallion, catalog` · **MED**
+- *What is left:* Land one of two surfaces. Either add an enumeration to the promotions door — the router exposes exactly `POST /promotions/{instance_id}/decision` and `GET /promotions/{instance_id}`, both keyed by an instance id, and no list route exists anywhere in services/ — gated the way the single read is (test_promotion_read_is_gated.py). Or make the tier board name a written-but-unpublished tier by reading LagTickReport.unpublished_source (cascade_lag.py:305,446), which already carries those cells as identities. Keep it a report, not a metric series: the detector cannot date a source, so a series would page on every freshly created lane.
+- *Closes when:* An operator can ask 'what is held?' or see a written-but-unpublished tier on a board without knowing an instance id in advance.
+- *Evidence:* `services/medallion/src/medallion/api/promotions.py:270,300 (the only two routes)` · `grep -rn 'list_holds|list_promotions' services/ -> no matches` · `services/medallion/src/medallion/services/cascade_lag.py:305,446 (unpublished_source)` · `services/medallion/tests/test_a_tier_that_stopped_is_not_a_lane_nobody_ran.py`
+
+**LH-035 · The query door has no inline-bytes opt-in, and the `/blobs` docstring never names `read_blob_ranges` as the batched path**
+`catalog` · **MED**
+- **blocked:** Owner acknowledgement of 'R8' — a ruling the register no longer defines anywhere (its only occurrence is this row's header); confirm what R8 is or drop the gate.
+- *What is left:* The query door delegates the body to `native.call(ns, "query_table", body)`, and neither it nor installed `lance_namespace` 0.11.1's `QueryTableRequest` carries `blob_handling`/`all_binary` (both absent from `model_fields`), so a caller cannot ask for inline bytes. Add the opt-in to the query request model. `read_blob_ranges` is documented in docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:424-426 but `data.py` never names it; add the cross-reference to the `GET /{id}/blobs` docstring (data.py:509).
+- *Closes when:* A query request can carry an inline-bytes flag that the door honours, and the `/blobs` docstring points at `read_blob_ranges` for many-rows-one-range clients.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:509 (`/blobs` door)` · ``grep -n 'blob_handling|all_binary|read_blob_ranges' data.py` → no matches` · ``uv run python -c` → QueryTableRequest.model_fields lacks blob_handling and all_binary` · `open_backlog_left.md:3780 (sole 'R8' occurrence)`
+
+**LH-037 · `mode=Skip` on `drop_namespace` is unreachable (the FGA gate refuses before existence resolves) and `Overwrite` on `create_namespace` is refused pending a ruling**
+`catalog` · **MED** · PARTIAL
+- **blocked:** (1) Whether the authorization gate may admit an idempotent no-op against an id with no tuples (the no-existence-oracle class rule, docs/DECISIONS.md:1394) or `Skip` is withdrawn from `drop_namespace`; (2) whether `Overwrite` on `create_namespace` is implemented against the cascade/trash interaction or stays refused
+- *What is left:* Every other mode is honoured: `create_namespace` keeps an existing namespace on `ExistOk` without seeding ownership and refuses `Overwrite` with a 400 (`namespaces.py:142-145`, seam `create_or_keep_namespace` :261); `register_table` refuses `Overwrite` (`tables.py:735-738`); `drop_namespace` parses `Fail`/`Skip` via `DropMode` (`modes.py:54`). Take ruling (1): either let the gate admit a `Skip` drop of an id with no tuples, or remove `Skip` from this door's accepted set and name that in the 400. Take ruling (2): implement `Overwrite` as cascade-drop-then-create, or leave the refusal. Keep `modes.py`'s fold of unrecognised modes to `Create`.
+- *Closes when:* Both rulings are recorded in docs/DECISIONS.md and the doors' behaviour matches them.
+- *Evidence:* `services/catalog/src/catalog/core/modes.py:21,54` · `services/catalog/src/catalog/api/v1/endpoints/namespaces.py:142-145,261` · `services/catalog/src/catalog/api/v1/endpoints/tables.py:735-738` · `docs/DECISIONS.md:1394`
+
+**LH-041 · pylance `Tags.update` has no conditional form, so a tag MOVE is last-writer-wins; If-Match is proven on MinIO only**
+`catalog` · **MED** · PARTIAL
+- **blocked:** (a) Accept a last-writer-wins tag MOVE and record it in docs/DECISIONS.md, or (b) raise a conditional `Tags::update` upstream in Lance
+- *What is left:* Take the ruling; do not hand-write `_refs/tags/<name>.json` from the catalog. The tag CREATE race is already arbitrated (`tags.create` refuses an existing tag; `publication.py:298 _set_tag`, `models.py:213-215`). Under (b), file against pylance (11.0.0 in uv.lock) and consume the primitive in `_set_tag` and `models.py:215`. Separately, re-run `tests/e2e-py/test_object_store_cas_e2e.py`'s If-Match tier against RustFS if a deployment ever enables it; the chart runs MinIO (`chart/values.yaml:2022-2023`).
+- *Closes when:* The ruling is recorded (and, under (b), the upstream conditional update is consumed).
+- *Evidence:* `services/catalog/src/catalog/services/publication.py:298` · `services/catalog/src/catalog/services/models.py:213-215` · `uv.lock:3276-3277 (pylance 11.0.0)` · `chart/values.yaml:2022-2023 (minio.enabled: true)`
+
+**LH-043 · Unknown whether MemWAL server-id sharding fits append-only bronze landing (coordinator-free ingest)**
+`ingest, medallion` · **MED**
+- **blocked:** §K — the Dapr-retreat / BYO-engine cutover must land first; the row sequences itself after it (a sequencing gate, not a ruling).
+- *What is left:* Prototype MemWAL one-shard-per-pod (`uuid5(instance_id)`, PUT-IF-NOT-EXISTS with epoch fencing, reads unioning all shards) against bronze landing and record whether it fits append-only ingest. The only MemWAL awareness at HEAD is the maintenance orphan scan recognising `_mem_wal/` as a known layout; no ingest path uses it. The audit records that blob v2 columns read `None` through the MemWAL scanner, so the prototype must re-check that on the installed pylance (11.0.0) before any design rests on it.
+- *Closes when:* A prototype run against bronze landing answers, with a recorded result, whether MemWAL server-id sharding fits coordinator-free ingest.
+- *Evidence:* `docs/audits/lakehouse-2026-09/lakehouse-analysis.md:230 (option C′, blob v2 reads None through MemWAL)` · `services/maintenance/src/maintenance/services/orphans.py:84-87,354-355 (only MemWAL awareness in code)` · `uv.lock:3276-3277 (pylance 11.0.0)`
+
+**LH-061 · Reconcile is report-only: stranded objects are detected but not repaired or dropped beyond expired trash, and FGA tuples cannot be rebuilt from the catalog registries**
+`maintenance, catalog` · **MED** · PARTIAL
+- **blocked:** Overturn the standing owner deferral ('No — not yet') on a write-capable reconcile
+- *What is left:* The detection half exists: `services/maintenance/src/maintenance/services/reconcile.py` reports seven drift categories across OpenFGA, the control-root registries and object storage, AST-gated read-only by `tests/unit/test_reconcile_report.py`; `purge.py` reclaims only expired trash records (off by default via `MAINTENANCE_TRASH_PURGE_ENABLED`) and keeps orphan reclaim report-only. Once the deferral is overturned: add a repair pass that acts on the report at every tier (ungoverned tables, ghost projects, unbound namespaces, orphan buckets/datasets) with dry-run default and opt-in drift deletion, and an additive tuple rebuild driven from the `_projects/`, `_warehouses/` and bindings registries so the tuple estate can be reconstructed after a loss. Keep the report/reclaim module split.
+- *Closes when:* A dry-run-first repair pass and an additive tuple rebuild exist, driven from the catalog registries.
+- *Evidence:* `services/maintenance/src/maintenance/services/reconcile.py:1-4,969-983` · `services/maintenance/src/maintenance/services/purge.py:1-12` · `services/maintenance/src/maintenance/api/routes.py:11-19`
+
+**LH-062 · `type role` in `model.fga` has no `project` edge, so a global role name can be granted a rung on any tenant's namespace**
+`catalog, service-kit` · **MED**
+- **blocked:** Owner decision: the `model.fga` change is held alongside the FGA model-shape item so the two land as one coordinated edit rather than two.
+- *What is left:* Add `define project: [project]` to `type role` (`model.fga:50-52`, currently only `assignee`), updating `model.fga.yaml` and `model.json` together (`make fga-test` diffs all three). Then in `access.py::_access_mutate` (`:310`), before `fga.write_tuples` (`:354`), validate that a `role:` grantee's project matches the object's tenant resolved namespace → binding → warehouse → project; today a qualified `role:…#assignee` userset passes through verbatim (`:348-350`). The enforcing half is the real work because a namespace's tenant resolves only through the binding registry — a registry read on a security-critical grant path.
+- *Closes when:* A grant of a `role:` userset onto a namespace in a different project is refused 4xx, pinned by an FGA test and a catalog test.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:50-52` · `services/catalog/src/catalog/api/v1/endpoints/access.py:310,348-354`
+
+**LH-063 · FGA grants are keyed on the raw IdP `sub`, so changing the Dex connector or IdP re-keys every grant**
+`service-kit, catalog` · **MED**
+- **blocked:** Owner decision: design a stable internal principal id that FGA keys on (IdP subject as a mapped attribute, plus a tuple re-key migration), or record per-IdP subject keys as the permanent answer.
+- *What is left:* `governed/deps.py:181` and `:208` return `token.sub` verbatim as the FGA subject; no principal mapping, no configurable claim and no ruling in `docs/DECISIONS.md` (only the 2026-07-23 team/role WONTFIX at :412). After the ruling, land the principal id, the migration that re-keys existing tuples, and only then any configurable subject claim — it must not ship alone.
+- *Closes when:* Either DECISIONS.md records subject keys as permanent, or a principal-id seam plus tuple migration lands with a test that a connector rename keeps grants intact.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/deps.py:181,208` · `docs/DECISIONS.md:412 (only related ruling)`
+
+**LH-069 · The consume-side project-id rule is looser than the mint rule because pre-registry ghost ids were never adopted or revoked**
+`catalog, medallion, service-kit` · **MED**
+- **blocked:** Owner decision: adopt the pre-registry ghost project ids into the registry, or revoke them
+- *What is left:* Mint rule is `CONTROL_ID_RE` (`identifiers.py:33`: lowercase DNS-safe 3-63 chars, `\Z`-anchored); consume rule is `PROJECT_PATTERN` (`warehouse_registry.py:38`: `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, used by `is_safe_project` in catalog lineage_emit, medallion ingest_trigger and transform). After the decision, migrate the live control root, tighten `PROJECT_PATTERN` to the mint rule and regenerate medallion's clients (wire-visible). The presence of ghost ids in the live registry was not verified this session (no cluster access).
+- *Closes when:* `PROJECT_PATTERN` equals the mint rule and every registered project id satisfies it.
+- *Evidence:* `services/catalog/src/catalog/core/identifiers.py:32-33` · `packages/service-kit/src/service_kit/lakehouse/warehouse_registry.py:38-39,143-145` · `services/medallion/src/medallion/services/ingest_trigger.py:205`
+
+**LH-072 · `VendedCredentials.storage_options` is one mapping that mixes secrets with endpoint/region config**
+`catalog, storage` · **MED**
+- **blocked:** Decide the shape: split the vended response into `credentials` and `config` objects, or keep one mapping inside a type that knows which keys are secret and renders them redacted (pylance/lance-ray/object_store consume one dict, so a split is merged back at every call site).
+- *What is left:* `vending.py:45-54` still declares `storage_options: dict[str, str]` carrying key, secret and config together; no redacting container exists anywhere in service-kit or catalog. No path logs the vended dict, so this is a contract change, not an incident. After the decision, apply it across every vendor and regenerate the clients that consume the response.
+- *Closes when:* A client can tell secret fields from configuration by type, and a repr/log of the vended object never shows a secret, pinned by a unit test.
+- *Evidence:* `services/catalog/src/catalog/core/vending.py:45-54` · `rg -i redact packages/service-kit/src services/catalog/src → no credential container`
+
+**LH-075 · The read audit stream in GreptimeDB has no index; `dataset` is a JSON key inside `log_attributes`, not a column**
+`catalog, chart` · **MED** · PARTIAL
+- **blocked:** Owner ruling: promote the audit's `dataset` out of `log_attributes` into a real column (an OTel Collector transform, then index it) or leave it as a JSON key filtered after scope narrowing?
+- *What is left:* Add an index on `opentelemetry_logs.scope_name` in a hook Job shaped like `chart/templates/greptimedb-ttl-job.yaml`; that is startable now and gated by no ruling. `scope_name` is the only first-class column separating the `lance.audit` rows (6.46M of 105.4M, 6.1%) from the rest. No index DDL exists anywhere under `chart/`. Do not rework retention: the 14d database TTL hook is in place. Take the promotion ruling separately.
+- *Closes when:* A chart hook creates the `scope_name` index on `opentelemetry_logs`, and the dataset-promotion question has a recorded answer.
+- *Evidence:* `chart/templates/greptimedb-ttl-job.yaml (only GreptimeDB DDL hook; ALTER DATABASE ttl only)` · `grep -rniE 'CREATE INDEX|scope_name|SKIPPING INDEX|INVERTED INDEX' chart/templates chart/values.yaml → only age-postgres.yaml:41` · `ls chart/templates | grep greptime → greptimedb-ttl-job.yaml only`
+
+**LH-076 · `can_observe_events` is the estate-admin bar under a name that says 'read the feed'**
+`catalog, service-kit` · **MED** · PARTIAL
+- **blocked:** Owner ruling: add a distinctly named `can_administer_estate` that `projects.py`, `access_admin.py` and `POST /v1/stores` alias to (repointing live checks and reseeding tuples), or keep `can_observe_events` as the estate-admin rung under its current name.
+- *What is left:* The comment half is shipped: `model.fga:236-244` now states it IS the admin rung and the consumer list is derived from code by `tests/unit/test_the_estate_rung_documents_everything_it_gates.py`. Only the rename half remains: no `can_administer_estate` exists anywhere, and `stores.py:105,135,197`, lineage `fga_deps.py:144`, tenant minting and the raw-tuple routes all still gate on `can_observe_events` at the root object. Do nothing until the ruling lands; if it says rename, repoint those checks and reseed the tuples in one change with `fga model test` green.
+- *Closes when:* Either the owner rules the name stays, or a `can_administer_estate` relation exists and every estate-admin call site checks it.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:236-244 (rewritten comment, define can_observe_events: owner)` · `tests/unit/test_the_estate_rung_documents_everything_it_gates.py (exists)` · `services/catalog/src/catalog/api/v1/endpoints/stores.py:105,135,197; services/lineage/src/lineage/api/fga_deps.py:144` · `grep -rn can_administer_estate services packages chart → none`
+
+**LH-077 · `alter_transaction` gates a whole `AlterTransactionRequest` at one committer-tier check while the model claims a per-action distinction**
+`catalog, service-kit` · **MED**
+- **blocked:** Owner ruling: authorize `alter_transaction` per state-action (making `can_set_property`/`can_cancel` real doors) or keep one check and delete both relations from `model.fga`.
+- *What is left:* `model.fga:514` `can_set_property: editor` and `:516` `can_cancel: committer` are still referenced by nothing; `fga_deps._authorize_transaction` (`:410`) picks only `can_describe`/`can_set_status` (or `can_get_metadata`/`can_update_properties` on a namespaced txn), and `transactions.py:28-32` forwards the whole body after that one check. On the ruling: either extend the `alter` route to check per action, or delete both lines with `fga model test` green — deleting the `editor` rung is a second decision since `viewer` inherits from it. The `fga` CLI is at `.localbin/fga` (v0.6.4, not on PATH); the store is an in-cluster ClusterIP (`rask-openfga`), so a port-forward is the path for `fga model test`, not the sandbox proxy.
+- *Closes when:* Either `POST /v1/transaction/{id}/alter` authorizes each state action against its own relation, or `can_set_property` and `can_cancel` are gone from `model.fga` with `fga model test` green.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:505-516 (removal-candidate comment; the two relations)` · `services/catalog/src/catalog/api/fga_deps.py:410-425 (_authorize_transaction picks describe/set_status)` · `services/catalog/src/catalog/api/v1/endpoints/transactions.py:28-32 (single-check alter route)`
+
+**LH-091 · No control-lane event announces a table version advance, so a BYO change-feed consumer has no push trigger on `catalog.control.v1`**
+`catalog, lineage, notifications` · **MED**
+- **blocked:** Owner decision: point BYO change-feed consumers at `lineage.events.v1` (every governed write already publishes `version` there; costs no new event), or accept the control lane's per-replica broadcast buffer (`GET /v1/events`) carrying data-plane frequency and add a version-advance `ControlAction`.
+- *What is left:* Take the lane decision. If lineage: document at the `POST /v1/table/{id}/changes` door that the trigger is the `lineage.events.v1` write event's `version` and nothing else changes. If control lane: add the action to the 41-member `ControlAction` literal with the buffer cost stated, across the three-file contract. Either way do NOT add it to notifications' `NAMED_ACTIONS` — it names no party.
+- *Closes when:* Either the changes-door docs name `lineage.events.v1` as the trigger, or a version-advance action exists in `ControlAction` with an emitter and the stated cost.
+- *Evidence:* `packages/service-kit/src/service_kit/control_events.py:36 (`ControlAction` literal; 41 members, none for a write/version advance)` · `packages/service-kit/src/service_kit/control_events.py:57,105 (`NAMED_ACTIONS` exclusion rationale)`
+
+**LH-092 · The ingest-lane slice proves the TRIGGER chain but not the DATA chain — no silver or gold version or row count is ever asserted**
+`medallion` · **MED**
+- **blocked:** The double-home ruling ([[LH-137]]/[[LH-164]]): whether the catalog-vended path becomes the only legitimate home for the silver/gold tiers, or the composed `s3://<stageBucket>/medallion/<ns>` paths stay — which decides whether the lane asserts through the catalog or opens S3 directly
+- *What is left:* The tier URIs are already rendered for every stage runner (chart/templates/medallion.yaml:523-524 under `medallion.compute`), so configuration is not the gap. scripts/ingest-lane.sh asserts bronze only — `committed_version` at line 506 and `units_done` at 513, 618, 719 — and the words silver/gold appear only in the comment at line 89. Once the ruling lands, add an assertion that reads a committed silver AND gold version with row counts through whichever door the ruling makes correct; do not write it before, because the composed tier ids name no catalog table and a catalog lookup 404s today.
+- *Closes when:* scripts/ingest-lane.sh fails when silver or gold has no committed version or its row count does not match the bronze input.
+- *Evidence:* `scripts/ingest-lane.sh:89 (only silver/gold mention, a comment); :506 `committed_version`; :513,618,719 `units_done`` · `chart/templates/medallion.yaml:517-524 — MEDALLION_FROM_URI/TO_URI rendered under `$root.Values.medallion.compute`` · `open_backlog_left.md:2620 LH-137 header (reopened, unruled); :7521 LH-164 header`
+
+**LH-097 · Silver re-materialises managed blob bytes copied from bronze instead of being a shallow clone of bronze@N plus `add_columns`**
+`medallion, maintenance, catalog` · **MED**
+- **blocked:** Owner acknowledgement of R9 plus the storage-vs-coupling trade (a referencing silver means bronze can never be reclaimed independently — the sweep already refuses reclaim on shallow-clone/multi-base datasets) and of the recorded clone→source lineage edge.
+- *What is left:* Land the clone→source lineage pins. Add a `scripts/` measurement of both shapes — materialised copy vs shallow clone + `add_columns` — reporting bytes and latency on one corpus against the medallion's blob path; the existing `measure_blob_descriptor_carry_forward.py` / `measure_add_columns_on_blob_table.py` cover descriptors and add_columns, not clone-vs-copy. Then make silver a `shallow_clone` of bronze at the pinned version plus `add_columns` in `medallion/services/compute.py`, replacing the copy branch that carries bytes on the ground that they exist nowhere else.
+- *Closes when:* A silver produce commits no managed blob bytes of its own and the measurement script's clone shape is the one `compute.py` runs.
+- *Evidence:* `services/medallion/src/medallion/services/compute.py:513 ("MANAGED UPSTREAM: the bytes exist nowhere else, so carrying them IS the only option")` · `grep -rn shallow_clone services/medallion → nothing; only maintenance/optimize.py:645 and service_kit/lakehouse/features.py:238 (the reclaim guard)` · `ls scripts/ | grep measure → measure_add_columns_on_blob_table.py, measure_blob_descriptor_carry_forward.py, measure_external_blob_carry_forward.py`
+
+**LH-099 · The sweep's reclaimed bytes reach the summary and audit line but no metric, and no control event says a table was compacted**
+`maintenance, service-kit, notifications` · **MED** · PARTIAL
+- **blocked:** Owner decision, shared with the branch/tag control-event question: is a compaction an audit record only, or should someone be TOLD (a `table_maintained` action)?
+- *What is left:* Add a `bytes_removed` argument to `record_reclaimed` in maintenance/core/metrics.py and export it as a sweep instrument (today the only bytes instrument is `maintenance.trash.bytes_reclaimed`, fed solely by the purge); this half needs no decision. If the owner rules for an event: add `table_maintained` across the three-file `ControlAction` contract (41 members today, pinned by `tests/unit/test_control_action_three_file_contract.py`) and emit it from the sweep and the catalog maintenance endpoint. `summarize` already carries `bytes_removed`; do not re-add it.
+- *Closes when:* A sweep tick emits a bytes-reclaimed metric series, and the event question has a recorded answer with the emit landed or declined.
+- *Evidence:* `services/maintenance/src/maintenance/core/metrics.py:182-188 (`record_reclaimed` takes fragments/versions/indices, no bytes); :91,158,179 (trash bytes only)` · `services/maintenance/src/maintenance/services/sweep.py:699,1010,1159 (`bytes_removed` in per-dataset, audit and summary)` · `grep -rn table_maintained --include=*.py --include=*.ts . → nothing; ControlAction literal has 41 members` · `services/maintenance/src/maintenance/services/purge.py:712 (the only `emit_control` in maintenance)`
+
+**LH-108 · The lineage + OpenFGA store is the hand-rolled `rask-age` StatefulSet; the CNPG cutover is built but off**
+`lineage, chart` · **MED**
+- **blocked:** Owner decision: keep the AGE StatefulSet or cut over to CNPG with the ImageVolume extension — plus a K8s 1.33+ / CNPG >= 1.27 cluster to run it on
+- *What is left:* `age.cnpgCluster.enabled` defaults false with `extensionImage: ""` (chart/values.yaml:2762-2766) while the CNPG operator is installed with nothing to reconcile (values.yaml:2834 `enabled: true`); chart/templates/age-cluster.yaml:3 fails the render if both paths are on, so this is one-way. If CNPG: build and publish `.docker/cnpg-age-ext.dockerfile`, set `extensionImage` and flip `age.cnpgCluster.enabled` (with `age.enabled=false`) in chart/values-prod.yaml, and migrate the `lineage` + `openfga` databases. If StatefulSet: record the ruling and drop the idle operator toggle.
+- *Closes when:* Exactly one graph-store path is the recorded choice and, if CNPG, the two databases run on the `Cluster` with the extension image.
+- *Evidence:* `chart/values.yaml:2762-2766 `cnpgCluster: enabled: false` / `extensionImage: ""`` · `chart/templates/age-cluster.yaml:3 `fail "age.enabled and age.cnpgCluster.enabled are mutually exclusive ..."`` · `.docker/cnpg-age-ext.dockerfile exists (2032 bytes)` · `chart/values.yaml:2834 cnpg operator `enabled: true`; no `cnpgCluster` key in chart/values-prod.yaml`
+
+**LH-148 · Nothing re-ingests the JetStream `dlq.<appId>` stream, so a parked lineage event older than 7d retention is unrecoverable**
+`lineage, chart` · **MED** · PARTIAL
+- **blocked:** Disposition of the ~86% role-literal parked population (`author.sub` = data_eng/ray/analyst, unauthorizable by construction): drain the subject and record the loss, or grant a historical-replay identity. Also whether the graph should record provenance for a dropped table (a `service-maintenance` compaction of a dropped probe table parks permanently).
+- *What is left:* The metric half is shipped: `on_dead_letter` asks `repository.run_status` and records `PARKED_ALREADY_RECORDED` for a run the graph holds, `DEAD_LETTERED` otherwise (dapr.py:120), pinned by `tests/unit/test_a_park_the_graph_already_holds_is_not_terminal_loss.py`; its docstring states the retention bound (dapr.py:85-88); eight production sites pass `author_subject=settings.fga_service_identity`. The admin `/dlq/{run_id}/replay` door reads the OUTBOX object store only. Build a replay that re-presents a parked `dlq.<appId>` delivery to the ingest handler idempotent on `run_id` WITHOUT re-publishing — never via `reconcile_cron._drain_outbox`, which re-publishes by design. It serves only the authorizable remainder (~14% of samples); the mechanism (lineage's ingest consumer is ephemeral + `deliverPolicy: all`, so every restart re-parks) still holds in the chart. A real Dex subject that still parks (seq 12002/11975) is undiagnosed.
+- *Closes when:* A parked delivery on `dlq.lineage.events` can be re-ingested into the graph without landing back on `lineage.events.v1`, and the role-literal residue has a recorded disposition.
+- *Evidence:* `services/lineage/src/lineage/api/dapr.py:85-88, :120` · `services/lineage/src/lineage/api/v1/endpoints/dlq.py:87-137 (outbox-only replay)` · `chart/templates/dapr-component.yaml:172 (lineage subscriber deliverPolicy "all")` · ``grep -rn 'author_subject=settings.fga_service_identity' services/` → 8 sites`
+
+**LH-150 · Nothing refuses a boot whose `LANCE_NS_DELIMITER` disagrees with the OpenFGA object ids already stored, so changing it silently denies every check**
+`catalog, service-kit, openfga, lineage` · **MED**
+- **blocked:** Owner decision: refuse a boot whose delimiter disagrees with the tuples already stored in OpenFGA, or document the delimiter as bootstrap identity only and stop presenting it as an operator knob?
+- *What is left:* Get the ruling. If 'refuse': at catalog boot read one governed (`table:`/`namespace:`) object id from OpenFGA and refuse to serve when its delimiter disagrees with `settings.delimiter`; no-op on an empty store so a fresh estate can boot; never compare a `user:` subject. The stored tuples are the record (715 of 1000 sampled ids carry `$`, 0 carry `.`), so no new estate state is needed. Do not hardcode `$` in FGA ids: `tests/unit/test_cross_axis_identity.py` holds the FGA object, lineage Dataset name and Lance-metadata id byte-identical under any delimiter. The prose half is done (`naming.py`, `config.py` both state the consequence).
+- *Closes when:* Either a boot-time delimiter/tuple check exists and is pinned by a test, or the knob is documented as bootstrap-only everywhere it is exposed and the ruling is recorded.
+- *Evidence:* `packages/service-kit/src/service_kit/lakehouse/naming.py:16 ('RENAMES every…')` · `services/catalog/src/catalog/core/config.py:84 ('BOOTSTRAP-ONLY. It spells every OpenFGA object id…')` · `grep -rn -i delimiter services/catalog/src/catalog/main.py services/catalog/src/catalog/core/lifespan.py → no boot check`
+
+**LH-151 · Deterministic DROPs park on the DLQ and page as exhaustion, while a non-CloudEvent body parks invisibly**
+`medallion, lineage, chart, notifications` · **MED**
+- **blocked:** Owner decides the parking shape: (1) for deterministic refusals, publish to a per-lane `refused.<lane>` topic and ACK with SUCCESS (upstream's sanctioned pattern, dapr/dapr#7097) so the DLQ means exhaustion; (2) for a body the sidecar cannot deserialize, add rawPayload handling on `/dlq-event`, alert on the sidecar's `error deserializing cloud event` line, or record it as outside the contract in RESILIENCE.md.
+- *What is left:* `transform.py:111,124,1565` and lineage `consumer.py:44,90,97` still return `{"status":"DROP"}` on subscriptions that declare a deadLetterTopic; no `refused.*` topic exists in the chart or medallion; `/dlq-event` has no rawPayload path. The DLQ carries no delivery metadata (headers are `Nats-Msg-Id` alone), so the discriminator must be made at the refusal, not read at the park. After the ruling: add the topic per lane, publish on the refusal path at both sites, change the `medallion_dlq_parked_total` contract, and fix `docs/DECISIONS.md:1376`, which still claims a DROP is never dead-lettered.
+- *Closes when:* A quality-gate hold neither raises `medallion_dlq_parked_total` nor fires `MedallionCascadeDeadLettering`, its payload is retained for replay, and an envelope failure is either counted or documented as out of contract.
+- *Evidence:* `services/medallion/src/medallion/services/transform.py:111,124,1565` · `services/lineage/src/lineage/services/consumer.py:44,90,97` · `docs/RESILIENCE.md:43` · `docs/DECISIONS.md:1375-1377`
+
+**LH-152 · Three live e2e legs cannot pass against a governed estate: two stage provenance as an unregistered table, and one asserts zero errors against unreadable registry entries**
+`lineage, medallion, maintenance, catalog` · **MED** · PARTIAL
+- **blocked:** (b) whether `errors == {}` is the right assertion for a long-lived estate, or whether unreadable registry entries belong in an exclusion set the way the reconciler already reports `excluded_datasets` — gates the maintenance leg only
+- *What is left:* Ruling (a) is decided — probes write to a REAL governed table created through the catalog and stamp the creating subject as author — and applied to `test_outbox_e2e` via the `probe_author` fixture (tests/e2e-py/test_outbox_e2e.py:107). Apply the same fixture to tests/e2e-py/test_outbox_crash_e2e.py:189-204, which still stages `author="e2e"` against the unregistered `bronze$e2e_crash_ds`. Rework `test_fga_deny_drops_promotion_and_regrant_restores` (tests/e2e-py/test_governed_union_e2e.py:566) so its revoke does not delete the warehouse-level owner tuple (`_owner_tuples`, :130-136) that the live stage runners share — a failure between revoke and regrant strips a grant the cascade needs. The maintenance leg (tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} ...`) waits on (b); the reconciler already exposes `excluded_datasets` (maintenance reconcile.py:271, 966) to build on.
+- *Closes when:* The crash and FGA legs pass against the governed estate without touching shared grants, and the maintenance leg's assertion matches the (b) ruling.
+- *Evidence:* `git log 91d183cc `test(e2e,LH-152): the outbox probe's output table is a real governed table, authored by its owner`; tests/e2e-py/test_outbox_e2e.py:107-121 `probe_author` docstring records the 2026-09-15 ruling` · `tests/e2e-py/test_outbox_crash_e2e.py:197 `author="e2e"`, :201 `output_name="e2e_crash_ds"`` · `tests/e2e-py/test_governed_union_e2e.py:130-136 `_owner_tuples` — deletes warehouse, namespace and table owner tuples` · `tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} or body["errors"] == []`; services/maintenance/src/maintenance/services/reconcile.py:271,966 `excluded_datasets``
+
+**LH-164 · Chart-path medallion datasets at `s3://<bucket>/medallion/<ns>` are unregistered and ungoverned, so each tier has two homes and only one is governed**
+`maintenance, medallion, chart` · **MED** · PARTIAL
+- **blocked:** Owner ruling: are the chart-path medallion datasets (`medallion/lakehouse$silver` 8 rows, `medallion/lakehouse$gold` 8 rows, `research-bucket/medallion/bronze` 8 rows, `bind86-wh/medallion/bronze` 500 rows) residue to reap or data to register?
+- *What is left:* Both code halves are shipped: `denial_remedy` (`compaction_executor.py:107`) replaces the impossible grant advice at both refusal sites, and the reconciler's non-gating `ungoverned_tables` category (`reconcile.py:95,127,261`) detects a catalog table with no tuples. Obtain the ruling above, then either reap or register the five datasets. `chart/templates/medallion.yaml:293` (`MEDALLION_BRONZE_URI`) and `:523` (`MEDALLION_FROM_URI`) still render `s3://<bucket>/medallion/<ns>` while `ensure_stage_output` vends a different governed location per tier — collapse each tier to one home once ruled. Reaping the wrong one destroys live rows. Row counts above are carried from the row, not re-measured this session.
+- *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
+- *Evidence:* `services/maintenance/src/maintenance/services/compaction_executor.py:107` · `services/maintenance/src/maintenance/services/reconcile.py:95,127,261` · `chart/templates/medallion.yaml:293,523` · ``grep -i 'two homes\|bind86' docs/DECISIONS.md` → no ruling recorded`
+
+**LH-166 · Lineage answers a permanent authorization refusal with DROP, which on a subscription with a `deadLetterTopic` parks the event, and every restart re-parks the same events**
+`lineage, medallion, maintenance` · **MED**
+- **blocked:** Owner ruling on the refusal-ack shape (shared with LH-151): (a) ack SUCCESS and record the refusal in a metric/log, (b) keep parking but make it idempotent by a dedup key, or (c) refuse role-literal authors at the producer so the events are never unrepairable.
+- *What is left:* `consumer.py:97` returns `_DROP` on `PermissionDeniedError` and `api/dapr.py:140` declares `dead_letter_topic` (chart sets `LINEAGE_DLQ_TOPIC=dlq.lineage.events`, `services.yaml:512`), so a DROP parks. The authz gate (`fga_deps.py:280-284`) accepts any `author.sub` as subject, including the role literals `data_eng`/`analyst`/`ray` that `service_kit.lakehouse.subjects._NOT_A_PERSON` (`subjects.py:32`) already classifies — those hold no tuples and can never be authorized. Implement the ruled option; if (c), reuse `_NOT_A_PERSON` at the lineage door and at the producers that stamp role literals. The DLQ is bounded by `max_age` 168 h, so its depth is restart-count × backlog rather than a loss rate; measure `dlq.lineage.events` over a window, not at a point. The `ungoverned_tables` detector reports 0 for these outputs because they are not catalog tables — a detector over outputs a lineage event NAMES is a separate gap. DLQ counts are carried from the row, not re-measured this session.
+- *Closes when:* `dlq.lineage.events` stops growing across a restart, measured over a window, and no lineage event whose output cannot be governed is produced or parked.
+- *Evidence:* `services/lineage/src/lineage/services/consumer.py:44,97` · `services/lineage/src/lineage/api/dapr.py:140` · `chart/templates/services.yaml:512` · `packages/service-kit/src/service_kit/lakehouse/subjects.py:32`
+
+**LH-170 · The lineage replay re-parks every gate-REFUSED event on each restart, and the chart's `idempotent MERGE ingest` comment does not state that exception**
+`lineage, chart` · **MED**
+- **blocked:** the LH-151/LH-166 ack ruling: whether a permanently refused event is acked SUCCESS (discarded) instead of DROP (routed to the DLQ and re-presented by `deliverPolicy: all` on every restart)
+- *What is left:* `consumer.py:56-72,91-94` maps DENIED → DROP, which on a subscription carrying a `deadLetterTopic` still parks the event, and the lineage subscriber is the one of eight with `deliverPolicy: all` and no `durableName` (dapr-component.yaml:172,247-251), so each restart re-parks the same unrepairable events. Do not add a cursor to the subscription. When the ruling lands, change the DENIED branch's ack to match. Independently of the ruling, rewrite the comment at `chart/templates/dapr-component.yaml:160-171` (and its echo at :279) so "idempotent MERGE ingest" carries the refused-event exception.
+- *Closes when:* The DENIED ack matches the ruling and the chart comment names the refused-event exception.
+- *Evidence:* `services/lineage/src/lineage/services/consumer.py:56-72,91-94` · `chart/templates/dapr-component.yaml:160-172,247-251,279` · `open_backlog_left.md:4294 (LH-151 still `blocked: owner decision`)`
+
+**LH-171 · Nine governed transform records fail `TransformSpec` validation and the estate only WARNs**
+`medallion, service-kit` · **MED**
+- **blocked:** Owner ruling on the field mapping for the older record shapes: does `entrypoint` become `task` verbatim, and what does `lane` become (no successor in `TransformSpec`)?
+- *What is left:* `_transforms/` holds 10 records in three shapes — one current, one with `name`+`entrypoint`, eight with `lane`+`entrypoint` — and `TransformSpec` (`extra="forbid"`, requires `name`, `task`) rejects nine of them; `_parse` at `transform_specs.py:182-193` logs `transform_spec_malformed` and skips. `cardinality` already defaults to `ONE_TO_ONE` in the model, so only the two mappings above need ruling. Once ruled: migrate or delete the nine (10 records total, 9 sharing one shape), then make an unparseable control record louder than a WARN or gate the set empty — no test asserts on `transform_spec_malformed` today. The live count is not re-measured this session.
+- *Closes when:* Every record under `<control_root>/_transforms/` validates against `TransformSpec`, and a record that does not is surfaced by more than a listing-path WARN.
+- *Evidence:* `packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84 (fields, extra=forbid, cardinality default), :182-193 (_parse warns and skips)` · `grep -rn transform_spec_malformed tests services/*/tests packages/*/tests → none` · `grep -rln 'migrate.*transform' scripts → none`
+
+**LH-046 · A malformed branch name on the S3-backed catalog may still answer `Internal 18` from Lance's clone-path panic, and no upstream issue is filed**
+`catalog` · **LOW**
+- *What is left:* At HEAD `_classify_ref_error` maps `Ref is invalid` to 13, and `refuse_a_branch_name_the_backend_cannot_use` refuses the three marker-less names (`main`, `""`, a `..` segment) at the door — measured on pylance 11.0.0 against the local backend only. Re-measure on S3 with pylance 11.0.0 whether a malformed name (a space, `~`, a trailing `/`) still reaches the clone path and dies `Clone operation should not enter build_manifest` before validation. If it does, file the upstream Lance issue (nothing in the tree references one) and, once Lance raises `Ref is invalid` on S3 too, the existing mapping closes it with no code change. Do not duplicate Lance's ref grammar locally.
+- *Closes when:* An S3 create with a malformed branch name answers `InvalidInput 13` through the existing classifier.
+- *Evidence:* `services/catalog/src/catalog/services/dataplane.py:1738-1769 (door guard, 'Driven on 11.0.0')` · `services/catalog/src/catalog/services/dataplane.py:1770-1778 (_REF_INVALID_MARKER → InvalidInputError)` · `tests/unit/test_a_branch_name_the_backend_cannot_use_is_a_caller_error.py:1-24 (no S3 case)` · `uv.lock:3276-3277 (pylance 11.0.0); grep 'lance/issues' across catalog/docs → 0 hits`
+
+**LH-047 · Five tool-generated `lance_docs/` bundles carry no scrape commit and are verified by nothing**
+`catalog` · **LOW** · PARTIAL
+- *What is left:* `ns_catalog/spec.yaml` is pinned, provenance'd and gated (`lance_docs/PROVENANCE.md`, `tests/integration/test_spec_conformance.py`); the five bundles (`file_format.md`, `guide.md`, `namespace.md`, `ray.md`, `lance_sdk.md`) still record no source commit and no check reads them. Re-vendor each with the tool that produced it, record the commit per bundle in the "Not machine-checked" table of `PROVENANCE.md`, and add whatever drift check the tool's output permits. `file_format.md` is at least four feature-flag bits behind `lance-table/src/feature_flags.rs`, which is the concrete cost of leaving them.
+- *Closes when:* Every file under `lance_docs/` names the upstream commit it was scraped at.
+- *Evidence:* `lance_docs/PROVENANCE.md ("Not machine-checked" table: no commit column)` · ``ls -la lance_docs/` → five bundles unchanged since vendoring, spec.yaml re-vendored` · `tests/integration/test_spec_conformance.py:81,155,227 (spec-only gates)`
+
+**LH-048 · Two upstream lance-namespace defects rask works around are unfiled, so no fix version is tracked**
+`catalog` · **LOW**
+- *What is left:* File the pylance bundled-REST-client GET-vs-POST issue (the dual-mount workaround at data.py:613-622 and tags.py:28 says "worth filing") and the 0.12.0 `header.`/`headers.` prefix issue against lancedb/lance, then record each issue URL beside its workaround and track the fix version. The `header.` prefix workaround site is not locatable by grep in services/ or packages/ this session; the lock pins `lance-namespace 0.11.1`, so confirm where that workaround lives (or whether it only applies at the 0.12.0 bump, itself gated at data.py:325-329) before filing.
+- *Closes when:* Both workaround comments cite an upstream issue URL and the tracked fix version.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:613-622 (dual-mount rationale, "worth filing", no URL)` · `grep -rn 'lance/issues' services/catalog packages docs .claude → nothing` · `uv.lock:1648-1649 (`lance-namespace` 0.11.1), :3276-3277 (`pylance` 11.0.0)`
+
+**LH-119 · The dropped-parameter sweep's candidate list and its 16 unverified calls exist nowhere in the tree**
+`catalog, medallion, ingest` · **LOW** · **REWRITTEN — the original ask would be wrong**
+- *What is left:* Drop this row: there is no sweep record to re-run — `grep -rl dropped-parameter docs/ .claude/` finds only the register, and its only surviving classifications are LH-037 (reduced to two rulings) and CP-026. If an accepted-and-ignored-parameter audit is wanted, run a fresh one from the generated Lance Namespace request models (six carry `mode`, in four vocabularies) rather than reviving a lost session's list, and file each finding as its own row.
+- *Closes when:* The row is removed, or a fresh audit lands its findings as rows.
+- *Evidence:* `grep -rln -i dropped-parameter docs/ .claude/ *.md — only open_backlog_left.md` · `open_backlog_left.md:3794 (LH-037), :8892 (CP-026) — the only rows carrying the sweep's classification`
+
+**LH-050 · No query store for catalog listings, deliberately, until interactive-frequency listing load is measured**
+`catalog` · **LOW**
+- **blocked:** the tripwire: measured evidence that catalog listings (`ListNamespaces`/`ListTables`/warehouses) are hit at interactive frequency
+- *What is left:* Nothing to build. No query store or listing cache exists in `services/catalog/src` or `service_kit` (grep for `query store|query_store|listing cache` is empty), and no dashboard or alert rule reads the listing routes' rate. The instrument already exists: `service_kit.setup_otel` emits `http.server.*` RED metrics per route into GreptimeDB, so the tripwire is a PromQL read over the `namespaces.py`/`tables.py`/`warehouses.py` list handlers, not new code. When that read shows interactive frequency, run a query-store design round.
+- *Closes when:* A recorded measurement shows listing request rate at interactive frequency, followed by a query-store design.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/{namespaces,tables,warehouses}.py (the list handlers)` · `grep -rn -i 'query store|query_store|listing cache|list_cache' services/catalog/src packages/service-kit/src → empty` · `chart/templates/perses-dashboards.yaml, chart/alerting/rules.yml → no listing-rate panel or rule`
+
+**LH-079 · Two standing answers on the `x-api-key` principal contradict each other, and no key store or rotation model exists**
+`catalog, gateway` · **LOW**
+- **blocked:** Owner: is the Q7 api-key principal withdrawn in favour of bearer-only (the spec `security` block is a disjunction; 155 of 160 ops declare bearer), or does the management API mint scoped, expiring keys after all?
+- *What is left:* `x-api-key` is read nowhere in catalog, gateway or service-kit, while `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md` B6 still prescribes accepting it against a management-API key store. Take the ruling and edit the losing statement out. If bearer-only wins, rewrite B6 (:122-124, :367) as a conformance note. If the key principal survives, write the key-store and rotation design into the management API RFC and read `x-api-key` in `catalog/api/security.py`.
+- *Closes when:* One answer stands in the tree and the other is gone; if keys survive, the RFC carries the store and rotation design.
+- *Evidence:* `grep -rn 'x-api-key' services/catalog/src services/gateway/src packages/service-kit/src → 0 hits` · `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:122-124,367` · `grep -n -i 'api.key\|bearer' docs/DECISIONS.md → no ruling`
+
+**LH-082 · The gateway proxies the catalog's full all-method write surface to the public ingress and nothing says whether that is intended**
+`gateway, catalog` · **LOW**
+- **blocked:** Owner ruling on whether all-method public exposure of `/api/catalog/*` (behind catalog-side OIDC+FGA only) is intended
+- *What is left:* `Route("/api/catalog", "", *catalog)` at services/gateway/src/gateway/__init__.py:225 forwards every method from the ingress `- path: /api` rule (chart/templates/ingress.yaml:66); the row carries no rationale comment and docs/DECISIONS.md has no entry for it. Record the ruling — a rationale comment on that Route row plus a line in docs/DECISIONS.md stating the write surface is deliberately internet-facing behind catalog OIDC+FGA — or narrow the row's method set.
+- *Closes when:* Either the Route row carries the rationale and docs/DECISIONS.md records the ruling, or the row forwards a narrowed method set.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:225 `Route("/api/catalog", "", *catalog)` with no rationale comment (context :200-226)` · `grep -n -i 'api/catalog\|all-method\|write surface\|internet-facing' docs/DECISIONS.md → empty` · `chart/templates/ingress.yaml:66 `- path: /api``
+
+
+## PHASE 1 · CROSS-CUTTING
+
+**XC-001 · Helm-written Secrets carry no content checksum and ESO-written Secrets have no watcher, so a rotation never reaches running pods**
+`chart, frontend-zones, lineage` · **HIGH**
+- *What is left:* Two mechanisms, and only the first may be an annotation. (1) `rask-frontend-session` (`frontends.yaml:397-402`, consumed at :296-303 by all seven zones) has no checksum; the zones carry only `checksum/infra-credentials` (:111), whose template renders empty when `externalSecrets.enabled=true`, so the hash is a constant there. Add a checksum that hashes the session Secret's content, and make the gate `tests/unit/test_a_rotated_secret_reaches_the_pods_that_hold_it.py` render with `externalSecrets.enabled=true` and rotate `frontend.oidc.sessionSecret`, not only `age.password`. (2) For ESO-written Secrets, install a Secret-object watcher that restarts consumers or read the token from a projected volume per request; no reloader exists in the chart (`values.yaml:2420` is the NATS config reloader). Do not add more `checksum/` annotations for the ESO half.
+- *Closes when:* Rotating `frontend.oidc.sessionSecret` rolls every zone (gate RED→GREEN under live values), and an ESO refresh of `rask-infra-credentials` restarts or is re-read by its consumers.
+- *Evidence:* `chart/templates/frontends.yaml:111,296-303,397-402` · `tests/unit/test_a_rotated_secret_reaches_the_pods_that_hold_it.py:32-43,104-116` · `chart/values.yaml:2420,2817` · `rg -i reloader chart/ → NATS config reloader only`
+
+**XC-003 · `lance.audit` shares `opentelemetry_logs` with all telemetry under the estate-wide 14d TTL, and `:4000/v1/sql` accepts unauthenticated writes and DELETEs in-cluster**
+`catalog, lineage, medallion` · **HIGH**
+- *What is left:* Every clause is unmet. `otel-collector.yaml` has no `routing` connector and no audit-specific exporter or table; `audit-core.ts:144` still runs `SELECT * FROM opentelemetry_logs WHERE body = 'audit'`; retention is database-level (`observability.retention: "14d"`, values.yaml:2888, applied by `greptimedb-ttl-job.yaml`'s `ALTER DATABASE`), so a split table inherits 14d unless given its own TTL; the estate's `greptimedb-standalone` values block sets no `auth`, though the subchart supports `auth.enabled` with a static `passwd` file (`GREPTIMEDB_STANDALONE__USER_PROVIDER`). Route `lance.audit` to its own table with an explicit non-14d TTL, repoint `audit-core.ts` in the same change, and put a credential in front of `:4000` carried by the Collector, the TTL hook, vmalert, Perses and all seven zones, with read separated from write. Live row counts and the DELETE acceptance are not re-measured this session (no cluster access).
+- *Closes when:* Audit rows live in their own table with their own TTL, the admin viewer reads that table, and an unauthenticated in-cluster `POST /v1/sql` DELETE is refused.
+- *Evidence:* `chart/templates/otel-collector.yaml (`grep -n 'routing|audit'` → no pipeline hits)` · `frontend/microfrontends/home/src/lib/server/audit-core.ts:144` · `chart/values.yaml:2888 (retention: "14d") and chart/templates/greptimedb-ttl-job.yaml:8` · `chart/charts/greptimedb-standalone-0.4.5.tgz values.yaml:231-239 (auth block unused by the estate)`
+
+**LH-160 · 30 rendered secrets still arrive through the environment, `compute` cannot reach the secret store, and the Ray head's six live entries are outside the gate**
+`chart, service-kit, compute` · **HIGH** · PARTIAL
+- **blocked:** For the 29 no-sidecar and infra entries only: XC-002's owner ruling on whether an ESO-written Secret delivered by `secretKeyRef` satisfies 'never secret through envs' — it decides whether those move to file mounts or are excluded from the count. The `compute` flip needs no ruling.
+- *What is left:* The ratchet stands at `SECRET_ENV_BASELINE = 30` / `WITH_SIDECAR_BASELINE = 1`, the one sidecar entry being `compute`, recorded in `_UNREACHABLE_STORE` because `lance.secretScopes` never appends its app-id. Add `compute` to that scope derivation in `_helpers.tpl:1332-1360`, render `RASK_APP_TOKEN_FROM_STORE` for it via `lance.appTokenEnv`, drop its `APP_API_TOKEN` row, lower both baselines (30→29, 1→0) and observe a real Dapr delivery, not a boot log. Then the 22 no-sidecar entries (`LINEAGE_SERVICE_TOKEN`, `OIDC_CLIENT_SECRET`, `SESSION_SECRET`) and the 7 infra rows go to mounted files, or are excluded, per the ruling; whether each third-party image accepts a file mount is unverified. Count the out-of-chart plane: `deploy/ray-lance-demo.yaml` carries 6 `secretKeyRef` entries the gate cannot see, so a green 0 reads as enforcement while that manifest is uncounted.
+- *Closes when:* The baseline reaches 0 (excluding LH-161) with the ruling's exclusions named in the gate, and a test counts secret env delivery in every manifest the estate applies, chart or not.
+- *Evidence:* `tests/unit/test_secret_env_delivery_only_shrinks.py:41,46,221` · `chart/templates/_helpers.tpl:1332-1360 (scopes: catalog, lineage, maintenance, medallion, explorer services — no compute)` · `chart/templates/_helpers.tpl:1395 (lance.appTokenEnv renders RASK_APP_TOKEN_FROM_STORE)` · `grep -c secretKeyRef deploy/ray-lance-demo.yaml → 6`
+
+**XC-004 · `externalSecrets.enabled` defaults false, and the Dapr app token and the zones' OIDC/session secrets are helm-rendered Secrets outside ESO**
+`chart, frontend zones, explorer` · **HIGH** · PARTIAL
+- **blocked:** A `helm upgrade` release with `externalSecrets.enabled=true` — the estate carries hand-deployed images a values-mismatched upgrade would revert to chart defaults
+- *What is left:* `chart/templates/external-secrets.yaml` (gated on the toggle) already syncs `infra-credentials` (postgres, minio, ray-compute, dex-client-secret, every `service-token-*` including the zones' `LINEAGE_SERVICE_TOKEN`), `observability-s3` and `ray-auth-token`. Still outside ESO: `<release>-dapr-app-token` (`dapr-app-token.yaml:29-31`, consumed as `APP_API_TOKEN` via `_helpers.tpl:655,1399`) and `<release>-frontend-session` (`frontends.yaml:397`, the zones' `OIDC_CLIENT_SECRET`/`SESSION_SECRET`). Add ExternalSecret entries for those two, set `externalSecrets.enabled: true` in `chart/values.yaml` (:2817), deploy via `make k3s-up`. Before migrating any ref, fix how its consumer READS it — ESO rewrites the Secret out of band, so a value bound at boot goes silently stale and a `checksum/` annotation cannot see it. The `MEDIA_S3_ACCESS_KEY_ID` clause is resolved: the viewer renders the scoped `minio.viewerAccessKey` (`explorer.yaml:222`) and no secret half ships in env (`secrets.yaml:15-19`). Live ESO state was not verified this session.
+- *Closes when:* Every secret-bearing env ref is ESO-synced or STS-vended, the toggle is on in values.yaml, and consumers re-read rotated values.
+- *Evidence:* `chart/values.yaml:2817 (externalSecrets.enabled: false)` · `chart/templates/external-secrets.yaml:1,27-29,61-70,78,136-138,174-176` · `chart/templates/dapr-app-token.yaml:29-31; chart/templates/frontends.yaml:273-303,397` · `chart/templates/explorer.yaml:222; chart/templates/secrets.yaml:15-19`
+
+**XC-005 · The OpenBao seed Job and the three ExternalSecrets carry no `helm.sh/hook`, so adding one property to an ExternalSecret destroys the whole Secret for ~12 minutes**
+`chart` · **HIGH**
+- **blocked:** Owner decision: turn today's silent ~12-minute Secret outage into a loudly aborted release via a bounded pre-upgrade hook.
+- *What is left:* `chart/templates/openbao.yaml:137` (`kind: Job`, the seed) carries only `helm.sh/resource-policy: keep` (`:50`), and the three ExternalSecrets (`external-secrets.yaml:27,136,174`) run `creationPolicy: Owner` (`:39,150,188`), so seed and sync apply in arbitrary order within one upgrade. Extract the seed into a named template and add a `helm.sh/hook: pre-upgrade` copy (not pre-install — on first install OpenBao does not exist and the wait hangs) with a bounded `activeDeadlineSeconds`, leaving install-time behaviour unchanged. Measured outage: 696 s with five web zones in CreateContainerConfigError; each scoped identity the zero-trust work adds changes an ExternalSecret's data list and re-triggers it.
+- *Closes when:* Adding one property to an ExternalSecret in a `helm upgrade` either keeps the Secret continuously present or fails the release before any pod restarts.
+- *Evidence:* `chart/templates/openbao.yaml:50,137` · `chart/templates/external-secrets.yaml:27,39,136,150,174,188` · ``grep -n helm.sh/hook chart/templates/openbao.yaml chart/templates/external-secrets.yaml` → empty`
+
+**XC-006 · OpenBao has no auto-unseal, so any restart leaves it sealed and the fail-closed fleet hangs at startup**
+`chart, catalog, lineage, medallion, notifications` · **HIGH**
+- **blocked:** Owner decision on the unseal mechanism: bank-vaults, vault-operator, or a KMS/transit auto-unseal stanza. Note external-secrets (`externalSecrets.enabled`, values.yaml:2811) is a secret READER and cannot unseal, so it is not a candidate for this row.
+- *What is left:* `openbao.yaml:5,118` and `values.yaml:2798` state an operator must `bao operator init` and unseal by hand; `values-prod.yaml:146` carries only that prose; `chart/alerting/rules.yml` has no seal-status rule. After the ruling, wire the chosen auto-unseal into `chart/templates/openbao.yaml` and `values-prod.yaml`, and add a sealed-status alert to `rules.yml`.
+- *Closes when:* A restarted OpenBao pod serves secrets without operator action, and a sealed instance fires an alert.
+- *Evidence:* `chart/templates/openbao.yaml:4-5,118` · `chart/values.yaml:2796-2798,2811-2817` · `chart/values-prod.yaml:146` · `rg -i seal chart/alerting/rules.yml → 0`
+
+**XC-007 · Every in-cluster store the fleet dials is plaintext: RustFS S3, OpenFGA, the AGE DSN (sslmode=disable), OpenBao, NATS and OTLP**
+`catalog, lineage, maintenance, medallion, chart` · **HIGH**
+- **blocked:** Owner decision on introducing a certificate source — the estate has neither cert-manager nor a chart-generated certificate.
+- *What is left:* With a certificate source chosen, flip each rendered scheme: chart/templates/_helpers.tpl:682 (RustFS https, ALLOW_HTTP=false), :744 (tls:// NATS), :1208 (OpenFGA https plus a preshared key or OIDC), :729/:741 (OpenBao https), the AGE DSNs at infra-credentials.yaml:93, external-secrets.yaml:81 and openbao.yaml:178 (sslmode=disable -> verify-full), and dapr-component.yaml:343 whose skipVerify is derived from the scheme. Then add the missing TLS-on-store-hops test; the only plaintext test today (test_invariants.py:2447) checks credential VALUES, not transport. Dapr Sentry mTLS covers sidecar hops only.
+- *Closes when:* helm template renders no http://, nats:// or sslmode=disable store URL for an in-cluster store, and a unit test refuses a plaintext store scheme.
+- *Evidence:* `chart/templates/_helpers.tpl:682,729,741,744,1208 (http:// / nats:// stores)` · `chart/templates/infra-credentials.yaml:93; external-secrets.yaml:81; openbao.yaml:178 (sslmode=disable)` · `chart/templates/dapr-component.yaml:343 (skipVerify from scheme)` · `grep -in cert-manager chart/Chart.yaml chart/values.yaml -> no matches`
+
+**XC-008 · `rask-age` serves TLS-off Postgres for the lineage graph and OpenFGA; the AGE→CNPG cutover is built but not taken**
+`lineage, catalog, chart` · **HIGH**
+- **blocked:** owner decision to run the data migration of the lineage AGE graph and OpenFGA's tables off the `rask-age` StatefulSet PVC into the CNPG Cluster
+- *What is left:* Set `age.cnpgCluster.enabled: true` and `age.enabled: false` (`age-cluster.yaml:1-3` fails the render if both are on; defaults are `age.enabled: true` at values.yaml:2736 and `cnpgCluster.enabled: false` at :2763). Move the lineage graph and OpenFGA tables into the CNPG Cluster, retire the `age-postgres.yaml` StatefulSet, and prove the round-trip with `scripts/age_restore_drill.sh`. Then, and only then, drop `sslmode=disable` from the four client strings (`external-secrets.yaml:81`, `infra-credentials.yaml:93`, `openbao.yaml:178`, `otel-collector.yaml:335`) — a client-side `require` before the server change is an outage. The extension image builds from `.docker/cnpg-age-ext.dockerfile`. Live TLS state was not re-measured this session.
+- *Closes when:* The CNPG Cluster serves both databases with TLS, the `rask-age` StatefulSet is gone, and the restore drill passes.
+- *Evidence:* `chart/templates/age-cluster.yaml:1-3` · `chart/values.yaml:2736,2762-2763` · `chart/templates/{external-secrets.yaml:81,infra-credentials.yaml:93,openbao.yaml:178,otel-collector.yaml:335} (`sslmode=disable`)` · `scripts/age_restore_drill.sh; .docker/cnpg-age-ext.dockerfile; chart/templates/age-postgres.yaml (StatefulSet)`
+
+**XC-025 · `chart/templates/dex.yaml` ships in-memory storage, static demo users and a plaintext client secret in a ConfigMap, and `values-prod.yaml` has no `dex:` stanza**
+`chart, catalog, lineage, gateway` · **HIGH**
+- **blocked:** Which real IdP prod federates to
+- *What is left:* Add a `dex:` block to `chart/values-prod.yaml` (none exists) with an externally-reachable HTTPS issuer, a Postgres storage backend and an org-IdP connector. In `chart/templates/dex.yaml` (a ConfigMap): replace `storage: type: memory` (:13), keep `staticPasswords` (:20) off the prod path, and stop rendering `staticClients[].secret: {{ .Values.dex.clientSecret }}` (:40) — the ESO template already syncs a `dex-client-secret` key (`external-secrets.yaml:78`), so read it from there. The default issuer is `http://rask-dex:5556/dex` (`values.yaml:2773`).
+- *Closes when:* The prod render has a real issuer, durable storage, an org connector, no static users and no client secret in a ConfigMap.
+- *Evidence:* `chart/templates/dex.yaml:13,20,37,40 (kind: ConfigMap)` · `grep '^dex:' chart/values-prod.yaml — no match` · `chart/values.yaml:2769-2777` · `chart/templates/external-secrets.yaml:78`
+
+**XC-009 · No Dapr `accessControl` policy exists in any chart template and the actor/workflow invocation planes are uncharacterised**
+`chart, medallion, notifications, gateway, annotator, ingest` · **MED**
+- *What is left:* `accessControl`, `defaultAction`, `trustDomain` and `WorkflowAccessPolicy` appear in zero files under `chart/`; `networkPolicy.enabled` is false (`values.yaml:761`). Characterise actor-to-actor (ActorProxy) and Dapr Workflow invocation on the live estate first — Dapr excludes workflows from service-invocation access control — then write `policies:` plus `defaultAction: deny` and `trustDomain` into the shared `lance-tracing` Configuration (`chart/templates/observability.yaml:72`), add a `WorkflowAccessPolicy`, validate by driving every gateway route live, and add the missing test. NetworkPolicy stays a separate prod-hardening half (no-op on k3s flannel).
+- *Closes when:* The rendered Configuration carries `defaultAction: deny` with per-app policies and every gateway route and cascade hop still succeeds on a live drive.
+- *Evidence:* `grep -rn 'accessControl|defaultAction|WorkflowAccessPolicy|trustDomain' chart/: no hits` · `chart/values.yaml:761 (networkPolicy.enabled: false)` · `chart/templates/observability.yaml:72-76 (Configuration lance-tracing)`
+
+**XC-011 · Estate bootstrap writes no `_control/bootstrap.json` record; `provision()` is already content-gated**
+`chart, service-kit, catalog` · **MED** · PARTIAL
+- *What is left:* `provision()` no longer rewrites every boot: it compares `_canonical_model(current) == _canonical_model(model)` and logs `openfga_model_unchanged` instead of writing (fga.py:574-575), which is the content-hash answer to C-Q2, with `RASK_FGA_MODEL_ID` as the production pin. The `_control/bootstrap.json {subject, store_id, model_id, at}` record via `records.create_json` is not written: `bootstrap-admin.yaml` remains check-then-write and treats a duplicate 400/409 "already exists" as success (:21, :251). Its original purpose (gating provision) is now served, so either write the record for its audit value alone or close the row on the content gate.
+- *Closes when:* Either `_control/bootstrap.json` exists after a fresh install with 409-on-exists treated as success, or the row is closed on the shipped content gate.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/fga.py:508, :574-575` · `chart/templates/bootstrap-admin.yaml:21, :251` · ``grep -n 'bootstrap.json|create_json' chart/templates/bootstrap-admin.yaml` → none`
+
+**XC-016 · OpenFGA's pgxpool defaults (MaxOpenConns 30 / MaxIdleConns 10) are untuned against the shared AGE Postgres at `max_connections=100`**
+`openfga, chart, lineage` · **MED**
+- *What is left:* No `datastore.maxOpenConns` / `maxIdleConns` is set anywhere in `chart/` and OpenFGA v1.18.3 (`chart/values.yaml:2683`) runs pgxpool defaults against the Postgres that also carries AGE, `lance-statestore` and the backup Job; `values.yaml:2695` explicitly defers `datastore_throttling` to a measurement. Measure observed connections per consumer on the AGE Postgres (`pg_stat_activity`, or OpenFGA's own metrics once XC-047 exports them — the estate scrapes no OpenFGA endpoint today), then set both pool values and decide `datastore_throttling` from the numbers rather than blind.
+- *Closes when:* The chart carries measured `datastore.maxOpenConns` / `maxIdleConns` values with the measurement cited beside them.
+- *Evidence:* ``grep -n 'maxOpenConns\|maxIdleConns' chart/values.yaml chart/templates/*.yaml` → 0 hits` · `chart/values.yaml:2683 (image.tag v1.18.3), 2695 (datastore_throttling deferred)` · ``grep -in openfga chart/templates/otel-collector.yaml` → no scrape target`
+
+**XC-017 · The zero-trust posture is asserted per control, not re-derived as one checked list of the 19 §F controls**
+`catalog, lineage, maintenance, medallion` · **MED** · PARTIAL
+- *What is left:* Owner acknowledgement of R11 is given (R1–R11 stand). Individual tests now pin §F2-1, -2, -3, -4, -8, -9 and -11 from the sweep's ordered gap list, but no single test or `make` target encodes the 19 §A controls and re-derives matched/partial/missing. Encode that list, then close the remaining §B items against it — 5 (Dapr access-control policy + NetworkPolicy on by default), 6 (TLS to every store), 7 (`register_table` location validation), 10 (audit correlation ids), 12 (image signing/attestation). Whether any of those five has since shipped is not re-measured this session.
+- *Closes when:* One checked list re-derives the 19 §F controls' status on every run and reports zero missing and zero partial.
+- *Evidence:* `docs/audits/lakehouse-2026-09/sweeps/zero-trust.md:5-27 (§A control table), :29-42 (§B ordered gaps)` · `grep -rhoE '§F[0-9]+-[0-9]+' tests services/*/tests packages/*/tests → §F2-1,2,3,4,8,9,11` · `open_backlog_left.md:164 (R1–R11 STAND)` · `grep -rln 'zero.trust|§F' Makefile scripts → none`
+
+**XC-018 · `model.fga.yaml` has no `check` case with a userset subject and no `list_users` with a userset filter, the exact behaviours `weighted_graph_check` alters**
+`service-kit` · **MED**
+- *What is left:* The CLI blocker is gone: `.localbin/fga` is installed. At HEAD the file holds 169 `check` subjects, 0 of the form `type:id#relation`, and 5 `list_users` blocks all filtering `[{ type: user }]`, while `weighted_graph_check` is on in `chart/values.yaml:2710`. Add `check` cases with `role:x#assignee` and `team:eng#member` as the subject, the self-referential userset case, and `list_users` with a userset filter for the admin-console rungs; run `.localbin/fga model test --tests packages/service-kit/src/service_kit/governed/auth/model.fga.yaml` and wire it wherever the existing model test runs.
+- *Closes when:* `fga model test` passes with userset-subject checks and userset `list_users` filters in the file.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml (grep -E '^\s*- user: [a-z_]+:[^ #]+#' → 0 of 169)` · `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:484-485,525-526 (user_filter: [{ type: user }])` · `chart/values.yaml:2710 (experimentals: weighted_graph_check)` · `ls .localbin/fga → present`
+
+**XC-019 · The Lance `TableWriter` seam has no create-if-absent verb, so the first annotation save on a fresh estate has no table to merge into**
+`service-kit, annotator` · **MED**
+- *What is left:* Add a create-if-absent verb to the `TableWriter` Protocol and its three implementations in `service_kit/lancekit/writer.py` (today: `merge_upsert`, `merge_insert_only`, `delete` only). Call it from `annotator/annotations/save.py` before `reader.table_version()` at :86 and the merge; the annotator's only `create_table` is the publish saga's in `projects/lakehouse.py`, which does not create the annotations table. Pin with a RED test that saves into an estate where the annotations table does not exist. Do not widen an except clause instead.
+- *Closes when:* A save against a project with no annotations table creates it and commits, under a test.
+- *Evidence:* `packages/service-kit/src/service_kit/lancekit/writer.py:44-51 (Protocol: three verbs), :98-108, :118-120, :131-134 (implementations)` · `services/annotator/src/annotator/annotations/save.py:82-86 (`open_reader` then unguarded `reader.table_version()`)` · `grep -rn 'create_table' services/annotator/src → only projects/lakehouse.py:161-294`
+
+**XC-031 · No ordered prod install runbook exists; the FGA seed / OpenBao unseal / PSA-label ordering is documented only as warnings in values-prod**
+`chart` · **MED**
+- *What is left:* Write docs/runbooks/RUNBOOK-prod-install.md with the ordered sequence: secrets -> scripts/seed_medallion_fga.sh -> OpenBao init and unseal -> flip governance (auth.enabled, medallion.fgaEnabled) -> verify. docs/runbooks/ holds only llm-cluster.md, RUNBOOK-oncall.md and RUNBOOK-restore.md. Decide whether chart/templates/bootstrap-admin.yaml (a post-install/post-upgrade hook that seeds standing tuples) should absorb the stage-runner grants seed_medallion_fga.sh applies, so the prerequisite at values-prod.yaml:18 and the alert text at chart/alerting/rules.yml:294 stop naming a manual script.
+- *Closes when:* docs/runbooks/RUNBOOK-prod-install.md exists with the ordered steps, and the FGA seed is either a hook or a named runbook step.
+- *Evidence:* `ls docs/runbooks/ -> llm-cluster.md, RUNBOOK-oncall.md, RUNBOOK-restore.md` · `chart/values-prod.yaml:16-24 (seed prerequisite warning, fgaEnabled: true)` · `chart/templates/bootstrap-admin.yaml:2,30-32 (post-install hook seeding standing tuples)` · `chart/alerting/rules.yml:294 (re-seed with scripts/seed_medallion_fga.sh)`
+
+**XC-032 · No first-party image is registry-qualified or digest-pinned in `chart/values-prod.yaml`**
+`chart` · **MED** · PARTIAL
+- *What is left:* The `imagePullSecrets` half is shipped for the six first-party pod-spec templates and pinned by `tests/unit/test_a_first_party_pod_can_pull_from_a_private_registry.py`. `chart/values-prod.yaml:11-14` has `image:` with only `pullPolicy` and two commented-out per-component tags, and `chart/values.yaml:529-533` defaults `image.repository: ""` / `digest: ""` — set a registry-qualified `image.repository` and per-component `tag` or `digest` values in `values-prod.yaml` so a non-k3s cluster can pull. The airgap/mirror question for the 17 pinned third-party images is separate and only answered if asked.
+- *Closes when:* `helm template -f chart/values-prod.yaml` renders every first-party image with a registry-qualified repository and a release tag or digest.
+- *Evidence:* `chart/values-prod.yaml:11-14` · `chart/values.yaml:529-533` · `tests/unit/test_a_first_party_pod_can_pull_from_a_private_registry.py (exists)`
+
+**XC-033 · Nothing runs `scripts/e2e_live.sh` routinely, so the 133 e2e functions across 30 files only ever hit the deployed estate by hand**
+`e2e, ci, lineage` · **MED** · PARTIAL
+- *What is left:* `make e2e-live` (Makefile:885) and `scripts/e2e_live.sh` exist, and the lineage suite runs hermetically in CI as job `e2e-lineage` (`dagger call test-lineage`, .github/workflows/ci.yml:417-420). The two failing `test_lineage_e2e.py` cases are unnamed in the row; LH-109 records the suite at 14 passed after the AGE memory fix and the cases cannot be reproduced offline (needs AGE), so treat them as unconfirmed rather than open. Wire `scripts/e2e_live.sh` into a scheduled run against the k3s release — no workflow or cron references it. Note the CI signal itself is absent at HEAD: the last three ci.yml runs on e198b61b/6a6ecc3a are `failure` with `ms-test` red, `e2e-lineage` is skipped because it `needs: ms-test`, and `gh api …/workflows/ci.yml/runs?status=success` returns no run at all. Update the script header's `111` to the current 133.
+- *Closes when:* A scheduled job runs `scripts/e2e_live.sh` against the deployed release on a cadence and its latest run is green including all 11 `test_lineage_e2e.py` cases.
+- *Evidence:* `Makefile:885-886; scripts/e2e_live.sh:1-20` · `rg -n 'e2e_live|e2e-live' .github/workflows/ → no hits; ci.yml:417-420 runs dagger call test-lineage` · `gh run list --workflow=ci.yml --limit 3 → all failure; jobs of 35301962075: ms-test failure, e2e-lineage skipped` · `rg -c '^(async )?def test_' over the 30 e2e-marked files → 133`
+
+**XC-047 · OpenFGA exports no traces or metrics: no OTLP endpoint is configured on the subchart and the estate scrapes no Prometheus endpoint**
+`openfga, chart, catalog` · **MED**
+- *What is left:* The `openfga:` block (`chart/values.yaml:2629`) sets only `extraEnvVars: OPENFGA_EXPERIMENTALS` (`:2708-2710`) — no `telemetry.trace.otlp.endpoint`, no `OTEL_*`; `prometheus.io/scrape` appears 0 times in `chart/templates/`; the perses "Blocked at the gates" panel (`perses-dashboards.yaml:246`) plots app-side denial counters, not OpenFGA's own series. Point the subchart's trace OTLP endpoint at the OTel Collector with the `x-greptime-pipeline-name=greptime_trace_v1` header, decide how its `/metrics` (`datastore_item_count`, `openfga_iter_query_duration_ms`) reach GreptimeDB — a Collector prometheus receiver scraping the OpenFGA Service keeps the Collector as the single seam — and add an FGA panel. The subchart is 0.3.9 with image v1.18.3 (`Chart.yaml:74-78`); a version bump needs `helm` on PATH to refresh `Chart.lock`.
+- *Closes when:* `opentelemetry_traces` holds an OpenFGA span and a Perses panel plots `openfga_iter_query_duration_ms`.
+- *Evidence:* `chart/values.yaml:2629,2708-2710` · ``grep -rn prometheus.io/scrape chart/templates/ | wc -l` → 0` · `chart/templates/perses-dashboards.yaml:246` · `chart/Chart.yaml:74-78`
+
+**LH-161 · The GreptimeDB subchart pulls the whole `rask-observability-s3` Secret into its environment via `envFrom`**
+`chart` · **MED**
+- **blocked:** Whether a third-party subchart's own env handling (greptimedb-standalone's `envFrom: secretRef`) is out of scope for the envFrom ban — an owner ruling that must be written next to the exemption, not assumed.
+- *What is left:* The vendored `greptimedb-standalone-0.4.5` subchart's `templates/statefulset.yaml:114-122` emits `envFrom: secretRef: <existingSecretName>` whenever `objectStorage.credentials` is set, and its `env` map renders plain string values only (no `valueFrom`), so no values-level keyed-ref override exists. `test_secret_env_delivery_only_shrinks.py:129` names this one workload in `_ENVFROM_EXCEPTIONS`. Either change the subchart upstream to take the credential keyed or by file, override that template in the estate, or record the out-of-scope ruling beside the exemption.
+- *Closes when:* The greptimedb StatefulSet no longer renders `envFrom`, or the exemption carries a written owner ruling.
+- *Evidence:* `chart/charts/greptimedb-standalone-0.4.5.tgz → templates/statefulset.yaml:103-122` · `tests/unit/test_secret_env_delivery_only_shrinks.py:122-129` · `chart/values.yaml:3023 (existingSecretName: "rask-observability-s3")`
+
+**XC-002 · Whether an ESO-written Secret delivered by `secretKeyRef` satisfies 'never secret through envs' is undecided, and the Ray head's six entries hang on it**
+`chart, medallion, storage` · **MED**
+- **blocked:** Owner: does an ESO-written Secret delivered by `secretKeyRef` satisfy the rule 'never secret through envs; ESO, Dapr secret store or STS'? Two in-tree statements say yes; LH-160's gate counts it as the banned path.
+- *What is left:* The credential itself works and is chart-derived; what is open is delivery. `deploy/ray-lance-demo.yaml` carries six `secretKeyRef` entries off `rask-infra-credentials` (`S3_SECRET`, `LINEAGE_SERVICE_TOKEN`, 4× `RASK_LINEAGE_TOKEN_SERVICE_*`), no file mount, no STS. Take the ruling. If NO: move the six to a projected file mount, `S3_SECRET` to STS, and rewrite `tests/unit/test_the_ray_credential_has_one_source.py:3-8` and `.claude/skills/rask-dapr/SKILL.md:151-154` in the same commit, since both pin `secretKeyRef` as the sanctioned no-sidecar path. If YES: close, and make LH-160's gate exclude ESO-written refs explicitly. Either way delete the hand-applied `Secret/rask-ray-compute-s3` whose `last-applied-configuration` annotation holds the base64 credential (live state not re-verified this session).
+- *Closes when:* The ruling is in `docs/DECISIONS.md`, the test and skill agree with it, and the Ray head's delivery path matches.
+- *Evidence:* `deploy/ray-lance-demo.yaml:83,101,117,120,123,126` · `tests/unit/test_the_ray_credential_has_one_source.py:3-8` · `.claude/skills/rask-dapr/SKILL.md:151-154` · `grep -n secretKeyRef docs/DECISIONS.md → 0 hits`
+
+**XC-013 · pg dumps land in the lakehouse bucket the VolumeSnapshot protects, old VolumeSnapshots are never pruned, and `snapshotClassName` is empty in prod**
+`chart, lineage` · **MED** · PARTIAL
+- **blocked:** Where off-cluster pg dumps go — the bucket/endpoint `chart/values-prod.yaml` should point `backups.pgDump` at instead of the lakehouse's own `minio.bucket`.
+- *What is left:* pg-dump retention is shipped (`backups.pgDump.keep: 7`, pruning at `backup-pg.yaml:90-95`). Point the dump at an off-cluster destination: `backup-pg.yaml:88-89` still writes to `{{ .Values.minio.bucket }}/_backups/pg/` via `lance.s3Endpoint`, the same store a PVC loss takes out. Add pruning of old VolumeSnapshots in `backup-snapshot.yaml`, which only `kubectl create`s (line 85) and never deletes — this clause needs no ruling. Set a real `snapshotClassName` in `chart/values-prod.yaml:144`, still `""`.
+- *Closes when:* Prod dumps land outside the lakehouse bucket, `backup-snapshot.yaml` prunes snapshots beyond a `keep` count, and `values-prod.yaml` names a real VolumeSnapshotClass.
+- *Evidence:* `chart/templates/backup-pg.yaml:88-95 (same bucket; keep-N pruning present)` · `chart/templates/backup-snapshot.yaml:85 (kubectl create only, no delete)` · `chart/values-prod.yaml:139-144 (snapshotClassName: "")` · `chart/values.yaml:1965-1973 (pgDump.keep, volumeSnapshot.snapshotClassName)`
+
+**XC-014 · The Ray head is a hand-applied `deploy/ray-lance-demo.yaml` the chart does not render**
+`chart, compute, medallion` · **MED** · PARTIAL
+- **blocked:** The same owner ruling as CP-012: a chart-owned RayCluster/RayService versus the standing hand-applied head. Reconciling the head presumes that answer.
+- *What is left:* The OpenBao half is done and must not be retouched: `chart/templates/openbao.yaml:137` is a chart-owned Job that seeds KV (`:174`, `:283`) and enables/configures the kubernetes auth mount, policy and role idempotently (`:310-318`). Only the Ray head remains. After the ruling, render the head from the release (`chart/templates/rayservice.yaml` is gated on `ray.enabled && singleTenant.enabled`, default false) and delete `deploy/ray-lance-demo.yaml` together with its apply at `scripts/ray_e2e_stack.sh:121` and the references at `Makefile:433`, `chart/values.yaml:766` and `chart/templates/medallion.yaml:549`.
+- *Closes when:* A fresh `make k3s-up` produces the Ray head from the chart and `deploy/ray-lance-demo.yaml` no longer exists.
+- *Evidence:* `chart/templates/openbao.yaml:137,174,310-318` · `deploy/ray-lance-demo.yaml (9,845 bytes at HEAD; last touched 85fe0830)` · `scripts/ray_e2e_stack.sh:121` · `chart/templates/rayservice.yaml:1 + chart/values.yaml:65-66 (singleTenant.enabled: false)`
+
+**XC-027 · `chart/values-prod.yaml` sets `ingress.enabled/className/host` but no `tls:` block, so OIDC tokens and vended S3 credentials traverse plaintext at the edge**
+`chart, gateway` · **MED**
+- **blocked:** Owner decision on the prod hostname and the certificate issuer.
+- *What is left:* `chart/values-prod.yaml:221-224` supplies only `enabled`, `className: nginx` and an empty `host`; `chart/templates/ingress.yaml:44-45` renders `tls:` only `with .Values.ingress.tls`. Add an `ingress.tls` block plus the cert-manager issuer annotation to `values-prod.yaml`, then re-run `bash scripts/prod_render_check.sh` to pin it. In-cluster Dapr mTLS covers service invocation only, not the edge.
+- *Closes when:* `helm template -f chart/values-prod.yaml` renders an Ingress with a `tls:` entry and an issuer annotation, and `scripts/prod_render_check.sh` fails without them.
+- *Evidence:* `chart/values-prod.yaml:221-224` · `chart/templates/ingress.yaml:44-45` · `scripts/prod_render_check.sh (exists)`
+
+**XC-030 · Images are unsigned and the estate runs no admission-time signature verifier**
+`chart, dagger` · **MED**
+- **blocked:** Owner names a signing-key custodian and approves an admission-time verifier (Kyverno or sigstore policy-controller); signing without a verifier is decoration.
+- *What is left:* `.dagger/images.go:46-53` emits only the three OCI provenance labels; no cosign or attestation code exists in any `.dagger/*.go` (the SBOM at `scan.go:346` is the only supply-chain artefact); `chart/` has no kyverno, policy-controller, sigstore or ClusterImagePolicy. After the ruling, add cosign signing to the `dagger call image … publish` path and the verifying admission policy to the chart.
+- *Closes when:* A published image carries a cosign signature and an unsigned image is refused at admission on the deployed cluster.
+- *Evidence:* `.dagger/images.go:46-53` · `rg -i cosign|signature|attest .dagger/*.go → 0` · `.dagger/scan.go:346 (SBOM only)` · `rg -i kyverno|policy-controller|sigstore|ClusterImagePolicy chart/ → 0`
+
+**XC-035 · ~154 single-component test files sit in `tests/unit` instead of their component's own testpath**
+`catalog, service-kit, annotator, lineage, maintenance, medallion` · **MED**
+- **blocked:** Owner decision on relocating the single-component files out of tests/unit
+- *What is left:* `tests/unit` holds 394 files; a direct-import classifier finds ~154 importing exactly one component (46 catalog, 41 service_kit, 21 annotator, 17 lineage, 15 maintenance, 11 medallion, 2 search, 1 ingest) while `services/catalog/tests` holds 93. The count grew since the row was written. Read the 41 `service_kit` files first to separate shared fixtures from misplaced tests, then move the rest into each component's `tests/` with import fixes, keeping the per-commit selection always including the invariant and integration layers.
+- *Closes when:* A catalog-only change can be verified by `uv run pytest services/catalog/tests` alone, with tests/unit holding only multi-component and chart-render files.
+- *Evidence:* `ls tests/unit/*.py | wc -l = 394` · `find services/catalog/tests -name 'test_*.py' | wc -l = 93` · `grep-based single-component classifier over tests/unit (this session): 154 files` · `pyproject.toml:279 (testpaths)`
+
+**XC-048 · No service propagates `request_id` or actor to its downstream clients, and no supersession verdict is recorded**
+`service-kit, catalog, lineage` · **MED**
+- **blocked:** Owner records in `docs/DECISIONS.md` §9 that OTel tracing plus the audit trail supersede request_id/actor propagation, or orders the build.
+- *What is left:* `docs/DECISIONS.md` has zero mentions of request_id or `X-Request-ID`. What exists: the gateway mints and forwards the header (`gateway/__init__.py:494-513`), each service's `RequestIDMiddleware` echoes it, and `CorrelationFilter` (`context.py:38`) stamps it on log records. No outbound httpx hook carries it from one service to the next, and no actor propagation exists. After the ruling, either write the §9 entry or add the outbound hook in service-kit plus the actor field on the downstream clients.
+- *Closes when:* Either DECISIONS.md §9 records supersession, or a service-to-service call carries the caller's request id and actor, pinned by a test.
+- *Evidence:* `rg -i request_id|X-Request-ID docs/DECISIONS.md → 0` · `packages/service-kit/src/service_kit/context.py:27-38 (no client hook)` · `services/gateway/src/gateway/__init__.py:494-513`
+
+**XC-052 · A helm-LABELLED `rask-assist` Deployment/Service the release does not own will fail the next upgrade that renders it**
+`chart` · **MED**
+- **blocked:** Whether `rask-assist` becomes chart-rendered and helm-adopted (enable `runners.enabled` and annotate the live objects for adoption) or is deleted as hand-applied residue.
+- *What is left:* The chart renders `Deployment/<fullname>-assist` + its Service behind `runners.enabled` (`chart/templates/runners.yaml:1-15`), which defaults `false` (`chart/values.yaml:1851`), so the live hand-applied pair carries release labels no release owns and the first upgrade with the flag on meets an object it cannot adopt. Either set `runners.enabled` in the deploy values and add `meta.helm.sh/release-name` / `release-namespace` annotations plus `managed-by: Helm` on the live objects so the upgrade adopts them, or delete them; record the choice. Live state not re-verified (no cluster access).
+- *Closes when:* `helm get manifest rask` contains `rask-assist`, or no such objects exist in the cluster, and the choice is recorded.
+- *Evidence:* `chart/templates/runners.yaml:1-20` · `chart/values.yaml:1850-1853 (runners.enabled: false)`
+
+**LH-168 · The live `lance-secrets` Dapr Component is two scopes short of the chart and nothing detects Component-scope drift**
+`chart, viewer, search` · **LOW**
+- *What is left:* The chart's `lance.secretScopes` (`chart/templates/_helpers.tpl:1332-1357`) grants every `explorer.services` app-id (search, viewer) and the `lance-secrets` Component (`chart/templates/dapr-component.yaml:317`) renders them; helm does not re-patch an unchanged field, so out-of-band drift survives every upgrade. Re-apply the rendered Component so the live scopes match, then add a render-vs-live diff on Dapr Component scopes — `scripts/k3s-pins.sh --check-only` (`make k3s-stem-check`, `Makefile:766-776`) compares image stems only. Live drift (13 rendered vs 11 live) not re-verified (no cluster access).
+- *Closes when:* The live `lance-secrets` scopes equal the rendered set and a pre-upgrade check refuses on Component-scope drift.
+- *Evidence:* `chart/templates/_helpers.tpl:1332-1357` · `chart/templates/dapr-component.yaml:317-320` · `Makefile:766-776 (k3s-stem-check is image-stem only)` · ``grep -in 'component\|scopes' scripts/k3s-pins.sh` → image parsing only`
+
+**XC-020 · `transaction.can_set_property` and `transaction.can_cancel` are defined in `model.fga` and used by no relation and no code path**
+`service-kit, catalog` · **LOW**
+- *What is left:* Where the `fga` CLI is available (it is not on PATH here), re-run the usage sweep, then either delete both relations from `packages/service-kit/src/service_kit/governed/auth/model.fga` (lines 514 and 516) and their assertions in `model.fga.yaml:621-627`, or grow `alter_transaction` into the property/cancel actions so they are used. Run `fga model test` green and regenerate `model.json`. The only non-model references are a docstring at `catalog/api/fga_deps.py:423-424`; `fga_deps.py` picks only between `can_describe` and `can_set_status`.
+- *Closes when:* `fga model test` is green with the two relations either removed or exercised by a code path, and `model.json` is regenerated.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:505-516` · `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:621-627` · `grep -rn 'can_set_property\|can_cancel' services/ packages/ --include=*.py → only fga_deps.py:423-424 docstring` · `which fga → not found`
+
+**XC-034 · `submit_or_reattach`'s delete-and-resubmit branch has no test asserting the DELETE**
+`medallion` · **LOW** · PARTIAL
+- *What is left:* Six of the seven seams now have direct tests: `lakehouse/blobs.py` (`tests/unit/test_blob_create.py`, `test_blob_null_alignment.py`), `lancekit/store.py` (`packages/service-kit/tests/test_a_vended_credential_survives_the_storage_seam.py`, `test_s3fs_is_memoized.py`), `lancekit/reader.py`'s REST path (`tests/unit/test_annotate_catalog_versions.py:112` drives `RestCatalogTransport` with a fake; `test_catalog_caller_token.py`), `governed/audit.py` (`tests/unit/test_audit.py`), `middleware.py` (`packages/service-kit/tests/test_shared_body_cap.py`, `test_cors_is_the_outermost_layer.py`) and `lakehouse/objectfs.py` (`test_explicit_credentials_beat_the_ambient_environment.py`, `test_a_warehouse_can_require_encryption_at_rest.py`). Write one medallion test for `ray_jobs_api.py:185-194`: present a job whose status is in `TERMINAL_BAD` with `on_terminal_failure="resubmit"` and assert `DELETE /api/jobs/{sub_id}` then `POST /api/jobs/` and the `"resubmitted"` return. Today only the negative (`report` never deletes, `test_train_rides_the_shared_kernel.py:116`) and the workflow-level activity count (`test_a_vanished_stage_is_resubmitted.py:36`) exist.
+- *Closes when:* A medallion test asserts the DELETE-then-POST sequence on `submit_or_reattach`'s resubmit branch.
+- *Evidence:* `services/medallion/src/medallion/services/ray_jobs_api.py:153,185-194` · `services/medallion/tests/test_train_rides_the_shared_kernel.py:57-58,116 (negative assertion only)` · `tests/unit/test_audit.py:10; tests/unit/test_annotate_catalog_versions.py:112; packages/service-kit/tests/test_shared_body_cap.py:29` · `tests/unit/test_blob_create.py:28,73; packages/service-kit/tests/test_a_vended_credential_survives_the_storage_seam.py`
+
+**XC-036 · Two subchart values hardcode `rask-`-prefixed Secret names while the estate renders them as `<release>-…`, so any release not named `rask` points at Secrets that do not exist**
+`chart` · **LOW**
+- *What is left:* The mechanism is inverted from the row's wording: `lance.fullname` IS `{{ .Release.Name }}` (helpers.tpl:478), so the estate's own templates render `<release>-infra-credentials` and `<release>-observability-s3`, while two SUBCHART values hardcode the literal — `openfga.datastore.existingSecret: rask-infra-credentials` (values.yaml:2719) and `greptimedb-standalone.objectStorage.credentials.existingSecretName: "rask-observability-s3"` (:3023). Subchart values cannot template, so either give those two Secrets a release-independent name in the estate templates or add a render-time gate that fails any release not named `rask`. No test pins the pairing today.
+- *Closes when:* `helm template` under a release name other than `rask` either renders matching Secret names for the openfga and greptimedb subcharts or fails loudly at render.
+- *Evidence:* `chart/templates/_helpers.tpl:478 (lance.fullname = .Release.Name)` · `chart/values.yaml:2719 and :3023 (hardcoded rask- names)` · `chart/templates/observability.yaml:10 and external-secrets.yaml:138 (`{{ .Release.Name }}-observability-s3`)` · `grep over tests/unit for the pairing → no gate`
+
+**XC-037 · `pytest-xdist` is not a dependency and ~20 test files roll their own `subprocess` helm render**
+`chart, service-kit` · **LOW**
+- *What is left:* Add `pytest-xdist` (absent from `pyproject.toml` dev deps and `uv.lock`) and group the three parallel-unsafe suites (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) with `--dist loadfile`. Convert the cleanly-convertible hand-rolled helm renders onto the cached `_rendered_docs`/`render(*flags)` helper in `tests/unit/test_invariants.py` keyed on the verbatim flag tuple; 21 files invoke helm through their own `subprocess` today (20 excluding `test_invariants.py`, which hosts the helper). Leave alone the ones needing a real subprocess (`check=False` x3, `CalledProcessError` in `test_invariants`) and the two deliberate variants (`test_chart_gitops_ready._render` omits `image.localImages=true`; `test_prod_ha_posture` renders `-f chart/values-prod.yaml`).
+- *Closes when:* `uv run pytest -n auto -m 'not slow'` passes green and the only `subprocess` helm calls left are the named exceptions.
+- *Evidence:* `rg 'xdist' pyproject.toml uv.lock -> no hits` · `rg -l subprocess tests services packages | xargs rg -l '"helm"' -> 21 files` · `tests/unit/conftest.py:21 (nineteen files import _rendered_docs from test_invariants)`
+
+**XC-039 · Live e2e legs skip on a 5 s `/livez` timeout while the medallion producer is up and serving the cascade**
+`medallion, e2e` · **LOW**
+- *What is left:* `tests/e2e-py/test_medallion_e2e.py:81-85` probes the producer and lineage `/livez` with `timeout=5` and `pytest.skip`s on any exception as "not reachable"; 17 other `/livez` probes across `tests/e2e-py` use the same 5 s literal. Replace the inline probe with a shared helper carrying a longer budget and a bounded retry, so a loaded-but-healthy service does not turn a pass into a skip.
+- *Closes when:* A producer answering `/livez` slower than 5 s no longer skips the medallion legs.
+- *Evidence:* `tests/e2e-py/test_medallion_e2e.py:81-85` · ``grep -rn 'timeout=5)' tests/e2e-py/*.py | grep livez | wc -l` → 17`
+
+**XC-040 · The dangling-locator gate checks pointers INTO a register but nothing gates a register's sidecar outliving it**
+`e2e` · **LOW**
+- *What is left:* `tests/unit/test_no_locator_names_a_deleted_register.py` has two tests (locator into a gone register; carried list only shrinks) and its `_register_exists` at :52-53 accepts a `.findings.json` as a valid target, but no test fails when an `open_*.findings.json` (or similar sidecar) exists with no `open_*.md` beside it. Add that assertion over `git ls-files`. Decide how it classifies the tracked, uncited root `open_stack.html` (no `open_stack.md` exists) — sidecar or standalone document — so the gate is not vacuous: at HEAD no `*.findings.json` exists.
+- *Closes when:* A test fails on a root `open_*` sidecar whose register is gone, and it passes at HEAD with `open_stack.html` classified explicitly.
+- *Evidence:* `tests/unit/test_no_locator_names_a_deleted_register.py:52-53,64,85` · `find . -maxdepth 2 -name '*.findings.json' → none` · `git ls-files open_stack.html → tracked; no open_stack.md; grep -rn open_stack.html → uncited`
+
+**XC-041 · `make seed-dev` chmods the whole corpus root, hardcodes one release name, host path and ports, and seeds labeling doc ids with a literal `dataset_version`**
+`scripts` · **LOW**
+- *What is left:* `scripts/seed_demo_corpus.py:344-362` `_make_world_readable(root)` walks `root.rglob("*")` and chmods everything under the corpus root rather than the paths the run wrote, and does nothing for the re-seed case. `scripts/seed_dev_estate.sh` hardcodes `rask-search`/`rask-viewer`/`rask-annotator`/`rask-minio`/`rask-catalog` (:28,34,48,113-114,126,128), the host path `/home/gabriel/media-corpus` (:22) and ports 19900/12433. `scripts/seed_labeling_task.sh:124-126` hardcodes `fe00cd746463ad2c/{0,1,2}` keys with `"dataset_version": 1`. Track and chmod only what the run wrote; take release name, namespace, host path and ports as parameters; derive the labeling keys and `dataset_version` from the live fixture and the catalog's table version, the way the corpus half already reads `MEDIA_DB` and `/v1/me`.
+- *Closes when:* A seed against a differently named release on another host, run twice, leaves only its own files readable and a labeling task whose keys and version match the fixture it read.
+- *Evidence:* `scripts/seed_demo_corpus.py:344-362` · `scripts/seed_dev_estate.sh:22,28,34,113-114,126,128` · `scripts/seed_labeling_task.sh:124-126` · `Makefile:527-528 (seed-dev → scripts/seed_dev_estate.sh)`
+
+**XC-042 · `/capi/v1/me` 502s under `dev-micro.sh` because the fleet starts no catalog; the BFF's 502 is honest and the consumer already degrades**
+`annotator, home-zone, scripts` · **LOW** · **REWRITTEN — the original ask would be wrong**
+- *What is left:* Do not make the BFF answer anything but 502 for an unreachable catalog: `makeBackendProxy` reports the failure, `fetchMeViaBff` returns `null` on ANY failure, and the layout renders base entries fail-closed — silencing the 502 would mask an outage. The `:8103` clause is shipped (`dev-micro.sh` starts `annotator` on `ANNOTATOR_PORT`). The only residue is that `scripts/dev-micro.sh` starts no catalog service at all, so `/capi/v1/me` 502s there by construction; if a local identity call matters, add the catalog to the roster as its own row.
+- *Closes when:* Closed as written; a catalog-in-dev-micro row exists if wanted.
+- *Evidence:* `scripts/dev-micro.sh:41,96 (`ANNOTATOR_PORT` 8103, `run annotator`); grep -i catalog → no catalog process` · `frontend/packages/api/src/bff.ts:224-228 (fetch failure → 502), :353-358 (`makeCatalogProxy`)` · `frontend/packages/api/src/client.ts:67-73 (`fetchMeViaBff`: null on any failure)` · `frontend/microfrontends/annotator/src/routes/+layout.svelte:113-116 (null → base entries, fail-closed)`
+
+**XC-043 · Ten docs still describe the orchestrator, `core_api`/`search_api`/`volumes_api`, `packages/htr` or `/default/<zone>` bases in their body, tombstone or not**
+`docs` · **LOW** · PARTIAL
+- *What is left:* Rewrite the bodies, not only the headers. Tombstone admonitions are in place on `system-overview.md`, `microservices.md`, `packages/htr.md`, `frontend-conventions.md` and `frontend-microfrontends.md`, but the prose under them still presents the dead things as live (`microservices.md:59-60` lists volumes-api/search-api as services, `frontend-microfrontends.md:94-95` diagrams `/default/` bases, `components/ui.md:8`, `components/progress.md:191,258`, `layout.md:64` names `media`/`train` zones, `frontend-conventions.md:55`). The gate grep returns 10 files at HEAD, not 6: `DECISIONS.md`, `deployment.md` and `packages/htr.md` hit only as explicit tombstones; the other seven carry live stale text. `docs/reference/htr.md` no longer exists. Keep the zensical nav gate green (`zensical.toml` serves layout, deployment, microservices, frontend-microfrontends, system-overview, packages/htr, components/ui, DECISIONS).
+- *Closes when:* `grep -rl "core_api\|search_api\|volumes_api\|packages/htr\|/default/" docs/ --exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files whose every hit is an explicit tombstone, with the nav gate green.
+- *Evidence:* `grep -rl … docs/ → 10 files (DECISIONS 1, frontend-microfrontends 26, layout 1, packages/htr 1, deployment 1, frontend-conventions 8, microservices 10, system-overview 10, progress 2, ui 2)` · `docs/architecture/microservices.md:59-60,185-200 (live prose for volumes-api/search-api/orchestrator, 'Auth: none')` · `docs/architecture/frontend-microfrontends.md:94-95; docs/components/ui.md:8` · `zensical.toml:22-59`
+
+**XC-044 · `fga model validate` is not in the `ms-authz` CI job, so weighted-graph compatibility stays a hand audit**
+`service-kit` · **LOW**
+- *What is left:* The blocker is gone: `fga model validate` ships in fga CLI 0.6.4 — the exact version `.github/workflows/ci.yml:201` installs — and answers `{"is_valid":true}` for packages/service-kit/src/service_kit/governed/auth/model.fga. Add `fga model validate --file $AUTH/model.fga` to the `ms-authz` job (ci.yml:195-215) beside `fga model test` at line 208. Whether 0.6.4's validate specifically covers weighted-graph compatibility is not stated by its help text; confirm against the upstream release notes when wiring it.
+- *Closes when:* The `ms-authz` job runs `fga model validate` on `model.fga` and fails on an invalid model.
+- *Evidence:* `.github/workflows/ci.yml:201 `FGA_V=0.6.4`; :208 `fga model test --tests $AUTH/model.fga.yaml`; no `validate` call in :195-215` · `.localbin/fga --version → v0.6.4; `.localbin/fga model --help` lists `validate`` · ``.localbin/fga model validate --file packages/service-kit/src/service_kit/governed/auth/model.fga` → `{"is_valid":true}` exit 0`
+
+**XC-022 · A NACK operator under GitOps and a query engine are owner-parked with no ruling**
+`chart, nats` · **LOW** · PARTIAL
+- **blocked:** Owner ruling on whether JetStream streams are provisioned as NACK Stream CRs under GitOps, and whether a query engine is in scope
+- *What is left:* The NATS HA clause is shipped: `nats.config.cluster.enabled: true, replicas: 3` (chart/values.yaml:2408-2410) with JetStream on (:2388-2389). What remains unruled is the NACK-operator-under-GitOps question — today NACK appears only as a commented prod option (chart/values-prod.yaml:273-274) and no NACK CR exists in chart/templates — and whether a query engine is in scope. No work until the ruling.
+- *Closes when:* An owner ruling records yes/no on NACK Stream CRs under GitOps and on a query engine; if yes, the CRs and engine land in the chart.
+- *Evidence:* `chart/values.yaml:2408-2410 `cluster: enabled: true / replicas: 3`; :2388-2389 `jetstream: enabled: true`` · `chart/values-prod.yaml:273-274 — NACK named only in a comment` · `grep -rn -i 'nack' chart/ --include=*.yaml → no template/CR hits`
+
+**XC-023 · The Dapr retreat (D5) has not started: 37 of 523 src files import the SDK and 39 of 59 chart templates mention dapr**
+`medallion, notifications, ingest, lineage, service-kit, chart` · **LOW**
+- **blocked:** Owner sequencing: the retreat (§K) is ordered after §A–§D of the lakehouse audit and has not been released to start.
+- *What is left:* Work the stated order once released: secrets (OpenBao direct) → pub/sub (JetStream durable consumers behind a `Publisher` protocol replacing `dapr_publish`) → state (JetStream KV with CAS; notifications' actors become KV rows with revision CAS) → bindings (in-process scheduler + KV lease) → invocation (plain HTTP + mTLS) → workflow last (BYO engine; `promotion_review` becomes a record + door + scheduled message). The per-block replacement map is `docs/audits/lakehouse-2026-09/dapr-coupling-analysis.md` §4 and the ranked loss list §6.
+- *Closes when:* No file under `services/` or `packages/` imports `dapr`, and no chart template renders a Dapr Component or sidecar annotation.
+- *Evidence:* ``grep -rlE '^(from|import) dapr' services/ packages/ --include=*.py | grep -v /tests/ | wc -l` → 37 of 523 src files` · ``grep -rl dapr chart/templates/ | wc -l` → 39 of 59` · `docs/audits/lakehouse-2026-09/dapr-coupling-analysis.md:171,333`
+
+**XC-045 · No ruling on where a rask-operator chart and its CRD would be installed from**
+`chart` · **LOW**
+- **blocked:** Whether a rask-operator chart (with its `helm.sh/resource-policy: keep` CRD) is installed via a split infra chart in this repo or shipped from the separate rask-operator repo
+- *What is left:* Record the ruling in `docs/DECISIONS.md`. Two standing decisions constrain it: the chart is NOT split (infra vs app), reopened only by the named triggers at `DECISIONS.md:845-849`; and CRDs are a rask-operator-repo concern — landing one here without its controller is ruled a regression (`:920-924`, `:1492-1494`).
+- *Closes when:* docs/DECISIONS.md names the operator chart's home.
+- *Evidence:* `docs/DECISIONS.md:810-812,834-849` · `docs/DECISIONS.md:920-924,1492-1494`
+
+**XC-046 · Remote branch `claude/flyte-2-dapr-audit-19cyc2` still exists on origin**
+`—` · **LOW**
+- **blocked:** Owner action: push rights to delete the remote branch
+- *What is left:* `git ls-remote --heads origin` still lists the branch at `d6f13ff3`. It carries one commit not on main (`docs: add the governed-lakehouse backlog…`); 10 of its 11 files exist on main and the eleventh, `open_lakehouse.md`, is the register this file superseded. Run `git push origin --delete claude/flyte-2-dapr-audit-19cyc2` from a machine with push rights.
+- *Closes when:* `git ls-remote --heads origin claude/flyte-2-dapr-audit-19cyc2` returns nothing.
+- *Evidence:* `git ls-remote --heads origin | grep flyte → d6f13ff3 refs/heads/claude/flyte-2-dapr-audit-19cyc2` · `git log --oneline main..origin/claude/flyte-2-dapr-audit-19cyc2 | wc -l = 1` · `git cat-file -e main:<each file>: 10/11 present, open_lakehouse.md absent`
+
+**XC-049 · Two Kueue controllers reconcile one set of CRDs, producing kueue-ca handshake spam, and two otel-collector scrape targets fail**
+`chart` · **LOW**
+- **blocked:** Cluster-operator decision to remove the foreign kueue-system Kueue install (or the chart-owned one) so a single controller writes the CRD conversion-webhook CA bundle.
+- *What is left:* The chart still owns a Kueue 0.18.1 dependency gated on kueue.enabled (default true) with chart/templates/kueue-queues.yaml; the foreign kueue-system install is outside this repo. Once one controller remains, confirm the x509 'kueue-ca' spam stops. Separately identify and repair the two failing otel-collector scrape targets among the four scrape jobs in chart/templates/otel-collector.yaml:116-276 (dapr-sidecars, dapr-control-plane, ray-pods, greptimedb). Cluster state — the foreign install, the spam rate, which two targets fail — is not verifiable from this session.
+- *Closes when:* One Kueue controller reconciles the CRDs and every otel-collector scrape target reports up.
+- *Evidence:* `chart/Chart.yaml:65-68 (kueue 0.18.1, condition kueue.enabled)` · `chart/values.yaml:2601-2602 (kueue.enabled: true)` · `chart/templates/otel-collector.yaml:116-276 (four scrape jobs)`
+- *Confidence LOW* — re-measure before acting on this row.
+
+**XC-051 · Undecided whether the estate shares one GreptimeDB or runs one per workload**
+`chart` · **LOW**
+- **blocked:** One shared GreptimeDB, or one per workload
+- *What is left:* Record the ruling in `docs/DECISIONS.md` (no GreptimeDB sharing decision exists there) and make `chart/values.yaml`'s observability stanza state it. De facto there is one (`rask-greptimedb-standalone`); the question bites once a runner's telemetry volume competes with the cascade's RED metrics and traces.
+- *Closes when:* docs/DECISIONS.md and chart/values.yaml both state the topology.
+- *Evidence:* `grep -n -i greptime docs/DECISIONS.md — none of the 8 hits is a sharing ruling` · `grep -n -i 'per-workload|one shared' chart/values.yaml — no observability match`
+
+
+## PHASE 2 · COMPUTE
+
+**CP-005 · `ensure_dataset` runs before enumeration, so a source that enumerates zero units leaves a registered empty bronze table behind a COMPLETE run**
+`ingest, medallion, catalog` · **HIGH**
+- *What is left:* `ensure_dataset` is the first activity (workflow.py:520), `enumerate_chunks` follows (:523), and the `units_total == 0` short-circuit (:629) returns COMPLETE without touching the table it registered. Do NOT reorder: `enumerate_chunks`' incremental anti-join reads existing ids at the location `ensure_dataset` returned and refuses an absent table as a read failure (workflow.py:1203-1215, F12c), so the table must exist before enumeration. Make `ensure_dataset` report created-vs-found and, on `units_total == 0`, roll back a table THIS run created while leaving a pre-existing one untouched (a quiet source against an existing table is the ruled-legitimate case). Pin with a test that points a source at an empty prefix and asserts no table remains registered.
+- *Closes when:* A run whose source enumerates zero units leaves no newly-registered bronze table, proven by a test that asserts the catalog holds no table afterward.
+- *Evidence:* `services/ingest/src/ingest/workflow.py:520 (ensure_dataset first) and :523 (enumerate_chunks after)` · `services/ingest/src/ingest/workflow.py:629 (units_total==0 returns COMPLETE, no rollback)` · `services/ingest/src/ingest/workflow.py:1203-1215 (anti-join requires the table to exist)` · `services/ingest/tests/test_empty_source.py:1-10 (empty = COMPLETE ruling)`
+
+**CP-007 · Ingest's reads of the estate-default store and of secretless registered stores run on ambient credentials, not a scoped identity**
+`ingest, catalog, chart` · **HIGH** · PARTIAL
+- **blocked:** Which source buckets ingest reads, and which scoped identity (a name in the Dapr secret store) each registered store declares — an operator decision per bucket.
+- *What is left:* Path 1 is shipped: `POST /v1/outbox/credentials` vends a write-tier STS credential scoped to `settings.lineage_outbox_uri`, gated on `can_stage_events` (`event_stager` rung, granted to ingest by bootstrap-admin.yaml), and `_outbox_storage_options` vends through it, degrading to endpoint-only on refusal. Not verified live this session: staging from ingest and watching the reconcile cron drain the object. Paths 2 and 3 remain: `objectstore._s3_prefix`'s `is_estate_default` branch returns a `pafs.S3FileSystem` on pyarrow's ambient AWS_* chain, and a registered store declaring no `secret` falls to `without_credentials`. Register each source bucket as a store that declares a `secret` naming a scoped identity so `_own_store_for` stops falling back; the machinery exists and is inert until aimed.
+- *Closes when:* Every bucket ingest reads is a registered store with a declared scoped secret, and no code path in objectstore.py reaches `without_credentials` or the ambient chain.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/outbox_credentials.py:51-55 (the door)` · `services/ingest/src/ingest/lineage.py:252-293 (_outbox_storage_options vends)` · `packages/service-kit/src/service_kit/governed/auth/model.fga:255 (can_stage_events)` · `services/ingest/src/ingest/objectstore.py:239-252 (estate-default + secretless fallbacks)`
+
+**CP-010 · dev-kuberay.ra.se's job-submission API answers 200 with no token and with a wrong token**
+`external-kuberay, compute` · **HIGH**
+- **blocked:** The operators of the KubeRay cluster at dev-kuberay.ra.se must enable token verification (or front it with ingress auth / a network policy); plus their answer on whether the host is reachable from outside the network and whether anything already fronts it, which decides urgency.
+- *What is left:* rask's half is in place: ray-kit sends `Authorization: Bearer <token>` and the chart wires KubeRay-native authOptions; nothing in this repo can make the external cluster check it. Get the cluster's operators to enable token verification, then re-run the three probes from inside rask's cluster: no-token and wrong-token must 401 on `/api/version`, `/api/jobs/` and `/api/cluster_status`. Note `chart/values.yaml` defaults `ray.auth.enabled: false` with `dashboardUrl: https://dev-kuberay.ra.se`; the live release's value and the cluster's behaviour are not re-measured this session (no cluster access).
+- *Closes when:* No-token and wrong-token requests to `/api/version`, `/api/jobs/` and `/api/cluster_status` on dev-kuberay.ra.se all answer 401.
+- *Evidence:* `packages/ray-kit/src/ray_kit/auth.py:41-45 (Bearer header built from the token env)` · `chart/values.yaml:2190 (dashboardUrl dev-kuberay.ra.se), :2202-2203 (ray.auth.enabled default false)` · `services/compute/src/compute/lifespan.py:29-31 (auth_headers as client default)`
+
+**CP-011 · `runners/htr` is not re-cut as a stage runner: the prefetch pipeline and loader/writer endcaps remain, `main.py` has no stage entrypoint, and no per-job image seam exists**
+`runners/htr, medallion, compute, chart` · **HIGH**
+- **blocked:** Which image seam carries the htr lane: per-lane `runtime_env.image_uri` on the Jobs-API submit path plus the task/spec record, or a baked platform-side job calling a `/htrflow` Serve door (deployed nowhere today). Baking htr into the head image is forbidden by the 2026-08-25 seal ruling.
+- *What is left:* Merge with LH-010 (same P7b re-cut; it carries the better anchor). Decide the image seam: `ray_submit.py` posts `runtime_env: {env_vars}` only, `grep -rn image_uri services/ packages/ scripts/` is empty, and `MEDALLION_RAY_ENTRYPOINT` (`core/config.py:312`) can only name a script baked into the runner-free head image. Give the htr runner an env-parameterised stage entrypoint shaped like `runners/dummy/src/dummy_runner/job.py` (`RASK_SOURCE_URI`/`RASK_DEST_URI`/`RASK_VERSION_FLOOR`, not a typer subcommand), declare the lane as a `TransformSpec` + `TaskDeclaration`, and retire `prefetch_pipeline` (`pipeline.py:143`, entry `:230`) with the `PageLoaderActor`/`AltoWriterActor` endcaps (`pipeline.py:10`) — deliberately taking `htr/iiif.py::IIIFCachedSource` with them, whose only consumer is prefetch. Rewrite `chart/values.yaml:1485-1491`, which still prescribes baking the entrypoint into the ray-cluster image. Prove the HTR lane's own bronze→silver→gold green with lineage on the head; the generic cascade is already green without htr and does not discriminate.
+- *Closes when:* An htr stage job submitted through the medallion cascade succeeds on the head with lineage populated, and `runners/htr` carries no prefetch pipeline or ALTO endcaps.
+- *Evidence:* `runners/htr/src/runner/pipeline.py:10,143,230` · `runners/htr/src/runner/main.py:43 (single @app.command, no subcommands)` · `services/medallion/src/medallion/core/config.py:312` · `chart/values.yaml:1485-1491`
+
+**CP-012 · The Ray lane still bypasses the executor port, the live Ray head is a hand-applied manifest outside the chart, and Kueue admits nothing**
+`medallion, compute, chart` · **HIGH** · PARTIAL
+- **blocked:** Owner: bring the standing Ray head under the chart (a RayCluster/RayService rendered by the release) or keep it hand-applied — and, now that the RayJob CR adapter is deleted, whether Kueue stays installed with nothing to admit.
+- *What is left:* The CR adapter branch is settled: `rayjob_executor.py` and `chart/templates/medallion-rayjob-rbac.yaml` no longer exist and `RayJobsApiExecutor` is what `engine_registry.executor_for(RAY_ENGINE)` returns. Route the Ray lane through that port instead of `workflow.py:487`'s direct `submit_stage_job` import; the one gap is `ray_submit.py:167`'s fallback to `settings.ray_entrypoint` when no task is declared, which the adapter has no equivalent for (overlaps LH-159). After the ruling, render the head from the chart (`rayservice.yaml` is gated on `singleTenant.enabled`, default false) and delete `deploy/ray-lance-demo.yaml` plus its apply at `scripts/ray_e2e_stack.sh:121`. Give job records a home that survives a head restart (Ray history server) or record that `DURABLE_RECORD` is declined on purpose, and either set gang/priority policy on the `rask` ClusterQueue behind a CR path or drop `kueue.enabled`. Live CR count and head annotations were not re-verified this session (no kubectl).
+- *Closes when:* `workflow.py` reaches Ray only through `executor_for`, the release renders the Ray head and `deploy/ray-lance-demo.yaml` is gone, and Kueue is either admitting Ray work or removed.
+- *Evidence:* `services/medallion/src/medallion/workflow.py:487` · `services/medallion/src/medallion/services/ray_submit.py:167` · `docs/DECISIONS.md:1850 (adapter deleted 2026-09-15; executor_for had zero production callers on the Ray lane)` · `scripts/ray_e2e_stack.sh:121 + deploy/ray-lance-demo.yaml (9,845 bytes at HEAD)`
+
+**CP-025 · Dapr Workflow definitions are registered by bare `__name__` with no versioning seam, so every deploy replays in-flight instances against new code**
+`medallion, ingest, flows` · **HIGH**
+- **blocked:** Owner sequencing of the Dapr retreat (XC-023 / D5): build a workflow version-pinning seam now, or accept the replay-on-deploy cost until the BYO-engine cutover
+- *What is left:* Medallion (`workflow.py:829-848`), ingest (`ingest/__init__.py:165,266`), promotions (`api/promotions.py:185`) and flows all host Dapr workflows registered by function name, and `workflow.py`'s own docstring records 'the estate has no versioning seam'. `ingest/replay_guard.py` and `test_replay_hygiene.py` only ban env reads inside workflow bodies; `service_kit/draining.py` only refuses new admissions on a draining pod. Neither pins a workflow definition to a version or drains in-flight instances before a rollout. Add versioned workflow names plus a deploy-time drain gate, or take the retreat.
+- *Closes when:* A rollout with an in-flight medallion or ingest instance either replays against the pinned old definition or is held until that instance completes, pinned by a test.
+- *Evidence:* `services/medallion/src/medallion/workflow.py:829-848` · `services/ingest/src/ingest/__init__.py:165,266` · `packages/service-kit/src/service_kit/draining.py:1-40 (admission gate only)` · `grep -ri 'workflow_version|drain gate' services/ packages/ chart/: no versioning seam`
+
+**CP-001 · The Ray stage/train job signs S3 writes with the pod's static `rask-ray-compute` key, whose policy is `arn:aws:s3:::*` wide and enumerates every bucket**
+`medallion, catalog, chart` · **MED** · PARTIAL
+- *What is left:* The `runtime_env` half is shipped: no key, secret or token rides the job body (ray_submit.py:206-220), the job reads `S3_KEY`/`S3_SECRET` from the pod's own Secret (ray_stage_job.py:86-91). What remains is the per-table vend on the Ray lane: have the job obtain a table-scoped STS triple itself from the catalog's credentials door (services/catalog/src/catalog/api/v1/endpoints/credentials.py) with a pod-held service token, and feed it to `lance_storage_options`, which already accepts `session_token`. Never carry the triple in `runtime_env`. Then narrow the `ray-compute` policy in chart/templates/minio-scoped-users.yaml:271-289 away from `arn:aws:s3:::*`, keeping the runtime-minted-warehouse case green (`tests/unit/test_scoped_policies_reach_runtime_minted_warehouses.py`). The 104/105-bucket enumeration count is from the row, not re-measured this session.
+- *Closes when:* A cascade tier is written under a credential scoped to that table's bucket+prefix and the pod's static key can no longer list the estate's buckets.
+- *Evidence:* `services/medallion/src/medallion/services/ray_submit.py:206-220` · `scripts/ray_stage_job.py:81-91` · `chart/templates/minio-scoped-users.yaml:271-289` · `chart/templates/minio-scoped-users.yaml:184-195`
+
+**CP-006 · `StagingOverlapError`'s docstring still claims the two-batch redelivery merge is reachable, though the worker now stages redeliveries singly**
+`ingest` · **MED** · PARTIAL
+- *What is left:* The batching fix is shipped by a stricter rule than the row asks for: `worker.py` stages ONE fragment per redelivered unit (`worker.py:540-562`), so the staged family is laminar and the two-batch fragment cannot form. Rewrite `StagingOverlapError`'s docstring at `staging.py:195-217`, which still asserts "This is REACHABLE" and "Both are open". Keep the class rather than deleting it: the `verdict.chosen is None` branch at `staging.py:322` still needs a loud refusal for a non-laminar family produced by hand-written or foreign manifests, and two test files construct exactly that.
+- *Closes when:* `staging.py`'s `StagingOverlapError` docstring describes it as the guard for a manifest family the worker cannot produce, with no claim that `drain_chunk` batches redeliveries together.
+- *Evidence:* `services/ingest/src/ingest/worker.py:540-562 (ONE FRAGMENT PER REDELIVERED UNIT, commit 83912acd)` · `services/ingest/src/ingest/staging.py:195-217 (docstring still says REACHABLE / Both are open)` · `services/ingest/src/ingest/staging.py:322 (raise site on chosen is None)` · `services/ingest/tests/test_partial_ack_duplication.py:140 (hand-built overlap still raises)`
+
+**CP-014 · `submit_or_reattach` answers REATTACHED on any 4xx after reading only the existing job's status, never its identity**
+`medallion` · **MED** · PARTIAL
+- *What is left:* The code_version half is shipped: `ray_jobs_api.submission_id` folds `code` into the id, `ray_submit.py:181` passes it, and the chart sets `MEDALLION_RAY_CODE_VERSION` from the image. What remains is the re-attach check itself: `submit_or_reattach` treats ANY >=400 on `POST /api/jobs/` as a possible duplicate, GETs the job and inspects only `status`. Narrow the duplicate branch to the actual duplicate-id status, and before answering `reattached` compare the existing job's entrypoint and `runtime_env.env_vars` to the body, raising `RayJobError` (or resubmitting) on mismatch. Pin it with a test in `services/medallion/tests` that presents a same-id job with a different entrypoint.
+- *Closes when:* A same-id job with a different entrypoint or runtime_env is never reported as `reattached`, and a non-duplicate 4xx is never read as a collision, both pinned by a test.
+- *Evidence:* `services/medallion/src/medallion/services/ray_jobs_api.py:153-200 (POST, then GET, then `status` only)` · `services/medallion/src/medallion/services/ray_jobs_api.py:44-75 (`code` hashed into the id)` · `services/medallion/src/medallion/services/ray_submit.py:169,181,204` · `chart/templates/medallion.yaml:582 (`MEDALLION_RAY_CODE_VERSION` = catalog image)`
+
+**CP-015 · `POST /train` derives a feature's URI from the tier segment alone and discards the `$name` half, so training reads the tier dataset rather than the named table**
+`medallion, catalog` · **MED**
+- *What is left:* Resolve each `features[].dataset` (`stage$name`) against the catalog inside the `/train` door instead of `stage_uri_for`, which builds `<stage_base>/<stage>` from the segment before `$` and never reads the name. Hand the job the resolved table URI (the `uri` field at train.py:278) and pin the version off that table. Refuse an unresolvable reference with a 4xx problem+json (the door already maps `resolve_failed` to 422 at api/train.py:120-121); do not forward it.
+- *Closes when:* A `/train` naming `silver$features` submits a job whose `FEATURES[].uri` is the catalog table's location, and a name the catalog does not hold is refused 4xx.
+- *Evidence:* `services/medallion/src/medallion/services/train.py:87-96 (`stage_uri_for` splits on `$` and uses only the stage segment)` · `services/medallion/src/medallion/services/train.py:118-123 (`_resolve_version` opens that tier URI)` · `services/medallion/src/medallion/services/train.py:278 (`uri: stage_uri_for(...)` forwarded to the Ray job)` · `services/medallion/src/medallion/api/train.py:120-121 (`resolve_failed` → 422)`
+
+**CP-016 · No test proves a Ray dashboard endpoint rejects a missing or wrong token; every Ray-auth test asserts chart render or a mocked transport**
+`compute, chart, ray-kit` · **MED**
+- *What is left:* Add a test that calls a Ray dashboard endpoint (`/api/version`, `/api/jobs/`) with no token and with a wrong token and asserts 401. Run it against a Ray brought up with `dagger core container … as-service up`, never docker. `tests/unit/test_ray_auth.py` holds 8 render-time tests only and `packages/ray-kit/tests/test_auth.py` asserts on `httpx.MockTransport`; `tests/e2e-py/test_ray_*_e2e.py` never issue a tokenless call to Ray.
+- *Closes when:* A suite test observes 401 from a live Ray dashboard for a missing and for a wrong token.
+- *Evidence:* `tests/unit/test_ray_auth.py:78-191 (8 tests, all helm-render assertions)` · `packages/ray-kit/tests/test_auth.py:1-12,94 (mocked transport; docstring defers the live proof to 'cluster gates')` · `grep -n '401\|token' tests/e2e-py/test_ray_batch_e2e.py tests/e2e-py/test_ray_train_e2e.py — no tokenless Ray assertion`
+
+**CP-018 · Ray core logs (driver/task/actor) stay as files under /tmp/ray in the head container; nothing mounts or tails them**
+`chart, deploy (ray head)` · **MED**
+- *What is left:* Add a `ray-logs` emptyDir (sizeLimit 2Gi) at `/tmp/ray` on the ray-head container and a `ray-log-agent` otel-collector-contrib sidecar mounting it read-only, with a filelog receiver over `/tmp/ray/session_latest/logs/**/*.{log,out,err}` (`include_file_path: true`, `start_at: end`, json_parser; `RAY_LOGGING_CONFIG_ENCODING=JSON` is already set) exporting otlphttp to the same GreptimeDB as the metrics. Poll frequently at first; the directory does not exist until Ray creates it. Land it on both in-repo head definitions, `deploy/ray-lance-demo.yaml` (the hand-applied head, whose only volume is `dshm`) and `chart/templates/rayservice.yaml`; the remote dev-kuberay.ra.se cluster is outside this repo and needs its operators. Consider `RAY_DEDUP_LOGS=0` (already set on the demo head).
+- *Closes when:* A `job-driver-*.log` line from a medallion stage job is queryable in GreptimeDB.
+- *Evidence:* `chart/templates/_ray-cluster-config.tpl:95-98 — comment records /tmp/ray is unmounted and untailed` · `deploy/ray-lance-demo.yaml:138-143 — the head's only volume is dshm` · `grep -rn 'ray-logs|session_latest' chart/ deploy/ — no sidecar or mount` · `chart/templates/otel-collector.yaml:231-232`
+
+**CP-027 · No test asserts `medallion.stage.outcome` carries `verdict=failed` on the dying path**
+`medallion` · **MED** · PARTIAL
+- *What is left:* The metric is shipped: `medallion.stage.outcome` counts the application's own terminal verdict (succeeded|failed|abandoned|unnotified) at `workflow.py:652`, its docstring records why Dapr's `status=success` label is false, and `MedallionStageOutcomesFailing` alerts on it. Add one test that drives the failed verdict through `report_stage_outcome` and asserts the counter records `lance.medallion.verdict=failed`; the existing failed-path tests assert the FAIL lineage event and one monkeypatches `record_stage_outcome` to a no-op.
+- *Closes when:* A medallion test fails if `record_stage_outcome` stops receiving `failed` when a stage job dies.
+- *Evidence:* `services/medallion/src/medallion/core/metrics.py:133-175 (counter + record_stage_outcome)` · `services/medallion/src/medallion/workflow.py:652 (record_stage_outcome(outcome.verdict))` · `services/medallion/tests/test_stage_workflow.py:293-332 (failed verdict driven, FAIL event asserted)` · `services/medallion/tests/test_activity_bodies_are_reexecution_safe.py:133 (record_stage_outcome monkeypatched away)`
+
+**CP-029 · `compute` is an introspection shell — no submit door with vended credentials, no idempotent outcome door, no plan document on a control lane**
+`compute, medallion` · **MED**
+- *What is left:* Build the two BYO-engine artefacts from `docs/audits/lakehouse-2026-09/lakehouse-analysis.md` §11 D on compute's management API: a submit door that vends credentials via the catalog's existing `POST /v1/table/{id}/credentials`, and an idempotent outcome door backed by `ray_kit.submit_or_reattach`, with the plan document published on a control lane. Today compute's router is GET-only (`/ray/health|jobs|jobs/{id}/logs|cluster|actors|tasks|overview|logs`) plus the `/api/serve/*` proxy, `submit_or_reattach` is called only in-process by the medallion, and no `/plans` or `/outcome` route exists on any service.
+- *Closes when:* Compute exposes a credential-vending submit door and an idempotent outcome door keyed on the action id, and the plan document is published on a control lane.
+- *Evidence:* `services/compute/src/compute/routes.py:26-71 (GET-only router under /ray)` · `services/medallion/src/medallion/services/ray_submit.py:322,429 and rayjobs_api_executor.py:109 (only callers of submit_or_reattach)` · `services/catalog/src/catalog/api/v1/endpoints/credentials.py:44-47 (POST /v1/table/{id}/credentials)` · `docs/audits/lakehouse-2026-09/lakehouse-analysis.md:222 (§11 D)`
+
+**CP-017 · Nothing scrapes the external Ray cluster — zero `ray_*` / `ray_serve_*` / `ray_data_*` / `autoscaler_*` series reach GreptimeDB**
+`external-kuberay` · **MED**
+- **blocked:** The operators of the external KubeRay cluster at dev-kuberay.ra.se applying the scrape on their collector — nothing in the rask chart can do it (chart/templates/otel-collector.yaml:20 renders nothing when observability.otelCollector.externalEndpoint is set)
+- *What is left:* On the collector beside the external cluster, add a `job_name: ray-pods` scrape block mirroring chart/templates/otel-collector.yaml:190-254 — keep on `__meta_kubernetes_pod_label_ray_io_is_ray_node="yes"` and container port name `metrics`; relabel `ray_io_cluster`, `ray_node_type`, `namespace`, `pod`. Carry the `metric_relabel_configs` drop (lines 247-254) that keeps only `ray_data_num_tasks_submitted` and `ray_data_task_submission_backpressure_time` — an unfiltered scrape adds 113 `ray_data_*` families and OOMKills the store. Confirm the head and every worker group declares `containerPort: 8080, name: metrics`, and export to `http://<greptimedb-host>:4000/v1/otlp` with `x-greptime-db-name` only. Ray metrics are per-node pull endpoints, so this cannot be pushed from rask's side.
+- *Closes when:* `ray_node_cpu_utilization` returns a series on that GreptimeDB's `:4000/v1/prometheus`.
+- *Evidence:* `chart/templates/otel-collector.yaml:20 — `{{- if and $o.enabled $c.enabled (not $c.externalEndpoint) }}` wraps the whole in-cluster Collector` · `chart/templates/otel-collector.yaml:190 `job_name: ray-pods`; :196 keep on `ray_io_is_ray_node`; :247-254 `ray_data_*` drop` · `chart/values.yaml:2878 `externalEndpoint: ""` (prod posture sets it and deploys nothing)`
+
+**CP-019 · No Serve proxy/router/replica span has ever been observed, and the external KubeRay cluster does not set the Serve tracing switch**
+`external-kuberay, compute, service-kit, chart` · **MED** · PARTIAL
+- **blocked:** External operators of the KubeRay cluster at dev-kuberay.ra.se must set the Serve tracing env on an image that carries `service_kit`, and a Serve application must actually come up to receive a traced request.
+- *What is left:* rask's own chart already wires the whole switch: `tracing-startup-hook: service_kit.ray_tracing:setup_tracing` on the head (`_ray-cluster-config.tpl:51`) and `RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH` + `RAY_SERVE_TRACING_SAMPLING_RATIO` on the head container (`:82-86`), gated on `lance.otelEnabled`; `workerGroupSpecs` is empty (`:268`), so add the two Serve env lines to any future worker group. On the external cluster set the same three (hook on the HEAD only; on a worker group it is a silent no-op), verify `python -c "import service_kit.ray_tracing"` in its image, then with a live Serve application send one request through the gateway and find ONE trace_id in `opentelemetry_traces` carrying both a gateway span and a Serve proxy/replica span. `ray_tracing.py:89` is a silent no-op without `OTEL_EXPORTER_OTLP_ENDPOINT` and both planes fail soft, so a healthy pod proves nothing — only the observed span does.
+- *Closes when:* One trace_id in `opentelemetry_traces` carries both a gateway span and a Serve proxy/replica span.
+- *Evidence:* `chart/templates/_ray-cluster-config.tpl:51,82-86,268` · `packages/service-kit/src/service_kit/ray_tracing.py:69,89,100`
+
+**CP-020 · The chart's Ray telemetry env renders only under `singleTenant.enabled`, which no values file turns on**
+`chart` · **MED**
+- **blocked:** Owner decision: flip the gate so `rayservice.yaml` renders, bring the externally-managed `rask-ray` RayService under the Helm release, or delete the `RAY_SERVE_TRACING_*` / `RAY_SERVE_LOG_ENCODING` wiring from the chart.
+- *What is left:* `rayservice.yaml:1` is gated on `and .Values.ray.enabled .Values.singleTenant.enabled`; `singleTenant.enabled` is false in `values.yaml` and `values-prod.yaml` names it only in a comment. The tracing and log-encoding env now lives in `_ray-cluster-config.tpl:82-109`, and that template is included only from the gated `rayservice.yaml:70`, so no install renders it. After the ruling, make the matching single edit and record the choice in `docs/DECISIONS.md` (no entry exists).
+- *Closes when:* A default render either produces a RayService carrying the telemetry env, or the chart no longer carries the env at all, per the recorded ruling.
+- *Evidence:* `chart/templates/rayservice.yaml:1,69-70` · `chart/templates/_ray-cluster-config.tpl:82,86,109` · `chart/values.yaml:65-66` · `chart/values-prod.yaml:153`
+
+**CP-021 · Ray GCS is not fault-tolerant: a head restart kills in-flight jobs, and the only supported fix needs an external Redis the estate forbids**
+`compute, chart` · **MED**
+- **blocked:** Owner ruling: accept job loss on Ray head restart (recorded in docs/DECISIONS.md), or grant a scoped exception to the no-Redis rule for the Ray GCS store.
+- *What is left:* Obtain the ruling. If job loss is accepted, record it in docs/DECISIONS.md and close. If an exception is granted, add GCS fault-tolerance options plus a Redis for the GCS store to the chart behind a values toggle. No gcsFaultTolerance wiring exists in chart/ today; chart/templates/dapr-statestore.yaml:19 records owner approval of Redis for CACHE only, which is a precedent the ruling can cite, not the ruling itself.
+- *Closes when:* docs/DECISIONS.md carries the ruling, and if it is the exception, the chart renders a GCS store behind a toggle.
+- *Evidence:* `grep -rn -i gcsFaultTolerance chart/ -> no matches` · `chart/values.yaml:2253 (only redisPort: 6379, no Redis object)` · `docs/DECISIONS.md:1482 states GCS is not fault-tolerant as a premise, not a ruling` · `chart/templates/dapr-statestore.yaml:19 (Redis approved for cache, not GCS)`
+
+**CP-030 · The `Transform` CRD is deferred to `rask-operator`, so a lane declaration cannot live in git as a CR with the catalog record as a projection**
+`chart, catalog, medallion` · **MED**
+- **blocked:** `rask-operator` (the separate controller repo) existing — the CRD ships only together with its controller, never in this chart alone.
+- *What is left:* Ship the `Transform` CRD with its controller in `rask-operator`. Nothing lands in `chart/` for this: no `kind: Transform` exists in `chart/templates` and none should until the controller does, because unreconciled CRs render as objects stuck mid-provision. A lane declaration stays a catalog record until then.
+- *Closes when:* `rask-operator` reconciles a `Transform` CR into the catalog's declaration record.
+- *Evidence:* `docs/DECISIONS.md:1492-1495 (step 5 deferred to rask-operator, precedent from the Project CRD)` · `grep -rn 'kind: Transform' chart/templates → 0 hits` · `no rask-operator directory in the repo root`
+
+**CP-031 · A stage runner row carries stageJob / ray_entrypoint / ray_job_params beside the declared TransformSpec that supersedes them, with engine_choice arbitrating at runtime**
+`medallion, catalog, chart` · **MED**
+- **blocked:** CP-030: the Transform CRD shipping with rask-operator (a separate repo), which gives lane declarations a git-backed seeding path.
+- *What is left:* Once lane declarations can be seeded from a CR, delete stageJob from the stage-runner row (chart/templates/medallion.yaml:559-562, chart/values.yaml:1463), the ray_entrypoint and ray_job_params settings (services/medallion/src/medallion/core/config.py:312,349), and the `spec else settings.*` fallback in ray_submit.py:167-168 and transform.py:753. Collapse the declared-vs-env arbitration in transform.py:836-838 so a lane runs only what its declaration names. Do not remove any of it before a seeding path exists, or the default deploy runs no cascade.
+- *Closes when:* A stage runner row and MedallionSettings carry no Ray entrypoint or params of their own, and every lane runs from its declared record.
+- *Evidence:* `chart/templates/medallion.yaml:559-562 (stageJob -> MEDALLION_RAY_ENTRYPOINT)` · `services/medallion/src/medallion/core/config.py:312,349,362-371` · `services/medallion/src/medallion/services/ray_submit.py:167-168` · `services/medallion/src/medallion/services/transform.py:753,836-838`
+
+**CP-003 · The `/api/serve` proxy is a `{path:path}` catch-all although every consumer reads only `GET /api/serve/applications/`**
+`compute` · **LOW** · PARTIAL
+- *What is left:* The enumeration and the FGA half are done: the only client call set is `/api/ray/{health,jobs,jobs/{id}/logs,cluster,actors,tasks,overview,logs}` plus `GET /api/serve/applications/` (compute zone via `@rask/api/ray.ts`, studio via `serveApplications`, annotator via `serve_discovery.APPLICATIONS_PATH`), and `services/compute` serves exactly those eight `/ray` routes with `require_read` at the router. Narrow `proxy.py`'s `_register_proxy` from `/api/serve/{path:path}` to the one `applications/` resource so the whole Ray dashboard is no longer reachable through the gateway, and keep the traversal test in `services/compute/tests/test_ray.py:234` green. The row's blocker `D1` resolves to nothing in the register or `docs/`; treat it as unblocked.
+- *Closes when:* `GET /api/serve/applications/` still answers through the gateway and any other `/api/serve/<x>` path returns 404, pinned by a test in `services/compute/tests/test_ray.py`.
+- *Evidence:* `services/compute/src/compute/routes.py:24-77 (eight /ray routes, router-level require_read)` · `services/compute/src/compute/proxy.py:63-69 (`{path:path}` catch-all, GET/HEAD)` · `frontend/packages/api/src/ray.ts:426 and services/annotator/src/annotator/api/v1/endpoints/serve_discovery.py:53 (`/api/serve/applications/` only)` · `grep '\bD1\b' over open_backlog_left.md, docs/DECISIONS.md, docs/OPERATORS.md: no definition`
+
+**CP-008 · Ingest enumeration has no BYTE ceiling — one enormous object enters unbounded**
+`ingest, chart` · **LOW**
+- *What is left:* Add `max_bytes` to `RunLimits` (`services/ingest/src/ingest/workflow.py:122-157`) and to settings beside `max_units` (`config.py:102-104`, env `RASK_INGEST_MAX_BYTES`, zero = unbounded), refused at enumeration before the fan-out exactly as `max_units` is, with a chart default next to `RASK_INGEST_MAX_UNITS` (`chart/values.yaml:282`). The enumerated `UnitTask` (`queue.py:100`) carries no size field, so the source listing must first supply per-unit bytes. RED test first. The run-hours and unit ceilings already exist and need nothing.
+- *Closes when:* An enumeration whose summed bytes exceed `RASK_INGEST_MAX_BYTES` is refused before fan-out, pinned by a test.
+- *Evidence:* ``grep -rn max_bytes services/ingest/src` → 0 hits` · `services/ingest/src/ingest/config.py:102-104 (only max_run_hours / max_units / incremental_max_rows)` · `chart/values.yaml:266,282` · `services/ingest/src/ingest/queue.py:100 (UnitTask has no size)`
+
+**CP-022 · `ray-kit` depends on `ray[default]` solely for `JobSubmissionClient`/`JobStatus`, keeping `compute` on a private 1536Mi memory tier**
+`ray-kit, compute, chart` · **LOW**
+- *What is left:* Reimplement `build_client`, `health`, `list_jobs` and the prune protocol in packages/ray-kit over httpx against the dashboard's `/api/jobs/` and `/api/version`, replace the `JobStatus` import from `ray.dashboard.modules.job.common` (schemas.py:12) with a local enum, and map `ray.exceptions.AuthenticationError` to an httpx 401. Drop `ray[default]>=2.58` from packages/ray-kit/pyproject.toml:14 and re-lock. `compute` is the only fleet importer (five files under services/compute/src; medallion uses its own `ray_jobs_api`). Then revert `resources.compute` in chart/values.yaml:568-570 (512Mi request / 1536Mi limit) to the shared tier and measure the pod's steady state before calling it done.
+- *Closes when:* `uv tree --package ray-kit` shows no `ray` and the compute pod runs on the shared memory tier without an OOMKill.
+- *Evidence:* `packages/ray-kit/pyproject.toml:14` · `packages/ray-kit/src/ray_kit/dashboard.py:23-27` · `packages/ray-kit/src/ray_kit/schemas.py:12` · `chart/values.yaml:568-570`
+
+**CP-024 · `ray_gcs_*` is unconfirmed to survive Ray token auth, so no GCS alert rule may be written yet**
+`external-kuberay, chart` · **LOW**
+- *What is left:* `chart/alerting/rules.yml` carries no `ray_gcs_*` rule and must not until measured. `values-prod.yaml:160-161` sets `ray.auth.enabled: true` while local `values.yaml` sets it false, so the local cluster cannot answer. The Collector's `ray-pods` scrape job exists (otel-collector.yaml:190), so the scrape precondition is met. On a cluster with `ray.auth.enabled=true`, curl the head's `:8080/metrics` and confirm `ray_gcs_update_resource_usage_time_bucket` is present (ray-project/ray#59361 reports token auth drops the family); only then add GCS rules. Not measured this session — no cluster access.
+- *Closes when:* The head's `:8080/metrics` under token auth is observed to include `ray_gcs_update_resource_usage_time_bucket`, or observed not to and the row records that GCS rules are impossible on this Ray version.
+- *Evidence:* `chart/values-prod.yaml:160-161 (ray.auth.enabled: true)` · `chart/values.yaml ray.auth.enabled: false (awk over the ray block)` · `chart/templates/otel-collector.yaml:190 (ray-pods scrape job)` · ``grep -rn ray_gcs chart/` → no matches`
+
+**CP-002 · `services/compute` runs an image without `DiagnosticFormatter`, so its `extra=` diagnostics are dropped**
+`compute, service-kit` · **LOW**
+- **blocked:** owner go-ahead for one `compute` image build and roll
+- *What is left:* Build and roll one compute image from `.docker/compute.dockerfile` (`dagger call image --name=compute publish …`), then confirm an `extra=`-carrying log line renders with its fields in the pod's logs. The code needs nothing: `services/compute/src/compute/__init__.py:29` builds the app through `make_service_app`, which installs `DiagnosticFormatter` at `service_kit/app.py:97`, so any image built from HEAD carries it. Which image the pod runs today is not verifiable without the cluster and was not re-measured this session.
+- *Closes when:* An `extra=`-carrying line renders with its fields in the compute pod's logs.
+- *Evidence:* `packages/service-kit/src/service_kit/app.py:27,97` · `services/compute/src/compute/__init__.py:17,29` · `.docker/compute.dockerfile:33,40`
+
+**CP-004 · Nothing in the FGA model governs execution — no zone, compute-job or run type**
+`compute, catalog, service-kit` · **LOW**
+- **blocked:** owner ruling on whether execution/zone access becomes a governed dimension: add zone/run types to `model.fga` with gates in `services/compute`, or record that execution rights are data rungs on what the surface reads and a zone is a deployment surface, never a governed object
+- *What is left:* Record the ruling in `docs/DECISIONS.md`, which today has no entry on execution governance. `model.fga` holds exactly ten types (user, team, role, project, warehouse, namespace, table, materialized_view, transaction, annotation_project) and no relation matching `zone|compute|submit|job|run`. `services/compute` gates both routers on `reader` over `settings.fga_root_object` (`security.py:42-54`) — a door, not a model. If the ruling adds types, add them to `model.fga` and gate `services/compute` on them; otherwise the DECISIONS entry alone closes the row.
+- *Closes when:* A `docs/DECISIONS.md` entry states the ruling and, if it adds types, `model.fga` carries them with matching gates in `services/compute`.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten `type` lines, no zone/job/run)` · `services/compute/src/compute/security.py:42-54` · `services/compute/src/compute/routes.py:26; proxy.py:17` · `grep -n -i 'execution|compute-job' docs/DECISIONS.md → no ruling`
+
+**CP-023 · `RAY_LOGGING_CONFIG_ENCODING` / `RAY_SERVE_LOG_ENCODING=JSON` render on no cluster that runs, and no Serve replica line has been seen to land**
+`external-kuberay, chart` · **LOW**
+- **blocked:** the operators of the external KubeRay cluster named by `ray.dashboardUrl` (chart/values.yaml:2190) must set the two env vars on its head and worker containers
+- *What is left:* Both env vars render only in `chart/templates/_ray-cluster-config.tpl:107-110`, consumed by `rayservice.yaml`, whose gate is `and ray.enabled singleTenant.enabled` while `singleTenant.enabled` defaults false (values.yaml:66) — so no rendered cluster carries them. Get `RAY_LOGGING_CONFIG_ENCODING=JSON` and `RAY_SERVE_LOG_ENCODING=JSON` onto the external cluster's head container env and every worker-group container (must precede `import ray`, which a container env satisfies). Then confirm a Serve replica exception appears in `opentelemetry_logs` with a populated `severity_text` and queryable deployment/replica fields. Do not use `RAY_LOG_TO_STDERR=1` (it stops Ray writing log files and breaks the driver-log reader behind `/api/ray/jobs/{id}/logs`); `RAY_BACKEND_LOG_JSON=1` converts only the Job Supervisor.
+- *Closes when:* A Serve replica exception row is queryable in `opentelemetry_logs` with `severity_text` and deployment/replica fields populated.
+- *Evidence:* `chart/templates/_ray-cluster-config.tpl:107-110` · `chart/templates/rayservice.yaml:1 (`if and .Values.ray.enabled .Values.singleTenant.enabled`)` · `chart/values.yaml:65-66 (`singleTenant.enabled: false`), :2185-2190`
+
+
+## PHASE 3 · CONTROLPLANE
+
+**CTL-001 · The gateway's lineage guard is a two-entry prefix blocklist, so every lineage/catalog path it does not name is reachable at the edge**
+`gateway, chart` · **HIGH**
+- *What is left:* Replace `lineage_sidecar_guard`'s blocklist (rendered by `lance.lineageSidecarOnlyRoutes` as exactly `lineage-events[,<reconcile-binding>]`) with a per-row allowlist in gateway/__init__.py — catalog `/v1/*`; lineage `/runs`, `/events`, `/v1/*` — so anything unlisted 404s. Add a test that the currently-exposed paths (`/api/lineage/lineage-dlq`, `/api/catalog/control-events`, both `/dapr/subscribe`, `/ui/*`, `/demo/*`) 404 while the allowlisted ones proxy. When HTTPRoutes land, express the same allowlist there, delete `lineage_sidecar_guard`, and prove the sidecar paths still reach the service from its sidecar.
+- *Closes when:* A request to any unlisted `/api/lineage/*` or `/api/catalog/*` path 404s at the edge under a test, and the guard's env blocklist no longer exists.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:517-534 (prefix blocklist loop, 403)` · `chart/templates/_helpers.tpl:809-821 (`lineage-events{,bindingName}` is the whole list)` · `services/gateway/tests/test_lineage_guard.py:52-95 (tests assert the blocklist, not an allowlist)`
+
+**CTL-002 · How the north-south path authenticates once the edge bypasses the fleet gateway and its dapr-api-token guard is undecided**
+`gateway, service-kit, chart` · **HIGH**
+- **blocked:** Owner decision: when the edge calls Services directly (kgateway), keep dapr-api-token and have the edge mint it, replace it with a different edge-injected credential, or drop it and re-argue the allowlist?
+- *What is left:* Record the owner decision in `docs/DECISIONS.md` (the plan it was to be recorded in, `open_gateway.md`, no longer exists at HEAD), then change `packages/service-kit/src/service_kit/governed/dapr_auth.py` and the chart to match. Today the Ingress routes `/api` to the fleet gateway, the gateway reaches services through the sidecar at `127.0.0.1:<DAPR_HTTP_PORT>/v1.0/invoke/...` when `RASK_DAPR_ENABLED` is on, and `dapr_auth.py` refuses any call whose `dapr-api-token` does not match `APP_API_TOKEN`; an edge-to-Service backendRef sends no such header. kgateway is recorded as the intended future edge and is not implemented.
+- *Closes when:* The decision is recorded and `dapr_auth.py` plus the chart implement it.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/dapr_auth.py:7-14,75` · `services/gateway/src/gateway/__init__.py:330-339 (_target_base → /v1.0/invoke when dapr_enabled)` · `chart/templates/ingress.yaml:55-72 (/api → fleet gateway; 'kgateway is the intended future edge (not implemented on this branch)')` · `ls open_gateway.md → No such file`
+
+**CTL-003 · Nothing replaces the dapr-sentry mTLS that an edge->Service backendRef drops**
+`gateway, chart` · **HIGH**
+- **blocked:** Choose the in-cluster transport security for an edge->service hop that bypasses the Python gateway's daprd — mesh/Envoy TLS origination, or an explicit accepted-plaintext ruling — before any /api row moves off the Python gateway
+- *What is left:* Today every /api call rides browser -> Ingress (chart/templates/ingress.yaml:66) -> rask-gateway -> its own daprd (`http://127.0.0.1:{dapr_http_port}/v1.0/invoke/{app_id}/method`, services/gateway/src/gateway/__init__.py:338-339) -> service, so caller->service is sentry-issued mTLS. No HTTPRoute exists in the chart yet (grep `HTTPRoute|gateway.networking.k8s.io` over chart/ hits only prose in chart/templates/_helpers.tpl:807). Decide and wire the replacement, or write the accepted-plaintext ruling into the edge plan, before the first Gateway-API backendRef lands.
+- *Closes when:* The edge migration plan names the edge->service transport security (mesh TLS origination or a recorded accepted-plaintext ruling) and no HTTPRoute backendRef exists without it.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:338-339 — dapr invoke URL when `settings.dapr_enabled`` · `grep -rln 'HTTPRoute\|gateway.networking.k8s.io' chart/ → only chart/templates/_helpers.tpl:807 (prose) and crds-bootstrap/cnpg-crds.yaml` · `chart/templates/ingress.yaml:66 `- path: /api``
+
+**CTL-004 · Dapr invocation resiliency (retries, timeouts, breakers) is scoped to the gateway sidecar and has no edge equivalent for the kgateway migration**
+`gateway, chart` · **HIGH**
+- **blocked:** The kgateway edge migration (gateway/P1-edge browser-proven, gateway/P2-dapr-token) landing — the chart has no HTTPRoute or kgateway policy object to attach a policy to
+- *What is left:* Express the policy that `chart/templates/dapr-resiliency.yaml:143-149` applies from the gateway sidecar (scoped to `gateway` at lines 255-256: 30 s connect / 300 s read matching the gateway's httpx client, breaker sheds a dead upstream for 30 s after 5 consecutive failures) on the kgateway HTTPRoutes or a kgateway policy CRD for each absorbed backend. Then drop the dead gateway scope from `dapr-resiliency.yaml`. kgateway is only 'the intended future edge' (`chart/values-prod.yaml:223`); no HTTPRoute exists under `chart/templates`.
+- *Closes when:* Each absorbed backend has an equivalent edge policy and `dapr-resiliency.yaml` no longer scopes to `gateway`.
+- *Evidence:* `chart/templates/dapr-resiliency.yaml:143-149,255-256` · `chart/values-prod.yaml:223` · `grep -rl 'HTTPRoute' chart/templates — no match`
+
+**CTL-005 · The no-k8s dev loop (`scripts/dev-micro.sh`) has no /api origin derived from the chart's HTTPRoutes, and no HTTPRoute exists to derive it from**
+`gateway, chart, scripts` · **HIGH**
+- **blocked:** CTL-007 / gateway P2-routes: no Gateway or HTTPRoute exists in `chart/templates/`, so a proxy rendered from that table cannot be built until the owner-sequenced gateway dissolution lands it.
+- *What is left:* Once CTL-007 renders Gateway + HTTPRoute, build a thin dev-only proxy whose route table is RENDERED from those HTTPRoutes (never a second hand-kept table), wire it into `scripts/dev-micro.sh` in place of the `gateway :8888` row (`dev-micro.sh:34,65`), and add a contract test that fails when the rendered table and the chart's HTTPRoutes disagree. `frontend/packages/zone-contract/src/proxy.ts` composes zones only and does not proxy `/api`, so it is not a starting point.
+- *Closes when:* `make dev-micro` serves `/api/*` from a proxy whose table is rendered from the chart's HTTPRoutes, and a test fails when the two diverge.
+- *Evidence:* ``grep -rln 'kind: HTTPRoute' chart/templates/` → empty` · `scripts/dev-micro.sh:34,65` · `open_backlog_left.md:8972 (CTL-007: no Gateway/HTTPRoute exists)`
+
+**CTL-006 · The gateway mounts no body cap, no rate limit and emits no access line**
+`gateway, service-kit` · **MED** · PARTIAL
+- *What is left:* Shipped: inbound `X-Forwarded-*` is stripped and re-stamped from uvicorn's resolved client (`gateway/__init__.py:96-119`), `RequestIDMiddleware` is mounted (:513), and 400/404/502 answer problem+json (:475-490). Drop the `code`-in-problem+json clause: `:467-472` records that the gateway deliberately carries no Lance numeric code. Still missing at the edge: the gateway runs neither `register_middleware` nor `BodySizeLimitMiddleware` (the cap exists only on the services behind it, `service_kit/middleware.py:119`); `service_kit/rate_limit.py` is per-route and unused by the gateway; the only per-request log is the 502 error line (:678). Mount the body cap, add a per-subject/IP bucket via `service_kit.rate_limit` (honour its single-replica gate), and emit one structured access line per proxied request.
+- *Closes when:* An over-cap upload is refused 413 at the gateway, a burst from one subject is refused 429, and every proxied request produces one structured access line, each pinned in `services/gateway/tests`.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:96-119,467-490,494,513,678` · `packages/service-kit/src/service_kit/middleware.py:107-131` · `packages/service-kit/src/service_kit/rate_limit.py:1-21`
+
+**CTL-007 · No Gateway/HTTPRoute exists: chart/templates/ingress.yaml is the only edge template and kgateway is named only in comments**
+`gateway, chart` · **MED**
+- *What is left:* Add a kgateway toggle to chart/values.yaml on the cnpg.enabled pattern (toggle gates operator and resources; nginx stays default). Render Gateway + HTTPRoute with routing identical to ingress.yaml:66-124 — /api -> <fullname>-gateway:8888, /<zone> -> <fullname>-web-<zone>:3000 specific-first, /dex -> dex:5556 (ingress.yaml:92-98, which the original ask omitted), / -> home last, no path rewriting — emitting one rule per future backend (catalog, lineage, produce, train, explorer, ray/serve, projects) rather than one /api rule. Prove both edges with helm template in each toggle position and a real browser reaching /, /lakehouse, /compute and /api/catalog with the toggle on. Leave OpenFGA ClusterIP-only and the rask-gateway Deployment untouched.
+- *Closes when:* helm template renders a working Gateway + HTTPRoute with the toggle on and the nginx Ingress with it off, and a browser reaches /, /lakehouse, /compute and /api/catalog through the kgateway edge.
+- *Evidence:* `ls chart/templates | grep -i 'ingress|gateway|route' -> ingress.yaml only` · `grep -rn HTTPRoute chart/ -> only a comment at chart/templates/_helpers.tpl:807` · `chart/values-prod.yaml:223 ('kgateway is the intended future edge')` · `chart/templates/ingress.yaml:66-124 (the routing to mirror)`
+
+**CTL-012 · Envoy path-normalization parity with `_normalize_path` (merge_slashes, `..` segments) is unproven**
+`gateway, chart` · **MED**
+- *What is left:* No kgateway/Envoy edge exists at HEAD: `HTTPRoute` appears only in `_helpers.tpl` prose and `chart/values.yaml` has no `kgateway` key, so this waits on CTL-007 rendering the edge. Once it exists, write a test or documented comparison showing Envoy's `merge_slashes` / `normalize_path` / escaped-slash settings produce the same paths as `services/gateway/src/gateway/__init__.py:276 _normalize_path` for repeated slashes and `..` segments, and pin those settings in the chart.
+- *Closes when:* A test (or committed comparison) proves the rendered edge normalizes slashes and dot segments as `_normalize_path` does, with the Envoy settings pinned in `chart/`.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:276 (_normalize_path)` · `rg -l HTTPRoute chart/templates -> only chart/templates/_helpers.tpl` · `rg '^kgateway' chart/values.yaml -> no hits`
+
+**CTL-017 · No test refuses a rendered `platform.rask.io` CustomResourceDefinition; the only CRD-aware scan skips CRDs**
+`chart, controlplane` · **MED**
+- *What is left:* Add a test to tests/unit/test_invariants.py that renders the chart and asserts no document has `kind: CustomResourceDefinition` with `spec.group` (or any apiGroup) equal to `platform.rask.io`. Leave the RBAC `apiGroups: ["platform.rask.io"]` reference at chart/templates/controlplane.yaml:126 allowed.
+- *Closes when:* The new invariant test passes at HEAD and fails when a `platform.rask.io` CRD template is added.
+- *Evidence:* `tests/unit/test_invariants.py:1782 (`continue` on `kind: CustomResourceDefinition`)` · `grep -rn 'platform.rask.io' chart/ → only chart/templates/controlplane.yaml:126` · `grep -n 'CustomResourceDefinition' tests/unit/*.py → only the skip at :1782`
+
+**CTL-022 · Notifications has no subject-erasure door and no TTL on watch/prefs/cursor state**
+`notifications` · **MED** · PARTIAL
+- *What is left:* The reverse-index clause is shipped: `WatchIndexActor` (`watch_actor.py:61`, project → subjects) and `InboxWatches` (`models.py:331`, subject → projects) already make a subject's watches enumerable, and the sent ledger rides the inbox pointer rather than being separate state (`models.py:174-179`). Add a delete-subject door under `services/notifications/api/` (the only DELETE today is `watches.py:117` for one project) that sweeps the subject's inbox, `ChannelPrefs` (`models.py:289`), `InboxCursor` (`models.py:211`) and removes it from every project's `WatchIndexActor`. Only the inbox is bounded today (`feed.compact`, `feed.py:61`); `ActorStateTTL` is off on the estate and `actor_state_ttl_enabled` defaults False (`config.py:65`), so a TTL on watches/prefs/cursor needs either that Dapr feature enabled or an in-app sweep.
+- *Closes when:* One door erases every record a subject holds across inbox, prefs, cursor and watch indexes, and a test proves the subject is unrecoverable afterwards.
+- *Evidence:* `services/notifications/src/notifications/watch_actor.py:61` · `services/notifications/src/notifications/models.py:211,289,331` · `services/notifications/src/notifications/config.py:65` · ``grep -rn '@router.delete' services/notifications/src/notifications/api/` → only watches.py:117`
+
+**CTL-008 · No kgateway/HTTPRoute timeout equivalent of nginx's 3600s proxy-read-timeout exists, so `query.live` streams die on the future edge**
+`gateway, chart` · **MED**
+- **blocked:** CTL-007 — no Gateway/HTTPRoute exists in chart/ to carry a timeout; the kgateway toggle and rendered routes must land first (prerequisite work, not an owner ruling)
+- *What is left:* Once CTL-007 renders HTTPRoutes, set the route/policy timeout to match `nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"` (chart/values.yaml:2326) and keep `idleTimeoutSeconds: 0` on the zone Bun servers (chart/values.yaml:849) — the edge value alone is not sufficient, a stream died at 256.8s with the edge at 3600s until Bun's idle timeout was disabled. Prove it by holding a notification-bell `query.live` stream open for more than 90s through the new edge in a browser, not by reading the rendered object. The edge is still ingress-nginx today (chart/templates/ingress.yaml is the only edge template; kgateway is named only as the intended future edge in chart/values-prod.yaml:223).
+- *Closes when:* A bell `query.live` stream stays connected for more than 90s through kgateway in a browser.
+- *Evidence:* `chart/values.yaml:2326` · `chart/values.yaml:849` · `chart/values-prod.yaml:223` · `rg -n 'HTTPRoute' chart/ --glob '!*.md' → only comments in _helpers.tpl and ingress.yaml`
+
+**CTL-009 · Longest-prefix `/api` routing lives in `gateway/__init__.py::_routes()` and not in per-service HTTPRoute rules**
+`gateway, chart` · **MED**
+- **blocked:** CTL-007 (a Gateway/HTTPRoute rendered behind a kgateway values toggle and browser-proven) and CTL-002 (how the north-south path authenticates once the edge calls Services directly instead of via dapr-api-token)
+- *What is left:* `_routes()` at `services/gateway/src/gateway/__init__.py:183-264` holds 15 `Route(...)` rows and no `kind: HTTPRoute` exists under `chart/templates/` (the only Gateway-API text in `chart/` is inside `crds-bootstrap/cnpg-crds.yaml`). Once CTL-007 has rendered the edge, add one HTTPRoute rule plus backendRef per row in `chart/` and delete that row from the Python table. Gateway API matches most-specific-first natively, so the longest-prefix ordering needs no re-encoding.
+- *Closes when:* Every `Route(...)` row in `_routes()` has a matching HTTPRoute rule in `chart/` and the Python table is empty.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:183,217-264 (15 Route rows)` · `grep -rln 'kind: HTTPRoute' chart/ → only chart/crds-bootstrap/cnpg-crds.yaml` · `open_backlog_left.md:8972-8982 (CTL-007, CTL-008 still open)`
+
+**CTL-010 · Zones reach the gateway server-side through two env vars: compute/studio/models read `RASK_GATEWAY_URL`, home/lakehouse read `LANCE_GATEWAY_URL`**
+`gateway, frontend, chart` · **MED**
+- **blocked:** Gateway Phase-2 route plan (P2-routes): whether zone SSR fetches target the gateway's in-cluster address or the services directly
+- *What is left:* `compute`/`studio` `hooks.server.ts` and every zone's `inbox.remote.ts` plus `models/src/lib/server/doors.ts` read `RASK_GATEWAY_URL`; `home`/`lakehouse` go through `makeZoneHooks`, whose `bff.ts:341` reads `LANCE_GATEWAY_URL` with a `:8001` default; `chart/templates/frontends.yaml:203-210` injects both. Collapse to one SSR base-URL variable across all seven zones and `@rask/api/bff.ts`, set it once in the chart, and delete the two-var gotcha from `.claude/skills/rask-frontend/SKILL.md:272`.
+- *Closes when:* `grep -rn LANCE_GATEWAY_URL frontend/ chart/ .claude/` returns nothing and every zone's SSR fetch resolves through the same variable.
+- *Evidence:* `frontend/packages/api/src/bff.ts:341` · `frontend/microfrontends/compute/src/hooks.server.ts:21 and studio/src/hooks.server.ts:22` · `chart/templates/frontends.yaml:203-210` · `.claude/skills/rask-frontend/SKILL.md:272`
+
+**CTL-011 · Deleting the gateway removes the north-south OTLP span the Perses 'Fleet — RED' panels read**
+`gateway, chart` · **MED**
+- **blocked:** The gateway→Gateway API migration phase (gateway/P2-routes), itself gated on CTL-002: how the north-south path authenticates once Dapr service invocation leaves it (edge-minted dapr-api-token, a different edge-injected credential, or drop it and re-argue the allowlist).
+- *What is left:* The Python gateway still exists and calls `setup_otel(app, service_name="gateway")`; the 'Fleet — RED' dashboard reads `http_server_duration_milliseconds_count` by `service_name`. kgateway is named only as the intended future edge (values-prod.yaml:223) and no HTTPRoute exists. Before the gateway is deleted, pipe kgateway/Envoy access logs and metrics into the Collector→GreptimeDB path and confirm the RED panels still show north-south rate, errors and duration.
+- *Closes when:* With the Python gateway removed, the 'Fleet — RED' dashboard shows north-south request rate, error rate and duration sourced from the edge.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:454 (setup_otel)` · `chart/templates/perses-dashboards.yaml:45-64 (RED queries)` · `chart/values-prod.yaml:223 (kgateway is future)` · `open_backlog_left.md:8949-8961 (CTL-002 gate on P2)`
+
+**CTL-013 · `services/gateway`, its dockerfile, chart Deployment and dev-micro.sh entry all still exist**
+`gateway, chart, scripts` · **MED**
+- **blocked:** CTL-002's owner decision on how the north-south path authenticates once the edge calls Services directly (the gateway plan's Phase 2 cannot proceed until it is answered); Phase 3 does not start while Phase 1 is open.
+- *What is left:* Remove `services/gateway`, `.docker/gateway.dockerfile`, the chart's gateway Deployment/Service/resiliency scope (`chart/templates/fleet.yaml`, `dapr-resiliency.yaml`, and the `/api` → `-gateway` rules at `chart/templates/ingress.yaml:66-70,118-122`) and the gateway process in `scripts/dev-micro.sh`. The chart renders no HTTPRoute and `dev-micro.sh` has no derived proxy, so every `/api/*` row still reaches the fleet only through the gateway; prove each zone's `/api/*` in-cluster through the edge and through a derived dev proxy before deleting. Update `docs/architecture/system-overview.md`, `deployment.md` and `.claude/skills/rask-services-fleet` in the same commits. The `open_gateway.md` deletion clause is already done (folded into the register).
+- *Closes when:* `services/gateway` no longer exists and every zone's `/api/*` works in-cluster and under `make dev-micro` without it.
+- *Evidence:* ``ls services/gateway .docker/gateway.dockerfile` → both present` · `chart/templates/ingress.yaml:66-70,118-122` · ``grep -rln HTTPRoute chart/templates/` → only _helpers.tpl prose` · `open_backlog_left.md:3 (open_gateway.md folded); `ls open_gateway.md` → absent`
+
+**CTL-021 · notifications cannot present a dedicated lineage credential: its reconciler reaches lineage through Dapr service invocation and daprd overwrites dapr-api-token**
+`notifications, lineage, chart` · **MED**
+- **blocked:** Move the notifications reconciler's `GET /events` call off Dapr service invocation onto direct HTTP (as ingest does), or accept that sidecar-invoked hops authenticate as the estate
+- *What is left:* Take the ruling. If direct HTTP: change `IngressSettings.feed_base_url` (`services/notifications/src/notifications/api/settings.py:157-181`, which routes through `127.0.0.1:3500/v1.0/invoke/lineage/method` when Dapr is on) to call lineage's own URL so the dedicated token survives, add `notifications` to the lineage-privileged subject list in `chart/templates/services.yaml` (deliberately absent, lines 718-726), and re-drive both directions at lineage's service door as ingest's were (own token 200, shared bearer 401). If accepted: record the boundary in `docs/DECISIONS.md`.
+- *Closes when:* Either the reconciler authenticates at lineage with its own credential in both directions, or the estate-identity boundary is recorded in docs/DECISIONS.md.
+- *Evidence:* `services/notifications/src/notifications/api/settings.py:157-181` · `chart/templates/services.yaml:718-726`
+
+**CTL-014 · The Dapr helper comment's "routes become HTTPRoutes" note is neither acted on nor deferred**
+`gateway, chart` · **LOW**
+- *What is left:* The note at `chart/templates/_helpers.tpl:807` still reads "On the kgateway/Envoy migration these become 'no HTTPRoute declared'" with no deferral beside it; no HTTPRoute or Gateway API object exists in the chart. Either rewrite that comment to reflect the Gateway API, or leave an explicit deferral at that site. The deferral's reason already exists elsewhere (`ingress.yaml:65`, `frontends.yaml:38`: "kgateway is the intended future edge (not implemented on this branch)"), so the deferral branch needs no edge migration to write.
+- *Closes when:* `_helpers.tpl`'s lineageSidecarOnlyRoutes comment either describes the Gateway API shape or carries an explicit deferral saying why it stays as-is.
+- *Evidence:* `chart/templates/_helpers.tpl:807 (the HTTPRoute note)` · `chart/templates/ingress.yaml:64-65 and frontends.yaml:37-38 (kgateway deferral wording at other sites)` · `grep -rn HTTPRoute chart/ → only _helpers.tpl:807`
+
+**CTL-023 · Notifications actor proxies surface sidecar transport failures as bare 500s and open a fresh channel per call**
+`notifications` · **LOW**
+- *What is left:* `proxies.py:105-114` re-raises anything not carrying `InboxUnreadable` unchanged, so a Dapr SDK transport error falls to service-kit's `_unexpected` catch-all (`exceptions.py:192`) as a 500; nothing in service-kit maps `DaprHttpError`/`DaprInternalError`. `typed_proxy` (`proxies.py:117-125`) calls `ActorProxy.create` per call over a fresh sidecar channel. Map transport errors to a 503 problem+json (`ServiceUnavailableError`) inside `_translating`, and build the proxy factory once in the notifications lifespan for `inbox_for`/`watch_index_for` to reuse.
+- *Closes when:* A sidecar connection failure answers 503 problem+json, and one lifespan-built proxy factory serves every call, both pinned by unit tests.
+- *Evidence:* `services/notifications/src/notifications/proxies.py:85-135` · `packages/service-kit/src/service_kit/exceptions.py:192` · `rg DaprInternalError|DaprHttpError packages/service-kit/src services/notifications/src → only the proxies.py docstring`
+
+**CTL-024 · `.claude/skills/rask-notifications/SKILL.md` contradicts `services/notifications` on the reason count, line refs, and omits WatchIndexActor, `named_subjects` and the `/events/projection` rung**
+`notifications` · **LOW**
+- *What is left:* `NotificationReason` has 12 members (`models.py:63-98`, incl. ORIGINATOR, four TASK_*, PROMOTION_REVIEW_REQUESTED, TASK_LEASE_EXPIRED) while the skill says 'one of four reasons' (line 12) and 'six targeting sources' (line 3). Its line refs are stale: `notifiable()` is at `api/lineage_events.py:171` not `:154`, `enforce_author` at `lineage/api/fga_deps.py:178` not `:96`, and `fanout.py:37/87/88` land on comment lines. `WatchIndexActor` (10 code hits) and `named_subjects` (`api/control_events.py:84`) appear nowhere in the skill, nor does lineage's `GET /events/projection` / `can_observe_events` rung (`lineage/api/v1/endpoints/runs.py:163`, `fga_deps.py:125-146`). `lease_expired` is already covered (skill lines 61, 274). Rewrite the skill against the code for the remaining items.
+- *Closes when:* Every reason, actor, line ref and rung the skill names matches `services/notifications/src` and `services/lineage/src` at HEAD.
+- *Evidence:* `services/notifications/src/notifications/models.py:63-98 (12 NotificationReason members)` · `services/notifications/src/notifications/api/lineage_events.py:171 vs SKILL.md:84` · `services/notifications/src/notifications/api/control_events.py:84 (named_subjects; 0 skill hits)` · `services/lineage/src/lineage/api/v1/endpoints/runs.py:163 (/events/projection; 0 skill hits)`
+
+**CTL-015 · The 502-with-detail → 503 change for an unreachable upstream is not named anywhere the edge migration will be read from**
+`gateway` · **LOW** · PARTIAL
+- **blocked:** gateway/P2-routes — the first `/api` row moving off the Python gateway onto a kgateway HTTPRoute (no HTTPRoute exists in `chart/templates` yet); writing the note before that lands would describe a change that has not happened.
+- *What is left:* The client check is done: no zone branches on a gateway 502 — the BFF `doors.ts` files and `rows-arrow.ts` emit their own 502s and bucket non-401/403/404 failures generically, and `single-health-poll.test.ts:81` only mocks a 502 body. What remains is the note itself. In the commit that moves the first `/api` row onto an HTTPRoute, record in `docs/architecture/system-overview.md` (or `deployment.md`) and in `.claude/skills/rask-services-fleet` §5 that an unreachable upstream answers 503 from the edge rather than the Python gateway's `HTTPException(502, "upstream ... unreachable")`.
+- *Closes when:* The status-code change is stated in the architecture doc and the fleet skill in the same commit as the first HTTPRoute row.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:679 (the 502 contract at HEAD)` · `.claude/skills/rask-services-fleet/SKILL.md:53 (§5 '502 contract')` · `grep -rn 'kind: HTTPRoute' chart/templates → 0 hits` · `frontend/microfrontends/annotator/src/lib/server/doors.ts:17 (non-401/403/404 bucketed generically)`
+
+**CTL-016 · The gateway's merged `/docs` + fleet-wide `openapi.json` aggregation has no home once the gateway dissolves**
+`gateway` · **LOW**
+- **blocked:** Decide whether the merged `/docs` + `openapi.json` aggregation is re-homed onto one service endpoint or retired outright.
+- *What is left:* `_merged_openapi` (`services/gateway/src/gateway/__init__.py:365-400`) and the `/docs` + `/openapi.json` handler (`:626-632`) still fetch every upstream's `openapi.json` and serve a merged Swagger UI; nothing else hosts it. Once decided, either move the aggregation onto one service endpoint or delete it, and record the decision in `docs/DECISIONS.md` or the commit rather than dropping it silently.
+- *Closes when:* The aggregation code is gone from `gateway/__init__.py` and the decision is recorded.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:365 (_merged_openapi)` · `services/gateway/src/gateway/__init__.py:626-632`
+
+**CTL-018 · controlplane ProjectStatus carries only `phase` and `namespace`; no conditions[], observedGeneration or catalogProjectId**
+`controlplane, home` · **LOW**
+- **blocked:** Owner decision (C-Q3): which fields of the controlplane Project DTO freeze once conditions[] exists, and the matching home-zone render contract?
+- *What is left:* Get the ruling on the frozen fields. Then add a typed `conditions[]` carrying `observedGeneration`, plus `catalogProjectId` and `namespace` as external facts, to `ProjectStatus` additively, keeping `phase` for the home-zone render. `ProjectStatus` is exactly `phase: str = ""` and `namespace: str = ""` at HEAD.
+- *Closes when:* `ProjectStatus` exposes `conditions[]` with `observedGeneration` and the home zone can distinguish 'not yet reconciled' from 'reconciled and failed'.
+- *Evidence:* `services/controlplane/src/controlplane/schemas.py:59-64` · `grep -rn 'conditions\|observedGeneration\|catalogProjectId' services/controlplane/src → no hits`
+
+**CTL-019 · No managed surfaces for roles and identities over the FGA model**
+`controlplane, catalog` · **LOW**
+- **blocked:** Owner ruling that the estate becomes long-lived and shared (Section I item 7 marks this CONDITIONAL on that call)
+- *What is left:* Nothing ships: services/controlplane/src/controlplane/ holds config, dependencies, health, k8s, lifespan, routes, schemas, security, service — no roles or identities router, and no `/roles` or `/identities` route anywhere under services/controlplane/src. If the ruling lands, build role and identity management surfaces over the FGA model in the controlplane.
+- *Closes when:* An owner ruling that the estate is long-lived/shared exists and role + identity management routes are served behind the controlplane's FGA gate.
+- *Evidence:* `ls services/controlplane/src/controlplane/ — no roles/identities module` · `grep -rn '/roles\|/identities\|identit' services/controlplane/src → no route hits`
+
+**CTL-020 · The models registry has no MLflow-parity feature set**
+`controlplane, models zone, catalog` · **LOW**
+- **blocked:** C2 (the product-works pass) must run first; then an owner decision naming which MLflow capabilities the models plane must match.
+- *What is left:* Nothing is buildable until the gate opens. Run C2, then obtain the owner's list of MLflow capabilities to match before any is built. At HEAD no MLflow exists in code (`docs/RAY-TRAIN.md:215` states it; the models zone's Experiments view says "not MLflow").
+- *Closes when:* C2 has run and the owner has named the MLflow capabilities the models plane must match.
+- *Evidence:* `frontend/microfrontends/models/src/lib/models/Experiments.svelte:4,88 (MLflow not used)` · `docs/RAY-TRAIN.md:206-215 (no MLflow anywhere in the code)`
+
+
+## FRONTEND
+
+**FE-002 · Six lineage route pages still hand-roll a `lastStatus`/`settled` fetch triple around `$lib/api`, and three of them keep governed rows on screen after a 401**
+`lineage, lakehouse-zone` · **MED** · PARTIAL
+- *What is left:* The zone now has 11 `.remote.ts` modules, `+page.ts` loads for admin/catalog/stores and zero `fetch(` calls in route `.svelte` files, and `lineage/datasets/+page.svelte:50-55` nulls its rows on 401. Still hand-rolled: 13 files import `$lib/api` directly and 26 files (10 route pages + 16 lib components) carry the `lastStatus`/`settled` pattern. Move the six lineage route pages (columns, datasets, datasets/[name], jobs, jobs/[...job], runs) and `lib/lineage/store.svelte.ts` onto `query` remote functions (`lib/lineage/remote/lineage.remote.ts` exists) or `+page.ts` load so 401 is handled once. Until that lands, `runs/+page.svelte:17-26`, `jobs/+page.svelte:36-45` and `columns/+page.svelte:55-64` must null their rows on 401 instead of keeping the last-good list; the graph store only flips `online` and never clears.
+- *Closes when:* No route `.svelte` in the lakehouse zone imports `$lib/api` directly, and an expired session clears rows on every lineage list page.
+- *Evidence:* `frontend/microfrontends/lakehouse/src/routes/lineage/runs/+page.svelte:17-26` · `frontend/microfrontends/lakehouse/src/routes/lineage/datasets/+page.svelte:44-56` · `rg -l "from '\$lib/api'" frontend/microfrontends/lakehouse/src → 13 files` · `rg -l 'lastStatus|settled' frontend/microfrontends/lakehouse/src → 26 files`
+
+**FE-005 · No UI reaches the namespace rung's `POST /v1/namespace/{id}/undrop` or its `/tasks` deadline**
+`catalog, lakehouse-zone` · **MED** · PARTIAL
+- *What is left:* The table rung is shipped: `fetchTableTasks` (`GET /v1/table/{id}/tasks`) and `undropTable` (`POST /v1/table/{id}/undrop`) in `catalog.remote.ts`, rendered by `RecoverCard.svelte` inside `TableDetail.svelte`. The namespace rung has no zone surface: nothing in the lakehouse zone calls `/v1/namespace/{id}/tasks` or `/v1/namespace/{id}/undrop`, although `@rask/api`'s generated client already types both. Add a namespace-level recover surface (deadline + undrop), and a trash listing across objects if per-table-detail is not enough.
+- *Closes when:* A cascade-dropped namespace can be recovered from the lakehouse zone without curl, showing its deadline first.
+- *Evidence:* `frontend/microfrontends/lakehouse/src/lib/data/remote/catalog.remote.ts:108-116` · `frontend/microfrontends/lakehouse/src/lib/data/table-detail/RecoverCard.svelte` · `frontend/packages/api/src/generated/catalog.ts:897 (namespace undrop typed)` · `grep for `namespace/${…}/(undrop|tasks)` in the lakehouse zone → no matches`
+
+**FE-006 · The project-scoped maintenance policy has an API but no UI**
+`catalog, lakehouse-zone` · **MED**
+- *What is left:* Build the project policy screen in the lakehouse zone over `POST /v1/project/{id}/policy/{set,describe,delete}` (`policies.py:228/285/296`), which the generated client already types (`frontend/packages/api/src/generated/catalog.ts:1017-1068`). Only the TABLE policy has a surface today: `MaintenanceSection.svelte` wires `setTablePolicy`/`deleteTablePolicy` and nothing calls the project operations. The lakehouse zone has no project route; `routes/catalog/warehouses/[id]` (a warehouse belongs to a project) is the nearest anchor.
+- *Closes when:* A lakehouse page sets, shows and deletes a project's maintenance policy through the shipped project-policy operations.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/policies.py:228,285,296` · `frontend/packages/api/src/generated/catalog.ts:1017-1068` · `frontend/microfrontends/lakehouse/src/lib/data/table-detail/MaintenanceSection.svelte:15-18 (table-only)` · `rg 'project.*policy' frontend/microfrontends -> no non-generated hits`
+
+**FE-012 · `home`/`lakehouse` proxy `/api` to a dead `:8001` (`LANCE_BACKEND`) while `compute`/`models`/`studio` proxy to the gateway `:8888` (`VIEWER_BACKEND`)**
+`frontend, zone-contract` · **MED**
+- *What is left:* Point every proxied zone's vite `/api` dev proxy at one env var and one default (`VIEWER_BACKEND`, `http://localhost:8888`): delete `LANCE_BACKEND` from `home/vite.config.ts` and `lakehouse/vite.config.ts`. Update `zone-contract/src/dev-zone.ts` (which sets `LANCE_BACKEND` for home/lakehouse and `VIEWER_BACKEND` for the rest) to set the one var for all five. Rewrite the `rask-services-fleet` and `rask-frontend` skills and the CLAUDE.md conventions bullet that document the split. The `gateway/P2-devproxy` prerequisite the row cites has no row anywhere in the register; nothing prevents doing this now.
+- *Closes when:* `grep -rn LANCE_BACKEND frontend/` returns nothing and every proxied zone's `/api` proxy reads the same variable.
+- *Evidence:* `frontend/microfrontends/home/vite.config.ts:5,18 and lakehouse/vite.config.ts:5,22 (`LANCE_BACKEND` → :8001)` · `frontend/microfrontends/{compute,models,studio}/vite.config.ts:5,20 (`VIEWER_BACKEND` → :8888)` · `frontend/packages/zone-contract/src/dev-zone.ts:123-146,188 (sets both vars per zone)` · `grep -n 'P2-devproxy' open_backlog_left.md → only line 9174 (FE-012 itself)`
+
+**FE-007 · The chart ships only the ingress-nginx proxy-read-timeout annotation, inert on k3s's Traefik — the zones' live SSE bell has no edge-level guard there**
+`chart, gateway` · **LOW**
+- *What is left:* `chart/values.yaml:2326` sets only `nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"` while `ingress.className` is `""` (`:2287`, k3s default Traefik), so the guard is inert locally; `ingress.yaml:22-24` and `docs/architecture/edge-baseline.md:27-40` both say so. Add the Traefik equivalent (a `ServersTransport` / `traefik.ingress.kubernetes.io/*` annotation, or `respondingTimeouts`) under `ingress.annotations`, then run `HOLD_S=270 node scripts/verify_live_stream_timeout.mjs` against the k3s ingress and record the result. Only the runs feed's app-level 20 s keepalive mitigates it today.
+- *Closes when:* A 270 s idle live stream through the Traefik edge survives unsevered, measured by `scripts/verify_live_stream_timeout.mjs`.
+- *Evidence:* `chart/values.yaml:2287,2326` · `chart/templates/ingress.yaml:22-24` · `docs/architecture/edge-baseline.md:27-40` · `scripts/verify_live_stream_timeout.mjs exists`
+
+**FE-008 · Eight mutation sites do a trailing `await load()` after every write instead of `form` + single-flight + `withOverride`**
+`lakehouse, annotator` · **LOW**
+- *What is left:* Convert the mutation sites that reload after a write to `form`/`command` + single-flight + `withOverride`, deleting each trailing `await load()`. At HEAD there are 8, not 6: `lakehouse/src/lib/data/WarehouseAdmin.svelte:107,122`, `TableRegistry.svelte:126,176`, `NamespaceRegistry.svelte:149`, `lakehouse/src/lib/admin/DlqPanel.svelte:74`, `annotator/src/lib/projects/ProjectsLanding.svelte:277`, `annotator/src/routes/tasks/[id]/+page.svelte:161`. `withOverride` is used nowhere yet; both zones already ship `.remote.ts` seams to build on. Sequence after FE-002 (the `load`/`query` adoption), which supplies the queries these writes invalidate.
+- *Closes when:* `grep -rn 'await load()' frontend/microfrontends` returns zero post-write reloads and each converted site uses a remote form/command with an override.
+- *Evidence:* `grep -rn 'await load()' frontend/microfrontends → 8 sites (listed)` · `grep -rln withOverride frontend/microfrontends → none` · `frontend/microfrontends/lakehouse/src/lib/data/remote/*.remote.ts, annotator/src/lib/projects/remote/tasks.remote.ts (existing command/form seams)`
+
+**FE-011 · Two Estate Settings rows (new-project defaults, credentials) are named on `/settings` but have no backing store to write to**
+`home-zone, controlplane, catalog` · **LOW** · PARTIAL
+- *What is left:* The zone question is settled in code: home owns `/settings` (estate-admin gated in `+layout.server.ts`), serving `/settings/access`, `/settings/audit` and `/projects`. Build the two rows the page lists as unwired: new-project defaults needs the catalog to accept a defaults payload on project creation; credentials needs the OpenBao-backed secret store (never a browser-editable form). No eighth zone is needed; a formal IA ruling was never recorded, so an owner who wants a separate zone must say so.
+- *Closes when:* `/settings` renders no `UNWIRED` rows because both surfaces have a store behind them.
+- *Evidence:* `frontend/microfrontends/home/src/routes/settings/+page.svelte:7-28 (platform-level settings, three surfaces served, two named-not-built)` · `frontend/microfrontends/home/src/routes/settings/+page.svelte:40-48 (`needs:` strings for defaults and credentials)` · `frontend/microfrontends/home/src/routes/settings/+layout.server.ts:21-33 (estate-admin gate)` · `find frontend/microfrontends -path '*routes*' -iname '*setting*' → home and annotator only`
+
+**FE-013 · The WebGPU atlas is zone-local in explorer instead of hoisted to `frontend/packages/atlas`**
+`explorer, annotator` · **LOW**
+- *What is left:* Create `frontend/packages/atlas` (zone-agnostic props, no `$app/*` imports, transport injected), move the 14 files in `frontend/microfrontends/explorer/src/lib/atlas/` (AtlasMap.svelte, gpu-scatter.svelte, cross-filter.svelte.ts, mount-atlas.svelte, atlas-send.ts, legend/geometry/colors/grid, gpu-support) into it, re-point the explorer zone, and add the annotator's bulk-labeling embed. `frontend/packages/` holds api, config, dockview, engine, explorer-api, flow, labeling, media-api, ui, zone-contract — no atlas. The annotator references the atlas only in comments (the deep-link bridge), not as an embed.
+- *Closes when:* `frontend/packages/atlas` exists, explorer imports from it, and the annotator's bulk-labeling view renders the same selection surface.
+- *Evidence:* `ls frontend/packages -> no atlas` · `ls frontend/microfrontends/explorer/src/lib/atlas -> 14 files` · `frontend/microfrontends/annotator/src/lib/labeling/review-selection.svelte.ts:3 (comment-only reference)`
+
+**FE-009 · No ruling says whether a catalog-scoped governance page returns to the lakehouse zone or home `/settings/access` stays the single governance surface**
+`lakehouse-zone, home-zone, catalog` · **LOW** · PARTIAL
+- **blocked:** Owner IA ruling: does a project/catalog-scoped governance page return to the lakehouse zone, or does the estate-scoped explorer at home `/settings/access` stay the only governance surface?
+- *What is left:* The trace is done: `857e9d5c` moved Access/Audit to `/lakehouse/governance/*`, `4a2177c0` replaced the four tabs with the query-driven access explorer, the #105 port moved that explorer to `home/src/routes/settings/access/+page.svelte` because it reads the whole tuple store across projects, and `e59549b1` swept the last two `governance/` files without naming it. Take the ruling and record it in `docs/DECISIONS.md`. If the lakehouse gets a page back, it is project-scoped and built over the catalog's project registry, not a second copy of the estate explorer.
+- *Closes when:* `docs/DECISIONS.md` carries the ruling and the chosen surface exists.
+- *Evidence:* `frontend/microfrontends/home/src/routes/settings/access/+page.svelte:4-6 (estate surface, ported from /lakehouse/governance/access)` · `git log --oneline -- frontend/microfrontends/lakehouse/src/routes/governance (857e9d5c, 4a2177c0, 5e942940, e59549b1)` · `grep -n -i governance docs/DECISIONS.md → no surface ruling`
+
+
+## LOW PRIORITY
+
+**LOW-002 · Consensus replicas mint `{gid}-r{k}` task ids that can exceed the 64-char task route bound, wedging that project's publish**
+`annotator` · **MED** · PARTIAL
+- *What is left:* The draft-sharing half is addressed by construction: each replica is its own `Task` with its own actor and draft (project_events.py:543-553; actor.py:74 `DRAFT_KEY`, :440), and `_refuse_second_replica` (tasks.py:186) allows one replica per annotator per group. The wedge remains: the send door accepts a client `task_id` up to 64 chars (project_events.py:166), replicas are minted `f"{group_id}-r{k}"` (:548, `k` ≤ `consensus_n` ≤ 5), and every task route bounds ids at 64 (tasks.py:92, project_events.py:327) — so a 62-64 char client id yields replicas no route can address. Bound the client id on a consensus send to 61, or hash it; RED-first with the wedged-publish case as the failing test. `annotator` is on the register's do-not-work list.
+- *Closes when:* A consensus send with a 64-char client `task_id` either refuses at the door or mints replica ids every task route accepts, and a test pins it.
+- *Evidence:* `services/annotator/src/annotator/api/v1/endpoints/project_events.py:166 `task_id: str | None = Field(default=None, max_length=64, ...)`; :528 `group_id = item.task_id or new_id()`; :548 `task_id=f"{group_id}-r{k}"`` · `services/annotator/src/annotator/api/v1/endpoints/tasks.py:92 `TaskId = Annotated[str, Path(min_length=1, max_length=64, ...)]`` · `services/annotator/src/annotator/projects/actor.py:74 `DRAFT_KEY = "draft"` (per-task actor state); tasks.py:186 `_refuse_second_replica`` · `services/annotator/src/annotator/projects/models.py:335 `consensus_n: int = Field(default=1, ge=1, le=5)``
+
+**LOW-003 · The annotator canvas still saves through the per-row Lance write path (`POST /annotations/{doc}/{speech}/{chunk}`), one dataset version per state flip**
+`annotator, explorer` · **MED** · PARTIAL
+- *What is left:* Sequenced after the task draft/publish path (S7/S8) is proven live. Point the canvas save (`review-selection.svelte.ts:36` and `BulkGrid.svelte:250` build `/api/annotations/${key}`) at `PUT /tasks/{id}/draft` (`tasks.remote.ts:104`); the `?task=`-opened snapshot-into-draft half already exists. Write a fresh draw → draft → publish-with-shapes drive script against the cluster — the row's `frontend/microfrontends/annotator/drive2.tmp.mjs` does not exist. Then delete `services/annotator/src/annotator/annotations/save.py` (route at :55), `tags.py`, `versions.py` and `commit.py:check_base_version_value` (:30), keeping the Arrow-IPC read.
+- *Closes when:* Shapes drawn on the canvas travel into a publish via the task draft, and the per-row write modules are deleted.
+- *Evidence:* `services/annotator/src/annotator/annotations/save.py:55` · `services/annotator/src/annotator/annotations/commit.py:30` · `frontend/microfrontends/annotator/src/lib/labeling/review-selection.svelte.ts:36; src/lib/projects/remote/tasks.remote.ts:104` · `ls frontend/microfrontends/annotator/drive2.tmp.mjs — absent`
+
+**LOW-009 · The annotator publish saga emits no `annotation.project.published` control event after a successful publish**
+`annotator, catalog, lineage, service-kit` · **MED** · PARTIAL
+- *What is left:* The publish path exists as a token-keyed idempotent saga, not a Dapr Workflow, by design: `projects/saga.py` (collect accepted drafts, `build_plan`, create-by-derived-id, tag `publish-<publish_id>`, record, fire `publish_succeeded`), the catalog REST publisher in `projects/lakehouse.py`, and crash-after-each-step tests in `tests/unit/test_publish_saga.py`. Do not rebuild it as a Dapr Workflow. Unshipped: the control event — `ControlAction` has no published-project action and neither `saga.py` nor `lakehouse.py` calls `emit_control`. Add the action to `service_kit/control_events.py`, emit it after `record_publish` naming the project's members per the rask-notifications contract, and decide whether the catalog's `table_published` (`endpoints/publication.py:326`) already suffices for #102/#125 consumers.
+- *Closes when:* A successful publish lands one control event that a consumer can key `query.live` on, pinned by a saga test.
+- *Evidence:* `services/annotator/src/annotator/projects/saga.py:171-290` · `services/annotator/src/annotator/projects/lakehouse.py:276-309` · `tests/unit/test_publish_saga.py:261,420` · `packages/service-kit/src/service_kit/control_events.py:36-101 (no published-project action; grep emit_control in saga.py/lakehouse.py: none)`
+
+**LOW-017 · `proxyServeInfer` buffers every uploaded byte with `await request.arrayBuffer()` in a SvelteKit pod sized for rendering HTML**
+`flows, frontend, storage` · **MED**
+- *What is left:* Add a TTL scratch bucket, presign a PUT from the browser straight to RustFS (credentials from the Dapr secret store, never env), and add an `objectRef` payload kind to `services/flows`. The buffering site is `frontend/packages/api/src/serve-proxy.ts:106` (shared by the studio zone's `/api/infer` route), and the studio executor also reads whole files with `cfg.file.arrayBuffer()` at `executor.ts:326`. `BODY_SIZE_LIMIT` is set per zone in `chart/templates/frontends.yaml:150`, which bounds the damage but rules out audio and video. No `objectRef` exists in `services/flows/src`.
+- *Closes when:* An upload reaches RustFS without passing through a zone pod and `services/flows` accepts an `objectRef` payload.
+- *Evidence:* `frontend/packages/api/src/serve-proxy.ts:83,106` · `frontend/microfrontends/studio/src/lib/flows/executor.ts:326` · `grep -rn 'objectRef\|object_ref' services/flows/src → empty` · `chart/templates/frontends.yaml:141-150`
+
+**LOW-018 · The studio node library shows every Ray-dashboard-reported Serve app's status verbatim, so an app with no ingress route appears callable**
+`flows, compute, frontend` · **MED**
+- *What is left:* `getServeApps` (studio serve.remote.ts:14-27) reduces `/api/serve/applications/` to `{name, app, status}` and passes the dashboard's `status` through; palette.ts:124 and ModelNode.svelte:22 render `${name} · ${status}`. Nothing in services/flows probes reachability. Either probe each app's ingress route from `services/flows` and mark unreachable apps, or stop rendering the dashboard status as a callability signal. `flows` is on the register's do-not-work list.
+- *Closes when:* The Model node's picker distinguishes a reachable app from one the ingress does not route, or shows no callability claim.
+- *Evidence:* `frontend/microfrontends/studio/src/lib/flows/remote/serve.remote.ts:20 `status: a.status`` · `frontend/microfrontends/studio/src/lib/flows/palette.ts:124 `blurb: \`/${a.app} · ${a.status}\``; nodes/ModelNode.svelte:22` · `services/flows/src/flows/catalog.py:59 and models.py:138 — options come from `/api/serve/applications/`; no probe in services/flows/src`
+
+**LOW-023 · No lines FTS surface exists, and a 'lines' gold contract with text/geometry/confidence columns is a workload-shaped tier schema the estate forbids**
+`search, catalog, medallion, viewer` · **MED** · **REWRITTEN — the original ask would be wrong**
+- **blocked:** The HTR gold wave (LH-010 / D2c) publishing the HTR runner's lines output as a governed table.
+- *What is left:* Do not build a lines table as a gold contract or add a `lines` name to search, viewer or catalog: medallion/schemas holds only tier.py and events.py and every governed row is {id, payload, stage, lineage, source_rowid} with an opaque payload. The modality-agnostic surface already exists — the search service derives modes generically from a dataset's declared search bindings (fts is always present) and the viewer serves DatasetRegistry descriptors. When the HTR runner publishes its lines table, declare it as a search binding and a registry descriptor, with thumb crops as a blob column. That is the whole remaining step.
+- *Closes when:* An HTR-published lines table answers /api/explorer/search?mode=fts through the generic bindings with no lines-specific code in a shared service.
+- *Evidence:* `grep -rni '"lines"' services/search/src services/viewer/src -> no matches` · `services/search/src/search/services/spec.py:22-44 (modes derived generically; FTS always)` · `services/viewer/src/viewer/api/v1/endpoints/datasets.py:20,52 (DatasetRegistry)` · `services/medallion/src/medallion/schemas/ (tier.py + events.py only)`
+
+**LOW-027 · The explorer trio reads the media corpus off a mounted volume rather than the catalog**
+`explorer, viewer, search, annotator, chart` · **MED**
+- **blocked:** Owner decision, taken against the destination cluster: PVC (`explorer.corpus.mode=pvc`) as the permanent answer, the governed-bucket path (`explorer.corpusS3Root`), or #103 catalog-registered project tables.
+- *What is left:* `explorer.yaml:113-115` still derives `MEDIA_DB_ROOT`/`MEDIA_DB`/`MEDIA_DESCRIPTOR_DIR` from `explorer.corpusMountPath`, with `explorer.corpus.mode` defaulting to `emptyDir`. A third shape now exists: `explorer.corpusS3Root` (default empty) renders `MEDIA_S3_ENDPOINT`/`MEDIA_S3_DB_ROOT` for all three readers (`explorer.yaml:202-208`, read by `service_kit/media/config.py`) — a governed bucket, not catalog tables. `docs/DECISIONS.md` carries no ruling. After the ruling either land the catalog-registered tables and drop `corpus.mode`, or record the chosen mode as permanent and drop #103.
+- *Closes when:* Either the three readers resolve the corpus through the catalog and `explorer.corpus.mode` is gone, or DECISIONS.md records the volume/bucket mode as permanent.
+- *Evidence:* `chart/templates/explorer.yaml:113-115,202-208` · `chart/values.yaml:1775,1791-1792` · `packages/service-kit/src/service_kit/media/config.py (MEDIA_S3_DB_ROOT reader)`
+
+**LOW-007 · The annotator's two named proofs — concurrent claims yield one 200 + one 409, and a fired lease reminder returns the task to `unassigned` with its draft intact — are pinned by no test**
+`annotator` · **LOW** · PARTIAL
+- *What is left:* Both actors exist on `lance-statestore` against the OIDC-verified subject: `AnnotationProjectActor` (project doc + task index, `projects/project_actor.py`), `AnnotationTaskActor` (task state + `LEASE_REMINDER`, `projects/actor.py`), `tenant_actor.py`, and `api/security.py` builds `current_subject` from `make_auth_deps` — no `X-User` header is read, so the §10 blocker is gone. Write the two proofs: two concurrent claims on one task → one 200 + one 409 (the existing 409 tests in `test_send_writes_the_index_once.py:207,222` cover item ownership at send, not claims), and `receive_reminder` (actor.py:466-480) → state `unassigned` with the draft still present and `assignee` cleared. No test under services/annotator/tests names `receive_reminder` or `lease_expired`.
+- *Closes when:* Both scenarios are pinned by tests in services/annotator/tests and pass.
+- *Evidence:* `services/annotator/src/annotator/projects/actor.py:466-480` · `services/annotator/src/annotator/projects/project_actor.py:1-25` · `services/annotator/src/annotator/api/security.py:40-53` · `rg -n 'lease_expired|receive_reminder' services/annotator/tests → no hits`
+
+**LOW-010 · `publish.py` stamps the PROJECT ontology instead of each task's captured one, and `modality` is cross-checked against nothing**
+`annotator` · **LOW** · PARTIAL
+- *What is left:* `template_kind` is gone (zero hits in services/annotator/src). Two clauses remain. `publish.py:432` stamps the PROJECT's ontology (`ontology=project.ontology.model_dump(...)`) into the run facet although each task captures its own at send (models.py:265-270); stamp the captured ones, or report mixed when they differ. `LabelOntology.modality` (ontology.py:150) is read nowhere, so an `audio` ontology accepts image items; cross-check it against `MediaRef.kind` at send. Shape `source`/`model_version`/`confidence` (publish.py:258-260) remain client-supplied; the "Server-stamped provenance" comment now sits below them and scopes to the fields that follow.
+- *Closes when:* The run facet carries each task's captured ontology and a send whose item kind contradicts the ontology's modality is refused.
+- *Evidence:* `services/annotator/src/annotator/projects/publish.py:258-260, :432` · `services/annotator/src/annotator/projects/models.py:265-270 (per-task captured ontology)` · `services/annotator/src/annotator/projects/ontology.py:150 (modality declared)` · ``grep -rn '\.modality' services/annotator/src` → no reads; `grep -rn template_kind` → none`
+
+**LOW-011 · Batch-labeling submit has no runner behind it — `runners.jobsUrl: ""` in every default deploy**
+`annotator, chart, explorer` · **LOW** · **REWRITTEN — the original ask would be wrong**
+- *What is left:* The gap is real: `chart/values.yaml:1857` ships `jobsUrl: ""`, and the annotator service's `POST /apply` and `GET /{job_id}` answer `backend="mock"` when `jobs_url` is empty (`jobs.py:110-123`), forwarding to a remote `{job_id, status}` contract only when set. But the ask names a "compute service's Ray job door" that does not exist — `compute/routes.py` exposes only `GET /jobs` and `GET /jobs/{id}/logs` — and adding a raw Ray-submit door there creates an ungoverned fourth ingest door outside the medallion's three token-guarded write doors and its lineage/idempotency path. Route the batch-labeling submit through a medallion-governed door (`/ingest-media` or a stage trigger) instead, keep the annotator's status read, and witness one submitted batch job in-cluster.
+- *Closes when:* A batch-labeling submit from the annotator reaches a governed medallion door, runs as a real job, and its status reads back `backend="remote"` in-cluster.
+- *Evidence:* `chart/values.yaml:1857 (jobsUrl: "")` · `services/annotator/src/annotator/api/v1/endpoints/jobs.py:98-123 (mock branch when jobs_url empty)` · `services/compute/src/compute/routes.py:39-44 (GET-only job routes)` · `frontend/microfrontends/annotator/src/lib/viewer/annotator.svelte.ts:1407-1412 (HONEST MOCK submit)`
+
+**LOW-012 · The annotator's wire and state still say `project` where the ruled unit of work is a labeling TASK**
+`annotator, service-kit` · **LOW**
+- *What is left:* Layer 2 of the rename has not happened: `type annotation_project` (`packages/service-kit/src/service_kit/governed/auth/model.fga:530`), `AnnotationProjectActor` + `AnnotationTaskActor` (`services/annotator/src/annotator/main.py:23-24,93-94`), `prefix="/projects"` and `"/tasks"` (`api/v1/endpoints/projects.py:39`, `members.py:37`, `tasks.py:84`, `project_events.py:67`) and `can_create_annotation_project` (`projects/models.py:317-318`) are unchanged — 88 hits across annotator, service-kit and chart. Run the rename as its own red-first slice with a state migration for existing actor ids and FGA tuples, updating `tests/unit/test_actor_proxy_names.py` (root `tests/unit`, not `services/annotator/tests`) — not a find-and-replace.
+- *Closes when:* The FGA type, actor ids and routes name a labeling task, and existing actor state and tuples migrate under a test.
+- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:530` · `services/annotator/src/annotator/main.py:23-24,93-94` · `services/annotator/src/annotator/api/v1/endpoints/projects.py:39, tasks.py:84` · `tests/unit/test_actor_proxy_names.py (exists at root tests/unit)`
+
+**LOW-014 · No send surface emits an audio item, and reading order is an int attribute with no ordering tool**
+`annotator, explorer, labeling` · **LOW** · PARTIAL
+- *What is left:* Character spans exist: the ontology's `span: true` maps to the `text` tool on the wire, `char_start`/`char_end` ride `@rask/labeling/annotations-client.ts:37-38`, and the annotator edits them in its document text lane — they belong there, not as a `@rask/engine` canvas `Shape`, so do not add a span tool to the engine. A relations editor exists in the annotator viewer. Remaining: make `explorer/src/lib/components/SendToProjectDialog.svelte:109` emit `media.kind` from the corpus descriptor instead of the hardcoded `{ kind: 'image' as const }` (and widen `projects.ts:58`'s type), then drive one audio item claim→submit→publish end to end. Add an `order` tool with a sequencing editor behind the `order` int attribute (`templates.ts:51`). Relations-editor behaviour was not exercised this session.
+- *Closes when:* One audio item has gone through claim→submit→publish, and reading order is authored by a tool rather than typed as an integer.
+- *Evidence:* `frontend/microfrontends/explorer/src/lib/components/SendToProjectDialog.svelte:109` · `frontend/microfrontends/explorer/src/lib/projects/projects.ts:58` · `frontend/microfrontends/annotator/src/lib/projects/task-yaml.ts:27,48-49 (span capability, text tool)` · `frontend/microfrontends/annotator/src/lib/projects/templates.ts:41,51 (relations in the ontology; READING_ORDER int attr)`
+
+**LOW-019 · The flows Dapr Workflow lane has not been observed end to end; runs degrade to the inline executor whenever the scheduler fails**
+`flows` · **LOW** · PARTIAL
+- *What is left:* The durable lane is already first choice: `services/flows/src/flows/routes.py:189-220` schedules through `DaprFlowScheduler` whenever a scheduler exists and falls back to inline only on a confirmed-not-created failure (logged at exception level), so 'make it the default lane' needs no code. Drive a flow against the cluster, confirm `record_run(DURABLE)` fires and the workflow instance's state transitions are visible end to end, and fix whatever makes the lane degrade (the known trap is `lance-statestore` not scoped to app-id `flows`). Live behaviour was not verified in this session.
+- *Closes when:* A run against the cluster is recorded as DURABLE and its per-node transitions are read back from the workflow history.
+- *Evidence:* `services/flows/src/flows/routes.py:189-220` · `services/flows/src/flows/routes.py:220 — the inline fallback log line`
+
+**LOW-020 · Studio's node palette ships its own 11-kind registry while `services/flows` declares 5 kinds, so the two vocabularies have already drifted**
+`flows, frontend/studio` · **LOW**
+- *What is left:* `services/flows/src/flows/catalog.py` declares `CATALOG` (5 v0 kinds) served at `GET /flows/catalog` (`routes.py:82-90`); studio reads it only for a status chip (`serve-contract.ts:21-27`: "the palette is client-side") while `lib/flows/node-types.ts:17-29` maps 11 kinds (image, text, dataset, prompt, model, mcp, alto, extract, regex, compare, inspect). Have the studio palette fetch the catalog from flows and delete the client-side vocabulary, reconciling the 6 extra kinds into the server catalog first. `catalog.py` also names `/htrflow` in shared-service prose — a modality name in a shared seam to remove on the way.
+- *Closes when:* The studio palette renders kinds it fetched from `/flows/catalog`, and no node-kind list exists in `frontend/microfrontends/studio` beyond the component map.
+- *Evidence:* `services/flows/src/flows/catalog.py:1-9` · `services/flows/src/flows/routes.py:82-90` · `frontend/microfrontends/studio/src/lib/flows/node-types.ts:17-29` · `frontend/microfrontends/studio/src/lib/flows/serve-contract.ts:21-27`
+
+**LOW-021 · Flows has no IIIF loader node, no bucket attach and no run streaming**
+`flows, frontend, storage` · **LOW**
+- *What is left:* `services/flows/routes.py` exposes `/catalog`, `/validate`, a run POST, `/runs/{id}` and `/runs/{id}/terminate` and nothing streams; no IIIF code exists in flows or the studio zone; no presigned lane exists in any service or `@rask/api`; the studio zone reads neither `/api/explorer/object*` nor a bucket. Add an allowlisted IIIF fetch proxy plus a manifest→canvas→image node; wire bucket load over the governed `/api/explorer/object*` read; add SSE to `services/flows` with a per-node progress surface in studio. The upload half of bucket attach depends on a presigned-upload lane that does not yet exist.
+- *Closes when:* A studio flow can load from IIIF and from a bucket, and a running flow shows per-node progress before it completes.
+- *Evidence:* `services/flows/src/flows/routes.py:82-292` · `rg -i iiif services/flows/src frontend/microfrontends/studio/src → 0` · `rg -i presign services/*/src frontend/packages/api/src → 0`
+
+**LOW-024 · The EAD `archive_catalog` table has no governed landing and is served by nothing**
+`search, catalog, medallion` · **LOW**
+- *What is left:* Nothing outside docs/ references `archive_catalog`; `scripts/harvest_ead.py` (Makefile:520) only downloads OAI-PMH XML. Land the EAD rows through the catalog — via `POST /produce` or a sealed `runners/<workload>`, never a `scripts/` CLI and never a protocol-specific ingest door — with a dataset descriptor declaring an `FtsBinding` (packages/service-kit/src/service_kit/lancekit/descriptor.py:80) and `filterable` (descriptor.py:104) naming `archive_code` and the date fields. The search router already selects any descriptor-declared dataset via `?dataset=` (services/search/src/search/api/v1/router.py:7-9,136), so no search-side change is needed.
+- *Closes when:* `/api/explorer/search?dataset=archive_catalog&mode=fts&archive_code=<x>` returns EAD hits from a catalog-governed Lance table.
+- *Evidence:* `rg -n 'archive_catalog' --glob '!open_backlog*' --glob '!docs/**' . → no hits` · `Makefile:517-521` · `packages/service-kit/src/service_kit/lancekit/descriptor.py:80,104` · `services/search/src/search/api/v1/router.py:7-9,136`
+
+**LOW-026 · Search binds to ONE declared `row_table` keyed by the identity triple — no table chooser, no non-identity joins, no external-pointer declaration**
+`search, viewer, explorer, service-kit` · **LOW**
+- *What is left:* `service_kit/lancekit/descriptor.py:101` declares `row_table: str` (single) and its validator (`:251-257`) checks only that table and the identity fields; `viewer/api/v1/endpoints/system.py:98,150` and `viewer/api/security.py:126` consume it as one table. Extend the descriptor to declare multiple row tables plus external pointers, add a table chooser to the explorer search surface, and support a join key other than the identity triple. Explorer/viewer are deprioritised: the corpus they read is a mounted volume, not catalog-governed tables.
+- *Closes when:* A dataset descriptor with two row tables and an external pointer validates, and the explorer search surface can choose between them.
+- *Evidence:* `packages/service-kit/src/service_kit/lancekit/descriptor.py:101,251-257` · `services/viewer/src/viewer/api/v1/endpoints/system.py:98,150` · `services/viewer/src/viewer/api/security.py:126`
+
+**LOW-016 · COCO/YOLO/CSV/HF export serializers do not exist, and the P7c exporter service they belong in does not exist**
+`annotator, exporter (P7c)` · **LOW** · PARTIAL
+- **blocked:** Owner decision: schedule the export serializers, and stand up the P7c exporter service they must live in (ruling R4 puts serialization in a separate microservice)?
+- *What is left:* Once scheduled and once a P7c exporter service exists, add the projection functions there (ALTO 4.4 first, then COCO/YOLO/CSV/HF), never inside the annotator. The managed label taxonomy half is done: `services/annotator/src/annotator/projects/ontology.py` is the labeling task's one definition (taxonomy, tools, attributes, relations) and closed-set label enforcement reads it. No `exporter` directory exists under `services/`.
+- *Closes when:* An exporter service serializes an annotation project to at least ALTO 4.4 and one of COCO/YOLO/CSV/HF, with no second export path in the annotator.
+- *Evidence:* `services/annotator/src/annotator/projects/ontology.py:1-9 (taxonomy shipped)` · `ls services → no exporter` · `grep -rni 'coco\|yolo' services/annotator/src frontend/microfrontends/annotator/src → no hits`
+
+**LOW-022 · `https://dev-kuberay.ra.se/htr/transcribe` answers a bare `text/plain 404` — the external Serve HTTP ingress exposes no `/htr` route**
+`flows, compute` · **LOW**
+- **blocked:** Ops on the external dev-kuberay cluster adding the `/htr` prefix route to its Serve ingress (as `dev-kuberay.ra.se/gemma-31b/v1` has) — not code in this repo
+- *What is left:* The studio's model node POSTs `{serve_url}/{app}` (services/flows/src/flows/config.py:36) with the app name the user picks, so the repo side is config-driven and needs no change. The external route is the fix. Not re-probed this session (no cluster contact), so the 404 is the row's own measurement, not a fresh one. Note rask's own chart routes its workload at `/htrflow` (chart/values.yaml:2233), so verify the external app's name before asking for `/htr`.
+- *Closes when:* `POST https://dev-kuberay.ra.se/htr/transcribe` with raw image bytes returns ALTO XML.
+- *Evidence:* `services/flows/src/flows/config.py:35-36 `serve_url` — `A model node POSTs to {serve_url}/{app}`` · `chart/values.yaml:2231-2233 `- name: htrflow` / `routePrefix: "/htrflow"` (rask's own cluster, not the external one)`
+- *Confidence LOW* — re-measure before acting on this row.
+
+**LOW-028 · No opaque-asset FGA type exists; the model registry authorizes on `table:models$<model>`**
+`catalog, openfga` · **LOW**
+- **blocked:** Owner ratification of the rung's shape: a governed opaque blob type with no format tag, schema interpretation or data ops
+- *What is left:* `endpoints/models.py:9,48,106-109` lists and checks models as `table:` objects and `model.fga` has no blob/asset type; `docs/DECISIONS.md` carries no entry. After ratification, add the distinct FGA type and repoint the registry's `list_objects`/checks off `table`. LANCE-ONLY constrains the shape (opaque blob, no format tag) and does not itself authorize the rung.
+- *Closes when:* `model.fga` declares the asset type and `models.py` no longer queries `object_type="table"`.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/models.py:9,48,106,109` · `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530` · `grep -i 'opaque|K-F9' docs/DECISIONS.md: no hits`
+
+
+## Dropped as ALREADY DONE by the audit
+
+Re-measured at HEAD and found shipped. Listed so a reader who remembers the row can see where it went, not to keep a changelog.
+
+- **CP-026** — `GET/POST /stage-runners/{stage runner}/stages/{instance_id}` ignores both path parameters
+- **CP-028** — Dapr `daprstate` workflow-history rows accumulate with no retention and no alert
+- **FE-001** — No in-tab browser memo for /api/atlas/points, so the 6.6 MB projection refetches on every mount and Text/Visual toggle
+- **FE-003** — Lakehouse panels still `setInterval`-poll and four admin surfaces make zero requests instead of riding a live lineage feed
+- **FE-004** — Every lakehouse lineage window render already passes `summary: true`
+- **FE-010** — `/projects/<id>` is built in the home zone with the hierarchy graph on it
+- **LH-014** — The provenance recipe (`stamp_stage`, `source_rowid`, the tier contract) is written down
+- **LH-049** — Table descriptions are unbound to the catalog object
+- **LH-060** — Nothing detects a table stranded between the Lance write and the ownership grant — a catalog object with ZERO FGA tuples is invisible to the drift rep
+- **LOW-001** — services/annotator keys ownership on a client-settable `X-User` header
+- **LOW-004** — The annotator projects entities and the pure transition machine with its illegal-transition, lease-holder and self-review rules are missing
+- **LOW-005** — The `annotation_project` FGA type and `can_create_annotation_project` are missing from `model.fga`
+- **LOW-006** — services/annotator/projects/publish.py lacks PUBLISHED_LABELS_SCHEMA and a published-table builder
+- **LOW-008** — No HTTP surface for annotation projects/tasks/drafts behind the `annotation_project` FGA doors
+- **LOW-013** — S9 — the annotator zone lands on the refused `DataSelection.svelte` gallery
+- **LOW-015** — `GET /projects/{project_id}/tasks` honours `limit` and `cursor`
+- **LOW-025** — `GET /api/search` silently ignores `dataset` and `mode`
+- **XC-024** — With frontend.oidc.enabled false, locals.authEnabled is false and the serve-proxy 401 guard never fires, so anonymous callers reach GPU inference

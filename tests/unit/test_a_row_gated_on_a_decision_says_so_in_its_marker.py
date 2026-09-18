@@ -25,7 +25,7 @@ import pathlib
 import re
 
 
-REGISTER = pathlib.Path(__file__).resolve().parents[2] / "open_backlog_left.md"
+REGISTER = pathlib.Path(__file__).resolve().parents[2] / "open_backlog_left_new.md"
 
 #: How the register says "this needs a ruling". Collected from rows that carry the marker correctly
 #: rather than invented, so a new row phrasing it a fourth way is a gap in this list, not a false pass.
@@ -33,11 +33,11 @@ _DECISION = re.compile(r"owner call|owner ruling|owner decides|owner decision|ne
 
 #: Rows that match the phrase set and are CORRECTLY unmarked, each with the reason. A row leaves this
 #: set by gaining a marker or by losing the phrase — never by being deleted to quiet the gate.
-_MATCHES_BUT_NOT_GATED = {
-    "LH-034": "the decision is about TIMING, not a blocker — the row says the rewrite 'is minutes'",
-    "LH-096": "only the SECOND half (service-kit's 6 opens) is a decision; the first is ordinary conversion",
-    "LH-159": "cites a ruling already MADE (2026-09-15); its own remaining design + RED test can start today",
-    "LH-164": "the row states outright that the second question is the owner call; the first is code",
+_MATCHES_BUT_NOT_GATED: dict[str, str] = {
+    # EMPTY, and that is the ratchet having been spent rather than the rule being relaxed. The four rows
+    # recorded here — LH-034, LH-096, LH-159, LH-164 — each left the set the only way a row may: two
+    # gained a `**blocked:**` marker naming their question, and two lost the incidental phrase when the
+    # register was rewritten against HEAD. A row is added back only with a sentence a reader can check.
 }
 
 
