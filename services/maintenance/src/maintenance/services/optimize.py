@@ -262,12 +262,11 @@ def discover_datasets(fs: pafs.FileSystem, bucket: str, *, max_depth: int = 3) -
     return found
 
 
-#: Why a dataset inside the protected set is refused, per `base_refs.containment_of` relation. Each is
-#: the SAME refusal; they differ only in what they tell an operator is true, and a single sentence for
-#: all four described the referent's situation even when the subject was the referrer.
+#: Why a CROSS-ROOT referrer is refused, per `base_refs.containment_of` relation. The three here name
+#: the same refusal and differ only in what they tell an operator is true; `branch` carries no entry
+#: because an in-root branch is maintained rather than refused — see the gate in :func:`compact_one`.
 _WHY_PROTECTED = {
     "is": "another dataset resolves its files through {root} (shallow clone / multi-base) — compacting or reclaiming here would break it",
-    "branch": "this is a BRANCH of {root} and therefore a shallow clone of it — its own data resolves through the parent, so compacting or reclaiming here is refused until a branch-scoped reclaim is proven safe",
     "under": "this lies inside {root}, whose files another dataset resolves through — deleting or rewriting anything at or beneath it breaks the referrer",
     "ancestor": "{root} lies beneath this location and another dataset resolves its files through it — reclaiming here would take the referenced bytes with it",
 }
@@ -679,14 +678,30 @@ def compact_one(
     # the obsoleted originals (-> 1 file) and the clone fails to open IN A FRESH PROCESS. Since this
     # function runs compact -> optimize_indices -> cleanup as one pass, the refusal belongs here, in
     # front of all three, rather than in front of compaction alone.
-    if protected is not None and (root := protected.is_protected(uri)) is not None:
-        # THE REFUSAL IS THE SAME FOR ALL FOUR; ONLY THE DIAGNOSIS DIFFERS. Measured on the live estate
-        # 2026-09-17, 129 of 246 refused datasets were BRANCHES told "another dataset resolves its
-        # files through <root>" — the parent's situation stated about the child. A branch is the
-        # REFERRER (`file_format.md:2744`: "Each branch dataset is technically a shallow clone of the
-        # source dataset"), so that sentence inverts the fact an operator needs to act on.
-        why = _WHY_PROTECTED[containment_of(uri, root)].format(root=root)
-        log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": containment_of(uri, root), "root": root})
+    if protected is not None and (root := protected.is_protected(uri)) is not None and (relation := containment_of(uri, root)) != "branch":
+        # A BRANCH FALLS THROUGH; THE THREE CROSS-ROOT RELATIONS DO NOT. This gate returns before the
+        # dataset is opened, so refusing here skipped RECLAMATION as well as compaction — and on the
+        # live estate that was most of what the sweep declined (105 `branch` against 94 `is` over ten
+        # minutes, 2026-09-17). Reclaiming a branch cannot reach the parent: measured on pylance
+        # 11.0.0, `cleanup_old_versions(older_than=0, delete_unverified=True)` on `tree/work` reported
+        # `CleanupStats(old_versions=3, data_files_removed=1, transaction_files_removed=3)` — all of
+        # them the branch's own — while the parent's `data/` held 3 files before and 3 after with none
+        # removed, and from a COLD interpreter the parent still read 9 rows and still time-travelled
+        # to versions 1, 2 and 3.
+        #
+        # COMPACTING a branch stays refused, one rung out, and by the gate that is right about it: a
+        # branch manifest DOES register the parent as a base (measured on the same fixture,
+        # `manifest_base_paths` is `[]` on main and `['<parent>']` on the branch, whose inherited
+        # fragments carry `base_id: 0`), so `describe_compaction_unsupported_flags` declines it on
+        # flag 16 for the cost reason above. Letting the branch past THIS gate is what lets that
+        # narrower answer be given at all.
+        #
+        # The cross-root case is the one Lance disclaims in as many words (`file_format.md:3187`, of a
+        # clone into another root: "Source dataset remains immutable and can be garbage collected
+        # independently"). Nothing in the format protects that clone, which is the whole reason the
+        # estate-wide pre-pass exists — so `is`/`under`/`ancestor` keep refusing.
+        why = _WHY_PROTECTED[relation].format(root=root)
+        log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": relation, "root": root})
         return DatasetResult(uri=uri, refused=why)
     # Read the producer's DECLARED name while the dataset is open — the emit path downstream holds only
     # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
