@@ -107,3 +107,21 @@ def test_enabling_the_backup_without_the_operator_is_REFUSED() -> None:
     """Rendering a pod that references a Secret nothing creates is a backup that never runs."""
     with pytest.raises(RuntimeError, match="externalSecrets"):
         _render("--set", "backups.controlRoot.enabled=true", "--set", "externalSecrets.enabled=false")
+
+
+def test_it_runs_THE_SAME_IMAGE_REFERENCE_as_the_catalog() -> None:
+    """The tool ships inside the catalog image, so the Job must name that image — not a near-miss.
+
+    Spelling the stem by hand here once produced `rest-catalog` against a chart default of
+    `lance-rest-catalog`: a reference that exists in no registry. The CronJob rendered, the release
+    reported success, and the Job sat in ImagePullBackOff — a backup that can never run, discovered
+    only by triggering one. Asserted against the catalog Deployment's own reference rather than
+    against a literal, so a rename moves both or fails here.
+    """
+    docs = _render(*_ON)
+    job = _cronjob(docs)["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["image"]
+    catalog = next(
+        d["spec"]["template"]["spec"]["containers"][0]["image"] for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-catalog")
+    )
+
+    assert job == catalog, f"the backup Job runs {job!r} while the catalog runs {catalog!r} — the tool ships in the catalog image"

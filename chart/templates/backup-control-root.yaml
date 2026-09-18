@@ -65,7 +65,11 @@ spec:
                 optional: false
           containers:
             - name: backup
-              image: {{ include "rask.image" (list . "rest-catalog") | quote }}
+              {{- /* The SAME helper the sibling hooks use (`bootstrap-admin`, `openfga-model`). Spelling
+                     the stem by hand here produced `rest-catalog` against a chart default of
+                     `lance-rest-catalog`, which is a reference that exists in no registry — the Job sat
+                     in ImagePullBackOff and the CronJob looked healthy. */}}
+              image: "{{ include "lance.catalogImage" . }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               securityContext:
                 allowPrivilegeEscalation: false

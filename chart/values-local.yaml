@@ -130,3 +130,13 @@ minio:
 # alone was never sufficient.
 externalSecrets:
   enabled: true
+
+# THE CONTROL ROOT'S SCHEDULED BACKUP ([[LH-110]]), on here so the lane is exercised rather than only
+# rendered. `dest` is left empty deliberately for a dev estate: that writes `_backups/control/` inside
+# the control root itself, which survives a bad write and does NOT survive losing the bucket — the
+# failure a backup exists for. Any deployment that matters sets a separate bucket, which is what the
+# chart's own values say.
+backups:
+  controlRoot:
+    enabled: true
+    keep: 3
