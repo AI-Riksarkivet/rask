@@ -378,6 +378,30 @@ metadata:
   name: {{ include "lance.fullname" . }}-catalog
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
+  # ONE CALLER, ONE REPLICA — because the control-event cursor is per-replica. Each catalog replica
+  # subscribes to `catalog.control.v1` with NO queueGroupName (broadcast), so every replica keeps its
+  # own ring buffer and its own monotonic counter (`core/control_buffer.py`). Round-robined across the
+  # two replicas `values-prod.yaml` runs, the console hands replica A's cursor to replica B, which
+  # reads it against a counter that never issued it and answers `reset=True` — so the admin console
+  # re-reads authoritative state on roughly every other poll.
+  #
+  # AFFINITY RATHER THAN A SHARED BUFFER: the events are hints and the audit trail is the durable
+  # record, so a reset is wasteful, not wrong. Paying for a shared buffer to fix a wasteful reset is
+  # the wrong trade.
+  #
+  # `ClientIP` works here because every caller is a POD with a stable address — the console's poll
+  # runs server-side in the home zone and reaches this Service directly (`CATALOG_API`), never through
+  # the gateway. Stage runners, medallion and maintenance are their own pods and keep spreading.
+  # This is NOT a pattern to copy onto the gateway Service, which sits behind the Ingress: there every
+  # request arrives from the ingress controller's single address, and pinning it would send the whole
+  # estate to one replica.
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      # Longer than any console session, so the cursor is not reset by the affinity expiring between
+      # polls — which would be this same defect on a timer. kube-proxy's own default is 10800s; stated
+      # here so the window is a decision rather than an inherited one.
+      timeoutSeconds: 10800
   ports: [{ name: http, port: {{ .Values.services.catalog.port }}, targetPort: http }]
   selector: { app.kubernetes.io/component: catalog, app.kubernetes.io/instance: {{ .Release.Name }} }
 ---
