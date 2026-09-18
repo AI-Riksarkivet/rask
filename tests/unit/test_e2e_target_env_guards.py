@@ -46,6 +46,10 @@ REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     # point of this file is that a target fails rather than reporting a proof it never ran, and this
     # suite's first live run SKIPPED all three legs while reading as green.
     "fga-model": ("LANCE_E2E_FGA",),
+    # The URL alone. `LANCE_E2E_TOKEN` gates it too, but every live target already needs that and the
+    # runner always issues one — listing it here would add a guard for a variable whose absence means
+    # the whole harness failed earlier.
+    "open-run": ("LANCE_E2E_LINEAGE_URL",),
     # Only the CATALOG url gates it: the suite's own skipif is keyed on that alone, and
     # `LANCE_E2E_DEX` has a working default, so demanding it would refuse a legitimate invocation.
     "spec-conformance": ("LANCE_E2E_CATALOG_URL",),

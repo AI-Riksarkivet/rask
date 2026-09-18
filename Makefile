@@ -1,4 +1,4 @@
-.PHONY: sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -805,7 +805,7 @@ k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
 # Same chart, same :dev image set, same release name (rask) as k3s — but on a disposable
 # kind cluster, which is what the CI live-proof jobs (e2e-stack / e2e-ray) boot. Toolchain
 # is pinned into .localbin by `make bootstrap` (kind/kubectl/fga; helm + docker from PATH).
-.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: bootstrap kind-up kind-images kind-load kind-deploy kind-down e2e-ci e2e-ray-ci e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 LOCALBIN     := $(CURDIR)/.localbin
 KIND         := $(LOCALBIN)/kind
@@ -914,6 +914,14 @@ e2e-isolation: ## Cross-tenant credential attack vs a deployed vending-enabled s
 # picks one: bob is in `team:eng`, bound to `project:acme`, so he holds `can_administer` and would make
 # that leg allege a property the estate does not have. Prefer `bash scripts/e2e_live.sh <file>`, which
 # discovers the whole environment from the running release.
+e2e-open-run: ## A cascade hop is an OPEN run in the graph before it is a finished one
+	@# The dispatch branch used to ack having emitted nothing, so a hop was invisible in the graph for
+	@# its whole runtime and one that died before its terminal looked like one that never began
+	@# ([[LH-173]]). Asserted on the event stream rather than by catching a job mid-flight: a test that
+	@# sleeps into a window is a flake waiting for a faster machine.
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! set LANCE_E2E_LINEAGE_URL + LANCE_E2E_TOKEN, or run: bash scripts/e2e_live.sh tests/e2e-py/test_a_cascade_hop_is_an_open_run_before_it_is_a_finished_one.py"; exit 1; }
+	uv run pytest tests/e2e-py/test_a_cascade_hop_is_an_open_run_before_it_is_a_finished_one.py -m e2e -v
+
 e2e-fga-model: ## The DEPLOYED OpenFGA model matches this repo's — the third copy `fga-test` cannot see
 	@# `make fga-test` diffs model.json against model.fga. The store is the third copy and was checked by
 	@# nothing, which is how it fell NINE relations behind without a test going red — until a Helm hook
