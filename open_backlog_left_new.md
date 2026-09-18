@@ -186,8 +186,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
   cannot happen. The suite probes reachability and skips with that reason rather than reporting it as a
   conformance failure. Whether an external client should receive an externally-resolvable endpoint is a
   real question this row now carries.
-- *What is left:* lance-ray. It is ABSENT from the catalog image, so its drive needs a pod that has it
-  (a runner image) or an externally-resolvable endpoint; the test is written and skips precisely.
+- **LANCE-RAY IS PROVEN TOO, from the Ray head** (`lance_ray` 0.5.0, `ray` 2.58.0 — the catalog image
+  carries neither): `read_lance(table_id=[NS, TBL], namespace_impl="rest", namespace_properties=…,
+  storage_options=<vended>)` read the same **36 rows** distributed. So all THREE stock clients —
+  `lance_namespace`, lancedb and lance-ray — drive the deployed catalog.
+- *What is left:* wire the two new cases into `make e2e-spec-conformance` so the proof is repeatable rather
+  than a drive somebody did once. They are marked `spec_conformance` and already collected by that target;
+  what they need is a runner that HAS these clients and can resolve the vended endpoint — the catalog pod
+  has lancedb but not lance-ray, the Ray head the reverse.
 - *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
 - *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `grep -rn 'lancedb|lance_ray' tests/e2e-py — no match` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
 
