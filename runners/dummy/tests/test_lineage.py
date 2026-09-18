@@ -24,6 +24,14 @@ from dummy_runner.lineage import build_run_event
 
 
 def _event(**over: object) -> dict:
+    """The event as it goes ON THE WIRE, which is what every assertion below is about.
+
+    `build_run_event` returns a typed `lineage_kit.RunEvent` now, and `to_wire()` is the OFFICIAL
+    serializer's dict of it — so these assertions read the bytes a consumer receives rather than an
+    intermediate the producer happens to hold. That is strictly stronger than the hand-built dict
+    they used to read: a field the model carries but the serializer drops would have passed before
+    and fails here.
+    """
     base: dict = {
         "event_type": "COMPLETE",
         "run_id": "e2e-1",
@@ -34,7 +42,7 @@ def _event(**over: object) -> dict:
         "originator": "CiQwOGE4Njg0Yi1kYjg4",
         "project": "acme",
     }
-    return build_run_event(**(base | over))
+    return build_run_event(**(base | over)).to_wire()
 
 
 def test_a_completed_run_is_TERMINAL() -> None:

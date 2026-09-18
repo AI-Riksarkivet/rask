@@ -28,6 +28,14 @@ dependencies = [
     # ALL — `ModuleNotFoundError: No module named 'PIL'` before it reads a single argument. It fails
     # identically for a tabular run that will never touch an image, because the import is unconditional.
     "service-kit[lancekit,media]",
+    # The ONE authority for the OpenLineage envelope (LIN-001, owner ruling 2026-09-18: the compute
+    # plane emits, through `lineage-kit`). It belongs in the PLATFORM env rather than in a workload's
+    # because three baked jobs here emit — `ray_stage_job`, `ray_train_job` and the dummy lane — and
+    # a copy per job is what had already drifted two facet revisions. Resolved from the ROOT lock with
+    # everything else here, which is what keeps it inside the "never a second resolution into this
+    # image" ruling the dockerfile states. Light by construction: openlineage-python's own deps are
+    # attrs/httpx/requests/pyyaml/dateutil, and pydantic is already here via service-kit.
+    "lineage-kit",
     # Lance/Arrow core — `import lance`, `lance.optimize`, `pyarrow`/`pyarrow.fs`.
     "pylance>=11.0.0",
     "pyarrow",
@@ -69,3 +77,4 @@ package = false
 
 [tool.uv.sources]
 service-kit = { workspace = true }
+lineage-kit = { workspace = true }

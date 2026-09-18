@@ -10,6 +10,12 @@ dependencies = [
     # pins to keep out today, but the SHAPE is the point: a runner that quietly became a workspace
     # member would be a precedent, and the next one would carry torch in with it.
     "storage",
+    # `lineage-kit` as a PATH dep for the same reason, and it is the ONLY first-party way this lane
+    # may author an OpenLineage envelope (LIN-001, owner ruling 2026-09-18). The package is
+    # dependency-capped — openlineage-python, pydantic, opentelemetry-api, nothing heavier — precisely
+    # so a sealed runner can take it without the seal leaking. The hand-rolled stdlib emitter it
+    # replaces had drifted two facet revisions from the platform's.
+    "lineage-kit",
     # The write path this runner exercises for real: CDF delta read, merge_insert, fragment commit.
     # Pinned to the version §7.11 verified rather than a floor, since the mechanics are the claim.
     "pylance>=11.0.0",
@@ -29,6 +35,7 @@ packages = ["src/dummy_runner"]
 
 [tool.uv.sources]
 storage = { path = "../../packages/storage" }
+lineage-kit = { path = "../../packages/lineage-kit" }
 
 [dependency-groups]
 dev = ["pytest>=8"]

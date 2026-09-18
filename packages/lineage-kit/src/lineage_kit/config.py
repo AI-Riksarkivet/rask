@@ -27,9 +27,16 @@ class LineageSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="RASK_LINEAGE_", extra="ignore")
 
     #: The OpenLineage HTTP endpoint base URL (e.g. ``http://localhost:5000``). Unset → no-op emitter.
-    endpoint: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT", "OPENLINEAGE_URL"))
-    #: Bearer api key for the HTTP transport (optional).
-    api_key: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_API_KEY", "OPENLINEAGE_API_KEY"))
+    #:
+    #: ``LINEAGE_URL`` is the THIRD of a trio this model already accepted two thirds of: the Ray lane
+    #: sets ``LINEAGE_URL`` / ``LINEAGE_SERVICE_TOKEN`` / ``LINEAGE_SERVICE_ID`` together, and the
+    #: latter two are aliased below. Accepting two and not the first is the worst of both — the
+    #: credential resolves, the endpoint does not, and `build_emitter` degrades to the no-op that
+    #: never raises, so a lane loses its provenance while reporting success.
+    endpoint: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_ENDPOINT", "OPENLINEAGE_URL", "LINEAGE_URL"))
+    #: Bearer api key for the HTTP transport (optional) — the token a producer presents when it holds
+    #: a USER bearer rather than the service pair, which is the Ray lane's ``LINEAGE_TOKEN``.
+    api_key: str | None = Field(default=None, validation_alias=AliasChoices("RASK_LINEAGE_API_KEY", "OPENLINEAGE_API_KEY", "LINEAGE_TOKEN"))
     #: The shared app token for rask's own **service door** on the lineage ingest.
     #:
     #: rask's ingest does not authenticate in-cluster producers with a bearer: ``lineage.api.security``

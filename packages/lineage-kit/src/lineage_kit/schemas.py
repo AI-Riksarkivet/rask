@@ -23,6 +23,7 @@ from openlineage.client.facet_v2 import (
     dataset_version_dataset,
     datasource_dataset,
     error_message_run,
+    job_type_job,
     output_statistics_output_dataset,
     parent_run,
     schema_dataset,
@@ -48,6 +49,7 @@ OUTPUT_STATISTICS_FACET_SCHEMA_URL = (
     "https://openlineage.io/spec/facets/1-0-2/OutputStatisticsOutputDatasetFacet.json#/$defs/OutputStatisticsOutputDatasetFacet"
 )
 DATASOURCE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasourceDatasetFacet.json#/$defs/DatasourceDatasetFacet"
+JOB_TYPE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/2-0-4/JobTypeJobFacet.json#/$defs/JobTypeJobFacet"
 DATASET_VERSION_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
 
 
@@ -205,6 +207,29 @@ class DatasetVersionFacet(Facet):
 
     def to_openlineage(self) -> dataset_version_dataset.DatasetVersionDatasetFacet:
         return dataset_version_dataset.DatasetVersionDatasetFacet(datasetVersion=self.dataset_version, producer=self.producer)  # ty: ignore[unknown-argument]
+
+
+class JobTypeJobFacet(Facet):
+    """``jobType`` job facet — what KIND of job this is, which every Ray lane stamps.
+
+    Modelled here rather than written out per producer because it is a STANDARD facet with a
+    published schema of its own, so it must not point at ``BaseFacet`` the way `custom_facet` does.
+    Two producers were spelling the URL by hand (`runners/dummy`, `scripts/ray_train_job.py`) and a
+    hand-written spec URL is exactly the second authority LIN-001 exists to remove.
+    """
+
+    schema_url: str = Field(default=JOB_TYPE_FACET_SCHEMA_URL, alias="_schemaURL")
+    processing_type: str = Field(default="BATCH", alias="processingType")
+    integration: str = "RAY"
+    job_type: str = Field(default="JOB", alias="jobType")
+
+    def to_openlineage(self) -> job_type_job.JobTypeJobFacet:
+        return job_type_job.JobTypeJobFacet(
+            processingType=self.processing_type,
+            integration=self.integration,
+            jobType=self.job_type,
+            producer=self.producer,  # ty: ignore[unknown-argument] — keyword-only on the attrs base; ty does not see it
+        )
 
 
 class RunFacets(WireModel):

@@ -1,10 +1,17 @@
-"""Four modules author the same OpenLineage envelope, and nothing compared them until now.
+"""Three modules author the same OpenLineage envelope, and nothing compared them until now.
 
-[[LIN-001]]. The estate has FOUR independent authorities for one wire format —
-`service_kit.openlineage`, `lineage_kit.schemas`, `scripts/ray_train_job.py` and
-`runners/dummy`'s hand-rolled copy. The register's claim was that they "agree by test rather than by
-construction"; measured, they agreed by NOTHING. No test compared them, and one had already drifted:
-`runners/dummy` declared `BaseFacet` at spec `1-0-5` while the other three said `2-0-2`.
+[[LIN-001]]. The estate has independent authorities for one wire format — `service_kit.openlineage`,
+`lineage_kit.schemas` and `scripts/ray_train_job.py`. The register's claim was that they "agree by
+test rather than by construction"; measured, they agreed by NOTHING. No test compared them, and one
+had already drifted: `runners/dummy`'s hand-rolled copy declared `BaseFacet` at spec `1-0-5` while
+the others said `2-0-2`.
+
+THE RIGHT NUMBER OF AUTHORITIES IS NOT ZERO, and it is not one either. `service_kit.openlineage`
+hand-builds its dicts so `openlineage-python` stays out of the catalog and lineage images, where it
+is a dev-group dependency; `lineage_kit.schemas` imports the client and serialises through it. Each
+pays for what the other refuses, so both stay — compared here rather than merged. What must never
+come back is a FOURTH authored inside a producer, which
+`tests/unit/test_a_runner_that_emits_does_it_through_lineage_kit.py` now refuses outright.
 
 WHY A DRIFTED `_schemaURL` IS NOT COSMETIC. It is the field a consumer follows to VALIDATE a custom
 facet. Pointing it at an older spec revision means a validating consumer fetches a schema the payload was
@@ -44,7 +51,6 @@ AUTHORITIES = {
     "service_kit.openlineage": ROOT / "packages/service-kit/src/service_kit/openlineage.py",
     "lineage_kit.schemas": ROOT / "packages/lineage-kit/src/lineage_kit/schemas.py",
     "scripts/ray_train_job.py": ROOT / "scripts/ray_train_job.py",
-    "runners/dummy": ROOT / "runners/dummy/src/dummy_runner/lineage.py",
 }
 
 #: `https://openlineage.io/spec/<version>/<doc>.json#/$defs/<Facet>` — with an optional `facets/`

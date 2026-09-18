@@ -97,6 +97,11 @@ ENV UV_PROJECT_ENVIRONMENT=/opt/runner-venv
 # `packages/storage` is a PATH dependency of every runner; COPY (not bind) because the ARG-expanded
 # runner path below is resolved by COPY, and the two must land in the same WORKDIR layout.
 COPY packages/storage packages/storage
+# `packages/lineage-kit` is the OTHER first-party path dep a runner may take — the one authority for
+# the OpenLineage envelope (LIN-001). Copied unconditionally beside storage: a runner that does not
+# declare it resolves nothing extra, and a runner that does would otherwise fail the locked sync here
+# rather than at lock time, which is the expensive place to find out.
+COPY packages/lineage-kit packages/lineage-kit
 COPY runners/${RUNNER} runners/${RUNNER}
 
 RUN --mount=type=cache,target=/root/.cache/uv \

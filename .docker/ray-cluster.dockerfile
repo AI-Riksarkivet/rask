@@ -144,10 +144,12 @@ COPY --chown=app:app scripts/ray_stage_job.py scripts/ray_train_job.py scripts/r
 # `from dummy_runner.job import main` resolves with no PYTHONPATH edit and, more importantly, NO
 # second dependency resolution. That distinction is what keeps this inside the "a workload's
 # awkward dependencies are ITS problem, never a fattened shared image" ruling: `dummy_runner`
-# imports pyarrow and lance and nothing else, and both are already here from the platform compute
-# trio above. A `uv sync --project runners/dummy` would instead resolve a SECOND lock into this
-# image and could quietly move pylance out from under the htr runner — the actual harm the ruling
-# names. A source copy adds no resolvable dependency at all.
+# imports pyarrow, lance and `lineage_kit`, all three of which are already here from the platform
+# env above — `lineage-kit` is a declared dependency of `packages/ray-cluster-env` because the
+# compute plane emits through it (LIN-001) and three baked jobs in this image do. A
+# `uv sync --project runners/dummy` would instead resolve a SECOND lock into this image and could
+# quietly move pylance out from under the htr runner — the actual harm the ruling names. A source
+# copy plus a root-lock dependency adds no second resolution at all.
 #
 # It is baked rather than shipped via `runtime_env` for the same reason every other job here is:
 # Ray documents runtime_env as development-only, and the whole point of a dummy lane is to exercise

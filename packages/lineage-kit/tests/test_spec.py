@@ -18,6 +18,7 @@ from openlineage.client.facet_v2 import (
     dataset_version_dataset,
     datasource_dataset,
     error_message_run,
+    job_type_job,
     output_statistics_output_dataset,
     parent_run,
     schema_dataset,
@@ -28,6 +29,7 @@ from lineage_kit import (
     DATASET_VERSION_FACET_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
+    JOB_TYPE_FACET_SCHEMA_URL,
     OUTPUT_STATISTICS_FACET_SCHEMA_URL,
     PARENT_RUN_FACET_SCHEMA_URL,
     PRODUCER,
@@ -91,6 +93,11 @@ def _full_event() -> RunEvent:
     [
         (PARENT_RUN_FACET_SCHEMA_URL, parent_run.ParentRunFacet),
         (ERROR_MESSAGE_FACET_SCHEMA_URL, error_message_run.ErrorMessageRunFacet),
+        # Added 2026-09-18 with the constant, and it found drift on its first run: the two producers
+        # spelling this URL by hand both said `2-0-3` while the installed client says `2-0-4`. They
+        # agreed with EACH OTHER, which is why the cross-authority walk could not see it — only a
+        # comparison against the client can.
+        (JOB_TYPE_FACET_SCHEMA_URL, job_type_job.JobTypeJobFacet),
         (SCHEMA_FACET_SCHEMA_URL, schema_dataset.SchemaDatasetFacet),
         (OUTPUT_STATISTICS_FACET_SCHEMA_URL, output_statistics_output_dataset.OutputStatisticsOutputDatasetFacet),
         (DATASOURCE_FACET_SCHEMA_URL, datasource_dataset.DatasourceDatasetFacet),

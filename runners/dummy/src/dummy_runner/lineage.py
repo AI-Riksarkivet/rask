@@ -1,9 +1,13 @@
 """The dummy lane's OpenLineage emission — provenance the platform can read back.
 
-Modelled on ``scripts/ray_train_job.py``'s emitter, which is the estate's worked reference for a
-run that a SERVICE executes on behalf of a person. The shape matters more than the values here: a
-lane that emits nothing is invisible to the lineage graph, and a lane that emits the WRONG shape is
-worse, because `notifiable()` discards it and acks SUCCESS — so nothing anywhere reports the loss.
+**The envelope is `lineage-kit`'s, never this module's** (LIN-001, owner ruling 2026-09-18). This
+file holds only what is TRUE OF THIS LANE — which states it emits, which principals are addresses,
+how a catalog identifier splits into a dataset ref — and every spec constant, the wire form and the
+transport come from the shared package. The stdlib copy this replaces had already drifted two facet
+revisions from the platform's (`BaseFacet` at 1-0-5 against 2-0-2, `DatasetVersionDatasetFacet` at
+1-0-0 against 1-0-1), and a `_schemaURL` is what a consumer follows to VALIDATE a custom facet — so a
+stale one fails at the consumer, about a producer it cannot name. `to_wire()` is produced by the
+official serializer, so the wire form cannot drift from the client the package pins.
 
 **The human rides ``lance.originator``, never ``author``.** This job authenticates to the lineage
 ingest as a service, and `enforce_author` overwrites the author facet with that service's verified
@@ -17,31 +21,31 @@ nothing — the event still records the run for the graph, it simply targets nob
 honest outcome for a run no person asked for.
 
 Emission is BEST EFFORT and never raises into the transform: provenance must not fail a run that
-actually produced data. A failure is loud on stderr, with the HTTP status kept so a 401/403
-(credential problem) stays distinguishable from an outage.
+actually produced data. `build_emitter` degrades to a logged no-op when no endpoint is configured,
+and `ClientEmitter` keeps serialisation and transport in separate `try` blocks so an unserialisable
+facet is distinguishable from an outage.
 """
 
 from __future__ import annotations
 
-import json
-import os
-import sys
-import urllib.error
-import urllib.request
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-_PRODUCER = "https://github.com/AI-Riksarkivet/rask/runners/dummy"
-_RUN_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
-# 2-0-2, the spec revision the other three authorities and the line above already name — this said
-# 1-0-5, so one file cited two revisions of ONE document two lines apart. `_schemaURL` is what a
-# consumer follows to VALIDATE a custom facet, so an older revision sends it to a schema the payload
-# was never written against, and it fails at the consumer about a producer it cannot name.
-_BASE_FACET = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/BaseFacet"
-# 1-0-1, matching the FIVE platform-side citations (service-kit's kernel, the stage and train jobs)
-# — this said 1-0-0, the drift `tests/unit/test_lineage_emitters_share_one_wire_contract.py` was
-# written to catch and caught on its first run.
-_VERSION_FACET = "https://openlineage.io/spec/facets/1-0-1/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
+from lineage_kit import RunEvent, build_emitter
+from lineage_kit.schemas import (
+    Dataset,
+    DatasetFacets,
+    DatasetVersionFacet,
+    ErrorMessageRunFacet,
+    Job,
+    JobTypeJobFacet,
+    OutputDataset,
+    Run,
+    RunFacets,
+    RunState,
+    custom_facet,
+)
 
 #: The only states a person is told about. START/RUNNING notify nobody by product decision, and
 #: RECONCILED is lineage's own repair marker rather than an outcome anyone chose.
@@ -51,15 +55,20 @@ TERMINAL_STATES = frozenset({"COMPLETE", "FAIL"})
 #: a wildcard is a statement about everyone and therefore about no one.
 _NOT_A_PERSON = frozenset({"", "*", "user:*", "ray", "data_eng", "analyst", "htr", "service", "system"})
 
+#: The job facet every Ray lane stamps. `jobType` is a STANDARD facet with its own published schema,
+#: so it carries that schema's URL rather than `BaseFacet` — and the model lives in `lineage_kit`,
+#: where the package's conformance test holds the URL equal to the installed client's.
+_JOB_TYPE_FACET = JobTypeJobFacet().model_dump(by_alias=True)
 
-def _dataset_ref(identifier: str) -> dict[str, str]:
+
+def _dataset_ref(identifier: str) -> tuple[str, str]:
     """Split a catalog identifier into the ``namespace``/``name`` pair lineage nodes are keyed by.
 
     ``name`` stays the FULL identifier — `silver$dummy`, never `dummy` — because delivery and render
     check `table:<name>` against the FGA object, and an unqualified name matches no tenant-qualified
     grant, which counts every recipient HIDDEN rather than denied.
     """
-    return {"namespace": identifier.split("$", 1)[0], "name": identifier}
+    return identifier.split("$", 1)[0], identifier
 
 
 def build_run_event(
@@ -73,7 +82,7 @@ def build_run_event(
     originator: str = "",
     project: str = "",
     error: str | None = None,
-) -> dict[str, Any]:
+) -> RunEvent:
     """One terminal RunEvent for a dummy-lane run.
 
     ``version`` belongs on COMPLETE only — a FAIL committed nothing, and a fabricated version there
@@ -82,13 +91,7 @@ def build_run_event(
     if event_type not in TERMINAL_STATES:
         raise ValueError(f"{event_type!r} is not terminal; this lane emits only {sorted(TERMINAL_STATES)} (a START notifies nobody)")
 
-    lance: dict[str, Any] = {
-        "_producer": _PRODUCER,
-        "_schemaURL": _BASE_FACET,
-        "operation": "transform",
-        "run_id": run_id,
-        "rows": rows,
-    }
+    lance: dict[str, Any] = {"operation": "transform", "run_id": run_id, "rows": rows}
     # Both are TARGETING hints and authorize nothing — the notifications plane re-derives every
     # recipient's visibility at delivery.
     if originator and originator not in _NOT_A_PERSON:
@@ -96,95 +99,50 @@ def build_run_event(
     if project:
         lance["project"] = project
 
-    run_facets: dict[str, Any] = {"lance": lance}
+    facets = RunFacets(lance=custom_facet(**lance))
     if error is not None:
-        run_facets["errorMessage"] = {
-            "_producer": _PRODUCER,
-            "_schemaURL": "https://openlineage.io/spec/facets/1-0-1/ErrorMessageRunFacet.json#/$defs/ErrorMessageRunFacet",
-            "message": error[:1000],
-            "programmingLanguage": "PYTHON",
-        }
+        facets.error_message = ErrorMessageRunFacet(message=error[:1000], programmingLanguage="PYTHON")
 
-    output: dict[str, Any] = _dataset_ref(to_id)
+    out_namespace, out_name = _dataset_ref(to_id)
+    in_namespace, in_name = _dataset_ref(from_id)
+    output = OutputDataset(namespace=out_namespace, name=out_name)
     if version is not None:
-        output["facets"] = {"version": {"_producer": _PRODUCER, "_schemaURL": _VERSION_FACET, "datasetVersion": str(version)}}
+        output.facets = DatasetFacets(version=DatasetVersionFacet(datasetVersion=str(version)))
 
-    return {
-        "eventType": event_type,
-        "eventTime": datetime.now(UTC).isoformat(),
-        "producer": _PRODUCER,
-        "schemaURL": _RUN_SCHEMA,
-        "run": {"runId": run_id, "facets": run_facets},
-        "job": {
-            "namespace": "ray-jobs",
-            "name": f"dummy.{to_id}",
-            "facets": {
-                "jobType": {
-                    "_producer": _PRODUCER,
-                    "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
-                    "processingType": "BATCH",
-                    "integration": "RAY",
-                    "jobType": "JOB",
-                }
-            },
-        },
+    return RunEvent(
+        eventType=RunState(event_type),
+        eventTime=datetime.now(UTC).isoformat(),
+        run=Run(runId=run_id if _is_uuid(run_id) else str(uuid.uuid5(uuid.NAMESPACE_URL, run_id)), facets=facets),
+        job=Job(namespace="ray-jobs", name=f"dummy.{to_id}", facets={"jobType": _JOB_TYPE_FACET}),
         # The DERIVED_FROM edge. Without an input, silver lands in the graph as an orphan nobody can
         # trace back to bronze — which is most of what a lineage graph is for.
-        "inputs": [_dataset_ref(from_id)],
-        "outputs": [output],
-    }
+        inputs=[Dataset(namespace=in_namespace, name=in_name)],
+        outputs=[output],
+    )
 
 
-def emit(event: dict[str, Any]) -> bool:
-    """POST the event to the lineage ingest. Returns whether it landed; never raises.
+def _is_uuid(value: str) -> bool:
+    """``runId`` MUST be a UUID per the spec, and the official serializer enforces it.
 
-    Ray pods carry no Dapr sidecar, so this is the plain HTTP ingest. Authentication is the SERVICE
-    identity the job already has — the shared app token plus the bare FGA subject — which lineage
-    verifies against its allowlist and then FGA-checks on the outputs, so this lane can only record
-    provenance for what its rung permits. ``LINEAGE_URL`` unset means "not wired", not "failed".
+    The hand-rolled emitter did not, so a lane passing a readable run id got a wire event the
+    platform accepted and a stricter consumer would reject. Deriving one with `uuid5` keeps the id
+    STABLE for a given input — a replayed run converges on the same node instead of adding a second.
     """
-    url = os.environ.get("LINEAGE_URL", "").rstrip("/")
-    if not url:
+    try:
+        uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
         return False
-    headers = {"content-type": "application/json"}
-    # BOTH HALVES OR NEITHER. The receiving door forks on the identity header's PRESENCE
-    # (`lineage/api/security.py`: `dapr_api_token is not None and x_lance_service_identity is not None`),
-    # and `""` is not None — so defaulting the id to empty ASKS FOR the service door with no subject,
-    # is refused 403, and that branch is final by design: it never re-asks OIDC. The `elif` then meant
-    # a perfectly good `LINEAGE_TOKEN` bearer was never tried. A job that lands its rows and loses its
-    # provenance, invisibly from both ends.
-    service_id = os.environ.get("LINEAGE_SERVICE_ID", "")
-    # THE IDENTITY SELECTS THE CREDENTIAL, because ONE POD RUNS SEVERAL IDENTITIES. This head runs the
-    # train lane (claiming `service-trainer`) and every stage lane (each claiming its own stage runner
-    # subject), so a single shared token can only ever be right for one of them — and the door refuses a
-    # PRIVILEGED subject presenting a credential that is not its own, with no fallback
-    # (`dapr_auth.service_principal`). Measured against the live door 2026-09-08, the same POST twice
-    # from inside the Ray head: `service-trainer` -> 201, a second identity -> 401 "the presented
-    # credential may not claim …" — while the job writes its data and exits SUCCEEDED, the 2026-07-13
-    # trainer incident's exact shape, reported by nothing.
-    #
-    # `RASK_LINEAGE_TOKEN_<IDENTITY>` is that identity's own credential, mounted on the pod. Absent, the
-    # shared variable answers unchanged, which is every one-identity producer that works today. Neither
-    # ever rides `runtime_env` — Ray echoes it back on the job (`ray_submit` records that as a P0 leak);
-    # only the identity travels there, and it is not a secret.
-    scoped = os.environ.get(f"RASK_LINEAGE_TOKEN_{service_id.upper().replace('-', '_')}", "") if service_id else ""
-    service_token = scoped or os.environ.get("LINEAGE_SERVICE_TOKEN", "")
-    if service_token and service_id:
-        headers["dapr-api-token"] = service_token
-        headers["x-lance-service-identity"] = service_id
-    elif token := os.environ.get("LINEAGE_TOKEN", ""):
-        headers["authorization"] = f"Bearer {token}"
+    return True
 
-    body = json.dumps(event).encode()
-    for attempt in (1, 2):
-        try:
-            request = urllib.request.Request(f"{url}/api/v1/lineage", data=body, headers=headers)  # noqa: S310 — in-cluster URL from env
-            urllib.request.urlopen(request, timeout=10)  # noqa: S310
-        except urllib.error.HTTPError as exc:
-            print(f"lineage-emit-failed attempt={attempt} status={exc.code} reason={exc.reason}", file=sys.stderr)
-        # Broad on purpose: provenance must never crash a run that produced data.
-        except Exception as exc:
-            print(f"lineage-emit-failed attempt={attempt} error={exc}", file=sys.stderr)
-        else:
-            return True
-    return False
+
+def emit(event: RunEvent) -> bool:
+    """Send the event to the lineage ingest. Returns whether it landed; never raises.
+
+    Ray pods carry no Dapr sidecar, so this is the plain HTTP ingest, and `build_emitter` resolves
+    the credential the same way every other rask producer does — including the rule that ONE POD RUNS
+    SEVERAL IDENTITIES, so `RASK_LINEAGE_TOKEN_<IDENTITY>` wins over the shared token when the claimed
+    identity has its own. That rule was measured against the live door (a second identity presenting
+    the shared token → 401, while the job wrote its rows and exited SUCCEEDED), and it lives in
+    `lineage_kit.config` where every producer gets it rather than in this lane alone.
+    """
+    return build_emitter().emit(event)

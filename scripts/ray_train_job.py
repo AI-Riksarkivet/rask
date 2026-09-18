@@ -169,7 +169,14 @@ def build_event(
             "facets": {
                 "jobType": {
                     "_producer": _PRODUCER,
-                    "_schemaURL": "https://openlineage.io/spec/facets/2-0-3/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
+                    # 2-0-4, which is what the installed `openlineage-python` publishes for this facet
+                    # (`job_type_job.JobTypeJobFacet._get_schema()`, measured 2026-09-18). This said 2-0-3,
+                    # and so did the one other hand-written copy — they agreed with each other and with
+                    # nothing authoritative, which is why a cross-producer walk could not see it.
+                    # `lineage_kit.schemas.JOB_TYPE_FACET_SCHEMA_URL` is the constant; this file cannot
+                    # import it because `packages/ray-cluster-env` does not carry `lineage-kit`, so the
+                    # literal stays until that lands (LIN-001).
+                    "_schemaURL": "https://openlineage.io/spec/facets/2-0-4/JobTypeJobFacet.json#/$defs/JobTypeJobFacet",
                     "processingType": "BATCH",
                     "integration": "RAY",
                     "jobType": "TRAINING",

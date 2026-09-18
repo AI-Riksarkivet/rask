@@ -1,11 +1,17 @@
-"""The two job-side OpenLineage emitters must speak the SAME wire contract — pinned, since they
-cannot share code.
+"""The two job-side OpenLineage emitters must speak the SAME wire contract.
 
-open_ray-kernel.md move 4, the review's finding: `runners/dummy`'s hand-rolled emitter was "the only
-cross-seal duplication in the tree with no pin". The seal is why it is a copy at all — the dummy
-image builds from the runner's OWN lock, and its lineage module is deliberately stdlib-only so the
-job depends on nothing — and a copy without a pin is where the estate's one-sided fixes land (the
-credential echo; the work-axis id).
+One of them is now `lineage-kit`. `runners/dummy` was the hand-rolled copy this file was written to
+pin — "the only cross-seal duplication in the tree with no pin" — and the seal was the argument for
+it being a copy at all: the dummy image builds from the runner's own lock. That argument did not
+survive measurement. `lineage-kit` is dependency-capped precisely so a sealed runner can take it as
+a path dependency, the copy had already drifted two facet revisions, and the owner ruled
+(2026-09-18, [[LIN-001]]) that the compute plane emits through the package. So dummy takes the
+dependency and this file compares `scripts/ray_train_job.py` against the package instead.
+
+THE PIN IS NOT LESS USEFUL FOR THAT — it is pointed at the remaining gap. `ray_train_job.py` is
+baked into the Ray image, which carries `packages/ray-cluster-env` and NOT `lineage-kit`, so it
+still hand-builds its envelope and its headers. These assertions are what will say, on the day that
+changes, that nothing moved on the way across.
 
 WHAT DRIFT COSTS HERE, and why each pinned item is load-bearing rather than cosmetic:
 
@@ -69,7 +75,7 @@ def _events() -> tuple[dict[str, Any], dict[str, Any]]:
         version=3,
         originator="user:alice",
         project="proj-a",
-    )
+    ).to_wire()
     return train_event, dummy_event
 
 
@@ -110,17 +116,49 @@ def test_a_role_literal_never_becomes_an_originator() -> None:
         to_id="silver$dummy",
         from_id="bronze$dummy",
         originator="ray",
-    )
+    ).to_wire()
     assert "originator" not in event["run"]["facets"]["lance"], "a role literal rode the originator key — an inbox actor named `ray` is about to exist"
 
 
-def _emit_headers(module: ModuleType, env: dict[str, str], monkeypatch: Any) -> dict[str, str]:
+def _lineage_kit_headers(env: dict[str, str], monkeypatch: Any) -> dict[str, str]:
+    """What `lineage_kit.build_emitter()` would actually send, for the same environment.
+
+    Reads the built transport's own config — the seam `packages/lineage-kit/tests/test_config.py`
+    uses — rather than re-deriving the rule, so this cannot pass while the emitter does something
+    else. The bearer lives on the auth provider rather than in `custom_headers`, so it is folded in
+    under the same key the hand-built emitter uses; that difference is transport plumbing, and the
+    PROPERTY (a valid bearer is not discarded) is the same one either way.
+    """
+    from lineage_kit import build_emitter
+
+    for key in ("LINEAGE_URL", "LINEAGE_SERVICE_TOKEN", "LINEAGE_SERVICE_ID", "LINEAGE_TOKEN", "RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+
+    emitter = build_emitter()
+    config = emitter._client.transport.config  # ty: ignore[unresolved-attribute] — the package's own tests read it here
+    headers = dict(config.custom_headers)
+    if (bearer := getattr(config.auth, "get_bearer", lambda: None)()) is not None:
+        headers["authorization"] = bearer
+    return headers
+
+
+def _emit_headers(module: ModuleType | None, env: dict[str, str], monkeypatch: Any) -> dict[str, str]:
     """The headers one emit would put on the wire, without sending anything.
 
-    Both modules build `headers` and then hand it to `urllib.request.Request`, so intercepting the
-    Request constructor is the only seam that does not require the emitter to be refactored for the
-    test — and refactoring a SEALED runner to make it testable is the change this pin exists to avoid.
+    `scripts/ray_train_job.py` still hand-builds `headers` and hands them to
+    `urllib.request.Request`, so intercepting the Request constructor is the seam for it. ``None``
+    selects `lineage-kit`, which `runners/dummy` now emits through (LIN-001) — there the headers are
+    the built transport's, read the way the package's own tests read them.
+
+    BOTH SIDES STAY PINNED HERE ON PURPOSE. These four properties are why this file exists, and the
+    fact that one emitter now gets them from a shared package is not a reason to stop asserting them
+    against the other: the day `ray_train_job.py` is converted, this is what says the behaviour did
+    not change on the way.
     """
+    if module is None:
+        return _lineage_kit_headers(env, monkeypatch)
     captured: dict[str, str] = {}
 
     class _Request:
@@ -156,7 +194,7 @@ def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> No
     The result is a job that does its work and loses its provenance: the run's rows land and its
     terminal event 403s, which is invisible from the job and from the graph alike.
     """
-    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
         headers = _emit_headers(
             module,
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_TOKEN": "a.valid.bearer"},
@@ -169,7 +207,7 @@ def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> No
 def test_a_named_service_id_still_takes_the_service_door(monkeypatch: Any) -> None:
     """The fix must not close the door it exists to open: with BOTH halves present the service
     identity is what goes on the wire, and no bearer is needed."""
-    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
         headers = _emit_headers(
             module,
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
@@ -199,7 +237,7 @@ def test_the_identity_selects_its_own_credential(monkeypatch: Any) -> None:
     back on the job, which is why `ray_submit` records a token there as a P0 leak); the credentials
     are mounted on the pod.
     """
-    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
         headers = _emit_headers(
             module,
             {
@@ -219,7 +257,7 @@ def test_the_identity_selects_its_own_credential(monkeypatch: Any) -> None:
 def test_the_shared_credential_still_serves_a_pod_of_one_identity(monkeypatch: Any) -> None:
     """The selector must change nothing where it does not apply: no per-identity variable means the
     shared token, exactly as before. Every producer that works today has one identity and one token."""
-    for module, name in ((train, "scripts/ray_train_job.py"), (dummy, "runners/dummy/.../lineage.py")):
+    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
         headers = _emit_headers(
             module,
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
