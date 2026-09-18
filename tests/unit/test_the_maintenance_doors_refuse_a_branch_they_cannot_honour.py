@@ -1,9 +1,15 @@
-"""Every `/maintenance/` verb refuses a branch rather than silently acting on main.
+"""Every `/maintenance/` verb either REFUSES a branch or CARRIES it — never silently acts on main.
 
-[[LH-105]]. These four doors reclaim version history, rewrite fragments and replace indexes. None of
-them can scope any of that to a branch — `open_dataset` resolves main and nothing downstream carries a
-ref — so a caller who names one and is answered 200 has been told their branch was acted on when
-MAIN was.
+[[LH-105]], [[LH-019]]. These doors reclaim version history, rewrite fragments and replace indexes.
+A caller who names a branch and is answered 200 for work done on MAIN has been told something false,
+and that is the single defect this gate exists to prevent. Refusing is one correct answer; honouring
+is the other. What is never correct is declaring `branch` and dropping it.
+
+`maintenance/reindex` is the door that moved. It refused while `IndexWorkItem` could not carry a ref
+— the door publishes and answers 202, so the WORKER opens the dataset — and now that the unit has a
+`branch` and the worker checks it out, it carries one instead. The gate is written over the family
+and derived from the mounted routes, so a door switching sides needs no edit here; only a door doing
+NEITHER fails.
 
 THE ESTATE HAS ALREADY PAID FOR THIS ONCE, TWICE. `indices.py:146-149` records why the spec index
 doors declare `branch` only to refuse it: "The route did not accept it at all, which read as safe and
@@ -59,13 +65,18 @@ def test_a_maintenance_verb_declares_a_branch_so_it_can_refuse_one(path: str, ha
 
 
 @pytest.mark.parametrize(("path", "handler"), _maintenance_handlers(), ids=lambda v: v if isinstance(v, str) else "")
-def test_a_maintenance_verb_actually_calls_the_refusal(path: str, handler: Callable[..., Any]) -> None:
-    """Declaring it and then ignoring it would be the same defect with a parameter attached.
+def test_a_maintenance_verb_either_refuses_the_branch_or_PASSES_IT_ON(path: str, handler: Callable[..., Any]) -> None:
+    """Declaring it and then ignoring it is the same defect with a parameter attached.
 
-    Asserted against the shared helper by name: `refuse_a_branch_this_door_cannot_honour` is the one
-    the eleven spec doors call, and a door that hand-rolled its own refusal would drift from the status
-    and problem-body the rest of the estate answers with.
+    Two acceptable answers, checked by name. `refuse_a_branch_this_door_cannot_honour` is the shared
+    refusal the spec doors call — a hand-rolled one would drift from the status and problem body the
+    rest of the estate answers with. `branch=branch` is the other: the door forwards the ref to
+    whatever actually opens or enqueues, which is what honouring means here.
+
+    A door doing neither is the silent-main case, and it reads exactly like a working door.
     """
     source = inspect.getsource(handler)
+    refuses = "refuse_a_branch_this_door_cannot_honour" in source
+    carries = "branch=branch" in source
 
-    assert "refuse_a_branch_this_door_cannot_honour" in source, f"{path} declares `branch` but never refuses it"
+    assert refuses or carries, f"{path} declares `branch` and neither refuses nor forwards it — a caller naming one is answered for main"

@@ -142,6 +142,17 @@ class IndexWorkItem(BaseModel):
 
     #: The dataset to index. The worker opens exactly this and derives nothing.
     uri: str
+    #: The REF to build on — a branch name, or empty for main. A FIELD rather than a spelling of
+    #: ``uri``, because a branch is not openable by path: it lives at ``tree/{branch}/`` with its own
+    #: ``_versions/`` and no ``data/`` (`lance_docs/file_format.md:2746-2761`), so the worker has to
+    #: check the ref out of the dataset the URI names.
+    #:
+    #: It is what lets the catalog's ``maintenance/reindex`` accept a branch at all. Without it the
+    #: door could only refuse: the door publishes and answers 202, so the WORKER opens the dataset,
+    #: and accepting ``branch`` without carrying it would rebuild MAIN's index while the API reported
+    #: the branch's. Empty means main, so a producer that never heard of branches publishes exactly
+    #: what it published before.
+    branch: str = ""
     #: The catalog identifier, for the vended per-table write credential and for the log line. Empty
     #: means the producer could not name it, and the worker falls back to its ambient credential —
     #: the rule `credentials.write_options_for` already states.
@@ -182,6 +193,10 @@ class IndexWorkItem(BaseModel):
         DERIVED rather than random so a redelivered publish names the same unit: the spec points a
         caller at ``ListTableIndices`` / ``DescribeTableIndexStats`` to follow progress, and an id
         that changed per attempt would make two deliveries of one request look like two builds.
+
+        THE REF IS PART OF THE IDENTITY. Rebuilding one index on ``main`` and on a branch are two
+        different builds over two different sets of fragments, so an id that ignored ``branch`` would
+        answer one ``transaction_id`` for both and point the caller at whichever landed last.
         """
-        digest = hashlib.sha256(f"{self.uri}\x00{self.column}\x00{self.kind}\x00{self.index_type}\x00{self.name}".encode()).hexdigest()[:24]
+        digest = hashlib.sha256(f"{self.uri}\x00{self.branch}\x00{self.column}\x00{self.kind}\x00{self.index_type}\x00{self.name}".encode()).hexdigest()[:24]
         return f"index-{digest}"

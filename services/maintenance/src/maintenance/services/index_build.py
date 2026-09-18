@@ -68,7 +68,7 @@ class UnknownIndexKindError(ValueError):
 
 
 def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> IndexOutcome:
-    """Build the index this unit describes and return what landed.
+    """Build the index this unit describes, on the ref it names, and return what landed.
 
     `params` are forwarded as keyword arguments and never inspected: they are pylance's own index
     tuning (`num_partitions`, `num_sub_vectors`, `metric`, …), already translated from the spec's
@@ -83,6 +83,14 @@ def build_index(item: IndexWorkItem, *, write_options: Mapping[str, str]) -> Ind
     impossible without it and dropping first would leave the table unindexed if the rebuild failed.
     """
     dataset = lance.dataset(item.uri, storage_options=dict(write_options) or None, session=shared_lance_session())
+    # THE REF THE UNIT NAMES, not always main. A branch is not openable by path — it lives at
+    # `tree/{branch}/` with its own `_versions/` and no `data/` (`lance_docs/file_format.md:2746-2761`)
+    # — so it is checked out of the dataset the URI names, the same idiom the compaction pair uses.
+    # Without this the catalog's `maintenance/reindex` could only refuse a branch: this worker is what
+    # opens the dataset, so a door accepting `branch` would have main's index rebuilt while the API
+    # reported the branch's, and the column check below would pass or fail against the wrong schema.
+    if item.branch:
+        dataset = dataset.checkout_version((item.branch, None))
     # THE COLUMN IS CHECKED BEFORE THE BUILD, because the schema is already in hand and "does this
     # column exist" is a question with an answer rather than a failure to classify afterwards.
     # Measured on pylance 10.0.0: an absent column raises a bare `KeyError('nope not found in

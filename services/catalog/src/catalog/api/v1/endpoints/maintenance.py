@@ -250,15 +250,18 @@ async def reindex_maintenance(
     `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
     runs here.
     """
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/reindex")
     segments = parse_identifier(id, settings.delimiter)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments)
+    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     spec = await run_in_threadpool(index_specs.describe_index_for_rebuild, ds, body.index_name)
     params = {**spec.params, **body.params}
 
     publisher = getattr(request.app.state, "dapr_client", None)
     item = IndexWorkItem(
         uri=str(getattr(ds, "uri", "") or ""),
+        # THE REF TRAVELS WITH THE UNIT, and that is what lets this door accept a branch at all. It
+        # publishes and answers 202, so the WORKER opens the dataset; a branch accepted here but not
+        # carried would rebuild MAIN's index while this response reported the branch's.
+        branch=branch or "",
         table_id=id,
         column=spec.column,
         kind=spec.kind,
