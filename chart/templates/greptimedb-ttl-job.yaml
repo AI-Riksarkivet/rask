@@ -74,22 +74,38 @@ spec:
               AUDIT_TABLE='{{ .Values.observability.auditTable }}'
               AUDIT_TTL='{{ .Values.observability.auditRetention }}'
               echo "setting $AUDIT_TABLE table ttl=$AUDIT_TTL"
-              # THE TABLE MAY NOT EXIST YET, and that is a REAL first-install state rather than a
-              # failure: the Collector creates it on the first audit record, so a fresh estate that
-              # has emitted none has nothing to alter. Distinguished from every other failure instead
-              # of swallowed — an absent table says so and the hook succeeds, anything else fails the
-              # hook, because a retention silently not applied is how the trail ends up on 14 days
-              # while the chart claims otherwise. The hook is post-upgrade and idempotent, so the
-              # next upgrade applies it once the table is there.
-              AUDIT_OUT="$(curl -s "$GT/v1/sql?db=$DB" \
-                --data-urlencode "sql=ALTER TABLE $AUDIT_TABLE SET 'ttl'='$AUDIT_TTL'")"
-              if echo "$AUDIT_OUT" | grep -q affectedrows; then
+              # IT WAITS FOR THE TABLE, and the reason is an ordering this hook cannot win otherwise.
+              # The Collector CREATES the audit table on the first audit record, and it creates it
+              # INHERITING the database TTL just set above — so on any estate where the table is not
+              # there when the hook fires, a single attempt leaves the governance trail on the
+              # telemetry retention. Measured 2026-09-18 on the live estate: the hook ran, found no
+              # table, and `SHOW CREATE TABLE lance_audit` read `ttl = '14days'` a minute later once
+              # the first record created it. Deferring to "the next upgrade" is not a retention
+              # policy — an estate that is never upgraded again keeps the 14 days forever.
+              #
+              # Bounded rather than unbounded: a fresh estate that has genuinely emitted nothing has
+              # no trail to protect yet, and blocking the hook on it would block every install. It
+              # says which of the two happened instead of exiting 0 either way.
+              AUDIT_APPLIED=""
+              i=0
+              while [ "$i" -lt 36 ]; do
+                AUDIT_OUT="$(curl -s "$GT/v1/sql?db=$DB" \
+                  --data-urlencode "sql=ALTER TABLE $AUDIT_TABLE SET 'ttl'='$AUDIT_TTL'")"
+                if echo "$AUDIT_OUT" | grep -q affectedrows; then
+                  AUDIT_APPLIED=yes
+                  break
+                fi
+                if ! echo "$AUDIT_OUT" | grep -qiE "not found|does not exist|TableNotFound"; then
+                  echo "FAILED to set audit retention: $AUDIT_OUT" >&2
+                  exit 1
+                fi
+                i=$((i + 1))
+                sleep 5
+              done
+              if [ -n "$AUDIT_APPLIED" ]; then
                 echo "audit retention applied: $AUDIT_TTL"
-              elif echo "$AUDIT_OUT" | grep -qiE "not found|does not exist|TableNotFound"; then
-                echo "audit table $AUDIT_TABLE does not exist yet (no audit record has been emitted); it inherits $TTL until the next upgrade"
               else
-                echo "FAILED to set audit retention: $AUDIT_OUT" >&2
-                exit 1
+                echo "audit table $AUDIT_TABLE still absent after 3m — no audit record has been emitted on this estate yet, so there is no trail to retain; the next upgrade applies $AUDIT_TTL"
               fi
 {{- end }}
 {{- end }}
