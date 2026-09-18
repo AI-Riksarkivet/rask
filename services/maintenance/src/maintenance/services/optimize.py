@@ -75,6 +75,12 @@ class DatasetResult(BaseModel):
     #: "something failed" (nothing failed; we declined, before touching a byte). Folding a refusal
     #: into either is what made a shallow clone's silent full materialization invisible.
     refused: str | None = None
+    #: WHICH GATE refused it: ``protected_base`` (another dataset resolves its files through this
+    #: location) or ``manifest_flags`` (this manifest sets a feature this pass cannot correctly
+    #: rewrite). A count that merges them is not actionable — the first is someone else's clone and
+    #: stays true forever, the second is a pylance upgrade away from being supported — and the sweep's
+    #: one WARNING carries this breakdown in place of a line per dataset.
+    refused_by: str | None = None
     #: #F6(d) — this dataset is in the TRASH: dropped with a grace window, recoverable until it expires,
     #: and therefore frozen. Names the record id and its deadline so a record stuck long past its
     #: deadline (one the purge keeps refusing) is visible as a permanent exclusion rather than a
@@ -362,6 +368,7 @@ def _compact_files(
         # refusal means a real clone hazard, each line is one an operator should see.
         log.warning("maintenance_compaction_skipped_unsupported", extra={"uri": uri, "reason": refusal})
         result.refused = refusal
+        result.refused_by = "manifest_flags"
         metrics: Any = None
     else:
         try:
@@ -541,6 +548,21 @@ def _reclaim_versions(
         result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
 
 
+def summarize_refusals(results: list[DatasetResult]) -> dict[str, int]:
+    """How many datasets each gate refused this sweep — empty when none were.
+
+    EMPTY RATHER THAN ZEROED, so a caller can stay silent instead of logging that nothing happened.
+    `record_refused` emits its zero on purpose (a whitelist that stopped matching must be visible as a
+    number) and that is a METRIC; a log line that fires every tick to report an absence is the noise
+    this replaces.
+    """
+    counts: dict[str, int] = {}
+    for result in results:
+        if result.refused_by is not None:
+            counts[result.refused_by] = counts.get(result.refused_by, 0) + 1
+    return counts
+
+
 def compact_one(
     uri: str,
     storage_options: dict[str, str],
@@ -612,7 +634,7 @@ def compact_one(
         # directory — reported as `open:` it reads as transient noise and the lineage layer drops it.
         if (refusal := unsupported_features_from_open_error(exc)) is not None:
             log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
-            return DatasetResult(uri=uri, refused=refusal)
+            return DatasetResult(uri=uri, refused=refusal, refused_by="manifest_flags")
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
     # TWO GATES, because the three operations do not share a hazard. This was ONE blanket refusal, and
     # the cost was measured: 17 of the estate's datasets were refused on flag 16 and they were exactly
@@ -653,7 +675,7 @@ def compact_one(
     gc_refusal = describe_gc_unsupported_flags(reader_flags, writer_flags)
     if gc_refusal is not None:
         log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": gc_refusal})
-        return DatasetResult(uri=uri, refused=gc_refusal)
+        return DatasetResult(uri=uri, refused=gc_refusal, refused_by="manifest_flags")
     compact_refusal = describe_compaction_unsupported_flags(
         reader_flags,
         writer_flags,
@@ -701,8 +723,14 @@ def compact_one(
         # independently"). Nothing in the format protects that clone, which is the whole reason the
         # estate-wide pre-pass exists — so `is`/`under`/`ancestor` keep refusing.
         why = _WHY_PROTECTED[relation].format(root=root)
-        log.warning("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": relation, "root": root})
-        return DatasetResult(uri=uri, refused=why)
+        # DEBUG, not WARNING, and the level is the whole point: measured on the deployed estate
+        # 2026-09-18, this line fired 116 times in ONE tick and was ~half of every WARN the estate
+        # emitted — the same permanent fact about the same datasets, repeated every tick forever. The
+        # sweep's own summary reports the count and the breakdown once (`summarize_refusals`), the
+        # `refusals` map still names every dataset with its reason, and
+        # `compaction_datasets_refused_total` still counts them.
+        log.debug("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": relation, "root": root})
+        return DatasetResult(uri=uri, refused=why, refused_by="protected_base")
     # Read the producer's DECLARED name while the dataset is open — the emit path downstream holds only
     # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
     # dataset with no declared id simply falls back to the URI derivation, which is the common case

@@ -38,7 +38,7 @@ from maintenance.core.metrics import (
     record_trashed_skipped,
 )
 from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
-from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets
+from maintenance.services.optimize import DatasetResult, Rewriter, compact_one, discover_datasets, summarize_refusals
 from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
@@ -1142,6 +1142,10 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # sets it while this summary still reported a clean sweep.
         "refused": sum(1 for r in results if r.refused),
         "refusals": {r.uri: r.refused for r in results if r.refused},
+        # WHICH GATE, not just how many — the payload of the one WARNING that replaced a line per
+        # dataset. `protected_base` is someone else's clone and stays true forever; `manifest_flags` is
+        # a pylance upgrade away from being supported, which is a different thing to act on.
+        "refused_by": summarize_refusals(results),
         # F6(d) — its own line for the same reason `refused` has one. These datasets were discovered,
         # were maintainable, and were deliberately left alone because they are in the trash: dropped
         # with a grace window and therefore frozen until undrop or purge. Naming them (not just

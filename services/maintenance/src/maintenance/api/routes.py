@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from maintenance.api.dependencies import ControlEmitterDep, DaprClientDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_run
+from maintenance.services.optimize import summarize_refusals
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
@@ -117,6 +118,18 @@ async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprC
         await emit_sweep_lineage(emitter, results, delimiter=settings.delimiter)
         summary = summarize(results)
         log.info("maintenance_sweep", extra=summary)
+        # ONE WARNING FOR THE WHOLE SWEEP, and only when there is something to say. Measured on the
+        # deployed estate 2026-09-18: the per-dataset refusal fired 116 times in this one tick and was
+        # roughly half of every WARN the estate emitted, all of it the same permanent fact about the
+        # same datasets. The per-dataset line is DEBUG now; this is where an operator hears it, with
+        # the gate breakdown that says which of the two causes it was. `summary["refusals"]` still
+        # carries every dataset and its reason for whoever needs the list.
+        #
+        # Counted off `results`, not off `summary`: the summary is a SERIALIZED report whose keys are
+        # its callers' contract, and reading one back to make a decision couples this line to that
+        # shape for no gain when the results are in hand.
+        if by_gate := summarize_refusals(results):
+            log.warning("maintenance_refusals", extra={"refused": sum(by_gate.values()), "by_gate": by_gate, "datasets": len(results)})
         return summary
 
 
