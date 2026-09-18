@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**207 open items**, of which **99 are blocked on a decision** and **108 can be picked up today**.
+**206 open items**, of which **99 are blocked on a decision** and **107 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 63 | 24 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 62 | 23 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -352,12 +352,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Write `tests/e2e-py/test_chaos_e2e.py` driving the pull-a-service rows, including lineage scale-0 → three events published while it is down → restart-replay, against a uuid-suffixed throwaway namespace (the `test_maintenance_s3_e2e.py` shape). Gate it behind an env-gated `make e2e-chaos` target kept OUT of `e2e-ci`'s suite list, the way the other per-suite targets are gated. Hand-driving replay on the live estate is not acceptable: a synthetic author is refused by `enforce_bus_authz` and bumps a watched refusal counter, and an authorized one injects fabricated provenance. DLQ poison parking and the cascade retry window are already driven and gated; do not redo them.
 - *Closes when:* `make e2e-chaos` runs the harness against a throwaway namespace and asserts replay after a lineage scale-0, and `e2e-ci` does not list it.
 - *Evidence:* `ls tests/e2e-py/ → no test_chaos_e2e.py` · `grep -c -i chaos Makefile → 0` · `Makefile:888 (`e2e-ci` suite list), :940-946 (env-gated per-suite target pattern)` · `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py (exists — retry window already gated)`
-
-**LH-110 · The control-root backup has no scheduled lane — the tool ships in no image and no CronJob invokes it**
-`catalog, chart` · **MED** · PARTIAL
-- *What is left:* Backup, verify, restore and retention are shipped in `scripts/control_root_backup.py` (`do_prune` at :173, `--keep N` at :273, default 0 = unbounded) and documented in `docs/runbooks/RUNBOOK-restore.md`. What remains is the scheduled run: `scripts/` is copied into no image (`.docker/rest-catalog.dockerfile:46-48` copies only `pyproject.toml`, `uv.lock`, `packages/`, `services/`) and `chart/templates/` has no CronJob for the control root. Pick one of: bake `scripts/` into an image, mount the script from a ConfigMap, or re-implement backup+prune in shell with `mc` the way `backup-pg.yaml` does; then add the CronJob with a `keep` value and an off-bucket `--dest`.
-- *Closes when:* A chart-rendered CronJob runs the control-root backup with retention on a schedule and its manifest is verifiable from the runbook.
-- *Evidence:* `scripts/control_root_backup.py:173-201,273 (do_prune, --keep)` · `.docker/rest-catalog.dockerfile:46-48 (no scripts/ copied)` · `grep -rn control_root chart/templates → no CronJob, only comments in services/maintenance/medallion.yaml` · `docs/runbooks/RUNBOOK-restore.md (exists)`
 
 **LH-113 · One 464-line catalog `Settings` class carries every domain's configuration**
 `catalog` · **MED**
