@@ -23,6 +23,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -161,7 +162,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     # first cut had none of those (``runId`` was ``promote-<pid>``) and the ingest accepted it, so what the
     # test really pinned was our own tolerance, not the contract (found 2026-07-26 — the event was still
     # sitting in the live /events feed as the one non-conforming non-reconcile event).
-    promote = {
+    promote: dict[str, Any] = {
         "eventType": "COMPLETE",
         "eventTime": "2026-06-24T00:00:00+00:00",
         "producer": _PRODUCER,

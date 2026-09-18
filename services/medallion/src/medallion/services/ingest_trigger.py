@@ -33,7 +33,7 @@ from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict
 
-from medallion.core.config import MedallionSettings, dedicated_token_for, project_namespace
+from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, project_namespace
 from medallion.core.metrics import record_transition
 from medallion.services import catalog_register
 from service_kit import dapr_publish
@@ -247,7 +247,7 @@ async def _vended_upstream(settings: MedallionSettings, table_id: str) -> str:
                 catalog_url=settings.catalog_url,
                 table_id=table_id,
                 token=settings.catalog_token,
-                app_token=settings.app_api_token,
+                app_token=outbound_app_token(settings),
                 service_identity=settings.catalog_service_identity,
                 dedicated_token=dedicated_token_for(settings),
             )

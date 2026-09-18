@@ -53,7 +53,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import authenticate_subject
-from medallion.core.config import MedallionSettings, StageRunnerGate, dedicated_token_for
+from medallion.core.config import MedallionSettings, StageRunnerGate, dedicated_token_for, outbound_app_token
 from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
 from service_kit import dapr_publish
@@ -175,7 +175,7 @@ async def _vended_location(settings: MedallionSettings, object_id: str) -> str |
                 catalog_url=settings.catalog_url,
                 table_id=table_id,
                 token=settings.catalog_token,
-                app_token=settings.app_api_token,
+                app_token=outbound_app_token(settings),
                 service_identity=settings.catalog_service_identity,
                 dedicated_token=dedicated_token_for(settings),
             )

@@ -40,6 +40,7 @@ from typing import Any
 from ingest import runtime
 from ingest.catalog import ServiceCatalogSeam
 from ingest.runtime import PublishSpec
+from service_kit.lakehouse.vended_credentials import VendedCredential
 
 
 class _CatalogThatWouldPublish(ServiceCatalogSeam):
@@ -57,6 +58,23 @@ class _CatalogThatWouldPublish(ServiceCatalogSeam):
     def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, Any]:
         self.attempts.append((namespace, dataset, version))
         return {"published": True, "from_version": 1, "to_version": version}
+
+    # THE UNASKED METHODS RAISE, which is this file's own doctrine applied to the rest of the seam:
+    # "A double that merely returned success would also let a call through unnoticed, which is the one
+    # thing these tests exist to detect." A stub returning a plausible value is the same hazard one
+    # method over, so every member this test does not exercise refuses instead.
+
+    def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = "read") -> VendedCredential | None:
+        raise AssertionError(f"this double vends nothing; {namespace}.{dataset} asked for a {tier} credential")
+
+    def describe_version(self, namespace: str, dataset: str) -> int:
+        raise AssertionError(f"this double describes no version; {namespace}.{dataset} was asked")
+
+    def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
+        raise AssertionError(f"this double commits nothing; run {run_id} tried against {namespace}.{dataset}")
+
+    def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
+        raise AssertionError(f"this double ensures nothing; {namespace}.{dataset} was asked")
 
 
 @dataclass(frozen=True)

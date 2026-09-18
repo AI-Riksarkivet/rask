@@ -32,7 +32,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 from PIL import Image
 
-from medallion.core.config import MedallionSettings, dedicated_token_for
+from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register
 from medallion.services.ingest import IngestResult, ingest_schema_for, ingest_to_bronze
@@ -180,7 +180,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
                         schema=media_bronze_schema(),
                         delimiter=settings.delimiter,
                         token=settings.catalog_token,
-                        app_token=settings.app_api_token,
+                        app_token=outbound_app_token(settings),
                         service_identity=settings.catalog_service_identity,
                         dedicated_token=dedicated_token_for(settings),
                     )

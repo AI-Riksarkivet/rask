@@ -23,7 +23,7 @@ from urllib.parse import quote
 
 import httpx
 
-from medallion.core.config import dedicated_token_for
+from medallion.core.config import dedicated_token_for, outbound_app_token
 from medallion.services import catalog_register
 from medallion.services.cascade_lag import ConsumedRange, EdgeNotMeasurable
 from service_kit.lakehouse.record_store import list_records
@@ -104,7 +104,11 @@ def _service_headers(settings: Any) -> dict[str, str]:  # noqa: ANN401 — the s
     """
     return catalog_register.credential(
         token=None,
-        app_token=getattr(settings, "app_api_token", "") or None,
+        # RESOLVED, not read off the settings object. On a store-path deployment `app_api_token` is
+        # empty by design ([[LH-160]]) and `credential` returns `{}` for a missing half, so these reads
+        # go out with no headers and every edge 401s — which is indistinguishable from a detector that
+        # simply cannot see the estate. Measured: 2,700 401s and zero successes in twenty-five minutes.
+        app_token=outbound_app_token(settings) or None,
         service_identity=getattr(settings, "catalog_service_identity", "") or None,
         dedicated_token=dedicated_token_for(settings),
     )

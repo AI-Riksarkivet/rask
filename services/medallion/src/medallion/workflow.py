@@ -57,6 +57,7 @@ from opentelemetry.trace import Status, StatusCode
 from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
+from medallion.core.config import outbound_app_token
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 from medallion.schemas.promotion import PromotionSpec
 from service_kit.activity_loop import run_activity
@@ -1379,7 +1380,7 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
             version=spec.version,
             key_column=settings.quality_key_column,
             accept_assertions=list(spec.reasons),
-            app_token=settings.app_api_token,
+            app_token=outbound_app_token(settings),
             service_identity=settings.catalog_service_identity,
             dedicated_token=_dedicated(settings),
             token=settings.catalog_token,

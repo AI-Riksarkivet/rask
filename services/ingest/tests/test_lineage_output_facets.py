@@ -28,6 +28,7 @@ from openlineage.client.serde import Serde
 
 from ingest.catalog import ServiceCatalogSeam
 from ingest.lineage import LineageRecorder, _output_datasets
+from service_kit.lakehouse.vended_credentials import VendedCredential
 
 
 def _output(project: str = "bind86", dataset: str = "pages", version: int | None = 7, rows: int = 1204) -> dict[str, Any]:
@@ -334,8 +335,23 @@ def _publication_verdict() -> dict[str, Any]:
             return bronze_namespace_for(self.project)
 
     class _Catalog(ServiceCatalogSeam):
+        # The members this test does not exercise RAISE rather than return a plausible value: a double
+        # that answers every call lets an unintended one through unnoticed, which is what these tests
+        # exist to detect.
         def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, object]:
             return {"published": False, "from_version": 3, "to_version": 4, "reason": "quality gate failed: not_null"}
+
+        def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = "read") -> VendedCredential | None:
+            raise AssertionError(f"this double vends nothing; {namespace}.{dataset} asked for a {tier} credential")
+
+        def describe_version(self, namespace: str, dataset: str) -> int:
+            raise AssertionError(f"this double describes no version; {namespace}.{dataset} was asked")
+
+        def commit(self, namespace: str, dataset: str, fragments_json: Sequence[str], read_version: int, run_id: str) -> tuple[int, int]:
+            raise AssertionError(f"this double commits nothing; run {run_id} tried against {namespace}.{dataset}")
+
+        def ensure(self, namespace: str, dataset: str, external_base: str | None = None) -> str:
+            raise AssertionError(f"this double ensures nothing; {namespace}.{dataset} was asked")
 
     return _publish(_Catalog(), _Spec(), 4)
 

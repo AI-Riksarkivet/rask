@@ -37,7 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from lineage_kit.consume import LineageDoc
 from medallion.core.best_effort import best_effort
-from medallion.core.config import MedallionSettings, dedicated_token_for, project_namespace
+from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, project_namespace
 from medallion.core.metrics import (
     record_denied,
     record_media_underivable,
@@ -627,7 +627,7 @@ async def _resolve_roots(settings: MedallionSettings, *, project: str, from_data
                 catalog_url=settings.catalog_url,
                 table_id=from_dataset,
                 token=settings.catalog_token,
-                app_token=settings.app_api_token,
+                app_token=outbound_app_token(settings),
                 service_identity=settings.catalog_service_identity,
                 dedicated_token=dedicated_token_for(settings),
             )
@@ -1012,7 +1012,7 @@ async def _run_compute(
                     schema=upstream.schema,
                     delimiter=settings.delimiter,
                     token=settings.catalog_token,
-                    app_token=settings.app_api_token,
+                    app_token=outbound_app_token(settings),
                     service_identity=settings.catalog_service_identity,
                     dedicated_token=dedicated_token_for(settings),
                 )
@@ -1030,7 +1030,7 @@ async def _run_compute(
                     catalog_url=settings.catalog_url,
                     table_id=to_dataset,
                     token=settings.catalog_token,
-                    app_token=settings.app_api_token,
+                    app_token=outbound_app_token(settings),
                     service_identity=settings.catalog_service_identity,
                     dedicated_token=dedicated_token_for(settings),
                 )
@@ -1296,7 +1296,7 @@ async def _probe_gate(
                 key_column=settings.quality_key_column,
                 required_columns=settings.required_column_list,
                 token=settings.catalog_token,
-                app_token=settings.app_api_token,
+                app_token=outbound_app_token(settings),
                 service_identity=settings.catalog_service_identity,
                 dedicated_token=dedicated_token_for(settings),
                 timeout_seconds=settings.publish_timeout_seconds,
@@ -1384,7 +1384,7 @@ async def _evaluate_promotion(
             key_column=settings.quality_key_column,
             required_columns=settings.required_column_list,
             token=settings.catalog_token,
-            app_token=settings.app_api_token,
+            app_token=outbound_app_token(settings),
             service_identity=settings.catalog_service_identity,
             dedicated_token=dedicated_token_for(settings),
             timeout_seconds=settings.publish_timeout_seconds,

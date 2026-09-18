@@ -424,7 +424,8 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: FGA is on. Authentication and authorization are different questions, and coupling them means a
     #: governed estate running `auth.enabled: true` with FGA off cannot authenticate at all.
     catalog_service_identity: str = Field(default="", alias="MEDALLION_CATALOG_SERVICE_IDENTITY")
-    #: The Dapr app token, injected by the sidecar from a managed secret — never a chart literal.
+    #: The Dapr app token as the ENVIRONMENT carries it, which on a store-path deployment is EMPTY.
+    #: Read it through `outbound_app_token` rather than directly — see that function for why.
     #: Paired with the identity above; one without the other is refused at a door that cannot say why.
     app_api_token: str = Field(default="", alias="APP_API_TOKEN")
     # The catalog id delimiter (`gold$catalog`) — matches LANCE_DELIMITER's default, same rationale as
@@ -666,3 +667,26 @@ def shared_lance_session() -> lance.Session:
     settings = get_settings()
     metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
     return lance_session(metadata, index)
+
+
+def outbound_app_token(settings: MedallionSettings) -> str:
+    """The app token this service PRESENTS, resolved the way its own doors VERIFY one.
+
+    THE TWO ARE THE SAME SECRET, and reading them through different accessors is what breaks a
+    deployment silently. `service_kit.governed.dapr_auth.expected_app_token` is the single resolver the
+    inbound doors use: it returns the Dapr secret store's value when `RASK_APP_TOKEN_FROM_STORE` is set
+    and the env value otherwise. The outbound credential read `settings.app_api_token` directly, so the
+    moment the estate's secrets rule moved the token off the environment — which is the whole point of
+    the rule — every catalog call this service makes went out with NO headers at all.
+
+    `catalog_register.credential` needs both halves and returns `{}` when either is missing, so the
+    failure is not a refusal anybody can see from here: it is a 401 raised one service away, on every
+    call. Measured live: 2,700 in twenty-five minutes with zero successes.
+
+    IT DOES NOT CATCH `SecretStoreUnreadable`. A store outage must not degrade into an unauthenticated
+    request — that turns a transient, retryable condition into a permission error whose cause is a
+    service away. Raising keeps the caller's own retry meaning what it says.
+    """
+    from service_kit.governed import dapr_auth
+
+    return dapr_auth.expected_app_token() or settings.app_api_token or ""

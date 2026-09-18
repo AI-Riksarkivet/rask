@@ -26,6 +26,7 @@ import pytest
 from ingest.catalog import LocalCatalogSeam, ServiceCatalogSeam
 from ingest.runtime import _prior_commit_for_run, finalize_run
 from ingest.workflow import RunSpec
+from service_kit.lakehouse.vended_credentials import VendedCredential
 
 
 SPEC = RunSpec.model_validate({"run_id": "run-purged", "kind": "s3-prefix", "project": "acme", "dataset": "pages", "options": {}})
@@ -52,6 +53,24 @@ class _CatalogThatRemembers(ServiceCatalogSeam):
             raise ValueError("no fragments to commit")
         return self._answer
 
+    # THE UNASKED METHODS RAISE, which is this file's own doctrine applied to the rest of the seam:
+    # "A double that merely returned success would also let a call through unnoticed, which is the one
+    # thing these tests exist to detect." A stub returning a plausible value is the same hazard one
+    # method over, so every member this test does not exercise refuses instead.
+
+    def vend_storage_options(self, namespace: str, dataset: str, *, tier: str = "read") -> VendedCredential | None:
+        # ANSWERS `None`, which is a real answer rather than a stub: the seam's return type is
+        # `VendedCredential | None` and `None` means this catalog vends nothing, so the caller signs with
+        # its own credential. The replay path under test asks for a WRITE credential on the way to the
+        # commit, so refusing here would fail the test for a call that is supposed to happen.
+        return None
+
+    def describe_version(self, namespace: str, dataset: str) -> int:
+        raise AssertionError(f"this double describes no version; {namespace}.{dataset} was asked")
+
+    def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, object]:
+        raise AssertionError(f"this double publishes nothing; {namespace}.{dataset} v{version} was asked")
+
 
 def test_the_branch_ASKS_the_catalog_with_an_empty_list() -> None:
     """The shape matters: a post-purge replay has nothing to offer, so the question must be askable
@@ -72,7 +91,19 @@ def test_a_catalog_with_NO_commit_answers_None() -> None:
     """LocalCatalog, the dev default. No marker, so no recognition -- and no crash."""
 
     class _Local(LocalCatalogSeam):
-        pass
+        # A local catalog has no commit to find, which is the whole point of the assertion below — so
+        # every member RAISES rather than answering, and a call that should not happen says so.
+        def ensure(self, project: str, dataset: str, external_base: str | None = None) -> str:
+            raise AssertionError(f"this double ensures nothing; {project}.{dataset} was asked")
+
+        def ensure_at(self, uri: str, external_base: str | None = None) -> str:
+            raise AssertionError(f"this double ensures nothing; {uri} was asked")
+
+        def ensure_dataset(self, project: str, dataset: str, schema: object | None = None) -> str:
+            raise AssertionError(f"this double ensures no dataset; {project}.{dataset} was asked")
+
+        def register_version(self, dataset_uri: str, version: int, run_id: str) -> None:
+            raise AssertionError(f"this double registers nothing; {dataset_uri} v{version} run {run_id}")
 
     assert _prior_commit_for_run(_Local(), SPEC) is None
 
