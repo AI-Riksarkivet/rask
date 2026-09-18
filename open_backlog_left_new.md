@@ -132,14 +132,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**191 open items**, of which **96 are blocked on a decision** and **95 can be picked up today**.
+**192 open items**, of which **96 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 66 | 27 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 27 | 13 | 6 |
+| **PHASE 2 · COMPUTE** | 28 | 14 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
 | **FRONTEND** | 9 | 8 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -632,10 +632,11 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LIN-001 · One of nine runners emits lineage, and four modules independently author the same OpenLineage envelope**
 `runners, lineage-kit, service-kit, medallion` · **HIGH**
-- **RE-MEASURED 2026-09-18, and the headline was wrong: `runners/dummy` EMITS, end to end.** `dummy_runner/job.py:24` imports `build_run_event, emit` from its own `lineage.py` (190 lines), and `tests/e2e-py/test_dummy_lane_e2e.py::test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service` passes against the deployed release (7/7 live). So the count is **1 of 9**, not 0, and the ruling this row asks for is not *may the compute plane emit* — one lane already proves the shape, the FGA grant and the read-back. It is *should the other eight, and through which module*. The eight silent ones are `asr`, `assist`, `diarize`, `htr`, `insid3`, `kg`, `topics`, `voiceprint` (zero files matching `openlineage|schemaURL|RunEvent` in each).
+- **RE-MEASURED 2026-09-18, and the headline was wrong: `runners/dummy` EMITS, end to end.** `dummy_runner/job.py:24` imports `build_run_event, emit` from its own `lineage.py` (190 lines), and `tests/e2e-py/test_dummy_lane_e2e.py::test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service` passes against the deployed release (7/7 live). So the count is **1 of 9**, not 0, and the ruling this row asks for is not *may the compute plane emit* — one lane already proves the shape, the FGA grant and the read-back. It is *should the other eight, and through which module*. **RULED 2026-09-18 (owner): the eight emit, through `lineage-kit`** — it is dependency-capped exactly so a sealed runner can import it — dummy's hand-rolled copy is replaced by it, and `service_kit.openlineage` stays as the no-client path for catalog and lineage. Two authors with a stated reason each, which the facet-name gate already compares.
+- **THE EIGHT ARE NOT EIGHT COMPARABLE UNITS, and [[CP-032]] is why.** The silent ones are `asr`, `assist`, `diarize`, `htr`, `insid3`, `kg`, `topics`, `voiceprint` (zero files matching `openlineage|schemaURL|RunEvent` in each) — but only **`htr` and `assist` are projects that can take a path dependency**. The other six carry no `uv.lock`, so `.docker/ray-runner.dockerfile`'s `uv sync --locked` cannot build them today, and five also ship no build backend. So the wireable set is `htr`, `assist` and the `dummy` replacement; the remaining six wait on CP-032 rather than on this row.
 - *What is left:* `packages/lineage-kit` is dependency-capped precisely so a sealed runner can import it, and no runner declares it — `grep -rn 'lineage' runners/*/pyproject.toml` returns nothing. `runners/dummy` hand-rolled a stdlib duplicate that has already drifted (facet URL `1-0-0` against the shared `1-0-1`). Meanwhile four modules author the envelope — `service_kit.openlineage`, `lineage_kit.schemas`, `runners/dummy`'s copy, and `scripts/ray_train_job.py` — agreeing by test rather than by construction. **THE TWO LIBRARY AUTHORS ARE NOT REDUNDANT COPIES, and 'one module authors the envelope' has a cost this row did not state:** `lineage_kit.schemas` imports `openlineage.client` and produces the wire form through the official serializer (fidelity by construction), declaring `openlineage-python>=1.52.0` as a RUNTIME dependency; `service_kit.openlineage` hand-builds the wire dicts precisely so that client stays out of the images, and it is a DEV-group dependency at the root (`pyproject.toml:71`). Only `ingest`, `annotator` and `medallion` depend on lineage-kit, so only those three images carry the client today. Consolidating onto lineage-kit puts it into the catalog and lineage images; consolidating onto service-kit gives up the by-construction serializer for the three planes that have it. Neither is free, and the row should be taken with that trade on the table rather than as a de-duplication. Decide whether the compute plane emits at all: the industry places lineage at the engine, and rask's runners are the one plane that does not. If it does, route every producer through `lineage-kit` and delete the duplicates; if it does not, delete `lineage_kit.stage`/`.actor`, which have zero consumers outside their own tests.
 - *Landed, so the remainder is only the ruling:* the four authorities now agree BY GATE rather than by nobody checking — `tests/unit/test_the_openlineage_envelope_has_one_vocabulary.py` compares every `_schemaURL` by facet NAME across all four, derived rather than hand-listed. It found one real disagreement on its first run: `runners/dummy` declared `BaseFacet` at spec `1-0-5` while the other three said `2-0-2` — one file citing two revisions of one document two lines apart. Fixed. The pre-existing `test_lineage_emitters_share_one_wire_contract.py` names three facets between TWO emitters and does not catch this class: mutation-checked, drifting `JobTypeJobFacet` reds the new gate and passes the old one 8/8.
-- *Closes when:* One module authors the envelope, and either every runner emits through `lineage-kit` or the runner-facing half of it is deleted as unused.
+- *Closes when:* `htr`, `assist` and `dummy` emit through `lineage-kit` with dummy's hand-rolled copy deleted, and the six runners CP-032 names are wired as they become buildable.
 - *Evidence:* `grep -rn 'lineage' runners/*/pyproject.toml → empty` · `grep -rln lineage_kit runners/ → empty` · `packages/lineage-kit/src/lineage_kit/{stage,actor}.py — no consumers outside the package's own tests` · `runners/dummy/src/dummy_runner/job.py:24 (imports build_run_event, emit)` · `tests/e2e-py/test_dummy_lane_e2e.py — 7/7 passed live 2026-09-18, incl. the lineage read-back` · `packages/lineage-kit/pyproject.toml:8-12 (openlineage-python runtime)` vs `pyproject.toml:60,71 (dev group)`
 
 ## PHASE 1 · CROSS-CUTTING
@@ -935,6 +936,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 2 · COMPUTE
+
+**CP-032 · Six of the nine runners have no `uv.lock`, so the parametrized runner image cannot build them at all**
+`runners, chart` · **HIGH**
+- *What is left:* Give `asr`, `diarize`, `insid3`, `kg`, `topics` and `voiceprint` a `uv.lock` and a build backend, or stop counting them as runners. `.docker/ray-runner.dockerfile:103` is `uv sync --project runners/${RUNNER} --locked --no-editable`, and `--locked` refuses a project with no lockfile — measured 2026-09-18: `uv sync --project runners/asr --locked --dry-run` → `error: Unable to find lockfile at 'uv.lock', but '--locked' was provided`, while the same command on `runners/htr` resolves. Only **3 of 9** carry a lock (`htr`, `dummy`, `assist`). Five of the six also ship no `build-backend` and no `[project.scripts]`, so they are loose `.py` files at the runner root rather than installable projects — no `src/` package either (only `htr` and `dummy` have one). `runners/asr` additionally resolves to **CPython 3.11.15**, not the estate's 3.13. This is what bounds [[LIN-001]]: "wire the eight silent runners through lineage-kit" is not eight comparable units of work, because six of them cannot take a path dependency until they are projects.
+- *Closes when:* Every directory under `runners/` either builds through `.docker/ray-runner.dockerfile` with `--locked`, or is removed from the runner count in `CLAUDE.md` and the architecture docs.
+- *Evidence:* `.docker/ray-runner.dockerfile:100,103` · `git ls-files runners/<r> → no uv.lock for asr, diarize, insid3, kg, topics, voiceprint` · `uv sync --project runners/asr --locked --dry-run (2026-09-18) → Unable to find lockfile` · `grep -c 'build-backend' runners/{asr,diarize,insid3,kg,voiceprint}/pyproject.toml → 0`
 
 **CP-005 · `ensure_dataset` runs before enumeration, so a source that enumerates zero units leaves a registered empty bronze table behind a COMPLETE run**
 `ingest, medallion, catalog` · **HIGH**
