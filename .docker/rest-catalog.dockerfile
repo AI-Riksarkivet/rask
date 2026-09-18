@@ -83,6 +83,14 @@ ENV PATH="/opt/venv/bin:$PATH" \
 WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
 COPY --from=builder --link /opt/venv /opt/venv
+# The control-root backup tool, and ONLY that file out of `scripts/`. The chart's backup CronJob runs
+# it (`backups.controlRoot`), so it has to exist in an image; copying the whole directory would put
+# every dev and ops script into a request-serving image for the sake of one. It imports stdlib plus
+# `storage`, which the venv above already carries, so this adds no dependency.
+#
+# INTO THE FINAL STAGE, not the builder: the builder hands over `/opt/venv` and nothing else, so a
+# file staged there ships nowhere.
+COPY --link scripts/control_root_backup.py /srv/control_root_backup.py
 
 # ── the import gate ──────────────────────────────────────────────────────────
 # Import every module this image serves, against the venv the runtime stage ships. A missing

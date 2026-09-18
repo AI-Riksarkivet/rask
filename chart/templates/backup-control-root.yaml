@@ -1,0 +1,102 @@
+{{- if .Values.backups.controlRoot.enabled }}
+{{- if not .Values.externalSecrets.enabled }}
+{{- /* REFUSED AT RENDER rather than shipped broken. The credential is a MOUNTED ESO Secret and env
+   delivery is not an alternative the estate permits, so with the operator off this job would render a
+   pod referencing a Secret nothing creates — `optional: false`, so it never starts, and a backup that
+   never starts is indistinguishable from one that has nothing to do. */}}
+{{- fail "backups.controlRoot.enabled requires externalSecrets.enabled: the job takes its S3 credential from an ESO-written Secret it MOUNTS, and this estate does not deliver secrets through the environment" }}
+{{- end }}
+{{- /*
+The CONTROL ROOT's scheduled backup ([[LH-110]]) — the registry holding every project, warehouse,
+namespace binding and bucket claim. Lose it and the Lance data survives while nothing can route to
+it, which is the one loss the lakehouse cannot reconstruct from storage.
+
+`scripts/control_root_backup.py` already shipped backup/verify/restore/prune and
+`docs/runbooks/RUNBOOK-restore.md` documents the drill; what did not exist was anything that RUNS it.
+The tool is baked into the catalog image (one file, not all of `scripts/`) so this job and the
+service share one implementation — a shell reimplementation with `mc` would be a second one to keep
+in step, and a ConfigMap copy would be a third place the same code lives.
+
+THE CREDENTIAL ARRIVES AS A FILE, never on the environment. The estate admits three secret paths and
+env is not among them; this pod carries no Dapr sidecar, so the one that fits is ESO writing a Secret
+the pod MOUNTS. `--credentials-file` refuses to fall back to the env chain when that file is
+unreadable, so a credential that moved fails the job loudly instead of silently signing as whatever
+the pod's own role happens to be.
+
+The component label is load-bearing under the prod default-deny NetworkPolicy, exactly as
+`backup-pg.yaml` records: an unlabelled pod matches no allow rule and its writes are dropped in
+silence.
+*/}}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "lance.fullname" . }}-control-root-backup
+  labels: {{- include "lance.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backups.controlRoot.schedule | quote }}
+  # Forbid, not Replace: a run that overlaps its successor would prune against a half-written copy,
+  # and the prune is what makes retention safe.
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        metadata:
+          labels:
+            {{- include "lance.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup-control-root
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- if .Values.security.serviceAccounts.enabled }}
+          serviceAccountName: {{ include "rask.fullname" . }}-sa-jobs
+          {{- end }}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile: { type: RuntimeDefault }
+          volumes:
+            - name: s3-credentials
+              secret:
+                secretName: {{ include "lance.fullname" . }}-control-root-backup-s3
+                optional: false
+          containers:
+            - name: backup
+              image: {{ include "rask.image" (list . "rest-catalog") | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: ["ALL"] }
+              resources:
+                requests: { cpu: "50m", memory: "128Mi" }
+                limits: { cpu: "500m", memory: "512Mi" }
+              volumeMounts:
+                - { name: s3-credentials, mountPath: /var/run/secrets/rask/s3, readOnly: true }
+              env:
+                # The ENDPOINT is not a secret — it is the address the credential is used against, and
+                # `s3_client` resolves it from this chain while the keys come from the mounted file.
+                # `RASK_S3_ENDPOINT_URL`, which is the name `storage/client.py:34` actually resolves
+                # (`_ENDPOINT_ENVS`). The bare `RASK_S3_ENDPOINT` reads correctly and is read by
+                # nothing — caught by `test_no_dead_chart_env_vars`, which exists for exactly this.
+                - name: RASK_S3_ENDPOINT_URL
+                  value: {{ include "lance.s3Endpoint" . | quote }}
+              command: ["python", "/srv/control_root_backup.py"]
+              args:
+                - backup
+                - --credentials-file
+                - /var/run/secrets/rask/s3/credentials.json
+                - --root
+                # The SAME expression `services.yaml:75` renders as LANCE_REST_ROOT, so the backup and
+                # the catalog cannot disagree about which root is the control root.
+                - "s3://{{ .Values.minio.bucket }}"
+                - --keep
+                - {{ .Values.backups.controlRoot.keep | quote }}
+                {{- with .Values.backups.controlRoot.dest }}
+                - --dest
+                - {{ . | quote }}
+                {{- end }}
+{{- end }}

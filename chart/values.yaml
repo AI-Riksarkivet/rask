@@ -1966,6 +1966,18 @@ backups:
     enabled: false
     schedule: "0 2 * * *" # daily 02:00
     keep: 7 # retention: prune all but the newest N daily dumps each run, so the backups don't grow unbounded
+  # THE CONTROL ROOT — the registry that holds every project, warehouse, binding and bucket claim. Lose
+  # it and the Lance data survives while nothing can route to it. `scripts/control_root_backup.py`
+  # ships backup/verify/restore/prune and `docs/runbooks/RUNBOOK-restore.md` documents the drill; this
+  # is the scheduled lane, which is what was missing.
+  controlRoot:
+    enabled: false
+    schedule: "0 1 * * *" # daily 01:00, ahead of the pg dump so the two do not contend for the store
+    keep: 14 # prune to the newest N after each successful copy; 0 keeps every run, unbounded
+    # ANOTHER BUCKET is the point of a backup. Empty writes `_backups/control/` inside the control root
+    # itself, which survives a bad write and does NOT survive losing the bucket — the failure a backup
+    # exists for. Set it in any deployment that matters.
+    dest: ""
   # CSI VolumeSnapshot of the lakehouse PVC. Needs a CSI snapshotter + a VolumeSnapshotClass.
   volumeSnapshot:
     enabled: false
