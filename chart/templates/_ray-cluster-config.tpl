@@ -254,9 +254,25 @@
                   nvidia.com/gpu: {{ .Values.ray.gpuCount }}
                   {{- end }}
                   {{- toYaml .Values.ray.resources.limits | nindent 18 }}
+              {{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
+              {{- /* GCS FAULT TOLERANCE via the EMBEDDED RocksDB backend — the third path, and the one
+                     that needs no Redis. Ray documents it ALPHA, Linux-only and SINGLE-WRITER; the
+                     claim above is ReadWriteOnce for that last reason.
+                     WHAT IT BUYS, honestly: it persists the GCS's CLUSTER METADATA, so a head restart
+                     stops erasing the job records the cascade polls — which is what turns an UNKNOWN
+                     job state into a known terminal one and lets the executor claim DURABLE_RECORD.
+                     WHAT IT DOES NOT: it is not application state. On a head-only cluster the driver
+                     still dies with the head; workers are what make that survivable. */}}
+              env:
+                - {name: RAY_gcs_storage, value: rocksdb}
+                - {name: RAY_gcs_storage_path, value: /var/lib/ray-gcs}
+              {{- end }}
               volumeMounts:
                 - {name: dshm, mountPath: /dev/shm}
                 - {name: hf-cache, mountPath: /cache/hf}
+                {{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
+                - {name: gcs-store, mountPath: /var/lib/ray-gcs}
+                {{- end }}
           volumes:
             - name: dshm
               emptyDir:
@@ -265,5 +281,14 @@
             - name: hf-cache
               persistentVolumeClaim:
                 claimName: {{ include "rask.fullname" . }}-hf-cache
+            {{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
+            {{- /* A CLAIM, NOT AN EMPTYDIR, and the distinction is the whole feature: the GCS store
+                   exists to outlive the pod that writes it, and an emptyDir dies with exactly that
+                   pod. ReadWriteOnce is also load-bearing rather than a default — RocksDB is
+                   single-writer, so the claim must not be attachable twice. */}}
+            - name: gcs-store
+              persistentVolumeClaim:
+                claimName: {{ include "rask.fullname" . }}-ray-gcs
+            {{- end }}
     workerGroupSpecs: []
 {{- end -}}

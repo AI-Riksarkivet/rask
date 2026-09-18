@@ -1,0 +1,29 @@
+{{- if and .Values.ray.enabled (or .Values.singleTenant.enabled .Values.ray.cluster.enabled) }}
+{{- /* The HF model cache, claimed by WHICHEVER Ray object this estate renders.
+
+     It lived inside `rayservice.yaml`, so a RayCluster estate mounted `<release>-hf-cache` and nothing
+     created it — the head would sit ContainerCreating forever on a claim that does not exist. Caught
+     by the render gate rather than on a cluster, which is the cheap place to find it.
+
+     One definition for both consumers, for the same reason `_ray-cluster-config.tpl` exists: the head's
+     shape is one question, and two copies of it drift where nobody is looking. */}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rask.fullname" . }}-hf-cache
+  labels:
+    {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- /* NO hardcoded class. `local-path` is the k3s default provisioner's name and does NOT exist on
+       stock kind (`standard`) or on any managed cluster — hardcoding it wedged this PVC Pending with no
+       diagnostic, taking the Ray head down with it (live-proof 2026-07-28, defect 2's second site).
+       Empty => the key is omitted => the CLUSTER's default StorageClass provisions it, which is the only
+       portable answer. (`storageClassName: ""` would DISABLE dynamic provisioning, hence `with`.) */}}
+  {{- with .Values.ray.hfCacheStorageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ray.hfCacheStorage }}
+{{- end }}

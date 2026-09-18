@@ -2200,6 +2200,38 @@ ray:
   # empty => fall back to the in-cluster head Service, which exists only under singleTenant.
   # rask's Ray is managed outside this repo, so an external address is the normal case.
   dashboardUrl: "https://dev-kuberay.ra.se"
+  # THE BATCH LANE'S OWN CLUSTER — a RayCluster the KubeRay operator owns, as opposed to the
+  # RayService `singleTenant` renders (which wraps a cluster of its own to run Serve applications).
+  # Mutually exclusive with it: two objects would give the estate two heads, and whichever one
+  # `medallion.rayAddress` does not name is the one nobody notices is idle.
+  #
+  # OFF by default because an estate pointed at an external Ray (`dashboardUrl` set) must not gain a
+  # second one it did not ask for. On, it replaces the hand-applied `deploy/ray-lance-demo.yaml` head
+  # — which nothing reconciles, and whose own header says "NOT for production: production is KubeRay
+  # (RayCluster CR)".
+  cluster:
+    enabled: false
+    # GCS FAULT TOLERANCE via Ray's EMBEDDED RocksDB backend — the path that needs no Redis, and so
+    # no exception to the estate's rule against one.
+    #
+    # WHAT IT BUYS: the GCS persists its cluster metadata, so a head restart stops erasing the job
+    # records the cascade polls. Today a restart in the 30 s window between submit and first poll
+    # makes every later poll 404, which the medallion compensates for with MAX_UNSEEN_POLLS and
+    # MAX_RESUBMITS — that BOUNDS the loss without removing it, and its `abandoned` verdict means a
+    # job may still be running with nobody watching.
+    #
+    # WHAT IT DOES NOT BUY, stated so the toggle is not read as more than it is: this is cluster
+    # metadata, never application state. On a head-only cluster the driver still dies with the head.
+    #
+    # ALPHA, Linux-only, SINGLE-WRITER — Ray's own words. The single-writer restriction is why the
+    # claim is ReadWriteOnce and why this belongs on an operator-managed head: `replicas: 1` on a
+    # plain Deployment does NOT give single-writer, because the default RollingUpdate strategy starts
+    # the replacement before the original goes.
+    gcsFaultTolerance:
+      enabled: false
+      size: 2Gi
+      # Empty => the cluster's default provisioner, which is the only portable answer.
+      storageClass: ""
   # --- Ray token auth (gate 7 / R3) — RAY_AUTH_MODE=token on the head + every Ray-talking client.
   # DEFAULT OFF for dev; values-prod flips it ON (the ray-auth-token.yaml prod guard demands it).
   # The kuberay >= 1.6.0 prerequisite is SATISFIED (Chart.yaml pins kuberay-operator 1.6.2):

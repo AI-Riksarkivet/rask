@@ -1,0 +1,61 @@
+{{- if and .Values.ray.enabled .Values.ray.cluster.enabled }}
+{{- if .Values.singleTenant.enabled }}
+{{- /* ONE RAY, NOT TWO. A RayService already wraps a cluster of its own, so rendering a RayCluster
+       beside it gives the estate two heads, two GCSes and two dashboards — and whichever one
+       `medallion.rayAddress` does not name is the one nobody notices is idle, because every job still
+       succeeds on the other. Refused at render rather than documented, since the symptom of getting
+       it wrong is silence. */}}
+{{- fail "ray.cluster.enabled and singleTenant.enabled both render a Ray head: the RayService wraps its own cluster, so enabling both gives the estate two. Pick the RayService for a Serve estate, the RayCluster for the batch lane." }}
+{{- end }}
+{{- /*
+The BATCH lane's cluster — the second consumer `_ray-cluster-config.tpl` was factored for and which
+was never written. Its header states the split: "A RayService wraps a cluster to run SERVE
+applications; a RayCluster is the cluster on its own, for the batch lane that submits Jobs and serves
+nothing."
+
+WHY IT EXISTS AT ALL, measured 2026-09-18: all four Ray CRDs are installed, `kubectl get
+rayservice,raycluster,rayjob -A` returns No resources found, `kuberay-operator` has run 52 days with
+nothing to reconcile, and the head every stage and train job lands on is `deploy/ray-lance-demo.yaml`
+— a hand-applied Deployment whose own header says "NOT for production: production is KubeRay
+(RayCluster CR)". Nothing reconciles it, and that file lists three silent reverts it has already
+caused.
+
+WHAT THE OPERATOR BUYS, beyond reconciliation: it labels its pods `ray.io/is-ray-node`, which three
+chart seams already select and which nothing currently carries — the Collector's `ray-pods` scrape
+job, the Ray NetworkPolicy peer, and by consequence four of the five Ray alert rules. They are not
+broken; they are watching an empty set, which looks identical to a healthy one.
+
+THE SUBMITTER DOES NOT CHANGE. The Ray Jobs API works the same against an operator-managed head, and
+the docs present a standing RayCluster fed by the Jobs API as one of three legitimate configurations
+— they pick no winner. This changes who OWNS the cluster, not how work reaches it.
+*/}}
+apiVersion: ray.io/v1
+kind: RayCluster
+metadata:
+  name: {{ include "rask.fullname" . }}-ray
+  labels:
+    {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
+spec:
+{{- include "rask.rayClusterConfig" . }}
+{{- if .Values.ray.cluster.gcsFaultTolerance.enabled }}
+---
+{{- /* The GCS store's claim. ReadWriteOnce is not a default here — RocksDB is single-writer, and a
+       claim that could attach twice is the one way this backend corrupts. The class comes from values
+       and empty means the cluster's own default, for the reason the hf-cache claim records: naming
+       `local-path` wedged a PVC Pending with no diagnostic on anything that is not k3s. */}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "rask.fullname" . }}-ray-gcs
+  labels:
+    {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  {{- with .Values.ray.cluster.gcsFaultTolerance.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.ray.cluster.gcsFaultTolerance.size | quote }}
+{{- end }}
+{{- end }}
