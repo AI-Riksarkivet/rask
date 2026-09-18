@@ -1,0 +1,122 @@
+{{- if .Values.auth.enabled }}
+{{- /*
+WRITE THE AUTHORIZATION MODEL ([[LH-174]]). `model.fga` is the source of truth for every `can_*` the
+code derives, and until this hook existed nothing put it in OpenFGA — `rask-openfga-migrate` is the
+DATABASE migration, and `make fga-test` diffs `model.json` against `model.fga`, two of three copies.
+The store was the third and was checked by nothing.
+
+WHAT THAT COST, measured 2026-09-18: the store's newest model defined 26/27/26 relations on
+warehouse/namespace/table against 30/29/29 in the repo. `warehouse#maintainer` existed in the model
+the code reasons about and could not be written, so `bootstrap-admin` — the hook two weights later —
+CrashLooped on `Invalid tuple '…#maintainer@user:service-maintenance'` and wedged the release in
+`pending-upgrade`, which refuses every later upgrade.
+
+WEIGHT 0: after `openfga-migrate` (-5) has made the store's schema, before `bootstrap-admin` (5)
+writes tuples against it. That ordering is the defect, not a nicety — tuples cannot name a relation
+the model has not defined yet.
+
+READ FROM THE IMAGE, never a ConfigMap. `service_kit/governed/auth/` ships `model.fga`,
+`model.fga.yaml` and `model.json` inside the catalog image, so the hook reads the same bytes the
+services import. Rendering it into a ConfigMap would have created a FOURTH copy of the artefact whose
+copies had already drifted — the exact shape of this row.
+
+IDEMPOTENT BY COMPARISON, not by blind write. An OpenFGA model is immutable and versioned, so writing
+unconditionally would mint a new id on every upgrade and grow the store forever (50 models already).
+The hook compares the store's newest against the image's and writes only on a difference.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lance.fullname" . }}-openfga-model
+  labels:
+    {{- include "rask.componentLabels" (list . "openfga-model") | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 300
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: openfga-model
+    spec:
+      restartPolicy: OnFailure
+      {{- if .Values.security.serviceAccounts.enabled }}
+      serviceAccountName: {{ include "rask.fullname" . }}-sa-jobs
+      {{- end }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: write-model
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          env:
+            - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
+            {{- with .Values.auth.fgaStoreId }}
+            - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
+            {{- end }}
+          command: ["python", "-c"]
+          args:
+            - |
+              import json, os, sys, time, urllib.error, urllib.request
+              from importlib.resources import files
+
+              api = os.environ["FGA_API_URL"].rstrip("/")
+
+              def call(path, body=None):
+                  data = json.dumps(body).encode() if body is not None else None
+                  headers = {"content-type": "application/json"} if data else {}
+                  req = urllib.request.Request(f"{api}{path}", data=data, headers=headers)
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      return json.loads(response.read() or b"{}")
+
+              # The store may still be coming up behind the migrate hook.
+              for attempt in range(60):
+                  try:
+                      stores = call("/stores").get("stores") or []
+                      break
+                  except Exception as exc:  # noqa: BLE001 — any transport error here is "not ready yet"
+                      if attempt == 59:
+                          print(f"openfga never became reachable: {exc}", file=sys.stderr)
+                          raise
+                      time.sleep(2)
+
+              pinned = os.environ.get("RASK_FGA_STORE_ID", "")
+              store = pinned or (stores[0]["id"] if stores else "")
+              if not store:
+                  print("no OpenFGA store exists yet and none is pinned; nothing to write a model into", file=sys.stderr)
+                  raise SystemExit(1)
+
+              # THE SAME BYTES THE SERVICES IMPORT, read from the installed package.
+              model = json.loads((files("service_kit.governed.auth") / "model.json").read_text())
+              model.pop("id", None)
+
+              def shape(m):
+                  """What makes two models EQUAL for this purpose: the types and their relation names.
+                  Comparing whole documents would differ on server-assigned ids and re-write every
+                  upgrade, which is what grows a store to fifty models."""
+                  return {t["type"]: sorted(t.get("relations") or {}) for t in m.get("type_definitions", [])}
+
+              existing = call(f"/stores/{store}/authorization-models?page_size=1").get("authorization_models") or []
+              if existing and shape(existing[0]) == shape(model):
+                  print(f"model already current in store {store} ({len(shape(model))} types); nothing to write")
+                  raise SystemExit(0)
+
+              written = call(f"/stores/{store}/authorization-models", model)
+              print(f"wrote authorization model {written.get('authorization_model_id')} to store {store}")
+{{- end }}
