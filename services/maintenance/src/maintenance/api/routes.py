@@ -195,6 +195,9 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             # `_orphans_by_dataset`. Omitted entirely when the scan found nothing, so a clean tick does
             # not carry an empty key that reads like a category nobody looked at.
             **({"orphans_by_dataset": distribution} if (distribution := _orphans_by_dataset(report)) else {}),
+            # WHICH OF THEM WILL CLEAR THEMSELVES, beside the distribution — the difference between a
+            # finding to act on and a clock to wait out. Same omit-when-empty rule as the line above.
+            **({"orphans_by_reclaimability": split} if (split := _orphans_by_reclaimability(report)) else {}),
         }
         # A category that could not be checked is NOT clean, so an unavailable/incomplete run is as
         # loud as a drifting one — otherwise a permanently-broken FGA connection reads as "no drift".
@@ -297,6 +300,34 @@ def _orphans_by_dataset(report: ReconcileReport) -> dict[str, int]:
     if remainder := ranked[_ORPHAN_DATASETS_NAMED:]:
         named[f"… {len(remainder)} more datasets (truncated)"] = sum(count for _, count in remainder)
     return named
+
+
+def _orphans_by_reclaimability(report: ReconcileReport) -> dict[str, int]:
+    """How many orphans Lance will still collect, how many it can never see, and how many are unknown.
+
+    [[LH-094]]. The count alone cannot tell an operator whether to act or to wait: measured 2026-09-18
+    it fell 1011 -> 32 in ten minutes as the ordinary sweep reclaimed 979 files at the +7-day
+    anniversary of the writes that made them, so the same number meant "wait" on one tick and "act" on
+    the next. The split is what carries that difference.
+
+    The line is the LISTING FLOOR, not an age. `cleanup_old_versions` clamps its unreferenced-file
+    listing to the earliest retained manifest's commit timestamp
+    (`rust/lance/src/dataset/cleanup.rs:332-341`) BEFORE the 7-day unverified rule (:345) filters what
+    was listed, so a file above that instant is unreachable at any `older_than` and with
+    `delete_unverified=True` — permanently, once a dataset has collapsed to one live version.
+
+    `unknown` is its own bucket rather than folded into either, because a floor that could not be read
+    is "we could not tell". Reporting that as "Lance will take it" is the conflation `checked=False`
+    versus `orphans=[]` already exists to prevent, on the category that decides whether the trash purge
+    may run. The three sum to `counts["orphan_files"]`, so a reader can reconcile them.
+    """
+    if not report.orphan_files:
+        return {}
+    buckets = {"lance_will_reclaim": 0, "beyond_lance_listing_floor": 0, "unknown": 0}
+    for orphan in report.orphan_files:
+        key = "unknown" if orphan.reclaimable_by_lance is None else ("lance_will_reclaim" if orphan.reclaimable_by_lance else "beyond_lance_listing_floor")
+        buckets[key] += 1
+    return buckets
 
 
 def _finding_identity(finding: BaseModel) -> str:
