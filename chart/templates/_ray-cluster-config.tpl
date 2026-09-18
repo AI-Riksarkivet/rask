@@ -144,6 +144,31 @@
                      operator provisions the scoped MinIO user. NOTHING credential-shaped rides the
                      submission any more, so this pod is the single source and there is no second
                      value to keep in agreement. */}}
+                {{- /* THE ADDRESS THE CREDENTIAL ABOVE IS USED AGAINST, owned by the same pod for the
+                     same reason. `scripts/ray_stage_job.py:86` reads `os.environ["S3_ENDPOINT"]` with a
+                     BRACKET, so a job that does not get it dies before reading a byte — and until this
+                     row existed the only thing supplying it was the SUBMITTER, which injected it into
+                     `runtime_env.env_vars` on every submission (measured 2026-09-18 on the deployed
+                     head: `S3_KEY` and `S3_SECRET` present, `S3_ENDPOINT` absent).
+
+                     An endpoint is NOT a secret — it is public routing information, and an inline
+                     value is the right delivery for it where a `secretKeyRef` would only hide it from
+                     the reader who needs it. That asymmetry is pinned by
+                     `tests/unit/test_the_ray_pod_owns_every_name_its_jobs_require.py`.
+
+                     It is also what unblocks [[LH-159]]: routing `workflow.py` through
+                     `executor_for(RAY_ENGINE)` sends `WorkOrder.to_env()` and nothing else, and
+                     `WorkOrder` is `extra="forbid"`, so a deployment fact cannot ride the order. */}}
+                - name: S3_ENDPOINT
+                  value: {{ include "lance.s3Endpoint" . | quote }}
+                {{- /* The literal, matching `services.yaml:121` and both maintenance templates. A new
+                     `minio.region` value would be a fourth spelling of one constant that nothing in
+                     this estate varies, and `test_every_chart_value_a_template_names_actually_exists`
+                     refuses a key values.yaml does not declare. Inert today —
+                     `scripts/ray_stage_job.py:89` defaults to the same string — and here so the pod
+                     owns the whole pair rather than half of it. */}}
+                - name: S3_REGION
+                  value: "us-east-1"
                 - name: S3_KEY
                   valueFrom:
                     secretKeyRef:
@@ -191,9 +216,14 @@
                      `LINEAGE_SERVICE_TOKEN` above can be right for exactly one of them, and the door
                      refuses a privileged subject presenting another's key with no fallback.
 
-                     LATENT, NOT FIRING: `stage_lineage_url` is empty by default and this estate has
-                     not wired it (verified on all three stage runners 2026-09-08), so the stage lanes
-                     emit nothing and only the trainer — whose token IS the one mounted — posts today.
+                     NOT FIRING, AND NOT FOR THE REASON A READER WOULD GUESS. `stage_lineage_url` IS
+                     wired: measured 2026-09-18, all three stage runners carry
+                     `MEDALLION_STAGE_LINEAGE_URL=http://rask-lineage:8000`. The stage lanes still emit
+                     nothing from the JOB because `scripts/ray_stage_job.py` never reads `LINEAGE_URL`
+                     at all — it writes the `lineage` COLUMN from `RASK_LINEAGE_DOCUMENT`, and
+                     `scripts/ray_train_job.py:202` is the only reader. So wiring the URL does not arm
+                     this mismatch; teaching the stage job to POST would, and that is the change that
+                     must carry the per-lane token with it.
                      What the door does with a mismatch was measured directly, one POST replayed twice
                      from inside the head: `service-trainer` -> 201, a second subject -> 401 "the
                      presented credential may not claim '<subject>'", while the job writes its data and
