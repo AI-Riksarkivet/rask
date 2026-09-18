@@ -815,7 +815,7 @@ class CompactionOutcome(BaseModel):
     files_removed: int
 
 
-def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> PlannedCompaction:
+def plan_compaction(location: str, so: StorageOptions, *, branch: str | None = None, **policy: Any) -> PlannedCompaction:
     """Plan a compaction WITHOUT executing it — the catalog's first half of the maintenance protocol.
 
     This is a metadata read: it opens the manifest, decides which fragments should merge, and returns
@@ -836,6 +836,19 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
     options = {k: v for k, v in policy.items() if v is not None}
     try:
         dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
+        if branch is not None:
+            # THE REF THE REQUEST NAMES. `lance.dataset(uri)` opens MAIN whatever the caller asked for, so
+            # planning without this returns main's fragments and main's `read_version` labelled as the
+            # branch's work — and `commit_compaction` would then have a worker rewrite the wrong ref.
+            # `checkout_version((branch, None))` is pylance's own branch reference, the form
+            # `core.namespace.open_dataset` uses; this door takes a LOCATION rather than a table id, so it
+            # cannot call that helper and applies the ref itself.
+            #
+            # A BRANCH IS SAFE TO COMPACT WHILE IT IS NOT YET SAFE TO RECLAIM, which is the licence for
+            # opening this door while `maintenance/preview|run|compact` stay refused: a compaction rewrites
+            # fragments and mints a version, leaving the old files for whatever reclaims them later
+            # ([[LH-094]]). It changes which dataset is REWRITTEN, never what is DELETED.
+            dataset = dataset.checkout_version((branch, None))
     except ValueError as exc:
         # A REGISTERED TABLE WHOSE BYTES ARE NOT THERE. Measured live 2026-09-04: a table declared into
         # a namespace bound to one warehouse, with its data written to another bucket, reached this
@@ -876,7 +889,7 @@ def plan_compaction(location: str, so: StorageOptions, **policy: Any) -> Planned
     return PlannedCompaction(read_version=int(plan.read_version), tasks=[cast(str, cast(Any, task).json()) for task in plan.tasks])
 
 
-def commit_compaction(location: str, so: StorageOptions, results: Sequence[str]) -> CompactionOutcome:
+def commit_compaction(location: str, so: StorageOptions, results: Sequence[str], *, branch: str | None = None) -> CompactionOutcome:
     """Commit the workers' rewrite results — the catalog's second half, under ROOT creds.
 
     Metadata-only by construction: every data file this publishes was written by the worker that
@@ -896,6 +909,11 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str])
     except (ValueError, TypeError, AttributeError) as exc:
         raise InvalidInputError(f"malformed compaction result: {exc}") from exc
     dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
+    if branch is not None:
+        # THE SAME REF THE PLAN READ. `plan_compaction` returns a `read_version` from the branch, and Lance
+        # commits a rewrite against the ref it was planned on — committing here on main would apply the
+        # worker's results to a dataset whose fragments the plan never saw.
+        dataset = dataset.checkout_version((branch, None))
     # THE SAME GATE THE BUTTON ASKS, and asked HERE rather than at plan time because this is the half
     # that mints a version and drops the old fragments — a plan nobody commits costs nothing.
     #

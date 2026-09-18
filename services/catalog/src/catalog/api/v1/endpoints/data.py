@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Body, Header, Query
@@ -206,15 +207,14 @@ async def plan_table_compaction(
     to queue.
     """
     segments = parse_identifier(id, settings.delimiter)
-    # A branch has its own version sequence and its own fragments; planning against main and reporting
-    # it as the branch's work would compact the wrong dataset with a 200. Refuse until the plan/commit
-    # pair opens the branch ref (docs/DECISIONS.md "A rename moves a POINTER, not bytes").
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="plan_table_compaction")
+    # HONOURED, not refused: the pair now opens the ref the request names. It stayed refused while
+    # `lance.dataset(location)` resolved MAIN whatever the caller asked, because planning against main and
+    # reporting it as the branch's work compacts the wrong dataset with a 200.
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location to compact")
     policy = (body or CompactionPlanRequest()).model_dump(exclude_none=True)
-    plan = await run_in_threadpool(lambda: dataplane.plan_compaction(described.location or "", so, **policy))
+    plan = await run_in_threadpool(lambda: dataplane.plan_compaction(described.location or "", so, branch=branch, **policy))
     return CompactionPlanResponse(read_version=plan.read_version, tasks=plan.tasks)
 
 
@@ -242,11 +242,10 @@ async def commit_table_compaction(
     recording it as one would put phantom writes on the graph at every maintenance pass.
     """
     segments = parse_identifier(id, settings.delimiter)
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="commit_table_compaction")
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location to compact")
-    outcome = await run_in_threadpool(dataplane.commit_compaction, described.location, so, body.results)
+    outcome = await run_in_threadpool(partial(dataplane.commit_compaction, described.location, so, body.results, branch=branch))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
