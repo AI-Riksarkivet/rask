@@ -174,6 +174,20 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 **LH-020 · The lance-ray client is undriven against the deployed catalog and the conformance suite covers only pylance's RestNamespace**
 `catalog, tests/e2e-py` · **HIGH** · PARTIAL
 - *What is left:* Do NOT file the lancedb upstream issue: lancedb 0.34.0 exposes `open_table(name, namespace_path=[...])`, so a multi-segment identifier is expressible and the issue has no bug behind it. Drive `lance_ray.read_lance(table_id=[...], namespace_impl="rest")` (lance-ray 0.5.0 in uv.lock) against the catalog with vended creds and `ray.init(address="local", _temp_dir=...)`. Extend `tests/e2e-py/test_the_stock_lance_client_drives_the_catalog.py` / `make e2e-spec-conformance` (Makefile:953-955) from lance_namespace-only to all three clients; nothing under `tests/e2e-py` imports lancedb or lance_ray.
+- **LANCEDB IS PROVEN END TO END against the deployed catalog:** resolved through
+  `connect_namespace("rest", …)` + `open_table(TABLE, namespace_path=[NS], storage_options=…)` with a
+  Dex bearer and a 900 s vended credential, reading **36 rows, 7 schema fields** from
+  `acme-bronze$agnostic`. Two API facts were measured rather than assumed: `lancedb.connect()` rejects
+  namespace arguments outright (the entry point is `lancedb.namespace.connect_namespace`), and
+  `storage_options` must go on `open_table` — the connection-level one does not reach the dataset read.
+- **A PROPERTY OF VENDING TO AN EXTERNAL CLIENT, found by driving it:** the vended `endpoint` is the
+  catalog's own in-cluster address (`http://rask-minio:9000`), so a client OUTSIDE the cluster gets a
+  correct credential for a host it cannot resolve — resolution and the vend both succeed and the READ
+  cannot happen. The suite probes reachability and skips with that reason rather than reporting it as a
+  conformance failure. Whether an external client should receive an externally-resolvable endpoint is a
+  real question this row now carries.
+- *What is left:* lance-ray. It is ABSENT from the catalog image, so its drive needs a pod that has it
+  (a runner image) or an externally-resolvable endpoint; the test is written and skips precisely.
 - *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
 - *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `grep -rn 'lancedb|lance_ray' tests/e2e-py — no match` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
 
