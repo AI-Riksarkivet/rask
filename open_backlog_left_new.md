@@ -304,7 +304,17 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
 - *What is left:* Add a transport-independent producer signature over the CloudEvent and verify it in the bus door (`on_lineage_event` / `enforce_bus_authz`), with the signing seam in `packages/lineage-kit` so it survives a Dapr retreat; `_StampedAuthor` states the gap ("nothing proves the stamp"). Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
-- *Closes when:* A bus event whose signature does not verify is refused at `/lineage-events`, pinned by a unit test, with no `accessControl` in the tree.
+- **ITS STRENGTH IS CAPPED BY [[ZT-001]], and that should be settled first.** A producer signature needs
+  a KEY, and every key a producer holds today is derivable from `dapr.appToken`: the shared app token
+  itself, and the per-identity `service-token-<identity>` which `lance.dedicatedServiceToken` computes
+  as `sha256("<identity>-<dapr.appToken>")[:40]` (measured: 5 of 5 privileged identities). So an HMAC
+  keyed on today's material would refuse an UNAUTHENTICATED forger — real value — and would not refuse
+  any of the 13 pods holding the shared token, which is the population that can already stamp a
+  neighbour's subject. Shipping it before ZT-001 produces something that reads as non-repudiation and
+  is not; shipping it after, with independent per-producer material, is the control this row describes.
+  *What is NOT capped:* `_StampedAuthor` already bounds the forgery — a forged subject must still hold
+  the rung on every output — so the gap is narrower than "anyone can claim anyone".
+- *Closes when:* A bus event whose signature does not verify is refused at `/lineage-events`, pinned by a unit test, with no `accessControl` in the tree — and the signing key is not derivable from `dapr.appToken`.
 - *Evidence:* `services/lineage/src/lineage/api/fga_deps.py:237-275 (`_StampedAuthor` "nothing proves the stamp"; `enforce_bus_authz` delegates to `enforce_output_authz`)` · `grep -rniE 'signature|hmac' services/lineage/src packages/lineage-kit/src → prose only, no verification code` · `chart/templates/dapr-component.yaml:204-245 (scopes only on notifications; comment records the non-additive breakage)` · `tests/unit/test_the_inbox_may_read_the_provenance_bus_but_never_write_it.py (exists)`
 
 **LH-066 · The maintenance identity is one key across every warehouse rather than a per-warehouse scoped credential**
