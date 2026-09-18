@@ -132,14 +132,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**200 open items**, of which **97 are blocked on a decision** and **103 can be picked up today**.
+**209 open items**, of which **99 are blocked on a decision** and **110 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 66 | 27 | 15 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 36 | 21 | 12 |
+| **PHASE 2 · COMPUTE** | 45 | 28 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
 | **FRONTEND** | 9 | 8 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -1001,6 +1001,71 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Measured live 2026-09-18: `rask-otel-collector` IS running (so `observability.otelCollector.externalEndpoint` is empty here and the in-cluster Collector renders), its ConfigMap carries `job_name: ray-pods` at line 127 keeping on `__meta_kubernetes_pod_label_ray_io_is_ray_node` regex `"yes"`, and `kubectl get pods -A -l ray.io/is-ray-node=yes` returns `No resources found`. The estate's only Ray pod is `ray-lance-head`, a hand-applied Deployment labelled `app: ray-lance-head` (`deploy/ray-lance-demo.yaml:25,31`), which fails the keep on TWO independent counts: it carries no `ray.io/*` label, and it declares only `gcs`/`dashboard`/`client` container ports (`:128-130`) with no port named `metrics` — `ray start` is given no `--metrics-export-port`, so Ray's Prometheus endpoint is not exposed at all. Consequence: `RayMetricsMissing` (`absent(ray_node_cpu_utilization)`) fires forever, and its own description says the rest out loud — "Until it clears, RayWorkerOOMKills and RayServeNoHealthyReplicas cannot fire." That means the one failure this research identifies as most likely for a head-only cluster (driver exit 137, a host-RAM OOM) is invisible on the cluster the cascade actually uses. This is DISTINCT from CP-017, which is scoped to the external `dev-kuberay.ra.se` cluster and blocked on its operators; this half is in-repo and unblocked. Fix with the head: expose Ray's metrics port and add the `ray.io/is-ray-node: "yes"` label (or land XC-014 and let KubeRay do both), then carry the existing `metric_relabel_configs` drop at `otel-collector.yaml:247-254` — an unfiltered scrape adds 113 `ray_data_*` families and OOMKills the store.
 - *Closes when:* `ray_node_cpu_utilization` returns a series in GreptimeDB for the cluster the medallion submits to, and `RayMetricsMissing` clears.
 - *Evidence:* live 2026-09-18: `kubectl get cm rask-otel-collector -o yaml` → line 127 `job_name: ray-pods`, line 133 keep on `__meta_kubernetes_pod_label_ray_io_is_ray_node`; `kubectl get pods -A -l ray.io/is-ray-node=yes` → `No resources found`; `kubectl get pods -A | grep -i ray` → only `kuberay-operator` and `ray-lance-head` · `deploy/ray-lance-demo.yaml:25,31,128-130,43-51` (no metrics port, no `--metrics-export-port`) · `chart/templates/otel-collector.yaml:20,190-205,247-254` · `chart/alerting/rules.yml:725-737` (`RayMetricsMissing`)
+
+<!-- A second 16-agent workflow (2026-09-18) asked whether rask uses RayJob/KubeRay the way the docs
+     prescribe. Its verdict splits: the SUBMISSION mechanism is doc-aligned — the Ray docs present
+     RayJob-ephemeral, RayJob-with-clusterSelector and a standing RayCluster fed by the Jobs API as three
+     legitimate configurations and pick no winner — so the 2026-09-15 RayJobExecutor deletion was reasoned
+     and stands. The CLUSTER is the defect. Adversarial verification refuted 4 of 8 claims before filing,
+     most importantly downgrading the two-Ray-address finding from a live outage to a LATENT chart defect:
+     the running estate hides the split only because RAY_DASHBOARD_URL was hand-set, which is drift, not
+     health. -->
+
+**CP-041 · The compute plane and the cascade address two different Ray clusters**
+`compute, medallion, chart` · **HIGH**
+- *What is left:* `RAY_DASHBOARD_URL` is derived with an external-wins fallback (chart/templates/configmap.yaml:106-109); `MEDALLION_RAY_ADDRESS` has no such branch and goes straight to `<release>-ray-head-svc:8265` (chart/templates/medallion.yaml:132 and :551), a Service that renders only under `singleTenant.enabled` (false by default). Extract one `rask.rayDashboardUrl` helper and use it in both templates.
+- *Closes when:* A rendered chart gives compute and every stage runner the same address, an invariant test asserts they render equal, and the prune cron reclaims job history on the cluster the cascade submits to.
+- *Evidence:* Live, KUBECONFIG=/etc/rancher/k3s/k3s.yaml: `kubectl get cm rask-config -o jsonpath='{.data.RAY_DASHBOARD_URL}'` -> `https://dev-kuberay.ra.se`; all three stage runners (rask-bronze-to-silver, rask-media-to-silver, rask-silver-to-gold) carry `MEDALLION_RAY_ADDRESS=http://ray-lance-head:8265`. Consequence: services/compute/src/compute/dependencies.py:37 builds the prune client from `settings.ray_dashboard_url`, so packages/ray-kit/src/ray_kit/prune.py reclaims on dev-kuberay while `ray-lance-head` grows unbounded — the exact growth that measured 81,155 jobs / 164.7 MB and OOM-killed compute (packages/ray-kit/src/ray_kit/dashboard.py:54-56). `RayJobHistoryGrowing` (chart/alerting/rules.yml:710) watches the pruned cluster.
+
+**CP-042 · The Ray head is a hand-applied Deployment, so three chart seams select zero pods**
+`chart, observability, medallion` · **HIGH**
+- *What is left:* Render a `RayCluster` CR for the batch lane — the second consumer chart/templates/_ray-cluster-config.tpl:3-12 was extracted for and never got. Gate on a new `ray.batchCluster.enabled` defaulting false; enable it on the local profile and retire deploy/ray-lance-demo.yaml as the cascade's Ray.
+- *Closes when:* `kubectl get pods -l ray.io/is-ray-node=yes` returns the head, `ray_node_cpu_utilization` has series, and `RayMetricsMissing` stops firing.
+- *Evidence:* Live: all four Ray CRDs installed 2026-07-28, `kubectl get rayservice,raycluster,rayjob -A` -> No resources found, `kuberay-operator` Running 52d, head is Deployment `ray-lance-head` with labels exactly `{"app":"ray-lance-head","pod-template-hash":"85999c7996"}`; `kubectl get pods -A -l ray.io/is-ray-node=yes` -> No resources found. Three seams select that label and match nothing: chart/templates/otel-collector.yaml:195-197 (`__meta_kubernetes_pod_label_ray_io_is_ray_node`, action keep), chart/templates/network-policy.yaml:251, and consequently chart/alerting/rules.yml:725 (`absent(ray_node_cpu_utilization)`) and :740 (`ray_memory_manager_worker_eviction_total`). `grep -rn "rask.rayClusterConfig" chart/` -> one definition, one includer (rayservice.yaml:70). deploy/ray-lance-demo.yaml:7-10 states the misconfiguration against itself.
+
+**CP-043 · Every Ray task runs on a 2-CPU head because there are no worker groups**
+`chart, medallion` · **HIGH**
+- *What is left:* Add `num-cpus: "0"` to the head's `rayStartParams` and at least one `workerGroupSpecs` entry carrying the GPU limits and accelerator nodeSelector. Ships with the RayCluster above; it is the same change.
+- *Closes when:* A stage job's tasks are scheduled on a worker pod and the head runs only GCS, the dashboard and the Serve controller.
+- *Evidence:* chart/templates/_ray-cluster-config.tpl:268 is the literal `workerGroupSpecs: []`; :37-39 is the complete rayStartParams block (`dashboard-host`, `num-gpus`, and a conditional tracing hook at :51) with no `num-cpus`; `grep -rn "num-cpus" chart/` -> zero hits; `grep -rn "enableInTreeAutoscaling" chart/` -> zero hits. Live head args: `[start --head --dashboard-host=0.0.0.0 --port=6379 --num-cpus=2 --disable-usage-stats --block]` with `limits: {cpu: 2, memory: 3Gi}`. The cost is already being paid: chart/alerting/rules.yml:740-750 exists for kernel OOM-kills with no traceback, and services/medallion/src/medallion/services/rayjobs_api_executor.py:33-35 classifies exit 137 as "the host-RAM OOM that kills a stage with no other symptom".
+
+**CP-044 · The Ray lane is the last bypass of the Executor port, so the capability seam is unreachable**
+`medallion, service-kit` · **MED**
+- **blocked:** Nothing. The wire objection that blocked it is measured-false as of 2026-09-17.
+- *What is left:* Give the chart's undeclared lanes a real `TaskRegistration` at producer boot instead of the submitter-side fallback, then replace workflow.py's five direct imports with `executor_for(RAY_ENGINE, ...)` and gate the resubmit branch on `may_resubmit(state, capabilities=...)`.
+- *Closes when:* `grep -rn "ray_submit\|ray_jobs_api" services/medallion/src/medallion/workflow.py` returns nothing, the cascade runs end to end, and no behaviour changed (the Jobs API adapter still withholds DURABLE_RECORD).
+- *Evidence:* `grep -rn "executor_for(" services/ packages/ | grep -v /tests/` -> 2 hits: the definition at services/medallion/src/medallion/services/engine_registry.py:54 and one caller, services/medallion/src/medallion/services/transform.py:793, resolving `IN_PROCESS_ENGINE`. The Ray lane imports directly at workflow.py:488, :528-529, :708-709, :979-980. Two derivations of one id result: rayjobs_api_executor.py:105 posts `order.idempotency_key`, ray_submit.py:181,302 posts `stage_submission_id(...)`. The stated blocker is already narrowed to one item at docs/DECISIONS.md:1926-1942, and the older "0 of 6 overlap" objection is corrected there — scripts/ray_stage_job.py:449 now reads `RASK_SOURCE_URI`/`RASK_DEST_URI`/`RASK_STAGE`, matching `WorkOrder.to_env()` (packages/service-kit/src/service_kit/lakehouse/work_order.py:126).
+
+**CP-045 · A lost watcher over a succeeded job strands live data with a human as the only owner**
+`medallion` · **MED**
+- **blocked:** The Executor-port row (S2) and a KubeRay-managed cluster to submit CRs against (S3), or confirmation that dev-kuberay.ra.se is operator-managed.
+- *What is left:* Land the `RayJobCrExecutor` behind `medallion.rayExecutor`, advertising `DURABLE_RECORD` — which makes `may_resubmit` return False and retires the `vanished`/`never_registered` ambiguity without deleting a line of workflow code. Requires the port row above first.
+- *Closes when:* With the flag on, killing a stage-runner pod mid-job lets another replica resume and report the real outcome from `status.jobDeploymentStatus`, instead of burning MAX_UNSEEN_POLLS and resubmitting work that may have landed.
+- *Evidence:* The cascade only advances through `publish_stage_ready` (services/medallion/src/medallion/workflow.py:387-400), so an `abandoned` job that later succeeds writes its data and rings nothing (:207-213, :355-372), and `unnotified` means the data landed and the wake-up failed (:209-211). Repair is the operator-driven `POST /api/.../rerun` (services/medallion/src/medallion/api/rerun.py:18-23). Root cause at workflow.py:315-326 and packages/service-kit/src/service_kit/lakehouse/executor.py:14-19: Ray's GCS is not fault-tolerant here, so a head restart takes every job record with it. The seam already exists — `Capability.DURABLE_RECORD` at executor.py:53 and `may_resubmit` at :104-106.
+
+**CP-046 · Terminating a stage leaves the Ray job running although the adapter can cancel it**
+`medallion` · **LOW**
+- *What is left:* Have `terminate_stage` resolve the executor and call `cancel(handle)` when `Capability.CANCEL` is declared, then correct the response body.
+- *Closes when:* `POST /stages/{instance_id}/terminate` stops the watch AND the Ray job, and the response says so truthfully.
+- *Evidence:* `grep -rn "\.cancel(" services/medallion/` -> one hit, services/medallion/tests/test_the_second_executor_makes_the_port_a_contract.py:122. The capability is advertised at services/medallion/src/medallion/services/rayjobs_api_executor.py:76 and implemented as `DELETE /api/jobs/{id}` at :142-144. services/medallion/src/medallion/api/stage_ops.py:110 tells the operator "the Ray job it was polling keeps running and must be stopped through Ray" — honest, and the reason this is LOW rather than higher, but an operator told 'terminated' reasonably frees the GPUs in their head and they are not free.
+
+**CP-047 · The GPU quota described as the estate's concurrency lever governs nothing**
+`chart` · **LOW**
+- *What is left:* Either wire it (only meaningful with a CR submitter: `spec.suspend: true` plus the queue label) or rewrite the prose so the quota stops reading as an active lever. Do not adopt Kueue as its own piece of work.
+- *Closes when:* Either a submitted workload carries `kueue.x-k8s.io/queue-name` and is admitted by unsuspension, or chart/values.yaml's description of the nominalQuota matches what it actually controls.
+- *Evidence:* `grep -rn "kueue.x-k8s.io/queue-name" chart/ services/ packages/` -> one hit, a comment at chart/values.yaml:2620. `grep -rn "kueueQueue" chart/ services/ packages/` -> one hit, its own declaration at chart/values.yaml:1322 — zero readers. The queues render via a post-install hook (chart/templates/kueue-queues.yaml:72-90) with `nvidia.com/gpu` nominalQuota at chart/values.yaml:2613-2637. chart/values.yaml:1318-1320 concedes the inertness. `grep -n -i ray chart/templates/kueue-queues.yaml` finds only a comment.
+
+**CP-048 · Falsified prose points readers at a finished port and a deleted module**
+`medallion, docs` · **LOW**
+- *What is left:* Rewrite four sites in whatever commit next touches the port. Per CLAUDE.md the old claim goes, not gets annotated.
+- *Closes when:* No file claims both lanes go through the port while `executor_for` has one caller, and no file references a module that does not exist.
+- *Evidence:* docs/DECISIONS.md:1892 is titled "`RESULT` is a capability, and both lanes now go through the port" while `grep -rn "executor_for(" ... | grep -v /tests/` returns one caller resolving `IN_PROCESS_ENGINE` (transform.py:793) — the entry's own body concedes this at :1934-1942, but the heading is what gets read. docs/DECISIONS.md:1467 still lists `rayjob_executor` as a live adapter. services/medallion/src/medallion/services/dapr_saga.py:4 calls itself "the workflow-plane twin of `inprocess_executor` / `rayjob_executor`"; `ls services/medallion/src/medallion/services/rayjob_executor.py` fails (deleted in b3a10799). services/medallion/pyproject.toml carries a comment about "The generic Ray submitter (R2). It moved OUT of this service" dangling above `fastapi`, describing a dependency the file does not declare — the medallion depends on no `ray-kit` and carries its own `ray_jobs_api.py`.
+
+**CP-049 · GCS job-record loss on head restart is an accepted cost that no decision record states**
+`docs, medallion` · **LOW**
+- *What is left:* Record the ruling so the backlog row that keeps re-asking can close: job-record loss on head restart is accepted, the compensation is the resubmit budget, and a durable record comes from a CR rather than from Redis.
+- *Closes when:* docs/DECISIONS.md carries the ruling and the open backlog row citing it is closed.
+- *Evidence:* `grep -rn "gcsFaultTolerance|GcsFaultToleranceOptions|redisAddress|RAY_external_storage_namespace"` over the tree -> zero hits each. docs/DECISIONS.md:1482 uses the non-durability as a premise ("Ray's GCS is not fault-tolerant here, so the Jobs-API watcher carries MAX_UNSEEN_POLLS/MAX_RESUBMITS") without ever ruling on it; open_backlog_left_new.md:1056-1058 records the ruling as still outstanding. The Ray docs are unambiguous that GCS FT is not the remedy — recommended for Ray Serve, and for other workloads "isn't recommended and the compatibility isn't guaranteed" — and no-Redis is a standing estate rule (chart/templates/dapr-statestore.yaml:21-26). So the honest close is a written ruling, not an adoption.
 
 **CP-005 · `ensure_dataset` runs before enumeration, so a source that enumerates zero units leaves a registered empty bronze table behind a COMPLETE run**
 `ingest, medallion, catalog` · **HIGH**
