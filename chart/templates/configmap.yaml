@@ -105,6 +105,12 @@ data:
        address is the NORMAL case and the in-cluster head is the opt-in. */}}
   {{- if .Values.ray.dashboardUrl }}
   RAY_DASHBOARD_URL: {{ .Values.ray.dashboardUrl | quote }}
-  {{- else if .Values.singleTenant.enabled }}
+  {{- else if or .Values.singleTenant.enabled .Values.ray.cluster.enabled }}
+  {{- /* `ray.cluster.enabled` belongs in this fallback beside `singleTenant`, and its absence was
+         [[CP-041]]: a RayCluster creates the SAME `<release>-ray-head-svc` a RayService does, so an
+         estate rendering one had a real in-cluster head while this key kept the external default.
+         The cascade then submitted to one cluster and `compute` — the only job-history reclaimer —
+         pruned another, which fails NOTHING: every job succeeds on the head it was sent to and is
+         simply counted by nobody. */}}
   RAY_DASHBOARD_URL: {{ printf "http://%s-ray-head-svc:%v" (include "rask.fullname" .) .Values.ray.dashboardPort | quote }}
   {{- end }}
