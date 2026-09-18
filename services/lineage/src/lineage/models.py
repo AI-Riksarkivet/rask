@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field
 
 from lineage.schemas import SchemaField
@@ -315,6 +316,24 @@ class Run(BaseModel):
     model_config = _MODEL
     run_id: str = Field(alias="runId")
     facets: dict[str, Any] = Field(default_factory=dict)
+
+
+class UnauthoredRunError(PermissionDeniedError):
+    """A bus-delivered run carrying no author at all — a defect in the MESSAGE, not a verdict on a person.
+
+    Its own type because the ack differs and nothing else separates the two: a named person who lacks a
+    grant can be granted one, and the same event then succeeds on its next presentation, so that refusal
+    keeps the DROP that routes it to the dead-letter topic. An author cannot be added to bytes already
+    published — no tuple, no redelivery and no restart changes the answer — so re-presenting it buys
+    nothing and parking it buys a duplicate.
+
+    Measured on the deployed estate 2026-09-18: 37 of 44 refusals in one hour were this, all for ONE run
+    id, in a single burst at pod start with `already_recorded=False`, on a subscriber that is ephemeral
+    with `deliverPolicy: all` and therefore meets the whole retained stream again on every roll.
+
+    It stops being unrepairable when the producers sign ([[LH-064]]), at which point this arm should
+    stop firing rather than begin discarding more.
+    """
 
 
 def author_sub_from_payload(raw: object) -> str | None:

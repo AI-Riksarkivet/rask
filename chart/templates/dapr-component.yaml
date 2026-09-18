@@ -168,7 +168,15 @@ scopes:
      delivered on recovery, and a rollout restart re-attached with zero "consumer name already in use"
      errors (that orphan failure applies to durables WITHOUT a queue group, not this combination).
      lineage stays ephemeral ON PURPOSE — a durable cursor would defeat its replay-rebuilds-the-graph
-     recovery story. */}}
+     recovery story.
+
+     THE REPLAY IS IDEMPOTENT FOR EVENTS THAT INGEST, AND THAT IS NOT ALL OF THEM. An event the door
+     refuses meets the same refusal on every restart, so the retained stream is re-refused in a burst at
+     each roll — measured 2026-09-18, 44 refusals and 44 dead-letter parks in the hour spanning one
+     lineage roll, 37 of them one unauthored run id. The two unrepairable classes (bytes that do not
+     parse, and a run carrying no author) are therefore ACKED and counted rather than parked, because no
+     grant, redelivery or restart can change their answer and a park writes a duplicate per roll. A named
+     PERSON who lacks a grant still parks: a tuple can be written and the same event then succeeds. */}}
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
 {{- if .Values.medallion.enabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new") }}

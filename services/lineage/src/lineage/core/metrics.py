@@ -60,6 +60,17 @@ class Outcome(StrEnum):
     # `lineage.events.v1` against a stream whose last sequence was 5,860, and 17 of 21 distinct parked
     # run ids already present in the graph.
     PARKED_ALREADY_RECORDED = "parked_already_recorded"
+    # UNREPAIRABLE, and therefore the one outcome that ACKS a run the graph does not hold: a payload
+    # that does not parse, or a run carrying no author at all. No tuple, redelivery or restart can
+    # change that answer, so parking it writes a dead-letter duplicate on every roll — measured
+    # 2026-09-18, 37 of 44 refusals in one hour were one unauthored run id re-presented at pod start.
+    #
+    # ITS OWN VALUE BECAUSE THE ACK IS A DELIBERATE, SILENT DISCARD. `REFUSED` still means a named
+    # person who lacks a grant, which parks and can be repaired by writing the tuple; this one cannot be
+    # repaired at all and leaves nothing behind but this count, which is what makes the count the safety
+    # argument for acking rather than a statistic. A producer regression shows up here as a rising line
+    # and nowhere else.
+    UNREPAIRABLE = "unrepairable"
 
 
 def record_outcome(outcome: Outcome) -> None:

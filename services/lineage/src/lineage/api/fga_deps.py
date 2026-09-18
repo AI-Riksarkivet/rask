@@ -41,7 +41,7 @@ from openfga_sdk import OpenFgaClient
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
-from lineage.models import RunEvent, author_sub_from_payload
+from lineage.models import RunEvent, UnauthoredRunError, author_sub_from_payload
 from service_kit.governed import fga
 
 
@@ -280,7 +280,7 @@ async def enforce_bus_authz(event: RunEvent, request: Request, settings: Lineage
     subject = author_sub_from_payload(payload)
     try:
         if not subject:
-            raise PermissionDeniedError("a bus-delivered run must carry a verified author sub to be authorized")
+            raise UnauthoredRunError("a bus-delivered run must carry a verified author sub to be authorized")
         await enforce_output_authz(event, request, settings, _StampedAuthor(subject), relations=relations_for_operation(event.operation))
     except PermissionDeniedError:
         if not await _is_replay(event, payload, request):
