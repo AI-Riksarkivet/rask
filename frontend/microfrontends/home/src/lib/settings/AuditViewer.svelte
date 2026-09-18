@@ -1,6 +1,7 @@
 <script lang="ts">
 	// `/settings/audit` — the #77 audit-log viewer over the #41 compliance trail. Events land on the
-	// dedicated `lance.audit` logger → OTLP → GreptimeDB (`opentelemetry_logs`); `$lib/server/audit-core.ts`
+	// dedicated `lance.audit` logger → OTLP → GreptimeDB's own audit table (`observability.auditTable`,
+	// routed by the Collector and retained past the telemetry TTL); `$lib/server/audit-core.ts`
 	// queries them server-side behind the zone's remote function and returns parsed
 	// {timestamp, action, outcome, subject, resource}. No credential reaches the browser. Governed without
 	// a session → 401; no observability stack → 501; auth-off dev → open.

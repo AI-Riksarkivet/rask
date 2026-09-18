@@ -65,4 +65,31 @@ spec:
                 --data-urlencode "sql=ALTER DATABASE $DB SET 'ttl'='$TTL'" \
                 | grep -q affectedrows
               echo "retention applied: $TTL"
+{{- if .Values.observability.auditRetention }}
+              # THE AUDIT TABLE'S OWN TTL, which is the whole point of routing it out of
+              # `opentelemetry_logs`: a new table inherits the database's retention, so the split
+              # without this line would change which table the trail is in and nothing about when it
+              # is destroyed. A table-level TTL overrides the database's — verified against GreptimeDB
+              # v1.1.1, read back by SHOW CREATE TABLE.
+              AUDIT_TABLE='{{ .Values.observability.auditTable }}'
+              AUDIT_TTL='{{ .Values.observability.auditRetention }}'
+              echo "setting $AUDIT_TABLE table ttl=$AUDIT_TTL"
+              # THE TABLE MAY NOT EXIST YET, and that is a REAL first-install state rather than a
+              # failure: the Collector creates it on the first audit record, so a fresh estate that
+              # has emitted none has nothing to alter. Distinguished from every other failure instead
+              # of swallowed — an absent table says so and the hook succeeds, anything else fails the
+              # hook, because a retention silently not applied is how the trail ends up on 14 days
+              # while the chart claims otherwise. The hook is post-upgrade and idempotent, so the
+              # next upgrade applies it once the table is there.
+              AUDIT_OUT="$(curl -s "$GT/v1/sql?db=$DB" \
+                --data-urlencode "sql=ALTER TABLE $AUDIT_TABLE SET 'ttl'='$AUDIT_TTL'")"
+              if echo "$AUDIT_OUT" | grep -q affectedrows; then
+                echo "audit retention applied: $AUDIT_TTL"
+              elif echo "$AUDIT_OUT" | grep -qiE "not found|does not exist|TableNotFound"; then
+                echo "audit table $AUDIT_TABLE does not exist yet (no audit record has been emitted); it inherits $TTL until the next upgrade"
+              else
+                echo "FAILED to set audit retention: $AUDIT_OUT" >&2
+                exit 1
+              fi
+{{- end }}
 {{- end }}

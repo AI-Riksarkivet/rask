@@ -389,6 +389,25 @@ data:
               and attributes["log.file.path"] != nil
               and resource.attributes["k8s.container.name"] != "daprd"
               and IsMatch(body, "^[0-9]{4}-[0-9]{2}-[0-9]{2} ")
+      # THE AUDIT SPLIT. `lance.audit` is the governance trail, not telemetry, and it rode in
+      # `opentelemetry_logs` under the database's 14d TTL — measured 2026-09-18: 8,590,872 audit rows
+      # among 114,938,016. These two filters are COMPLEMENTARY on purpose, so each record lands in
+      # exactly one table: a split that copied rather than routed would double the store and leave the
+      # 14-day copy authoritative. The filter processor DROPS what its conditions match, which is why
+      # the audit pipeline's condition is the negation.
+      #
+      # Keyed on `body`, the same discriminator `audit-core.ts` used to select these rows out of the
+      # shared table, so the routing and the reader cannot disagree about what an audit record is.
+      filter/audit_only:
+        error_mode: ignore
+        logs:
+          log_record:
+            - 'body != "audit"'
+      filter/drop_audit:
+        error_mode: ignore
+        logs:
+          log_record:
+            - 'body == "audit"'
       batch: {}
       # The workflow engine's liveness ping to its own sidecar, dropped before it reaches the store.
       # RE-MEASURED 2026-08-23 rather than inherited (two audits put its share 40 points apart):
@@ -438,6 +457,24 @@ data:
           initial_interval: 5s
           max_interval: 30s
           max_elapsed_time: 300s
+      # The audit trail's own table. `x-greptime-log-table-name` is what GreptimeDB's OTLP log
+      # ingestion routes on — verified against the running v1.1.1 rather than taken from docs: a
+      # protobuf record carrying the header created the named table. Same endpoint, same durability
+      # settings as the shared exporter; only the destination table differs.
+      otlphttp/greptime_audit:
+        endpoint: {{ $greptime | quote }}
+        headers:
+          x-greptime-db-name: {{ $o.dbName | quote }}
+          x-greptime-log-table-name: {{ $o.auditTable | quote }}
+        sending_queue:
+          enabled: true
+          storage: file_storage
+          queue_size: 500
+        retry_on_failure:
+          enabled: true
+          initial_interval: 5s
+          max_interval: 30s
+          max_elapsed_time: 300s
       otlphttp/greptime:
         endpoint: {{ $greptime | quote }}
         headers:
@@ -472,8 +509,15 @@ data:
           exporters: [otlphttp/greptime]
         logs:
           receivers: [otlp, filelog]
-          processors: [memory_limiter, k8sattributes, filter/drop_app_file_logs, batch]
+          processors: [memory_limiter, k8sattributes, filter/drop_app_file_logs, filter/drop_audit, batch]
           exporters: [otlphttp/greptime]
+        # OTLP ONLY. An audit record is emitted by a service through the SDK; a `body == "audit"` line
+        # arriving from `filelog` is a container log that happens to read that way, and writing it to
+        # the governance table would make the trail forgeable by anything that can print.
+        logs/audit:
+          receivers: [otlp]
+          processors: [memory_limiter, k8sattributes, filter/audit_only, batch]
+          exporters: [otlphttp/greptime_audit]
 ---
 apiVersion: apps/v1
 kind: Deployment

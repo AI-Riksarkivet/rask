@@ -2886,6 +2886,18 @@ observability:
   # opentelemetry_traces, the metrics physical table) inherits it. Empty string
   # = no TTL (unbounded growth). GreptimeDB accepts e.g. "14d", "30d", "90d".
   retention: "14d"
+  # THE GOVERNANCE TRAIL IS NOT TELEMETRY, and until 2026-09-18 it aged out as if it were: measured on
+  # the live store, 8,590,872 `lance.audit` rows sat inside `opentelemetry_logs` beside 114,938,016
+  # telemetry rows under one `ttl = '14days'`. The Collector now routes them to their own table
+  # (`x-greptime-log-table-name`, verified against GreptimeDB v1.1.1) and the retention hook gives that
+  # table its own TTL, which overrides the database's — also verified, read back by SHOW CREATE TABLE.
+  #
+  # Empty string leaves the audit table on the database TTL, which is the old behaviour and is a
+  # choice rather than a default. This does NOT put a credential in front of `:4000`; an
+  # unauthenticated in-cluster DELETE is still accepted (XC-003's remaining clause), so this decides
+  # what ages out, never who may erase it.
+  auditRetention: "400d"
+  auditTable: lance_audit # the table `lance.audit` records are routed to, read by the admin viewer
   greptimePort: 4000 # GreptimeDB HTTP: /v1/otlp (ingest), /v1/prometheus (query), /v1/sql, /health
   dbName: public # the GreptimeDB database all signals land in (x-greptime-db-name header)
   tracePipeline: greptime_trace_v1 # required pipeline header for OTLP trace ingestion → opentelemetry_traces

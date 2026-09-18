@@ -9,6 +9,12 @@ import * as v from 'valibot';
 // flattening (the 2026-07-21 "every field renders —" bug), and the post-filters.
 
 const GREPTIME_API = env.GREPTIME_API ?? '';
+// The governance trail's OWN table, rendered from the same chart value the Collector routes on
+// (`observability.auditTable`). It used to be a `WHERE body = 'audit'` over `opentelemetry_logs`,
+// which put the trail on the telemetry database's 14-day TTL — measured 2026-09-18: 8,590,872 audit
+// rows among 114,938,016. The default matches the chart's so a dev run with no env still reads the
+// table the deployed Collector writes.
+const AUDIT_TABLE = env.GREPTIME_AUDIT_TABLE ?? 'lance_audit';
 const CATALOG_API = env.CATALOG_API ?? 'http://localhost:2333';
 
 export type AuditEvent = {
@@ -129,9 +135,10 @@ export async function readAuditTrail(
 			detail: 'the audit viewer requires the observability stack (GreptimeDB)',
 		};
 	}
-	// Proven query shape (docs/KIND-RUNBOOK.md): filter to audit records, newest first, bounded. The
-	// finer filters are applied below over the returned columns. The TIME window belongs in SQL and is
-	// an ALLOW-LIST, never interpolated user text — an unknown value falls back to 24h.
+	// The TABLE is the filter now: every row in it is an audit record, so there is no `body = 'audit'`
+	// predicate to get wrong. Newest first, bounded; the finer filters are applied below over the
+	// returned columns. The TIME window belongs in SQL and is an ALLOW-LIST, never interpolated user
+	// text — an unknown value falls back to 24h.
 	const WINDOWS: Record<string, string> = {
 		'1h': "timestamp > now() - INTERVAL '1 hour'",
 		'24h': "timestamp > now() - INTERVAL '1 day'",
@@ -141,7 +148,7 @@ export async function readAuditTrail(
 	};
 	const clause = WINDOWS[params.since ?? '24h'] ?? WINDOWS['24h']!;
 	const sql =
-		`SELECT * FROM opentelemetry_logs WHERE body = 'audit'${clause ? ` AND ${clause}` : ''}` +
+		`SELECT * FROM ${AUDIT_TABLE}${clause ? ` WHERE ${clause}` : ''}` +
 		' ORDER BY timestamp DESC LIMIT 500';
 	try {
 		const res = await fetchFn(`${GREPTIME_API}/v1/sql?db=public`, {

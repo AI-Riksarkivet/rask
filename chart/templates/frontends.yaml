@@ -219,6 +219,12 @@ spec:
             # `RASK_MEDALLION_API_URL` row, which is a different variable with a live reader.
             - name: GREPTIME_API
               value: {{ printf "http://%s:%v" (include "lance.greptimeHost" $root) $root.Values.observability.greptimePort | quote }}
+            # The table the governance trail lives in. Rendered from the SAME value the Collector's
+            # `x-greptime-log-table-name` header carries, so the writer and the reader cannot name two
+            # different tables — which is how a viewer ends up reporting an empty audit log while the
+            # rows land elsewhere.
+            - name: GREPTIME_AUDIT_TABLE
+              value: {{ $root.Values.observability.auditTable | quote }}
             {{- if $root.Values.nats.enabled }}
             # JetStream visibility (admin /streams): the NATS HTTP monitor port —
             # unauthenticated by design and ClusterIP-only, consumed strictly server-side
