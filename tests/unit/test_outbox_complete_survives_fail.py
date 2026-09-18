@@ -85,8 +85,13 @@ def test_a_failed_complete_publish_does_not_get_overwritten_by_a_fail(tmp_path: 
 
     staged = _staged(tmp_path)
     assert staged, "nothing staged — the outbox did not run at all"
-    assert len(staged) == 1, f"expected one staged event per run, got {list(staged)}"
-    event_type = next(iter(staged.values())).get("eventType")
+    # A run stages its START and then its terminal, which is what `_object_key` was built for: it keys
+    # on `run_id@eventType` precisely because "one run has a START and then a COMPLETE or a FAIL". So
+    # the invariant here is not a COUNT — it is that exactly one TERMINAL is staged and it is the
+    # COMPLETE, never a FAIL that truncated it.
+    terminals = {k: v for k, v in staged.items() if not k.endswith("@START")}
+    assert len(terminals) == 1, f"expected one staged terminal per run, got {list(terminals)}"
+    event_type = next(iter(terminals.values())).get("eventType")
     assert event_type == "COMPLETE", (
         f"a {event_type} was staged over the COMPLETE — the outbox lost the event it exists to "
         "preserve. The guard flag in handle_stage is set after the COMPLETE emit instead of before it."
@@ -103,4 +108,6 @@ def test_the_complete_is_still_staged_at_all_after_its_publish_fails(tmp_path: P
 
     assert _staged(tmp_path), "the crash window is gone — a publish failure now loses the event"
     assert dapr.attempts, "no publish was attempted"
-    assert dapr.attempts[0].get("eventType") == "COMPLETE"
+    # The START opens the run first now, so the COMPLETE is not attempt zero — what matters is that it
+    # was attempted at all, which is the publish whose failure this test is about.
+    assert next(a.get("eventType") for a in dapr.attempts if a.get("eventType") != "START") == "COMPLETE"

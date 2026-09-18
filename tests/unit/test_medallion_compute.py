@@ -156,7 +156,7 @@ def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any)
     assert out.num_rows == 4 and set(out.column("stage").to_pylist()) == {"silver"}
 
     # The emitted lineage event carries the REAL downstream version (not the hardcoded 1).
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = lineage["data"]["outputs"][0]
     assert output["name"] == "silver$features"
     assert output["facets"]["version"]["datasetVersion"] == str(_newest_data_version(silver))
@@ -192,7 +192,7 @@ def test_handle_stage_compute_off_writes_no_data(tmp_path: Any) -> None:
     dapr = _FakeDapr()
 
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = lineage["data"]["outputs"][0]
     assert output["name"] == "silver$features" and output["namespace"] == "silver"
     # No write happened — opening the downstream path as a dataset must fail (it was never created).
@@ -224,7 +224,7 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     dapr = _FakeDapr()
 
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = lineage["data"]["outputs"][0]
 
     # The run is still recorded — the producer's emit IS the cascade head, so suppression is not an
@@ -249,7 +249,7 @@ def test_produce_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     dapr = _FakeDapr()
 
     asyncio.run(produce(cast(DaprClient, dapr), settings, token="t1"))
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = lineage["data"]["outputs"][0]
 
     assert lineage["data"]["run"]["facets"]["lance"]["synthetic"] is True
@@ -266,7 +266,7 @@ def test_produce_seeds_real_bronze_and_emits_its_version(tmp_path: Any) -> None:
     assert result["status"] == "produced"
     # bronze$events really exists, and the emitted lineage records its real version.
     assert lance.dataset(bronze).to_table().num_rows > 0
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     assert lineage["data"]["outputs"][0]["facets"]["version"]["datasetVersion"] == str(lance.dataset(bronze).version)
 
 
@@ -447,7 +447,7 @@ def test_a_failed_assertion_is_RECORDED_by_the_stage_runner_and_RULED_ON_by_the_
     assert result == {"status": "SUCCESS"}
 
     # The audit fact survived the move.
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     facet = lineage["data"]["outputs"][0]["facets"]["dataQualityAssertions"]
     assert any(a["assertion"] == "not_null" and a["success"] is False for a in facet["assertions"])
     # And no second door opened.
@@ -464,7 +464,7 @@ def test_quality_gate_promotes_on_clean_data(tmp_path: Any) -> None:
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
     assert result == {"status": "SUCCESS"}
 
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     facet = lineage["data"]["outputs"][0]["facets"]["dataQualityAssertions"]
     assert all(a["success"] for a in facet["assertions"])
     # Clean data does NOT buy a stage runner-fired promotion — there is one door and this stage runner has no
@@ -480,7 +480,7 @@ def test_quality_off_emits_no_assertions_facet(tmp_path: Any) -> None:
     settings = _stage_runner_settings(bronze, silver)  # compute on, quality off
     dapr = _FakeDapr()
     asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
-    output = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)["data"]["outputs"][0]
+    output = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")["data"]["outputs"][0]
     assert "outputStatistics" in output["facets"]
     assert "dataQualityAssertions" not in output["facets"]
 

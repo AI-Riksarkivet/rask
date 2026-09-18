@@ -244,7 +244,13 @@ def test_stage_runner_ray_branch_submits_job_then_emits_measured_lineage(monkeyp
     )
     assert dispatched["run_id"], "the job would emit its lineage under a run id nothing else knows"
     assert measured_uris == {}, "the ray branch measured before the job could have written anything"
-    assert first.calls == [], "a COMPLETE was emitted for a job that had not run"
+    # A START, AND NOTHING ELSE. Dispatch used to ack having emitted nothing at all, which left the
+    # job's whole runtime with no run in the graph ([[LH-173]]) — a hop that died before its terminal
+    # was indistinguishable there from one that never began. What must still never appear here is a
+    # TERMINAL: the job has not run, so a COMPLETE would describe a write that has not happened, which
+    # is the defect the dispatch branch exists to prevent.
+    kinds = [c["data"]["eventType"] for c in first.calls if c["topic"] == _RAY_STAGE_RUNNER.lineage_topic]
+    assert kinds == ["START"], f"dispatch emitted {kinds or 'nothing'} — it must open the run and emit no terminal for a job that has not run"
 
     # PASS 2 — the workflow read SUCCESSED and re-published the trigger with `ray_job_done`. NOW the
     # destination exists, so the measure is a question about this run's output rather than a race.

@@ -226,7 +226,7 @@ def test_handle_stage_emits_identity_column_edges(tmp_path: Any) -> None:
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
     assert result == {"status": "SUCCESS"}
 
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = Dataset.model_validate(lineage["data"]["outputs"][0])
     edges = {(e.out_field, e.name, e.field, e.subtype) for e in output.column_edges}
     # The LIVE cascade (not seed.py) produced field-to-field identity edges pointing at the bronze input —
@@ -331,14 +331,18 @@ def test_ray_branch_emits_column_edges_reconstructed_from_disk(tmp_path: Any, mo
 
     dispatch_only = _FakeDapr()
     assert asyncio.run(handle_stage(cast(DaprClient, dispatch_only), settings, {"data": {"token": "t1"}})) == {"status": "SUCCESS"}
-    assert dispatch_only.published == [], "the dispatch pass emitted lineage for a job it had not yet waited for"
+    # A START opens the run and nothing else. Dispatch used to emit nothing at all, which left the
+    # job's entire runtime with no run in the graph ([[LH-173]]); what it must still never emit is a
+    # TERMINAL, because it has not waited for the job and so knows none of what a terminal asserts.
+    dispatched_kinds = [p["data"]["eventType"] for p in dispatch_only.published if p["topic"] == settings.lineage_topic]
+    assert dispatched_kinds == ["START"], f"the dispatch pass emitted {dispatched_kinds or 'nothing'} for a job it had not yet waited for"
 
     dapr = _FakeDapr()
 
     result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1", "ray_job_done": True}}))
     assert result == {"status": "SUCCESS"}
 
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
+    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
     output = Dataset.model_validate(lineage["data"]["outputs"][0])
     edges = {(e.out_field, e.name, e.field, e.subtype) for e in output.column_edges}
     assert edges == {

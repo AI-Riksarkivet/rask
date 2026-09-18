@@ -266,6 +266,83 @@ def accepted_input_names(*, env_from_dataset: str, declared: Any | None) -> set[
     return accepted
 
 
+async def _emit_start_run(
+    dapr: DaprClient,
+    settings: MedallionSettings,
+    trigger: StageTrigger,
+    identity: StageIdentity,
+    *,
+    token: str | None,
+    project: str,
+) -> None:
+    """Open the run in the graph BEFORE the work starts, and stage-and-publish it through the outbox.
+
+    THE DISPATCH BRANCH ACKS HAVING EMITTED NOTHING, which is what this closes. It submits to Ray and
+    returns `None  # DISPATCHED`, and the one event for the whole run is the terminal the workflow
+    publishes after its wake-up — minutes to hours later. Between the two, no run exists in the graph
+    at all, so a hop that died before its terminal is indistinguishable there from one that never
+    began, and the only other answers live in the Dapr workflow instance and the Ray dashboard, both
+    per-head state `rayjobs_api_executor.py:20-25` explicitly refuses to call durable.
+
+    IT MERGES, it does not add. `run_id` is DERIVED from `(project, operation, token)`
+    (`events.py:337`), so this carries the same `runId` the terminal will, and the lineage consumer's
+    idempotent MERGE-on-`run_id` closes the run this opened. That is also why no version, row count or
+    size is passed: they would describe a write that has not happened yet, and `build_run_event`
+    renders no `outputStatistics` facet without them.
+
+    Best-effort in the same sense the FAIL emit is — through the outbox, so a publish that fails
+    leaves a staged copy the relay drains rather than losing the only record that the run began.
+    """
+    # ONCE PER RUN, on the pass that actually begins it. The Ray lane re-enters `handle_stage` with
+    # `ray_job_done` set after the workflow's wake-up, and that re-entry is the SAME run continuing —
+    # its terminal follows within milliseconds. Re-emitting there would put a START on the bus after
+    # the work finished, immediately before its own COMPLETE: harmless to the graph, since the outbox
+    # key is `run_id@eventType` and it overwrites itself, and misleading to anyone reading the stream
+    # in order.
+    if trigger.ray_job_done:
+        return
+    start_event = build_run_event(
+        operation=settings.operation,
+        author=settings.author,
+        author_subject=settings.fga_service_identity,
+        job_namespace=settings.job_namespace,
+        inputs=[(identity.from_namespace, identity.from_dataset)],
+        output_namespace=identity.to_namespace,
+        output_name=identity.to_dataset,
+        token=token,
+        cascade_id=trigger.cascade_id or None,
+        project=project or None,
+        originator=trigger.originator or None,
+        event_type="START",
+    )
+    # OPENING A RUN MUST NEVER FAIL THE RUN. Every other emit here is awaited for its staging and may
+    # propagate, because a terminal describes work that already happened and losing it loses the only
+    # record of it. This one runs BEFORE the work: if it raised, the stage would abort having written
+    # nothing, and the handler would then emit a FAIL for a run that was never attempted — turning a
+    # provenance hiccup into a cascade failure. Caught by
+    # `tests/unit/test_outbox_complete_survives_fail.py`, which fails every publish and saw exactly
+    # that: a FAIL staged where the COMPLETE should have been.
+    #
+    # The staged copy is what carries the durability. `publish_lineage_with_outbox` stages before it
+    # publishes, so a swallowed publish still leaves an object for the relay to drain.
+    try:
+        await outbox.publish_lineage_with_outbox(
+            dapr,
+            outbox_uri=settings.lineage_outbox_uri,
+            storage_options=settings.storage_options(),
+            run_id=start_event["run"]["runId"],
+            event_json=json.dumps(start_event),
+            pubsub_name=settings.pubsub,
+            topic_name=settings.lineage_topic,
+            timeout_seconds=settings.publish_timeout_seconds,
+        )
+    except Exception as exc:  # noqa: BLE001 — a run must start even when its announcement cannot
+        log.warning(
+            "medallion_stage_start_emit_failed",
+            extra={"to_dataset": identity.to_dataset, "token": token, "error": str(exc)},
+        )
+
+
 async def _emit_fail_run(
     dapr: DaprClient,
     settings: MedallionSettings,
@@ -956,6 +1033,7 @@ async def _write_stage(
 
 
 async def _run_compute(
+    dapr: DaprClient,
     settings: MedallionSettings,
     trigger: StageTrigger,
     identity: StageIdentity,
@@ -1055,6 +1133,24 @@ async def _run_compute(
                 # than an empty one, which is the worse of the two failures.
                 span.set_attribute("lance.medallion.run_id", lineage_doc.run_id)
                 span.set_attribute("lance.medallion.chain_depth", len(lineage_doc.derived_from))
+                # OPEN THE RUN BEFORE THE WORK, so a hop in flight exists in the graph ([[LH-173]]).
+                # Emitted here rather than inside the Ray branch on purpose: the run BEGAN either way,
+                # and the in-process lane differs only in how long the window is. `run_id` is derived
+                # from `(project, operation, token)`, so this and the terminal carry one `runId` and
+                # the consumer's MERGE closes the run this opened rather than adding a second node.
+                #
+                # The Ray lane is why it matters: that branch returns `None  # DISPATCHED` having
+                # emitted nothing, and its terminal arrives minutes to hours later — so without this,
+                # a job that died mid-run is indistinguishable in the graph from one that never began.
+                # OPEN THE RUN BEFORE THE WORK, so a hop in flight exists in the graph ([[LH-173]]).
+                await _emit_start_run(
+                    dapr,
+                    settings,
+                    trigger,
+                    identity,
+                    token=token,
+                    project=project,
+                )
                 result = await _write_stage(
                     settings,
                     trigger,
@@ -1645,6 +1741,7 @@ async def handle_stage(
         if from_uri is None:
             return _drop("from_uri_outside_read_root")
         write = await _run_compute(
+            dapr,
             settings,
             trigger,
             identity,
