@@ -436,6 +436,7 @@ ray-up:
 	  echo "Ray already running. ray-status / ray-down to inspect / stop."; \
 	else \
 	  S3_SECRET=$${S3_SECRET:-minioadmin} LINEAGE_SERVICE_TOKEN=$${APP_API_TOKEN:-} \
+	  S3_ENDPOINT=$${S3_ENDPOINT:-http://localhost:9000} S3_REGION=$${S3_REGION:-us-east-1} \
 	  uv run ray start --head --port=$(RAY_HEAD_PORT) \
 	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
 	  echo "Ray dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \

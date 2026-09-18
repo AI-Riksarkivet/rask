@@ -28,11 +28,16 @@ alone gave every job `SignatureDoesNotMatch`, measured twice on the live estate"
 pick the submission — it was to make the submission carry NOTHING of that shape and let the pod be the
 single source, which is what the chart comment beside those two keys now says.
 
-So the target state for this pair is the same, and it takes TWO steps in a fixed order: the pod gains
-them and is OBSERVED carrying them (this gate), and only then does `ray_submit` stop sending them
-(`test_the_submitter_owns_no_deployment_fact` below, which is skipped until the pod is deployed with
-them). Doing it in one step leaves a window where a job gets neither; doing only the first leaves
-exactly the two-owner drift this paragraph exists to prevent.
+So the target state for this pair is the same, and it took TWO steps in a fixed order: the pod gained
+them and was OBSERVED carrying them, and only then did `ray_submit` stop sending them. Doing it in one
+step would have left a window where a job got neither; doing only the first would have left exactly the
+two-owner drift this paragraph exists to prevent.
+
+OBSERVED, not rendered: with the head recycled, a job submitted with a `runtime_env` carrying NO S3
+names read `S3_ENDPOINT=http://rask-minio:9000` and `S3_REGION=us-east-1` out of its own process env
+(Ray dashboard `POST /api/jobs/`, SUCCEEDED). The recycle is part of the procedure, not an accident —
+**KubeRay does not recreate a head pod when the RayCluster spec changes**, so the CR carried the new
+rows while the running pod did not, and `helm get manifest` showed a change that was not live.
 """
 
 from __future__ import annotations
@@ -112,15 +117,29 @@ def test_the_stage_job_still_reads_the_name_this_gate_provisions() -> None:
     assert 'os.environ["S3_ENDPOINT"]' in source, "the stage job no longer hard-requires S3_ENDPOINT — re-justify this gate"
 
 
-def test_the_submitter_owns_no_deployment_fact() -> None:
-    """STEP TWO, and it is a real assertion rather than a note: once the pod carries the pair,
-    `ray_submit` must stop sending it, or the two-owner drift above is simply recreated.
+def test_the_submitter_sends_no_S3_NAME_AT_ALL() -> None:
+    """STEP TWO. Ray merges `runtime_env` OVER the process env, so a name sent by the submitter BEATS
+    the pod's — which is the two-owner drift the module docstring is about, and which this estate has
+    already paid for once on the credential halves.
 
-    It is `xfail(strict=True)` rather than skipped, so it fails the moment someone deletes the keys
-    from the submitter WITHOUT deleting this marker — and it fails loudly today if it unexpectedly
-    passes, which would mean step two landed while this file still claimed it had not.
+    Asserted on the SUBMISSION BODIES, not on the module: `settings.s3_endpoint` is still read
+    elsewhere in this file (the medallion does its own S3 work), and a grep for the setting would go
+    red for the wrong reason.
     """
     source = (REPO / "services/medallion/src/medallion/services/ray_submit.py").read_text()
 
-    pytest.xfail("step two: the pod is deployed with the pair first, then the submitter stops sending it")
-    assert '"S3_ENDPOINT"' not in source
+    for name in ("S3_ENDPOINT", "S3_KEY", "S3_SECRET", "S3_REGION"):
+        assert f'"{name}": ' not in source, f"{name} is back on the submission body — the pod and the submitter now disagree silently"
+
+
+def test_the_LOCAL_head_owns_the_same_pair() -> None:
+    """The invariant is "the head that runs the job supplies it", and there are two heads.
+
+    `make ray-up` starts the dev head, and it already exports `S3_SECRET` for exactly this reason. With
+    the names off the submission body, a local head missing them makes every `make dev-micro` stage job
+    die `KeyError` — a break that appears nowhere in the chart and nowhere in CI.
+    """
+    ray_up = (REPO / "Makefile").read_text().split("ray-up:", 1)[1].split("\n\n", 1)[0]
+
+    for name in ("S3_ENDPOINT", "S3_REGION", "S3_SECRET"):
+        assert f"{name}=" in ray_up, f"the local dev head does not export {name}"

@@ -205,22 +205,23 @@ async def submit_stage_job(
     )
     env_vars = {
         **order.to_env(),
-        # ENDPOINT, KEY ID AND REGION ONLY — the SECRET is deliberately absent. It rode this dict,
-        # and the Jobs API echoes runtime_env back to any reader of `GET /api/jobs/<id>` (P0, fixed
-        # 2026-08-28). The Ray pods hold S3_SECRET themselves (chart: secretKeyRef onto
-        # infra-credentials; dev: `make ray-up` exports it to the local head), and Ray merges this
-        # dict OVER the process env, so the job's `os.environ` contract is unchanged.
-        "S3_ENDPOINT": settings.s3_endpoint,
-        # NO CREDENTIAL RIDES THIS BODY — not the secret, and since 2026-08-30 not the key
-        # either. The Jobs API echoes `runtime_env` on `GET /api/jobs/<id>`, an unauthenticated
-        # dashboard published at the edge, so anything here is readable by anyone. Both halves
-        # come from the Ray pod's own Secret (`chart/templates/rayservice.yaml` mounts them from
-        # `infra-credentials`), and the job still reads them from `os.environ` unchanged.
+        # NO S3 NAME RIDES THIS BODY — not the secret, not the key, and since this change not the
+        # ENDPOINT or REGION either. The Jobs API echoes `runtime_env` on `GET /api/jobs/<id>`, an
+        # unauthenticated dashboard published at the edge, so anything here is readable by anyone; the
+        # credential halves moved to the pod for that reason and the address followed them for a
+        # different one.
         #
-        # It is also what makes the credential SCOPEABLE: Ray merges runtime_env OVER the process
-        # env, so a key sent here BEATS the pod's — the pair had two owners and repointing the pod
-        # alone gave every job `SignatureDoesNotMatch`, measured twice on the live estate.
-        "S3_REGION": settings.s3_region,
+        # TWO OWNERS IS THE FAILURE, and this file already records it happening: Ray merges
+        # `runtime_env` OVER the process env, so a key sent here BEATS the pod's — "the pair had two
+        # owners and repointing the pod alone gave every job `SignatureDoesNotMatch`, measured twice on
+        # the live estate". An address sent here had exactly that shape, and it also made the JOB
+        # unrunnable by any other submitter: `scripts/ray_stage_job.py:86` reads
+        # `os.environ["S3_ENDPOINT"]` with a bracket.
+        #
+        # The pod is the single source now, in both environments: `_ray-cluster-config.tpl` renders the
+        # pair onto the head, and `make ray-up` exports it to the local one. Verified on the deployed
+        # head 2026-09-18 by submitting a job whose `runtime_env` carried NO S3 names at all — it read
+        # `S3_ENDPOINT=http://rask-minio:9000` and `S3_REGION=us-east-1` from its own process env.
         # Forward this pod's OTLP config (the train path below already does) so the job can export the
         # span it parents on the handed-over trace context. The service name is the stage runner's own — the
         # job executes that stage runner's stage transform, so its span belongs to the same logical service.
@@ -383,17 +384,9 @@ async def submit_train_job(
                 # LINEAGE_SERVICE_TOKEN and S3_SECRET from `os.environ`, now sourced from the pod.
                 # Empty/absent token (dev/auth-off) → header omitted → the ingest stays open.
                 "LINEAGE_SERVICE_ID": settings.trainer_identity,
-                "S3_ENDPOINT": settings.s3_endpoint,
-                # NO CREDENTIAL RIDES THIS BODY — not the secret, and since 2026-08-30 not the key
-                # either. The Jobs API echoes `runtime_env` on `GET /api/jobs/<id>`, an unauthenticated
-                # dashboard published at the edge, so anything here is readable by anyone. Both halves
-                # come from the Ray pod's own Secret (`chart/templates/rayservice.yaml` mounts them from
-                # `infra-credentials`), and the job still reads them from `os.environ` unchanged.
-                #
-                # It is also what makes the credential SCOPEABLE: Ray merges runtime_env OVER the process
-                # env, so a key sent here BEATS the pod's — the pair had two owners and repointing the pod
-                # alone gave every job `SignatureDoesNotMatch`, measured twice on the live estate.
-                "S3_REGION": settings.s3_region,
+                # NO S3 NAME RIDES THIS BODY either — same rule and same owner as the stage lane
+                # above, and `scripts/ray_train_job.py:20` documents the same required set. The pod
+                # supplies all four.
                 # Forward this pod's own OTLP config so the training job's metrics land in the same
                 # GreptimeDB the services use (#18 experiment tracking → Perses). Empty (observability
                 # off) → the job's emit_metrics is a no-op. The service name is the trainer's identity so

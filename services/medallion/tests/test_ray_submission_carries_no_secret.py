@@ -122,8 +122,18 @@ async def test_the_train_submission_carries_no_secret_material(train_body: dict[
 async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage_body: dict[str, Any]) -> None:
     """The failure mode that would hide the fix: stripping everything also passes above.
 
-    Endpoint and region are configuration, not secrets — the job needs them per submission (they vary
-    by warehouse) — and `LINEAGE_SERVICE_ID` is an identity NAME, not a credential.
+    `LINEAGE_SERVICE_ID` is an identity NAME rather than a credential, and it is PER SUBMITTER — the
+    three stage runners authenticate as `service-bronze-to-silver`, `service-silver-to-gold` and
+    `service-media-to-silver` against ONE shared head — so it cannot come from the pod and has to ride
+    the submission.
+
+    `S3_ENDPOINT` AND `S3_REGION` LEFT THIS LIST, and the reason they were in it does not survive
+    measurement: they were defended as varying per submission, "by warehouse". They do not. Measured
+    2026-09-18 on the deployed estate, all four medallion pods carry
+    `MEDALLION_S3_ENDPOINT=http://rask-minio:9000` and none sets `MEDALLION_S3_REGION` at all; the chart
+    renders one `lance.s3Endpoint` for the release. A warehouse varies the BUCKET, which rides the
+    order's URIs, not the endpoint. So they are one deployment fact about where this cluster's object
+    store is — the same shape as the credential used against it, and now the same owner.
 
     `S3_KEY` USED TO BE IN THIS LIST, on the same reasoning: an access key id is not secret. That
     reasoning still holds, and it is not why the key left. It left because Ray merges
@@ -141,6 +151,8 @@ async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage
     quietly leave the job with nothing to read."""
     await ray_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
     env = stage_body["body"]["runtime_env"]["env_vars"] if "body" in stage_body else stage_body["runtime_env"]["env_vars"]
-    for key in ("S3_ENDPOINT", "S3_REGION", "LINEAGE_URL", "LINEAGE_SERVICE_ID"):
-        assert key in env, f"`{key}` was stripped with the secrets — the job cannot run without its non-secret config"
-    assert "S3_KEY" not in env, "the key must come from the pod alone, or runtime_env overrides it and the pair has two owners"
+    for key in ("LINEAGE_URL", "LINEAGE_SERVICE_ID"):
+        assert key in env, f"`{key}` was stripped with the secrets — it is per-SUBMITTER and no pod can supply it"
+    assert env["RASK_SOURCE_URI"] and env["RASK_DEST_URI"], "the order itself stopped riding the submission"
+    for pod_owned in ("S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_REGION"):
+        assert pod_owned not in env, f"`{pod_owned}` must come from the pod alone, or runtime_env overrides it and the pair has two owners"
