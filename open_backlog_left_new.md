@@ -132,14 +132,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**209 open items**, of which **99 are blocked on a decision** and **110 can be picked up today**.
+**210 open items**, of which **99 are blocked on a decision** and **111 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 66 | 27 | 15 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 45 | 28 | 15 |
+| **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
 | **FRONTEND** | 9 | 8 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -1066,6 +1066,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Record the ruling so the backlog row that keeps re-asking can close: job-record loss on head restart is accepted, the compensation is the resubmit budget, and a durable record comes from a CR rather than from Redis.
 - *Closes when:* docs/DECISIONS.md carries the ruling and the open backlog row citing it is closed.
 - *Evidence:* `grep -rn "gcsFaultTolerance|GcsFaultToleranceOptions|redisAddress|RAY_external_storage_namespace"` over the tree -> zero hits each. docs/DECISIONS.md:1482 uses the non-durability as a premise ("Ray's GCS is not fault-tolerant here, so the Jobs-API watcher carries MAX_UNSEEN_POLLS/MAX_RESUBMITS") without ever ruling on it; open_backlog_left_new.md:1056-1058 records the ruling as still outstanding. The Ray docs are unambiguous that GCS FT is not the remedy — recommended for Ray Serve, and for other workloads "isn't recommended and the compatibility isn't guaranteed" — and no-Redis is a standing estate rule (chart/templates/dapr-statestore.yaml:21-26). So the honest close is a written ruling, not an adoption.
+
+**CP-050 · The Ray cluster image is outside the estate's image mechanism: it bypasses `rask.image`, so it resolves to Docker Hub locally and no per-component pin reaches it**
+`chart` · **MED**
+- *What is left:* `chart/templates/_ray-cluster-config.tpl:64` renders `image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"` — bare, while every other workload in the chart goes through `include "rask.image" (list . "<name>")`. Two consequences, both measured 2026-09-18. (1) With `image.localImages=true` a default render gives `ray-cluster:dev`, which resolves to Docker Hub and ImagePullBackOffs on any side-loaded estate; the live head only works because `deploy/ray-lance-demo.yaml` hard-codes `localhost:5000/ray-lance:<tag>` by hand. (2) The per-component pin mechanism cannot reach it: `chart/values-live-pins.yaml:22` carries `ray-lance: "main-2c6363d0-lin001"` under `image.perComponent`, read by `rask.image` — which the Ray templates never call — so that pin is inert and `scripts/k3s-pins.sh`'s stem-convergence guarantee excludes the Ray plane entirely. Route the Ray image through `rask.image` and retire `ray.image.repository`/`ray.image.tag`, or state in values why Ray is deliberately exempt from both.
+- *Closes when:* A default local render gives a pullable Ray image and a `perComponent` pin for it changes what the Ray head runs.
+- *Evidence:* `chart/templates/_ray-cluster-config.tpl:64 (bare repository:tag)` · `grep -rn 'include "rask.image"' chart/templates/ → every other workload` · `chart/values-live-pins.yaml:22 (ray-lance pin, unread by the Ray templates)` · `live head image localhost:5000/ray-lance:main-2c6363d0-lin001 vs a default render's ray-cluster:dev`
 
 **CP-005 · `ensure_dataset` runs before enumeration, so a source that enumerates zero units leaves a registered empty bronze table behind a COMPLETE run**
 `ingest, medallion, catalog` · **HIGH**
