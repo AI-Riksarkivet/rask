@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**209 open items**, of which **99 are blocked on a decision** and **110 can be picked up today**.
+**208 open items**, of which **99 are blocked on a decision** and **109 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 65 | 26 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 64 | 25 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -310,12 +310,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
   the rung on every output — so the gap is narrower than "anyone can claim anyone".
 - *Closes when:* A bus event whose signature does not verify is refused at `/lineage-events`, pinned by a unit test, with no `accessControl` in the tree — and the signing key is not derivable from `dapr.appToken`.
 - *Evidence:* `services/lineage/src/lineage/api/fga_deps.py:237-275 (`_StampedAuthor` "nothing proves the stamp"; `enforce_bus_authz` delegates to `enforce_output_authz`)` · `grep -rniE 'signature|hmac' services/lineage/src packages/lineage-kit/src → prose only, no verification code` · `chart/templates/dapr-component.yaml:204-245 (scopes only on notifications; comment records the non-additive breakage)` · `tests/unit/test_the_inbox_may_read_the_provenance_bus_but_never_write_it.py (exists)`
-
-**LH-066 · The maintenance identity is one key across every warehouse rather than a per-warehouse scoped credential**
-`maintenance, chart` · **MED** · **REWRITTEN — the original ask would be wrong**
-- *What is left:* Close the row. The write path is already finer than per-warehouse: maintenance.vendWriteCredentials defaults true, so every rewrite signs with a per-TABLE 900 s credential from the catalog's vending door, and the ambient key is the scoped rask-maintenance user (policy: rewrite data, never the governing records), not the tenant root. The reads that stay ambient — discovery and the whole-estate protection pre-pass — must open every manifest in every bucket, because a shallow clone in bucket B is what marks bucket A's dataset unrewritable; a per-warehouse key would silently turn that guard off. Do not scope the ambient identity per warehouse.
-- *Closes when:* Closed: the write path vends per table and the ambient read key is scoped by policy, not by warehouse.
-- *Evidence:* `chart/values.yaml:1584 (vendWriteCredentials: true), :2103 (maintenanceAccessKey: rask-maintenance)` · `chart/templates/maintenance.yaml:122-137 (per-table vend), :245-248 (scoped pair wins)` · `services/maintenance/src/maintenance/services/credentials.py:1-25` · `chart/templates/minio-scoped-users.yaml:204-265 (rask-maintenance policy)`
 
 **LH-067 · Warehouse storage cannot be expressed as bases: one endpoint and one key for the whole estate, and a warehouse-rooted connection swaps only `root`**
 `catalog, storage` · **MED** · PARTIAL
