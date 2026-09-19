@@ -313,6 +313,28 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: applied, because the pre-pass has already run and `is_protected` is an in-memory compare.
     trash_purge_dry_run: bool = Field(default=False, alias="MAINTENANCE_TRASH_PURGE_DRY_RUN")
 
+    #: Write one metadata-only commit to a dataset whose orphans sit above its Lance listing floor, so
+    #: the next ordinary sweep can enumerate them ([[LH-094]], owner ruling 2026-09-19).
+    #:
+    #: OFF BY DEFAULT because it writes a version to a GOVERNED table for a GC side effect, which is a
+    #: real cost an estate should choose rather than inherit. It is the cheaper of the two routes the
+    #: ruling weighed: the alternative had this service delete the named bytes itself, on live tables,
+    #: against a floor rule it derived rather than one upstream enforces.
+    #:
+    #: SEPARATE FROM ITS DRY RUN, for the reason the trash purge's pair already establishes: this flag
+    #: is whether the estate wants the behaviour, the other is whether this tick acts. An operator
+    #: turning it on to SEE what it would touch must not thereby commit to a governed dataset.
+    floor_raise_enabled: bool = Field(default=False, alias="MAINTENANCE_FLOOR_RAISE_ENABLED")
+    #: Run the real selection and refusals, write nothing. DEFAULT TRUE, the opposite of the trash
+    #: purge's, and deliberately: the purge is gated behind a report that must first run clean, while
+    #: this pass is what MAKES that report clean and so has no such gate in front of it. Its only brake
+    #: is this flag.
+    floor_raise_dry_run: bool = Field(default=True, alias="MAINTENANCE_FLOOR_RAISE_DRY_RUN")
+    #: Per-tick ceiling on datasets committed to. The remainder is REPORTED (`FloorReport.capped`): a
+    #: store rebuild strands EVERY dataset at once, so an uncapped pass would turn one cron fire into a
+    #: commit against every governed table in the estate.
+    floor_raise_max_per_tick: int = Field(default=10, ge=1, le=1000, alias="MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK")
+
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and
     # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. The component

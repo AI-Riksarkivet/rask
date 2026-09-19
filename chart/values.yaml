@@ -1715,6 +1715,29 @@ maintenance:
   # Per-tick ceiling on purged records. The remainder is reported (`trash_purge.capped`) and drained on
   # the next tick, so a backlog never becomes one unbounded delete storm against object storage.
   trashPurgeMaxPerTick: 25
+  # [[LH-094]] — raise a stranded dataset's Lance LISTING FLOOR so its residue becomes reclaimable.
+  #
+  # `cleanup_old_versions` clamps its unreferenced-file listing to the earliest retained manifest's
+  # commit timestamp BEFORE the 7-day rule, so a file whose mtime is above that instant is invisible to
+  # Lance permanently — not late. Any restore, re-upload or lifecycle rehydrate puts every object mtime
+  # above every manifest and creates it estate-wide. This writes ONE metadata-only commit per stranded
+  # dataset, which moves the floor past the residue; Lance then does the deleting on the next sweep.
+  #
+  # OFF BY DEFAULT because the commit is a real version on a GOVERNED table, written for a GC side
+  # effect (owner ruling 2026-09-19, docs/DECISIONS.md). The rejected alternative had this service
+  # delete the named bytes itself, on live tables, against a floor rule it derived rather than one
+  # upstream enforces.
+  floorRaise: false
+  # The preview, and note the default is the OPPOSITE of trashPurgeDryRun above. The purge earns its
+  # permission from a report that must first run clean; this pass is what MAKES that report clean, so
+  # nothing gates it but these two flags — and the safe default for an ungated writer is to plan only.
+  # Turning `floorRaise` on therefore reports `floor_raise.raised` and commits nothing until this is
+  # set false.
+  floorRaiseDryRun: true
+  # Per-tick ceiling on datasets committed to. A store rebuild strands every dataset at once, so an
+  # uncapped pass would turn one cron fire into a commit against every governed table in the estate.
+  # The remainder is reported (`floor_raise.capped`) and taken on the next tick.
+  floorRaiseMaxPerTick: 10
   # The reconciler's per-dataset FILE scan — the unreferenced-file category (#128a).
   #
   # THIS IS THE LEVER TRASHPURGE ABOVE DEPENDS ON, and until 2026-08-15 it did not exist at any values

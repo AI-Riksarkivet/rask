@@ -170,6 +170,18 @@ spec:
                  SUBTRACT: with both flags on the tick previews and reclaims nothing. */}}
             - { name: MAINTENANCE_TRASH_PURGE_DRY_RUN, value: {{ hasKey .Values.maintenance "trashPurgeDryRun" | ternary .Values.maintenance.trashPurgeDryRun false | quote }} }
             - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
+            {{- /* [[LH-094]]. The floor raise writes ONE metadata-only commit to a dataset whose orphans
+                   sit above its Lance listing floor, so the next ordinary sweep can enumerate them. It
+                   deletes nothing — the delete stays `cleanup_old_versions`'s, under Lance's own rule.
+                   Rendered unconditionally for the same reason the orphan scan below is: a setting with
+                   no path from values is one no deployed estate can turn on, which is how the orphan
+                   scan sat permanently SKIPPED. TWO FLAGS, because "does this estate want the
+                   behaviour" and "does this tick act" are different questions, and the dry run defaults
+                   TRUE here where the purge's defaults false — the purge is gated behind a clean report
+                   and this pass is what MAKES the report clean, so it has no such gate in front of it. */}}
+            - { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Values.maintenance.floorRaise false | quote }} }
+            - { name: MAINTENANCE_FLOOR_RAISE_DRY_RUN, value: {{ hasKey .Values.maintenance "floorRaiseDryRun" | ternary .Values.maintenance.floorRaiseDryRun true | quote }} }
+            - { name: MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "floorRaiseMaxPerTick") | ternary .Values.maintenance.floorRaiseMaxPerTick 10 | quote }} }
             {{- /* #128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
                    because the whole defect was that the setting existed in config.py and had NO path
                    from values — an env var that appears only when enabled is one nobody can discover

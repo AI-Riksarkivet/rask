@@ -31,6 +31,7 @@ from pydantic import BaseModel
 from maintenance.api.dependencies import ControlEmitterDep, DaprClientDep, FgaClientDep, LineageEmitterDep, S3ClientDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_run
+from maintenance.services.floor import raise_listing_floors
 from maintenance.services.optimize import summarize_refusals
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
@@ -205,6 +206,27 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             log.warning("reconcile_drift", extra=summary)
         else:
             log.info("reconcile_clean", extra=summary)
+        # BEFORE the purge, and AFTER the report it consumes. Raising a floor does not clean THIS tick's
+        # report — Lance reclaims on the next ordinary sweep, and the tick after that sees the smaller
+        # number — so the ordering here buys nothing for the purge gate and is chosen for the other
+        # reason: the report is what identifies the stranded datasets, and the purge must be gated on
+        # the report as it was MEASURED, never on one a write in between could have changed.
+        floors = await run_in_threadpool(raise_listing_floors, settings, orphans=report.orphan_files, storage_options=settings.storage_options())
+        payload["floor_raise"] = floors.model_dump(mode="json")
+        # WARNING and NAMED, like the purge line below, because this writes a version to a GOVERNED
+        # table. Which tables is the entire audit trail; a count answers nobody's question about it.
+        if floors.raised or floors.refused:
+            log.warning(
+                "floor_raise_result",
+                extra={
+                    "dry_run": floors.dry_run,
+                    "raised": [
+                        {"dataset": r.dataset, "version": r.version, "orphan_files": r.orphan_files, "orphan_bytes": r.orphan_bytes} for r in floors.raised
+                    ],
+                    "refused": [{"dataset": r.dataset, "reason": r.refused} for r in floors.refused],
+                    "capped": floors.capped,
+                },
+            )
         purged = await purge_expired_trash(
             settings,
             report=report,
