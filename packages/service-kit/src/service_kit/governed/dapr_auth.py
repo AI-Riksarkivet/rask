@@ -183,6 +183,33 @@ def missing_app_token_knob() -> str:
     return "APP_API_TOKEN is unset"
 
 
+def refuse_unconfigured_door(*, caller: str | None = None) -> None:
+    """Raise unless this deployment has DECLARED that an unauthenticated door is acceptable.
+
+    THE ONE PLACE THE UNSET-TOKEN RULE LIVES, and it is a function because it was two answers. Every
+    sidecar-delivered door refused; `medallion.api.produce_auth.authorize_produce` returned a
+    service-caller result and admitted. Nothing in either said which was intended, so a reader of one
+    learned the wrong rule about the other — and the door that opened is the cascade head. Owner ruling
+    2026-09-19: an unset token is a refusal everywhere (`docs/DECISIONS.md`).
+
+    FAILING CLOSED IS NOT SEVERITY, IT IS THE CONTROL EXISTING. A guard with no expected value cannot
+    distinguish a legitimate delivery from a forged one, so admitting is the control being absent while
+    every probe reports it present. Measured 2026-09-15: an actor host with no token answered 200 to a
+    caller presenting none.
+
+    The hatch says "unconfigured is acceptable here", never "wrong tokens are acceptable" — a configured
+    door still refuses a forged one regardless of this flag.
+    """
+    door = DaprDoorSettings()
+    if not door.allow_unauthenticated_dapr:
+        remedy = "seed that field" if door.app_token_from_store else "wire dapr.io/app-token-secret + APP_API_TOKEN"
+        raise PermissionDeniedError(
+            f"this Dapr door is not configured: {missing_app_token_knob()}, so no caller can be authenticated. "
+            f"Either {remedy}, or set RASK_ALLOW_UNAUTHENTICATED_DAPR to accept an unauthenticated door deliberately."
+        )
+    log.warning("dapr_door_unauthenticated", extra={"caller": caller or "<unset>"})
+
+
 def require_dapr_token(
     dapr_api_token: Annotated[str | None, Header()] = None,
     # The INVOKING Dapr app-id. Every route guarded by this dependency is delivered by the app's OWN
@@ -219,7 +246,6 @@ def require_dapr_token(
     # directly, the fleet apps since `make_service_app` began installing the same translator.
     if is_public_caller(dapr_caller_app_id):
         raise PermissionDeniedError(f"{dapr_caller_app_id!r} is a public front door: its Dapr app-token authenticates the proxy, not the caller")
-    door = DaprDoorSettings()
     try:
         expected = expected_app_token()
     except SecretStoreUnreadable as outage:
@@ -235,15 +261,7 @@ def require_dapr_token(
     # absent while every probe reports it present. Measured 2026-09-15: an actor host with no token
     # answered 200 to a caller presenting none.
     if not expected:
-        if not door.allow_unauthenticated_dapr:
-            remedy = "seed that field" if door.app_token_from_store else "wire dapr.io/app-token-secret + APP_API_TOKEN"
-            raise PermissionDeniedError(
-                f"this Dapr door is not configured: {missing_app_token_knob()}, so no caller can be authenticated. "
-                f"Either {remedy}, or set RASK_ALLOW_UNAUTHENTICATED_DAPR to accept an unauthenticated door deliberately."
-            )
-        # The hatch says "unconfigured is acceptable here", never "wrong tokens are acceptable" — a
-        # configured door below still refuses a forged one regardless of this flag.
-        log.warning("dapr_door_unauthenticated", extra={"caller": dapr_caller_app_id or "<unset>"})
+        refuse_unconfigured_door(caller=dapr_caller_app_id)
         return
     # compare_digest: the token is the only guard on these routes, so no timing side-channel; bytes
     # (not str) so a non-ASCII header value is a clean 403, never a TypeError.

@@ -117,9 +117,14 @@ async def authorize_produce(
     a tenant, so it may only produce into the configured project — a different requested project is
     refused (403); crossing tenants takes a user bearer, which gets the per-project FGA check."""
     expected = _expected_app_token(settings)
-    # Dev: no service token configured → open, exactly as require_dapr_token was a no-op. No verified
-    # subject exists on this path, so there is no originator to carry — `None`, never a guess.
+    # UNCONFIGURED IS A REFUSAL, through the same function every sibling door calls. This door used to
+    # open here, and the asymmetry was unreachable from either side: `require_dapr_token` refuses, this
+    # admitted, and nothing said which was intended — on the CASCADE HEAD. Owner ruling 2026-09-19
+    # (`docs/DECISIONS.md`); `RASK_ALLOW_UNAUTHENTICATED_DAPR` is what a deployment that means to run
+    # open now says out loud. When the hatch is taken this returns as before: admitted, and `None`
+    # because no verified subject exists on that path, never a guess.
     if not expected:
+        dapr_auth.refuse_unconfigured_door(caller=dapr_caller_app_id)
         return None
     obj = f"project:{project or settings.produce_admin_project}"
     # Service-to-service path: a matching Dapr app-api-token. The shared token carries NO tenant
