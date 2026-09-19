@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**203 open items**, of which **95 are blocked on a decision** and **108 can be picked up today**.
+**204 open items**, of which **96 are blocked on a decision** and **108 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 59 | 24 | 12 |
+| **PHASE 1 · LAKEHOUSE** | 60 | 24 | 13 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -198,6 +198,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Measured against `datafusion-contrib/datafusion-openlineage`, the closest reference for a lakehouse query/compute engine: it emits "`START` at plan time, `COMPLETE` / `FAIL` at end of execution, all under one run id" and sends events "through a bounded queue drained by a background task — lineage never stalls or fails a query". rask's runner lanes do neither. `runners/dummy` REFUSES a START in terms ("a START notifies nobody"), which is a notifications argument applied to a lineage decision: a START is what makes a run observable WHILE it runs and what a child's `ParentRunFacet` attaches to. `runners/htr` emits only COMPLETE/FAIL. Both call `emit()` inline, so a slow ingest slows the job. `medallion/services/transform.py:316` and `scripts/ray_train_job.py:461` DO emit START, so this is a runner-lane gap rather than an estate-wide one. **`lineage_kit.runs.LineageRun` already carries the lifecycle** — `start()`, terminal-once protection, per-run facets, the `on_undelivered` hook — and neither runner lane uses it: both hand-roll ~150 lines that duplicate it and omit the terminal-once guard, so either can emit COMPLETE twice.
 - *Closes when:* Both runner lanes drive `LineageRun`, emit START, and emit off the critical path; `_NOT_A_PERSON` and the originator/project read live in `lineage-kit` rather than once per lane.
 - *Evidence:* `runners/dummy/src/dummy_runner/lineage.py:91-92 (TERMINAL_STATES refusal)` · `runners/htr/src/runner/lineage.py (no START, inline emit)` · `packages/lineage-kit/src/lineage_kit/runs.py:188-215 (_emit_terminal, start)` · https://github.com/datafusion-contrib/datafusion-openlineage
+
+**LIN-004 · Every DDL change is emitted as a RunEvent, so half the Job nodes in the graph are jobs that never ran**
+`catalog, lineage` · **MED**
+- **blocked:** Owner call — the fix changes the graph's node population and the `/jobs` ACCESS surface, which is bigger than it looks. Either DDL moves to `DatasetEvent` (and the phantom Jobs stop being created, leaving the existing ones to migrate or age out), or emitting DDL as a run is recorded as deliberate with its reason.
+- *What is left:* The OpenLineage spec defines FOUR event types — `BaseEvent`, `RunEvent`, `DatasetEvent`, `JobEvent` (verified in `OpenLineage/OpenLineage/spec/OpenLineage.json`, 2026-09-19). rask emits only `RunEvent`, so `build_write_event` wraps a DDL change in a synthetic run: `eventType: COMPLETE` with a Run that never executed and a Job that never ran. `DatasetEvent` exists for exactly this — "a dataset change outside any job (e.g. a DDL schema change)". **MEASURED on the live feed over 500 events: 168 DDL events producing 144 Job nodes, against 146 from real runs — half the Job population represents no job.** It scales with the TABLE count rather than with work, because the job name is per-table-per-operation (`lance-catalog/add_columns.lh019before299c33ns$t1`). It is not only tidiness: the `/jobs` governance fold makes a Job's output set its access handle, so each phantom is an access-control object for an operation nobody performed.
+- *Closes when:* A DDL change emits `DatasetEvent` (or the RunEvent choice is recorded with its reason), and the phantom Job count stops growing with the table count.
+- *Evidence:* `services/catalog/src/catalog/core/lineage_emit.py:305 ("eventType": "COMPLETE" for every operation)` · `gh api repos/OpenLineage/OpenLineage/contents/spec/OpenLineage.json → BaseEvent, DatasetEvent, JobEvent, RunEvent` · live feed 2026-09-19: 168 DDL events, 144 DDL-only Job nodes, 146 run Job nodes · https://opendatalakehouse.com/kb/data-lineage/
 
 **LH-016 · `silver-media$features` still occupies a medallion namespace in `lakehouse-wh` under two spellings, and the unbind door refuses a non-empty namespace**
 `catalog` · **HIGH**
@@ -311,7 +318,8 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Evidence:* `services/catalog/src/catalog/services/warehouses.py:117 (_CALLER_OWNED has no endpoint/credential field)` · `services/catalog/src/catalog/core/namespace.py:28-35 (swaps only root)` · `services/catalog/src/catalog/services/dataplane.py:218-237 (same so for every base; initial_bases/target_bases already passed)` · `open_backlog_left.md:164 (R1–R11 STAND); grep aws_provider_scheme services/catalog → none`
 
 **LH-073 · Right to erasure is a Lance row delete only — it reaches no blob sidecar, clone/branch or version-pinning tag**
-`catalog, maintenance, notifications` · **MED**
+`catalog, maintenance, notifications` · **HIGH**
+- **RAISED MED -> HIGH 2026-09-19.** Not new evidence about the defect — new evidence about what rests on it. Erasure traceability is named as a PRIMARY driver for column-level lineage in the reference material (GDPR Art. 17, plus CCPA/HIPAA/SOX): "show me every system that touched this record". rask HAS the column-level lineage that question needs (`ColumnLineageDatasetFacet`, emitted by catalog and medallion) and cannot act on the answer, which is the worse half of the pair to be missing: the estate can prove what it would have to erase and cannot erase it.
 - *What is left:* `delete_from_table` (`data.py:447`) is a predicate delete plus a DELETE lineage event and propagates nowhere. Propagate a row delete to clones/branches through the referrer registry (`service_kit.lakehouse.base_refs` / `work_items`, consumed by maintenance `sweep.py` and `purge.py`) and to tags pinning old versions, and add a delete-subject door in notifications (no erasure/delete-subject code exists there). For blob sidecars, check whether `orphans.py:221`'s per-data-file `.blob` accounting already reclaims them once old versions are cleaned up; if so the sidecar clause reduces to making erasure trigger version cleanup past the retention floor.
 - *Closes when:* A row erasure removes the subject from every clone, branch and pinned version and its sidecar bytes, and the notifications plane has a delete-subject door.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:447-462 (predicate delete + DELETE event only)` · `services/maintenance/src/maintenance/services/orphans.py:221 (blob sidecar accounting)` · `rg -l referrer services/maintenance/src packages -> sweep.py, purge.py, base_refs.py, work_items.py` · `rg -i 'delete.subject|erasure' services/notifications/src -> no hits`

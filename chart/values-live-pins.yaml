@@ -10,7 +10,7 @@ image:
     flows: "fix-71d7b04f"
     gateway: "stagerunner-04d6fcda"
     ingest: "main-a581cec0"
-    lance-rest-catalog: "main-4244ed9e"
+    lance-rest-catalog: "main-4b1d5ac7"
     minio: "RELEASE.2025-04-22T22-12-26Z"
     nats: "2.14.2-alpine"
     nats-box: "0.19.7"
