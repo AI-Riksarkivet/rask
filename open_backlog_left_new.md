@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**206 open items**, of which **97 are blocked on a decision** and **109 can be picked up today**.
+**206 open items**, of which **98 are blocked on a decision** and **108 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 62 | 25 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 62 | 24 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -173,6 +173,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LH-020 · The lance-ray client is undriven against the deployed catalog and the conformance suite covers only pylance's RestNamespace**
 `catalog, tests/e2e-py` · **HIGH** · PARTIAL
+- **blocked:** an owner call on what VENDING MEANS OFF-CLUSTER. The catalog vends its own in-cluster address (`http://rask-minio:9000`), so a client outside the cluster gets a correct credential for a host it cannot resolve. Either (a) an external client receives an externally-resolvable endpoint — a real decision about who vending serves — or (b) the conformance target runs from INSIDE the cluster, which proves the clients but leaves the product question open. **MEASURED 2026-09-19 from the host against release 186: 1 passed, 2 SKIPPED** — `test_lancedb_opens_a_table_through_the_catalogs_namespace` and `test_lance_ray_reads_a_table_through_the_catalogs_namespace` both skip with "the vended endpoint 'http://rask-minio:9000' is in-cluster and unreachable from here". The skips are honest (they name the cause rather than reporting an environment problem as a conformance failure) but the closing condition says PASSES, and a skip reads as green.
 - *What is left:* Do NOT file the lancedb upstream issue: lancedb 0.34.0 exposes `open_table(name, namespace_path=[...])`, so a multi-segment identifier is expressible and the issue has no bug behind it. Drive `lance_ray.read_lance(table_id=[...], namespace_impl="rest")` (lance-ray 0.5.0 in uv.lock) against the catalog with vended creds and `ray.init(address="local", _temp_dir=...)`. Extend `tests/e2e-py/test_the_stock_lance_client_drives_the_catalog.py` / `make e2e-spec-conformance` (Makefile:953-955) from lance_namespace-only to all three clients; nothing under `tests/e2e-py` imports lancedb or lance_ray.
 - **LANCEDB IS PROVEN END TO END against the deployed catalog:** resolved through
   `connect_namespace("rest", …)` + `open_table(TABLE, namespace_path=[NS], storage_options=…)` with a
@@ -199,7 +200,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
   repeatable proof covers resolution + credential issuance, and the READ is proven only by the in-cluster
   drives recorded above.
 - *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
-- *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `grep -rn 'lancedb|lance_ray' tests/e2e-py — no match` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
+- *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `tests/e2e-py/test_the_other_stock_clients_drive_the_catalog.py (3 cases, marked spec_conformance)` · `pytest -m spec_conformance --collect-only → 17 across 2 files (14 + 3)` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
 
 **LH-004 · The catalog's Lance-commit→lineage-publish window is not atomic and no ruling records whether that is accepted as view lag or needs a durable producer**
 `lineage, catalog, service-kit` · **HIGH** · **REWRITTEN — the original ask would be wrong**
