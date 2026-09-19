@@ -26,6 +26,16 @@ _versions_removed = _meter.create_counter(
     unit="{version}",
     description="Superseded Lance manifest versions GC'd.",
 )
+#: THE NUMBER THE SWEEP EXISTS TO PRODUCE, and until [[LH-099]] it reached three log sites and no
+#: series — measured on the deployed estate 2026-09-19, `compaction_bytes_reclaimed_total` returned
+#: ZERO series from GreptimeDB while `compaction_runs_total` returned one. Distinct from
+#: `maintenance.trash.bytes_reclaimed`, which the PURGE feeds: the two answer different questions (what
+#: superseded versions cost versus what dropped tables cost) and summing them would answer neither.
+_bytes_reclaimed = _meter.create_counter(
+    "compaction.bytes.reclaimed",
+    unit="By",
+    description="Bytes freed by GC'ing superseded Lance versions during the sweep.",
+)
 _indices_optimized = _meter.create_counter(
     "compaction.indices.optimized",
     unit="{index}",
@@ -179,14 +189,21 @@ def record_trash_purge(
     _trash_bytes.add(bytes_reclaimed, attributes)
 
 
-def record_reclaimed(*, fragments_removed: int, versions_removed: int, indices_optimized: int = 0) -> None:
+def record_reclaimed(*, fragments_removed: int, versions_removed: int, indices_optimized: int = 0, bytes_removed: int = 0) -> None:
     """Record what one sweep reclaimed + re-optimized across all datasets. Always emit — adding 0 is a valid
     no-op that still CREATES the counter series, so a dashboard/alert on ``rate(compaction_*_total[5m])``
     has data from the first sweep instead of reading "no data" until the first non-zero reclaim (obs audit
-    2026-07-13)."""
+    2026-07-13).
+
+    ``bytes_removed`` is the one an operator asks for and the one that was missing: counts of fragments
+    and versions say how much WORK happened, never how much disk came back. The always-emit rule binds
+    hardest here — a reclaimer whose byte series is flat at zero is either idle or broken, and those
+    must be distinguishable from a series that does not exist.
+    """
     _fragments_removed.add(fragments_removed)
     _versions_removed.add(versions_removed)
     _indices_optimized.add(indices_optimized)
+    _bytes_reclaimed.add(bytes_removed)
 
 
 def record_trashed_skipped(datasets: int) -> None:

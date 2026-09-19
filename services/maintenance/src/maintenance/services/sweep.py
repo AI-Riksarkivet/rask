@@ -743,6 +743,7 @@ def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, option
         fragments_removed=result.fragments_removed,
         versions_removed=result.old_versions_removed,
         indices_optimized=result.indices_optimized,
+        bytes_removed=result.bytes_removed,
     )
     record_refused(1 if result.refused else 0)
     if result.error is not None:
