@@ -103,10 +103,10 @@ FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
 #: THE FOUR BITS THE VENDORED TABLE DOES NOT CARRY. `lance_docs/file_format.md` stops at 16 and says
 #: "flags with bit values 32 and above are unknown"; upstream's own
-#: `rust/lance-table/src/feature_flags.rs` defines all four and puts its `FLAG_UNKNOWN` boundary at
-#: `1 << 8`, so the doc is four bits behind the code it describes — the same doc-lag the vendored
-#: `spec.yaml` carried until it was re-vendored (`lance_docs/PROVENANCE.md`). Read against the source
-#: 2026-09-14, not inferred. Named here so a refusal says WHICH feature it declined instead of
+#: `rust/lance-table/src/feature_flags.rs` allocates ELEVEN flags and puts its `FLAG_UNKNOWN` sentinel
+#: at `1 << 11` — read against the source 2026-09-19, not inferred, and the vendored
+#: `lance_docs/file_format.md` names only five of the eleven, which is the doc-lag
+#: `lance_docs/PROVENANCE.md` warns a load-bearing citation must be spot-checked against. Named here so a refusal says WHICH feature it declined instead of
 #: "32 (unknown)": an operator can act on "disable_transaction_file", not on a bare bit.
 #: **Naming is not supporting** — none of them enters :data:`SUPPORTED`, so all four still refuse;
 #: pylance 10.0.0 has no symbol for 32 or 128 at all, which makes refusal the only correct answer today.
@@ -122,13 +122,17 @@ FLAG_DISABLE_TRANSACTION_FILE = 32
 FLAG_DATA_OVERLAYS = 64
 #: Reader- and writer-required, and STICKY once set.
 FLAG_COVERED_INDEX_METADATA = 128
-#: RESERVED UPSTREAM AT THE UNKNOWN BOUNDARY — `FLAG_MIXED_DATA_FILE_VERSIONS` and `FLAG_UNKNOWN` are
-#: both `1 << 8`, i.e. upstream has allocated the name and left the bit outside what any reader treats
-#: as known "until its storage contract lands". A dataset setting it references recognised V2 data
-#: files at DIFFERENT exact versions, which is a layout no rewrite here has been checked against.
-#: Named for the refusal message only; a reserved bit that arrives before its contract does must still
-#: be declined, and declined by name.
+#: A dataset setting it references recognised V2 data files at DIFFERENT exact versions, which is a
+#: layout no rewrite here has been checked against. Named for the refusal message only.
 FLAG_MIXED_DATA_FILE_VERSIONS = 256
+#: THE FRAGMENT REUSE INDEX PAIR, read from `rust/lance-table/src/feature_flags.rs` on 2026-09-19.
+#: Neither is set by anything this estate does today — probed on pylance 11.0.0, a `compact_files`
+#: with `defer_index_remap=True` (the sweep's own call, and the one that USES the FRI) leaves the
+#: manifest at `(0, 0)` — so naming them changes no verdict now. They are here because `SUPPORTED`
+#: fails closed: the day a pylance bump starts stamping one, the sweep refuses that dataset, and the
+#: only difference between a diagnosable refusal and a dead end is whether the bit has a name.
+FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS = 512
+FLAG_FRAGMENT_REUSE_INDEX = 1024
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -176,7 +180,9 @@ _FLAG_NAMES = {
     FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
     FLAG_DATA_OVERLAYS: "data overlays",
     FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
-    FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions (reserved upstream)",
+    FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions",
+    FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS: "fragment reuse with stable row ids",
+    FLAG_FRAGMENT_REUSE_INDEX: "fragment reuse index",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented

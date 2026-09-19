@@ -43,9 +43,9 @@ source path was confirmed to exist on 2026-09-14; none of the bundles records th
 scraped at, so **a citation from these is weaker than one from `spec.yaml` and should be spot-checked
 against the live docs when it is load-bearing.**
 
-| File | Source tree |
-| --- | --- |
-| `file_format.md` | `lance-format/lance` — `docs/src/format/` |
+| File | Source tree | Spot-checked |
+| --- | --- | --- |
+| `file_format.md` | `lance-format/lance` — `docs/src/format/` | 2026-09-19 against `main` (`docs/src/format/table` at commit `6bd1a86a`) — see below |
 | `guide.md` | `lance-format/lance` — `docs/src/guide/` |
 | `namespace.md` | `lance-format/lance-namespace` — `docs/src/` |
 | `ray.md` | `lance-format/lance-ray` — `docs/src/` |
@@ -54,6 +54,24 @@ against the live docs when it is load-bearing.**
 `ns_catalog/` also holds the per-model markdown generated from the spec, plus two images. They move
 with `spec.yaml` and were not re-vendored with it, so where a model page and `spec.yaml` disagree,
 **`spec.yaml` is the one that was checked.**
+
+### Spot-checks (2026-09-19)
+
+Three claims from `file_format.md` were load-bearing for the branch-reclaim ruling, so each was read
+against the live source as the paragraph above instructs. All three are unchanged upstream:
+
+| Claim | Upstream today |
+| --- | --- |
+| a branch is a shallow clone of its source | `docs/src/format/table/branch_tag.md:49` |
+| a file with no `base_id` resolves against the dataset root | `docs/src/format/table/layout.md:72` |
+| "Source dataset remains immutable and can be garbage collected independently" | `docs/src/format/table/layout.md:156` |
+
+**The bundle IS stale where the row said, and measurably so.** It names five feature flags;
+`rust/lance-table/src/feature_flags.rs` allocates ELEVEN plus a sentinel at `1 << 11`. The six it does
+not name are `disable_transaction_file`, `unstable_data_overlay_files`, `covered_index_metadata`,
+`mixed_data_file_versions`, `frag_reuse_with_stable_row_ids` and `fragment_reuse_index`. That gap is
+why `service_kit.lakehouse.features` reads the Rust source rather than this bundle, and is pinned by
+`packages/service-kit/tests/test_a_refused_flag_is_refused_BY_NAME.py`.
 
 ## Re-vendoring
 
