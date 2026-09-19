@@ -981,6 +981,20 @@ e2e-spec-conformance:     ## The STOCK lance_namespace client against a live cat
 e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — proves the READ, not just the vend
 	bash scripts/conformance-incluster.sh
 
+# THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/integration` is
+# what every change runs before it is pushed, and it took 9m57s serially on a 64-core machine. Measured
+# 2026-09-19 at `-n 16 --dist loadfile`: **1m17s, 4,947 passed, zero failures** — 7.7x, because the
+# suite is a broad front with no hotspot (the slowest single test is 14.1s).
+#
+# `--dist loadfile` and not the default: three suites are parallel-unsafe at the FILE level (the
+# `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers), and
+# keeping a file's tests on one worker is what makes them safe. [[XC-037]].
+#
+# `-n 16` rather than `auto`: `auto` takes all 64 cores and the run is IO-bound long before that —
+# measured, 16 workers already reach the wall-clock floor while leaving the machine usable.
+check-fast: ## The pre-push suite in parallel — 1m17s against 9m57s serial
+	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
+
 e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m dummy_lane -v

@@ -98,6 +98,7 @@ dev = [
     # than into `addopts`: a global ceiling would also bound the model-loading `slow` suites, whose
     # honest runtime nobody here can measure.
     "pytest-timeout>=2.3",
+    "pytest-xdist>=3.6",
 ]
 
 [tool.uv.sources]
