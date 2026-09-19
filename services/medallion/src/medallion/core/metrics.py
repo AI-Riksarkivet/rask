@@ -301,8 +301,12 @@ def record_other_lane(transition: str) -> None:
     Labelled by transition only, never by the arrived dataset name — a dataset is caller-supplied and
     would make this counter's cardinality unbounded.
 
-    This exists because the drop is otherwise invisible. DROP is an ack, so Dapr neither redelivers nor
-    dead-letters, and the app records nothing. Before the lane guard, a ``bronze$pages`` arrival drove
+    This exists because the app itself records nothing else about the drop. DROP is an ack, so Dapr
+    does not redeliver — and since dapr/dapr#7097 it ROUTES TO THE DEAD-LETTER TOPIC, which every
+    medallion subscriber declares (`MEDALLION_DLQ_TOPIC=dlq.<appId>`, verified on all four running
+    pods 2026-09-19). So the drop is not traceless; it is a dead-letter park that
+    `MedallionCascadeDeadLettering` pages on as retry exhaustion, which a deterministic refusal is
+    not. This counter is what distinguishes the two. Before the lane guard, a ``bronze$pages`` arrival drove
     the events stage runner into a deterministic FAIL — and that FAIL is precisely the evidence
     ``docs/architecture/live-proof-2026-07-28.md`` used to show the page lane had no consumer. Fixing
     the wrong behaviour must not also delete the signal that revealed it.
@@ -314,7 +318,8 @@ def record_refused(transition: str, reason: str) -> None:
     """Count one trigger DROPped by the shape guard, by transition and REASON.
 
     The same argument `record_other_lane` makes, for every PRE-FLIGHT refusal: a DROP is an ack, so
-    Dapr neither redelivers nor dead-letters and nothing downstream records the event. A rejected
+    Dapr does not redeliver it — and routes it to the declared dead-letter topic, where it reads as an
+    exhausted delivery rather than a decision. A rejected
     `from_uri` is the signal that someone is publishing triggers this stage runner should not honour, and a
     tenant trigger arriving with registry resolution off is a deployment gap that halts that tenant's
     cascade permanently — both are worth an alert, and neither raises one from a log line.

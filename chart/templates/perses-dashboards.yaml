@@ -767,7 +767,7 @@ data:
           "ingress": {
             "kind": "Panel",
             "spec": {
-              "display": { "name": "Deliveries by process_status", "description": "`drop` is an ACK: Dapr neither redelivers nor dead-letters it, and the app records nothing. It is the one delivery outcome that leaves no other trace." },
+              "display": { "name": "Deliveries by process_status", "description": "`drop` is an ACK: Dapr does not retry it, but it DOES route to the declared dead-letter topic — so a drop reads as an exhausted delivery on the DLQ panels even when it was a deterministic decision. Read it beside medallion_stage_refused_total, which is what separates the two." },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
                 "query": "sum by (topic, process_status) (rate(dapr_component_pubsub_ingress_count_total[5m]))", "seriesNameFormat": {{ "{{topic}} {{process_status}}" | quote }} } } } } ]

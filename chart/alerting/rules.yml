@@ -326,10 +326,12 @@ groups:
             means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell
             them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
-      # A _preflight refusal returns DROP, and a DROP is an ACK: Dapr neither redelivers nor
-      # dead-letters, so there is no DLQ alarm, no retry and no error. `medallion_stage_refused_total`
-      # is the ONLY evidence the halt happened, which is why these two rules exist and why the counter
-      # carries a bounded `reason` label rather than the offending token.
+      # A _preflight refusal returns DROP, and a DROP is an ACK: Dapr does not retry it. It DOES route
+      # to the declared dead-letter topic (`MEDALLION_DLQ_TOPIC=dlq.<appId>` on all four subscribers),
+      # so the halt raises `MedallionCascadeDeadLettering` — as an EXHAUSTED DELIVERY, which a
+      # deterministic refusal is not. `medallion_stage_refused_total` is what says the halt was a
+      # decision, which is why these two rules exist and why the counter carries a bounded `reason`
+      # label rather than the offending token ([[LH-151]]).
       - alert: MedallionStageRoutingDisabled
         expr: sum(rate(medallion_stage_refused_total{lance_medallion_reason="routing_disabled"}[15m])) > 0
         for: 10m

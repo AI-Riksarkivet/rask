@@ -97,7 +97,7 @@ _RETRY = {"status": "RETRY"}
 def _drop(reason: str) -> dict[str, str]:
     """A DROP that SAYS WHY, using the same string the refusal counter already records.
 
-    Dapr neither redelivers nor dead-letters a DROP, so the ack is the last word a caller gets — and
+    Dapr does not redeliver a DROP, so the ack is the last word a caller gets — and
     it was the same four bytes for a routing drop, an unresolvable lane, an FGA denial and a held
     promotion. The reason was never missing: every one of these sites already passes it to
     `record_refused`, so the wire was discarding a value the code had in hand, and an operator could
@@ -518,8 +518,9 @@ async def _preflight(
     # consumer already applies to its own payload (`services/train.py`) and that this handler simply had
     # no counterpart for. It lives in a module neither handler owns so the two cannot silently diverge.
     # Malformed → DROP: redelivery cannot fix deterministic garbage and a raising handler poisons the
-    # subscription (DATA-CONTRACT §7.3). At WARNING because a DROP is an ack — Dapr neither redelivers
-    # nor dead-letters, so an unrecorded drop makes the event simply cease to exist.
+    # subscription (DATA-CONTRACT §7.3). At WARNING because a DROP is an ack — Dapr does not redeliver
+    # it, so this log and the counter are the app's only record of a trigger it will never process again.
+    # The PAYLOAD is not lost: the drop routes to the declared dead-letter topic ([[LH-151]]).
     trigger = parse_stage_trigger(event)
     if trigger is None:
         log.warning("medallion_stage_malformed", extra={"transition": transition, "event": str(event)[:200]})
@@ -567,8 +568,8 @@ async def _preflight(
         return _drop("unresolvable_lane")
     accepted = accepted_input_names(env_from_dataset=settings.from_dataset, declared=declared_lane)
     if arrived is not None and arrived not in accepted:
-        # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr neither redelivers nor
-        # dead-letters, so if the app records nothing the event simply ceases to exist. Before this
+        # OBSERVABLE, at INFO and on a counter. A DROP is an ack: Dapr does not redeliver it, so
+        # without this the app keeps no record of a trigger it will never process again. Before this
         # guard, a bronze$pages arrival drove this stage runner into a deterministic FAIL — and that FAIL is
         # what live-proof-2026-07-28.md used as evidence the page lane had no consumer. A silent fix
         # would have removed the symptom AND the only way to notice the lane is still unlanded.

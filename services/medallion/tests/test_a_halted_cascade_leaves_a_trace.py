@@ -1,8 +1,8 @@
 """A pre-flight halt is an ACK. Three of them left no series, and one did not halt at all.
 
 `handle_stage` refuses a trigger before it reads or writes anything for six reasons. A DROP is an
-ack — Dapr neither redelivers nor dead-letters — so a refusal the app does not record is an event
-that simply ceases to exist. Two of the six are counted (`malformed`, `unconfined_uri`, whose own
+ack — Dapr does not retry it — so a refusal the app does not record survives only as a dead-letter
+park indistinguishable from an exhausted delivery. Two of the six are counted (`malformed`, `unconfined_uri`, whose own
 docstring calls them "the only DROPs that leave no trace" — it was describing a subset, not a fact),
 one is counted as another lane's routine dispatch (`record_other_lane`), and three had a log line and
 nothing else:

@@ -1,6 +1,6 @@
 """A DROP is the last word a caller gets, so it must say which refusal it was.
 
-§ Q16-7. Dapr neither redelivers nor dead-letters a DROP — the ack IS the outcome — and it was the
+§ Q16-7. Dapr does not retry a DROP — the ack IS the outcome for the app — and it was the
 same four bytes for a routing drop, an unresolvable lane, an FGA denial and a held promotion. The
 counters and logs distinguished them; the wire did not, so an operator could not tell governance from
 misrouting. That opacity is how § Q16-6's assertion passed on a trigger that never reached the gate.

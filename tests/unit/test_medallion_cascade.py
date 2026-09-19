@@ -392,8 +392,9 @@ def test_page_lane_arrival_does_not_fire_the_events_lane_stage_runner(tmp_path: 
 def test_the_dropped_lane_is_observable(tmp_path: Any, caplog: Any) -> None:
     """Dropping quietly would delete the signal that the page lane has no consumer.
 
-    A DROP is an ack — Dapr neither redelivers nor dead-letters — so if the app logs nothing and counts
-    nothing, a completed IIIF ingest simply vanishes. That matters concretely: before the lane guard, a
+    A DROP is an ack — Dapr does not retry it — so if the app logs nothing and counts nothing, the only
+    remaining trace is a dead-letter park that reads as exhaustion rather than as a lane decision. That
+    matters concretely: before the lane guard, a
     ``bronze$pages`` arrival drove the events stage runner into a deterministic FAIL, and
     ``docs/architecture/live-proof-2026-07-28.md`` used that FAIL as its evidence that the P7b page lane
     was unlanded. Asserted at INFO because the stage runner's logger is configured to INFO

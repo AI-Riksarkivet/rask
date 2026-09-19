@@ -1373,8 +1373,10 @@ pieces closed it (C1, C3a, C3b, C3, C4, C2); what survives here is the reasoning
 be re-derived.
 
 **C3 and C4 cover DISJOINT failures and neither substitutes for the other.** A refusal counter can
-only see a hop that ARRIVED and was declined — `_preflight` DROPs, and a DROP is an ACK, so Dapr
-neither redelivers nor dead-letters and `medallion_stage_refused_total` is the only evidence. It is
+only see a hop that ARRIVED and was declined — `_preflight` DROPs, and a DROP is an ACK, so Dapr does
+not retry it; it routes to the declared dead-letter topic, where the halt is indistinguishable from an
+exhausted delivery, and `medallion_stage_refused_total` is the only thing that says it was a decision
+([[LH-151]]). It is
 structurally blind to a hop that never happened. `medallion_cascade_lag` measures the other side: how
 many source versions a destination has not consumed, which rises whether or not anything was refused.
 

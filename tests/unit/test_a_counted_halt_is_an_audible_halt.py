@@ -6,8 +6,9 @@ what a working alert looks like. This is the OTHER direction, and it is self-con
 way: a counter that is faithfully emitted and read by no rule is a halt nobody hears.
 
 The medallion needs it more than any service, because of how its refusals END. A `_preflight` refusal
-returns DROP, and a DROP is an ACK — Dapr neither redelivers nor dead-letters, so there is no DLQ
-alarm, no retry, no error, and the cascade simply stops for that tenant. `record_refused`'s own
+returns DROP, and a DROP is an ACK — Dapr does not retry it. It routes to the declared dead-letter
+topic, so the DLQ alarm that DOES fire says "a delivery gave up" about what was a deliberate decision,
+and the cascade stops for that tenant either way. `record_refused`'s own
 docstring says the counter IS the instrument: *"a tenant trigger arriving with registry resolution off
 is a deployment gap that halts that tenant's cascade permanently — both are worth an alert, and
 neither raises one from a log line."* It was worth an alert and had none.
