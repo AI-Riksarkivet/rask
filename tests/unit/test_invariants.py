@@ -96,6 +96,14 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # re-fires triggers. Their durability question is a different one, and is DECIDED: the caller-retry
     # idempotency-token contract is the carrier (docs/architecture/medallion-cascade.md, the dropped obligation-carrier ruling).
     ("services/medallion/src/medallion/services/ingest_trigger.py", "settings.bronze_topic"): "trigger",
+    # RETENTION — neither a description of a write, a refresh hint, nor an instruction. It is an
+    # ARCHIVAL COPY of a payload the handler deterministically refused, published so the refusal can be
+    # replayed after the ack stops parking it ([[LH-151]]). Its own intent because the three existing
+    # ones each imply a consumer that acts, and nothing acts on this: losing one costs the ability to
+    # replay a single refused trigger, never a write, a wake-up or a unit of work. Deliberately NOT
+    # staged through the outbox — the outbox exists so a committed write's event survives, and there is
+    # no commit here; staging a refusal would put retry machinery behind an event nobody is waiting for.
+    ("services/medallion/src/medallion/services/transform.py", "topic"): "retention",
     ("services/medallion/src/medallion/services/media_produce.py", "settings.media_topic"): "trigger",
     # The variable is now `topic` — resolved per publication from `settings.lane_routes` rather than
     # fixed to bronze, which is what let a silver publication fire a bronze trigger.

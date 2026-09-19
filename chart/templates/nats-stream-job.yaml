@@ -141,6 +141,7 @@ spec:
               # unconditionally, so once INGEST existed the Job exited 1 on every run and took the whole
               # `helm upgrade --wait-for-jobs` down with it (revision 34, 2026-08-15).
               assert_retention INGEST workqueue
+              assert_retention REFUSED limits
 
               add_if_missing LINEAGE "lineage.events.>"
               add_if_missing MEDALLION "medallion.>"
@@ -152,6 +153,12 @@ spec:
               # each app's durableName, which only avoids clashing with the app's main consumer
               # because the two live on different streams.
               add_if_missing DLQ "dlq.>"
+              # REFUSED retains the PAYLOAD of a deterministically refused trigger ([[LH-151]]).
+              # Its own stream rather than a subject space on DLQ, because the two answer different
+              # questions: DLQ holds deliveries the SIDECAR gave up on, REFUSED holds ones the HANDLER
+              # declined on purpose, and an alert that cannot tell them apart pages on governance. Same
+              # `limits`/168h shape as DLQ — a refusal is worth replaying for as long as a park is.
+              add_if_missing REFUSED "refused.>"
               # The ingest plane's own stream (open_ingest.md Phase 0): unit tasks on
               # `ingest.tasks.<run>` and the last-worker drained signal on `ingest.run.<id>.drained`.
               # Its OWN stream rather than a subject space on MEDALLION, because MEDALLION carries tier

@@ -164,6 +164,12 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # WITHOUT a retry policy dead-letters on the FIRST failure (Dapr documented default), which would
     # replace the chaos-verified redelivery-with-backoff behavior with instant parking.
     dlq_topic: str = Field(default="", alias="MEDALLION_DLQ_TOPIC")
+    # Where a DETERMINISTIC refusal's payload is retained so it can be replayed ([[LH-151]]). Distinct
+    # from `dlq_topic`, which is where the SIDECAR parks a delivery — a park cannot say whether the
+    # handler decided or gave up, and `MedallionCascadeDeadLettering` reads every park as exhaustion.
+    # Empty (default) = retain nowhere: Dapr does not auto-create streams, so a deployment that has not
+    # provisioned `refused.>` must publish nowhere rather than fail every refusal.
+    refused_topic: str = Field(default="", alias="MEDALLION_REFUSED_TOPIC")
     # Declared consumer dependencies for THIS stage's output (data-contract gap #1): comma-separated
     # column names downstream consumers read. Empty (default) = no declaration, no new assertion.
     # When set, the quality gate adds a `column_declared` assertion per name — a promotion that

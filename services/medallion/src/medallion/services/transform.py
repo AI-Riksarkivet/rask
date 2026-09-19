@@ -58,6 +58,7 @@ from medallion.services.gate_decision import GateOutcome, gate_decision, promoti
 from medallion.services.promotion import promotion_lineage
 from medallion.services.transform_spec import UndeclaredTransformError, resolve_transform_async
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
+from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse import outbox
 from service_kit.lakehouse.executor import Capability, RunState
@@ -1692,6 +1693,55 @@ def _report_success(
     return _SUCCESS
 
 
+async def _retain_refusal(
+    dapr: DaprClient,
+    settings: MedallionSettings,
+    *,
+    transition: str,
+    reason: str,
+    event: object,
+) -> None:
+    """Publish a refused trigger's PAYLOAD to the retention topic, so the refusal can be replayed.
+
+    **THIS IS THE HALF THAT MUST LAND FIRST ([[LH-151]]).** The eleven deterministic refusals below ack
+    with DROP, which Dapr routes to the dead-letter topic — so the payload survives today, but only as
+    something `MedallionCascadeDeadLettering` reads as an exhausted delivery. The fix is to ack SUCCESS
+    instead, and that CANNOT happen while this topic does not exist: the cascade's subscribers are
+    `deliverPolicy: new` (`chart/templates/dapr-component.yaml`), so a SUCCESS ack genuinely discards
+    the payload rather than leaving it on a replayable stream the way lineage's `all` subscriber does.
+    Retention first, ack second, in separate changes.
+
+    BEST-EFFORT, deliberately, and the return value is ignored on purpose. A refusal is already
+    deterministic; letting a retention publish raise would turn it into a handler error and hand the
+    sidecar a RETRY, so a NATS hiccup would convert a decided refusal into a redelivery storm. The
+    publish failing costs replay of one payload — the same position the estate is in today — while
+    raising costs the cascade. `publish_json` reports the failure in the estate's one shape.
+
+    Off unless `MEDALLION_REFUSED_TOPIC` is set, so a deployment that has not provisioned the stream
+    publishes nowhere rather than failing every refusal: Dapr does NOT auto-create streams, and a
+    publish to an absent subject fails.
+
+    CALLED FROM ONE SITE FOR ELEVEN REFUSALS. `_preflight` returns its verdict rather than acking
+    itself, so `handle_stage` retains every refusal it produces by construction — a twelfth refusal
+    added inside `_preflight` cannot forget to retain, which a per-site call would leave to memory.
+    """
+    topic = settings.refused_topic
+    if not topic:
+        return
+    # `publish_json` REPORTS rather than raises, which is exactly the contract this needs: it is the
+    # estate's one publish-failure shape (DUP-18) AND it is bounded, so a wedged sidecar cannot hang a
+    # refusal the handler has already decided. The bool is deliberately unread — see above.
+    await dapr_publish.publish_json(
+        dapr,
+        pubsub_name=settings.pubsub,
+        topic_name=topic,
+        payload={"transition": transition, "reason": reason, "event": event},
+        timeout_seconds=settings.publish_timeout_seconds,
+        failure_event="medallion_refusal_not_retained",
+        context={"transition": transition, "reason": reason},
+    )
+
+
 async def handle_stage(
     dapr: DaprClient,
     settings: MedallionSettings,
@@ -1725,6 +1775,7 @@ async def handle_stage(
 
     pre = await _preflight(settings, event, transition=transition, fga_client=fga_client)
     if not isinstance(pre, StagePreflight):
+        await _retain_refusal(dapr, settings, transition=transition, reason=pre.get("reason", ""), event=event)
         return pre
     trigger, project, identity = pre.trigger, pre.project, pre.identity
     token = trigger.token

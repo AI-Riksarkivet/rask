@@ -183,6 +183,7 @@ spec:
             # Dapr-native DLQ (ships with the Resiliency CRD): the producer's bronze-arrival + train
             # subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.medallion-producer" }
+            - { name: MEDALLION_REFUSED_TOPIC, value: "refused.medallion-producer" }
             {{- end }}
             {{- /* SOURCE NAMESPACE -> the topic whose stage runner consumes it. DERIVED from the declared
                    DAG, so a stage runner cannot exist that the publication head is unable to route — which
@@ -508,6 +509,7 @@ spec:
             # subscribing the same DLQ — every dead letter delivered to both, parked and counted twice,
             # attributed to neither. The producer's dlq.medallion-producer is the precedent.
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.{{ .daprAppId }}" }
+            - { name: MEDALLION_REFUSED_TOPIC, value: "refused.{{ .daprAppId }}" }
             {{- end }}
             {{- if .requiredColumns }}
             # Declared consumer dependencies (data-contract gap #1): the quality gate blocks a
