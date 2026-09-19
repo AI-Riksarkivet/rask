@@ -155,13 +155,15 @@ groups:
         annotations:
           summary: "Lineage is DISCARDING events it can never record — a producer is emitting garbage"
           description: >-
-            A delivered event either did not parse or carried no author at all, so no tuple, redelivery
-            or restart could ever make it recordable. It is ACKED rather than parked, deliberately — a
-            DROP on this subscription writes a dead-letter duplicate of the same event on every roll —
-            which means THIS COUNT IS THE ONLY TRACE IT LEFT. A rising line here is a producer
-            regression: something is publishing to `lineage.events.v1` without a verified author, or
-            with a body that is not an OpenLineage RunEvent. Distinct from `refused`, which is a named
-            person lacking a grant and is repairable by writing the tuple.
+            A delivered event did not parse, carried no author at all, or named only outputs that
+            carry no authorization tuple — so no tuple, redelivery or restart could ever make it
+            recordable. It is ACKED rather than parked, deliberately — a DROP on this subscription
+            writes a dead-letter duplicate of the same event on every roll — which means THIS COUNT IS
+            THE ONLY TRACE IT LEFT. A rising line here is a producer regression: something is
+            publishing to `lineage.events.v1` without a verified author, with a body that is not an
+            OpenLineage RunEvent, or naming an output the estate does not govern. Distinct from
+            `refused`, which is a named person lacking a grant on a table that EXISTS and is repairable
+            by writing the tuple.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       - alert: LineageIngestRefusingProvenance
