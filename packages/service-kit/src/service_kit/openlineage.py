@@ -116,23 +116,32 @@ LIFECYCLE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/Lifecycle
 
 #: rask's DDL vocabulary mapped onto the spec's six values (ALTER/CREATE/DROP/OVERWRITE/RENAME/TRUNCATE).
 #:
-#: A DATA operation is deliberately absent rather than forced into a value: ``INSERT``, ``DELETE``,
-#: ``MERGE_INSERT`` and ``COMPACT_TABLE`` change rows, not the dataset's existence or shape, and the
-#: enum has no member that means "wrote rows". Mapping them to ``OVERWRITE`` would tell a reader the
-#: table was replaced. They get no lifecycle facet, and their row-level story is the output statistics
-#: and version facets that already ride the same event.
+#: KEYED LOWERCASE, AND LOOKED UP LOWERCASE, because the estate emits both spellings and the wire form
+#: is the lower one. Measured on the deployed feed 2026-09-19 over the last 500 events: `create_table`
+#: 111, `drop_table` 39, `add_columns` 7, `update_schema_metadata` 6, `declare_table` 2,
+#: `create_table_version` 2 — while the constants in the source read `CREATE_TABLE`, `DROP_TABLE` and
+#: so on. A map built from the source literals matched ONE of them, which is how the first version of
+#: this shipped a facet that never appeared on a real write.
+#:
+#: A DATA operation is deliberately absent rather than forced into a value. The enum has no member
+#: meaning "wrote rows", so `insert`, `delete`, `merge_insert`, `update`, `compaction`, `transform`,
+#: `training` and the medallion's lane verbs get nothing — mapping them to `OVERWRITE` would tell a
+#: reader the table was replaced. Their row-level story is the output statistics and version facets
+#: that already ride the same event.
 _LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
-    "CREATE_TABLE": "CREATE",
     "create_table": "CREATE",
-    "CREATE_TABLE_VERSION": "CREATE",
-    "DECLARE_TABLE": "CREATE",
-    "DROP_TABLE": "DROP",
-    "DEREGISTER_TABLE": "DROP",
-    "ADD_COLUMNS": "ALTER",
-    "ALTER_COLUMNS": "ALTER",
-    "DROP_COLUMNS": "ALTER",
-    "CREATE_INDEX": "ALTER",
-    "DROP_INDEX": "ALTER",
+    "create_table_version": "CREATE",
+    "declare_table": "CREATE",
+    "register_table": "CREATE",
+    "drop_table": "DROP",
+    "deregister_table": "DROP",
+    "add_columns": "ALTER",
+    "alter_columns": "ALTER",
+    "drop_columns": "ALTER",
+    "create_index": "ALTER",
+    "drop_index": "ALTER",
+    "update_schema_metadata": "ALTER",
+    "rename_table": "RENAME",
 }
 
 
@@ -143,7 +152,7 @@ def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
     estate has added without deciding what it does to the dataset, and a wrong value here is worse than
     an absent one — a reader acts on ``DROP``.
     """
-    state = _LIFECYCLE_BY_OPERATION.get(operation)
+    state = _LIFECYCLE_BY_OPERATION.get(operation.lower())
     return {"_producer": producer, "_schemaURL": LIFECYCLE_FACET_SCHEMA_URL, "lifecycleStateChange": state} if state else {}
 
 

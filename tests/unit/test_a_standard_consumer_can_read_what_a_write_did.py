@@ -5,6 +5,12 @@ rask-private name (`CREATE_TABLE`, `DROP_COLUMNS`, …) and the engine nowhere a
 OpenLineage-native reader that makes a create, a drop and an alter the same event carrying a different
 opaque string, and leaves "what produced this table" unanswerable.
 
+KEYED ON WHAT THE ESTATE ACTUALLY EMITS, which is lowercase. The first version of this map was built
+from the `operation=` literals in the source (`CREATE_TABLE`, `DROP_COLUMNS`, …) and matched ONE live
+operation of eighteen — measured on the deployed feed 2026-09-19 over 500 events: `create_table` 111,
+`drop_table` 39, `add_columns` 7, `update_schema_metadata` 6, `declare_table` 2. The facet shipped and
+never appeared on a real write. The lookup lower-cases, so either spelling resolves.
+
 MEASURED AGAINST UPSTREAM, not assumed. `LifecycleStateChangeDatasetFacet` defines exactly six values
 (ALTER / CREATE / DROP / OVERWRITE / RENAME / TRUNCATE) and `ProcessingEngineRunFacet` requires only
 `version` — both read from `OpenLineage/OpenLineage/spec/facets` on 2026-09-19, where every one of the
@@ -40,24 +46,36 @@ _SPEC_VALUES = frozenset({"ALTER", "CREATE", "DROP", "OVERWRITE", "RENAME", "TRU
 @pytest.mark.parametrize(
     ("operation", "expected"),
     [
-        ("CREATE_TABLE", "CREATE"),
+        # The five DDL verbs MEASURED on the live feed, in the case the wire actually carries.
         ("create_table", "CREATE"),
-        ("CREATE_TABLE_VERSION", "CREATE"),
+        ("declare_table", "CREATE"),
+        ("create_table_version", "CREATE"),
+        ("drop_table", "DROP"),
+        ("add_columns", "ALTER"),
+        ("update_schema_metadata", "ALTER"),
+        # Declared in the source and not seen in the last 500 events; mapped so they are not a gap
+        # the day they are.
+        ("register_table", "CREATE"),
+        ("deregister_table", "DROP"),
+        ("alter_columns", "ALTER"),
+        ("drop_columns", "ALTER"),
+        ("create_index", "ALTER"),
+        ("drop_index", "ALTER"),
+        ("rename_table", "RENAME"),
+        # The UPPERCASE spelling resolves too — the source constants read that way.
         ("DECLARE_TABLE", "CREATE"),
         ("DROP_TABLE", "DROP"),
-        ("DEREGISTER_TABLE", "DROP"),
-        ("ADD_COLUMNS", "ALTER"),
-        ("ALTER_COLUMNS", "ALTER"),
-        ("DROP_COLUMNS", "ALTER"),
-        ("CREATE_INDEX", "ALTER"),
-        ("DROP_INDEX", "ALTER"),
     ],
 )
 def test_a_ddl_operation_states_what_it_did(operation: str, expected: str) -> None:
     assert lifecycle_facet("p", operation)["lifecycleStateChange"] == expected
 
 
-@pytest.mark.parametrize("operation", ["INSERT", "DELETE", "MERGE_INSERT", "COMPACT_TABLE"])
+@pytest.mark.parametrize(
+    "operation",
+    # Every non-DDL verb on the live feed, most frequent first.
+    ["compaction", "insert", "transform", "training", "reconcile", "embed_features", "delete", "compact_table", "merge_insert", "update", "aggregate_gold"],
+)
 def test_a_data_operation_claims_no_lifecycle_change(operation: str) -> None:
     """These change ROWS, not the dataset's existence or shape. `OVERWRITE` would be a lie a reader acts on."""
     assert lifecycle_facet("p", operation) == {}
@@ -79,17 +97,19 @@ def test_every_value_this_maps_to_is_in_the_SPECS_enum() -> None:
 
 
 _ALL_DDL = (
-    "CREATE_TABLE",
     "create_table",
-    "CREATE_TABLE_VERSION",
-    "DECLARE_TABLE",
-    "DROP_TABLE",
-    "DEREGISTER_TABLE",
-    "ADD_COLUMNS",
-    "ALTER_COLUMNS",
-    "DROP_COLUMNS",
-    "CREATE_INDEX",
-    "DROP_INDEX",
+    "declare_table",
+    "create_table_version",
+    "register_table",
+    "drop_table",
+    "deregister_table",
+    "add_columns",
+    "alter_columns",
+    "drop_columns",
+    "create_index",
+    "drop_index",
+    "update_schema_metadata",
+    "rename_table",
 )
 
 
@@ -131,24 +151,24 @@ def test_a_catalog_write_names_the_engine_that_made_it() -> None:
     """Without it every write path in a multi-engine lakehouse is an anonymous producer."""
     import lance
 
-    facet = _event("CREATE_TABLE")["run"]["facets"]["processing_engine"]
+    facet = _event("create_table")["run"]["facets"]["processing_engine"]
 
     assert (facet["name"], facet["version"]) == ("lance", lance.__version__)
 
 
 def test_a_catalog_DDL_write_states_its_lifecycle_change() -> None:
-    assert _event("DROP_TABLE")["outputs"][0]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "DROP"
+    assert _event("drop_table")["outputs"][0]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "DROP"
 
 
 def test_a_catalog_DATA_write_carries_no_lifecycle_facet() -> None:
     """The control. Without it, a builder that stamped every event would pass the case above."""
-    assert "lifecycleStateChange" not in (_event("INSERT")["outputs"][0].get("facets") or {})
+    assert "lifecycleStateChange" not in (_event("insert")["outputs"][0].get("facets") or {})
 
 
 def test_the_rask_operation_name_survives_beside_the_standard_one() -> None:
     """They are not redundant: `CREATE_INDEX` and `DROP_COLUMNS` are both `ALTER`, so the enum alone
     loses what the estate's own consumers read."""
-    event = _event("CREATE_INDEX")
+    event = _event("create_index")
 
-    assert event["run"]["facets"]["lance"]["operation"] == "CREATE_INDEX"
+    assert event["run"]["facets"]["lance"]["operation"] == "create_index"
     assert event["outputs"][0]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "ALTER"
