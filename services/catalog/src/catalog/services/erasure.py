@@ -67,10 +67,10 @@ class ErasureReport(BaseModel):
     #: Retained versions that STILL answer the predicate after every step ran. Non-empty means the
     #: erasure is incomplete however cleanly each step reported — see the verify step.
     residual_versions: list[int] = Field(default_factory=list)
-    #: Branch name -> the parent version it pins, for every branch pinning a version that still answers.
-    #: THIS IS THE ACTIONABLE HALF: `residual_versions` says the erasure is incomplete, and only this
-    #: says what to delete to finish it. Lance records the fork point in `_refs/branches/<name>.json`
-    #: (`parentVersion`), so the pin is readable rather than inferred.
+    #: `branch:<name>` / `tag:<name>` -> the version it pins, for every ref pinning a version that still
+    #: answers. THIS IS THE ACTIONABLE HALF: `residual_versions` says the erasure is incomplete, and only
+    #: this says what to delete to finish it. Lance records a branch's fork point in
+    #: `_refs/branches/<name>.json` (`parentVersion`), so the pin is read rather than inferred.
     pinned_by: dict[str, int] = Field(default_factory=dict)
     #: True only when every surface reported a non-`failed` outcome AND nothing still answers the
     #: predicate. A caller reporting completion to a data subject reads THIS, never the absence of an
@@ -91,7 +91,9 @@ class _Dataset(Protocol):
     def checkout_version(self, version: Any, /) -> Any: ...
     def versions(self) -> Any: ...
     def to_table(self, *args: Any, **kwargs: Any) -> Any: ...
-    def cleanup_old_versions(self, older_than: timedelta | None = None, *, delete_unverified: bool = False) -> Any: ...
+    def cleanup_old_versions(
+        self, older_than: timedelta | None = None, *, delete_unverified: bool = False, error_if_tagged_old_versions: bool = True
+    ) -> Any: ...
 
 
 def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta) -> ErasureReport:
@@ -153,7 +155,12 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
 
     # 4. RECLAIM, last, because every step above was removing something that pinned this.
     try:
-        stats = dataset.cleanup_old_versions(retention, delete_unverified=True)
+        # `error_if_tagged_old_versions=False` SKIPS a tagged version instead of failing the whole call.
+        # Found by driving the deployed door: step 2 deliberately keeps a tag over a version the subject
+        # never appeared in, and pylance's default then refuses the entire cleanup over that one tag —
+        # so retaining a reproducibility pointer would cost the estate every byte of reclamation, and
+        # the erasure would report `history: failed` for having done the right thing one step earlier.
+        stats = dataset.cleanup_old_versions(retention, delete_unverified=True, error_if_tagged_old_versions=False)
         report.versions_reclaimed = int(getattr(stats, "old_versions", 0) or 0)
         report.bytes_reclaimed = int(getattr(stats, "bytes_removed", 0) or 0)
         report.surfaces.append(
@@ -170,7 +177,12 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
     #    holding the subject. So a run can perform every step successfully and leave the row readable,
     #    which is the one outcome an erasure must never report as done.
     residual = _versions_still_matching(dataset, predicate)
-    report.pinned_by = {name: pinned for name, pinned in branches.items() if pinned is not None and pinned in residual}
+    report.pinned_by = {
+        **{f"branch:{name}": v for name, v in branches.items() if v is not None and v in residual},
+        # Re-listed AFTER step 2, so these are the survivors: a tag whose delete failed pins its version
+        # exactly as hard as a branch does, and naming only branches would leave that operator guessing.
+        **{f"tag:{name}": v for name, v in _tags(dataset).items() if v is not None and v in residual},
+    }
     if residual:
         failed = True
         log.warning("erasure_incomplete", extra={"table": table, "versions": residual})

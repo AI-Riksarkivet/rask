@@ -175,7 +175,7 @@ def test_the_report_names_the_BRANCH_that_pins_the_residual(table: str) -> None:
     """
     report = _erase(table)
 
-    assert set(report.pinned_by) == {"work", "review"}
+    assert set(report.pinned_by) == {"branch:work", "branch:review"}
     assert all(v in report.residual_versions for v in report.pinned_by.values())
 
 
@@ -219,3 +219,24 @@ def test_an_unreadable_tag_is_dropped_rather_than_assumed_clean(table: str, monk
     report = _erase(table)
 
     assert any(s.surface == "tag:pinned" and s.outcome == "untagged" for s in report.surfaces)
+
+
+def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
+    """FOUND BY DRIVING THE DEPLOYED DOOR, not by a unit test.
+
+    Keeping a tag over a clean version (the step above) made `cleanup_old_versions` refuse the ENTIRE
+    call — pylance errors by default when any tagged version falls in range. So doing the right thing
+    in step 2 cost the estate every byte of reclamation in step 4, and the erasure answered
+    `history: failed` as a direct consequence of preserving model provenance. Observed live before the
+    fix: `Cleanup error: 1 tagged version(s) have been marked for cleanup`.
+    """
+    uri = str(tmp_path / "mixed")
+    dataset = lance.write_dataset(pa.table({"id": pa.array([2]), "pii": pa.array(["bob"])}), uri)
+    dataset.tags.create("trained-on-v1", dataset.version)  # clean: the subject is not here yet
+    lance.write_dataset(pa.table({"id": pa.array([1]), "pii": pa.array([_SUBJECT])}), uri, mode="append")
+
+    report = _erase(uri)
+
+    assert [s.outcome for s in report.surfaces if s.surface == "history"] == ["reclaimed"]
+    assert "trained-on-v1" in lance.dataset(uri).tags.list(), "the clean tag had to survive for this to be the right test"
+    assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
