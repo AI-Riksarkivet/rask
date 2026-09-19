@@ -20,6 +20,7 @@ preference. See docs/architecture/lance-blob-v2-findings.md.
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -289,17 +290,27 @@ def _repo_packages() -> dict[str, Path]:
 
 
 def _distribution_deps() -> dict[str, set[str]]:
-    """``dist name -> its declared dependency dist names``, read from every workspace pyproject."""
+    r"""``dist name -> its declared dependency dist names``, read from every workspace pyproject.
+
+    PARSED AS TOML, not matched with a regex, because the regex was wrong in the direction that makes
+    a gate lie quietly. `^dependencies\s*=\s*\[(.*?)\]` is non-greedy and stops at the first `]` —
+    and an extras spec contains one, so `"service-kit[lancekit,media]"` ENDED the list. Measured on
+    `packages/ray-cluster-env`, whose first entry is exactly that: the parse returned
+    `{'service-kit'}` against seven declared dependencies, hiding `lineage-kit` among them. The
+    failure is a FALSE POSITIVE — the gate reports an image as not providing a package it installs —
+    which costs a reader a real bug hunt and teaches them the gate is noisy.
+    """
     deps: dict[str, set[str]] = {}
     for plane in _PLANES:
         for pyproject in (_REPO / plane).glob("*/pyproject.toml"):
-            text = pyproject.read_text(encoding="utf-8")
-            name = re.search(r'^name\s*=\s*"([^"]+)"', text, re.MULTILINE)
-            if not name:
+            parsed = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            project = parsed.get("project", {})
+            if not (name := project.get("name")):
                 continue
-            block = re.search(r"^dependencies\s*=\s*\[(.*?)\]", text, re.MULTILINE | re.DOTALL)
-            listed = re.findall(r'"([A-Za-z0-9._-]+)', block.group(1)) if block else []
-            deps[name.group(1)] = {d.lower() for d in listed}
+            # The dist name only — an extras spec, a version pin and an environment marker are all
+            # noise for "which workspace member does this reach".
+            listed = (re.split(r"[\[<>=!;~ ]", str(dep), maxsplit=1)[0] for dep in project.get("dependencies", []))
+            deps[str(name)] = {d.lower() for d in listed if d}
     return deps
 
 

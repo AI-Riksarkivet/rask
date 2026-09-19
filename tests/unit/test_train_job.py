@@ -62,20 +62,32 @@ _REGISTRY = "s3://lake/medallion/models/churn"
 
 
 def _event(**kw: Any) -> dict[str, Any]:
-    return job.build_event(token="tok1", model="churn", namespace="models", features=_FEATURES, registry_uri=_REGISTRY, **kw)
+    """The WIRE form, through the official serializer.
+
+    `build_event` returns a `lineage_kit` model now, and `to_wire()` is what `openlineage-python`
+    produces from it — so every round-trip below proves the OFFICIAL wire form is what the ingest
+    accepts, rather than proving a hand-built dict matches a hand-written expectation.
+    """
+    return job.build_event(token="tok1", model="churn", namespace="models", features=_FEATURES, registry_uri=_REGISTRY, **kw).to_wire()
 
 
 def test_version_facet_spec_pin_matches_the_medallion_emitter() -> None:
-    # The job cannot import services/, so its DatasetVersionDatasetFacet _schemaURL is a mirror —
-    # pinned here against the medallion emitter's constant so the two can never drift (2026-07-11
-    # review: the first draft hardcoded 1-0-0 while every sibling stamps 1-0-1).
+    """The pin survives the conversion, and it is now read off the EVENT rather than off a mirror.
+
+    The job used to carry its own `_VERSION_FACET_SCHEMA` because it could not import one; it emits
+    through `lineage-kit` now, so the constant is gone and the only honest place to check the spec it
+    actually stamps is the wire form it produces. That is the stronger assertion — a mirror can agree
+    with its source and still be stamped on nothing.
+    """
     from medallion.schemas import events as medallion_events
 
-    assert job._VERSION_FACET_SCHEMA == medallion_events._VERSION_FACET_SCHEMA
-    # The rest of the deliberate self-contained mirror, pinned the same way (audit 2026-07-15: only the
-    # version facet was pinned — the run/base/schema facet URLs could drift silently).
-    assert job._RUN_SCHEMA == common_ol.RUN_EVENT_SCHEMA_URL
-    assert job._BASE_FACET == common_ol.BASE_FACET_SCHEMA_URL
+    stamped = _event(event_type="COMPLETE", version=3)["outputs"][0]["facets"]["version"]["_schemaURL"]
+
+    assert stamped == medallion_events._VERSION_FACET_SCHEMA
+    # THE WHOLE MIRROR, read off the EVENT now that no mirror exists. Every URL below used to be a
+    # constant in the job compared against `service_kit.openlineage`'s; the job emits through
+    # `lineage-kit` and carries none of them, so the only honest check is what it actually stamps —
+    # and the two authorities still have to agree, which is the property these lines always meant.
     complete = job.build_event(
         event_type="COMPLETE",
         token="pin",
@@ -84,7 +96,8 @@ def test_version_facet_spec_pin_matches_the_medallion_emitter() -> None:
         features=[{"dataset": "silver$f", "version": 1}],
         registry_uri="s3://x/m",
         version=1,
-    )
+    ).to_wire()
+    assert complete["schemaURL"] == common_ol.RUN_EVENT_SCHEMA_URL
     assert complete["outputs"][0]["facets"]["schema"]["_schemaURL"] == common_ol.SCHEMA_FACET_SCHEMA_URL
     # dataSource + errorMessage were the two mirrors still UNPINNED, and both had drifted a version
     # behind (1-0-0 while service_kit stamps 1-0-1) — the 1-0-0 documents even $ref the retired 1-0-2 core
@@ -98,8 +111,9 @@ def test_version_facet_spec_pin_matches_the_medallion_emitter() -> None:
         features=[{"dataset": "silver$f", "version": 1}],
         registry_uri="s3://x/m",
         error="boom",
-    )
+    ).to_wire()
     assert failed["run"]["facets"]["errorMessage"]["_schemaURL"] == common_ol.ERROR_MESSAGE_FACET_SCHEMA_URL
+    assert failed["run"]["facets"]["lance"]["_schemaURL"] == common_ol.BASE_FACET_SCHEMA_URL
 
 
 def test_start_event_carries_training_jobtype_and_input_pins() -> None:
@@ -136,10 +150,15 @@ def test_fail_event_keeps_a_versionless_output_and_caps_the_error() -> None:
 
 
 def test_progress_facet_rides_the_running_events() -> None:
+    from lineage_kit.schemas import BASE_FACET_SCHEMA_URL, PRODUCER
+
     parsed = RunEvent.model_validate(_event(event_type="RUNNING", progress=(2, 3)))
+
+    # The PRODUCER is `lineage-kit`'s now, which is the visible consequence of the conversion: the
+    # graph attributes this event to the shared package rather than to a file path in `scripts/`.
     assert parsed.run.facets["progress"] == {
-        "_producer": job._PRODUCER,
-        "_schemaURL": job._BASE_FACET,
+        "_producer": PRODUCER,
+        "_schemaURL": BASE_FACET_SCHEMA_URL,
         "done": 2,
         "total": 3,
     }
@@ -240,7 +259,9 @@ def _run_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, fail_publish: 
     monkeypatch.setenv("REGISTRY_URI", str(tmp_path / "registry"))
     monkeypatch.setenv("ARTIFACT_BASE", str(tmp_path / "artifacts"))
     monkeypatch.delenv("LINEAGE_URL", raising=False)
-    monkeypatch.setattr(job, "emit", events.append)
+    # The WIRE form, so every assertion below reads what the ingest would receive rather than the
+    # model the job now hands its emitter.
+    monkeypatch.setattr(job, "emit", lambda event: events.append(event.to_wire()))
 
     real_write, real_publish = job.write_artifacts, job.publish_registry
 
@@ -296,7 +317,9 @@ def test_main_emits_an_attributable_fail_on_misconfiguration(monkeypatch: pytest
     monkeypatch.setenv("REGISTRY_URI", str(tmp_path / "registry"))
     monkeypatch.setenv("ARTIFACT_BASE", str(tmp_path / "artifacts"))
     monkeypatch.delenv("LINEAGE_URL", raising=False)
-    monkeypatch.setattr(job, "emit", events.append)
+    # The WIRE form, so every assertion below reads what the ingest would receive rather than the
+    # model the job now hands its emitter.
+    monkeypatch.setattr(job, "emit", lambda event: events.append(event.to_wire()))
     with pytest.raises(json.JSONDecodeError):
         job.main()
     assert [e["eventType"] for e in events] == ["FAIL"]

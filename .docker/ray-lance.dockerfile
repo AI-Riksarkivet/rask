@@ -70,6 +70,13 @@ RUN pip install --no-cache-dir "lance-ray==0.5.0" "pylance==11.0.0" "pyarrow==25
 # GreptimeDB (#18 experiment tracking → Perses). Pinned to the services' opentelemetry version for parity.
 RUN pip install --no-cache-dir "opentelemetry-sdk==1.43.0" "opentelemetry-exporter-otlp-proto-http==1.43.0"
 
+# `lineage-kit`'s own runtime dependency, for the jobs this image bakes that emit provenance
+# (`ray_train_job.py`, and `dummy_runner` behind `ray_dummy_job.py`). The package is COPYed beside
+# them below; without the client it imports, the COPY is a module that raises on import — the exact
+# `ModuleNotFoundError`-at-submit shape `test_ray_job_images.py` exists to prevent, one level deeper
+# than that gate walks. Pinned to `packages/lineage-kit/pyproject.toml`'s floor.
+RUN pip install --no-cache-dir "openlineage-python>=1.52.0"
+
 # Bake the jobs so `ray job submit -- python /home/ray/jobs/<job>.py` needs no working-dir upload.
 # EVERY default entrypoint in medallion.core.config must appear here — a job the config names but the
 # image does not carry fails at submit with "no such file", which is how the IIIF head's Ray branch was
@@ -102,6 +109,10 @@ COPY runners/dummy/src/dummy_runner /home/ray/jobs/dummy_runner
 # `service_kit` depends on `storage`, so both must be present or the first import fails on the second.
 COPY packages/service-kit/src/service_kit /home/ray/jobs/service_kit
 COPY packages/storage/src/storage /home/ray/jobs/storage
+# The estate's ONE OpenLineage authority (LIN-001). Beside its siblings rather than installed,
+# because this image resolves nothing from the root lock — it pip-installs an exported requirements
+# file — and a job that cannot import it emits nothing while exiting SUCCEEDED.
+COPY packages/lineage-kit/src/lineage_kit /home/ray/jobs/lineage_kit
 
 ARG BUILD_DATE
 ARG VCS_REF

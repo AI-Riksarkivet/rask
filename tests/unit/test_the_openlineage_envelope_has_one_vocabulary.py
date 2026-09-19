@@ -1,10 +1,17 @@
-"""Three modules author the same OpenLineage envelope, and nothing compared them until now.
+"""TWO modules author the same OpenLineage envelope, and this is what keeps them from drifting.
 
-[[LIN-001]]. The estate has independent authorities for one wire format — `service_kit.openlineage`,
-`lineage_kit.schemas` and `scripts/ray_train_job.py`. The register's claim was that they "agree by
-test rather than by construction"; measured, they agreed by NOTHING. No test compared them, and one
-had already drifted: `runners/dummy`'s hand-rolled copy declared `BaseFacet` at spec `1-0-5` while
-the others said `2-0-2`.
+[[LIN-001]]. The estate has independent authorities for one wire format — `service_kit.openlineage`
+and `lineage_kit.schemas`. The register's claim was that they "agree by test rather than by
+construction"; measured, they agreed by NOTHING. No test compared them, and two had already drifted:
+`runners/dummy`'s hand-rolled copy declared `BaseFacet` at spec `1-0-5` while the others said
+`2-0-2`, and both hand-written copies spelled `JobTypeJobFacet` `2-0-3` against the client's `2-0-4`.
+
+IT WAS FOUR AUTHORITIES, THEN THREE, AND IS NOW TWO. `runners/dummy` went first (2026-09-18) and
+`scripts/ray_train_job.py` followed (2026-09-19) once `packages/ray-cluster-env` carried
+`lineage-kit` — that was the stated blocker on the last hand-rolled one, and the file said so in a
+comment beside the very `2-0-3` literal that had drifted. A producer that emits through the package
+declares no `_schemaURL` of its own, which is why neither belongs in this walk any more: there is
+nothing there to compare.
 
 THE RIGHT NUMBER OF AUTHORITIES IS NOT ZERO, and it is not one either. `service_kit.openlineage`
 hand-builds its dicts so `openlineage-python` stays out of the catalog and lineage images, where it
@@ -19,11 +26,12 @@ never written against — and the failure surfaces at the consumer, about a prod
 after the run. The versions are also close enough to read as a typo, which is exactly how one survives
 review.
 
-WHY THIS IS A COMPARISON AND NOT A SINGLE-SOURCE REFACTOR. Collapsing the four onto `lineage-kit` is the
-right end state and is LIN-001's actual question — whether the compute plane emits at all, which needs a
-ruling. Until that lands the duplicates exist, so the honest control is the one that makes drift
-impossible to keep: compare the authorities by FACET NAME, so a file adding a facet nobody else carries
-is fine and a file disagreeing about one they share is not.
+WHY TWO AND NOT ONE. Collapsing them entirely would cost something real, which is why the ruling did
+not: `service_kit.openlineage` hand-builds its dicts precisely so `openlineage-python` stays out of the
+catalog and lineage images, where it is a dev-group dependency; `lineage_kit.schemas` imports the client
+and serialises through it, which is fidelity by construction. Each pays for what the other refuses. So
+the control is the one that makes drift impossible to keep: compare the authorities by FACET NAME, so a
+file adding a facet nobody else carries is fine and a file disagreeing about one they share is not.
 
 Keyed on the facet's `$defs` name rather than the whole URL, because the same facet legitimately appears
 under different documents; what may never differ is its VERSION between two files that both claim it.
@@ -50,7 +58,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 AUTHORITIES = {
     "service_kit.openlineage": ROOT / "packages/service-kit/src/service_kit/openlineage.py",
     "lineage_kit.schemas": ROOT / "packages/lineage-kit/src/lineage_kit/schemas.py",
-    "scripts/ray_train_job.py": ROOT / "scripts/ray_train_job.py",
 }
 
 #: `https://openlineage.io/spec/<version>/<doc>.json#/$defs/<Facet>` — with an optional `facets/`

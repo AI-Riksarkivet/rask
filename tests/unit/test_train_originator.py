@@ -232,7 +232,7 @@ def test_the_training_job_stamps_the_originator_and_project_on_its_own_events() 
         error="CUDA out of memory",
         originator="alice",
         project="acme",
-    )
+    ).to_wire()
     lance_facet = event["run"]["facets"]["lance"]
     assert lance_facet["originator"] == "alice"
     assert lance_facet["project"] == "acme"
@@ -242,6 +242,6 @@ def test_the_training_job_omits_both_when_it_has_neither() -> None:
     """A service-triggered run has no person behind it. The keys are ABSENT rather than empty:
     `originator_subject` reads truthiness, and an empty string would address an inbox named ''."""
     job = _load_job()
-    event = job.build_event(event_type="START", token="t1", model="churn", namespace="models", features=[])
+    event = job.build_event(event_type="START", token="t1", model="churn", namespace="models", features=[]).to_wire()
     lance_facet = event["run"]["facets"]["lance"]
     assert "originator" not in lance_facet and "project" not in lance_facet

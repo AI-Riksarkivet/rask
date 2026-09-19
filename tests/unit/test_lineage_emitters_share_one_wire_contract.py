@@ -65,7 +65,7 @@ def _events() -> tuple[dict[str, Any], dict[str, Any]]:
         version=3,
         originator="user:alice",
         project="proj-a",
-    )
+    ).to_wire()
     dummy_event = dummy.build_run_event(
         event_type="COMPLETE",
         run_id="00000000-0000-5000-8000-000000000001",
@@ -147,15 +147,16 @@ def _lineage_kit_headers(env: dict[str, str], monkeypatch: Any) -> dict[str, str
 def _emit_headers(module: ModuleType | None, env: dict[str, str], monkeypatch: Any) -> dict[str, str]:
     """The headers one emit would put on the wire, without sending anything.
 
-    `scripts/ray_train_job.py` still hand-builds `headers` and hands them to
-    `urllib.request.Request`, so intercepting the Request constructor is the seam for it. ``None``
-    selects `lineage-kit`, which `runners/dummy` now emits through (LIN-001) — there the headers are
-    the built transport's, read the way the package's own tests read them.
+    ``None`` selects `lineage-kit`, which every producer in the estate now emits through — including
+        `scripts/ray_train_job.py`, converted 2026-09-19 (LIN-001). The module leg remains because the
+        seam is still useful for anything that hand-builds headers, and there is nothing left that does.
 
-    BOTH SIDES STAY PINNED HERE ON PURPOSE. These four properties are why this file exists, and the
-    fact that one emitter now gets them from a shared package is not a reason to stop asserting them
-    against the other: the day `ray_train_job.py` is converted, this is what says the behaviour did
-    not change on the way.
+        WHAT KEEPS THESE FOUR CASES ALIVE after the conversion is the ENVIRONMENT, not the emitter. Each
+        one drives the package with the RAY TRAIN LANE's own variable spellings — `LINEAGE_URL`,
+        `LINEAGE_SERVICE_TOKEN`, `LINEAGE_SERVICE_ID`, `RASK_LINEAGE_TOKEN_<IDENTITY>` — which are NOT
+        `lineage-kit`'s canonical `RASK_LINEAGE_*` names. It accepts them through `AliasChoices`, and it
+        once accepted two thirds of that trio and not `LINEAGE_URL`: the credential resolved, the endpoint
+        did not, and the lane degraded to a silent no-op. That is the failure these keep shut.
     """
     if module is None:
         return _lineage_kit_headers(env, monkeypatch)
@@ -194,7 +195,11 @@ def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> No
     The result is a job that does its work and loses its provenance: the run's rows land and its
     terminal event 403s, which is invisible from the job and from the graph alike.
     """
-    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
+    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
+    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
+    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
+    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
+    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
         headers = _emit_headers(
             module,
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_TOKEN": "a.valid.bearer"},
@@ -207,7 +212,11 @@ def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> No
 def test_a_named_service_id_still_takes_the_service_door(monkeypatch: Any) -> None:
     """The fix must not close the door it exists to open: with BOTH halves present the service
     identity is what goes on the wire, and no bearer is needed."""
-    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
+    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
+    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
+    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
+    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
+    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
         headers = _emit_headers(
             module,
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
@@ -237,7 +246,11 @@ def test_the_identity_selects_its_own_credential(monkeypatch: Any) -> None:
     back on the job, which is why `ray_submit` records a token there as a P0 leak); the credentials
     are mounted on the pod.
     """
-    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
+    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
+    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
+    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
+    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
+    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
         headers = _emit_headers(
             module,
             {
@@ -257,7 +270,11 @@ def test_the_identity_selects_its_own_credential(monkeypatch: Any) -> None:
 def test_the_shared_credential_still_serves_a_pod_of_one_identity(monkeypatch: Any) -> None:
     """The selector must change nothing where it does not apply: no per-identity variable means the
     shared token, exactly as before. Every producer that works today has one identity and one token."""
-    for module, name in ((train, "scripts/ray_train_job.py"), (None, "lineage-kit (what runners/dummy emits through)")):
+    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
+    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
+    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
+    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
+    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
         headers = _emit_headers(
             module,
             {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
