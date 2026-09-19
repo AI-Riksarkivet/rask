@@ -972,6 +972,15 @@ e2e-spec-conformance:     ## The STOCK lance_namespace client against a live cat
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-spec-conformance needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m spec_conformance -v
 
+# THE SAME SUITE, run from INSIDE the cluster, and the difference is not redundancy. The catalog vends
+# its own in-cluster address, so a host-side client gets a correct 900s credential for a host it cannot
+# resolve — measured 2026-09-19, the k3s service network is routable from this host and `rask-minio`
+# does not resolve on it. The lancedb and lance-ray cases therefore SKIP above, and a skip reads as
+# green. This target proves the byte READ, which only a process inside the cluster can; the one above
+# still proves resolution and credential issuance from a developer's own machine.
+e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — proves the READ, not just the vend
+	bash scripts/conformance-incluster.sh
+
 e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m dummy_lane -v

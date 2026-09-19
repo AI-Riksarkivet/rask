@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**201 open items**, of which **94 are blocked on a decision** and **107 can be picked up today**.
+**201 open items**, of which **95 are blocked on a decision** and **106 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 57 | 23 | 13 |
+| **PHASE 1 · LAKEHOUSE** | 57 | 22 | 12 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -171,36 +171,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* The three LH-094-gated reclaim doors accept `branch` end to end (the other three are done), and every rask-only side effect lives behind a management prefix rather than a spec handler.
 - *Evidence:* `grep -rn 'refuse_a_branch_this_door_cannot_honour(' services/catalog/src → 15 call sites + tables.py:295/386/405 (describe) = 16 doors` · `services/catalog/src/catalog/api/v1/endpoints/maintenance.py:71-93 (preview/run declare `branch` only to refuse it)` · `services/catalog/src/catalog/api/fga_deps.py:1013-1045 (require_not_protected: InvalidTableStateError for table, NamespaceNotEmptyError otherwise)` · `grep -rn '/management' services/catalog/src --include=*.py → empty`
 
-**LH-020 · The lance-ray client is undriven against the deployed catalog and the conformance suite covers only pylance's RestNamespace**
-`catalog, tests/e2e-py` · **HIGH** · PARTIAL
-- **RULED 2026-09-19 (owner, `docs/DECISIONS.md`): run the conformance suite from INSIDE the cluster**, where the vended endpoint resolves, so lancedb and lance-ray become real passes instead of honest skips. Whether vending should serve off-cluster clients at all is a product question and is filed as its own row — it reaches into per-deployment external addressing and into what an endpoint discloses about internal topology.
-- *What is left:* Do NOT file the lancedb upstream issue: lancedb 0.34.0 exposes `open_table(name, namespace_path=[...])`, so a multi-segment identifier is expressible and the issue has no bug behind it. Drive `lance_ray.read_lance(table_id=[...], namespace_impl="rest")` (lance-ray 0.5.0 in uv.lock) against the catalog with vended creds and `ray.init(address="local", _temp_dir=...)`. Extend `tests/e2e-py/test_the_stock_lance_client_drives_the_catalog.py` / `make e2e-spec-conformance` (Makefile:953-955) from lance_namespace-only to all three clients; nothing under `tests/e2e-py` imports lancedb or lance_ray.
-- **LANCEDB IS PROVEN END TO END against the deployed catalog:** resolved through
-  `connect_namespace("rest", …)` + `open_table(TABLE, namespace_path=[NS], storage_options=…)` with a
-  Dex bearer and a 900 s vended credential, reading **36 rows, 7 schema fields** from
-  `acme-bronze$agnostic`. Two API facts were measured rather than assumed: `lancedb.connect()` rejects
-  namespace arguments outright (the entry point is `lancedb.namespace.connect_namespace`), and
-  `storage_options` must go on `open_table` — the connection-level one does not reach the dataset read.
-- **A PROPERTY OF VENDING TO AN EXTERNAL CLIENT, found by driving it:** the vended `endpoint` is the
-  catalog's own in-cluster address (`http://rask-minio:9000`), so a client OUTSIDE the cluster gets a
-  correct credential for a host it cannot resolve — resolution and the vend both succeed and the READ
-  cannot happen. The suite probes reachability and skips with that reason rather than reporting it as a
-  conformance failure. Whether an external client should receive an externally-resolvable endpoint is a
-  real question this row now carries.
-- **LANCE-RAY IS PROVEN TOO, from the Ray head** (`lance_ray` 0.5.0, `ray` 2.58.0 — the catalog image
-  carries neither): `read_lance(table_id=[NS, TBL], namespace_impl="rest", namespace_properties=…,
-  storage_options=<vended>)` read the same **36 rows** distributed. So all THREE stock clients —
-  `lance_namespace`, lancedb and lance-ray — drive the deployed catalog.
-- *The wiring is DONE and measured, not assumed:* `pytest tests/e2e-py -m spec_conformance --collect-only`
-  collects all three new cases, so `make e2e-spec-conformance` already runs them.
-- **WHAT IS LEFT IS ONE QUESTION, not code:** the target runs from the HOST, and the vended `endpoint` is
-  the catalog's in-cluster address — so from outside, resolution and the vend pass and the byte read skips.
-  Either an external client receives an externally-resolvable endpoint (a real decision about what vending
-  means off-cluster), or the conformance target runs from inside the cluster. Until one of those, the
-  repeatable proof covers resolution + credential issuance, and the READ is proven only by the in-cluster
-  drives recorded above.
-- *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
-- *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `tests/e2e-py/test_the_other_stock_clients_drive_the_catalog.py (3 cases, marked spec_conformance)` · `pytest -m spec_conformance --collect-only → 17 across 2 files (14 + 3)` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
+**LH-177 · The catalog vends its own in-cluster address, so an off-cluster client gets a valid credential for a host it cannot resolve**
+`catalog` · **MED**
+- **blocked:** Owner call on what VENDING MEANS OFF-CLUSTER — does an external client receive an externally-resolvable endpoint, or is vending in-cluster-only by design? Split from the closed [[LH-020]] on the 2026-09-19 ruling, which closed that row's test-coverage half and left this as the product question it always was.
+- *What is left:* Measured 2026-09-19: the vended `endpoint` is `http://rask-minio:9000`. The k3s service network IS routable from the host (`10.43.44.177` answers) and `rask-minio` does NOT resolve there, so resolution and the vend both succeed and only the byte read fails — the barrier is DNS, and it belongs to where the process runs rather than to the clients. If vending should serve external clients, the endpoint has to be configurable per deployment and someone must decide what an endpoint may disclose about internal topology. If it should not, the door should SAY so in its answer rather than handing out a credential that cannot be used: a 900 s credential for an unreachable host is indistinguishable from a broken object store until the read fails.
+- *Closes when:* The answer is recorded in `docs/DECISIONS.md` and the vending door matches it — either an externally-resolvable endpoint, or an explicit refusal/annotation for a caller it cannot serve.
+- *Evidence:* `make e2e-spec-conformance` from the host: the lancedb and lance-ray cases skip with "the vended endpoint 'http://rask-minio:9000' is in-cluster and unreachable from here" · the same suite in-cluster: **17 passed, 0 skipped** (`make e2e-spec-conformance-incluster`) · `getent hosts rask-minio` on the host: no answer; `kubectl get svc rask-minio`: ClusterIP 10.43.44.177, routable
 
 **LH-176 · A 300-row dataset sits in `lance-catalog` with no catalog record and no project, and the only category that counts it is `orphan_files`**
 `maintenance, catalog` · **MED**
