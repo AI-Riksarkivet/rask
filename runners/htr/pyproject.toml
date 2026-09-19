@@ -9,6 +9,12 @@ dependencies = [
     # deliberately NOT `workspace = true`, because this project is sealed OUT of the root uv
     # workspace so the model stack below never enters the fleet's resolution.
     "storage",
+    # The estate's ONE OpenLineage authority (LIN-001, owner ruling 2026-09-18: the compute plane
+    # emits, through `lineage-kit`). A PATH dep like `storage` and for the same reason — this project
+    # is sealed OUT of the root workspace. The package is dependency-capped precisely so a sealed
+    # runner can take it: openlineage-python, pydantic, opentelemetry-api and nothing heavier, none of
+    # which pulls a second copy of anything in the model stack below.
+    "lineage-kit",
     # --- the model stack. THIS is why the runner is sealed. ---
     "torch==2.13.0",
     "transformers>=5.6.1",
@@ -44,6 +50,7 @@ packages = ["src/htr", "src/runner"]
 
 [tool.uv.sources]
 storage = { path = "../../packages/storage", editable = true }
+lineage-kit = { path = "../../packages/lineage-kit", editable = true }
 htrflow = { git = "https://github.com/AI-Riksarkivet/htrflow.git" }
 
 [dependency-groups]

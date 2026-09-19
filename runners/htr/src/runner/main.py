@@ -5,6 +5,7 @@ Example:
         --prefix A0060198/ --pipeline htr
 """
 
+import functools
 import logging
 import os
 from itertools import islice
@@ -18,6 +19,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 
 from htr.iiif import DEFAULT_IIIF_BASE, IIIFCachedSource
+from runner.lineage import build_run_event, emit, originator_and_project
 from runner.pipeline import PIPELINES
 from storage import build_sink, build_source
 
@@ -167,19 +169,40 @@ def main(
         torch_trace_dir.mkdir(parents=True, exist_ok=True)
         pipeline_kwargs["transcribe_profile_dir"] = torch_trace_dir
         console.print(f"[bold]TranscribeActor profiling[/bold] -> {torch_trace_dir}/transcribe-pid*-call*.json")
-    ds = PIPELINES[pipeline](keys, source, sink, **pipeline_kwargs)
-    if profile:
-        ds = ds.materialize()
-        n_done = ds.count()
-        console.print(f"[bold green]Done[/bold green] — ok={n_done}, skipped={skipped}")
-        console.rule("[bold]Ray Data stats")
-        console.print(ds.stats())
-        timeline_path = Path("/tmp/runner-timeline.json")  # noqa: S108 — local debug artifact, not a security boundary
-        ray.timeline(filename=str(timeline_path))
-        console.print(f"[bold]Timeline trace[/bold] -> {timeline_path} (open in chrome://tracing)")
-    else:
-        n_done = ds.count()
-        console.print(f"[bold green]Done[/bold green] — ok={n_done}, skipped={skipped}")
+    # PROVENANCE AROUND THE PIPELINE, not inside it ([[LIN-001]]). The run id is derived from what
+    # IDENTIFIES this run — the two URIs and the pipeline — so a rerun of the same work MERGEs onto the
+    # same graph node instead of adding a second, and `run_id_for` turns it into the spec-legal UUID
+    # the serializer requires. A FAIL is emitted from the `except` and re-raises, because a run that
+    # died having recorded nothing is indistinguishable from one that never started.
+    originator, project = originator_and_project()
+    run_id = f"htr-{pipeline}-{input_uri or ','.join(batch or [])}-{output_uri}"
+    emitted = functools.partial(
+        build_run_event,
+        run_id=run_id,
+        input_uri=input_uri or f"iiif:{','.join(batch or [])}",
+        output_uri=output_uri,
+        pipeline=pipeline,
+        originator=originator,
+        project=project,
+    )
+    try:
+        ds = PIPELINES[pipeline](keys, source, sink, **pipeline_kwargs)
+        if profile:
+            ds = ds.materialize()
+            n_done = ds.count()
+            console.print(f"[bold green]Done[/bold green] — ok={n_done}, skipped={skipped}")
+            console.rule("[bold]Ray Data stats")
+            console.print(ds.stats())
+            timeline_path = Path("/tmp/runner-timeline.json")  # noqa: S108 — local debug artifact, not a security boundary
+            ray.timeline(filename=str(timeline_path))
+            console.print(f"[bold]Timeline trace[/bold] -> {timeline_path} (open in chrome://tracing)")
+        else:
+            n_done = ds.count()
+            console.print(f"[bold green]Done[/bold green] — ok={n_done}, skipped={skipped}")
+    except Exception as exc:
+        emit(emitted(event_type="FAIL", error=str(exc)))
+        raise
+    emit(emitted(event_type="COMPLETE", rows=n_done))
 
 
 if __name__ == "__main__":
