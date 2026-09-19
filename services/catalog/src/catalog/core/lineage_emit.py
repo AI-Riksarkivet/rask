@@ -51,7 +51,9 @@ from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
+    catalog_facet,
     custom_facet,
+    dataset_type_facet,
     lifecycle_facet,
     processing_engine_facet,
     schema_facet,
@@ -206,6 +208,8 @@ def build_write_event(
     project: str | None = None,
     originator: str | None = None,
     branch: str | None = None,
+    catalog_impl: str = "",
+    warehouse_uri: str = "",
 ) -> dict[str, Any]:
     """Build the OpenLineage ``RunEvent`` (wire JSON) for any catalog write to a table.
 
@@ -299,6 +303,16 @@ def build_write_event(
         # so a catalog-written table has real columns in the graph, not empty until a compute job re-asserts.
         # Built by the SHARED service_kit.openlineage helper — one spec version across all emitters.
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
+    # WHICH CATALOG GOVERNS THIS, so two estates writing `bronze$events` are not one node in a shared
+    # graph. `job_namespace` is reused as the catalog's NAME rather than taking a second parameter:
+    # it is already this catalog's identity on every event it emits, and a separate value could drift
+    # into the facet and the job disagreeing about who is speaking.
+    if catalog := catalog_facet(_PRODUCER, impl=catalog_impl, name=job_namespace, warehouse_uri=warehouse_uri):
+        facets["catalog"] = catalog
+    # WHAT KIND of thing this is. Unconditionally TABLE: this builder serves CATALOG writes, and the
+    # catalog writes governed Lance tables and nothing else — an external source reaches the graph as
+    # an INPUT ref, never as something this event wrote.
+    facets["datasetType"] = dataset_type_facet(_PRODUCER, external=False)
     if facets:
         output["facets"] = facets
     return {
@@ -582,6 +596,11 @@ class _BaseLineageEmitter:
     #: Set by `make_emitter`; absent in the hand-constructed emitters the tests build, which is why it
     #: carries a class-level default rather than being required in every `__init__`.
     _project_resolver: ProjectResolver | None = None
+    #: The catalog's self-description for the standard `catalog` facet ([[LIN-002]]), set the same way
+    #: and for the same reason. Empty renders NO facet rather than a blank one, which is what keeps an
+    #: emitter built without them honest instead of claiming an unnamed catalog.
+    _catalog_impl: str = ""
+    _warehouse_uri: str = ""
 
     async def project_for(self, top_ns: str) -> str | None:
         """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
@@ -643,6 +662,8 @@ class _BaseLineageEmitter:
             project=resolved_project,
             originator=fields.get("originator"),
             branch=fields.get("branch"),
+            catalog_impl=self._catalog_impl,
+            warehouse_uri=self._warehouse_uri,
         )
         await self._send(event, operation=operation, table_id=table_id, authorization=fields.get("authorization"))
 
@@ -744,6 +765,8 @@ def make_emitter(
     project_resolver: ProjectResolver | None = None,
     outbox_uri: str = "",
     storage_options: dict[str, str] | None = None,
+    catalog_impl: str = "",
+    warehouse_uri: str = "",
 ) -> LineageEmitter:
     """Select the lineage transport: ``dapr`` (durable pub/sub via the sidecar) or ``http`` (direct POST);
     no-op when disabled or unwired (a half-configured transport must never silently become the other)."""
@@ -760,10 +783,14 @@ def make_emitter(
             storage_options=storage_options,
         )
         emitter._project_resolver = project_resolver
+        emitter._catalog_impl = catalog_impl
+        emitter._warehouse_uri = warehouse_uri
         return emitter
     if transport == "http" and url and client is not None:
         http_emitter = HttpLineageEmitter(client, url, job_namespace=job_namespace)
         http_emitter._project_resolver = project_resolver
+        http_emitter._catalog_impl = catalog_impl
+        http_emitter._warehouse_uri = warehouse_uri
         return http_emitter
     return NoopEmitter()
 

@@ -720,7 +720,10 @@ def test_build_write_event_insert_omits_version_facet() -> None:
     assert event["job"]["name"] == "insert.a$b"
     assert event["run"]["facets"]["lance"]["operation"] == "insert"
     assert "version" not in event["run"]["facets"]["lance"]  # no version key on a version-less insert
-    assert "facets" not in event["outputs"][0]  # no version facet asserted when version is None
+    # The SUBJECT, stated directly. This was `"facets" not in …` while the version facet was the only
+    # dataset facet a version-less insert could carry; `datasetType` is now always present ([[LIN-002]]),
+    # so the blanket check would pass or fail for reasons unrelated to versions.
+    assert "version" not in event["outputs"][0]["facets"]
 
 
 def test_build_write_event_merge_carries_version() -> None:

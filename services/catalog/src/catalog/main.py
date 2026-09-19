@@ -209,6 +209,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         project_resolver=_resolve_project,
         outbox_uri=settings.lineage_outbox_uri,
         storage_options=settings.storage_options(),
+        # The catalog's self-description for the standard `catalog` facet ([[LIN-002]]): the Lance
+        # Namespace implementation it is reached through, and where the data it governs physically
+        # lives. Both are read from the SAME settings the catalog serves from, so the facet cannot
+        # describe a catalog other than the one answering.
+        catalog_impl=settings.impl,
+        warehouse_uri=settings.root,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
     # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS
