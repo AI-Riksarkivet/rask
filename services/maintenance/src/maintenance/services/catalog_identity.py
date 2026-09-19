@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from maintenance.core.config import MaintenanceSettings
-from service_kit.governed.dapr_auth import DaprDoorSettings
+from service_kit.governed.dapr_auth import expected_app_token
 
 
 def dedicated_token_for(settings: MaintenanceSettings) -> Callable[[str], str | None] | None:
@@ -43,11 +43,22 @@ def service_headers(settings: MaintenanceSettings) -> dict[str, str]:
 
     Its OWN credential when the store has one; the shared bearer otherwise, which is every estate
     that has not provisioned this identity.
+
+    THE FALLBACK RESOLVES THROUGH `expected_app_token`, not through `DaprDoorSettings().app_api_token`,
+    and the difference is a whole branch. That attribute is the ENV half alone; the resolver returns
+    the STORE's value when `app_token_from_store` is set, which is the case this estate runs — measured
+    on the deployed pod 2026-09-19, the attribute is `None` while the resolver answers a token. Its own
+    docstring is the rule: "a service door still reading env while the Dapr door reads the store is a
+    pod where half the credentials are configured and nothing says which half."
+
+    The combination that was broken is the one the line above calls common — token in the store,
+    dedicated identity absent — where this sent NO bearer and the catalog refused a call whose cause is
+    a service away. `medallion/core/config.py::outbound_app_token` is the same fix one service over.
     """
     headers = {"x-lance-service-identity": settings.catalog_service_identity}
     resolver = dedicated_token_for(settings)
     if resolver is not None and (own := resolver(settings.catalog_service_identity)):
         headers["dapr-api-token"] = own
-    elif token := DaprDoorSettings().app_api_token:
+    elif token := expected_app_token():
         headers["dapr-api-token"] = token
     return headers
