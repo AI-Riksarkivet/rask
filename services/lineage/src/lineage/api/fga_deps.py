@@ -41,7 +41,7 @@ from openfga_sdk import OpenFgaClient
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
-from lineage.models import RunEvent, UnauthoredRunError, author_sub_from_payload
+from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
 from service_kit.governed import fga
 
 
@@ -102,6 +102,29 @@ async def _denied_objects(client: OpenFgaClient, *, user: str, relations: tuple[
         allowed = await fga.batch_check(client, user=user, relation=relation, objects=[f"{object_type}:{n}" for n in remaining])
         remaining = [n for n in remaining if not allowed.get(f"{object_type}:{n}")]
     return sorted(remaining)
+
+
+async def _none_are_governed(client: OpenFgaClient, *, names: list[str], object_type: str) -> bool:
+    """True only when EVERY denied name carries zero tuples — i.e. there is nothing to grant on.
+
+    Decides which ack a refusal earns ([[LH-166]]): a grant needs an object, so a denial naming only
+    objects FGA has no record of can never be repaired, and parking it appends a dead-letter copy per
+    restart forever. One targeted read per denied name, on the refusal path only — `governed_objects`
+    pages the whole store and is a per-SWEEP cost, not a per-event one.
+
+    FAIL-CLOSED TO THE REPAIRABLE ARM. An unreadable store answers False, so the caller parks: parking
+    a repairable event costs a duplicate, acking an unreadable one deletes provenance, and only the
+    second cannot be undone. Short-circuits on the first governed name — one is enough to make the
+    refusal repairable.
+    """
+    try:
+        for name in names:
+            if await fga.read_object_tuples(client, f"{object_type}:{name}"):
+                return False
+    except Exception as exc:  # noqa: BLE001 — unreadable is not evidence of absence
+        log.warning("ingest_governance_probe_unreadable", extra={"outputs": names, "error": str(exc)})
+        return False
+    return True
 
 
 async def _require_relation(relation: str, name: str, request: Request, settings: LineageSettings, token: Principal | None) -> None:
@@ -369,7 +392,10 @@ async def enforce_output_authz(
         denied = await _denied_objects(client, user=token.sub, relations=relations, names=outputs, object_type=object_type)
         if denied:
             log.info("ingest_denied", extra={"sub": token.sub, "relation": "|".join(relations), "outputs": denied})
-            raise PermissionDeniedError(f"{' or '.join(relations)} required on outputs: {', '.join(denied)}")
+            reason = f"{' or '.join(relations)} required on outputs: {', '.join(denied)}"
+            if await _none_are_governed(client, names=denied, object_type=object_type):
+                raise UngovernedOutputError(reason)
+            raise PermissionDeniedError(reason)
     # Inputs: you may only RECORD reading a dataset you can SEE — else an authenticated reader (e.g. the
     # service-web read identity) could forge READ-edge provenance like "service-web read gold$catalog" into
     # the governed audit graph. `writer ⊇ reader` in model.fga, so stage runners (writers) and the trainer (reader)

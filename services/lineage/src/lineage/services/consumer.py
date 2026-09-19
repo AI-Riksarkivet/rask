@@ -32,7 +32,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
 from lineage.core.metrics import Outcome, record_ingest_duration, record_outcome
-from lineage.models import RunEvent, UnauthoredRunError
+from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError
 from lineage.services.repository import LineageRepository
 
 
@@ -104,6 +104,14 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
             # the deployed estate 2026-09-18: 37 of 44 refusals in one hour, all one run id, one burst
             # per roll, each appending a NEW dead-letter message about an event the DLQ already held.
             log.warning("lineage_event_unauthored", extra={"run": event.run.run_id, "reason": str(exc)})
+            record_outcome(Outcome.UNREPAIRABLE)
+            return _SUCCESS
+        except UngovernedOutputError as exc:
+            # UNREPAIRABLE, so it is consumed rather than parked — a grant needs an OBJECT, and every
+            # output this names carries zero tuples. Measured on the deployed estate 2026-09-19: all 7
+            # parks in a six-hour window were this, four distinct outputs, none with a tuple and one
+            # answering 404 from the catalog. Parked, they came back on every roll forever.
+            log.warning("lineage_event_ungoverned_output", extra={"run": event.run.run_id, "reason": str(exc)})
             record_outcome(Outcome.UNREPAIRABLE)
             return _SUCCESS
         except PermissionDeniedError as exc:
