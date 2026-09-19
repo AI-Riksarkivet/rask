@@ -94,7 +94,7 @@ tests:
               service: medallion
             exp_annotations:
               summary: "Medallion cascade dead-lettering — a stage delivery gave up"
-              description: "A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating. This now MEANS exhaustion: a deterministic refusal acks SUCCESS once its payload reaches `refused.<appId>`, so it no longer lands here ([[LH-151]]). The one exception is a refusal whose retention publish did not land — no `MEDALLION_REFUSED_TOPIC`, or a broker that refused it — which falls back to parking on purpose, because SUCCESS would discard the payload on a `deliverPolicy: new` subscriber. Check `medallion_stage_refused_total` and the `medallion_refusal_not_retained` log before reading a park as a stuck delivery. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # 4. No dead-letters (flat counter) → the cascade alert stays silent.
   - interval: 1m

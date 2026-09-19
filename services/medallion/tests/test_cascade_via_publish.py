@@ -143,7 +143,12 @@ class TestARefusalBecomesTheHold:
 
         status = asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream), _event()))
 
-        assert status["status"] == "DROP"
+        # SUCCESS, not DROP ([[LH-151]]): a quality hold is a DECISION, and the run it decided about is
+        # already in the lineage graph as a FAIL plus a published hold. DROP would route it to the
+        # dead-letter topic, where `MedallionCascadeDeadLettering` reads it as a delivery that gave up.
+        # The load-bearing assertion is the next line — the cascade must still not advance.
+        assert status["status"] == "SUCCESS"
+        assert status["reason"] == "quality_blocked", "the ack must still say WHY it stopped"
         assert "medallion.silver" not in dapr.topics
         assert holds and holds[0]["reasons"] == ["row_count_positive"], (
             "the catalog's verdict must reach the review — without the assertion names it cannot tell a corrupt finding from a reviewable one"

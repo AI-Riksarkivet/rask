@@ -303,7 +303,13 @@ groups:
         annotations:
           summary: "Medallion cascade dead-lettering — a stage delivery gave up"
           description: >-
-            A cascade delivery exhausted its retries and was parked; a dataset has silently stopped updating.
+            A cascade delivery exhausted its retries and was parked; a dataset has silently stopped
+            updating. This now MEANS exhaustion: a deterministic refusal acks SUCCESS once its payload
+            reaches `refused.<appId>`, so it no longer lands here ([[LH-151]]). The one exception is a
+            refusal whose retention publish did not land — no `MEDALLION_REFUSED_TOPIC`, or a broker
+            that refused it — which falls back to parking on purpose, because SUCCESS would discard the
+            payload on a `deliverPolicy: new` subscriber. Check `medallion_stage_refused_total` and the
+            `medallion_refusal_not_retained` log before reading a park as a stuck delivery.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       # THE RUN-LEVEL VERDICT, and the reason it cannot come from Dapr's own family.
@@ -326,12 +332,13 @@ groups:
             means the outcome reached the graph and no person. Split by `lance_medallion_verdict` to tell
             them apart. Runbook: docs/runbooks/RUNBOOK-oncall.md#cascade-stalled
 
-      # A _preflight refusal returns DROP, and a DROP is an ACK: Dapr does not retry it. It DOES route
-      # to the declared dead-letter topic (`MEDALLION_DLQ_TOPIC=dlq.<appId>` on all four subscribers),
-      # so the halt raises `MedallionCascadeDeadLettering` — as an EXHAUSTED DELIVERY, which a
-      # deterministic refusal is not. `medallion_stage_refused_total` is what says the halt was a
-      # decision, which is why these two rules exist and why the counter carries a bounded `reason`
-      # label rather than the offending token ([[LH-151]]).
+      # A _preflight refusal acks SUCCESS once its payload is retained on `refused.<appId>`, so the
+      # halt leaves no delivery trace at all — `MedallionCascadeDeadLettering` is deliberately blind to
+      # it now, because a governance decision is not an exhausted delivery ([[LH-151]]). That makes
+      # `medallion_stage_refused_total` the ONLY evidence the halt happened, which is why these two
+      # rules exist and why the counter carries a bounded `reason` label rather than the offending
+      # token. A refusal that could NOT be retained still parks, so a park plus a refusal in the same
+      # window means the retention topic is the thing to look at.
       - alert: MedallionStageRoutingDisabled
         expr: sum(rate(medallion_stage_refused_total{lance_medallion_reason="routing_disabled"}[15m])) > 0
         for: 10m

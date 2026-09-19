@@ -112,17 +112,37 @@ def _drop(reason: str) -> dict[str, str]:
     return {"status": "DROP", "reason": reason}
 
 
-# A quality-blocked run was handled (its failed assertions are recorded in lineage), it just must not
-# promote — DROP so Dapr doesn't redeliver: the data is deterministically bad and the failed run in the
-# lineage graph is the audit trail.
+def _acked_if_retained(verdict: dict[str, str], retained: bool) -> dict[str, str]:
+    """SUCCESS when the payload is provably replayable, otherwise the DROP that parks it ([[LH-151]]).
+
+    **THE ACK FOLLOWS THE EVIDENCE, NOT THE CONFIGURATION.** Every refusal here is deterministic, so
+    re-presenting it buys nothing and parking it costs a dead-letter copy per roll that
+    `MedallionCascadeDeadLettering` reads as retry exhaustion — a decision paged as a failure. SUCCESS
+    is therefore right, but only once the payload survives elsewhere: this subscriber is
+    `deliverPolicy: new`, so SUCCESS DISCARDS rather than leaving the event on a replayable stream.
+
+    An estate on this code with no `MEDALLION_REFUSED_TOPIC`, or a broker that refused the publish,
+    keeps the old behaviour exactly — parks, and is paged. That is the safe direction of the two: an
+    unnecessary park costs a duplicate, and a premature SUCCESS costs the payload.
+
+    `reason` rides along on both, so the wire still says WHICH refusal it was.
+    """
+    return {**verdict, "status": "SUCCESS"} if retained else verdict
+
+
+# A quality-blocked run was HANDLED — it just must not promote. The transform ran, the output is
+# written, the failed assertions are in the lineage graph as a FAIL run, and `_report_hold` publishes
+# the hold a `can_promote` holder answers on. SUCCESS, because all three of those are the record and
+# none of them is the dead-letter topic ([[LH-151]]).
 #
-# THE DROP IS NOT SILENT, and a reader sizing its cost must know: with `MEDALLION_DLQ_TOPIC` set (the
-# chart sets it unconditionally) Dapr forwards a DROP to the dead-letter topic, so `/dlq-event`
-# ERROR-logs it and `medallion_dlq_parked_total` rises — which `MedallionCascadeDeadLettering` pages on
-# as "a stage delivery gave up". Measured 2026-09-14: one quality block produced exactly one park, 42ms
-# after the hold, with no retries in between. Tracked as LH-151 — the parking plane assumes every park
-# is retry exhaustion, and a deliberate governance decision is not one.
-_QUALITY_BLOCKED = {"status": "DROP"}
+# WHY THIS ONE NEEDS NO RETENTION TOPIC, unlike the eleven pre-flight refusals. Those are refused
+# BEFORE anything is read or written, so the trigger payload is the only copy and SUCCESS would
+# discard it on a `deliverPolicy: new` subscriber. Here the run already exists in the graph with its
+# token and dataset, emitted through the outbox and therefore durable, so the payload is reconstructible
+# without the event. Measured 2026-09-14, before this: one quality block produced exactly one park,
+# 42ms after the hold, with no retries in between — a governance decision counted as retry exhaustion
+# by `medallion_dlq_parked_total` and paged by `MedallionCascadeDeadLettering`.
+_QUALITY_BLOCKED = {"status": "SUCCESS", "reason": "quality_blocked"}
 
 
 def _dispatch_stage_workflow(
@@ -1700,26 +1720,21 @@ async def _retain_refusal(
     transition: str,
     reason: str,
     event: object,
-) -> None:
-    """Publish a refused trigger's PAYLOAD to the retention topic, so the refusal can be replayed.
+) -> bool:
+    """Publish a refused trigger's PAYLOAD to the retention topic. ``True`` when it landed.
 
-    **THIS IS THE HALF THAT MUST LAND FIRST ([[LH-151]]).** The eleven deterministic refusals below ack
-    with DROP, which Dapr routes to the dead-letter topic — so the payload survives today, but only as
-    something `MedallionCascadeDeadLettering` reads as an exhausted delivery. The fix is to ack SUCCESS
-    instead, and that CANNOT happen while this topic does not exist: the cascade's subscribers are
-    `deliverPolicy: new` (`chart/templates/dapr-component.yaml`), so a SUCCESS ack genuinely discards
-    the payload rather than leaving it on a replayable stream the way lineage's `all` subscriber does.
-    Retention first, ack second, in separate changes.
+    **THE RETURN VALUE DECIDES THE ACK ([[LH-151]]).** A deterministic refusal acks SUCCESS only when
+    its payload is provably somewhere replayable; otherwise it keeps the DROP that parks it. The
+    cascade's subscribers are `deliverPolicy: new` (`chart/templates/dapr-component.yaml`), so SUCCESS
+    genuinely DISCARDS — unlike lineage's `all` subscriber, where the retained stream re-presents it.
+    An estate running this code without `MEDALLION_REFUSED_TOPIC`, or with a wedged broker, must
+    therefore behave exactly as it did before: park, and be paged about it. Config is not evidence;
+    the publish returning True is.
 
-    BEST-EFFORT, deliberately, and the return value is ignored on purpose. A refusal is already
-    deterministic; letting a retention publish raise would turn it into a handler error and hand the
-    sidecar a RETRY, so a NATS hiccup would convert a decided refusal into a redelivery storm. The
-    publish failing costs replay of one payload — the same position the estate is in today — while
-    raising costs the cascade. `publish_json` reports the failure in the estate's one shape.
-
-    Off unless `MEDALLION_REFUSED_TOPIC` is set, so a deployment that has not provisioned the stream
-    publishes nowhere rather than failing every refusal: Dapr does NOT auto-create streams, and a
-    publish to an absent subject fails.
+    BEST-EFFORT, never raising. Letting a retention publish raise would turn a decided refusal into a
+    handler error and hand the sidecar a RETRY, so a NATS hiccup would become a redelivery storm over
+    an event that can never be accepted. `publish_json` reports in the estate's one failure shape
+    (DUP-18) and is bounded, so a wedged sidecar cannot hang the handler either.
 
     CALLED FROM ONE SITE FOR ELEVEN REFUSALS. `_preflight` returns its verdict rather than acking
     itself, so `handle_stage` retains every refusal it produces by construction — a twelfth refusal
@@ -1727,11 +1742,8 @@ async def _retain_refusal(
     """
     topic = settings.refused_topic
     if not topic:
-        return
-    # `publish_json` REPORTS rather than raises, which is exactly the contract this needs: it is the
-    # estate's one publish-failure shape (DUP-18) AND it is bounded, so a wedged sidecar cannot hang a
-    # refusal the handler has already decided. The bool is deliberately unread — see above.
-    await dapr_publish.publish_json(
+        return False
+    return await dapr_publish.publish_json(
         dapr,
         pubsub_name=settings.pubsub,
         topic_name=topic,
@@ -1775,8 +1787,7 @@ async def handle_stage(
 
     pre = await _preflight(settings, event, transition=transition, fga_client=fga_client)
     if not isinstance(pre, StagePreflight):
-        await _retain_refusal(dapr, settings, transition=transition, reason=pre.get("reason", ""), event=event)
-        return pre
+        return _acked_if_retained(pre, await _retain_refusal(dapr, settings, transition=transition, reason=pre.get("reason", ""), event=event))
     trigger, project, identity = pre.trigger, pre.project, pre.identity
     token = trigger.token
 

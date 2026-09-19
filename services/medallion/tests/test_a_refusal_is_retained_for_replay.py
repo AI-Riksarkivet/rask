@@ -1,11 +1,12 @@
 """A deterministically refused trigger's payload is published where it can be replayed ([[LH-151]]).
 
-**THE ACK IS DELIBERATELY UNCHANGED, and this file is the reason it can change later.** All eleven
-pre-flight refusals still return DROP, which Dapr routes to the dead-letter topic — so today nothing
-is lost and `MedallionCascadeDeadLettering` still reads every one as an exhausted delivery. The fix is
-to ack SUCCESS instead, and that cannot land first: the cascade's subscribers are `deliverPolicy: new`
-(`chart/templates/dapr-component.yaml`), so a SUCCESS there genuinely discards the payload rather than
-leaving it replayable the way lineage's `all` subscriber does. Retention first, ack second.
+**THE ACK FOLLOWS THE EVIDENCE, NOT THE CONFIGURATION.** A deterministic refusal acks SUCCESS only
+when its payload is provably on the retention topic; otherwise it keeps the DROP that parks it. The
+cascade's subscribers are `deliverPolicy: new` (`chart/templates/dapr-component.yaml`), so SUCCESS
+genuinely DISCARDS — unlike lineage's `all` subscriber, where the retained stream re-presents it. An
+estate with no `MEDALLION_REFUSED_TOPIC`, or a broker that refused the publish, must behave exactly as
+before: park, and be paged. An unnecessary park costs a duplicate; a premature SUCCESS costs the
+payload, and only one of those is recoverable.
 
 RETENTION HOOKS AT ONE SITE, NOT ELEVEN. `_preflight` returns its verdict rather than acking itself,
 so `handle_stage` retains every refusal it produces by construction — a twelfth refusal added inside
@@ -52,9 +53,10 @@ async def test_a_refused_trigger_is_published_to_the_retention_topic() -> None:
 
     verdict = await handle_stage(cast(DaprClient, dapr), _settings(), _MALFORMED)
 
-    assert verdict["status"] == "DROP", "the ack must NOT change until the topic is proven live"
     topics = [c.kwargs.get("topic_name") for c in dapr.publish_event.await_args_list]
     assert "refused.bronze-to-silver" in topics, f"the refusal was not retained; published to {topics}"
+    assert verdict["status"] == "SUCCESS", "a retained refusal must stop parking — that is the whole row"
+    assert verdict.get("reason") == "malformed", "the wire must still say WHICH refusal it was"
 
 
 @pytest.mark.asyncio
@@ -80,18 +82,19 @@ async def test_retention_is_OFF_when_no_topic_is_configured() -> None:
 
     verdict = await handle_stage(cast(DaprClient, dapr), _settings(MEDALLION_REFUSED_TOPIC=""), _MALFORMED)
 
-    assert verdict["status"] == "DROP"
     assert not [c for c in dapr.publish_event.await_args_list if "refused" in str(c.kwargs.get("topic_name"))]
+    assert verdict["status"] == "DROP", "with nowhere to retain, SUCCESS would DISCARD the payload on a deliverPolicy=new subscriber"
 
 
 @pytest.mark.asyncio
-async def test_a_FAILED_retention_publish_does_not_change_the_ack() -> None:
-    """THE ONE THAT PROTECTS THE CASCADE. A refusal is already decided; letting the retention publish
-    raise would hand the sidecar a handler error and therefore a RETRY, turning a NATS hiccup into a
-    redelivery storm over an event that can never be accepted. Losing one replay is the cost."""
+async def test_a_FAILED_retention_publish_falls_back_to_parking() -> None:
+    """THE ONE THAT PROTECTS THE PAYLOAD. A broker that refused the publish leaves nothing to replay,
+    so SUCCESS would discard the event outright — the ack falls back to the DROP that parks it. And it
+    must not become a RETRY either: the refusal is deterministic, so redelivery is a storm over an
+    event that can never be accepted."""
     dapr = _dapr()
     dapr.publish_event = AsyncMock(side_effect=RuntimeError("jetstream unavailable"))
 
     verdict = await handle_stage(cast(DaprClient, dapr), _settings(), _MALFORMED)
 
-    assert verdict["status"] == "DROP", "a retention failure must not become a RETRY"
+    assert verdict["status"] == "DROP", "a failed retention publish must fall back to parking, never SUCCESS or RETRY"
