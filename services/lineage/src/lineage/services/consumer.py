@@ -90,7 +90,7 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
         # ACKED, not DROPped. A DROP on a subscription carrying a `deadLetterTopic` PARKS, and bytes
         # that do not parse cannot be repaired by a redelivery, a grant or a restart — so parking them
         # writes a dead-letter copy no reader can act on, once per restart, forever. The count is the
-        # signal (`Outcome.DROPPED`), and the event stays on the stream for its retention.
+        # signal (`Outcome.UNREPAIRABLE`), and the event stays on the stream for its retention.
         return _SUCCESS
     if authorize is not None:
         try:

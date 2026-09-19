@@ -141,6 +141,29 @@ groups:
             A lineage event exhausted its Dapr resiliency schedule and was parked (a terminal loss signal).
             Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
+      - alert: LineageIngestDiscardingUnrepairable
+        expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="unrepairable"}[5m])) > 0
+        # 10m for the same reason `LineageIngestRefusingProvenance` uses it, and more so: the consumer
+        # is ephemeral with `deliverPolicy: all`, so every roll re-presents the retained stream and
+        # re-discards whatever still cannot be repaired. Measured 2026-09-18, one roll produced 70 of
+        # these in a single burst and then silence. A 5m `for` cannot tell that bounded burst from a
+        # producer emitting unparseable or unauthored events continuously.
+        for: 10m
+        labels:
+          severity: warning
+          service: lineage
+        annotations:
+          summary: "Lineage is DISCARDING events it can never record — a producer is emitting garbage"
+          description: >-
+            A delivered event either did not parse or carried no author at all, so no tuple, redelivery
+            or restart could ever make it recordable. It is ACKED rather than parked, deliberately — a
+            DROP on this subscription writes a dead-letter duplicate of the same event on every roll —
+            which means THIS COUNT IS THE ONLY TRACE IT LEFT. A rising line here is a producer
+            regression: something is publishing to `lineage.events.v1` without a verified author, or
+            with a body that is not an OpenLineage RunEvent. Distinct from `refused`, which is a named
+            person lacking a grant and is repairable by writing the tuple.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+
       - alert: LineageIngestRefusingProvenance
         expr: sum(rate(lineage_events_processed_total{lance_lineage_outcome="refused"}[5m])) > 0
         # 10m, not 5m, and the extra five minutes are the restart replay. The bus consumer is ephemeral

@@ -53,7 +53,7 @@ def test_handle_CONSUMES_a_malformed_payload() -> None:
     # those bytes into an event. DROP would not merely stop the retries — the subscription carries a
     # `deadLetterTopic`, so a DROP PARKS, and the subscriber is ephemeral with `deliverPolicy: all`, so
     # every restart meets the same bytes again and appends another dead-letter copy of an event the DLQ
-    # already holds. The count is the signal (`Outcome.DROPPED`), and the stream still holds the event
+    # already holds. The count is the signal (`Outcome.UNREPAIRABLE`), and the stream still holds the event
     # for its retention.
     repo = _FakeRepo()
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": {"not": "an event"}}))

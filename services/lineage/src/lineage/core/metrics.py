@@ -44,7 +44,6 @@ class Outcome(StrEnum):
     """The bounded set of terminal outcomes for one delivered event (the only metric attribute)."""
 
     INGESTED = "ingested"  # graph write committed → Dapr SUCCESS
-    DROPPED = "dropped"  # malformed payload → Dapr DROP (redelivery can't fix it)
     # A bus event the stamped subject was not authorized to record (§ E2). Its OWN value rather than
     # `DROPPED`, though both ack the same way: the two send an operator to different places — a refusal
     # is an authorization question about a producer, a drop is a schema question about its payload — and
