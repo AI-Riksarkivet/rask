@@ -114,3 +114,48 @@ def test_the_checksum_TRACKS_the_secret_rather_than_being_a_constant() -> None:
     )[0]
 
     assert baseline != rotated, "the checksum does not follow the Secret — a rotation would roll nothing"
+
+
+def test_the_infra_checksum_IS_a_constant_under_external_secrets() -> None:
+    """[[XC-001]]. The measurement that makes the session checksum necessary rather than redundant.
+
+    `infra-credentials.yaml` renders EMPTY when `externalSecrets.enabled=true` — ESO writes that Secret
+    instead of the chart — so the hash above it is taken over nothing and rotating any value it covers
+    produces the identical annotation. On a live estate that is the configuration, so the estate's one
+    rotation mechanism was inert exactly where it was needed.
+    """
+    external = ("--set", "externalSecrets.enabled=true")
+    baseline = re.findall(r"checksum/infra-credentials: (\S+)", _render(*external))[0]
+    rotated = re.findall(
+        r"checksum/infra-credentials: (\S+)",
+        _render(*external, "--set-string", "age.password=a-different-value-entirely"),
+    )[0]
+
+    assert baseline == rotated, "infra-credentials now tracks a rotation under ESO — if this is real, the session checksum below may be redundant"
+
+
+def test_rotating_the_SESSION_secret_rolls_every_zone_under_external_secrets() -> None:
+    """The clause the row names: rotate `frontend.oidc.sessionSecret`, not only `age.password`.
+
+    Rotating the sealing key logs everyone out, which is precisely why it must reach every zone at
+    once: half the fleet on the old key and half on the new is a cookie that verifies on one zone and
+    401s on the next, and nothing distinguishes that from a user who is simply signed out.
+    """
+    external = ("--set", "externalSecrets.enabled=true")
+    baseline = set(re.findall(r"checksum/frontend-session: (\S+)", _render(*external)))
+    rotated = set(
+        re.findall(
+            r"checksum/frontend-session: (\S+)",
+            _render(*external, "--set-string", "frontend.oidc.sessionSecret=a-completely-different-sealing-key-32"),
+        )
+    )
+
+    assert len(baseline) == 1, f"the seven zones disagree about the session checksum: {baseline}"
+    assert baseline != rotated, "rotating the sealing key rolls no zone — the annotation does not follow the Secret"
+
+
+def test_every_zone_carries_the_session_checksum() -> None:
+    """All seven, because the cookie is origin-wide and any zone left behind is the split-key case."""
+    rendered = _render("--set", "externalSecrets.enabled=true")
+
+    assert len(re.findall(r"checksum/frontend-session: ", rendered)) == 7

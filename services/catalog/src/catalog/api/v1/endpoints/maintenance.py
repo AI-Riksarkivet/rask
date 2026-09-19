@@ -164,7 +164,12 @@ async def compact_maintenance(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
-    branch: Annotated[str | None, Query(description="REFUSED here: a rewrite on a branch would materialise the parent's bytes into it.")] = None,
+    branch: Annotated[
+        str | None,
+        Query(
+            description="The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent."
+        ),
+    ] = None,
 ) -> CompactResult | CompactAccepted:
     """Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
@@ -180,14 +185,22 @@ async def compact_maintenance(
     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
     whose fragment count nobody bounded.
     """
-    dataplane.refuse_a_branch_this_door_cannot_honour(
-        branch,
-        door="maintenance/compact",
-        reason="a branch manifest registers its parent as a BASE (measured on pylance 11.0.0: `manifest_base_paths` is empty on main and names the parent on the branch), so a rewrite here would materialise the parent's bytes into `tree/<branch>/` rather than merge this ref's own fragments",
-        remedy="Compact the parent, which is where these fragments live.",
-    )
+    # NO SHAPE REFUSAL HERE. A branch is answered by `require_compactable`, which is evidence-based and
+    # already refuses a real shallow clone on COST — "compacting one materialises the shared data into
+    # its own root, 1,072 -> 108,199 bytes against a 119,693-byte base". A branch IS a shallow clone
+    # (`file_format.md:2744`), so it reaches that gate and gets that answer, measured against THIS
+    # dataset rather than asserted from its shape.
+    #
+    # The door used to refuse first, and its reason was wrong about the harm: measured on pylance
+    # 11.0.0, compacting a branch with 3 inherited and 2 own fragments reported
+    # `fragments_removed=5, fragments_added=1`, left main's data directory byte-identical at 3 files,
+    # and both refs still read (branch 40 rows, main 30). So it DOES merge this ref's own fragments and
+    # the parent is not endangered — the cost is duplication, which is exactly what the evidence gate
+    # measures and this one could not. It also made the answer permanent: a branch that has already
+    # been materialised owns all its fragments and is cheap to compact, and a shape refusal can never
+    # notice that.
     segments = parse_identifier(id, settings.delimiter)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments)
+    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     protected = await _base_refs(ds, so)
 
     publisher = getattr(request.app.state, "dapr_client", None)
@@ -232,7 +245,7 @@ async def compact_maintenance(
     # The QUEUED lane above is answered by an executor that emits; this lane has no such partner, and it
     # is the lane the deployed estate runs (`maintenance.workTopic` is empty on the release's values).
     # `pin_version` is None because `compact_now` reports fragment counts and no version — the trailer
-    # reads the snapshot the rewrite just committed. `branch` is not threaded: this door refuses one above.
+    # reads the snapshot the rewrite just committed.
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

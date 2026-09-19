@@ -84,7 +84,7 @@ def _app(settings: Settings, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) ->
     class _Ds:
         uri = "s3://warehouse/aa3bed10_ns$events"
 
-    monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments: _Ds())
+    monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments, **kwargs: _Ds())
     monkeypatch.setattr(door.base_refs, "sibling_base_refs", lambda uri, so: door.base_refs.BaseRefs())
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: object()

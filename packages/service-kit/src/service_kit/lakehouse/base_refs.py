@@ -118,8 +118,16 @@ _BRANCH_SEGMENT = "/tree/"
 def containment_of(location: str, root: str) -> str:
     """How ``location`` sits against the protected ``root``: ``is`` | ``branch`` | ``under`` | ``ancestor``.
 
-    DIAGNOSIS ONLY — every one of these is still refused, and this function decides no GC behaviour.
-    It exists because the four are not the same situation and one sentence described all of them:
+    IT DECIDES GC BEHAVIOUR, and one of the four is PERMITTED. `maintenance.services.optimize` reclaims
+    a location whose relation to the protected root is ``branch`` and refuses the other three, because a
+    branch is Lance's own business inside one root while an external clone is not — `file_format.md:3187`
+    disclaims exactly that case ("Source dataset remains immutable and can be garbage collected
+    independently"). Observed on the deployed estate 2026-09-18 when the permit landed: `relation='branch'`
+    refusals went 105 -> 0 and 61 branch datasets reclaimed 97 versions in one tick, with the parent's
+    `data/` unchanged and still time-travelling.
+
+    It began as diagnosis, because the four are not the same situation and one sentence described all of
+    them:
     measured on the live estate 2026-09-17, 129 of 246 refused datasets were ``branch`` and were told
     "another dataset resolves its files through <root>", which is the PARENT's situation stated about
     the child.

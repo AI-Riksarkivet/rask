@@ -109,6 +109,21 @@ spec:
                annotation, which changes the template, which rolls the consumers. Nothing else in this
                chart makes a credential change reach the pods holding it. */}}
         checksum/infra-credentials: {{ include (print $root.Template.BasePath "/infra-credentials.yaml") $root | sha256sum }}
+        {{- /* [[XC-001]]. The SESSION secret's own checksum, and it is not a duplicate of the line
+             above. `infra-credentials.yaml` renders EMPTY when `externalSecrets.enabled=true` — the
+             ESO half writes that Secret instead — so on a live estate the hash above is a constant
+             and rotating anything hashes to the same value. This one hashes the template that owns
+             `<release>-frontend-session`, which all seven zones consume for the session-cookie
+             sealing key and the confidential Dex client secret.
+             ROTATING THE SEALING KEY LOGS EVERYONE OUT, which is exactly why the rotation must reach
+             the pods: half the fleet holding the old key and half the new is a cookie that verifies
+             on one zone and 401s on the next, and the estate has no way to tell that apart from a
+             user who is simply signed out.
+             THE VALUES, NOT THE TEMPLATE. `include`-ing this file from inside it recurses until helm
+             gives up — the Secret and the Deployments that consume it live in one file — so the hash
+             is taken over exactly the two fields the Secret carries. That is also the tighter hash:
+             an unrelated edit to this template does not roll seven zones. */}}
+        checksum/frontend-session: {{ printf "%s|%s" ($root.Values.frontend.oidc.sessionSecret | default "") ($root.Values.dex.clientSecret | default "") | sha256sum }}
       labels:
         {{- include "rask.selectorLabels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ $comp }}

@@ -25930,7 +25930,7 @@
             }
           },
           {
-            "description": "REFUSED here: a rewrite on a branch would materialise the parent's bytes into it.",
+            "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -25943,7 +25943,7 @@
                   "type": "null"
                 }
               ],
-              "description": "REFUSED here: a rewrite on a branch would materialise the parent's bytes into it.",
+              "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
               "title": "Branch"
             }
           },
