@@ -53,6 +53,15 @@ REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     # Only the CATALOG url gates it: the suite's own skipif is keyed on that alone, and
     # `LANCE_E2E_DEX` has a working default, so demanding it would refuse a legitimate invocation.
     "spec-conformance": ("LANCE_E2E_CATALOG_URL",),
+    # GUARDS NOTHING FROM THE ENVIRONMENT, like `live` above and for the same reason: it DISCOVERS the
+    # catalog and Dex addresses from the release, because the whole point is to run where in-cluster
+    # names resolve — demanding the operator supply what the script derives would refuse a legitimate
+    # invocation. `scripts/conformance-incluster.sh` fails on the cluster's own answers instead: no
+    # reachable cluster, no Dex service, a Job that did not succeed. AND on a SKIP, which is the one
+    # this target exists for — the host-side run reports green while skipping the two cases that
+    # actually read bytes, so an in-cluster run that still skips has proved nothing and must not
+    # exit 0.
+    "spec-conformance-incluster": (),
     "compaction": ("LANCE_E2E_MAINTENANCE_URL", "LANCE_E2E_GREPTIME_URL"),
     "duckdb": ("LANCE_E2E_S3_ENDPOINT",),
     "dummy-lane": ("LANCE_E2E_CATALOG_URL",),

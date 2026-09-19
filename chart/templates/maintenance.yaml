@@ -224,6 +224,18 @@ spec:
             - { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Values.maintenance.floorRaise false | quote }} }
             - { name: MAINTENANCE_FLOOR_RAISE_DRY_RUN, value: {{ hasKey .Values.maintenance "floorRaiseDryRun" | ternary .Values.maintenance.floorRaiseDryRun true | quote }} }
             - { name: MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "floorRaiseMaxPerTick") | ternary .Values.maintenance.floorRaiseMaxPerTick 10 | quote }} }
+            {{- /* [[LH-061]]. The ADDITIVE tuple rebuild: re-assert authorization tuples the
+                   control-plane registries still justify, for objects the drift report found
+                   ungoverned. It WRITES AND NEVER DELETES, so it cannot widen access beyond what the
+                   control plane already recorded — which is what makes it safe against a live store.
+                   Off by default because it writes to the AUTHORIZATION store, and its dry run
+                   defaults TRUE so turning it on to SEE what it would grant does not grant it.
+                   The bound is real: project records carry `created_by` and warehouse records do not,
+                   so a tenant's admin seed and its warehouses' tenancy pointers come back, and every
+                   grant made after creation does not. */}}
+            - { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary .Values.maintenance.tupleRebuild false | quote }} }
+            - { name: MAINTENANCE_TUPLE_REBUILD_DRY_RUN, value: {{ hasKey .Values.maintenance "tupleRebuildDryRun" | ternary .Values.maintenance.tupleRebuildDryRun true | quote }} }
+            - { name: MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tupleRebuildMaxPerTick") | ternary .Values.maintenance.tupleRebuildMaxPerTick 50 | quote }} }
             {{- /* #128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
                    because the whole defect was that the setting existed in config.py and had NO path
                    from values — an env var that appears only when enabled is one nobody can discover

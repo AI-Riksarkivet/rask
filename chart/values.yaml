@@ -1738,6 +1738,26 @@ maintenance:
   # uncapped pass would turn one cron fire into a commit against every governed table in the estate.
   # The remainder is reported (`floor_raise.capped`) and taken on the next tick.
   floorRaiseMaxPerTick: 10
+  # [[LH-061]] — rebuild authorization tuples the control-plane registries still justify.
+  #
+  # ADDITIVE ONLY: the pass writes and never deletes, so it cannot widen access beyond what the control
+  # plane already recorded. It exists because the reconciler could DETECT a project holding no tuples
+  # at all and do nothing about it — and that project-admin tuple is what makes a tenant
+  # self-sustaining, so a tenant without it is one nobody can administer, grant on, or delete.
+  #
+  # THE BOUND, so this is not mistaken for a backup: project records carry `created_by` and warehouse
+  # records do not (measured live 2026-09-19, 93/93 and 0/97). So a tenant's admin seed and its
+  # warehouses' tenancy pointers come back; every grant made after creation — other admins, roles, team
+  # edges, per-table owners, the cascade identities — is in no registry and comes back from none of
+  # them. A rebuilt estate is one an admin can start repairing, not one that is repaired.
+  tupleRebuild: false
+  # Plan and report, write nothing. Defaults TRUE: turning the pass on to SEE what it would grant must
+  # not grant it.
+  tupleRebuildDryRun: true
+  # Per-tick ceiling on tuples written. A wholesale tuple loss makes every tenant eligible at once, so
+  # an uncapped pass would turn one cron fire into an estate-wide authorization write. The remainder is
+  # reported (`tuple_rebuild.capped`).
+  tupleRebuildMaxPerTick: 50
   # The reconciler's per-dataset FILE scan — the unreferenced-file category (#128a).
   #
   # THIS IS THE LEVER TRASHPURGE ABOVE DEPENDS ON, and until 2026-08-15 it did not exist at any values

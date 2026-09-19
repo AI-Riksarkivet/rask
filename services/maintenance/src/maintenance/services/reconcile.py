@@ -985,6 +985,13 @@ async def reconcile(
     warehouses_enabled: bool,
     control_root: str | None = None,
     namespace_root: str | None = None,
+    # FILLED with the stores this run read, for a caller that must act on the SAME snapshot the report
+    # was built from. The tuple rebuild is that caller: it writes grants a registry record justifies,
+    # so reading the registry a second time would let it assert a tuple for a record the report never
+    # saw. An out-parameter rather than a second return value, because `reconcile` has callers whose
+    # signature this must not change — and rather than a second `load_sources`, because two loads of a
+    # live control root can disagree and the difference would surface as an unexplained grant.
+    into_sources: list[Sources] | None = None,
     platform_buckets: Iterable[str] | None = None,
     fga_root_object: str = DEFAULT_FGA_ROOT_OBJECT,
     bucket_client: Any = None,
@@ -1043,6 +1050,8 @@ async def reconcile(
         bucket_client=bucket_client,
         delimiter=settings.delimiter,
     )
+    if into_sources is not None:
+        into_sources.append(sources)
     report = build_report(
         sources,
         warehouses_enabled=warehouses_enabled,

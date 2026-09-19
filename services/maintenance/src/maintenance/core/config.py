@@ -335,6 +335,21 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: commit against every governed table in the estate.
     floor_raise_max_per_tick: int = Field(default=10, ge=1, le=1000, alias="MAINTENANCE_FLOOR_RAISE_MAX_PER_TICK")
 
+    #: Rebuild authorization tuples the control-plane registries still justify ([[LH-061]], owner
+    #: ruling 2026-09-19 overturning the standing deferral on a write-capable reconcile).
+    #:
+    #: ADDITIVE ONLY — the pass writes and never deletes, so it cannot widen access beyond what the
+    #: control plane already recorded. OFF BY DEFAULT anyway, because it writes to the AUTHORIZATION
+    #: store and an estate should choose that rather than inherit it.
+    tuple_rebuild_enabled: bool = Field(default=False, alias="MAINTENANCE_TUPLE_REBUILD_ENABLED")
+    #: Plan and report, write nothing. DEFAULT TRUE: an operator turning the pass on to SEE what it
+    #: would grant must not thereby grant it.
+    tuple_rebuild_dry_run: bool = Field(default=True, alias="MAINTENANCE_TUPLE_REBUILD_DRY_RUN")
+    #: Per-tick ceiling on tuples written. The remainder is REPORTED (`RebuildReport.capped`). A
+    #: wholesale tuple loss makes every tenant eligible at once, and an uncapped pass would turn one
+    #: cron fire into an estate-wide authorization write.
+    tuple_rebuild_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK")
+
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and
     # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. The component

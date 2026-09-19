@@ -1611,6 +1611,13 @@ TupleOrigin = Literal[
     # when it was actually written by a backfill months later, destroys the one property the origin
     # field exists for.
     "cascade_backfill",
+    # Re-asserting a tuple the control-plane REGISTRY still justifies, after the store lost it
+    # ([[LH-061]]). Its own value for `cascade_backfill`'s reason one step further: this grant was not
+    # made by anyone, at create time or later — it was RECONSTRUCTED from a record, and an auditor
+    # reviewing who granted a tenant's admin rung needs to see that no person did. It also bounds what
+    # the row can be read to mean: the registry justifies the SEED and nothing after it, so a
+    # `registry_rebuild` row is evidence of recovery, never of an authorization decision.
+    "registry_rebuild",
     "lifecycle_delete",
     "train",
     "annotator",

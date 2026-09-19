@@ -254,12 +254,29 @@ def test_the_reconcile_client_is_read_only_by_construction() -> None:
         assert verb not in src, f"the reconciler references {verb} — it must only READ"
 
 
-def test_the_service_can_never_GRANT_a_tuple() -> None:
-    """The purge revokes; nothing in this service grants.
+#: The ONE module in this service permitted to write a tuple ([[LH-061]], owner ruling 2026-09-19
+#: overturning the standing "No — not yet" deferral on a write-capable reconcile). A set of exactly
+#: one, held here rather than assumed, so the next grant capability is a decision someone makes in
+#: this file instead of an import somewhere convenient.
+_SANCTIONED_TUPLE_WRITERS = {"rebuild.py"}
 
-    A maintenance job that could write a grant would be an unaudited privilege door on a component whose
-    whole justification is that it only cleans up. Asserted across the WHOLE service package rather than
-    one module, because the risk is someone adding the capability somewhere convenient.
+
+def test_only_the_SANCTIONED_module_can_grant_a_tuple() -> None:
+    """The purge revokes; one named module rebuilds; nothing else in this service grants.
+
+    The original rule was that NOTHING here grants, because "a maintenance job that could write a grant
+    would be an unaudited privilege door on a component whose whole justification is that it only cleans
+    up". The owner's ruling changed the justification, not the risk: maintenance now also RECOVERS, and
+    a tuple estate that cannot be rebuilt after a loss is a resilience gap the estate chose to close.
+
+    SO THE GATE NARROWS RATHER THAN OPENS, the same shape `hierarchy_edge_tuples`' closed set of two
+    callers already uses. What made the old rule protective was that the capability had no home at all;
+    what makes this one protective is that it has exactly one, and every property that answers the
+    original objection is pinned elsewhere:
+    `test_the_tuple_estate_is_rebuildable_from_the_registries` holds that the module never deletes, that
+    every tuple names the registry record justifying it, and that the write carries its own audit
+    origin (`registry_rebuild`, never `project_create`) — so it is not unaudited, and it cannot widen
+    access beyond what the control plane already recorded.
 
     Matched against the AST's CALLED names, never the source text: the docstrings here necessarily name
     these verbs to explain which ones are off-limits, and a substring gate that fires on its own
@@ -271,14 +288,20 @@ def test_the_service_can_never_GRANT_a_tuple() -> None:
     from maintenance import service as svc
 
     forbidden = {"write_tuples", "grant_on_create", "seed_ownership", "provision"}
+    granting = []
     for path in sorted(Path(svc.__file__).parent.rglob("*.py")):
         called = {
             node.func.id if isinstance(node.func, ast.Name) else node.func.attr
             for node in ast.walk(ast.parse(path.read_text()))
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
         }
-        offenders = sorted(called & forbidden)
-        assert offenders == [], f"{path.name} calls {offenders} — maintenance may revoke, never grant"
+        if called & forbidden:
+            granting.append(path.name)
+
+    rogue = sorted(set(granting) - _SANCTIONED_TUPLE_WRITERS)
+    assert rogue == [], f"{rogue} write tuples and are not the sanctioned rebuild — maintenance may revoke and rebuild, never grant freely"
+    missing = sorted(_SANCTIONED_TUPLE_WRITERS - set(granting))
+    assert missing == [], f"{missing} is declared the sanctioned tuple writer and writes nothing — either the rebuild moved or this gate is now vacuous"
 
 
 def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: pytest.MonkeyPatch) -> None:

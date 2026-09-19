@@ -34,7 +34,9 @@ from maintenance.core.metrics import record_run
 from maintenance.services.floor import raise_listing_floors
 from maintenance.services.optimize import summarize_refusals
 from maintenance.services.purge import purge_expired_trash
+from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
+from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -166,6 +168,9 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
         log.warning("reconcile_skipped", extra={"reason": "previous reconcile still running"})
         return {"status": "skipped", "reason": "overlapping reconcile still running"}
     async with _reconcile_lock:
+        # The stores this run read, so the tuple rebuild below writes only grants the records the
+        # REPORT saw actually justify — see `reconcile`'s `into_sources`.
+        read_sources: list[ReconcileSources] = []
         report = await reconcile(
             settings,
             client,
@@ -173,6 +178,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             control_root=settings.resolved_control_root,
             fga_root_object=settings.fga_root_object,
             bucket_client=bucket_client,
+            into_sources=read_sources,
         )
         payload = report.model_dump(mode="json")
         summary = {
@@ -211,6 +217,25 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
         # number — so the ordering here buys nothing for the purge gate and is chosen for the other
         # reason: the report is what identifies the stranded datasets, and the purge must be gated on
         # the report as it was MEASURED, never on one a write in between could have changed.
+        # BEFORE the floor raise and the purge, because it is the only one of the three that RESTORES
+        # rather than reclaims: a tenant this revives may own datasets the other two would otherwise
+        # act on while nobody can administer them.
+        if read_sources:
+            rebuilt = await rebuild_tuples(settings, report=report, sources=read_sources[0], fga_client=client)
+            payload["tuple_rebuild"] = rebuilt.model_dump(mode="json")
+            if rebuilt.written or rebuilt.unjustified or rebuilt.error:
+                # NAMED at WARNING: every entry is an authorization change (or a tenant that cannot be
+                # recovered), and a count answers neither question an operator has about it.
+                log.warning(
+                    "tuple_rebuild_result",
+                    extra={
+                        "dry_run": rebuilt.dry_run,
+                        "written": [f"{t.user} {t.relation} {t.object} <- {t.justified_by}" for t in rebuilt.written],
+                        "unjustified": rebuilt.unjustified,
+                        "capped": rebuilt.capped,
+                        "error": rebuilt.error,
+                    },
+                )
         floors = await run_in_threadpool(raise_listing_floors, settings, orphans=report.orphan_files, storage_options=settings.storage_options())
         payload["floor_raise"] = floors.model_dump(mode="json")
         # WARNING and NAMED, like the purge line below, because this writes a version to a GOVERNED
