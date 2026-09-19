@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
+from typing import Final
 
 
 log = logging.getLogger(__name__)
@@ -101,6 +102,64 @@ def schema_facet(producer: str, fields: object) -> dict[str, object]:
         )
         items = items[:FACET_MAX_FIELDS]
     return {"_producer": producer, "_schemaURL": SCHEMA_FACET_SCHEMA_URL, "fields": items}
+
+
+#: Standard ``LifecycleStateChangeDatasetFacet`` schema URL — what a DDL operation did to the dataset's
+#: EXISTENCE or SHAPE, in the spec's own vocabulary.
+#:
+#: WHY THE STANDARD FACET AND NOT ONLY ``lance.operation``. The estate stamps a rask-private operation
+#: name (``CREATE_TABLE``, ``DROP_COLUMNS``, …) inside the custom ``lance`` run facet, and no consumer
+#: that is not rask can read it — so to any OpenLineage-native reader a create, a drop and an alter are
+#: the same event with a different opaque string. This is the field they DO read. Both are emitted: the
+#: rask name is more specific than the enum admits, and collapsing to the enum alone would lose it.
+LIFECYCLE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/LifecycleStateChangeDatasetFacet.json#/$defs/LifecycleStateChangeDatasetFacet"
+
+#: rask's DDL vocabulary mapped onto the spec's six values (ALTER/CREATE/DROP/OVERWRITE/RENAME/TRUNCATE).
+#:
+#: A DATA operation is deliberately absent rather than forced into a value: ``INSERT``, ``DELETE``,
+#: ``MERGE_INSERT`` and ``COMPACT_TABLE`` change rows, not the dataset's existence or shape, and the
+#: enum has no member that means "wrote rows". Mapping them to ``OVERWRITE`` would tell a reader the
+#: table was replaced. They get no lifecycle facet, and their row-level story is the output statistics
+#: and version facets that already ride the same event.
+_LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
+    "CREATE_TABLE": "CREATE",
+    "create_table": "CREATE",
+    "CREATE_TABLE_VERSION": "CREATE",
+    "DECLARE_TABLE": "CREATE",
+    "DROP_TABLE": "DROP",
+    "DEREGISTER_TABLE": "DROP",
+    "ADD_COLUMNS": "ALTER",
+    "ALTER_COLUMNS": "ALTER",
+    "DROP_COLUMNS": "ALTER",
+    "CREATE_INDEX": "ALTER",
+    "DROP_INDEX": "ALTER",
+}
+
+
+def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
+    """The standard ``lifecycleStateChange`` payload for ``operation``, or ``{}`` when it is not DDL.
+
+    Returning ``{}`` rather than guessing is the point: an operation this map does not name is one the
+    estate has added without deciding what it does to the dataset, and a wrong value here is worse than
+    an absent one — a reader acts on ``DROP``.
+    """
+    state = _LIFECYCLE_BY_OPERATION.get(operation)
+    return {"_producer": producer, "_schemaURL": LIFECYCLE_FACET_SCHEMA_URL, "lifecycleStateChange": state} if state else {}
+
+
+#: Standard ``ProcessingEngineRunFacet`` schema URL — WHICH ENGINE produced the run.
+#:
+#: A lakehouse that means it is multi-engine has to say which engine wrote a table, and rask already
+#: has more than one write path: the catalog commits through pylance in-process, the medallion's stage
+#: lanes write through Ray, and a query engine is a stated direction. Without this facet every one of
+#: them is an anonymous producer, and the question "what wrote this, and can I reproduce it" has no
+#: answer in the graph. ``version`` is the only REQUIRED field in the spec.
+PROCESSING_ENGINE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-1-1/ProcessingEngineRunFacet.json#/$defs/ProcessingEngineRunFacet"
+
+
+def processing_engine_facet(producer: str, *, name: str, version: str) -> dict[str, object]:
+    """The standard ``processing_engine`` run facet naming the engine and its version."""
+    return {"_producer": producer, "_schemaURL": PROCESSING_ENGINE_FACET_SCHEMA_URL, "name": name, "version": version}
 
 
 #: Standard ``ColumnLineageDatasetFacet`` schema URL — field-to-field provenance (#24 store / #1 emit).

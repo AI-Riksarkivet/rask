@@ -35,6 +35,7 @@ from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkable
 
 import httpx
+import lance
 from dapr.aio.clients import DaprClient
 from lance_namespace import InvalidInputError
 from opentelemetry import metrics
@@ -51,6 +52,8 @@ from service_kit.openlineage import (
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
     custom_facet,
+    lifecycle_facet,
+    processing_engine_facet,
     schema_facet,
 )
 
@@ -260,6 +263,12 @@ def build_write_event(
     # even if a reserved name slipped past shape_run_facets' denylist (defense in depth).
     run_facets: dict[str, Any] = dict(extra_run_facets) if extra_run_facets else {}
     run_facets["lance"] = custom_facet(_PRODUCER, **lance_fields)
+    # WHICH ENGINE WROTE THIS, in the field a non-rask consumer reads. The catalog commits through
+    # pylance in-process while the medallion's stage lanes write through Ray, so "what produced this
+    # table" has two answers and, without this facet, no way to tell them apart in the graph. Stamped
+    # beside `lance` rather than inside it: `lance.operation` is rask's own vocabulary and opaque to
+    # anyone else, and the engine is exactly the part that is not rask-specific.
+    run_facets["processing_engine"] = processing_engine_facet(_PRODUCER, name="lance", version=lance.__version__)
     if author is not None:
         run_facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
     output: dict[str, Any] = {"namespace": namespace, "name": table_id}
@@ -279,6 +288,12 @@ def build_write_event(
             "name": source_uri,
             "uri": source_uri,
         }
+    # WHAT THIS DID TO THE DATASET, in the spec's own six-value vocabulary. `lance.operation` already
+    # carries rask's more specific name and stays — this is the half a standard consumer can read, and
+    # without it a create, a drop and an alter are one event with a different opaque string. Empty for
+    # a DATA operation, deliberately: see `lifecycle_facet`.
+    if lifecycle := lifecycle_facet(_PRODUCER, operation):
+        facets["lifecycleStateChange"] = lifecycle
     if schema_fields:
         # Standard schema facet → the per-version column schema (blob/vector-aware) on the WROTE edge (#24),
         # so a catalog-written table has real columns in the graph, not empty until a compute job re-asserts.

@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**201 open items**, of which **95 are blocked on a decision** and **106 can be picked up today**.
+**203 open items**, of which **95 are blocked on a decision** and **108 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 57 | 22 | 12 |
+| **PHASE 1 · LAKEHOUSE** | 59 | 24 | 12 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -185,6 +185,19 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Measured 2026-09-19 on the deployed estate: `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` holds 300 rows across one live version, `GET /v1/table/m2proof_silver$m2-proof-1788537252` answers **404**, and `m2proof` is absent from the 93 registered projects. Nothing in the reconciler names this: `ungoverned_tables` compares REGISTERED tables against FGA tuples, so a dataset in neither set is invisible to it, and `orphan_buckets` looks at buckets rather than prefixes inside one. It surfaces only as 13 `orphan_files`, which reads as residue inside a governed table and is not — and that misreading is in this register's own history, where [[LH-094]] and [[LH-102]] both asserted the dataset was live and governed. The sweep cannot touch it either: maintenance is refused a write credential for it (403), correctly, because the catalog cannot authorize a table it has no record of. Add the reconciler category FIRST — a dataset prefix under a maintained root with no catalog record — so the estate can see how many others there are before anyone rules on this one.
 - *Closes when:* The reconciler reports unregistered dataset prefixes as their own category, and this dataset is either registered or gone.
 - *Evidence:* live 2026-09-19: `/v1/table/m2proof_silver$m2-proof-1788537252` 404, `/v1/projects` 93 entries without `m2proof`, `reconcile_drift counts.ungoverned_tables=0` while `orphan_files=13` · `services/maintenance/src/maintenance/services/reconcile.py (ungoverned_tables, orphan_buckets)` · sweep refusal: "the catalog REFUSED a write credential for m2proof_silver$m2-proof-1788537252 (403)"
+
+**LIN-002 · The estate emits 8 of ~30 standard OpenLineage facets, and told a standard consumer nothing about what a write DID**
+`catalog, lineage, medallion, service-kit` · **MED**
+- **TWO SHIPPED 2026-09-19, and the version audit is DONE and CLEAN.** Every one of the estate's eight pinned facet versions matches upstream exactly, read from `OpenLineage/OpenLineage/spec/facets`: ColumnLineage 1-2-0, DatasetVersion 1-0-1, Datasource 1-0-1, ErrorMessage 1-0-1, JobType 2-0-4, OutputStatistics 1-0-2, ParentRun 1-2-0, Schema 1-2-0, envelope 2-0-2. So a VERSION audit is not needed; a COVERAGE one was. Added: `LifecycleStateChangeDatasetFacet` (rask's 11 DDL operations mapped onto the spec's six-value enum — a DATA operation gets NO facet, because the enum has no member meaning "wrote rows" and `OVERWRITE` is a lie a reader acts on) and `ProcessingEngineRunFacet` (which engine wrote this, `version` being the spec's only required field). The rask `lance.operation` name stays beside both: it is more specific than the enum admits, so collapsing onto the standard field would lose what the estate's own consumers read.
+- *What is left:* The other facets a batch lakehouse can honestly fill, each needing a decision about where the value comes from rather than plumbing: `NominalTimeRunFacet` (the logical window a cascade run covers), `DataQualityMetricsDatasetFacet` (the quality gate already computes assertions — `service_kit.lakehouse.quality`), `DatasetTypeDatasetFacet`, `CatalogDatasetFacet`. `SQLJobFacet` has no subject until a query engine lands. Emitting a facet the estate cannot fill truthfully is worse than omitting it.
+- *Closes when:* Each remaining applicable facet is emitted with a real value or recorded as deliberately omitted with its reason.
+- *Evidence:* `packages/service-kit/src/service_kit/openlineage.py (lifecycle_facet, processing_engine_facet)` · `tests/unit/test_a_standard_consumer_can_read_what_a_write_did.py` · upstream facet versions read via the GitHub API 2026-09-19 · `gh api repos/OpenLineage/OpenLineage/contents/spec/facets` (~30 published)
+
+**LIN-003 · The runner lanes emit no START and emit inline, where the reference implementation does neither**
+`runners, lineage-kit` · **MED**
+- *What is left:* Measured against `datafusion-contrib/datafusion-openlineage`, the closest reference for a lakehouse query/compute engine: it emits "`START` at plan time, `COMPLETE` / `FAIL` at end of execution, all under one run id" and sends events "through a bounded queue drained by a background task — lineage never stalls or fails a query". rask's runner lanes do neither. `runners/dummy` REFUSES a START in terms ("a START notifies nobody"), which is a notifications argument applied to a lineage decision: a START is what makes a run observable WHILE it runs and what a child's `ParentRunFacet` attaches to. `runners/htr` emits only COMPLETE/FAIL. Both call `emit()` inline, so a slow ingest slows the job. `medallion/services/transform.py:316` and `scripts/ray_train_job.py:461` DO emit START, so this is a runner-lane gap rather than an estate-wide one. **`lineage_kit.runs.LineageRun` already carries the lifecycle** — `start()`, terminal-once protection, per-run facets, the `on_undelivered` hook — and neither runner lane uses it: both hand-roll ~150 lines that duplicate it and omit the terminal-once guard, so either can emit COMPLETE twice.
+- *Closes when:* Both runner lanes drive `LineageRun`, emit START, and emit off the critical path; `_NOT_A_PERSON` and the originator/project read live in `lineage-kit` rather than once per lane.
+- *Evidence:* `runners/dummy/src/dummy_runner/lineage.py:91-92 (TERMINAL_STATES refusal)` · `runners/htr/src/runner/lineage.py (no START, inline emit)` · `packages/lineage-kit/src/lineage_kit/runs.py:188-215 (_emit_terminal, start)` · https://github.com/datafusion-contrib/datafusion-openlineage
 
 **LH-016 · `silver-media$features` still occupies a medallion namespace in `lakehouse-wh` under two spellings, and the unbind door refuses a non-empty namespace**
 `catalog` · **HIGH**
