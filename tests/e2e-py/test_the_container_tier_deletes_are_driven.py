@@ -284,7 +284,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
         assert queued.json(), "a recoverable cascade queued no expiry, so the owner cannot see how long recovery is open"
         assert queued.json()[0].get("expires_at"), f"the queued entry names no deadline: {queued.text[:300]}"
 
-        recovered = requests.post(f"{catalog}/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
+        recovered = requests.post(f"{catalog}/management/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
         assert recovered.status_code == 200, f"the plural undrop failed: {recovered.status_code} {recovered.text[:400]}"
 
         for namespace_id, identifier in namespaces.items():
@@ -315,7 +315,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
         # deleted its warehouse and `undrop`'s deactivation gate reads a missing warehouse as
         # not-active (403). Seven days of a dead record pointing at a destroyed bucket is exactly the
         # residue `conftest`'s session cleanup exists to stop this suite manufacturing.
-        requests.post(f"{catalog}/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
+        requests.post(f"{catalog}/management/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
         # PURGE, not a second recoverable drop — and `purge` is a QUERY parameter, which is the whole
         # trap. The body's `mode` is the orthogonal Fail/Skip field for a namespace that is not there,
         # and `DropMode.parse` folds anything it does not recognise to `FAIL` (`core/modes.py:80`), so

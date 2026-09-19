@@ -67,14 +67,6 @@ _STILL_ON_THE_SPEC_SURFACE: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/v1/table/{}/policy/delete"),
         ("POST", "/v1/table/{}/policy/describe"),
         ("POST", "/v1/table/{}/policy/set"),
-        # --- LIFECYCLE: deletion protection, the trash and its undrop. The spec has drop; it has no
-        # notion of a drop that can be taken back.
-        ("GET", "/v1/namespace/{}/protection"),
-        ("POST", "/v1/namespace/{}/protection"),
-        ("POST", "/v1/namespace/{}/undrop"),
-        ("GET", "/v1/table/{}/protection"),
-        ("POST", "/v1/table/{}/protection"),
-        ("POST", "/v1/table/{}/undrop"),
         # --- MAINTENANCE: compaction, reclamation, index rebuilds, and the distributed compaction
         # pair the executor drives.
         ("POST", "/v1/table/{}/compaction_commit"),

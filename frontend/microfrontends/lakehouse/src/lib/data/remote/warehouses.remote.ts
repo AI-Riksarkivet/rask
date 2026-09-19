@@ -106,6 +106,13 @@ export const createWarehouse = command(
 		// generated body type requires, and the mismatch surfaced at the command's overload rather
 		// than anywhere near the cause.
 		protected: v.optional(v.boolean(), false),
+		// `primary` is the operator's answer to an ambiguous project warehouse set, and it is defaulted
+		// here for the same reason `protected` is: a warehouse is born non-primary and is designated
+		// deliberately afterwards, so asking at create time would offer a choice that belongs to a
+		// project already holding several warehouses. It must be PRESENT though — the generated body type
+		// carries every field the server defaults, so valibot's inferred arg type has to carry it too or
+		// the mismatch surfaces at the command's overload rather than anywhere near the cause.
+		primary: v.optional(v.boolean(), false),
 	}),
 	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> => {
 		const result = parsed(

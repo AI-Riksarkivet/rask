@@ -794,15 +794,17 @@ test('an unreadable trash record is NAMED, never rendered as "your data is gone"
 test('undrop posts to the catalog and re-registers the table (#75)', async ({ page }) => {
 	await seed(page, {
 		...droppedRoutes(),
-		[`POST /v1/table/${GONE}/undrop`]: { id: ['db1', 'dropped'] },
+		[`POST /management/v1/table/${GONE}/undrop`]: { id: ['db1', 'dropped'] },
 	});
 	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
 	await expect(page.locator('.recover')).toBeVisible();
 
 	// The write must not have fired before the click — this is a recovery, not an auto-heal.
-	expect(await callTo(page, `/v1/table/${GONE}/undrop`)).toBeUndefined();
+	expect(await callTo(page, `/management/v1/table/${GONE}/undrop`)).toBeUndefined();
 	await page.getByRole('button', { name: 'Undrop this table' }).click();
-	await expect.poll(async () => await callTo(page, `/v1/table/${GONE}/undrop`)).not.toBeUndefined();
+	await expect
+		.poll(async () => await callTo(page, `/management/v1/table/${GONE}/undrop`))
+		.not.toBeUndefined();
 });
 
 test('a REFUSED undrop shows the catalog reason verbatim and keeps the panel (#75)', async ({
@@ -810,7 +812,7 @@ test('a REFUSED undrop shows the catalog reason verbatim and keeps the panel (#7
 }) => {
 	await seed(page, {
 		...droppedRoutes(),
-		[`POST /v1/table/${GONE}/undrop`]: {
+		[`POST /management/v1/table/${GONE}/undrop`]: {
 			status: 403,
 			body: { detail: 'can_delete required on table:db1$dropped' },
 		},

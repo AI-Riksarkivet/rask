@@ -77,3 +77,11 @@ for _module in (
     transforms,
 ):
     api_router.include_router(_module.router)
+    # A module may ALSO carry a `management_router`, mounted at `/management/v1/...`. That is the seam
+    # [[LH-021]] moves rask-only operations across: a spec client meeting a rask verb on a spec prefix
+    # has no way to tell the two apart, so the estate's own governance gets its own mount the way
+    # Lakekeeper separates `/management` from `/catalog`. Both routers inherit `api_router`'s authn,
+    # authz and delimiter guard, so a route does not lose its gate by moving.
+    management = getattr(_module, "management_router", None)
+    if management is not None:
+        api_router.include_router(management)

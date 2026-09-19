@@ -356,7 +356,7 @@ def test_undrop_grants_the_undropper_nothing(moto_client_recoverable: TestClient
     with pytest.MonkeyPatch.context() as mp:
         for name in ("seed_ownership", "seed_ownership_or_compensate"):
             mp.setattr(fga_deps_mod, name, lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
-        recovered = moto_client_recoverable.post("/v1/table/f3u$t/undrop", json={})
+        recovered = moto_client_recoverable.post("/management/v1/table/f3u$t/undrop", json={})
 
     assert recovered.status_code == 200, recovered.text
     assert seeded == [], "undrop granted ownership to the caller — it is a restore, not a claim"
@@ -397,14 +397,14 @@ def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_rec
 
         mp.setattr(tables_mod.trash, "clear", _die)
         with pytest.raises(OSError, match="killed before the record was cleared"):
-            moto_client_recoverable.post("/v1/table/f3c$t/undrop", json={})
+            moto_client_recoverable.post("/management/v1/table/f3c$t/undrop", json={})
 
     # The residue: the table is LIVE and its trash record still stands, so the sweep would exclude it
     # from maintenance indefinitely (F6(d)) — which is why the retry has to converge, not 409.
     assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
     assert moto_client_recoverable.get("/v1/table/f3c$t/tasks").json() != []
 
-    retried = moto_client_recoverable.post("/v1/table/f3c$t/undrop", json={})
+    retried = moto_client_recoverable.post("/management/v1/table/f3c$t/undrop", json={})
     assert retried.status_code == 200, retried.text
     assert moto_client_recoverable.get("/v1/table/f3c$t/tasks").json() == [], "the record was never cleared"
     assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
@@ -569,7 +569,7 @@ def test_create_is_refused_while_the_id_is_still_recoverable(moto_client_recover
 
     # …and the recoverable table is untouched by the refused create — the whole point of refusing
     # rather than revoking-and-overwriting.
-    undropped = moto_client_recoverable.post("/v1/table/bleed$t/undrop", json={})
+    undropped = moto_client_recoverable.post("/management/v1/table/bleed$t/undrop", json={})
     assert undropped.status_code == 200, undropped.text
     assert int(moto_client_recoverable.post("/v1/table/bleed$t/count_rows", json={}).text) == 1
 
@@ -654,7 +654,7 @@ def test_an_expired_but_unpurged_drop_still_undrops(moto_client_recoverable: Tes
     assert tasks and tasks[0]["expired"] is True
 
     # …and the undrop still works, with the rows intact.
-    undropped = moto_client_recoverable.post("/v1/table/exp$t/undrop", json={})
+    undropped = moto_client_recoverable.post("/management/v1/table/exp$t/undrop", json={})
     assert undropped.status_code == 200, undropped.text
     assert int(moto_client_recoverable.post("/v1/table/exp$t/count_rows", json={}).text) == 2
 
@@ -730,5 +730,5 @@ def test_a_crash_mid_drop_leaves_the_table_recoverable_not_unreachable(moto_clie
     retried = moto_client_recoverable.post("/v1/table/f6a$t/drop", json={})
     assert retried.status_code == 200, retried.text
     # Recoverable, as a graced drop promises.
-    assert moto_client_recoverable.post("/v1/table/f6a$t/undrop", json={}).status_code == 200
+    assert moto_client_recoverable.post("/management/v1/table/f6a$t/undrop", json={}).status_code == 200
     assert int(moto_client_recoverable.post("/v1/table/f6a$t/count_rows", json={}).text) == 1

@@ -25,7 +25,10 @@
 	// `null` therefore means UNKNOWN, and the only correct move is to ATTEMPT the image and let
 	// `/api/page` settle it: treating unknown as absent disables every thumbnail on exactly the
 	// corpora that do have images.
-	function mayHavePayload(page: { has_payload?: boolean | null; has_image?: boolean | null }): boolean {
+	function mayHavePayload(page: {
+		has_payload?: boolean | null;
+		has_image?: boolean | null;
+	}): boolean {
 		return (page.has_payload ?? page.has_image) !== false;
 	}
 

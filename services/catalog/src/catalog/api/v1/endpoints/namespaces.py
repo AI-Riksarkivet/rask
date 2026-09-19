@@ -62,6 +62,13 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/namespace", tags=["namespace"])
 
+#: THE MANAGEMENT SURFACE ([[LH-021]]). rask-only governance mounts here, not on the spec prefix: a
+#: spec client meeting `undrop` or `protection` on `/v1/table` has no way to tell a rask verb from a
+#: Lance one. Deletion protection and the trash are the clearest case — the spec has `drop` and no
+#: notion of a drop that can be taken back. It inherits the same authn/authz/delimiter guard as the
+#: spec router (`api/v1/router.py`), so moving a route does not move it out of its gate.
+management_router = APIRouter(prefix="/management/v1/namespace", tags=["namespace-management"])
+
 # Safety ceiling on the pagination loops in _collect_descendants — a runaway/looping backend token can't
 # spin forever. Far above any real namespace fan-out.
 _MAX_LIST_PAGES = 1000
@@ -551,7 +558,7 @@ async def drop_namespace(
 
     With a grace period configured (#96), a CASCADE becomes RECOVERABLE: the subtree is detached —
     tables deregistered, namespaces emptied then dropped — with a trash record per destroyed object,
-    and ``POST /v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same
+    and ``POST /management/v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same
     explicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the
     namespace it removes is empty by definition, and re-creating an empty namespace needs no trash."""
     segments = parse_identifier(id, settings.delimiter)
@@ -713,7 +720,7 @@ async def namespace_tasks(
     return [TrashEntry(**{k: str(record.get(k, "")) for k in ("id", "location", "dropped_by", "dropped_at", "expires_at")})]
 
 
-@router.post("/{id}/undrop", response_model_exclude_none=True)
+@management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_namespace(
     id: str,
     request: Request,
@@ -849,7 +856,7 @@ async def undrop_namespace(
     return response
 
 
-@router.get("/{id}/protection", response_model_exclude_none=True)
+@management_router.get("/{id}/protection", response_model_exclude_none=True)
 async def get_namespace_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
     """Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up."""
     segments = parse_identifier(id, settings.delimiter)
@@ -858,7 +865,7 @@ async def get_namespace_protection(id: str, settings: SettingsDep) -> Protection
     return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 
-@router.post("/{id}/protection", response_model_exclude_none=True)
+@management_router.post("/{id}/protection", response_model_exclude_none=True)
 async def set_namespace_protection(
     id: str,
     body: SetProtectionRequest,

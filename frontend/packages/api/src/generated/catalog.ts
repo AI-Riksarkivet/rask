@@ -38,6 +38,166 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/namespace/{id}/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Namespace Protection
+         * @description Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up.
+         */
+        get: operations["get_namespace_protection_management_v1_namespace__id__protection_get"];
+        put?: never;
+        /**
+         * Set Namespace Protection
+         * @description Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router
+         *     (``protection`` maps to ``can_delete`` — whoever may delete the namespace decides whether
+         *     deleting it needs a second thought). Same control-root record contract as the table door.
+         */
+        post: operations["set_namespace_protection_management_v1_namespace__id__protection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/undrop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undrop Namespace
+         * @description Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
+         *
+         *     The unit of a cascade is the subtree, so the unit of its recovery is too: every trashed
+         *     namespace under (and including) ``id`` is re-created shallowest-first, then every trashed table
+         *     is re-registered at its old id from its still-present bytes, and each record is cleared as its
+         *     object recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).
+         *
+         *     Resumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is
+         *     treated as recovered, so a rerun after a mid-recovery failure finishes the job instead of
+         *     409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired
+         *     or never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers
+         *     nothing. A declared-only table (empty recorded location) is skipped with a warning — there were
+         *     no bytes to lose.
+         */
+        post: operations["undrop_namespace_management_v1_namespace__id__undrop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/erasure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Erase Subject
+         * @description Remove every row matching the predicate from every ref, then reclaim what no longer pins it.
+         *
+         *     Owner-gated (``can_drop``) — it destroys history, which is a stronger claim than the drop rung
+         *     guards, and there is no rung above it.
+         *
+         *     **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any
+         *     retained version still answers the predicate after every step ran — which happens on a table with
+         *     a branch, because deleting rows on a branch does not remove that branch's pin on the parent's
+         *     history ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller
+         *     reading the status code reports the wrong thing.
+         *
+         *     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.
+         *     Refusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had
+         *     erased a subject when they had narrowed the operation to one ref.
+         */
+        post: operations["erase_subject_management_v1_table__id__erasure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/protection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Table Protection
+         * @description Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
+         *     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
+         *     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
+         *     record's `set_by` comes back so a refused drop can name who armed it.
+         */
+        get: operations["get_table_protection_management_v1_table__id__protection_get"];
+        put?: never;
+        /**
+         * Set Table Protection
+         * @description Set or clear deletion protection on the table at ``id`` (#73 — the warehouse contract on the
+         *     rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:
+         *     whoever may destroy the table decides whether destroying it needs a second thought). The flag is
+         *     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
+         *     control event and never creates a table version, readable even when the dataset is corrupted,
+         *     and unreachable from the future properties write door (#78).
+         */
+        post: operations["set_table_protection_management_v1_table__id__protection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/undrop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Undrop Table
+         * @description Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old
+         *     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
+         *     the namespace is the same authority as removing it).
+         *
+         *     404 when there is no trash record — a never-trashed or already-PURGED drop is genuinely
+         *     unrecoverable, and saying so plainly beats a 200 that recovers nothing.
+         *
+         *     THE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has
+         *     passed but which the purge has not yet collected still undrops, because the bytes are still on
+         *     storage and refusing would destroy recoverable data on a timestamp alone. The estate already
+         *     reasons this way one service over — maintenance's own config says "a record that survives is a
+         *     recovery that still works; a purged one is not" — and this door simply never said so out loud.
+         *     What was wrong was the DESCRIPTION: the previous docstring called an expired drop "genuinely
+         *     unrecoverable" alongside a never-trashed one, and `/tasks` reported the deadline as finality.
+         *     Both now say purge-eligible, which is what it is.
+         *
+         *     An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
+         *     edge of the window, and an operator should be able to see either.
+         */
+        post: operations["undrop_table_management_v1_table__id__undrop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/readyz": {
         parameters: {
             query?: never;
@@ -623,7 +783,7 @@ export interface paths {
          *
          *     With a grace period configured (#96), a CASCADE becomes RECOVERABLE: the subtree is detached —
          *     tables deregistered, namespaces emptied then dropped — with a trash record per destroyed object,
-         *     and ``POST /v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same
+         *     and ``POST /management/v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same
          *     explicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the
          *     namespace it removes is empty by definition, and re-creating an empty namespace needs no trash.
          */
@@ -803,32 +963,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/namespace/{id}/protection": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Namespace Protection
-         * @description Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up.
-         */
-        get: operations["get_namespace_protection_v1_namespace__id__protection_get"];
-        put?: never;
-        /**
-         * Set Namespace Protection
-         * @description Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router
-         *     (``protection`` maps to ``can_delete`` — whoever may delete the namespace decides whether
-         *     deleting it needs a second thought). Same control-root record contract as the table door.
-         */
-        post: operations["set_namespace_protection_v1_namespace__id__protection_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/namespace/{id}/table/list": {
         parameters: {
             query?: never;
@@ -888,38 +1022,6 @@ export interface paths {
         get: operations["namespace_tasks_v1_namespace__id__tasks_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/undrop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Undrop Namespace
-         * @description Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
-         *
-         *     The unit of a cascade is the subtree, so the unit of its recovery is too: every trashed
-         *     namespace under (and including) ``id`` is re-created shallowest-first, then every trashed table
-         *     is re-registered at its old id from its still-present bytes, and each record is cleared as its
-         *     object recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).
-         *
-         *     Resumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is
-         *     treated as recovered, so a rerun after a mid-recovery failure finishes the job instead of
-         *     409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired
-         *     or never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers
-         *     nothing. A declared-only table (empty recorded location) is skipped with a warning — there were
-         *     no bytes to lose.
-         */
-        post: operations["undrop_namespace_v1_namespace__id__undrop_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2537,7 +2639,16 @@ export interface paths {
          * @description Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
          *     gated (``can_drop``); never mutates.
          *
-         *     ``branch`` is DECLARED only so it can be REFUSED — see the module header.
+         *     ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
+         *     measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
+         *     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns — so [[LH-094]]'s
+         *     question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
+         *     both reclaim, and stay refused until that is decided for them.
+         *
+         *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
+         *     version of it: the caller acts on the version list, so
+         *     ``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather
+         *     than asserting the branch reached ``open_dataset``.
          */
         post: operations["preview_maintenance_v1_table__id__maintenance_preview_post"];
         delete?: never;
@@ -2699,38 +2810,6 @@ export interface paths {
          * @description Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``).
          */
         post: operations["set_table_policy_v1_table__id__policy_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/protection": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Table Protection
-         * @description Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
-         *     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
-         *     409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the
-         *     record's `set_by` comes back so a refused drop can name who armed it.
-         */
-        get: operations["get_table_protection_v1_table__id__protection_get"];
-        put?: never;
-        /**
-         * Set Table Protection
-         * @description Set or clear deletion protection on the table at ``id`` (#73 — the warehouse contract on the
-         *     rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:
-         *     whoever may destroy the table decides whether destroying it needs a second thought). The flag is
-         *     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
-         *     control event and never creates a table version, readable even when the dataset is corrupted,
-         *     and unreachable from the future properties write door (#78).
-         */
-        post: operations["set_table_protection_v1_table__id__protection_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3050,43 +3129,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/table/{id}/undrop": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Undrop Table
-         * @description Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old
-         *     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
-         *     the namespace is the same authority as removing it).
-         *
-         *     404 when there is no trash record — a never-trashed or already-PURGED drop is genuinely
-         *     unrecoverable, and saying so plainly beats a 200 that recovers nothing.
-         *
-         *     THE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has
-         *     passed but which the purge has not yet collected still undrops, because the bytes are still on
-         *     storage and refusing would destroy recoverable data on a timestamp alone. The estate already
-         *     reasons this way one service over — maintenance's own config says "a record that survives is a
-         *     recovery that still works; a purged one is not" — and this door simply never said so out loud.
-         *     What was wrong was the DESCRIPTION: the previous docstring called an expired drop "genuinely
-         *     unrecoverable" alongside a never-trashed one, and `/tasks` reported the deadline as finality.
-         *     Both now say purge-eligible, which is what it is.
-         *
-         *     An expired undrop IS logged: it means the purge is behind, or somebody recovered at the very
-         *     edge of the window, and an operator should be able to see either.
-         */
-        post: operations["undrop_table_v1_table__id__undrop_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/table/{id}/update": {
         parameters: {
             query?: never;
@@ -3141,6 +3183,32 @@ export interface paths {
         /**
          * Create Table Version
          * @description Create one version entry for this table, from a manifest the table itself owns.
+         *
+         *     THE ONLY DOOR IN THIS MODULE THAT WRITES, and until [[LH-018]] it recorded nothing. It MOVES a
+         *     manifest into the table's version slot, so a version exists afterwards that did not before — and a
+         *     version minted through the SPEC's own commit door left no provenance, while the same table's
+         *     `/commit` door emitted. Two doors onto one table, one of them silent.
+         *
+         *     Emitted AFTER the native call, pinned to the version just minted, exactly as the column doors and
+         *     `restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion
+         *     control, and two ops the dir backend answers 406) and stay quiet on purpose — an emit from those
+         *     would be provenance for work that never happened.
+         *
+         *     NO `Idempotency-Key` SEAM HERE, DELIBERATELY: the version CAS already converges a replay, and
+         *     wiring `catalog.api.idempotency` on top would add a second answer to a question the spec has
+         *     settled. Measured 2026-09-16 against a real `dir` namespace — a staged manifest committed at version
+         *     2, then the identical request replayed::
+         *
+         *         attempt 1 -> OK, version 2
+         *         attempt 2 -> ConcurrentModificationError (code 14)
+         *
+         *     which is precisely the error set `lance_docs/namespace.md:1772` declares for this operation
+         *     (1 NamespaceNotFound, 4 TableNotFound, 14 ConcurrentModification). That is the seam's own bar and it
+         *     is met without it: the replay is non-destructive (the slot is occupied, so nothing moves), it maps to
+         *     409 rather than a bare 500, and the caller can tell its own commit from a competing writer's by
+         *     reading `DescribeTableVersion` and comparing the `e_tag` of the manifest it staged. Contrast
+         *     `create_table`, which the seam DOES wrap: there a replay's `AlreadyExists` is indistinguishable from
+         *     a name collision and the caller cannot learn whether its own write landed.
          */
         post: operations["create_table_version_v1_table__id__version_create_post"];
         delete?: never;
@@ -3862,7 +3930,7 @@ export interface components {
              * Depth
              * @default 1
              */
-            depth: number;
+            depth?: number;
             /** Object */
             object: string;
             /** Relation */
@@ -3967,7 +4035,7 @@ export interface components {
              * Truncated
              * @default false
              */
-            truncated: boolean;
+            truncated?: boolean;
         };
         /**
          * AccessListUsersRequest
@@ -3988,7 +4056,7 @@ export interface components {
              * User Type
              * @default user
              */
-            user_type: string;
+            user_type?: string;
         };
         /**
          * AccessListUsersResponse
@@ -4910,7 +4978,7 @@ export interface components {
              * @description Boost factor for negative query (default: 0.5)
              * @default 0.5
              */
-            negative_boost: number | null;
+            negative_boost?: number | null;
             positive: components["schemas"]["FtsQuery"];
         };
         /**
@@ -5046,7 +5114,7 @@ export interface components {
              * Accepted
              * @default true
              */
-            accepted: boolean;
+            accepted?: boolean;
             /** Protected By */
             protected_by?: string | null;
             /** Uri */
@@ -5178,7 +5246,7 @@ export interface components {
              * @description If true, the view is automatically refreshed when source-table data changes past the deployment-level threshold. Boolean opt-in only; the threshold and cooldown are configured on the deployment, not per-view.
              * @default false
              */
-            auto_refresh: boolean | null;
+            auto_refresh?: boolean | null;
             /**
              * Context
              * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
@@ -5213,7 +5281,7 @@ export interface components {
              * @description If false, the server kicks off an initial refresh immediately after creating the view and the response includes a job ID.
              * @default true
              */
-            with_no_data: boolean | null;
+            with_no_data?: boolean | null;
         };
         /**
          * CreateMaterializedViewResponse
@@ -5719,7 +5787,7 @@ export interface components {
              * Adopt Existing
              * @default false
              */
-            adopt_existing: boolean;
+            adopt_existing?: boolean;
             /** Namespace */
             namespace: string;
         };
@@ -5733,14 +5801,14 @@ export interface components {
              * Primary
              * @default false
              */
-            primary: boolean;
+            primary?: boolean;
             /** Project */
             project: string;
             /**
              * Protected
              * @default false
              */
-            protected: boolean;
+            protected?: boolean;
             /** Serving */
             serving?: string | null;
         };
@@ -6165,7 +6233,7 @@ export interface components {
              * @description Whether to check if the table exists only as a namespace declaration without storage data. Default is false. When true, the response should populate `is_only_declared`. When false, the implementation should return null for `is_only_declared` unless another option such as `load_detailed_metadata` requires checking declared-only table state.
              * @default false
              */
-            check_declared: boolean | null;
+            check_declared?: boolean | null;
             /**
              * Context
              * @description Arbitrary context as key-value pairs. How to use the context is custom to the specific implementation.  On a request, it carries caller-provided context to the implementation. On a response, it carries implementation-provided context back to the caller.  REST NAMESPACE ONLY Context entries are mapped to and from HTTP headers using the `header.` prefix: - On a request, any entry whose key starts with `header.` is sent as an HTTP   request header with the prefix stripped. For example, the entry   `{"header.Authorization": "Bearer abc"}` is sent as the request header   `Authorization: Bearer abc`. - On a response, every HTTP response header is returned as an entry whose key is the   header name prefixed with `header.`. For example, the response header   `x-request-id: abc123` is returned as the entry `{"header.x-request-id": "abc123"}`.
@@ -6201,7 +6269,7 @@ export interface components {
              * @description Whether to include the table URI in the response. Default is false.
              * @default false
              */
-            with_table_uri: boolean | null;
+            with_table_uri?: boolean | null;
         };
         /**
          * DescribeTableResponse
@@ -6551,6 +6619,52 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * ErasureReport
+         * @description One subject's erasure across every surface the catalog serves this table from.
+         */
+        ErasureReport: {
+            /**
+             * Bytes Reclaimed
+             * @default 0
+             */
+            bytes_reclaimed?: number;
+            /**
+             * Complete
+             * @default false
+             */
+            complete?: boolean;
+            /** Pinned By */
+            pinned_by?: {
+                [key: string]: number;
+            };
+            /** Predicate */
+            predicate: string;
+            /** Residual Versions */
+            residual_versions?: number[];
+            /** Surfaces */
+            surfaces?: components["schemas"]["SurfaceResult"][];
+            /** Table */
+            table: string;
+            /**
+             * Versions Reclaimed
+             * @default 0
+             */
+            versions_reclaimed?: number;
+        };
+        /**
+         * ErasureRequest
+         * @description What to erase, and how much history the caller means to take with it ([[LH-073]]).
+         */
+        ErasureRequest: {
+            /** Predicate */
+            predicate: string;
+            /**
+             * Retain Days
+             * @default 0
+             */
+            retain_days?: number;
+        };
+        /**
          * EstateBindingsResponse
          * @description Every namespace→warehouse binding the caller can see, in ONE read (#86).
          *
@@ -6564,7 +6678,7 @@ export interface components {
              * Authorization Truncated
              * @default false
              */
-            authorization_truncated: boolean;
+            authorization_truncated?: boolean;
             /** Bindings */
             bindings: {
                 [key: string]: string;
@@ -6609,7 +6723,7 @@ export interface components {
              * @description Whether to return verbose explanation
              * @default false
              */
-            verbose: boolean | null;
+            verbose?: boolean | null;
         };
         /**
          * FragmentStats
@@ -6676,19 +6790,19 @@ export interface components {
              * Key Column
              * @default id
              */
-            key_column: string;
+            key_column?: string;
             /** Required Columns */
             required_columns?: string[];
             /**
              * Review Band
              * @default 0.25
              */
-            review_band: number;
+            review_band?: number;
             /**
              * Review Enabled
              * @default false
              */
-            review_enabled: boolean;
+            review_enabled?: boolean;
         };
         /** GateSpecResponse */
         GateSpecResponse: {
@@ -7224,7 +7338,7 @@ export interface components {
         /** Liveness */
         Liveness: {
             /** @default ok */
-            status: components["schemas"]["LivenessStatus"];
+            status?: components["schemas"]["LivenessStatus"];
         };
         /**
          * LivenessStatus
@@ -7498,7 +7612,7 @@ export interface components {
              * Authorization Truncated
              * @default false
              */
-            authorization_truncated: boolean;
+            authorization_truncated?: boolean;
             /** Models */
             models: components["schemas"]["ModelSummary"][];
             /** Page Token */
@@ -7595,12 +7709,12 @@ export interface components {
              * Cleanup Enabled
              * @default true
              */
-            cleanup_enabled: boolean;
+            cleanup_enabled?: boolean;
             /**
              * Compact Enabled
              * @default true
              */
-            compact_enabled: boolean;
+            compact_enabled?: boolean;
             /** Compact Interval Hours */
             compact_interval_hours?: number | null;
             /** Index Columns */
@@ -7611,7 +7725,7 @@ export interface components {
              * Optimize Indices Enabled
              * @default true
              */
-            optimize_indices_enabled: boolean;
+            optimize_indices_enabled?: boolean;
             /** Repack Mode */
             repack_mode?: ("reencode" | "try_binary_copy" | "force_binary_copy") | null;
             /** Retain Versions */
@@ -7633,12 +7747,12 @@ export interface components {
              * Cleanup Enabled
              * @default true
              */
-            cleanup_enabled: boolean;
+            cleanup_enabled?: boolean;
             /**
              * Compact Enabled
              * @default true
              */
-            compact_enabled: boolean;
+            compact_enabled?: boolean;
             /** Compact Interval Hours */
             compact_interval_hours?: number | null;
             /** Id */
@@ -7651,7 +7765,7 @@ export interface components {
              * Optimize Indices Enabled
              * @default true
              */
-            optimize_indices_enabled: boolean;
+            optimize_indices_enabled?: boolean;
             /** Path */
             path: string;
             /** Repack Mode */
@@ -7674,7 +7788,7 @@ export interface components {
              * Detail
              * @default
              */
-            detail: string;
+            detail?: string;
             /** Name */
             name: string;
             /**
@@ -7735,7 +7849,7 @@ export interface components {
              * Incomplete
              * @default false
              */
-            incomplete: boolean;
+            incomplete?: boolean;
             /** Namespaces */
             namespaces: string[];
             /** Policies */
@@ -7796,7 +7910,7 @@ export interface components {
              * Tag
              * @default blessed
              */
-            tag: string;
+            tag?: string;
             /** Version */
             version: number;
         };
@@ -7833,19 +7947,19 @@ export interface components {
              * Cascade Id
              * @default
              */
-            cascade_id: string;
+            cascade_id?: string;
             /**
              * Gate Only
              * @default false
              */
-            gate_only: boolean;
+            gate_only?: boolean;
             /** Key Column */
             key_column: string;
             /**
              * Originator
              * @default
              */
-            originator: string;
+            originator?: string;
             /** Required Columns */
             required_columns?: string[];
             /** Version */
@@ -7870,7 +7984,7 @@ export interface components {
              * Gate Source
              * @default request
              */
-            gate_source: string;
+            gate_source?: string;
             /** Published */
             published: boolean;
             /** Reason */
@@ -8183,7 +8297,7 @@ export interface components {
              * Code Version
              * @default
              */
-            code_version: string;
+            code_version?: string;
             /** Command */
             command: string;
             /** Engine */
@@ -8222,7 +8336,7 @@ export interface components {
              * Accepted
              * @default true
              */
-            accepted: boolean;
+            accepted?: boolean;
             /** Column */
             column: string;
             /** Index Name */
@@ -8273,7 +8387,7 @@ export interface components {
              * Ok
              * @default true
              */
-            ok: boolean;
+            ok?: boolean;
             /** Version */
             version: number;
         };
@@ -8288,7 +8402,7 @@ export interface components {
              * Truncated
              * @default false
              */
-            truncated: boolean;
+            truncated?: boolean;
             /** Users */
             users: string[];
         };
@@ -8489,7 +8603,7 @@ export interface components {
              * @description What a reader should expect to find here.
              * @default
              */
-            description: string;
+            description?: string;
             /**
              * Endpoint
              * @description S3 endpoint this bucket lives on. `None` means the deployment's configured default (RASK_S3_ENDPOINT_URL) — which is what every governed tier uses.
@@ -8500,7 +8614,7 @@ export interface components {
              * @description Skip TLS verification for this endpoint. Needed for internal hosts with private CAs.
              * @default false
              */
-            insecure: boolean;
+            insecure?: boolean;
             /**
              * Name
              * @description Stable identifier used by the object browser and the API.
@@ -8511,7 +8625,7 @@ export interface components {
              * @description Whether the estate writes here through the UI. The browser is a READER; a store the cascade owns must not be presented as editable just because S3 would allow it.
              * @default true
              */
-            read_only: boolean;
+            read_only?: boolean;
             /** @description Where this store sits in the cascade. */
             role: components["schemas"]["StorageRole"];
             /**
@@ -8550,6 +8664,22 @@ export interface components {
          */
         StructuredFtsQuery: {
             query: components["schemas"]["FtsQuery"];
+        };
+        /**
+         * SurfaceResult
+         * @description What happened on one surface. NAMED, never counted — an erasure that half-succeeded has to say
+         *     which half, because the remainder is a legal obligation and not a retry.
+         */
+        SurfaceResult: {
+            /**
+             * Detail
+             * @default
+             */
+            detail?: string;
+            /** Outcome */
+            outcome: string;
+            /** Surface */
+            surface: string;
         };
         /**
          * TableBasicStats
@@ -8591,7 +8721,7 @@ export interface components {
              * @default inserted
              * @enum {string}
              */
-            kind: "inserted" | "updated" | "deleted";
+            kind?: "inserted" | "updated" | "deleted";
         };
         /**
          * TableExistsRequest
@@ -8707,12 +8837,12 @@ export interface components {
              * Cardinality
              * @default 1:1
              */
-            cardinality: string;
+            cardinality?: string;
             /**
              * Code Version
              * @default
              */
-            code_version: string;
+            code_version?: string;
             /** From Id */
             from_id: string;
             /** Name */
@@ -8732,12 +8862,12 @@ export interface components {
              * Cardinality
              * @default 1:1
              */
-            cardinality: string;
+            cardinality?: string;
             /**
              * Code Version
              * @default
              */
-            code_version: string;
+            code_version?: string;
             /** From Id */
             from_id: string;
             /** Name */
@@ -8766,7 +8896,7 @@ export interface components {
              * Expired
              * @default false
              */
-            expired: boolean;
+            expired?: boolean;
             /** Expires At */
             expires_at: string;
             /** Id */
@@ -9196,12 +9326,12 @@ export interface components {
              * @default union
              * @enum {string}
              */
-            combineMode: "union" | "intersect";
+            combineMode?: "union" | "intersect";
             /**
              * Enabled
              * @default true
              */
-            enabled: boolean;
+            enabled?: boolean;
             /** Exportcolumns */
             exportColumns?: string[] | null;
             /**
@@ -9209,7 +9339,7 @@ export interface components {
              * @default csv
              * @enum {string}
              */
-            exportFormat: "json" | "csv";
+            exportFormat?: "json" | "csv";
             /** Filters */
             filters?: {
                 [key: string]: string;
@@ -9218,44 +9348,44 @@ export interface components {
              * Imagename
              * @default
              */
-            imageName: string;
+            imageName?: string;
             /**
              * Label
              * @default
              */
-            label: string;
+            label?: string;
             /** Minscore */
             minScore?: number | null;
             /** @default fts */
-            mode: components["schemas"]["WorkflowSearchMode"];
+            mode?: components["schemas"]["WorkflowSearchMode"];
             /**
              * N
              * @default 24
              */
-            n: number;
+            n?: number;
             /**
              * Q
              * @default
              */
-            q: string;
+            q?: string;
             /**
              * Refinescope
              * @default video
              * @enum {string}
              */
-            refineScope: "video" | "chunk";
+            refineScope?: "video" | "chunk";
             /**
              * Rerank
              * @default false
              */
-            rerank: boolean;
+            rerank?: boolean;
             /** Tags */
             tags?: string[];
             /**
              * Where
              * @default
              */
-            where: string;
+            where?: string;
         };
         /**
          * WorkflowNodeKind
@@ -9328,6 +9458,287 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Liveness"];
+                };
+            };
+        };
+    };
+    get_namespace_protection_management_v1_namespace__id__protection_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_namespace_protection_management_v1_namespace__id__protection_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undrop_namespace_management_v1_namespace__id__undrop_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateNamespaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    erase_subject_management_v1_table__id__erasure_post: {
+        parameters: {
+            query?: {
+                /** @description IGNORED: an erasure acts on every ref by construction, so naming one would narrow it. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ErasureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErasureReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_table_protection_management_v1_table__id__protection_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_table_protection_management_v1_table__id__protection_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetProtectionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    undrop_table_management_v1_table__id__undrop_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterTableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -10325,9 +10736,11 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -10638,86 +11051,6 @@ export interface operations {
             };
         };
     };
-    get_namespace_protection_v1_namespace__id__protection_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProtectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_namespace_protection_v1_namespace__id__protection_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetProtectionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProtectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_tables_v1_namespace__id__table_list_get: {
         parameters: {
             query?: {
@@ -10784,44 +11117,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrashEntry"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    undrop_namespace_v1_namespace__id__undrop_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CreateNamespaceResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12563,6 +12858,7 @@ export interface operations {
     commit_table_compaction_v1_table__id__compaction_commit_post: {
         parameters: {
             query?: {
+                /** @description The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -12608,6 +12904,7 @@ export interface operations {
     plan_table_compaction_v1_table__id__compaction_plan_post: {
         parameters: {
             query?: {
+                /** @description The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13052,6 +13349,7 @@ export interface operations {
                 check_declared?: boolean | null;
                 version?: number | null;
                 tag?: string | null;
+                /** @description The ref to describe. Omit for main. */
                 branch?: string | null;
                 vend_credentials?: boolean | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
@@ -13308,6 +13606,7 @@ export interface operations {
             query?: {
                 page_token?: string | null;
                 limit?: number | null;
+                /** @description REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13351,6 +13650,7 @@ export interface operations {
     drop_table_index_v1_table__id__index__index_name__drop_post: {
         parameters: {
             query?: {
+                /** @description REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13397,6 +13697,7 @@ export interface operations {
     describe_table_index_stats_v1_table__id__index__index_name__stats_post: {
         parameters: {
             query?: {
+                /** @description REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13442,6 +13743,7 @@ export interface operations {
         parameters: {
             query?: {
                 mode?: string | null;
+                /** @description The ref to insert into. Omit for main. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13487,14 +13789,17 @@ export interface operations {
     compact_maintenance_v1_table__id__maintenance_compact_post: {
         parameters: {
             query?: {
+                /** @description The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -13539,6 +13844,7 @@ export interface operations {
     preview_maintenance_v1_table__id__maintenance_preview_post: {
         parameters: {
             query?: {
+                /** @description The ref to preview. Omit for main; this door reads the ref it is given. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13582,14 +13888,17 @@ export interface operations {
     reindex_maintenance_v1_table__id__maintenance_reindex_post: {
         parameters: {
             query?: {
+                /** @description The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -13634,6 +13943,7 @@ export interface operations {
     run_maintenance_v1_table__id__maintenance_run_post: {
         parameters: {
             query?: {
+                /** @description REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -13685,6 +13995,7 @@ export interface operations {
                 when_not_matched_by_source_delete_filt?: string | null;
                 timeout?: string | null;
                 use_index?: boolean | null;
+                /** @description The ref to merge into. Omit for main. */
                 branch?: string | null;
                 source?: string | null;
                 source_version?: number | null;
@@ -13835,86 +14146,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_table_protection_v1_table__id__protection_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProtectionResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_table_protection_v1_table__id__protection_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SetProtectionRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProtectionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -14198,6 +14429,7 @@ export interface operations {
     get_table_stats_v1_table__id__stats_post: {
         parameters: {
             query?: {
+                /** @description REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -14520,44 +14752,6 @@ export interface operations {
             };
         };
     };
-    undrop_table_v1_table__id__undrop_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RegisterTableResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     update_table_v1_table__id__update_post: {
         parameters: {
             query?: {
@@ -14653,9 +14847,11 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -14779,6 +14975,7 @@ export interface operations {
                 page_token?: string | null;
                 limit?: number | null;
                 descending?: boolean | null;
+                /** @description The ref whose version history to list. Omit for main. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;

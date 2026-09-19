@@ -255,6 +255,9 @@ export interface paths {
         /**
          * Get Downstream
          * @description What derives from ``name`` (impact). Gated; non-visible related datasets are dropped.
+         *
+         *     ``depth`` bounds the walk exactly as on `/upstream` — impact is the direction that fans OUT, so a
+         *     hub dataset is where an unbounded walk costs most.
          */
         get: operations["get_downstream_datasets__name__downstream_get"];
         put?: never;
@@ -467,6 +470,13 @@ export interface paths {
          *
          *     Gated on ``can_get_metadata`` for ``name``; related datasets the caller may not see are
          *     dropped so the graph can't disclose tables outside its reach.
+         *
+         *     ``depth`` bounds the walk, the same shape and ceiling `/graph` already offers. The repository has
+         *     accepted it since the helper landed; only this door never declared it, so every request reached the
+         *     unbounded `*1..` statement whatever the caller wanted. Omitted it stays unbounded — the previous
+         *     behaviour, and what an un-rooted caller asks for — but it is now a caller's CHOICE rather than the
+         *     only thing the door can do. `age.py` names that unbounded path over a grown graph as the reason a
+         *     pooled connection cannot be pinned.
          */
         get: operations["get_upstream_datasets__name__upstream_get"];
         put?: never;
@@ -820,17 +830,17 @@ export interface components {
              * Description
              * @default
              */
-            description: string;
+            description?: string;
             /**
              * Kind
              * @default derived_from_column
              */
-            kind: string;
+            kind?: string;
             /**
              * Masking
              * @default false
              */
-            masking: boolean;
+            masking?: boolean;
             /** Source Dataset */
             source_dataset: string;
             /** Source Field */
@@ -843,12 +853,12 @@ export interface components {
              * Transformation Subtype
              * @default
              */
-            transformation_subtype: string;
+            transformation_subtype?: string;
             /**
              * Transformation Type
              * @default
              */
-            transformation_type: string;
+            transformation_type?: string;
         };
         /**
          * ColumnGraph
@@ -1116,7 +1126,7 @@ export interface components {
              * Parseable
              * @default true
              */
-            parseable: boolean;
+            parseable?: boolean;
             /** Run Id */
             run_id: string;
         };
@@ -1143,7 +1153,7 @@ export interface components {
              * Capped
              * @default false
              */
-            capped: boolean;
+            capped?: boolean;
             /** Edges */
             edges: components["schemas"]["GraphEdge"][];
             /** Nodes */
@@ -1199,7 +1209,7 @@ export interface components {
              * Kind
              * @default derived_from
              */
-            kind: string;
+            kind?: string;
             /** Source */
             source: string;
             /** Target */
@@ -1217,14 +1227,14 @@ export interface components {
              * Failed
              * @default false
              */
-            failed: boolean;
+            failed?: boolean;
             /** Id */
             id: string;
             /**
              * Kind
              * @default dataset
              */
-            kind: string;
+            kind?: string;
             /** Namespace */
             namespace?: string | null;
             /** Source Uri */
@@ -1299,7 +1309,7 @@ export interface components {
         /** Liveness */
         Liveness: {
             /** @default ok */
-            status: components["schemas"]["LivenessStatus"];
+            status?: components["schemas"]["LivenessStatus"];
         };
         /**
          * LivenessStatus
@@ -1404,7 +1414,7 @@ export interface components {
              * Reads
              * @default 0
              */
-            reads: number;
+            reads?: number;
         };
         /**
          * Readers
@@ -1461,7 +1471,7 @@ export interface components {
              * Stale
              * @default false
              */
-            stale: boolean;
+            stale?: boolean;
             status: components["schemas"]["ReconcileState"];
             /** Storage Version */
             storage_version?: number | null;
@@ -1556,7 +1566,7 @@ export interface components {
              * Events
              * @default 0
              */
-            events: number;
+            events?: number;
             /** Job */
             job?: string | null;
             /** Operation */
@@ -1601,7 +1611,7 @@ export interface components {
              * Type
              * @default
              */
-            type: string;
+            type?: string;
         };
         /**
          * SearchHit
@@ -1857,7 +1867,9 @@ export interface operations {
     };
     get_column_downstream_datasets__name__columns__field__downstream_get: {
         parameters: {
-            query?: never;
+            query?: {
+                depth?: number | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -1893,7 +1905,9 @@ export interface operations {
     };
     get_column_upstream_datasets__name__columns__field__upstream_get: {
         parameters: {
-            query?: never;
+            query?: {
+                depth?: number | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -2003,7 +2017,9 @@ export interface operations {
     };
     get_downstream_datasets__name__downstream_get: {
         parameters: {
-            query?: never;
+            query?: {
+                depth?: number | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
@@ -2328,7 +2344,9 @@ export interface operations {
     };
     get_upstream_datasets__name__upstream_get: {
         parameters: {
-            query?: never;
+            query?: {
+                depth?: number | null;
+            };
             header?: {
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;

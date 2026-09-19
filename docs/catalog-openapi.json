@@ -6400,6 +6400,13 @@
             "title": "Complete",
             "type": "boolean"
           },
+          "pinned_by": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Pinned By",
+            "type": "object"
+          },
           "predicate": {
             "title": "Predicate",
             "type": "string"
@@ -12565,6 +12572,356 @@
         ]
       }
     },
+    "/management/v1/namespace/{id}/protection": {
+      "get": {
+        "description": "Read the namespace's deletion-protection flag (#123) \u2014 the table door's read, one rung up.",
+        "operationId": "get_namespace_protection_management_v1_namespace__id__protection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Namespace Protection",
+        "tags": [
+          "namespace-management"
+        ]
+      },
+      "post": {
+        "description": "Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router\n(``protection`` maps to ``can_delete`` \u2014 whoever may delete the namespace decides whether\ndeleting it needs a second thought). Same control-root record contract as the table door.",
+        "operationId": "set_namespace_protection_management_v1_namespace__id__protection_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Namespace Protection",
+        "tags": [
+          "namespace-management"
+        ]
+      }
+    },
+    "/management/v1/namespace/{id}/undrop": {
+      "post": {
+        "description": "Recover a cascade-dropped SUBTREE from the trash (#96) \u2014 the plural undrop.\n\nThe unit of a cascade is the subtree, so the unit of its recovery is too: every trashed\nnamespace under (and including) ``id`` is re-created shallowest-first, then every trashed table\nis re-registered at its old id from its still-present bytes, and each record is cleared as its\nobject recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).\n\nResumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is\ntreated as recovered, so a rerun after a mid-recovery failure finishes the job instead of\n409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired\nor never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers\nnothing. A declared-only table (empty recorded location) is skipped with a warning \u2014 there were\nno bytes to lose.",
+        "operationId": "undrop_namespace_management_v1_namespace__id__undrop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNamespaceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undrop Namespace",
+        "tags": [
+          "namespace-management"
+        ]
+      }
+    },
     "/management/v1/table/{id}/erasure": {
       "post": {
         "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any\nretained version still answers the predicate after every step ran \u2014 which happens on a table with\na branch, because deleting rows on a branch does not remove that branch's pin on the parent's\nhistory ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller\nreading the status code reports the wrong thing.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
@@ -12720,6 +13077,356 @@
         "summary": "Erase Subject",
         "tags": [
           "erasure"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/protection": {
+      "get": {
+        "description": "Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:\nan operator could not arm, disarm-check, or audit protection \u2014 they discovered it by eating a\n409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the\nrecord's `set_by` comes back so a refused drop can name who armed it.",
+        "operationId": "get_table_protection_management_v1_table__id__protection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Table Protection",
+        "tags": [
+          "table-management"
+        ]
+      },
+      "post": {
+        "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:\nwhoever may destroy the table decides whether destroying it needs a second thought). The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
+        "operationId": "set_table_protection_management_v1_table__id__protection_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Set Table Protection",
+        "tags": [
+          "table-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/undrop": {
+      "post": {
+        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing.\n\nTHE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has\npassed but which the purge has not yet collected still undrops, because the bytes are still on\nstorage and refusing would destroy recoverable data on a timestamp alone. The estate already\nreasons this way one service over \u2014 maintenance's own config says \"a record that survives is a\nrecovery that still works; a purged one is not\" \u2014 and this door simply never said so out loud.\nWhat was wrong was the DESCRIPTION: the previous docstring called an expired drop \"genuinely\nunrecoverable\" alongside a never-trashed one, and `/tasks` reported the deadline as finality.\nBoth now say purge-eligible, which is what it is.\n\nAn expired undrop IS logged: it means the purge is behind, or somebody recovered at the very\nedge of the window, and an operator should be able to see either.",
+        "operationId": "undrop_table_management_v1_table__id__undrop_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegisterTableResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Undrop Table",
+        "tags": [
+          "table-management"
         ]
       }
     },
@@ -15706,7 +16413,7 @@
     },
     "/v1/namespace/{id}/drop": {
       "post": {
-        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.\nA CASCADE is checked against the whole SUBTREE before the native call \u2014 its children are destroyed\ninside that one call and never reach this door, so a protected table under a cascaded namespace\nwould otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first.\n\nWith a grace period configured (#96), a CASCADE becomes RECOVERABLE: the subtree is detached \u2014\ntables deregistered, namespaces emptied then dropped \u2014 with a trash record per destroyed object,\nand ``POST /v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same\nexplicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the\nnamespace it removes is empty by definition, and re-creating an empty namespace needs no trash.",
+        "description": "Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples \u2014 and, for a Cascade drop, every\ndropped child's \u2014 so a reused id can't inherit stale grants.\n\nDeletion protection (#73): a ``protected`` control-root record refuses 409 unless ``force=true``.\nA CASCADE is checked against the whole SUBTREE before the native call \u2014 its children are destroyed\ninside that one call and never reach this door, so a protected table under a cascaded namespace\nwould otherwise die silently. ``force`` turns the protection lock only; the FGA gate ran first.\n\nWith a grace period configured (#96), a CASCADE becomes RECOVERABLE: the subtree is detached \u2014\ntables deregistered, namespaces emptied then dropped \u2014 with a trash record per destroyed object,\nand ``POST /management/v1/namespace/{id}/undrop`` rebuilds the whole subtree. ``purge=true`` is the same\nexplicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the\nnamespace it removes is empty by definition, and re-creating an empty namespace needs no trash.",
         "operationId": "drop_namespace_v1_namespace__id__drop_post",
         "parameters": [
           {
@@ -16747,242 +17454,6 @@
         ]
       }
     },
-    "/v1/namespace/{id}/protection": {
-      "get": {
-        "description": "Read the namespace's deletion-protection flag (#123) \u2014 the table door's read, one rung up.",
-        "operationId": "get_namespace_protection_v1_namespace__id__protection_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProtectionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Namespace Protection",
-        "tags": [
-          "namespace"
-        ]
-      },
-      "post": {
-        "description": "Set or clear deletion protection on namespace ``id`` (#73). Owner-gated by the router\n(``protection`` maps to ``can_delete`` \u2014 whoever may delete the namespace decides whether\ndeleting it needs a second thought). Same control-root record contract as the table door.",
-        "operationId": "set_namespace_protection_v1_namespace__id__protection_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetProtectionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProtectionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Set Namespace Protection",
-        "tags": [
-          "namespace"
-        ]
-      }
-    },
     "/v1/namespace/{id}/table/list": {
       "get": {
         "description": "List the tables under namespace ``id``; when FGA is on, filtered to what the caller can\n``can_read_data``. ``include_declared=false`` drops declared-only tables (reserved, no storage yet).\n\n**WHY THIS FILTERS AT ALL \u2014 the route's gate stopped implying its contents.** The router mounts\nevery endpoint here under ``authorize``, which resolves this route's ``list`` action to\n``can_get_metadata``; C1 (upward visibility) then redefined that on a namespace as\n``reader or can_get_metadata from child``. The widening is correct for what it was for \u2014 without\nit a grantee could not resolve the breadcrumb to their own table and every list above it 403'd \u2014\nbut it means holding ``reader`` on ONE table opens this route, and the route used to answer with\nevery SIBLING table's name. Measured against both compiled models: before ``14a84022`` the check\nwas ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header;\n``viewer.api.security`` states the estate's position outright \u2014 \"A corpus LIST is itself sensitive:\nit names data someone may not know exists.\"\n\nSo the split ``open_notifications.md`` \u00a73.1 already settled applies verbatim: the ROUTE may open on\n``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)\nhas always done this; that this route did not was the inconsistency, not the policy.\n\n**Pagination moved off the native call, for the reason it moved there too (#141).** A backend\n``limit`` truncates BEFORE the filter, so ``limit=10`` could answer 2 and hand out a cursor that\nskips everything the filter removed \u2014 pages that silently drop tables the caller CAN read. The\nnative call is therefore unpaginated and the keyset cursor is applied to the filtered list. The\nlist is sorted and deduped first because the cursor is the last NAME of the previous page and is\nstable only over an ordered one.",
@@ -17252,120 +17723,6 @@
           }
         ],
         "summary": "Namespace Tasks",
-        "tags": [
-          "namespace"
-        ]
-      }
-    },
-    "/v1/namespace/{id}/undrop": {
-      "post": {
-        "description": "Recover a cascade-dropped SUBTREE from the trash (#96) \u2014 the plural undrop.\n\nThe unit of a cascade is the subtree, so the unit of its recovery is too: every trashed\nnamespace under (and including) ``id`` is re-created shallowest-first, then every trashed table\nis re-registered at its old id from its still-present bytes, and each record is cleared as its\nobject recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).\n\nResumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is\ntreated as recovered, so a rerun after a mid-recovery failure finishes the job instead of\n409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired\nor never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers\nnothing. A declared-only table (empty recorded location) is skipped with a warning \u2014 there were\nno bytes to lose.",
-        "operationId": "undrop_namespace_v1_namespace__id__undrop_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CreateNamespaceResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Undrop Namespace",
         "tags": [
           "namespace"
         ]
@@ -27539,242 +27896,6 @@
         ]
       }
     },
-    "/v1/table/{id}/protection": {
-      "get": {
-        "description": "Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:\nan operator could not arm, disarm-check, or audit protection \u2014 they discovered it by eating a\n409. Owner-gated like the set door (the observer of a safety is whoever might trip it), and the\nrecord's `set_by` comes back so a refused drop can name who armed it.",
-        "operationId": "get_table_protection_v1_table__id__protection_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProtectionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Get Table Protection",
-        "tags": [
-          "table"
-        ]
-      },
-      "post": {
-        "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:\nwhoever may destroy the table decides whether destroying it needs a second thought). The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
-        "operationId": "set_table_protection_v1_table__id__protection_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SetProtectionRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProtectionResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Set Table Protection",
-        "tags": [
-          "table"
-        ]
-      }
-    },
     "/v1/table/{id}/publish": {
       "post": {
         "description": "Gate `version` and, if it passes, advance `published` to it.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. Errors are reserved for the caller getting it wrong \u2014\nan unknown version (404), a backwards move (409), a malformed one (400) \u2014 all raised as\n`lance_namespace` typed errors so the shared problem-body handler renders them.",
@@ -29712,120 +29833,6 @@
           }
         ],
         "summary": "Table Tasks",
-        "tags": [
-          "table"
-        ]
-      }
-    },
-    "/v1/table/{id}/undrop": {
-      "post": {
-        "description": "Recover a dropped table from the trash (#75) \u2014 re-register its still-present bytes at its old\nid and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into\nthe namespace is the same authority as removing it).\n\n404 when there is no trash record \u2014 a never-trashed or already-PURGED drop is genuinely\nunrecoverable, and saying so plainly beats a 200 that recovers nothing.\n\nTHE CLOCK DOES NOT GATE THIS, deliberately (diff2 F10 item 5). A record whose `expires_at` has\npassed but which the purge has not yet collected still undrops, because the bytes are still on\nstorage and refusing would destroy recoverable data on a timestamp alone. The estate already\nreasons this way one service over \u2014 maintenance's own config says \"a record that survives is a\nrecovery that still works; a purged one is not\" \u2014 and this door simply never said so out loud.\nWhat was wrong was the DESCRIPTION: the previous docstring called an expired drop \"genuinely\nunrecoverable\" alongside a never-trashed one, and `/tasks` reported the deadline as finality.\nBoth now say purge-eligible, which is what it is.\n\nAn expired undrop IS logged: it means the purge is behind, or somebody recovered at the very\nedge of the window, and an operator should be able to see either.",
-        "operationId": "undrop_table_v1_table__id__undrop_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RegisterTableResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Undrop Table",
         "tags": [
           "table"
         ]

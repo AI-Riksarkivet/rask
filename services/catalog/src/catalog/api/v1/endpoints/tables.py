@@ -88,6 +88,13 @@ _MAIN_BRANCH = "main"
 
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
+#: THE MANAGEMENT SURFACE ([[LH-021]]). rask-only governance mounts here, not on the spec prefix: a
+#: spec client meeting `undrop` or `protection` on `/v1/table` has no way to tell a rask verb from a
+#: Lance one. Deletion protection and the trash are the clearest case — the spec has `drop` and no
+#: notion of a drop that can be taken back. It inherits the same authn/authz/delimiter guard as the
+#: spec router (`api/v1/router.py`), so moving a route does not move it out of its gate.
+management_router = APIRouter(prefix="/management/v1/table", tags=["table-management"])
+
 
 def _is_expired(expires_at: str) -> bool:
     """Has the purge-eligibility deadline passed? Unparseable or absent → NOT expired.
@@ -821,7 +828,7 @@ async def register_table(
     return response
 
 
-@router.get("/{id}/protection", response_model_exclude_none=True)
+@management_router.get("/{id}/protection", response_model_exclude_none=True)
 async def get_table_protection(id: str, settings: SettingsDep) -> ProtectionResponse:
     """Read the deletion-protection flag (#123). The SET door shipped a year of writes with NO read:
     an operator could not arm, disarm-check, or audit protection — they discovered it by eating a
@@ -856,7 +863,7 @@ async def table_tasks(
     return [TrashEntry(**fields, expired=_is_expired(fields["expires_at"]))]
 
 
-@router.post("/{id}/undrop", response_model_exclude_none=True)
+@management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_table(
     id: str,
     ns: NamespaceDep,
@@ -942,7 +949,7 @@ async def undrop_table(
     return response
 
 
-@router.post("/{id}/protection", response_model_exclude_none=True)
+@management_router.post("/{id}/protection", response_model_exclude_none=True)
 async def set_table_protection(
     id: str,
     body: SetProtectionRequest,

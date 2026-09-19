@@ -220,8 +220,8 @@
 
 			{#if rows.length === 0}
 				<p class="text-muted-foreground text-sm">
-					No transform is declared. Every stage runner is still running whatever its Deployment env names —
-					which nothing here can enumerate, review or gate.
+					No transform is declared. Every stage runner is still running whatever its Deployment env
+					names — which nothing here can enumerate, review or gate.
 				</p>
 			{:else}
 				<div class="flex flex-col divide-y">

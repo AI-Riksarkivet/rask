@@ -231,7 +231,7 @@ def test_a_recoverable_cascade_unbinds_and_undrop_rebinds_the_same_warehouse(
     # actually sees. (Caught by the mutation pass: removing the re-resolve left the suite green.)
     client.app.state.warehouse_binding_cache.clear()
 
-    recovered = client.post("/v1/namespace/tenantns/undrop", json={})
+    recovered = client.post("/management/v1/namespace/tenantns/undrop", json={})
     assert recovered.status_code == 200, recovered.text
 
     # The binding is restored…
@@ -270,7 +270,7 @@ def test_undrop_refuses_when_the_id_was_bound_elsewhere_during_the_grace_window(
     wh_svc.put_warehouse(control, {}, {"id": "wh-b", "bucket": "wh-b", "root_uri": str(other), "project": "rival"})
     wh_svc.bind_namespace(control, {}, "tenantns", "wh-b", str(other))
 
-    refused = client.post("/v1/namespace/tenantns/undrop", json={})
+    refused = client.post("/management/v1/namespace/tenantns/undrop", json={})
     assert refused.status_code == 409, refused.text
     # And the rival's binding is untouched — the refusal changed nothing.
     assert wh_svc.binding_for_namespace(control, {}, "tenantns") == {

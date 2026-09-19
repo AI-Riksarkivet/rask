@@ -368,7 +368,9 @@
 					<Card class="group-hover:border-ring flex h-full flex-col gap-2 p-4 transition-colors">
 						<div class="flex items-start justify-between gap-2">
 							<span class="text-sm font-semibold">{project.title || project.slug}</span>
-							<Badge variant={projectStateVariant(project.state)}>{project.state.replace('_', ' ')}</Badge>
+							<Badge variant={projectStateVariant(project.state)}
+								>{project.state.replace('_', ' ')}</Badge
+							>
 						</div>
 						<span class="text-muted-foreground font-mono text-xs">{project.slug}</span>
 						{#if project.description}
@@ -406,9 +408,9 @@
 		<form
 			class="grid grid-cols-1 items-start gap-x-8 gap-y-3 lg:grid-cols-[minmax(15rem,2fr)_3fr]"
 			onsubmit={(e) => {
-	e.preventDefault();
-	void create();
-}}
+				e.preventDefault();
+				void create();
+			}}
 		>
 			<div class="flex flex-col gap-3">
 				<label class="flex flex-col gap-1 text-sm">
@@ -429,7 +431,8 @@
 				</label>
 				<label class="flex flex-col gap-1 text-sm">
 					<span
-						>Instructions <span class="text-muted-foreground">(shown to annotators — how to label)</span
+						>Instructions <span class="text-muted-foreground"
+							>(shown to annotators — how to label)</span
 						></span
 					>
 					<Textarea
@@ -463,10 +466,10 @@
 						bind:value={templateId}
 						ariaLabel="Task template"
 						options={[
-	{ value: 'custom', label: 'custom (type your own classes)' },
-	{ value: 'yaml', label: 'custom (define in YAML)' },
-	...PROJECT_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
-]}
+							{ value: 'custom', label: 'custom (type your own classes)' },
+							{ value: 'yaml', label: 'custom (define in YAML)' },
+							...PROJECT_TEMPLATES.map((t) => ({ value: t.id, label: t.name })),
+						]}
 					/>
 				</label>
 				{#if templateId !== 'custom'}
@@ -517,8 +520,9 @@
 								</ul>
 							{:else}
 								<p class="text-muted-foreground text-[10px]">
-									draw = geometry on the canvas · span = ranges in the text · tag = whole-item choice ·
-									transcribe = regions carry transcribed text · fields = typed extras per region
+									draw = geometry on the canvas · span = ranges in the text · tag = whole-item
+									choice · transcribe = regions carry transcribed text · fields = typed extras per
+									region
 								</p>
 							{/if}
 						{:else}
@@ -612,9 +616,9 @@
 												>
 													{field.name}
 													<span class="text-muted-foreground">
-														{field.options.length ? field.options.join(' | ') : field.type}{field.required
-															? ' · required'
-															: ''}
+														{field.options.length
+															? field.options.join(' | ')
+															: field.type}{field.required ? ' · required' : ''}
 													</span>
 												</span>
 											{/each}
@@ -628,18 +632,18 @@
 									size="xs"
 									data-testid="add-class"
 									onclick={() =>
-	(draft.classes = [
-		...draft.classes,
-		{
-			name: '',
-			draw: ['bbox'],
-			span: false,
-			tag: false,
-			transcribe: false,
-			required: false,
-			fields: [],
-		},
-	])}
+										(draft.classes = [
+											...draft.classes,
+											{
+												name: '',
+												draw: ['bbox'],
+												span: false,
+												tag: false,
+												transcribe: false,
+												required: false,
+												fields: [],
+											},
+										])}
 								>
 									+ add label
 								</Button>
@@ -650,11 +654,13 @@
 						{/if}
 						{#if draft.relations.length}
 							<p class="text-muted-foreground" data-testid="template-relations">
-								relations: {liveRelations.length ? liveRelations.map((r) => r.name).join(', ') : 'none'}
+								relations: {liveRelations.length
+									? liveRelations.map((r) => r.name).join(', ')
+									: 'none'}
 								{#if liveRelations.length < draft.relations.length}
 									<span class="text-warning">
-										— {draft.relations.length - liveRelations.length} dropped (an endpoint class was renamed or
-										removed)</span
+										— {draft.relations.length - liveRelations.length} dropped (an endpoint class was renamed
+										or removed)</span
 									>
 								{/if}
 							</p>
@@ -695,9 +701,9 @@
 							bind:value={taskKind}
 							ariaLabel="Task type"
 							options={[
-	{ value: 'free', label: 'free (no task type)' },
-	...Object.keys(TASK_PRESETS).map((kind) => ({ value: kind, label: kind })),
-]}
+								{ value: 'free', label: 'free (no task type)' },
+								...Object.keys(TASK_PRESETS).map((kind) => ({ value: kind, label: kind })),
+							]}
 						/>
 					</label>
 					<label class="flex items-center gap-2 text-sm">
