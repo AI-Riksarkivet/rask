@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**206 open items**, of which **99 are blocked on a decision** and **107 can be picked up today**.
+**204 open items**, of which **99 are blocked on a decision** and **105 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 62 | 23 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 60 | 21 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -362,12 +362,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* `make e2e-chaos` runs the harness against a throwaway namespace and asserts replay after a lineage scale-0, and `e2e-ci` does not list it.
 - *Evidence:* `ls tests/e2e-py/ → no test_chaos_e2e.py` · `grep -c -i chaos Makefile → 0` · `Makefile:888 (`e2e-ci` suite list), :940-946 (env-gated per-suite target pattern)` · `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py (exists — retry window already gated)`
 
-**LH-113 · One 464-line catalog `Settings` class carries every domain's configuration**
-`catalog` · **MED**
-- *What is left:* `Settings` is services/catalog/src/catalog/core/config.py:66-529 — 464 lines, 62 annotated fields, in a 573-line module, deriving from `GovernedAuthSettings`, `LanceSessionCaps` and `BaseSettings`. Exactly one block has been lifted out so far: `LanceSessionCaps` (config.py:31-63, 2 fields) is a mixin the way the split should look. Continue that shape: carve the remaining fields into per-domain settings blocks and compose them, the pattern the eight services already share via `GovernedAuthSettings`.
-- *Closes when:* `Settings` is a composition of per-domain blocks and no single class in config.py exceeds a domain's own fields.
-- *Evidence:* `AST measure this session: `class Settings: lines 66-529 (464 lines), annotated fields=62, bases=['GovernedAuthSettings','LanceSessionCaps','BaseSettings']`` · `services/catalog/src/catalog/core/config.py:31 `class LanceSessionCaps(BaseSettings)` (2 fields) — the one block already split` · `wc -l services/catalog/src/catalog/core/config.py → 573`
-
 **LH-127 · Eight orphaned Dapr durables sit on six streams until the chart-durables orphan pass runs, and nothing surfaces an unexpected consumer**
 `lineage, compute, chart` · **MED** · PARTIAL
 - *What is left:* The orphan pass is written: `chart/templates/_durables.tpl` renders `lance.chartDurables`, `nats-stream-job.yaml:255-258` deletes any `*-durable` on a walked stream absent from `EXP_DURABLES`, and `tests/unit/test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py` pins the set. **THE EIGHT ORPHANS ARE GONE, verified 2026-09-18** against the live NATS monitor (`/jsz?consumers=true`): no `lance-ray`, no `pages-to-gold-htr`, no `maintenance-durable`, no `maintenance-work-durable` on any stream. What remains is exactly the chart-rendered set — MEDALLION 4, DLQ 6, CATALOG_CONTROL 2, LINEAGE 2, TRAINING 1. Then surface the inverse signal: the lakehouse admin `/streams` view shows `num_pending` and `push_bound` and flags an EXPECTED group that is unbound (`jetstream.ts:113-122`), but nothing flags a consumer that is NOT in the expected set, so the next orphan is still invisible without a NATS client. **IT MUST FLAG UNEXPECTED DURABLES, NOT UNEXPECTED CONSUMERS** — measured the same day, CATALOG_CONTROL carries an EPHEMERAL consumer (`xP0FWBl7`, no `durable_name`, `_INBOX` delivery, `num_pending: 0`) which is the catalog's own control-buffer subscription: each replica subscribes WITHOUT a queueGroupName by design (`core/control_buffer.py`), so broadcast subscribers are ephemeral and auto-named. A signal keyed on "not in the expected set" would flag that one permanently, and a permanently-firing signal is how the real orphan gets ignored. The orphan PASS has the same blind spot from the other side: `nats-stream-job.yaml:255-258` deletes `*-durable` names only, so a non-durable orphan survives it. `MAINTENANCE_WORK` and the index lane stay excluded from the walk by design (work-sized backoff).
@@ -575,12 +569,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* File the pylance bundled-REST-client GET-vs-POST issue (the dual-mount workaround at data.py:613-622 and tags.py:28 says "worth filing") and the 0.12.0 `header.`/`headers.` prefix issue against lancedb/lance, then record each issue URL beside its workaround and track the fix version. The `header.` prefix workaround site is not locatable by grep in services/ or packages/ this session; the lock pins `lance-namespace 0.11.1`, so confirm where that workaround lives (or whether it only applies at the 0.12.0 bump, itself gated at data.py:325-329) before filing.
 - *Closes when:* Both workaround comments cite an upstream issue URL and the tracked fix version.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:613-622 (dual-mount rationale, "worth filing", no URL)` · `grep -rn 'lance/issues' services/catalog packages docs .claude → nothing` · `uv.lock:1648-1649 (`lance-namespace` 0.11.1), :3276-3277 (`pylance` 11.0.0)`
-
-**LH-119 · The dropped-parameter sweep's candidate list and its 16 unverified calls exist nowhere in the tree**
-`catalog, medallion, ingest` · **LOW** · **REWRITTEN — the original ask would be wrong**
-- *What is left:* Drop this row: there is no sweep record to re-run — `grep -rl dropped-parameter docs/ .claude/` finds only the register, and its only surviving classifications are LH-037 (reduced to two rulings) and CP-026. If an accepted-and-ignored-parameter audit is wanted, run a fresh one from the generated Lance Namespace request models (six carry `mode`, in four vocabularies) rather than reviving a lost session's list, and file each finding as its own row.
-- *Closes when:* The row is removed, or a fresh audit lands its findings as rows.
-- *Evidence:* `grep -rln -i dropped-parameter docs/ .claude/ *.md — only open_backlog_left.md` · `open_backlog_left.md:3794 (LH-037), :8892 (CP-026) — the only rows carrying the sweep's classification`
 
 **LH-050 · No query store for catalog listings, deliberately, until interactive-frequency listing load is measured**
 `catalog` · **LOW**

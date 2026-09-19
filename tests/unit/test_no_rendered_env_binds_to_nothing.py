@@ -38,6 +38,7 @@ would have found it and passed. A mention inside a comment or a docstring theref
 
 from __future__ import annotations
 
+import ast
 import importlib
 import pathlib
 import re
@@ -68,8 +69,19 @@ def _settings_classes() -> list[tuple[str, str, str]]:
             if not prefix:
                 continue
             module = ".".join(path.relative_to(src).with_suffix("").parts)
-            for cls in re.findall(r"^class (\w+)\(.*BaseSettings", text, re.MULTILINE):
-                found.append((prefix.group(1), module, cls))
+            # PARSED, NOT PATTERN-MATCHED. The line-anchored form was `^class (\w+)\(.*BaseSettings`,
+            # which needs `BaseSettings` on the SAME line as the class name — so a signature wrapped by
+            # the formatter, which is what happens the moment a class composes more than two or three
+            # mixins, became invisible to this gate. Measured 2026-09-19: splitting the catalog's
+            # `Settings` into per-domain blocks ([[LH-113]]) wrapped its bases and dropped all sixteen of
+            # its remaining fields out of the accept-set, so thirteen `LANCE_*` vars the chart really does
+            # bind read as bound-to-nothing. The AST sees a base list however it is laid out.
+            for node in ast.walk(ast.parse(text)):
+                if isinstance(node, ast.ClassDef) and any(
+                    (isinstance(base, ast.Name) and base.id.endswith("Settings")) or (isinstance(base, ast.Attribute) and base.attr.endswith("Settings"))
+                    for base in node.bases
+                ):
+                    found.append((prefix.group(1), module, node.name))
     return found
 
 

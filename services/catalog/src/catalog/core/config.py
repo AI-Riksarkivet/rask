@@ -63,7 +63,315 @@ class LanceSessionCaps(BaseSettings):
     lance_index_cache_mb: int = Field(default=256, ge=8, alias="LANCE_INDEX_CACHE_MB")
 
 
-class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
+class CatalogStorageSettings(BaseSettings):
+    """The object store this catalog reads and writes through.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Object store (MinIO / S3). Credentials are required — no default — so a
+    # missing secret fails loudly at startup instead of silently using a default.
+    s3_endpoint: str = Field(default="http://minio:9000", alias="LANCE_S3_ENDPOINT")
+    s3_access_key_id: str = Field(alias="LANCE_S3_ACCESS_KEY_ID")
+    # Optional default: with secrets_from_dapr on, the secret comes from the store (no plaintext env), and
+    # the lifespan fails closed if neither the store nor env provides it.
+    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LANCE_S3_SECRET_ACCESS_KEY")
+    s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
+    s3_allow_http: bool = Field(default=True, alias="LANCE_S3_ALLOW_HTTP")
+    s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
+    s3_assume_role_arn: str | None = Field(default=None, alias="LANCE_S3_ASSUME_ROLE_ARN")
+    #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
+    #: straight to object storage with the catalog out of the path, so whatever the estate intends must
+    #: travel in the storage options or it does not happen.
+    #:
+    #: Key names and their contract are verified against `lance_docs/guide.md:2417-2419`, and
+    #: `lance_storage_options` REFUSES an invalid pairing rather than passing it on: object_store drops
+    #: an option it does not recognise, so a wrong value here would land plaintext under a config that
+    #: claims encryption — the one failure with no later signal.
+    #:
+    #: Unset is every deployment's behaviour today: whatever the bucket does.
+    s3_server_side_encryption: str | None = Field(default=None, alias="LANCE_S3_SERVER_SIDE_ENCRYPTION")
+    s3_sse_kms_key_id: str | None = Field(default=None, alias="LANCE_S3_SSE_KMS_KEY_ID")
+    s3_sse_bucket_key_enabled: bool | None = Field(default=None, alias="LANCE_S3_SSE_BUCKET_KEY_ENABLED")
+    s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
+
+
+class CatalogControlBusSettings(BaseSettings):
+    """The control lane: where governance events are published and staged.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
+    # Control-plane change-events (opt-in, best-effort — the governance/metadata stream, distinct from the
+    # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` onto the DEDICATED
+    # `control_pubsub` component (below, NOT the shared `dapr_pubsub`) under the `catalog.control.v1` topic,
+    # subscribed WITHOUT a queueGroupName so every replica buffers every event for the poll endpoint. Off by
+    # default, like lineage.
+    control_emit_enabled: bool = Field(default=False, alias="LANCE_CONTROL_EMIT_ENABLED")
+    control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_CONTROL_EMIT_TIMEOUT_SECONDS")
+    # A DEDICATED Dapr pub/sub component (NOT the shared lineage one) with NO queueGroupName, so the
+    # catalog's own subscription is a BROADCAST — every replica receives every event → each replica's ring
+    # buffer stays complete. The chart renders it (dapr-component.yaml) + a NATS stream (nats-stream-job).
+    control_pubsub: str = Field(default="catalog-control-pubsub", alias="LANCE_CONTROL_PUBSUB")
+    # The bounded per-replica ring buffer size (events retained for `GET /v1/events`); a client whose cursor
+    # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
+    control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")
+    #: The CONTROL lane's outbox prefix — and it must NOT be the lineage one. Each prefix is drained
+    #: by a lane-specific relay that re-ingests what it finds, so sharing would feed each relay the
+    #: other lane's events.
+    #:
+    #: Why the control lane needs one at all: `table_published` is what wakes the next cascade hop.
+    #: The stage runner does not fire its own topic and the medallion plane runs no cron and no reconcile
+    #: binding, so it never re-reads the tag. `DaprControlEmitter.emit` swallows a publish failure by
+    #: design — it is called after the change is already made and audited, so raising would turn a
+    #: delivered mutation into a 500 — which meant a NATS blip cancelled the cascade outright with
+    #: every pod green. Staged, the event survives to be re-published.
+    control_outbox_uri: str = Field(default="", alias="LANCE_CONTROL_OUTBOX_URI")
+    #: The cron binding that DRAINS `control_outbox_uri` — `catalog/api/control_relay.py`. Empty = the
+    #: relay route is not mounted (staging still happens; nothing republishes it).
+    #:
+    #: THIS STRING IS THE ROUTE. Dapr delivers an input binding to `POST /<component name>` at the pod
+    #: ROOT, so the Component's `metadata.name`, this value and the served path are one string; a
+    #: component named one thing and a route mounted at another is a cron that ticks into a 404 while
+    #: both halves look right in isolation. Pinned by `tests/unit/test_the_control_lane_relay_is_wired.py`.
+    control_relay_binding_name: str = Field(default="", alias="LANCE_CONTROL_RELAY_BINDING_NAME")
+
+
+class CatalogDaprSettings(BaseSettings):
+    """Which Dapr components this catalog addresses, and where its secrets come from.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Secret consumption — when on, read the sensitive S3 secret from the Dapr secret store (OpenBao) at
+    # boot instead of trusting plaintext env (the audit's 'wired but never read' fix). The store is then
+    # the STRICT sole source: the chart omits the plaintext secret from pod env, and a store miss FAILS
+    # CLOSED at boot (no env fallback) — matching the module docstring's "no silent fallback".
+    secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
+    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
+    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
+    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
+    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
+    #: still be moved on its own.
+    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
+    dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
+    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
+    # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
+    # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
+    dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
+    dapr_topic: str = Field(default="lineage.events.v1", alias="LANCE_DAPR_TOPIC")
+    # Injected into every app container by the Dapr sidecar injector — read it rather than restate it, so a
+    # non-default sidecar port cannot silently point us at a port nothing is listening on.
+    dapr_http_port: int = Field(default=3500, ge=1, le=65535, alias="DAPR_HTTP_PORT")
+
+
+class CatalogLineageSettings(BaseSettings):
+    """How a write's provenance leaves this service.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Lineage emission (opt-in). When enabled, the catalog emits an OpenLineage event to the lineage
+    # service on a table write — fire-and-forget + best-effort, so the lineage service being down can
+    # never block or fail a catalog write. The catalog is the only component that knows the verified
+    # principal, so it is the authoritative source of "who created/changed a table" (author = token.sub).
+    # Transport: ``http`` (direct POST — dev / external producers) or ``dapr`` (publish to the Dapr
+    # ``pubsub.jetstream`` component via the local sidecar — durable, decoupled, the production path).
+    lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
+    # Literal (like vending_mode) so pydantic validates the allowed set — one enum-setting idiom in this file.
+    lineage_transport: Literal["http", "dapr"] = Field(default="http", alias="LANCE_LINEAGE_TRANSPORT")
+    lineage_url: str | None = Field(default=None, alias="LANCE_LINEAGE_URL")
+    lineage_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_LINEAGE_EMIT_TIMEOUT_SECONDS")
+    lineage_job_namespace: str = Field(default="lance-catalog", alias="LANCE_LINEAGE_JOB_NAMESPACE")
+    #: Stage lineage events here before publishing (docs/RESILIENCE.md gap #1, the estate's #1
+    #: weakness). EMPTY = today's behaviour exactly: `publish_lineage_with_outbox` degrades to a plain
+    #: publish when this is unset, so the wiring is inert until a deployment opts in.
+    #:
+    #: Why it matters HERE specifically: the catalog's emit is inline-awaited and best-effort AFTER the
+    #: Lance write commits, so a crash between the write and the publish loses the event. The data
+    #: exists and the graph never learns of it — and because the catalog's write announcement is what
+    #: the medallion `/bronze-arrival` subscription reacts to, a lost one does not merely under-report
+    #: provenance: the whole bronze->silver->gold run silently never happens.
+    lineage_outbox_uri: str = Field(default="", alias="LANCE_LINEAGE_OUTBOX_URI")
+
+
+class CatalogMaintenanceSettings(BaseSettings):
+    """The maintenance lane this catalog hands work to.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Maintenance: when true, reject mutating /v1 requests with 503 + Retry-After — for
+    # zero-downtime model/schema migration windows. Default off (no-op).
+    maintenance_read_only: bool = Field(default=False, alias="LANCE_MAINTENANCE_READ_ONLY")
+    # The maintenance work queue, shared with ``services/maintenance``: the on-demand compaction door
+    # publishes ONE ``DatasetWorkItem`` here instead of rewriting fragments inside the request handler.
+    # Empty topic (the default) = NO QUEUE, and that is the honest default rather than a disabled feature:
+    # the executor is registered only where the same topic is configured (``register_work_route``), so a
+    # 202 from a deployment without one would accept work nothing will ever perform. Unset, the door
+    # keeps the synchronous behaviour it has always had.
+    maintenance_work_pubsub: str = Field(default="maintenance-work-pubsub", alias="LANCE_MAINTENANCE_WORK_PUBSUB")
+    maintenance_work_topic: str = Field(default="", alias="LANCE_MAINTENANCE_WORK_TOPIC")
+    #: The INDEX-BUILD lane. Set, `create_index` / `create_scalar_index` publish one unit and return
+    #: the spec's `transaction_id` instead of building inside the request handler — which is what
+    #: `CreateTableIndex` already documents ("index creation is handled asynchronously", progress via
+    #: `ListTableIndices` / `DescribeTableIndexStats`). Unset, the build runs here as it always has,
+    #: because nothing would ever execute a unit nobody consumes.
+    #:
+    #: The maintenance service reads the SAME topic name from its own settings, so the two cannot
+    #: disagree about whether a worker exists.
+    maintenance_index_topic: str = Field(default="", alias="LANCE_MAINTENANCE_INDEX_TOPIC")
+    #: Its own component, for the reason `services/maintenance` records: `ackWait` is per-component,
+    #: so an index build sharing the work queue's component would share its 720s window.
+    maintenance_index_pubsub: str = Field(default="maintenance-index-pubsub", alias="LANCE_MAINTENANCE_INDEX_PUBSUB")
+
+
+class CatalogUserStateSettings(BaseSettings):
+    """The per-user state store behind the estate's own UI preferences.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Per-subject user state (`GET/PUT/DELETE /v1/user-state/*`) on the Dapr state store. The default names
+    # the component the chart already renders (`stateStore.name` in chart/values.yaml) and that the catalog
+    # app-id is already in the `scopes` of, so this needs NO new chart value; tests/unit/test_invariants.py
+    # asserts that agreement so a rename or a dropped scope reddens rather than 503ing in production.
+    user_state_store: str = Field(default="lance-statestore", alias="LANCE_USER_STATE_STORE")
+    user_state_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_USER_STATE_TIMEOUT_SECONDS")
+    # A per-document ceiling. `max_body_bytes` is sized for Arrow-IPC writes (256 MiB), which is four orders
+    # of magnitude past anything a canvas or a saved-view list can legitimately be — and this is an
+    # unmetered per-user write surface onto a SHARED Postgres, so it gets its own honest bound.
+    user_state_max_bytes: int = Field(default=512 * 1024, ge=1, alias="LANCE_USER_STATE_MAX_BYTES")
+
+
+class CatalogVendingSettings(BaseSettings):
+    """Credential vending: which mode, and how long a vended credential lives.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Data-plane credential vending (pluggable; see services/catalog/core/vending.py). Target = S3-compatible
+    # storage (MinIO default, AWS S3, Ceph RGW, RustFS). Default "mode_b": server-mediated — no
+    # credential leaves the catalog (the simplest, backend-agnostic default). "sts": STS AssumeRole
+    # short-TTL per-table scoped tokens (the recommended path; MinIO/Ceph/AWS all implement STS).
+    # Client-DIRECT is the default WRITE path via POST /{id}/commit (the catalog never proxies data bytes);
+    # the vending MODE is the separate CREDENTIAL mechanism. Default `mode_b` (server_mediated) is safe on
+    # any store; `web_identity`/`sts` are the SCOPED-credential upgrade and are opt-in because they need an
+    # STS endpoint — WITHOUT one, boto3 resolves to the PUBLIC AWS STS endpoint and would POST the caller's
+    # OIDC token there (audit 2026-07-14). The chart pairs `web_identity` with the endpoint + rustfs.oidc,
+    # and `_validate_vending` below fails closed if the mode needs an endpoint that isn't set.
+    vending_mode: Literal["mode_b", "sts", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
+    vending_ttl_seconds: int = Field(default=900, ge=60, alias="LANCE_VENDING_TTL_SECONDS")
+
+
+class CatalogAuthzSettings(BaseSettings):
+    """Who this catalog trusts beyond the estate-wide rungs `GovernedAuthSettings` carries.
+
+    Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
+    changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
+    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
+    `test_the_settings_split_changed_no_field.py`.
+    """
+
+    # Bare FGA subjects (comma-separated) that may call the catalog as an in-cluster SERVICE, using
+    # the app token + `x-lance-service-identity` instead of an OIDC bearer.
+    #
+    # EMPTY BY DEFAULT — the door is SHUT, and the catalog behaves exactly as before. That default is
+    # deliberate: this is the estate's governance root, and opening a non-OIDC path into it is a
+    # decision to make on purpose, not to inherit from an upgrade.
+    #
+    # WHY IT EXISTS AT ALL: the catalog verified OIDC JWTs and nothing else, so a SERVICE had no way
+    # to authenticate to it. Measured — every ingest run died at its first activity with
+    # `catalog refused describe (401): Missing bearer token`, and the medallion's `register_gold_table`
+    # has the identical shape (a static `MEDALLION_CATALOG_TOKEN` from env that no governed deploy
+    # sets). A JWT expires, so a stored static token is the wrong shape for this door; the estate's
+    # existing answer for service-to-service is the identity door lineage already runs, which is what
+    # this reuses (`service_kit.governed.dapr_auth.service_principal`) rather than inventing a second.
+    service_subjects: str = Field(default="", alias="LANCE_SERVICE_SUBJECTS")
+    # Subjects that may NOT use the shared app token and need their own credential. Same contract as
+    # lineage's — see `service_principal`.
+    privileged_subjects: str = Field(default="", alias="LANCE_PRIVILEGED_SUBJECTS")
+    #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
+    #:
+    #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines
+    #: ``can_update_tag: owner``. Without the grant a tenant is created, its tiers are created, rows land
+    #: in bronze, lineage records the run — and the promotion is refused with a 403 in a stage runner log nobody
+    #: is watching. Measured five times on the live estate before this existed, once AFTER a human had
+    #: already approved the promotion (the resume runs as the producer, which held nothing).
+    #:
+    #: Granted at the WAREHOUSE rather than per tier: ``namespace`` and ``table`` both define
+    #: ``owner ... or owner from parent``, so one tuple at the container reaches every tier and every
+    #: table under it. Per-tier grants would be three-plus tuples per tenant that the hierarchy implies.
+    #:
+    #: EMPTY BY DEFAULT, and deliberately: an estate that declares nothing keeps exactly today's tuples,
+    #: so enabling this is an operator's decision rather than a side effect of upgrading. Subjects are
+    #: written verbatim (``user:service-bronze-to-silver``), because the catalog must not invent the
+    #: naming convention of a plane it does not own.
+    fga_cascade_writers: list[str] = Field(default_factory=list, alias="LANCE_FGA_CASCADE_WRITERS")
+    #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored.
+    #:
+    #: Separate from the cascade writers above because the rung is: a cascade identity moves data
+    #: between tiers and needs ``writer``/``publisher``/``validator``; maintenance compacts, optimizes
+    #: indices and reclaims versions, and must hold ``maintainer`` and nothing else. The model keeps the
+    #: two apart in both directions (``can_maintain`` neither implies nor is implied by
+    #: ``can_write_data``), so one list holding both would grant each of them the other's authority.
+    #:
+    #: Granted at the WAREHOUSE for the same reason the cascade rungs are: ``namespace`` and ``table``
+    #: both define ``maintainer ... or maintainer from parent``, so one tuple per tenant reaches every
+    #: tier and every table below it, and the sweep's reach stays enumerable.
+    #:
+    #: EMPTY BY DEFAULT, on the same terms: an estate declaring nothing keeps exactly today's tuples.
+    fga_maintainers: list[str] = Field(default_factory=list, alias="LANCE_FGA_MAINTAINERS")
+    # When False (default), any authenticated caller may create a TOP-LEVEL namespace/
+    # table and becomes its owner (the "users create their own workspaces" model). When
+    # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated
+    # root that must be seeded to bootstrap. Nested creation always gates on the parent.
+    fga_lock_root_create: bool = Field(default=False, alias="LANCE_FGA_LOCK_ROOT_CREATE")
+
+
+class Settings(
+    GovernedAuthSettings,
+    LanceSessionCaps,
+    CatalogStorageSettings,
+    CatalogControlBusSettings,
+    CatalogDaprSettings,
+    CatalogLineageSettings,
+    CatalogMaintenanceSettings,
+    CatalogUserStateSettings,
+    CatalogVendingSettings,
+    CatalogAuthzSettings,
+    BaseSettings,
+):
     """Catalog + object-store configuration sourced from ``LANCE_*`` env vars.
 
     The OIDC/FGA knobs are NOT declared here. They are the estate's shared vocabulary and arrive from
@@ -160,7 +468,6 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
     # to recoverable drops; it is never opted in for them by an upgrade. Set it (7 is the sensible
     # value) on any estate where a fat-fingered drop costs harvested page images.
     trash_grace_days: int = Field(default=0, ge=0, le=365, alias="LANCE_TRASH_GRACE_DAYS")
-    control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
     # Buckets NO warehouse may ever claim, beyond the always-reserved catalog root/registry buckets (audit
     # 2026-07-23: a project admin could register a warehouse over the SHARED bucket — or a medallion zone
     # bucket — and a later project-policy set would then govern every tenant's datasets in it). The chart
@@ -231,95 +538,16 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
         """One model's artifact tree: ``<model_artifacts_root>/<model>``."""
         return f"{self.model_artifacts_root}/{model}"
 
-    # Object store (MinIO / S3). Credentials are required — no default — so a
-    # missing secret fails loudly at startup instead of silently using a default.
-    s3_endpoint: str = Field(default="http://minio:9000", alias="LANCE_S3_ENDPOINT")
-    s3_access_key_id: str = Field(alias="LANCE_S3_ACCESS_KEY_ID")
-    # Optional default: with secrets_from_dapr on, the secret comes from the store (no plaintext env), and
-    # the lifespan fails closed if neither the store nor env provides it.
-    s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LANCE_S3_SECRET_ACCESS_KEY")
-    s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
-    s3_allow_http: bool = Field(default=True, alias="LANCE_S3_ALLOW_HTTP")
-    s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
-
-    # Secret consumption — when on, read the sensitive S3 secret from the Dapr secret store (OpenBao) at
-    # boot instead of trusting plaintext env (the audit's 'wired but never read' fix). The store is then
-    # the STRICT sole source: the chart omits the plaintext secret from pod env, and a store miss FAILS
-    # CLOSED at boot (no env fallback) — matching the module docstring's "no silent fallback".
-    secrets_from_dapr: bool = Field(default=False, alias="LANCE_SECRETS_FROM_DAPR")
-    #: THE ONE STORE, NAMED ONCE (DUP-17). The estate runs a single Dapr secret-store component and
-    #: seven env vars named it, each defaulting to the same literal and none of them set by the chart —
-    #: so repointing the store meant finding all seven. `RASK_SECRET_STORE` is the estate-wide name
-    #: (already what viewer and ingest read); the per-service alias stays FIRST so a single service can
-    #: still be moved on its own.
-    dapr_secret_store: str = Field(default="lance-secrets", validation_alias=AliasChoices("LANCE_DAPR_SECRET_STORE", "RASK_SECRET_STORE"))
-    dapr_secret_key: str = Field(default="lance", alias="LANCE_DAPR_SECRET_KEY")
-    dapr_secret_s3_field: str = Field(default="minio-secret-key", alias="LANCE_DAPR_SECRET_S3_FIELD")
-
     # OIDC authentication + OpenFGA authorization (both opt-in, both inherited from
     # `GovernedAuthSettings`). When store/model ids are unset, the app provisions them at startup
     # (dev/e2e); in production, provision once and pin both ids.
 
-    # Bare FGA subjects (comma-separated) that may call the catalog as an in-cluster SERVICE, using
-    # the app token + `x-lance-service-identity` instead of an OIDC bearer.
-    #
-    # EMPTY BY DEFAULT — the door is SHUT, and the catalog behaves exactly as before. That default is
-    # deliberate: this is the estate's governance root, and opening a non-OIDC path into it is a
-    # decision to make on purpose, not to inherit from an upgrade.
-    #
-    # WHY IT EXISTS AT ALL: the catalog verified OIDC JWTs and nothing else, so a SERVICE had no way
-    # to authenticate to it. Measured — every ingest run died at its first activity with
-    # `catalog refused describe (401): Missing bearer token`, and the medallion's `register_gold_table`
-    # has the identical shape (a static `MEDALLION_CATALOG_TOKEN` from env that no governed deploy
-    # sets). A JWT expires, so a stored static token is the wrong shape for this door; the estate's
-    # existing answer for service-to-service is the identity door lineage already runs, which is what
-    # this reuses (`service_kit.governed.dapr_auth.service_principal`) rather than inventing a second.
-    service_subjects: str = Field(default="", alias="LANCE_SERVICE_SUBJECTS")
-    # Subjects that may NOT use the shared app token and need their own credential. Same contract as
-    # lineage's — see `service_principal`.
-    privileged_subjects: str = Field(default="", alias="LANCE_PRIVILEGED_SUBJECTS")
     # Compliance audit trail (#41): emit a structured event on the dedicated `lance.audit` logger for every
     # security-relevant action — authn success/failure, authz allow/deny, credential vending — carrying
     # who/what/resource/outcome. Default on so a governed deployment records an audit trail out of the box;
     # set false to silence the stream. The events only carry a real subject when OIDC is on.
     audit_enabled: bool = Field(default=True, alias="LANCE_AUDIT_ENABLED")
-    #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
-    #:
-    #: They need it because `publish` is guarded by ``can_update_tag`` and the model defines
-    #: ``can_update_tag: owner``. Without the grant a tenant is created, its tiers are created, rows land
-    #: in bronze, lineage records the run — and the promotion is refused with a 403 in a stage runner log nobody
-    #: is watching. Measured five times on the live estate before this existed, once AFTER a human had
-    #: already approved the promotion (the resume runs as the producer, which held nothing).
-    #:
-    #: Granted at the WAREHOUSE rather than per tier: ``namespace`` and ``table`` both define
-    #: ``owner ... or owner from parent``, so one tuple at the container reaches every tier and every
-    #: table under it. Per-tier grants would be three-plus tuples per tenant that the hierarchy implies.
-    #:
-    #: EMPTY BY DEFAULT, and deliberately: an estate that declares nothing keeps exactly today's tuples,
-    #: so enabling this is an operator's decision rather than a side effect of upgrading. Subjects are
-    #: written verbatim (``user:service-bronze-to-silver``), because the catalog must not invent the
-    #: naming convention of a plane it does not own.
-    fga_cascade_writers: list[str] = Field(default_factory=list, alias="LANCE_FGA_CASCADE_WRITERS")
 
-    #: The MAINTENANCE identities — the sweep, and anything else that rewrites HOW a dataset is stored.
-    #:
-    #: Separate from the cascade writers above because the rung is: a cascade identity moves data
-    #: between tiers and needs ``writer``/``publisher``/``validator``; maintenance compacts, optimizes
-    #: indices and reclaims versions, and must hold ``maintainer`` and nothing else. The model keeps the
-    #: two apart in both directions (``can_maintain`` neither implies nor is implied by
-    #: ``can_write_data``), so one list holding both would grant each of them the other's authority.
-    #:
-    #: Granted at the WAREHOUSE for the same reason the cascade rungs are: ``namespace`` and ``table``
-    #: both define ``maintainer ... or maintainer from parent``, so one tuple per tenant reaches every
-    #: tier and every table below it, and the sweep's reach stays enumerable.
-    #:
-    #: EMPTY BY DEFAULT, on the same terms: an estate declaring nothing keeps exactly today's tuples.
-    fga_maintainers: list[str] = Field(default_factory=list, alias="LANCE_FGA_MAINTAINERS")
-    # When False (default), any authenticated caller may create a TOP-LEVEL namespace/
-    # table and becomes its owner (the "users create their own workspaces" model). When
-    # True, top-level creation also requires can_create_* on fga_root_object — an admin-gated
-    # root that must be seeded to bootstrap. Nested creation always gates on the parent.
-    fga_lock_root_create: bool = Field(default=False, alias="LANCE_FGA_LOCK_ROOT_CREATE")
     # diff2 F10 item 3 — the FLOOR under #46's broadcast eviction of the warehouse-binding cache.
     # That cache is positive-forever (a binding is immutable), and the broadcast that invalidates it
     # on the three mutations which break that premise rides a pub/sub subscription with no
@@ -329,38 +557,6 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
     # TTL bounds all of it to a window instead of the process lifetime. Minutes, because this is a
     # backstop for a lost event and not a consistency mechanism; 0 disables it.
     warehouse_binding_cache_ttl_seconds: float = Field(default=300.0, alias="LANCE_WAREHOUSE_BINDING_CACHE_TTL_SECONDS")
-
-    # Data-plane credential vending (pluggable; see services/catalog/core/vending.py). Target = S3-compatible
-    # storage (MinIO default, AWS S3, Ceph RGW, RustFS). Default "mode_b": server-mediated — no
-    # credential leaves the catalog (the simplest, backend-agnostic default). "sts": STS AssumeRole
-    # short-TTL per-table scoped tokens (the recommended path; MinIO/Ceph/AWS all implement STS).
-    # Client-DIRECT is the default WRITE path via POST /{id}/commit (the catalog never proxies data bytes);
-    # the vending MODE is the separate CREDENTIAL mechanism. Default `mode_b` (server_mediated) is safe on
-    # any store; `web_identity`/`sts` are the SCOPED-credential upgrade and are opt-in because they need an
-    # STS endpoint — WITHOUT one, boto3 resolves to the PUBLIC AWS STS endpoint and would POST the caller's
-    # OIDC token there (audit 2026-07-14). The chart pairs `web_identity` with the endpoint + rustfs.oidc,
-    # and `_validate_vending` below fails closed if the mode needs an endpoint that isn't set.
-    vending_mode: Literal["mode_b", "sts", "web_identity"] = Field(default="mode_b", alias="LANCE_VENDING_MODE")
-    vending_ttl_seconds: int = Field(default=900, ge=60, alias="LANCE_VENDING_TTL_SECONDS")
-    s3_assume_role_arn: str | None = Field(default=None, alias="LANCE_S3_ASSUME_ROLE_ARN")
-    #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
-    #: straight to object storage with the catalog out of the path, so whatever the estate intends must
-    #: travel in the storage options or it does not happen.
-    #:
-    #: Key names and their contract are verified against `lance_docs/guide.md:2417-2419`, and
-    #: `lance_storage_options` REFUSES an invalid pairing rather than passing it on: object_store drops
-    #: an option it does not recognise, so a wrong value here would land plaintext under a config that
-    #: claims encryption — the one failure with no later signal.
-    #:
-    #: Unset is every deployment's behaviour today: whatever the bucket does.
-    s3_server_side_encryption: str | None = Field(default=None, alias="LANCE_S3_SERVER_SIDE_ENCRYPTION")
-    s3_sse_kms_key_id: str | None = Field(default=None, alias="LANCE_S3_SSE_KMS_KEY_ID")
-    s3_sse_bucket_key_enabled: bool | None = Field(default=None, alias="LANCE_S3_SSE_BUCKET_KEY_ENABLED")
-    s3_sts_endpoint: str | None = Field(default=None, alias="LANCE_S3_STS_ENDPOINT")
-
-    # Maintenance: when true, reject mutating /v1 requests with 503 + Retry-After — for
-    # zero-downtime model/schema migration windows. Default off (no-op).
-    maintenance_read_only: bool = Field(default=False, alias="LANCE_MAINTENANCE_READ_ONLY")
 
     # Max request-body size (bytes) accepted on any route. The Arrow-IPC write endpoints buffer the whole
     # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
@@ -373,73 +569,6 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
     # concurrent = N × 256MiB — an OOM the memory tier only partly bounds. Over the cap → 429 (THROTTLING),
     # shed before the body is buffered. Generous default (rarely trips); 0 disables it entirely.
     max_concurrent_writes: int = Field(default=16, ge=0, alias="LANCE_MAX_CONCURRENT_WRITES")
-
-    # Lineage emission (opt-in). When enabled, the catalog emits an OpenLineage event to the lineage
-    # service on a table write — fire-and-forget + best-effort, so the lineage service being down can
-    # never block or fail a catalog write. The catalog is the only component that knows the verified
-    # principal, so it is the authoritative source of "who created/changed a table" (author = token.sub).
-    # Transport: ``http`` (direct POST — dev / external producers) or ``dapr`` (publish to the Dapr
-    # ``pubsub.jetstream`` component via the local sidecar — durable, decoupled, the production path).
-    lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
-    # Literal (like vending_mode) so pydantic validates the allowed set — one enum-setting idiom in this file.
-    lineage_transport: Literal["http", "dapr"] = Field(default="http", alias="LANCE_LINEAGE_TRANSPORT")
-    lineage_url: str | None = Field(default=None, alias="LANCE_LINEAGE_URL")
-    lineage_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_LINEAGE_EMIT_TIMEOUT_SECONDS")
-    lineage_job_namespace: str = Field(default="lance-catalog", alias="LANCE_LINEAGE_JOB_NAMESPACE")
-    # Dapr pub/sub transport (used when lineage_transport == "dapr"). The component name is what the
-    # sidecar resolves to NATS JetStream; the topic is versioned (a breaking schema change → a new .vN).
-    dapr_pubsub: str = Field(default="lineage-pubsub", alias="LANCE_DAPR_PUBSUB")
-    dapr_topic: str = Field(default="lineage.events.v1", alias="LANCE_DAPR_TOPIC")
-
-    # Control-plane change-events (opt-in, best-effort — the governance/metadata stream, distinct from the
-    # OpenLineage data events above). When on, mutations publish a `CatalogControlEvent` onto the DEDICATED
-    # `control_pubsub` component (below, NOT the shared `dapr_pubsub`) under the `catalog.control.v1` topic,
-    # subscribed WITHOUT a queueGroupName so every replica buffers every event for the poll endpoint. Off by
-    # default, like lineage.
-    control_emit_enabled: bool = Field(default=False, alias="LANCE_CONTROL_EMIT_ENABLED")
-    control_emit_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_CONTROL_EMIT_TIMEOUT_SECONDS")
-    # A DEDICATED Dapr pub/sub component (NOT the shared lineage one) with NO queueGroupName, so the
-    # catalog's own subscription is a BROADCAST — every replica receives every event → each replica's ring
-    # buffer stays complete. The chart renders it (dapr-component.yaml) + a NATS stream (nats-stream-job).
-    control_pubsub: str = Field(default="catalog-control-pubsub", alias="LANCE_CONTROL_PUBSUB")
-    # The bounded per-replica ring buffer size (events retained for `GET /v1/events`); a client whose cursor
-    # fell off the end (overflow) gets `reset: true` → the console `invalidateAll()`s.
-    control_buffer_size: int = Field(default=512, ge=1, alias="LANCE_CONTROL_BUFFER_SIZE")
-
-    # The maintenance work queue, shared with ``services/maintenance``: the on-demand compaction door
-    # publishes ONE ``DatasetWorkItem`` here instead of rewriting fragments inside the request handler.
-    # Empty topic (the default) = NO QUEUE, and that is the honest default rather than a disabled feature:
-    # the executor is registered only where the same topic is configured (``register_work_route``), so a
-    # 202 from a deployment without one would accept work nothing will ever perform. Unset, the door
-    # keeps the synchronous behaviour it has always had.
-    maintenance_work_pubsub: str = Field(default="maintenance-work-pubsub", alias="LANCE_MAINTENANCE_WORK_PUBSUB")
-    maintenance_work_topic: str = Field(default="", alias="LANCE_MAINTENANCE_WORK_TOPIC")
-    #: The INDEX-BUILD lane. Set, `create_index` / `create_scalar_index` publish one unit and return
-    #: the spec's `transaction_id` instead of building inside the request handler — which is what
-    #: `CreateTableIndex` already documents ("index creation is handled asynchronously", progress via
-    #: `ListTableIndices` / `DescribeTableIndexStats`). Unset, the build runs here as it always has,
-    #: because nothing would ever execute a unit nobody consumes.
-    #:
-    #: The maintenance service reads the SAME topic name from its own settings, so the two cannot
-    #: disagree about whether a worker exists.
-    maintenance_index_topic: str = Field(default="", alias="LANCE_MAINTENANCE_INDEX_TOPIC")
-    #: Its own component, for the reason `services/maintenance` records: `ackWait` is per-component,
-    #: so an index build sharing the work queue's component would share its 720s window.
-    maintenance_index_pubsub: str = Field(default="maintenance-index-pubsub", alias="LANCE_MAINTENANCE_INDEX_PUBSUB")
-
-    # Per-subject user state (`GET/PUT/DELETE /v1/user-state/*`) on the Dapr state store. The default names
-    # the component the chart already renders (`stateStore.name` in chart/values.yaml) and that the catalog
-    # app-id is already in the `scopes` of, so this needs NO new chart value; tests/unit/test_invariants.py
-    # asserts that agreement so a rename or a dropped scope reddens rather than 503ing in production.
-    user_state_store: str = Field(default="lance-statestore", alias="LANCE_USER_STATE_STORE")
-    # Injected into every app container by the Dapr sidecar injector — read it rather than restate it, so a
-    # non-default sidecar port cannot silently point us at a port nothing is listening on.
-    dapr_http_port: int = Field(default=3500, ge=1, le=65535, alias="DAPR_HTTP_PORT")
-    user_state_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="LANCE_USER_STATE_TIMEOUT_SECONDS")
-    # A per-document ceiling. `max_body_bytes` is sized for Arrow-IPC writes (256 MiB), which is four orders
-    # of magnitude past anything a canvas or a saved-view list can legitimately be — and this is an
-    # unmetered per-user write surface onto a SHARED Postgres, so it gets its own honest bound.
-    user_state_max_bytes: int = Field(default=512 * 1024, ge=1, alias="LANCE_USER_STATE_MAX_BYTES")
 
     @model_validator(mode="after")
     def _validate_lineage(self) -> Self:
@@ -474,36 +603,6 @@ class Settings(GovernedAuthSettings, LanceSessionCaps, BaseSettings):
             f"{_STORAGE_PREFIX}allow_http": str(self.s3_allow_http).lower(),
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
         }
-
-    #: Stage lineage events here before publishing (docs/RESILIENCE.md gap #1, the estate's #1
-    #: weakness). EMPTY = today's behaviour exactly: `publish_lineage_with_outbox` degrades to a plain
-    #: publish when this is unset, so the wiring is inert until a deployment opts in.
-    #:
-    #: Why it matters HERE specifically: the catalog's emit is inline-awaited and best-effort AFTER the
-    #: Lance write commits, so a crash between the write and the publish loses the event. The data
-    #: exists and the graph never learns of it — and because the catalog's write announcement is what
-    #: the medallion `/bronze-arrival` subscription reacts to, a lost one does not merely under-report
-    #: provenance: the whole bronze->silver->gold run silently never happens.
-    lineage_outbox_uri: str = Field(default="", alias="LANCE_LINEAGE_OUTBOX_URI")
-    #: The CONTROL lane's outbox prefix — and it must NOT be the lineage one. Each prefix is drained
-    #: by a lane-specific relay that re-ingests what it finds, so sharing would feed each relay the
-    #: other lane's events.
-    #:
-    #: Why the control lane needs one at all: `table_published` is what wakes the next cascade hop.
-    #: The stage runner does not fire its own topic and the medallion plane runs no cron and no reconcile
-    #: binding, so it never re-reads the tag. `DaprControlEmitter.emit` swallows a publish failure by
-    #: design — it is called after the change is already made and audited, so raising would turn a
-    #: delivered mutation into a 500 — which meant a NATS blip cancelled the cascade outright with
-    #: every pod green. Staged, the event survives to be re-published.
-    control_outbox_uri: str = Field(default="", alias="LANCE_CONTROL_OUTBOX_URI")
-    #: The cron binding that DRAINS `control_outbox_uri` — `catalog/api/control_relay.py`. Empty = the
-    #: relay route is not mounted (staging still happens; nothing republishes it).
-    #:
-    #: THIS STRING IS THE ROUTE. Dapr delivers an input binding to `POST /<component name>` at the pod
-    #: ROOT, so the Component's `metadata.name`, this value and the served path are one string; a
-    #: component named one thing and a route mounted at another is a cron that ticks into a 404 while
-    #: both halves look right in isolation. Pinned by `tests/unit/test_the_control_lane_relay_is_wired.py`.
-    control_relay_binding_name: str = Field(default="", alias="LANCE_CONTROL_RELAY_BINDING_NAME")
 
     @model_validator(mode="after")
     def _validate_outbox_prefixes(self) -> Self:

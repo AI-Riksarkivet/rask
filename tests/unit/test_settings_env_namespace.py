@@ -95,6 +95,17 @@ _SETTINGS: list[tuple[str, str, str]] = [
     ("services/gateway", "gateway.config", "GatewaySettings"),
     # Subclasses of service_kit.media.config.Settings. None declares `populate_by_name`, and
     # GovernedAuthSettings is a plain mixin rather than a BaseSettings, so none inherited it.
+    # The catalog's per-domain blocks ([[LH-113]]). `Settings` composes them, so each one's aliases reach
+    # a deployment through it — and each is its own `BaseSettings`, which is exactly the shape this
+    # roster exists to keep checked rather than inherited-and-forgotten.
+    ("services/catalog", "catalog.core.config", "CatalogStorageSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogControlBusSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogDaprSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogLineageSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogMaintenanceSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogUserStateSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogVendingSettings"),
+    ("services/catalog", "catalog.core.config", "CatalogAuthzSettings"),
     ("services/search", "search.core.config", "SearchSettings"),
     ("services/viewer", "viewer.core.config", "ViewerSettings"),
     ("services/annotator", "annotator.core.config", "AnnotatorSettings"),
