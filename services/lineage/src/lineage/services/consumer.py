@@ -53,30 +53,34 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
     module stays free of FGA — the door owns the policy, this owns the ack contract — and it splits the
     two failure kinds the way the sidecar needs them:
 
-    * **DENIED -> DROP.** Redelivery cannot grant a permission, so retrying a refused event only burns
-      the delivery budget. Same reasoning the malformed branch above already uses.
+    * **DENIED, AND THE ACK DEPENDS ON WHETHER ANYTHING COULD EVER CHANGE THE ANSWER.** A named PERSON
+      who lacks a grant keeps the DROP: a tuple can be written and the same event then succeeds on its
+      next presentation, so the dead-letter copy is a repairable event held for repair. A run carrying
+      NO author cannot be repaired by any tuple, redelivery or restart — `UnauthoredRunError` marks
+      that case at the door — so it is ACKED and counted instead.
 
-      **DROP STOPS THE RETRIES, NOT THE PARK, AND THAT IS NOT A CHOICE THIS FUNCTION MAKES.** The
-      subscription declares a `deadLetterTopic` (`api/dapr.py`), and for Dapr a DROP on such a
-      subscription ROUTES the message there — so a permanent refusal still lands in the DLQ, just
-      without burning the budget first. Measured on the live estate 2026-09-15, the sidecar and the app
-      naming the same CloudEvent id back to back: daprd logged *"DROP status returned from app while
-      processing pub/sub event a4d65ffd-…"*, the app logged `dapr_dead_letter_parked
-      event_id='a4d65ffd-…'`, and `POST /lineage-dlq` answered 200.
+      **DROP STOPS THE RETRIES, NOT THE PARK, AND THAT IS WHY THE SPLIT EXISTS.** The subscription
+      declares a `deadLetterTopic` (`api/dapr.py`), and for Dapr a DROP on such a subscription ROUTES
+      the message there. Measured on the live estate 2026-09-15, the sidecar and the app naming the
+      same CloudEvent id back to back: daprd logged *"DROP status returned from app while processing
+      pub/sub event a4d65ffd-…"*, the app logged `dapr_dead_letter_parked event_id='a4d65ffd-…'`, and
+      `POST /lineage-dlq` answered 200. So parking an UNREPAIRABLE event wrote a duplicate of it on
+      every roll — the consumer is ephemeral with `deliverPolicy: all`, so each restart re-presents the
+      retained stream and re-refuses the same events. One roll produced 49 parks inside two minutes of
+      pod start; one run sat in the DLQ twice, five days apart.
 
-      The consequence is the DLQ's growth curve, not one event: the ingest consumer is ephemeral with
-      `deliverPolicy: all`, so every restart re-presents the retained stream, this branch refuses the
-      same unrepairable events again, and each refusal appends a NEW DLQ message about an event already
-      in it. One roll produced 49 parks inside two minutes of pod start; one run sits in the DLQ twice,
-      five days apart. **There is currently no ack meaning "refused, permanently, do not keep this"** —
-      SUCCESS would ack and discard it.
+      UPSTREAM SETTLES THE ACK, and it is not this estate's preference: dapr/dapr#6282, implemented by
+      #7097, has a maintainer state that for a message the app can never accept "SUCCESS is still
+      there" — that PR REDEFINED DROP to mean "route to the dead-letter topic". Returning DROP on a
+      permanent refusal was asking the broker to KEEP the message.
 
-      THIS IS THE SECOND SITE OF ONE CLASS, so the decision is shared rather than local: `medallion`'s
-      `transform.py` parks its deterministic DROPs the same way, and `open_backlog_left.md` LH-151
-      carries the class with the upstream confirmation (`pkg/runtime/subscription/subscription.go`
-      routes `ErrMessageDropped` to the dead-letter topic). LH-166 carries this site's cost. Both wait
-      on ONE owner decision, which is why this branch keeps its behaviour and states it rather than
-      diverging from its sibling.
+      THE COUNT IS THE WHOLE TRACE an acked event leaves, which is what makes
+      `LineageIngestDiscardingUnrepairable` load-bearing rather than decoration: it reads
+      `lance_lineage_outcome="unrepairable"`, and without it the discard would be silent.
+
+      `medallion`'s `transform.py` still parks its deterministic DROPs, and deliberately: its stage
+      runners are `deliverPolicy: new`, so a SUCCESS ack there genuinely discards where this lane's
+      stream retains and re-presents. [[LH-151]] carries that lane's retention topic.
     * **ANYTHING ELSE -> RETRY.** An unreachable authorization service is an outage, not a verdict, and
       dropping on one would silently delete provenance for the duration of the outage — the failure
       this whole lane exists to prevent. The absent-vs-unreadable rule, at the ack layer.

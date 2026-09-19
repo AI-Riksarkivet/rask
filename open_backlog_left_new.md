@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**204 open items**, of which **99 are blocked on a decision** and **105 can be picked up today**.
+**203 open items**, of which **98 are blocked on a decision** and **105 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 60 | 21 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 59 | 21 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -209,11 +209,11 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
 - *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `tests/e2e-py/test_the_other_stock_clients_drive_the_catalog.py (3 cases, marked spec_conformance)` · `pytest -m spec_conformance --collect-only → 17 across 2 files (14 + 3)` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
 
-**LH-004 · The catalog's Lance-commit→lineage-publish window is not atomic and no ruling records whether that is accepted as view lag or needs a durable producer**
+**LH-004 · The Lance-commit→lineage-publish window is accepted in writing, but nothing asserts the repair bound the ruling depends on**
 `lineage, catalog, service-kit` · **HIGH** · **REWRITTEN — the original ask would be wrong**
-- **blocked:** Owner ruling on DURABILITY: ratify 'the Lance commit log is the source of truth and the lineage graph is a projection' (a lost publish is view lag, recovered by the reconcile sweep) in docs/DECISIONS.md, or accept the non-atomic window in writing
+- **THE RULING EXISTS AND THIS ROW'S HEADER DENIED IT — corrected 2026-09-19 by re-audit.** `docs/DECISIONS.md:766-812` (2026-08-15) accepts the window in writing and keeps the durable producer, in terms: "Atomicity between object storage and a message broker does not exist … So the goal is not atomicity; it is NO SILENT LOSS: every gap must be detected and repaired by something", and "`stage_event` runs AFTER the Lance commit, so a crash in the commit→stage gap still loses the event. That ordering is deliberate". The row's own evidence line searched `grep -i 'projection|source of truth|commit log'` — none of which that entry uses — and reported no hits as proof no ruling exists.
 - *What is left:* Do not do the row's closing clause: the four emit kernels differ by transport, authority and failure posture, the three builders by purpose, the one real mirror is pinned at zero drift by `test_openlineage_spec_conformance.py`, and the outbox-before-transport half is shipped (`service_kit/lakehouse/outbox.py`; `reconcile_cron.py` back-fills and reports `refused` separately; both alert rules guarded in `chart/alerting/rules.yml:33,52`). What remains is one ruling. Once ratified, add a COMPLETENESS gate on the reconcile sweep: every committed Lance version reaches the graph within a measured lateness bound. `docs/DECISIONS.md` carries no projection/source-of-truth entry today.
-- *Closes when:* docs/DECISIONS.md records the ruling and, if projection is chosen, a test asserts the sweep's completeness bound.
+- *Closes when:* A test asserts the repair bound the ruling leans on — every committed Lance version reaches the graph within a measured lateness bound. The ruling half is already recorded; "every gap must be detected and repaired by something" is a claim about the reconcile sweep that nothing currently measures, and that is the whole remainder.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/outbox.py (exists)` · `services/lineage/src/lineage/api/reconcile_cron.py:71-84 (refused counted apart from stranded)` · `chart/alerting/rules.yml:33,52` · `grep -i 'projection|source of truth|commit log' docs/DECISIONS.md: no hits`
 
 **LH-016 · `silver-media$features` still occupies a medallion namespace in `lakehouse-wh` under two spellings, and the unbind door refuses a non-empty namespace**
@@ -537,13 +537,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - **THE ACKED DISCARD IS NOW AUDIBLE (2026-09-19).** Acking an unrepairable event removed the only thing that made it visible — it no longer reaches `/lineage-dlq`, so `LineageIngestDeadLettering` cannot see it — leaving the count as its whole trace with no rule reading it. `LineageIngestDiscardingUnrepairable` reads it now, `for: 10m` to ride out the restart burst, and `tests/unit/test_a_lineage_outcome_that_LOSES_a_run_is_audible.py` asserts both directions so neither an unalerted loss nor a never-emitted label can ship again. VERIFIED THREE WAYS, and the fourth is named rather than claimed: promtool SUCCESS on all three shapes (dribble fires at 14m, 70-in-a-burst silent, flat counter silent); the live series exists and moves (GreptimeDB, 2026-09-19: `unrepairable=940`, `refused=7`, `dead_lettered=7`, and NO `dropped` — the split is one park per repairable denial, exactly as designed, and 940 events that would each have been a dead-letter park); and the rule renders into vmalert's ConfigMap under `observability.alerting.enabled` (a SECOND toggle beside `observability.enabled` — setting only the first renders nothing). NOT verifiable on this estate: the live vmalert -> GreptimeDB round trip, because no vmalert or Alertmanager pod runs here; `alerting.yaml`'s own comment calls that a prod drill.
 - *Closes when:* `dlq.lineage.events` stops growing across a restart, measured over a WINDOW spanning two rolls (the 7 repairable parks still repeat per roll until their tuples exist or [[LH-064]] lands producer signing). The ack half is done and observed; what remains is governing the 7 named outputs, or recording them as intentionally ungoverned.
 - *Evidence:* `services/lineage/src/lineage/services/consumer.py:44,97` · `services/lineage/src/lineage/api/dapr.py:140` · `chart/templates/services.yaml:512` · `packages/service-kit/src/service_kit/lakehouse/subjects.py:32`
-
-**LH-170 · The lineage replay re-parks every gate-REFUSED event on each restart, and the chart's `idempotent MERGE ingest` comment does not state that exception**
-`lineage, chart` · **MED**
-- **SHIPPED 2026-09-18 — the ruling came from upstream (see [[LH-166]]), and the chart comment is rewritten.** The DENIED ack now matches: unrepairable classes SUCCESS, a repairable person-level denial still DROPs. `dapr-component.yaml`'s `deliverPolicy: all` comment claimed the replay feeds "the idempotent MERGE ingest" without saying that a REFUSED event is not idempotent — it is re-refused, and each re-refusal used to append a new dead-letter copy of an event the DLQ already held. It now carries that exception with the measurement. No cursor was added to the subscription, as the row required.
-- *What is left:* `consumer.py:56-72,91-94` maps DENIED → DROP, which on a subscription carrying a `deadLetterTopic` still parks the event, and the lineage subscriber is the one of eight with `deliverPolicy: all` and no `durableName` (dapr-component.yaml:172,247-251), so each restart re-parks the same unrepairable events. Do not add a cursor to the subscription. When the ruling lands, change the DENIED branch's ack to match. Independently of the ruling, rewrite the comment at `chart/templates/dapr-component.yaml:160-171` (and its echo at :279) so "idempotent MERGE ingest" carries the refused-event exception.
-- *Closes when:* The DENIED ack matches the ruling and the chart comment names the refused-event exception.
-- *Evidence:* `services/lineage/src/lineage/services/consumer.py` (the DENIED arm now splits `UnauthoredRunError` -> SUCCESS from a person-level denial -> DROP) · `chart/templates/dapr-component.yaml` (the `deliverPolicy: all` comment carries the refused-event exception) · `services/lineage/tests/test_an_unrepairable_event_is_consumed_not_parked.py` · dapr/dapr#6282 + #7097, the upstream statement that a message the app can never accept is acked SUCCESS · live release 178: 70 unauthored acked with zero parks, 7 parks against 7 person-level denials
 
 **LH-171 · Nine governed transform records fail `TransformSpec` validation and the estate only WARNs**
 `medallion, service-kit` · **MED**
