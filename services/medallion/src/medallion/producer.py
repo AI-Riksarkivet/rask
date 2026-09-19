@@ -28,6 +28,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from medallion.api.bronze_arrival import register_bronze_arrival_route
 from medallion.api.cascade_lag_cron import mount_lag_cron
+from medallion.api.cascade_lag_read import router as cascade_lag_read_router
 from medallion.api.ingest_media import router as ingest_media_router
 from medallion.api.produce import router as produce_router
 from medallion.api.promotions import register_promotion_route
@@ -194,6 +195,12 @@ app.include_router(stage_runner_ops_router)
 # Ray-liveness check the design dropped — and this app already mints stage triggers, in the
 # `table_published` subscription. `build_stage_trigger` was written for exactly these two callers.
 app.include_router(rerun_router)
+# THE PULL-SHAPED ANSWER TO "WHAT STOPPED?" ([[LH-167]]). Always mounted, unlike the lag CRON beside it:
+# the cron is opt-in because an unnamed binding means no Component and a scan surface with nothing
+# behind it, while this door only scans when somebody asks. Every other route this app mounts is keyed
+# by an `instance_id`, so a tier written and then abandoned was reachable only by a reader who already
+# knew which one to look for.
+app.include_router(cascade_lag_read_router)
 register_promotion_route(app, _dapr_app)
 # The cascade-lag cron door. Opt-in on a configured binding name, like the control relay: an unnamed
 # binding means no Component, and mounting an always-live door would add a catalog+lineage scan surface
