@@ -230,6 +230,12 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # which would let a plain data writer replace an owner's tuned index with a default-shaped one
         # and leave the table answering queries the whole time.
         "maintenance/reindex": "can_drop",
+        # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
+        # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
+        # is the highest rung there is, so it gates here. Mapped explicitly for the reason every
+        # neighbour is: an unmapped table suffix falls through to the writer rung, which would let a
+        # plain data writer reclaim an owner's history under a compliance-shaped verb.
+        "erasure": "can_drop",
         # #73 deletion protection: arming/disarming the safety on an object is a statement about its
         # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
         # able to disarm protection they could never act on. (An unmapped suffix would fall through
@@ -293,19 +299,36 @@ _BATCH_PATHS = frozenset({"/v1/table/version/batch-create", "/v1/table/batch-com
 _BATCH_OWNER_OPS: dict[str, str] = {"deregister_table": "can_deregister"}
 
 
+#: The mount prefixes this guard understands. `/management/v1` is the rask-only surface ([[LH-021]]),
+#: and it is HERE rather than assumed because both helpers below matched `/v1/` literally: the first
+#: route mounted on the management prefix resolved to no resource, fell out of `authorize` entirely,
+#: and was reachable by any authenticated principal. It was the ERASURE door, which destroys a table's
+#: history. `test_stores_reads_are_gated.py` caught it before it shipped, and this list is what keeps
+#: the next management route from repeating it.
+_MOUNTS: Final = ("/management/v1", "/v1")
+
+
 def _resource_for(path: str) -> str | None:
-    """The guarded resource a ``/v1/<resource>/…`` path belongs to, else ``None``."""
-    for resource in _RESOURCES:
-        if path.startswith(f"/v1/{resource}/"):
-            return resource
+    """The guarded resource a ``<mount>/<resource>/…`` path belongs to, else ``None``."""
+    for mount in _MOUNTS:
+        for resource in _RESOURCES:
+            if path.startswith(f"{mount}/{resource}/"):
+                return resource
     return None
 
 
 def _suffix(path: str, resource: str, object_id: str) -> str:
-    """The route part after ``/v1/<resource>/{id}/`` (e.g. ``version/create``)."""
+    """The route part after ``<mount>/<resource>/{id}/`` (e.g. ``version/create``).
+
+    Checked against every mount, longest first, so `/management/v1/table/{id}/erasure` yields
+    `erasure` and reaches the owner-suffix map rather than falling through to the writer rung.
+    """
     clean = path.rstrip("/")
-    prefix = f"/v1/{resource}/{object_id}/"
-    return clean.removeprefix(prefix) if clean.startswith(prefix) else ""
+    for mount in _MOUNTS:
+        prefix = f"{mount}/{resource}/{object_id}/"
+        if clean.startswith(prefix):
+            return clean.removeprefix(prefix)
+    return ""
 
 
 def _object(fga_type: str, id_segments: list[str] | str, delimiter: str) -> str:

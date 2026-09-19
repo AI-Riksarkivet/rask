@@ -13,6 +13,7 @@ from catalog.api.v1.endpoints import (
     columns,
     credentials,
     data,
+    erasure,
     events,
     gates,
     indices,
@@ -46,6 +47,7 @@ from catalog.api.v1.endpoints import (
 # the server's — see `catalog.api.delimiter` for why this refuses rather than honours.
 api_router = APIRouter(dependencies=[Depends(authorize), DelimiterGuard])
 for _module in (
+    erasure,
     namespaces,
     tables,
     data,

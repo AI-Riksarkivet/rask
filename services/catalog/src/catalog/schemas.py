@@ -12,7 +12,7 @@ lineage-emit input reference).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Self
+from typing import Annotated, Any, Literal, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -404,6 +404,18 @@ class CompactRequest(BaseModel):
     """Optional #76 target-size override for a one-off compaction (None → Lance's default fragment sizing)."""
 
     target_rows_per_fragment: int | None = Field(default=None, ge=1024, le=10_000_000)
+
+
+class ErasureRequest(BaseModel):
+    """What to erase, and how much history the caller means to take with it ([[LH-073]])."""
+
+    #: The rows to remove, as a Lance filter expression — the same dialect `delete_from_table` takes.
+    predicate: str
+    #: How much version history to KEEP, in days. DEFAULTS TO NONE, which is the opposite of every
+    #: other retention knob in the estate and is the point: an erasure that leaves the subject readable
+    #: at an old version has not erased them, so a caller preserving unrelated history opts INTO it
+    #: rather than having to remember to opt out.
+    retain_days: Annotated[int, Field(ge=0, le=36500)] = 0
 
 
 class CompactResult(BaseModel):

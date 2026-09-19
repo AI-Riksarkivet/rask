@@ -6387,6 +6387,75 @@
         "title": "DropTableResponse",
         "type": "object"
       },
+      "ErasureReport": {
+        "description": "One subject's erasure across every surface the catalog serves this table from.",
+        "properties": {
+          "bytes_reclaimed": {
+            "default": 0,
+            "title": "Bytes Reclaimed",
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "title": "Complete",
+            "type": "boolean"
+          },
+          "predicate": {
+            "title": "Predicate",
+            "type": "string"
+          },
+          "residual_versions": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Residual Versions",
+            "type": "array"
+          },
+          "surfaces": {
+            "items": {
+              "$ref": "#/components/schemas/SurfaceResult"
+            },
+            "title": "Surfaces",
+            "type": "array"
+          },
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "versions_reclaimed": {
+            "default": 0,
+            "title": "Versions Reclaimed",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "table",
+          "predicate"
+        ],
+        "title": "ErasureReport",
+        "type": "object"
+      },
+      "ErasureRequest": {
+        "description": "What to erase, and how much history the caller means to take with it ([[LH-073]]).",
+        "properties": {
+          "predicate": {
+            "title": "Predicate",
+            "type": "string"
+          },
+          "retain_days": {
+            "default": 0,
+            "maximum": 36500.0,
+            "minimum": 0.0,
+            "title": "Retain Days",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "predicate"
+        ],
+        "title": "ErasureRequest",
+        "type": "object"
+      },
       "EstateBindingsResponse": {
         "description": "Every namespace\u2192warehouse binding the caller can see, in ONE read (#86).\n\nThe per-warehouse sibling answers for one id; a page listing the estate's namespaces was\ncalling it once per warehouse, and each of those calls re-LISTs and re-GETs every binding in the\nestate before filtering in Python \u2014 O(warehouses \u00d7 bindings) for a union the underlying\n``list_bindings`` already produces in a single pass.",
         "properties": {
@@ -10855,6 +10924,30 @@
         "title": "StructuredFtsQuery",
         "type": "object"
       },
+      "SurfaceResult": {
+        "description": "What happened on one surface. NAMED, never counted \u2014 an erasure that half-succeeded has to say\nwhich half, because the remainder is a legal obligation and not a retry.",
+        "properties": {
+          "detail": {
+            "default": "",
+            "title": "Detail",
+            "type": "string"
+          },
+          "outcome": {
+            "title": "Outcome",
+            "type": "string"
+          },
+          "surface": {
+            "title": "Surface",
+            "type": "string"
+          }
+        },
+        "required": [
+          "surface",
+          "outcome"
+        ],
+        "title": "SurfaceResult",
+        "type": "object"
+      },
       "TableBasicStats": {
         "description": "TableBasicStats",
         "properties": {
@@ -12469,6 +12562,164 @@
         "summary": "Livez",
         "tags": [
           "health"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/erasure": {
+      "post": {
+        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any\nretained version still answers the predicate after every step ran \u2014 which happens on a table with\na branch, because deleting rows on a branch does not remove that branch's pin on the parent's\nhistory ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller\nreading the status code reports the wrong thing.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
+        "operationId": "erase_subject_management_v1_table__id__erasure_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "IGNORED: an erasure acts on every ref by construction, so naming one would narrow it.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "IGNORED: an erasure acts on every ref by construction, so naming one would narrow it.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ErasureRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErasureReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Erase Subject",
+        "tags": [
+          "erasure"
         ]
       }
     },
