@@ -16,12 +16,13 @@ so `handle_stage` retains every refusal it produces by construction — a twelft
 from __future__ import annotations
 
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from dapr.aio.clients import DaprClient
 
 from medallion.core.config import MedallionSettings
+from medallion.services import transform
 from medallion.services.transform import handle_stage
 
 
@@ -98,3 +99,26 @@ async def test_a_FAILED_retention_publish_falls_back_to_parking() -> None:
     verdict = await handle_stage(cast(DaprClient, dapr), _settings(), _MALFORMED)
 
     assert verdict["status"] == "DROP", "a failed retention publish must fall back to parking, never SUCCESS or RETRY"
+
+
+@pytest.mark.asyncio
+async def test_a_TRANSIENT_failure_is_never_acked_as_a_refusal() -> None:
+    """THE GUARD THAT PROTECTS RECOVERABLE WORK, and the bug it exists for was real.
+
+    `_preflight` does not only answer refusals. `_authorize` returns RETRY when FGA is UNREACHABLE —
+    transient, and the whole point is that the sidecar redelivers. An ack rule keyed on "the verdict
+    is not a StagePreflight" flips that to SUCCESS too, and on a `deliverPolicy: new` subscriber
+    SUCCESS discards: an FGA blip would silently drop triggers instead of retrying them.
+
+    So the flip is keyed on DROP specifically, and a RETRY is neither retained nor re-acked — the
+    event is coming back, so a retention copy would duplicate something nothing lost.
+    """
+    dapr = _dapr()
+
+    with patch.object(transform, "_preflight", AsyncMock(return_value={"status": "RETRY"})):
+        verdict = await handle_stage(cast(DaprClient, dapr), _settings(), _MALFORMED)
+
+    assert verdict["status"] == "RETRY", "a transient authorization outage must still redeliver"
+    assert not [c for c in dapr.publish_event.await_args_list if "refused" in str(c.kwargs.get("topic_name"))], (
+        "a RETRY is not a refusal — retaining it duplicates an event that is coming back"
+    )

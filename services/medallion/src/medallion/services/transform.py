@@ -112,21 +112,27 @@ def _drop(reason: str) -> dict[str, str]:
     return {"status": "DROP", "reason": reason}
 
 
-def _acked_if_retained(verdict: dict[str, str], retained: bool) -> dict[str, str]:
-    """SUCCESS when the payload is provably replayable, otherwise the DROP that parks it ([[LH-151]]).
+async def _settle(dapr: DaprClient, settings: MedallionSettings, verdict: dict[str, str], *, transition: str, event: object) -> dict[str, str]:
+    """Retain a DETERMINISTIC refusal and ack it SUCCESS; pass anything else through untouched.
 
-    **THE ACK FOLLOWS THE EVIDENCE, NOT THE CONFIGURATION.** Every refusal here is deterministic, so
-    re-presenting it buys nothing and parking it costs a dead-letter copy per roll that
-    `MedallionCascadeDeadLettering` reads as retry exhaustion — a decision paged as a failure. SUCCESS
-    is therefore right, but only once the payload survives elsewhere: this subscriber is
-    `deliverPolicy: new`, so SUCCESS DISCARDS rather than leaving the event on a replayable stream.
+    **ONLY A `DROP` IS A REFUSAL, and the guard is the point.** `_preflight` also answers `_RETRY` —
+    `_authorize` returns it when FGA is UNREACHABLE, which is transient and must be redelivered.
+    Flipping that to SUCCESS would discard a trigger during an outage on a `deliverPolicy: new`
+    subscriber, turning a recoverable blip into lost work. It is also not retained: the event is coming
+    back, so a retention copy would be a duplicate of something nothing lost.
 
-    An estate on this code with no `MEDALLION_REFUSED_TOPIC`, or a broker that refused the publish,
-    keeps the old behaviour exactly — parks, and is paged. That is the safe direction of the two: an
-    unnecessary park costs a duplicate, and a premature SUCCESS costs the payload.
+    **THE ACK FOLLOWS THE EVIDENCE, NOT THE CONFIGURATION.** A deterministic refusal re-presented buys
+    nothing, and parking it costs a dead-letter copy per roll that `MedallionCascadeDeadLettering`
+    reads as retry exhaustion — a decision paged as a failure. SUCCESS is therefore right, but only
+    once the payload survives elsewhere. An estate with no `MEDALLION_REFUSED_TOPIC`, or a broker that
+    refused the publish, keeps the old behaviour exactly: parks, and is paged. That is the safe
+    direction — an unnecessary park costs a duplicate, a premature SUCCESS costs the payload.
 
-    `reason` rides along on both, so the wire still says WHICH refusal it was.
+    `reason` rides along on both acks, so the wire still says WHICH refusal it was.
     """
+    if verdict.get("status") != "DROP":
+        return verdict
+    retained = await _retain_refusal(dapr, settings, transition=transition, reason=verdict.get("reason", ""), event=event)
     return {**verdict, "status": "SUCCESS"} if retained else verdict
 
 
@@ -1787,7 +1793,7 @@ async def handle_stage(
 
     pre = await _preflight(settings, event, transition=transition, fga_client=fga_client)
     if not isinstance(pre, StagePreflight):
-        return _acked_if_retained(pre, await _retain_refusal(dapr, settings, transition=transition, reason=pre.get("reason", ""), event=event))
+        return await _settle(dapr, settings, pre, transition=transition, event=event)
     trigger, project, identity = pre.trigger, pre.project, pre.identity
     token = trigger.token
 
