@@ -7,11 +7,18 @@ project record holding no tuples at all) and could do nothing about it, and that
 the project-admin tuple is what makes a tenant self-sustaining, so a tenant without it is one nobody can
 administer, grant on, or delete.
 
-THESE TESTS ALSO PIN THE BOUND, which matters more than the capability. Measured against the live
-control root 2026-09-19: project records carry `created_by` (93 of 93) and warehouse records do NOT
-(97 of 97). So the creator's `owner` grant on a warehouse is unrecoverable — the registry never
-recorded who it belonged to — and a rebuild that invented one would be granting, not restoring. Only
-the tenancy pointer is justified there. `test_a_warehouse_owner_is_NOT_invented` holds that shut.
+THE LINE THESE TESTS HOLD IS UPSTREAM'S, and it is narrower than the row asked for. Lakekeeper's
+`lakekeeper openfga reconcile` rebuilds "the parent/child edges between server, projects, warehouses,
+namespaces, tables, views, and roles" and leaves "ownership tuples, grants, role assignments, bootstrap
+admin tuples, and authorization-model bookkeeping ... alone"
+(https://docs.lakekeeper.io/docs/latest/authorization-openfga/).
+
+It is right for rask for a specific reason, not by deference: **the registry does not record
+REVOCATION.** Project records carry `created_by` (93 of 93, live 2026-09-19) and warehouse records do
+not (0 of 97) — but `created_by` names who CREATED a tenant, never who may administer it today. An
+admin deliberately removed leaves the record untouched, so re-asserting that grant restores exactly the
+person an operator took care to remove. `test_a_stranded_project_is_REPORTED_not_re_granted` is the one
+that matters here; a structural edge cannot confer access, and a grant can.
 """
 
 from __future__ import annotations
@@ -48,21 +55,35 @@ _ACME = {"id": "acme", "created_at": "2026-08-07T06:48:27.0329", "created_by": "
 _ACME_WH = {"id": "acme-bucket", "bucket": "acme-bucket", "root_uri": "s3://acme-bucket", "project": "acme", "status": "active"}
 
 
-def test_a_tenant_with_no_tuples_gets_its_admin_seed_back() -> None:
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME]))
+def test_a_stranded_project_is_REPORTED_not_re_granted() -> None:
+    """THE LINE. A tenant holding no tuples needs an admin grant, and a grant is a decision.
 
-    assert [(t.user, t.relation, t.object) for t in planned] == [("user:CiQwOGE4Njg0Yi", "admin", "project:acme")]
-
-
-def test_the_seed_is_the_one_the_create_door_writes() -> None:
-    """`user:<sub> admin project:<id>`, matching `fga_deps.seed_project_admin` byte for byte.
-
-    A rebuild that invented a different shape would restore a tenant the create door could not have
-    produced, and the difference would surface later as an authorization decision nobody can explain.
+    `created_by` is right there and this deliberately does not use it: the registry records creation
+    and never revocation, so re-asserting it re-grants precisely the person an operator may have taken
+    care to remove — a privilege restoration wearing a repair's name.
     """
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME]))
+    planned, unjustified = plan_rebuild(_report("acme"), _sources(projects=[_ACME]))
 
-    assert planned[0].user.startswith("user:") and planned[0].relation == "admin" and planned[0].object.startswith("project:")
+    assert planned == [], "a project admin grant was written by a repair pass"
+    assert "decision, not a repair" in unjustified["project:acme"]
+
+
+def test_the_finding_names_the_candidate_so_the_decision_is_one_call_away() -> None:
+    """Refusing to grant must not mean refusing to help — the operator needs the id the record holds."""
+    _, unjustified = plan_rebuild(_report("acme"), _sources(projects=[_ACME]))
+
+    assert "CiQwOGE4Njg0Yi" in unjustified["project:acme"]
+
+
+def test_no_tuple_this_pass_writes_confers_ACCESS() -> None:
+    """The property that makes it safe to run unattended: a structural edge says where an object lives.
+
+    `admin`, `owner`, `writer`, `reader` and the rest are grants; `project` and `parent` are pointers.
+    Asserted over everything planned, so a later tier cannot quietly add a granting relation.
+    """
+    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
+
+    assert {t.relation for t in planned} <= {"project", "parent"}, [t.relation for t in planned]
 
 
 def test_a_healthy_tenant_is_left_alone() -> None:
@@ -72,13 +93,13 @@ def test_a_healthy_tenant_is_left_alone() -> None:
     assert plan_rebuild(_report(), _sources(projects=[_ACME])) == ([], {})
 
 
-def test_a_record_with_no_creator_justifies_NOTHING_and_says_so() -> None:
-    """The shape that matters: the record exists, the tenant is unadministrable, and this cannot fix it.
+def test_a_record_with_no_creator_says_SO_rather_than_going_quiet() -> None:
+    """Worse than a stranded tenant: one with no recorded creator at all, so not even a candidate exists.
     Reported rather than skipped, because a silent skip makes an unrecoverable tenant look recovered."""
     planned, unjustified = plan_rebuild(_report("orphaned"), _sources(projects=[{"id": "orphaned", "created_at": "x"}]))
 
     assert planned == []
-    assert "created_by" in unjustified["project:orphaned"]
+    assert "no `created_by`" in unjustified["project:orphaned"]
 
 
 def test_a_warehouse_under_a_revived_tenant_regains_its_tenancy_pointer() -> None:
@@ -97,8 +118,10 @@ def test_the_pointer_relation_is_project_NOT_parent() -> None:
 
 
 def test_a_warehouse_owner_is_NOT_invented() -> None:
-    """THE BOUND. Warehouse records carry no `created_by` (97 of 97, live 2026-09-19), so there is no
-    creator to restore — and a rebuild that picked one would be GRANTING, not restoring."""
+    """Warehouse records carry no `created_by` (0 of 97, live 2026-09-19), so there is no creator to
+    restore — and a rebuild that picked one would be GRANTING, not restoring. The same rule as the
+    project seed above, arriving by a second route: here the field is absent, there it is present and
+    still not a licence."""
     planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
 
     assert [t for t in planned if t.relation == "owner"] == []
@@ -116,7 +139,7 @@ def test_every_planned_tuple_names_the_record_that_justifies_it() -> None:
     rather than a grant."""
     planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
 
-    assert [t.justified_by for t in planned] == ["_projects/acme.json", "_warehouses/acme-bucket.json"]
+    assert [t.justified_by for t in planned] == ["_warehouses/acme-bucket.json"]
 
 
 # --- the write path --------------------------------------------------------------------------- #
@@ -147,8 +170,9 @@ def fga(monkeypatch: pytest.MonkeyPatch) -> _Fga:
 _WIRED = object()
 
 
-async def _run(settings: Any, fga_client: Any = _WIRED, **kwargs: Any) -> RebuildReport:
-    return await rebuild_tuples(settings, report=_report("acme"), sources=_sources(projects=[_ACME], warehouses=[_ACME_WH]), fga_client=fga_client, **kwargs)
+async def _run(settings: Any, fga_client: Any = _WIRED, warehouses: list[dict[str, str]] | None = None) -> RebuildReport:
+    sources = _sources(projects=[_ACME], warehouses=warehouses or [_ACME_WH])
+    return await rebuild_tuples(settings, report=_report("acme"), sources=sources, fga_client=fga_client)
 
 
 @pytest.mark.asyncio
@@ -163,7 +187,7 @@ async def test_a_disabled_pass_writes_nothing(fga: _Fga) -> None:
 async def test_a_dry_run_reports_the_plan_and_writes_nothing(fga: _Fga) -> None:
     report = await _run(_settings(dry_run=True))
 
-    assert len(report.written) == 2, "a dry run must still say what it would write"
+    assert len(report.written) == 1, "a dry run must still say what it would write"
     assert fga.writes == []
 
 
@@ -201,7 +225,7 @@ async def test_no_fga_client_writes_nothing(fga: _Fga) -> None:
 async def test_the_remainder_beyond_the_cap_is_reported(fga: _Fga) -> None:
     """A wholesale tuple loss makes every tenant eligible at once, so an uncapped pass would turn one
     cron fire into an estate-wide authorization write."""
-    report = await _run(_settings(max_per_tick=1))
+    report = await _run(_settings(max_per_tick=1), warehouses=[_ACME_WH, {"id": "acme-second", "project": "acme"}])
 
     assert len(report.written) == 1
     assert report.capped == 1

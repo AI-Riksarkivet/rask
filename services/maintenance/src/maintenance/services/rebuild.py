@@ -12,22 +12,32 @@ tenant that loses it is one nobody can administer, grant on, or delete. Until no
 detect that and not recover from it, and "the tuple estate cannot be rebuilt after a loss" is a
 resilience gap rather than a missing convenience.
 
-**WHAT THE REGISTRIES ACTUALLY JUSTIFY, measured rather than assumed, and it is less than the row
-claimed.** Read from the live control root 2026-09-19:
+**STRUCTURE IS REBUILT; A PERMISSION IS NEVER RE-GRANTED — and that line is upstream's, not ours.**
+Lakekeeper's `lakekeeper openfga reconcile` solves the same problem for the same pair of stores, and
+its scope is "the parent/child edges between server, projects, warehouses, namespaces, tables, views,
+and roles", with "ownership tuples, grants, role assignments, bootstrap admin tuples, and
+authorization-model bookkeeping ... left alone"
+(https://docs.lakekeeper.io/docs/latest/authorization-openfga/). This module holds the same line.
 
-* a project record is ``{id, created_at, created_by, protected}`` — 93 of 93 carry ``created_by``, so
-  ``user:<created_by> admin project:<id>`` is exactly the tuple `seed_project_admin` writes at create
-  time and is fully recoverable;
-* a warehouse record is ``{id, bucket, root_uri, project, status, created_at}`` and carries **NO
-  ``created_by``** — 97 of 97. So the creator's ``owner`` grant on a warehouse is NOT recoverable from
-  the registry, because the registry never recorded who it belonged to. Only the tenancy pointer
-  ``project:<p> project warehouse:<id>`` is justified, and that is the one this writes.
+THE REASON IT IS THE RIGHT LINE HERE TOO, and it is specific rather than deference: **the registry does
+not record REVOCATION.** A project record carries ``created_by`` — 93 of 93, measured on the live
+control root 2026-09-19 — but that field says who created the tenant, not who may administer it today.
+An admin deliberately removed leaves the record untouched, so "the record justifies this grant" is
+FALSE for exactly the person an operator took care to remove, and re-granting them is a privilege
+restoration wearing a repair's name. A structural edge cannot do that: it says where an object lives
+and confers nothing on its own.
 
-THE BOUND, STATED SO NOBODY READS THIS AS A BACKUP. What is rebuilt is the SEED: a tenant becomes
-administrable again and its warehouses point at it again. Grants made after creation — other admins,
-role assignments, team edges, per-table owners, the cascade identities (which come from catalog CONFIG
-and not from any record) — are not in these registries and no amount of reading them back recovers a
-single one. A rebuilt estate is one an admin can start repairing, not one that is repaired.
+So the split is:
+
+* a warehouse record is ``{id, bucket, root_uri, project, status, created_at}`` — the tenancy pointer
+  ``project:<p> project warehouse:<id>`` is STRUCTURAL and is rebuilt;
+* a project holding no tuples at all is REPORTED and not repaired. It needs an admin grant, which is a
+  decision a person makes; this names the tenant and the ``created_by`` the record holds, so that
+  decision is one call away and is still a decision.
+
+THE BOUND, STATED SO NOBODY READS THIS AS A BACKUP. Nothing here restores access. Grants, ownership,
+role assignments, team edges, per-table owners and the cascade identities (catalog CONFIG, in no record
+at all) come back from nothing. What comes back is the shape of the estate.
 
 OFF AND DRY-RUN BY DEFAULT, the same two flags the floor raise carries and for the same reason: "does
 this estate want the behaviour" and "does this tick act" are different questions, and an operator
@@ -74,17 +84,22 @@ class RebuildReport(BaseModel):
     error: str | None = None
 
 
-def _project_seed(record: dict[str, str]) -> RebuiltTuple | None:
-    """The one tuple a project record justifies, or ``None`` when it justifies none.
+def _needs_an_admin(record: dict[str, str]) -> str:
+    """Why this tenant cannot be repaired here, phrased so the next step is obvious.
 
-    Mirrors `catalog.api.fga_deps.seed_project_admin` exactly — `user:<sub> admin project:<id>`. A
-    rebuild that invented a different shape would restore a tenant the create door could not have
-    produced, and the difference would surface as an authorization decision nobody can explain.
+    NOT A GRANT, DELIBERATELY. `seed_project_admin` writes `user:<created_by> admin project:<id>` at
+    create time and this could mirror it — the field is there. It does not, because the registry does
+    not record REVOCATION: `created_by` names who created the tenant, never who may administer it
+    today, so re-asserting it re-grants exactly the person an operator may have taken care to remove.
+    The finding names the id the record holds so a human can make that call in one request.
     """
-    project, creator = record.get("id"), record.get("created_by")
-    if not project or not creator:
-        return None
-    return RebuiltTuple(user=f"user:{creator}", relation="admin", object=f"project:{project}", justified_by=f"_projects/{project}.json")
+    creator = record.get("created_by")
+    return (
+        f"holds no tuples and needs an admin grant — a decision, not a repair. The record's `created_by` is {creator!r}; "
+        "it records who CREATED the tenant, not who may administer it now, so this pass will not re-grant it."
+        if creator
+        else "holds no tuples and the record carries no `created_by`, so not even a candidate admin is recorded"
+    )
 
 
 def _warehouse_tenancy(record: dict[str, str]) -> RebuiltTuple | None:
@@ -112,24 +127,20 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
     would be harmless and also unreadable — the audit stream would carry an authorization write per
     tenant per tick forever, and the one that mattered would be indistinguishable from the noise.
     """
-    unreferenced = {finding.id for finding in report.unreferenced_projects}
+    stranded = {finding.id for finding in report.unreferenced_projects}
     planned: list[RebuiltTuple] = []
     unjustified: dict[str, str] = {}
 
     for record in sources.project_records or []:
-        if (project := record.get("id")) not in unreferenced:
-            continue
-        if (seed := _project_seed(record)) is None:
-            unjustified[f"project:{project}"] = "the record carries no `created_by`, so no grant is justified by it"
-            continue
-        planned.append(seed)
+        if (project := record.get("id")) in stranded:
+            unjustified[f"project:{project}"] = _needs_an_admin(record)
 
-    # A warehouse whose tenancy pointer is missing shows up as its project holding no tuples on it;
-    # the report has no category for that, so the pointer is asserted for any warehouse belonging to a
-    # project this pass is reviving. A warehouse under a healthy project is left alone.
-    revived = {t.object.removeprefix("project:") for t in planned}
+    # THE STRUCTURAL HALF, and the only half that writes. Scoped to warehouses under a project the
+    # report found stranded, because that is where the pointer is provably gone: a whole-estate
+    # re-assertion would write an authorization row per warehouse per tick forever and bury the one
+    # that mattered.
     for record in sources.warehouse_records or []:
-        if record.get("project") not in revived:
+        if record.get("project") not in stranded:
             continue
         if (pointer := _warehouse_tenancy(record)) is None:
             unjustified[f"warehouse:{record.get('id')}"] = "the record names no project, so its tenancy is unknown"
