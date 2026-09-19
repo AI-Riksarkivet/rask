@@ -174,6 +174,41 @@ def _base_name(uri: str) -> str:
     return uri.replace("s3://", "").strip("/").replace("/", "-") or "base"
 
 
+#: Lance's per-field encoding knobs (`lance_docs/file_format.md` — Compression Configuration). A create
+#: carries them as ordinary table properties; they reach Lance as FIELD metadata on the written schema.
+_ENCODING_PREFIX = "lance-encoding:"
+
+
+def _is_variable_width(dtype: pa.DataType) -> bool:
+    """The types general compression actually acts on — the ones Lance stores through its `Variable`
+    compressor. Bitpacking (ints) and BSS (floats) are chosen by Lance from the data itself."""
+    return bool(pa.types.is_string(dtype) or pa.types.is_large_string(dtype) or pa.types.is_binary(dtype) or pa.types.is_large_binary(dtype))
+
+
+def _apply_encoding(table: pa.Table, properties: dict[str, str] | None) -> pa.Table:
+    """Stamp any ``lance-encoding:*`` create property onto the VARIABLE-WIDTH fields of the schema.
+
+    **NOTHING IS SET BY DEFAULT, and that is a measured decision rather than an omission** — recorded in
+    `docs/DECISIONS.md`. General compression runs AFTER FSST/bitpacking/RLE, so on small values it adds a
+    frame per block and buys nothing: measured on this estate's own tier shape it COSTS up to +78% at
+    256 B values and only starts saving above ~1 KiB. The tier payload is opaque by design
+    (`medallion/schemas/tier.py`), so no one scheme can be right for every table — a workload that knows
+    its own value sizes opts in, per table, through this property.
+
+    VARIABLE-WIDTH ONLY, deliberately: ``lance-encoding:bss`` engages byte-stream-split on floats only
+    where general compression is also applied, so stamping every field would quietly change float
+    encoding as a side effect of asking for string compression.
+    """
+    encoding = {k: v for k, v in (properties or {}).items() if k.startswith(_ENCODING_PREFIX)}
+    if not encoding:
+        return table
+    schema = pa.schema(
+        [f.with_metadata({**(f.metadata or {}), **encoding}) if _is_variable_width(f.type) else f for f in table.schema],
+        metadata=table.schema.metadata,
+    )
+    return pa.Table.from_arrays(table.columns, schema=schema)
+
+
 def _write_blob(
     table: pa.Table,
     uri: str,
@@ -183,6 +218,7 @@ def _write_blob(
     allow_external: bool,
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
+    properties: dict[str, str] | None = None,
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
 
@@ -192,6 +228,7 @@ def _write_blob(
     (#3-B) are approved DATA-distribution bases the fragments round-robin across (the Uber pattern).
     Bases register on a fresh CREATE; an overwrite reuses the bases the table registered at create."""
     is_create = mode == "create"
+    table = _apply_encoding(table, properties)
     # De-dup: a repeated data_base must not double-register / double-target the round-robin.
     data_bases = list(dict.fromkeys(data_bases or []))
     # _base_name is lossy (s3://b/a/c and s3://b/a-c both → b-a-c). A collision would silently make one
@@ -302,6 +339,7 @@ def create_table(
                 allow_external=allow_external,
                 external_blob_bases=external_blob_bases,
                 data_bases=data_bases,
+                properties=properties,
             )
             return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
@@ -362,6 +400,7 @@ def _write_blob_into(
             allow_external=allow_external,
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
+            properties=properties,
         )
     except Exception:
         with suppress(Exception):  # best-effort rollback; re-raise the real write error

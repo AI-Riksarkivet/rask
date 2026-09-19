@@ -164,3 +164,58 @@ def test_retention_is_honoured_rather_than_forced_to_zero(table: str) -> None:
 
     assert report.versions_reclaimed == 0
     assert _SUBJECT not in _pii(lance.dataset(table)), "the rows must still be deleted even when nothing is reclaimed"
+
+
+def test_the_report_names_the_BRANCH_that_pins_the_residual(table: str) -> None:
+    """`residual_versions` says the erasure is incomplete; only this says what to delete to finish it.
+
+    Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so the pin is read
+    rather than guessed. Without it an operator holding a legal deadline knows a branch is responsible
+    and has to go find which one — on a table that may carry dozens.
+    """
+    report = _erase(table)
+
+    assert set(report.pinned_by) == {"work", "review"}
+    assert all(v in report.residual_versions for v in report.pinned_by.values())
+
+
+def test_a_clean_erasure_names_no_pin(tmp_path: Path) -> None:
+    """The control: `pinned_by` is evidence about a FAILURE, so a successful erasure must leave it empty
+    rather than listing every branch that merely exists."""
+    uri = str(tmp_path / "unpinned")
+    lance.write_dataset(pa.table({"id": pa.array([1, 2]), "pii": pa.array([_SUBJECT, "bob"])}), uri)
+
+    assert _erase(uri).pinned_by == {}
+
+
+def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path) -> None:
+    """A TAG IS A REPRODUCIBILITY POINTER, and erasing one is not part of erasing a person.
+
+    A tagged version is exempt from cleanup by design, which is how a training run records the exact
+    data it saw. Dropping every tag would destroy that record for versions the subject never appeared
+    in — model provenance lost as a side effect of a request about one person, and unrecoverable.
+    """
+    uri = str(tmp_path / "tagged")
+    dataset = lance.write_dataset(pa.table({"id": pa.array([1, 2]), "pii": pa.array([_SUBJECT, "bob"])}), uri)
+    dataset.tags.create("holds-the-subject", dataset.version)
+    dataset.delete(_PREDICATE)
+    clean = lance.dataset(uri)
+    clean.tags.create("trained-on-this", clean.version)
+
+    report = _erase(uri)
+
+    tags = lance.dataset(uri).tags.list()
+    assert "trained-on-this" in tags, "a tag pinning a version without the subject was destroyed"
+    assert "holds-the-subject" not in tags, "a tag pinning the subject survived and keeps the version alive"
+    assert any(s.surface == "tag:trained-on-this" and s.outcome == "retained" for s in report.surfaces)
+
+
+def test_an_unreadable_tag_is_dropped_rather_than_assumed_clean(table: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unreadable is not evidence of absence. A probe that fails must resolve AGAINST the tag, or an
+    erasure quietly keeps alive exactly the versions it could not inspect."""
+    import catalog.services.erasure as module
+
+    monkeypatch.setattr(module, "_answers", lambda *_args, **_kwargs: None)
+    report = _erase(table)
+
+    assert any(s.surface == "tag:pinned" and s.outcome == "untagged" for s in report.surfaces)

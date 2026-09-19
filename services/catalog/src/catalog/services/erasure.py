@@ -19,7 +19,8 @@ by design. So reclamation LAST is not tidiness — run it first and it is a no-o
 reports an erasure that reclaimed nothing:
 
     1. every branch          — delete on it, because a branch is a separate dataset with its own rows
-    2. every pinning tag     — remove it, or the version it holds can never be reclaimed
+    2. every tag pinning the SUBJECT — remove it, or the version it holds can never be reclaimed;
+       a tag over a version the subject never appeared in is a reproducibility pointer and is KEPT
     3. main                  — the row delete the door already performed
     4. reclaim history       — now that nothing pins it
 
@@ -33,6 +34,7 @@ and a caller who needs that guarantee needs the floor raised first.
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Any, Protocol
 
@@ -65,6 +67,11 @@ class ErasureReport(BaseModel):
     #: Retained versions that STILL answer the predicate after every step ran. Non-empty means the
     #: erasure is incomplete however cleanly each step reported — see the verify step.
     residual_versions: list[int] = Field(default_factory=list)
+    #: Branch name -> the parent version it pins, for every branch pinning a version that still answers.
+    #: THIS IS THE ACTIONABLE HALF: `residual_versions` says the erasure is incomplete, and only this
+    #: says what to delete to finish it. Lance records the fork point in `_refs/branches/<name>.json`
+    #: (`parentVersion`), so the pin is readable rather than inferred.
+    pinned_by: dict[str, int] = Field(default_factory=dict)
     #: True only when every surface reported a non-`failed` outcome AND nothing still answers the
     #: predicate. A caller reporting completion to a data subject reads THIS, never the absence of an
     #: exception.
@@ -103,7 +110,8 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
 
     # 1. BRANCHES FIRST. Each is a separate dataset with its own rows AND it pins the parent's history
     #    at the branch point, so a branch left alone defeats step 4 as well as retaining the rows.
-    for name in _branch_names(dataset):
+    branches = _branches(dataset)
+    for name in branches:
         try:
             dataset.checkout_version((name, None)).delete(predicate)
             report.surfaces.append(SurfaceResult(surface=f"branch:{name}", outcome="deleted"))
@@ -112,9 +120,20 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
             log.warning("erasure_branch_failed", extra={"table": table, "branch": name, "error": str(exc)})
             report.surfaces.append(SurfaceResult(surface=f"branch:{name}", outcome="failed", detail=str(exc)))
 
-    # 2. TAGS. A tag holds a VERSION, so there is nothing to delete from — the row is only unreachable
-    #    once the tag stops pinning the version that still contains it, and only then is it reclaimable.
-    for name in _tag_names(dataset):
+    # 2. TAGS THAT PIN THE SUBJECT — and ONLY those. A tag holds a VERSION, so there is nothing to
+    #    delete from it; the row becomes unreachable once the tag stops pinning the version holding it,
+    #    and only then is that version reclaimable.
+    #
+    #    A TAG IS ALSO A REPRODUCIBILITY POINTER, which is why this is selective. A tagged version is
+    #    exempt from cleanup by design, so tagging is how a training run records the exact data it saw.
+    #    Dropping every tag would erase that record for versions the subject never appeared in —
+    #    destroying model provenance as a side effect of a request about one person. A tag whose version
+    #    cannot be READ is dropped anyway: unreadable is not evidence of absence, and an erasure resolves
+    #    that doubt against the tag.
+    for name, version in _tags(dataset).items():
+        if version is not None and _answers(dataset, version, predicate) is False:
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="retained", detail=f"version {version} does not answer the predicate"))
+            continue
         try:
             dataset.tags.delete(name)
             report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="untagged"))
@@ -151,6 +170,7 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
     #    holding the subject. So a run can perform every step successfully and leave the row readable,
     #    which is the one outcome an erasure must never report as done.
     residual = _versions_still_matching(dataset, predicate)
+    report.pinned_by = {name: pinned for name, pinned in branches.items() if pinned is not None and pinned in residual}
     if residual:
         failed = True
         log.warning("erasure_incomplete", extra={"table": table, "versions": residual})
@@ -158,7 +178,7 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
             SurfaceResult(
                 surface="verify",
                 outcome="failed",
-                detail=f"version(s) {residual} still answer this predicate — a branch or tag still pins them",
+                detail=(f"version(s) {residual} still answer this predicate; pinned by {report.pinned_by or 'no branch this could name'}"),
             )
         )
     else:
@@ -193,10 +213,14 @@ def _versions_still_matching(dataset: _Dataset, predicate: str) -> list[int]:
     return still
 
 
-def _branch_names(dataset: _Dataset) -> list[str]:
-    """Every branch of this table, or an empty list when they cannot be listed.
+def _branches(dataset: _Dataset) -> dict[str, int | None]:
+    """Every branch of this table mapped to the parent version it pins, `{}` when they cannot be listed.
 
-    An unreadable branch list is NOT treated as "no branches" silently — the caller sees it because the
+    `branches.list()` answers a mapping of name -> metadata in pylance 11, carrying the `parent_version`
+    Lance records at the fork point. That version is what makes the erasure report actionable: a branch
+    pins the parent's history there, so it is the reason a pre-delete version survives cleanup.
+
+    An unreadable branch list is NOT silently treated as "no branches" — the caller sees it because the
     report then names no branch surface at all, and `complete` stays true only if nothing else failed.
     Raising here instead would abandon the surfaces below, which is the worse trade.
     """
@@ -204,15 +228,48 @@ def _branch_names(dataset: _Dataset) -> list[str]:
         listed = dataset.branches.list()
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_branch_list_failed", extra={"error": str(exc)})
-        return []
-    return [str(name) for name in (listed or [])]
+        return {}
+    if isinstance(listed, Mapping):
+        return {str(name): _parent_version(meta) for name, meta in listed.items()}
+    return {str(name): None for name in (listed or [])}
 
 
-def _tag_names(dataset: _Dataset) -> list[str]:
-    """Every tag on this table. `tags.list()` answers a mapping of name -> version in pylance 11."""
+def _parent_version(meta: object) -> int | None:
+    """The fork point out of one branch's metadata, or None when it is not readable as an int."""
+    value = meta.get("parent_version") if isinstance(meta, Mapping) else None
+    return int(value) if isinstance(value, int) else None
+
+
+def _tags(dataset: _Dataset) -> dict[str, int | None]:
+    """Every tag on this table mapped to the version it pins. `tags.list()` answers a mapping of
+    name -> metadata in pylance 11, carrying that version; `None` marks one this cannot read, which the
+    caller resolves against the tag rather than in its favour."""
     try:
         listed = dataset.tags.list()
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_tag_list_failed", extra={"error": str(exc)})
-        return []
-    return [str(name) for name in (listed or [])]
+        return {}
+    if isinstance(listed, Mapping):
+        return {str(name): _tag_version(meta) for name, meta in listed.items()}
+    return {str(name): None for name in (listed or [])}
+
+
+def _tag_version(meta: object) -> int | None:
+    """The version one tag pins, out of its metadata or out of a bare int."""
+    if isinstance(meta, Mapping):
+        value = meta.get("version")
+        return int(value) if isinstance(value, int) else None
+    return int(meta) if isinstance(meta, int) else None
+
+
+def _answers(dataset: _Dataset, version: int, predicate: str) -> bool | None:
+    """Whether ``version`` still holds a row matching ``predicate`` — `None` when it cannot be read.
+
+    THREE-VALUED ON PURPOSE. A caller deciding whether to destroy something must distinguish "proved
+    clean" from "could not tell", and only the first is a reason to keep it.
+    """
+    try:
+        return bool(dataset.checkout_version(version).to_table(filter=predicate).num_rows)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("erasure_tag_probe_failed", extra={"version": version, "error": str(exc)})
+        return None

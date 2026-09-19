@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**205 open items**, of which **97 are blocked on a decision** and **108 can be picked up today**.
+**204 open items**, of which **97 are blocked on a decision** and **107 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 61 | 24 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 60 | 23 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -296,12 +296,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* In a scratch environment (not this resolution — 0.12 rejects a bare string, so the bump is all-or-nothing), establish whether pylance 11.0.0's Rust `merge_insert_into_table` accepts a list for `on` once lance-namespace 0.12's model stops refusing one. If it does, lift the `<0.12` ceiling on the pins (root `pyproject.toml:48-49`, `packages/service-kit/pyproject.toml:42,44,54-55`, `services/medallion/pyproject.toml:23`), change `on: str | None` at `data.py:330` to `list[str]`, add per-column index coverage, and re-run the catalog and integration suites. Installed stack is lance-namespace 0.11.1 + pylance 11.0.0.
 - *Closes when:* A composite `on` (repeated query parameter per spec.yaml:3063) merges through `POST /{id}/merge_insert` on the pinned stack.
 - *Evidence:* `pyproject.toml:17-47 (override-dependencies rationale, 'one experiment')` · `services/catalog/src/catalog/api/v1/endpoints/data.py:315-330 (`on: str | None = None`)` · `uv pip list → lance-namespace 0.11.1, pylance 11.0.0`
-
-**LH-034 · No Lance compression scheme is set on the create path and no decision record exists**
-`catalog, medallion` · **MED**
-- *What is left:* `lance-encoding:compression` appears nowhere in `services/catalog/src`, `services/medallion/src` or `packages/service-kit/src` (the only `lance-encoding` hit is the blob key at `medallion/services/compute.py:482`), so tables store general data uncompressed (vendored default `none`, `lance_docs/file_format.md:679`); choosing a scheme also engages BSS. `docs/DECISIONS.md` has no compression entry. Choose a scheme on the create path and record it with the measured corpus size (~50 MB governed; the object store total is dominated by `rask-observability`), so the retrofit cost is on record. Not urgent while the corpus is that small.
-- *Closes when:* A compression scheme is set where the catalog creates tables and docs/DECISIONS.md records the choice and the corpus size it was taken at.
-- *Evidence:* `grep -rn 'lance-encoding' services/catalog/src services/medallion/src packages/service-kit/src: only medallion/services/compute.py:482 (blob)` · `grep -i compression docs/DECISIONS.md: no hits`
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL

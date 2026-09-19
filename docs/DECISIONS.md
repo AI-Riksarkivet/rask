@@ -2025,3 +2025,45 @@ and nothing reads them back. The additive rebuild is the half that carries that 
 ever writes tuples the registries already justify — it never deletes, so it cannot widen access beyond
 what the control plane already recorded. Deletion is the part that can destroy, so it is opt-in and
 previewed, never the default.
+
+### Lance general compression is OPT-IN PER TABLE, and off by default ([[LH-034]])
+
+**Decision.** The catalog's create path sets no `lance-encoding:compression` scheme. It instead honours
+any `lance-encoding:*` key supplied as a create **property**, stamping it onto the schema's
+variable-width fields (`catalog.services.dataplane._apply_encoding`), so a workload that knows its own
+value sizes opts in per table. Fixed-width fields are deliberately left alone: `lance-encoding:bss`
+engages byte-stream-split on floats only where general compression is also applied, so a blanket stamp
+would change float encoding as a side effect of asking for string compression.
+
+**Rationale.** "Compression on = smaller" is false at this estate's value sizes, measured rather than
+assumed. Lance already applies FSST to variable-width data, bitpacking to ints and RLE to
+low-cardinality columns; `lance-encoding:compression` adds a classical compressor *after* those, and
+below ~1 KiB per value the per-block frame costs more than it saves. Measured 2026-09-19 on the governed
+tier shape (`{id, payload, stage}`, 8 MiB of payload held constant while value size varies):
+
+| value B | rows | none | lz4 | zstd | lz4 vs none | zstd vs none |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 128 | 65,536 | 3,055,712 | 4,699,767 | 3,112,063 | +53.8% | +1.8% |
+| 256 | 32,768 | 3,001,060 | 5,346,747 | 5,346,627 | +78.2% | +78.2% |
+| 512 | 16,384 | 2,995,490 | 3,900,282 | 3,900,226 | +30.2% | +30.2% |
+| 1,024 | 8,192 | 3,090,642 | 3,019,177 | 3,019,185 | −2.3% | −2.3% |
+| 2,048 | 4,096 | 3,051,730 | 2,419,690 | 2,419,698 | −20.7% | −20.7% |
+| 4,096 | 2,048 | 2,943,121 | 2,124,584 | 2,124,592 | −27.8% | −27.8% |
+
+The crossover is ~1 KiB, the worst regression is +78% at 256 B, and above 32 KiB the setting is inert
+because Lance already applies general compression automatically in a full-zip context at that size
+(`lance_docs/file_format.md` — Compression Configuration; measured as a +0.0% delta at 256 KiB values,
+which is what confirms the harness was reading real behaviour rather than a no-op).
+
+**The corpus this was taken at.** The five governed tier datasets measured live on 2026-09-19 hold
+**121 rows** with a `payload` median of **8 B** (min 7, max 14) and `lineage` values of 1–32 KiB — the
+backlog row's standing figure for the governed plane is ~50 MB, against an object-store total dominated
+by `rask-observability`. Writing that real corpus under each scheme made it **+14.6% (lz4) / +14.7%
+(zstd) LARGER** than the default. So a blanket scheme today would cost bytes, not save them.
+
+**Why not decide it once for the whole estate.** The tier payload is opaque by construction —
+`medallion/schemas/tier.py` fixes `{id, payload, stage, lineage, source_rowid}` and lets the transform
+declare the payload's shape — so there is no value size the catalog is entitled to assume. A modality
+that lands 4 KiB JSON documents wants zstd; one that lands 8 B tokens is made worse by it. Pinning a
+single scheme in the create path would be the catalog deciding a workload's physical layout on evidence
+it does not have. Pinned by `services/catalog/tests/test_compression_is_opt_in_per_table.py`.
