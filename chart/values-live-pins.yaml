@@ -19,7 +19,7 @@ image:
     openbao: "2.2.0"
     openfga: "v1.18.3"
     opentelemetry-collector-contrib: "0.157.0"
-    ray-lance: "main-2c6363d0-lin001"
+    ray-lance: "main-cda85df4"
     web-annotator: "main-90b8d0ed"
     web-compute: "main-90b8d0ed"
     web-explorer: "main-90b8d0ed"

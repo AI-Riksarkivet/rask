@@ -26,16 +26,42 @@ export CHECK_ONLY
 # `mv` at the end) nor a half-written sibling for the next reader to mistake for output.
 trap 'rm -f "$OUT.tmp"' EXIT
 
-"$KUBECTL" get deploy,statefulset -o json | python3 -c '
+# RAYCLUSTER IS IN THE LIST, and its absence was a silent hole. This file's own header promises "what
+# the cluster is actually running", and the Ray head is not a Deployment — it is a pod KubeRay owns
+# under a RayCluster — so `ray-lance` was the one stem whose pin recorded what somebody INTENDED.
+# Measured 2026-09-19: the head was running `main-cda85df4` while the file said
+# `main-2c6363d0-lin001`, and re-running this script changed nothing. A capture that cannot see a
+# workload reports the stale value with the same confidence as a fresh one.
+#
+# `|| true`: an estate with `ray.enabled=false` has no such CRD, and a pin run must not fail there.
+KINDS="deploy,statefulset"
+"$KUBECTL" get raycluster -o name >/dev/null 2>&1 && KINDS="$KINDS,raycluster"
+"$KUBECTL" get "$KINDS" -o json | python3 -c '
 import json, os, sys
 
 tags, digests = {}, {}
 # component -> {tag_or_digest: [workloads running it]}. The chart has ONE tag per image stem, so a stem
 # running two different tags cannot be represented in the output at all — see the guard below.
 sources = {}
+def _pod_specs(item):
+    """Every pod spec a workload owns — one for a Deployment/StatefulSet, several for a RayCluster.
+
+    KubeRay nests its pods under `headGroupSpec` and `workerGroupSpecs` instead of the `spec.template`
+    every other workload uses, so a reader that only knows the common shape sees a RayCluster as having
+    no containers at all and skips it without saying so.
+    """
+    spec = item.get("spec", {})
+    if "template" in spec:
+        return [spec["template"]["spec"]]
+    groups = [spec["headGroupSpec"]] if "headGroupSpec" in spec else []
+    groups += spec.get("workerGroupSpecs", [])
+    return [g["template"]["spec"] for g in groups if "template" in g]
+
+
 for item in json.load(sys.stdin)["items"]:
     owner = item["metadata"]["name"]
-    for c in item["spec"]["template"]["spec"].get("containers", []):
+    for pod_spec in _pod_specs(item):
+      for c in pod_spec.get("containers", []):
         ref = c["image"]
         # FIRST-PARTY ONLY. `image.tags` feeds `rask.image`, which renders only the images this repo
         # builds; dex, greptimedb, cloudnative-pg and friends come from their own values and pinning
