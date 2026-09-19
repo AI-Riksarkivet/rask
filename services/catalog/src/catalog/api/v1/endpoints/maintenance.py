@@ -5,12 +5,20 @@ fga_deps — reclaiming version history is the drop rung, exactly like the reten
 The preview never mutates; the run reclaims old versions with the sweep's tag exemption. The heavy Lance
 work (open dataset, list versions, cleanup) runs in a threadpool so the event loop stays free.
 
-**EVERY DOOR HERE DECLARES ``branch`` ONLY SO IT CAN REFUSE IT**, and not accepting the parameter is
-not the same as refusing it: FastAPI drops an undeclared query parameter in silence, so a door that
-"takes no branch" is exactly the shape that answers 200 for a branch it ignored. None of these verbs
-can be scoped to a ref — ``open_dataset`` resolves main and nothing downstream carries one — so a
-caller who names a branch and is told 200 has been told their branch was reclaimed, rewritten or
-reindexed when MAIN was.
+**EVERY DOOR HERE DECLARES ``branch``, AND WHAT IT DOES WITH ONE IS PER DOOR.** Declaring it is not
+optional either way: FastAPI drops an undeclared query parameter in silence, so a door that "takes no
+branch" is exactly the shape that answers 200 for a branch it ignored.
+
+The split is by what the verb can REACH, measured per door, not by how risky it sounds:
+
+* ``maintenance/reindex`` and ``maintenance/preview`` HONOUR it. Reindex carries the ref on the work
+  item so the worker opens what the request named; preview calls ``_base_refs`` zero times and mutates
+  nothing, so [[LH-094]]'s question about what a reclaim may delete on a branch never reaches it.
+* ``maintenance/run`` and ``maintenance/compact`` still REFUSE it. Both reclaim, both consult
+  ``_base_refs``, and what they may delete on a branch is that question exactly.
+
+A door that honours a ref must answer ABOUT that ref: previewing main and labelling it the branch's is
+the same defect as reclaiming main, delivered as information instead of as deletion.
 
 The estate has paid for this twice. ``indices.py`` records why the spec index doors declare the field
 only to refuse it, and ``ff9604be`` fixed the destructive version: a branch-targeted
@@ -72,10 +80,18 @@ async def preview_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settin
     """Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
     gated (``can_drop``); never mutates.
 
-    ``branch`` is DECLARED only so it can be REFUSED — see the module header."""
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/preview")
+    ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
+    measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
+    ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns — so [[LH-094]]'s
+    question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
+    both reclaim, and stay refused until that is decided for them.
+
+    Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
+    version of it: the caller acts on the version list, so
+    ``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather
+    than asserting the branch reached ``open_dataset``."""
     segments = parse_identifier(id, settings.delimiter)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments)
+    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     result = await run_in_threadpool(
         maintenance.preview_gc,
         ds,
