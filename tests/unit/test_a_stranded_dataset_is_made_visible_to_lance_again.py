@@ -26,17 +26,24 @@ import lance
 import pyarrow as pa
 import pytest
 
+from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_floors
 from maintenance.services.orphans import OrphanFile
 
 
 class _Settings:
-    """Only the three fields this pass reads. A real `MaintenanceSettings` would drag its whole env."""
+    """The fields this pass reads. A real `MaintenanceSettings` would drag its whole env.
+
+    `catalog_url` empty is the NO-VENDING-DOOR posture, which `write_options_for` handles by returning
+    the ambient fallback and saying so. The tests that care about vending patch that function outright.
+    """
 
     def __init__(self, *, enabled: bool = True, dry_run: bool = False, max_per_tick: int = 10) -> None:
         self.floor_raise_enabled = enabled
         self.floor_raise_dry_run = dry_run
         self.floor_raise_max_per_tick = max_per_tick
+        self.catalog_url = ""
+        self.s3_access_key_id = "test-key"
 
 
 def _settings(**kwargs: Any) -> Any:
@@ -256,3 +263,91 @@ def test_the_remainder_beyond_the_cap_is_reported(readable_floor: None) -> None:
 def test_the_report_states_which_mode_produced_it(dry_run: bool) -> None:
     """A plan and an act must never read alike — the same rule the trash purge's `dry_run` carries."""
     assert raise_listing_floors(_settings(dry_run=dry_run), orphans=[], storage_options={}).dry_run is dry_run
+
+
+# --- the two defects the live run found -------------------------------------------------------- #
+
+
+def test_the_commit_is_signed_by_the_vended_credential(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A write to a governed table goes through the vending door, like every other write here.
+
+    `optimize.py` states the rule for the rewrite — "compacting locally would perform it under whatever
+    credential opened `ds`, which on a denied table is the deployment's ambient key. That is the bypass
+    this class exists to stop." A config commit is a write to the same table, so the same rule binds it.
+    Found by deploying: the first version of this signed with the ambient options while the sweep, on
+    the very same dataset, refused for want of a vended credential.
+    """
+    uri, orphan, _ = _stranded_dataset(tmp_path)
+    seen: list[dict[str, str]] = []
+
+    def _vended(dataset_uri: str, settings: Any, *, fallback: dict[str, str], declared_table_id: str | None = None) -> dict[str, str]:
+        seen.append(fallback)
+        return {"scoped": "yes"}
+
+    monkeypatch.setattr("maintenance.services.floor.write_options_for", _vended)
+    opened: list[dict[str, str]] = []
+    real = lance.dataset
+
+    def _record(dataset_uri: str, *args: Any, **kwargs: Any) -> Any:
+        opened.append(kwargs.get("storage_options") or {})
+        return real(dataset_uri, *args, **{**kwargs, "storage_options": {}})
+
+    monkeypatch.setattr(lance, "dataset", _record)
+
+    raise_listing_floors(
+        _settings(),
+        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
+        storage_options={"ambient": "yes"},
+    )
+
+    assert seen == [{"ambient": "yes"}], "the ambient options must be offered only as the vend's fallback"
+    assert {"scoped": "yes"} in opened, "the commit was opened with something other than the vended credential"
+
+
+def test_a_catalog_denial_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, readable_floor: None) -> None:
+    """A 403 means this identity may not write this table. Committing anyway is the bypass."""
+
+    def _denied(*args: Any, **kwargs: Any) -> dict[str, str]:
+        raise MaintenanceDenied("the catalog REFUSED a write credential for t (403)")
+
+    monkeypatch.setattr("maintenance.services.floor.write_options_for", _denied)
+
+    report = raise_listing_floors(_settings(), orphans=[_orphan("s3://wh/denied", False)], storage_options={})
+
+    assert report.raised == []
+    assert "REFUSED a write credential" in (report.refused[0].refused or "")
+
+
+def test_a_denial_is_reported_by_the_DRY_RUN_too(monkeypatch: pytest.MonkeyPatch, readable_floor: None) -> None:
+    """A preview that lists a table the catalog will refuse tells an operator the opposite of the truth."""
+
+    def _denied(*args: Any, **kwargs: Any) -> dict[str, str]:
+        raise MaintenanceDenied("the catalog REFUSED a write credential for t (403)")
+
+    monkeypatch.setattr("maintenance.services.floor.write_options_for", _denied)
+
+    report = raise_listing_floors(_settings(dry_run=True), orphans=[_orphan("s3://wh/denied", False)], storage_options={})
+
+    assert report.raised == []
+    assert len(report.refused) == 1
+
+
+def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:
+    """A COMMIT ALONE DOES NOT MOVE THE FLOOR — the manifests beneath it must then be cleaned.
+
+    On a dataset the sweep may not maintain, nothing cleans them, so this pass would write a version per
+    tick forever and reclaim nothing. Measured on the deployed estate 2026-09-19: the raise on
+    `m2proof_silver$m2-proof-1788537252` ran twice before this guard existed, because the sweep refused
+    that dataset for want of a write credential and its floor never moved.
+    """
+    uri, orphan, _ = _stranded_dataset(tmp_path)
+    orphans = [OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)]
+
+    first = raise_listing_floors(_settings(), orphans=orphans, storage_options={})
+    version_after_first = lance.dataset(uri).version
+    second = raise_listing_floors(_settings(), orphans=orphans, storage_options={})
+
+    assert [r.dataset for r in first.raised] == [uri]
+    assert second.raised == []
+    assert "already raised" in (second.refused[0].refused or "")
+    assert lance.dataset(uri).version == version_after_first, "a second commit was written to a dataset whose floor cannot move"

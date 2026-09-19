@@ -28,6 +28,23 @@ measured case are LIVE, so their residue is superseded-version material inside g
 than junk. The asymmetry `base_refs` already states decided it: a wrong refusal costs disk, a wrong
 permit costs data.
 
+**A COMMIT ALONE DOES NOT MOVE THE FLOOR — the old manifests must then be CLEANED.** The floor is
+the EARLIEST RETAINED manifest, so a new version raises nothing until `cleanup_old_versions` drops the
+ones beneath it; the commit is what makes them droppable. That makes this pass USELESS on a dataset the
+sweep cannot maintain, and worse than useless, because the orphans stay stranded and every tick writes
+another version. Measured on the deployed estate 2026-09-19: of the two stranded datasets, the sweep
+reclaimed `c6t115034-wh/medallion/bronze` (19 files gone, 32 -> 13) and REFUSED
+`m2proof_silver$m2-proof-1788537252` for want of a write credential, whose raise therefore ran twice.
+Both guards below exist for that measurement.
+
+THE COMMIT IS SIGNED BY A VENDED, TABLE-SCOPED CREDENTIAL, and a catalog denial REFUSES the raise.
+`optimize.py` states the rule for the rewrite — "compacting locally would perform it under whatever
+credential opened `ds`, which on a denied table is the deployment's ambient key. That is the bypass
+this class exists to stop" — and a config commit is a write to the same governed table, so it is the
+same bypass. `write_options_for` returns a scoped credential where the door vends one, raises
+`MaintenanceDenied` on a 401/403, and falls back to the ambient options only when vending is
+unconfigured or unreachable, which is the deployment posture it already counts.
+
 THE LINEAGE PLANE ALREADY ANTICIPATES THIS SHAPE. Lance records the operation as `UpdateConfig`, which
 `lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so the sweep neither reports the version as a
 provenance hole nor back-fills it with a run that never existed. Verified against pylance 11.0.0:
@@ -44,6 +61,8 @@ import lance
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
+from maintenance.services.compaction_executor import MaintenanceDenied
+from maintenance.services.credentials import write_options_for
 from maintenance.services.orphans import OrphanFile
 
 
@@ -119,6 +138,19 @@ def _current_floor(uri: str, storage_options: dict[str, str]) -> float | None:
         return None
 
 
+def _already_raised(uri: str, storage_options: dict[str, str]) -> str | None:
+    """The epoch of a previous raise on this dataset, or ``None`` if there has not been one.
+
+    Read from the dataset's own config rather than from any state this service keeps, so it survives a
+    pod roll, a replica change and an empty cache — and so an operator can answer the same question by
+    reading the dataset.
+    """
+    try:
+        return lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).config().get(FLOOR_KEY)
+    except Exception:  # noqa: BLE001 — an unreadable config is handled by the floor read above
+        return None
+
+
 def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanFile], storage_options: dict[str, str]) -> FloorReport:
     """Write one metadata commit per stranded dataset, so the next sweep can see its residue.
 
@@ -132,6 +164,12 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
     is acting on a stale one: a dataset that gained a commit in between no longer needs this, and the
     only thing a raise would buy it is the phantom version. One `versions()` read per candidate, no
     re-listing — the report already carries each orphan's mtime, which is what makes that sufficient.
+
+    A DATASET ALREADY CARRYING :data:`FLOOR_KEY` IS REFUSED, and that guard is what bounds the damage
+    of a raise that cannot work. The floor only moves once `cleanup_old_versions` drops the manifests
+    beneath the new commit, so on a dataset the sweep may not maintain this pass writes a version per
+    tick forever and reclaims nothing. One raise per dataset: if the floor has not moved by the next
+    tick, the blocker is downstream and another commit is not the answer to it.
     """
     report = FloorReport(enabled=settings.floor_raise_enabled, dry_run=settings.floor_raise_dry_run)
     if not settings.floor_raise_enabled:
@@ -150,10 +188,23 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
             report.refused.append(outcome.model_copy(update={"refused": "floor unreadable"}))
             continue
         outcome.floor_before = floor
+        if (stamped := _already_raised(uri, storage_options)) is not None:
+            report.refused.append(
+                outcome.model_copy(update={"refused": f"already raised at {stamped} and the floor has not moved — the sweep cannot clean this dataset"})
+            )
+            continue
         if all(o.mtime_epoch <= floor for o in found):
             # The floor already covers them: something committed to this dataset between the report and
             # now, so the next sweep will reclaim without help and a commit here buys only a version.
             report.refused.append(outcome.model_copy(update={"refused": "floor already covers these orphans"}))
+            continue
+        # THE CREDENTIAL IS RESOLVED BEFORE THE DRY-RUN BRANCH, so a preview reports the denial it
+        # would hit rather than a plan it could never carry out. A dry run that lists a table the
+        # catalog will refuse is the preview telling an operator the opposite of what happens.
+        try:
+            write_options = write_options_for(uri, settings, fallback=storage_options)
+        except MaintenanceDenied as exc:
+            report.refused.append(outcome.model_copy(update={"refused": str(exc)}))
             continue
         if report.dry_run:
             report.raised.append(outcome)
@@ -162,7 +213,7 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
             # THE SHARED SESSION, like every other dataset open in this service. This pod runs against
             # a 512Mi limit it has already been OOMKilled against, and a store rebuild strands datasets
             # in bulk — a per-dataset session here is the shape that turns a recovery into an eviction.
-            lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
+            lance.dataset(uri, storage_options=write_options, session=shared_lance_session()).update_config({FLOOR_KEY: str(int(time.time()))})
             outcome.version = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).version
         except Exception as exc:  # noqa: BLE001 — one dataset's failure must not stop the others
             report.refused.append(outcome.model_copy(update={"refused": f"commit failed: {exc}"}))
