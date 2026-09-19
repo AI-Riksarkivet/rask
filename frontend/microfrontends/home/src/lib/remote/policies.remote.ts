@@ -14,7 +14,7 @@ import { catalogJSON, parsed } from '$lib/server/catalog-fetch';
 // The project's MAINTENANCE plane (#65): the tenant-scoped view of every compaction/retention policy
 // governing its data, plus the set/delete pair for the project's own record.
 //
-// All four rungs of the read are one call. `GET /v1/projects/{id}/policies` answers the project record
+// All four rungs of the read are one call. `GET /management/v1/projects/{id}/policies` answers the project record
 // AND every table/namespace record inside the tenant, so the page never needs a `policy/describe` per
 // object — which it could not have issued anyway, since it would have to already know each id.
 //
@@ -46,7 +46,10 @@ const PolicyDraftSchema = v.object({
 export const fetchProjectPolicies = query(
 	v.string(),
 	async (project): Promise<ApiResult<ProjectPolicies>> =>
-		parsed(await catalogJSON(`/v1/projects/${enc(project)}/policies`), ProjectPoliciesSchema),
+		parsed(
+			await catalogJSON(`/management/v1/projects/${enc(project)}/policies`),
+			ProjectPoliciesSchema,
+		),
 );
 
 /** Set (or replace) the PROJECT-level policy — the tenant-wide fallback the sweep uses when no table
@@ -59,7 +62,7 @@ export const setProjectPolicy = command(
 	v.object({ project: v.string(), policy: PolicyDraftSchema }),
 	async ({ project, policy }): Promise<ApiResult<ProjectPolicy>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/project/${enc(project)}/policy/set`, {
+			await catalogJSON(`/management/v1/project/${enc(project)}/policy/set`, {
 				method: 'POST',
 				body: JSON.stringify(policy),
 			}),
@@ -77,7 +80,7 @@ export const deleteProjectPolicy = command(
 	v.string(),
 	async (project): Promise<ApiResult<ProjectPolicyDelete>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/project/${enc(project)}/policy/delete`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/project/${enc(project)}/policy/delete`, { method: 'POST' }),
 			PolicyDeleteSchema,
 		);
 		if (result.ok) void fetchProjectPolicies(project).refresh();

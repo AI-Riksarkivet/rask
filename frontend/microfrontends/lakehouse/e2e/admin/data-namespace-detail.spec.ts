@@ -61,23 +61,23 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await mockMe(page);
 	await seed(page, {
 		'GET /v1/table': TABLES,
-		'POST /v1/namespace/gold/policy/describe': POLICY,
+		'POST /management/v1/namespace/gold/policy/describe': POLICY,
 		// The write echoes the drafted bounds, exactly as the catalog does.
-		'POST /v1/namespace/gold/policy/set': { ...POLICY, retention_days: 30 },
+		'POST /management/v1/namespace/gold/policy/set': { ...POLICY, retention_days: 30 },
 		// The ENVELOPE form is mandatory here, not stylistic: this payload carries its own `status`
 		// field ("deleted"), which the bare form would read as the HTTP status and answer 500.
-		'POST /v1/namespace/gold/policy/delete': {
+		'POST /management/v1/namespace/gold/policy/delete': {
 			status: 200,
 			body: { status: 'deleted', kind: 'namespace', id: 'gold' },
 		},
-		'POST /v1/namespace/gold/access/list': ACL,
+		'POST /management/v1/namespace/gold/access/list': ACL,
 		// The SELF-view. Seeded for every test in this file because the policy card renders FROM it:
 		// unseeded it 404s, `perms` stays unanswered, and Edit/Remove/Set policy are correctly absent —
 		// which would fail the three specs below as a missing button rather than as the authz story it
 		// actually is. `can_delete` is the rung the catalog gates policy writes on, so this is the
 		// admin these tests have always been signed in as, now stated on the wire instead of assumed.
-		'POST /v1/namespace/gold/access/my-permissions': MY_PERMISSIONS,
-		'POST /v1/namespace/gold/access/grant': {
+		'POST /management/v1/namespace/gold/access/my-permissions': MY_PERMISSIONS,
+		'POST /management/v1/namespace/gold/access/grant': {
 			object: 'namespace:gold',
 			user: 'user:bob',
 			relation: 'reader',
@@ -121,9 +121,9 @@ test('a grant posts the exact {user, relation} body to the NAMESPACE access rout
 	// Poll (don't race the ledger) — and pin the PATH so a regression that silently falls back to the
 	// table surface can't pass.
 	await expect
-		.poll(async () => await callTo(page, '/v1/namespace/gold/access/grant'))
+		.poll(async () => await callTo(page, '/management/v1/namespace/gold/access/grant'))
 		.toMatchObject({ method: 'POST', body: { user: 'bob', relation: 'reader' } });
-	expect(await callTo(page, '/v1/table/gold/access/grant')).toBeUndefined();
+	expect(await callTo(page, '/management/v1/table/gold/access/grant')).toBeUndefined();
 });
 
 test('editing the policy posts the drafted bounds to the namespace policy route', async ({
@@ -135,12 +135,12 @@ test('editing the policy posts the drafted bounds to the namespace policy route'
 	// catalog's POST-write state, never from a local splice. Model that here: a real catalog would
 	// describe the policy it just stored.
 	await seed(page, {
-		'POST /v1/namespace/gold/policy/describe': { ...POLICY, retention_days: 30 },
+		'POST /management/v1/namespace/gold/policy/describe': { ...POLICY, retention_days: 30 },
 	});
 	await page.getByLabel('retention days').fill('30');
 	await page.getByRole('button', { name: 'Save policy' }).click();
 	await expect
-		.poll(async () => await callTo(page, '/v1/namespace/gold/policy/set'))
+		.poll(async () => await callTo(page, '/management/v1/namespace/gold/policy/set'))
 		.toMatchObject({
 			method: 'POST',
 			body: { compact_enabled: true, retention_days: 30, retain_versions: 5 },
@@ -161,11 +161,14 @@ test('removing the policy deletes it and the card falls back to the global-defau
 	// Same single-flight refresh: after the delete the catalog describes NO policy (404), which is the
 	// honest "global defaults apply" state — not an error.
 	await seed(page, {
-		'POST /v1/namespace/gold/policy/describe': { status: 404, body: { detail: 'no policy' } },
+		'POST /management/v1/namespace/gold/policy/describe': {
+			status: 404,
+			body: { detail: 'no policy' },
+		},
 	});
 	await page.getByRole('button', { name: 'Remove', exact: true }).click();
 	await expect
-		.poll(async () => await callTo(page, '/v1/namespace/gold/policy/delete'))
+		.poll(async () => await callTo(page, '/management/v1/namespace/gold/policy/delete'))
 		.toMatchObject({ method: 'POST' });
 	// Same two-round-trip budget as the set case above.
 	await expect(page.getByText('No policy — the sweep applies the global defaults.')).toBeVisible({
@@ -177,7 +180,10 @@ test('a 403 access review renders the denial state, never the ACL', async ({ pag
 	// Re-seeding the same key wins — deny the review like the catalog's FGA gate (owner-tier
 	// can_delete on the namespace) does for a non-owner.
 	await seed(page, {
-		'POST /v1/namespace/gold/access/list': { status: 403, body: { detail: 'forbidden' } },
+		'POST /management/v1/namespace/gold/access/list': {
+			status: 403,
+			body: { detail: 'forbidden' },
+		},
 	});
 	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('tab', { name: 'access' }).click();
@@ -190,7 +196,7 @@ test('a 403 access review renders the denial state, never the ACL', async ({ pag
 
 test('a 403 policy write surfaces the owner-rung denial on the card', async ({ page }) => {
 	await seed(page, {
-		'POST /v1/namespace/gold/policy/set': { status: 403, body: { detail: 'forbidden' } },
+		'POST /management/v1/namespace/gold/policy/set': { status: 403, body: { detail: 'forbidden' } },
 	});
 	await page.goto('/lakehouse/catalog/namespaces/gold');
 	await page.getByRole('button', { name: 'Edit', exact: true }).click();
@@ -223,7 +229,7 @@ test('a caller who may only SEE the namespace gets no policy actions, and is tol
 }) => {
 	await seed(page, {
 		// The single-table grantee: visible, and nothing more. `can_delete` false is the whole test.
-		'POST /v1/namespace/gold/access/my-permissions': {
+		'POST /management/v1/namespace/gold/access/my-permissions': {
 			object: 'namespace:gold',
 			subject: 'user:ivan',
 			permissions: { can_get_metadata: true, can_delete: false, can_update_properties: false },
@@ -284,7 +290,7 @@ test('a namespace with centralized granting says so, to the owner it constrains'
 	page,
 }) => {
 	await seed(page, {
-		'POST /v1/namespace/gold/managed-access/describe': {
+		'POST /management/v1/namespace/gold/managed-access/describe': {
 			object: 'namespace:gold',
 			managed_access: true,
 		},
@@ -297,7 +303,7 @@ test('a namespace with centralized granting says so, to the owner it constrains'
 
 test('an UNMANAGED namespace stays silent — no policy, no notice', async ({ page }) => {
 	await seed(page, {
-		'POST /v1/namespace/gold/managed-access/describe': {
+		'POST /management/v1/namespace/gold/managed-access/describe': {
 			object: 'namespace:gold',
 			managed_access: false,
 		},

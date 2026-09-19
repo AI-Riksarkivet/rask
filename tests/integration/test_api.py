@@ -847,16 +847,16 @@ def test_maintenance_policy_crud_round_trips(client: TestClient, fake_ns: MagicM
     # CONTRACT (#50): set resolves the physical path from describe_table and persists it; describe
     # returns the record; delete is idempotent and describe 404s afterwards.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
-    set_resp = client.post("/v1/table/db1$users/policy/set", json={"retention_days": 7, "compact_interval_hours": 12})
+    set_resp = client.post("/management/v1/table/db1$users/policy/set", json={"retention_days": 7, "compact_interval_hours": 12})
     assert set_resp.status_code == 200, set_resp.text
     body = set_resp.json()
     assert body["path"] == "lance-test-root/u1_db1$users" and body["retention_days"] == 7
 
-    desc = client.post("/v1/table/db1$users/policy/describe")
+    desc = client.post("/management/v1/table/db1$users/policy/describe")
     assert desc.status_code == 200 and desc.json()["compact_interval_hours"] == 12
 
-    assert client.post("/v1/table/db1$users/policy/delete").status_code == 200
-    assert client.post("/v1/table/db1$users/policy/describe").status_code == 404
+    assert client.post("/management/v1/table/db1$users/policy/delete").status_code == 200
+    assert client.post("/management/v1/table/db1$users/policy/describe").status_code == 404
 
 
 def _project_policy_settings(tmp_path: object):
@@ -888,17 +888,17 @@ def test_project_policy_crud_round_trips(client: TestClient, tmp_path: object) -
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-b", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-c", "bucket": "other-wh", "project": "other", "status": "active"})
 
-    set_resp = client.post("/v1/project/acme/policy/set", json={"retention_days": 90})
+    set_resp = client.post("/management/v1/project/acme/policy/set", json={"retention_days": 90})
     assert set_resp.status_code == 200, set_resp.text
     body = set_resp.json()
     # Only the project's own ACTIVE bucket is covered — never a deactivated one or another tenant's.
     assert body["kind"] == "project" and body["buckets"] == ["acme-wh"] and body["retention_days"] == 90
 
-    desc = client.post("/v1/project/acme/policy/describe")
+    desc = client.post("/management/v1/project/acme/policy/describe")
     assert desc.status_code == 200 and desc.json()["buckets"] == ["acme-wh"]
 
-    assert client.post("/v1/project/acme/policy/delete").status_code == 200
-    assert client.post("/v1/project/acme/policy/describe").status_code == 404
+    assert client.post("/management/v1/project/acme/policy/delete").status_code == 200
+    assert client.post("/management/v1/project/acme/policy/describe").status_code == 404
 
 
 def test_project_policy_set_refused_without_an_active_warehouse(client: TestClient, tmp_path: object) -> None:
@@ -906,7 +906,7 @@ def test_project_policy_set_refused_without_an_active_warehouse(client: TestClie
     from catalog.core.config import get_settings
 
     client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
-    resp = client.post("/v1/project/ghost/policy/set", json={"retention_days": 90})
+    resp = client.post("/management/v1/project/ghost/policy/set", json={"retention_days": 90})
     assert resp.status_code == 400
     assert "no active warehouse" in resp.json()["error"]
 
@@ -924,7 +924,7 @@ def test_project_policy_set_refused_on_a_cross_claimed_bucket(client: TestClient
     so = s.storage_options()
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "shared-bkt", "project": "acme", "status": "active"})
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-evil", "bucket": "shared-bkt", "project": "evil", "status": "active"})
-    resp = client.post("/v1/project/evil/policy/set", json={"retention_days": 1, "retain_versions": 1})
+    resp = client.post("/management/v1/project/evil/policy/set", json={"retention_days": 1, "retain_versions": 1})
     assert resp.status_code == 409, resp.text
 
 
@@ -944,21 +944,21 @@ def test_project_policy_set_tolerates_a_corrupt_registry_record(client: TestClie
         {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"},
     )
     (Path(str(tmp_path)) / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
-    resp = client.post("/v1/project/acme/policy/set", json={"retention_days": 90})
+    resp = client.post("/management/v1/project/acme/policy/set", json={"retention_days": 90})
     assert resp.status_code == 200, resp.text
     assert resp.json()["buckets"] == ["acme-wh"]
-    assert client.post("/v1/project/acme/policy/delete").status_code == 200  # no leak across tests
+    assert client.post("/management/v1/project/acme/policy/delete").status_code == 200  # no leak across tests
 
 
 def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_path: object) -> None:
     from catalog.core.config import get_settings
 
     client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
-    resp = client.post("/v1/project/Bad_Name/policy/set", json={"retention_days": 90})
+    resp = client.post("/management/v1/project/Bad_Name/policy/set", json={"retention_days": 90})
     assert resp.status_code == 400
 
 
-# --- GET /v1/projects/{id}/policies — the #65 project-scoped VIEW -------------------------- #
+# --- GET /management/v1/projects/{id}/policies — the #65 project-scoped VIEW -------------------------- #
 #
 # Real stores throughout (a local-FS control root through pyarrow.fs): real warehouse records, real
 # namespace bindings, real policy records written by the same `put_policy` the catalog uses. The one
@@ -968,7 +968,7 @@ def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_p
 
 def _list_policies_for(client: TestClient, project: str) -> dict[str, Any]:
     """The listing, asserted 200 — the settings override is already in place at every call site."""
-    resp = client.get(f"/v1/projects/{project}/policies")
+    resp = client.get(f"/management/v1/projects/{project}/policies")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert isinstance(body, dict)
@@ -1085,7 +1085,7 @@ def test_project_policies_list_reports_an_unreadable_binding_instead_of_narrowin
 def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
     # CONTRACT (#51): an auth-off stack has no grants to review — answer Unsupported honestly instead
     # of an empty grant list that would read as "nobody has access".
-    resp = client.post("/v1/table/db1$users/access/list")
+    resp = client.post("/management/v1/table/db1$users/access/list")
     # 406 since Q3 (2026-09-02) — the spec's status for Unsupported. The detail now survives too: it is
     # a 4xx, so the 5xx redaction that used to mask it no longer applies, and the caller is told which
     # capability is off rather than only that something is.
@@ -1093,13 +1093,13 @@ def test_access_list_is_unsupported_without_fga(client: TestClient) -> None:
 
 
 def test_maintenance_policy_rejects_an_empty_policy(client: TestClient, fake_ns: MagicMock) -> None:
-    resp = client.post("/v1/table/db1$users/policy/set", json={})
+    resp = client.post("/management/v1/table/db1$users/policy/set", json={})
     assert resp.status_code == 422  # a body that sets nothing changes nothing — the validator refuses
     fake_ns.describe_table.assert_not_called()
     # But an EXPLICIT compact_enabled=true is meaningful (a table-level re-enable under a disabled
     # namespace policy — the exact-table match shadows the namespace record), so it must be accepted.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-test-root/u1_db1$users")
-    resp = client.post("/v1/table/db1$users/policy/set", json={"compact_enabled": True})
+    resp = client.post("/management/v1/table/db1$users/policy/set", json={"compact_enabled": True})
     assert resp.status_code == 200, resp.text
     # The client fixture's registry root is a fixed local path — delete so no record leaks across tests.
-    assert client.post("/v1/table/db1$users/policy/delete").status_code == 200
+    assert client.post("/management/v1/table/db1$users/policy/delete").status_code == 200

@@ -32,8 +32,8 @@ READS = [
     "/v1/table/pages/version/list",
     "/v1/table/pages/tags/list",
     "/v1/table/pages/index/list",
-    "/v1/table/pages/policy/describe",
-    "/v1/table/pages/access/my-permissions",
+    "/management/v1/table/pages/policy/describe",
+    "/management/v1/table/pages/access/my-permissions",
     "/v1/namespace/acme/describe",
     "/v1/namespace/acme/exists",
 ]

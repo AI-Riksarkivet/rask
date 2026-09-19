@@ -15,7 +15,7 @@ so — like the #17 model routes — these endpoints gate EXPLICITLY, on ``proje
 (the model's tenant-admin action; ``project`` defines no reader-tier relation, so describe gates there
 too rather than checking a phantom relation, which would 400 → fail-closed 503 for everyone).
 
-The #65 project-scoped LIST (``GET /v1/projects/{id}/policies``) is the tenant's VIEW of all three tiers
+The #65 project-scoped LIST (``GET /management/v1/projects/{id}/policies``) is the tenant's VIEW of all three tiers
 at once. It scopes table/namespace records BINDING-DERIVED (logical id → top-level segment → namespace
 binding → warehouse → project) rather than by the record's stored bucket, and that is not a stylistic
 choice: ``set_namespace_policy`` below builds its ``path`` from ``settings.root`` — the DEFAULT root —
@@ -61,13 +61,18 @@ from service_kit.lakehouse.naming import CONTROL_ID_RE
 
 log = logging.getLogger(__name__)
 
-table_router = APIRouter(prefix="/v1/table", tags=["policy"])
-namespace_router = APIRouter(prefix="/v1/namespace", tags=["policy"])
-project_router = APIRouter(prefix="/v1/project", tags=["policy"])
+#: THE MANAGEMENT SURFACE ([[LH-021]]). rask's authorization model is not in the Lance namespace spec
+#: at ANY point — grants, policies and managed access are entirely rask's own — so a spec client
+#: discovering `/v1/table/{id}/access/grant` meets a verb the document never defines. These mount at
+#: `/management/v1` beside the rest of the estate's governance, and inherit the same authn/authz and
+#: delimiter guard from `api/v1/router.py` as the spec routers do.
+table_router = APIRouter(prefix="/management/v1/table", tags=["policy"])
+namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["policy"])
+project_router = APIRouter(prefix="/management/v1/project", tags=["policy"])
 # PLURAL, and deliberately not a fourth spelling: the LIST is a collection read on the control-plane
 # ``projects`` resource (``endpoints/projects.py``'s prefix), while the singular ``/v1/project`` keeps the
 # spec's ``POST /v1/<object>/{id}/<action>`` grammar for the set/describe/delete trio.
-projects_router = APIRouter(prefix="/v1/projects", tags=["policy"])
+projects_router = APIRouter(prefix="/management/v1/projects", tags=["policy"])
 
 # The same DNS-safe shape the whole control plane enforces for project ids — a malformed id must never
 # become a path-traversing registry key or a phantom FGA object. SHARED, not re-declared: this was one of

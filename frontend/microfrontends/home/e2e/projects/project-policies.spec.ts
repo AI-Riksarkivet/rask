@@ -81,7 +81,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 });
 
 test('renders the project record and every record that shadows it', async ({ page }) => {
-	await seed(page, { 'GET /v1/projects/acme/policies': POLICIES });
+	await seed(page, { 'GET /management/v1/projects/acme/policies': POLICIES });
 	await page.goto('/projects/acme');
 
 	// The project's OWN tier — the one this page can edit — shown as its knobs, not as an "effective"
@@ -106,7 +106,7 @@ test('renders the project record and every record that shadows it', async ({ pag
 test('each record row crosses INTO the lakehouse zone with data-sveltekit-reload', async ({
 	page,
 }) => {
-	await seed(page, { 'GET /v1/projects/acme/policies': POLICIES });
+	await seed(page, { 'GET /management/v1/projects/acme/policies': POLICIES });
 	await page.goto('/projects/acme');
 	// A namespace record links to the namespace rung, a table record to the table rung — the lakehouse
 	// owns both, and this zone's route manifest owns neither.
@@ -122,7 +122,7 @@ test('each record row crosses INTO the lakehouse zone with data-sveltekit-reload
 
 test('an unreadable binding is announced as a short list, never swallowed', async ({ page }) => {
 	await seed(page, {
-		'GET /v1/projects/acme/policies': {
+		'GET /management/v1/projects/acme/policies': {
 			...POLICIES,
 			policies: [],
 			namespaces: [],
@@ -139,7 +139,7 @@ test('an unreadable binding is announced as a short list, never swallowed', asyn
 
 test('a denied listing is named, never rendered as “no policies”', async ({ page }) => {
 	await seed(page, {
-		'GET /v1/projects/acme/policies': { status: 403, body: { detail: 'forbidden' } },
+		'GET /management/v1/projects/acme/policies': { status: 403, body: { detail: 'forbidden' } },
 	});
 	await page.goto('/projects/acme');
 	await expect(
@@ -153,8 +153,8 @@ test('Save posts ONLY the knobs the form touched — an omitted field means inhe
 	page,
 }) => {
 	await seed(page, {
-		'GET /v1/projects/acme/policies': { ...POLICIES, policies: [] },
-		'POST /v1/project/acme/policy/set': {
+		'GET /management/v1/projects/acme/policies': { ...POLICIES, policies: [] },
+		'POST /management/v1/project/acme/policy/set': {
 			kind: 'project',
 			id: 'acme',
 			path: '',
@@ -171,9 +171,9 @@ test('Save posts ONLY the knobs the form touched — an omitted field means inhe
 	await page.getByRole('button', { name: 'Save policy' }).click();
 
 	await expect
-		.poll(async () => (await postsTo(page, token, '/v1/project/acme/policy/set')).length)
+		.poll(async () => (await postsTo(page, token, '/management/v1/project/acme/policy/set')).length)
 		.toBe(1);
-	const [body] = (await postsTo(page, token, '/v1/project/acme/policy/set')) as [
+	const [body] = (await postsTo(page, token, '/management/v1/project/acme/policy/set')) as [
 		Record<string, unknown>,
 	];
 	expect(body.retention_days).toBe(45);

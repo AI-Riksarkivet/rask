@@ -37,7 +37,10 @@ const DETAIL_ROUTES = {
 	[`POST /v1/table/${TABLE}/tags/list`]: { tags: {} },
 	[`POST /v1/table/${TABLE}/branches/list`]: { branches: {} },
 	[`POST /v1/table/${TABLE}/index/list`]: { indexes: [] },
-	[`POST /v1/table/${TABLE}/policy/describe`]: { status: 404, body: { detail: 'no policy' } },
+	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
+		status: 404,
+		body: { detail: 'no policy' },
+	},
 };
 
 let token: string;
@@ -62,14 +65,14 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await mockMe(page);
 	await seed(page, {
 		...DETAIL_ROUTES,
-		[`POST /v1/table/${TABLE}/access/list`]: ACL,
-		[`POST /v1/table/${TABLE}/access/grant`]: {
+		[`POST /management/v1/table/${TABLE}/access/list`]: ACL,
+		[`POST /management/v1/table/${TABLE}/access/grant`]: {
 			object: 'table:db1$t',
 			user: 'user:bob',
 			relation: 'reader',
 			granted: true,
 		},
-		[`POST /v1/table/${TABLE}/access/revoke`]: {
+		[`POST /management/v1/table/${TABLE}/access/revoke`]: {
 			object: 'table:db1$t',
 			user: 'user:bob',
 			relation: 'writer',
@@ -89,7 +92,7 @@ test('grant writes a base rung and shows the result', async ({ page }) => {
 	await page.getByRole('option', { name: 'reader', exact: true }).click();
 	await page.getByRole('button', { name: 'Grant', exact: true }).click();
 	await expect(page.locator('.verdict.allow')).toContainText('granted to');
-	expect(await callTo(page, `/v1/table/${TABLE}/access/grant`)).toMatchObject({
+	expect(await callTo(page, `/management/v1/table/${TABLE}/access/grant`)).toMatchObject({
 		method: 'POST',
 		body: { user: 'bob', relation: 'reader' },
 	});
@@ -107,10 +110,10 @@ test('revoke hits the revoke endpoint', async ({ page }) => {
 	await page.getByRole('option', { name: 'writer', exact: true }).click();
 	await page.getByRole('button', { name: 'Revoke', exact: true }).click();
 	await expect(page.locator('.verdict.allow')).toContainText('revoked from');
-	expect(await callTo(page, `/v1/table/${TABLE}/access/revoke`)).toMatchObject({
+	expect(await callTo(page, `/management/v1/table/${TABLE}/access/revoke`)).toMatchObject({
 		method: 'POST',
 		body: { user: 'bob', relation: 'writer' },
 	});
 	// …and never the grant: the two rungs travel to their OWN endpoints.
-	expect(await callTo(page, `/v1/table/${TABLE}/access/grant`)).toBeUndefined();
+	expect(await callTo(page, `/management/v1/table/${TABLE}/access/grant`)).toBeUndefined();
 });

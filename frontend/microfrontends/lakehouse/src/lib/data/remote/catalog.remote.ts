@@ -203,7 +203,7 @@ export const previewMaintenance = query(
 export const setTablePolicy = command(
 	v.object({ table: v.string(), policy: PolicySchema }),
 	async ({ table, policy }): Promise<ApiResult<Policy>> =>
-		typedAs<Policy>(await post(`/v1/table/${enc(table)}/policy/set`, policy)),
+		typedAs<Policy>(await post(`/management/v1/table/${enc(table)}/policy/set`, policy)),
 );
 
 /** Maintenance-policy delete — idempotent removal, same owner gate. */
@@ -211,7 +211,7 @@ export const deleteTablePolicy = command(
 	TableArg,
 	async ({ table }): Promise<ApiResult<{ status: string }>> =>
 		typedAs<{ status: string }>(
-			await catalogJSON(`/v1/table/${enc(table)}/policy/delete`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/table/${enc(table)}/policy/delete`, { method: 'POST' }),
 		),
 );
 

@@ -7,7 +7,7 @@ BOTH INGEST HEADS ARE COVERED, because the defect was one shape appearing twice 
 THE DEFECT. Neither `medallion/services/produce.py` nor `medallion/services/media_produce.py` had a
 catalog import. The bronze datasets those heads write were never registered, so they held no `table:`
 object and every governed door bounced off them:
-`POST /v1/table/<id>/policy/set` answered **404 "table has no storage location to police"**, so
+`POST /management/v1/table/<id>/policy/set` answered **404 "table has no storage location to police"**, so
 there was no retention override and no legal hold; no `_protection/` record was reachable; and no FGA
 grant could name it, because `seed_ownership` runs at the CREATE/REGISTER door and that door was never
 opened. Silver and gold were governed the whole time (`transform.py` calls `ensure_stage_output` before
@@ -195,7 +195,7 @@ def test_a_produced_bronze_holds_a_catalog_record(catalog: Any, produced: tuple[
 
 def test_the_policy_door_that_404d_now_answers(catalog: Any, produced: tuple[dict[str, str], list[dict[str, Any]]]) -> None:
     """The measured symptom: retention/legal-hold was unreachable for the head's own tier."""
-    response = _post(catalog.url, "/v1/table/bronze$events/policy/set", {"retain_versions": 5})
+    response = _post(catalog.url, "/management/v1/table/bronze$events/policy/set", {"retain_versions": 5})
 
     assert response.status_code == 200, f"no retention override is reachable for a produced bronze: {response.text[:300]}"
     assert response.json()["path"].endswith("/medallion/bronze")
@@ -205,7 +205,7 @@ def test_the_doors_are_shut_until_the_head_registers(catalog: Any) -> None:
     """The same door, on the same estate, WITHOUT the produce — the state this change leaves behind."""
     assert _post(catalog.url, "/v1/namespace/bronze/create", {"id": ["bronze"], "mode": "EXIST_OK"}).status_code == 200
 
-    assert _post(catalog.url, "/v1/table/bronze$events/policy/set", {"retain_versions": 5}).status_code == 404
+    assert _post(catalog.url, "/management/v1/table/bronze$events/policy/set", {"retain_versions": 5}).status_code == 404
 
 
 def test_registering_seeds_the_ownership_tuples(catalog: Any, produced: tuple[dict[str, str], list[dict[str, Any]]]) -> None:
@@ -315,7 +315,7 @@ def test_an_ingested_media_bronze_holds_a_catalog_record(catalog: Any, ingested_
 def test_the_media_policy_door_that_404d_now_answers(catalog: Any, ingested_media: tuple[dict[str, str], _FakeDapr, str]) -> None:
     """The measured symptom on this lane: retention/legal-hold was unreachable for the media head's tier."""
     _, _, bronze_uri = ingested_media
-    response = _post(catalog.url, "/v1/table/bronze-media$objects/policy/set", {"retain_versions": 5})
+    response = _post(catalog.url, "/management/v1/table/bronze-media$objects/policy/set", {"retain_versions": 5})
 
     assert response.status_code == 200, f"no retention override is reachable for an ingested media bronze: {response.text[:300]}"
     # THE POLICY MUST GOVERN THE BYTES THAT WERE WRITTEN, so this compares against the location the
@@ -329,7 +329,7 @@ def test_the_media_doors_are_shut_until_the_head_registers(catalog: Any) -> None
     """The same door, on the same estate, WITHOUT the ingest — the state this change leaves behind."""
     assert _post(catalog.url, "/v1/namespace/bronze-media/create", {"id": ["bronze-media"], "mode": "EXIST_OK"}).status_code == 200
 
-    assert _post(catalog.url, "/v1/table/bronze-media$objects/policy/set", {"retain_versions": 5}).status_code == 404
+    assert _post(catalog.url, "/management/v1/table/bronze-media$objects/policy/set", {"retain_versions": 5}).status_code == 404
 
 
 def test_registering_the_media_bronze_seeds_the_ownership_tuples(catalog: Any, ingested_media: tuple[dict[str, str], _FakeDapr, str]) -> None:

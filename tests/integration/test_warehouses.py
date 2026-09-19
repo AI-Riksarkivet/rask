@@ -267,7 +267,7 @@ def test_mallory_cross_tenant_bucket_takeover_fails_at_every_layer(client: TestC
 
     # Layer 2 — force the rival record straight into the registry: the policy set still refuses.
     wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-evil", "bucket": "acme-wh", "project": "evil", "status": "active"})
-    r = client.post("/v1/project/evil/policy/set", json={"retention_days": 1, "retain_versions": 1})
+    r = client.post("/management/v1/project/evil/policy/set", json={"retention_days": 1, "retain_versions": 1})
     assert r.status_code == 409, r.text
 
     # Layer 3 — force contested policy records anyway: resolution warns and matches NEITHER.

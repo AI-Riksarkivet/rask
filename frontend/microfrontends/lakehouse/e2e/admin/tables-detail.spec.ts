@@ -54,7 +54,7 @@ const DETAIL_ROUTES: Record<string, unknown> = {
 	[`POST /v1/table/${TABLE}/index/list`]: {
 		indexes: [{ index_name: 'id_idx', columns: ['id'], index_type: 'BTREE' }],
 	},
-	[`POST /v1/table/${TABLE}/policy/describe`]: {
+	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
 		retention_days: 7,
 		retain_versions: 5,
 		compact_enabled: true,
@@ -125,7 +125,10 @@ const RENAMED_ROUTES: Record<string, unknown> = {
 	'POST /v1/table/db1%24t2/tags/list': { tags: {} },
 	'POST /v1/table/db1%24t2/branches/list': { branches: {} },
 	'POST /v1/table/db1%24t2/index/list': { indexes: [] },
-	'POST /v1/table/db1%24t2/policy/describe': { status: 404, body: { detail: 'no policy' } },
+	'POST /management/v1/table/db1%24t2/policy/describe': {
+		status: 404,
+		body: { detail: 'no policy' },
+	},
 };
 
 let token: string;

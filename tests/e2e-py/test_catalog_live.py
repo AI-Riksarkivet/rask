@@ -132,7 +132,7 @@ def table_id() -> list[str]:
         assert created.status_code == 200, created.text
         assert created.json()["version"] == 1
         policy = client.post(
-            f"/v1/table/{NAMESPACE}${name}/policy/set",
+            f"/management/v1/table/{NAMESPACE}${name}/policy/set",
             json={"retention_days": 30, "retain_versions": 100, "compact_enabled": True},
         )
         assert policy.status_code == 200, policy.text

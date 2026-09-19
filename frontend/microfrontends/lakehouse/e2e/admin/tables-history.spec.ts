@@ -100,7 +100,10 @@ const DETAIL_ROUTES: Record<string, unknown> = {
 		branches: { main: { createAt: 1_700_000_000, manifestSize: 512 } },
 	},
 	[`POST /v1/table/${TABLE}/index/list`]: { indexes: [] },
-	[`POST /v1/table/${TABLE}/policy/describe`]: { status: 404, body: { detail: 'no policy' } },
+	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
+		status: 404,
+		body: { detail: 'no policy' },
+	},
 	[`POST /v1/table/${TABLE}/restore`]: { version: 6 },
 };
 

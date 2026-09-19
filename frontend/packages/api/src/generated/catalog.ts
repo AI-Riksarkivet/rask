@@ -38,6 +38,234 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/namespace/{id}/access/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Namespace Access
+         * @description Simulate 'does <user> hold <relation> on this namespace?' — owner-gated (``can_delete``).
+         */
+        post: operations["check_namespace_access_management_v1_namespace__id__access_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/access/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Namespace Access
+         * @description Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``).
+         */
+        post: operations["grant_namespace_access_management_v1_namespace__id__access_grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/access/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Graph Namespace Access
+         * @description One hop of the authorization graph around the namespace — owner-gated (``can_delete``).
+         */
+        post: operations["graph_namespace_access_management_v1_namespace__id__access_graph_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/access/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Namespace Access
+         * @description Effective access on the namespace, per ``can_*`` action — owner-gated by the router
+         *     (``can_delete``).
+         */
+        post: operations["list_namespace_access_management_v1_namespace__id__access_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Namespace Permissions
+         * @description What the caller may do on this namespace — reader-gated by the router (``can_get_metadata``).
+         */
+        post: operations["my_namespace_permissions_management_v1_namespace__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/access/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Namespace Access
+         * @description Revoke a base rung on the namespace from a subject — gated per rung, identically to grant.
+         */
+        post: operations["revoke_namespace_access_management_v1_namespace__id__access_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/managed-access/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Namespace Managed Access
+         * @description Whether granting on this namespace is centralized — reader-gated (``can_get_metadata``).
+         */
+        post: operations["get_namespace_managed_access_management_v1_namespace__id__managed_access_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/managed-access/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Namespace Managed Access
+         * @description Centralize granting for this namespace and everything beneath it — gated on
+         *     ``can_set_managed_access`` (which derives from ``manage_grants``).
+         *
+         *     With it on, owners BELOW keep every data power and lose only the ability to hand access out; a
+         *     grant-manager at or above this namespace keeps it. Note the consequence for clearing it: inside an
+         *     already-managed scope the owner's ``manage_grants`` is withdrawn, so they cannot switch it off —
+         *     which is what makes it a policy rather than a suggestion.
+         */
+        post: operations["set_namespace_managed_access_management_v1_namespace__id__managed_access_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/policy/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Namespace Policy
+         * @description Remove the namespace's maintenance policy (idempotent) — owner-gated by the router.
+         */
+        post: operations["delete_namespace_policy_management_v1_namespace__id__policy_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/policy/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Namespace Policy
+         * @description The namespace's maintenance policy (reader-gated); 404 when none is set.
+         */
+        post: operations["describe_namespace_policy_management_v1_namespace__id__policy_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/namespace/{id}/policy/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Namespace Policy
+         * @description Set (or replace) a namespace-level policy — applies to every dataset under the namespace's
+         *     directory prefix unless a table policy overrides it. Owner-gated by the router (``can_delete``).
+         */
+        post: operations["set_namespace_policy_management_v1_namespace__id__policy_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/namespace/{id}/protection": {
         parameters: {
             query?: never;
@@ -96,6 +324,283 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/project/{id}/policy/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Project Policy
+         * @description Remove the project's maintenance policy (idempotent) — admin-gated.
+         */
+        post: operations["delete_project_policy_management_v1_project__id__policy_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/project/{id}/policy/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Project Policy
+         * @description The project's maintenance policy — admin-gated like set/delete (``project`` defines no
+         *     reader-tier relation); 404 when none is set.
+         */
+        post: operations["describe_project_policy_management_v1_project__id__policy_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/project/{id}/policy/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Project Policy
+         * @description Set (or replace) the project-level maintenance policy (#84) — the tenant-wide default the sweep
+         *     falls back to when no table or namespace policy matches. Admin-gated (``can_administer`` on
+         *     ``project:<id>``, checked explicitly — see the module docstring).
+         *
+         *     The record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse
+         *     registry NOW: a warehouse provisioned after this set is not covered until the policy is re-set
+         *     (the same set-time-resolution stance as the table policy's physical path). Staleness runs the OTHER
+         *     way too: a warehouse deactivated AFTER this set stays on the stored record — the policy keeps
+         *     governing that bucket's datasets until the policy is re-set (or deleted); a deactivation does not
+         *     rewrite existing policy records. A project with no active warehouse is refused — a policy that
+         *     could never match anything should fail loudly at set time, not lie dormant.
+         *
+         *     Defense in depth (audit 2026-07-23): a resolved bucket that ANOTHER project's warehouse also claims
+         *     is refused with 409 — even if a rival claim somehow got past ``create_warehouse``'s guards, it must
+         *     not become a policy governing (and destroying version history in) the other tenant's data.
+         */
+        post: operations["set_project_policy_management_v1_project__id__policy_set_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Project Permissions
+         * @description What the caller may do on this project — same self-view, same explicit gate as the warehouse
+         *     rung (``/v1/projects/…`` is likewise outside ``_RESOURCES``).
+         *
+         *     The project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`
+         *     has no cascade at all), so this is the one whose absence forced the UI to show a delete button and
+         *     discover the answer from a 403.
+         *
+         *     GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
+         *     surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
+         *     whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
+         *     / `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for
+         *     `can_get_metadata` by analogy with table and namespace; it does not exist on this type, and
+         *     `test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it — OpenFGA rejects an
+         *     undefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would
+         *     have made this endpoint permanently unavailable.
+         *
+         *     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
+         *     at (`can_create_annotation_project: member`), and a caller with no relationship to the project
+         *     still gets a 403 rather than learning the tenant exists. The alternative — adding
+         *     `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
+         *     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
+         */
+        post: operations["my_project_permissions_management_v1_projects__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/projects/{id}/policies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Project Policies
+         * @description Every maintenance policy governing data inside this project (#65) — the tenant-scoped VIEW.
+         *
+         *     Admin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio
+         *     already set that bar, and a second (estate-observer) door for the same information would split the
+         *     tier — a tenant admin could then be shown one of their records and denied the list of all of them.
+         *
+         *     ALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because
+         *     it is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this
+         *     READS coverage, and a deactivated warehouse's data — plus any policy still governing it — remains the
+         *     tenant's. Narrowing here would hide exactly the retention record an operator is looking for while
+         *     offboarding.
+         *
+         *     Tolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning
+         *     by the registry primitives themselves. An unreadable BINDING is different and is reported —
+         *     ``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into
+         *     ``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a
+         *     quietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the
+         *     destructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole
+         *     operation.
+         */
+        get: operations["list_project_policies_management_v1_projects__id__policies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/access/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Table Access
+         * @description Simulate 'does <user> hold <relation> on this table?' — owner-gated by the router (``can_drop``).
+         */
+        post: operations["check_table_access_management_v1_table__id__access_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/access/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Table Access
+         * @description Grant a base rung on the table to a subject — gated PER RUNG by the router
+         *     (``can_grant_<relation>``, read from the body). Granting is its own axis now: a `manage_grants`
+         *     holder may hand out access without holding the data, and a `pass_grants` delegate may hand on only
+         *     what they already hold.
+         */
+        post: operations["grant_table_access_management_v1_table__id__access_grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/access/graph": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Graph Table Access
+         * @description One hop of the authorization graph around the table — owner-gated by the router (``can_drop``).
+         */
+        post: operations["graph_table_access_management_v1_table__id__access_graph_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/access/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Table Access
+         * @description Effective access on the table, per ``can_*`` action — owner-gated by the router (``can_drop``).
+         */
+        post: operations["list_table_access_management_v1_table__id__access_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Table Permissions
+         * @description What the caller may do on this table — reader-gated by the router (``can_get_metadata``).
+         */
+        post: operations["my_table_permissions_management_v1_table__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/access/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Table Access
+         * @description Revoke a base rung on the table from a subject — gated per rung, identically to grant: taking a
+         *     rung away is the same authority as handing it out.
+         */
+        post: operations["revoke_table_access_management_v1_table__id__access_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/erasure": {
         parameters: {
             query?: never;
@@ -123,6 +628,66 @@ export interface paths {
          *     erased a subject when they had narrowed the operation to one ref.
          */
         post: operations["erase_subject_management_v1_table__id__erasure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/policy/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Delete Table Policy
+         * @description Remove the table's maintenance policy (idempotent) — owner-gated by the router.
+         */
+        post: operations["delete_table_policy_management_v1_table__id__policy_delete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/policy/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Describe Table Policy
+         * @description The table's maintenance policy (reader-gated); 404 when none is set.
+         */
+        post: operations["describe_table_policy_management_v1_table__id__policy_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/policy/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Table Policy
+         * @description Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``).
+         */
+        post: operations["set_table_policy_management_v1_table__id__policy_set_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -192,6 +757,96 @@ export interface paths {
          *     edge of the window, and an operator should be able to see either.
          */
         post: operations["undrop_table_management_v1_table__id__undrop_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouse/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Warehouse Permissions
+         * @description What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
+         *     action with its reason instead of a button that 403s on click.
+         *
+         *     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
+         *     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
+         *     returns early for every `/v1/warehouse/…` path and a route mounted here that forgets its own check
+         *     is simply ungated — the hazard this module's own header comment names.
+         *
+         *     Reader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its
+         *     two siblings on this router use: "what may I do here" discloses nothing about any other principal,
+         *     and gating it at the owner bar would mean only the people who already know the answer could ask.
+         */
+        post: operations["my_warehouse_permissions_management_v1_warehouse__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouse/{id}/managed-access/describe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Get Warehouse Managed Access
+         * @description The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
+         *     ``authorize`` returns early and a route added here without this call is ungated.
+         */
+        post: operations["get_warehouse_managed_access_management_v1_warehouse__id__managed_access_describe_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/warehouse/{id}/managed-access/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Warehouse Managed Access
+         * @description The same, for a whole warehouse — the scope root, so this governs every stage and table in it,
+         *     **and the warehouse itself**.
+         *
+         *     That last clause was not true until 2026-08-16. ``warehouse#manage_grants`` was the one rung
+         *     missing the ``but not managed_access_inheritance`` subtraction, so turning this on locked down
+         *     every namespace and table below and left the warehouse OWNER still able to grant on the warehouse —
+         *     the widest grant there is, since ``reader from parent`` cascades from here to everything beneath.
+         *
+         *     Who can still grant here once it is on: an explicitly appointed ``manage_grants`` holder (the
+         *     records manager this exists for), and the PROJECT admin above. The project admin is not a new
+         *     power — they already reached it through ``owner: [...] or admin from project`` — but the clause is
+         *     load-bearing: ``can_set_managed_access`` derives from ``manage_grants``, so without a path from
+         *     above, the flag would withdraw the only relation able to clear it and freeze this bucket's access
+         *     administration permanently. Unlike a namespace, a warehouse has no managed parent scope to
+         *     unlock it from.
+         *
+         *     Gated EXPLICITLY rather than through the router's suffix map: ``warehouse`` is not in
+         *     ``_RESOURCES``, so ``authorize`` returns early for these paths (the same reason ``warehouses.py``
+         *     and ``projects.py`` call ``require_relation`` by hand). A route added here without that call would
+         *     be authenticated and ungated.
+         */
+        post: operations["set_warehouse_managed_access_management_v1_warehouse__id__managed_access_set_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -601,127 +1256,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/namespace/{id}/access/check": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check Namespace Access
-         * @description Simulate 'does <user> hold <relation> on this namespace?' — owner-gated (``can_delete``).
-         */
-        post: operations["check_namespace_access_v1_namespace__id__access_check_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/access/grant": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Grant Namespace Access
-         * @description Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``).
-         */
-        post: operations["grant_namespace_access_v1_namespace__id__access_grant_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/access/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Graph Namespace Access
-         * @description One hop of the authorization graph around the namespace — owner-gated (``can_delete``).
-         */
-        post: operations["graph_namespace_access_v1_namespace__id__access_graph_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/access/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Namespace Access
-         * @description Effective access on the namespace, per ``can_*`` action — owner-gated by the router
-         *     (``can_delete``).
-         */
-        post: operations["list_namespace_access_v1_namespace__id__access_list_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/access/my-permissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * My Namespace Permissions
-         * @description What the caller may do on this namespace — reader-gated by the router (``can_get_metadata``).
-         */
-        post: operations["my_namespace_permissions_v1_namespace__id__access_my_permissions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/access/revoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Revoke Namespace Access
-         * @description Revoke a base rung on the namespace from a subject — gated per rung, identically to grant.
-         */
-        post: operations["revoke_namespace_access_v1_namespace__id__access_revoke_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/namespace/{id}/create": {
         parameters: {
             query?: never;
@@ -850,113 +1384,6 @@ export interface paths {
         get: operations["list_namespaces_v1_namespace__id__list_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/managed-access/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Namespace Managed Access
-         * @description Whether granting on this namespace is centralized — reader-gated (``can_get_metadata``).
-         */
-        post: operations["get_namespace_managed_access_v1_namespace__id__managed_access_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/managed-access/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Namespace Managed Access
-         * @description Centralize granting for this namespace and everything beneath it — gated on
-         *     ``can_set_managed_access`` (which derives from ``manage_grants``).
-         *
-         *     With it on, owners BELOW keep every data power and lose only the ability to hand access out; a
-         *     grant-manager at or above this namespace keeps it. Note the consequence for clearing it: inside an
-         *     already-managed scope the owner's ``manage_grants`` is withdrawn, so they cannot switch it off —
-         *     which is what makes it a policy rather than a suggestion.
-         */
-        post: operations["set_namespace_managed_access_v1_namespace__id__managed_access_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/policy/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete Namespace Policy
-         * @description Remove the namespace's maintenance policy (idempotent) — owner-gated by the router.
-         */
-        post: operations["delete_namespace_policy_v1_namespace__id__policy_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/policy/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Describe Namespace Policy
-         * @description The namespace's maintenance policy (reader-gated); 404 when none is set.
-         */
-        post: operations["describe_namespace_policy_v1_namespace__id__policy_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/namespace/{id}/policy/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Namespace Policy
-         * @description Set (or replace) a namespace-level policy — applies to every dataset under the namespace's
-         *     directory prefix unless a table policy overrides it. Owner-gated by the router (``can_delete``).
-         */
-        post: operations["set_namespace_policy_v1_namespace__id__policy_set_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1116,81 +1543,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/project/{id}/policy/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete Project Policy
-         * @description Remove the project's maintenance policy (idempotent) — admin-gated.
-         */
-        post: operations["delete_project_policy_v1_project__id__policy_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/policy/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Describe Project Policy
-         * @description The project's maintenance policy — admin-gated like set/delete (``project`` defines no
-         *     reader-tier relation); 404 when none is set.
-         */
-        post: operations["describe_project_policy_v1_project__id__policy_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/project/{id}/policy/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Project Policy
-         * @description Set (or replace) the project-level maintenance policy (#84) — the tenant-wide default the sweep
-         *     falls back to when no table or namespace policy matches. Admin-gated (``can_administer`` on
-         *     ``project:<id>``, checked explicitly — see the module docstring).
-         *
-         *     The record's ``buckets`` are the project's ACTIVE warehouse buckets, resolved from the warehouse
-         *     registry NOW: a warehouse provisioned after this set is not covered until the policy is re-set
-         *     (the same set-time-resolution stance as the table policy's physical path). Staleness runs the OTHER
-         *     way too: a warehouse deactivated AFTER this set stays on the stored record — the policy keeps
-         *     governing that bucket's datasets until the policy is re-set (or deleted); a deactivation does not
-         *     rewrite existing policy records. A project with no active warehouse is refused — a policy that
-         *     could never match anything should fail loudly at set time, not lie dormant.
-         *
-         *     Defense in depth (audit 2026-07-23): a resolved bucket that ANOTHER project's warehouse also claims
-         *     is refused with 409 — even if a rival claim somehow got past ``create_warehouse``'s guards, it must
-         *     not become a policy governing (and destroying version history in) the other tenant's data.
-         */
-        post: operations["set_project_policy_v1_project__id__policy_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/project/{id}/transform/delete": {
         parameters: {
             query?: never;
@@ -1293,84 +1645,6 @@ export interface paths {
          *     like any other ACL change, only when it was actually written.
          */
         post: operations["create_project_v1_projects_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects/{id}/access/my-permissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * My Project Permissions
-         * @description What the caller may do on this project — same self-view, same explicit gate as the warehouse
-         *     rung (``/v1/projects/…`` is likewise outside ``_RESOURCES``).
-         *
-         *     The project rung is where the estate's most irreversible action lives (`DELETE /v1/projects/{id}`
-         *     has no cascade at all), so this is the one whose absence forced the UI to show a delete button and
-         *     discover the answer from a 403.
-         *
-         *     GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
-         *     surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
-         *     whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
-         *     / `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for
-         *     `can_get_metadata` by analogy with table and namespace; it does not exist on this type, and
-         *     `test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it — OpenFGA rejects an
-         *     undefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would
-         *     have made this endpoint permanently unavailable.
-         *
-         *     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
-         *     at (`can_create_annotation_project: member`), and a caller with no relationship to the project
-         *     still gets a 403 rather than learning the tenant exists. The alternative — adding
-         *     `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
-         *     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
-         */
-        post: operations["my_project_permissions_v1_projects__id__access_my_permissions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/projects/{id}/policies": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Project Policies
-         * @description Every maintenance policy governing data inside this project (#65) — the tenant-scoped VIEW.
-         *
-         *     Admin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio
-         *     already set that bar, and a second (estate-observer) door for the same information would split the
-         *     tier — a tenant admin could then be shown one of their records and denied the list of all of them.
-         *
-         *     ALL warehouse statuses count, not just active ones. ``set_project_policy`` filters to active because
-         *     it is WRITING coverage (a policy over a bucket that no live warehouse serves could never match); this
-         *     READS coverage, and a deactivated warehouse's data — plus any policy still governing it — remains the
-         *     tenant's. Narrowing here would hide exactly the retention record an operator is looking for while
-         *     offboarding.
-         *
-         *     Tolerant like every other listing: an unreadable warehouse or policy record is skipped with a warning
-         *     by the registry primitives themselves. An unreadable BINDING is different and is reported —
-         *     ``read_bindings`` (not ``list_bindings``) so the skip list crosses the return boundary into
-         *     ``incomplete``/``skipped_bindings``. A binding you cannot read is a namespace you cannot see, and a
-         *     quietly short list would read as checked-and-clean. It still answers 200: this is a listing, not the
-         *     destructive door ``namespaces_bound_to`` guards, where one corrupt object correctly refuses the whole
-         *     operation.
-         */
-        get: operations["list_project_policies_v1_projects__id__policies_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1663,130 +1937,6 @@ export interface paths {
          *     that names a warehouse-bound namespace rather than writing its version metadata to the wrong bucket.
          */
         post: operations["batch_create_table_versions_v1_table_version_batch_create_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/access/check": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Check Table Access
-         * @description Simulate 'does <user> hold <relation> on this table?' — owner-gated by the router (``can_drop``).
-         */
-        post: operations["check_table_access_v1_table__id__access_check_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/access/grant": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Grant Table Access
-         * @description Grant a base rung on the table to a subject — gated PER RUNG by the router
-         *     (``can_grant_<relation>``, read from the body). Granting is its own axis now: a `manage_grants`
-         *     holder may hand out access without holding the data, and a `pass_grants` delegate may hand on only
-         *     what they already hold.
-         */
-        post: operations["grant_table_access_v1_table__id__access_grant_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/access/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Graph Table Access
-         * @description One hop of the authorization graph around the table — owner-gated by the router (``can_drop``).
-         */
-        post: operations["graph_table_access_v1_table__id__access_graph_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/access/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * List Table Access
-         * @description Effective access on the table, per ``can_*`` action — owner-gated by the router (``can_drop``).
-         */
-        post: operations["list_table_access_v1_table__id__access_list_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/access/my-permissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * My Table Permissions
-         * @description What the caller may do on this table — reader-gated by the router (``can_get_metadata``).
-         */
-        post: operations["my_table_permissions_v1_table__id__access_my_permissions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/access/revoke": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Revoke Table Access
-         * @description Revoke a base rung on the table from a subject — gated per rung, identically to grant: taking a
-         *     rung away is the same authority as handing it out.
-         */
-        post: operations["revoke_table_access_v1_table__id__access_revoke_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2756,66 +2906,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/table/{id}/policy/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Delete Table Policy
-         * @description Remove the table's maintenance policy (idempotent) — owner-gated by the router.
-         */
-        post: operations["delete_table_policy_v1_table__id__policy_delete_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/policy/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Describe Table Policy
-         * @description The table's maintenance policy (reader-gated); 404 when none is set.
-         */
-        post: operations["describe_table_policy_v1_table__id__policy_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/policy/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Table Policy
-         * @description Set (or replace) the table's maintenance policy — owner-gated by the router (``can_drop``).
-         */
-        post: operations["set_table_policy_v1_table__id__policy_set_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/table/{id}/publish": {
         parameters: {
             query?: never;
@@ -3436,96 +3526,6 @@ export interface paths {
          * @description Discard the caller's saved canvas.
          */
         delete: operations["delete_workflow_graph_v1_user_state_workflow_graph_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouse/{id}/access/my-permissions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * My Warehouse Permissions
-         * @description What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
-         *     action with its reason instead of a button that 403s on click.
-         *
-         *     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
-         *     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
-         *     returns early for every `/v1/warehouse/…` path and a route mounted here that forgets its own check
-         *     is simply ungated — the hazard this module's own header comment names.
-         *
-         *     Reader tier (`can_get_metadata`), matching `_my_permissions`' rule rather than the owner bar its
-         *     two siblings on this router use: "what may I do here" discloses nothing about any other principal,
-         *     and gating it at the owner bar would mean only the people who already know the answer could ask.
-         */
-        post: operations["my_warehouse_permissions_v1_warehouse__id__access_my_permissions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouse/{id}/managed-access/describe": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Get Warehouse Managed Access
-         * @description The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
-         *     ``authorize`` returns early and a route added here without this call is ungated.
-         */
-        post: operations["get_warehouse_managed_access_v1_warehouse__id__managed_access_describe_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/warehouse/{id}/managed-access/set": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Set Warehouse Managed Access
-         * @description The same, for a whole warehouse — the scope root, so this governs every stage and table in it,
-         *     **and the warehouse itself**.
-         *
-         *     That last clause was not true until 2026-08-16. ``warehouse#manage_grants`` was the one rung
-         *     missing the ``but not managed_access_inheritance`` subtraction, so turning this on locked down
-         *     every namespace and table below and left the warehouse OWNER still able to grant on the warehouse —
-         *     the widest grant there is, since ``reader from parent`` cascades from here to everything beneath.
-         *
-         *     Who can still grant here once it is on: an explicitly appointed ``manage_grants`` holder (the
-         *     records manager this exists for), and the PROJECT admin above. The project admin is not a new
-         *     power — they already reached it through ``owner: [...] or admin from project`` — but the clause is
-         *     load-bearing: ``can_set_managed_access`` derives from ``manage_grants``, so without a path from
-         *     above, the flag would withdraw the only relation able to clear it and freeze this bucket's access
-         *     administration permanently. Unlike a namespace, a warehouse has no managed parent scope to
-         *     unlock it from.
-         *
-         *     Gated EXPLICITLY rather than through the router's suffix map: ``warehouse`` is not in
-         *     ``_RESOURCES``, so ``authorize`` returns early for these paths (the same reason ``warehouses.py``
-         *     and ``projects.py`` call ``require_relation`` by hand). A route added here without that call would
-         *     be authenticated and ungated.
-         */
-        post: operations["set_warehouse_managed_access_v1_warehouse__id__managed_access_set_post"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -9462,6 +9462,444 @@ export interface operations {
             };
         };
     };
+    check_namespace_access_management_v1_namespace__id__access_check_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_namespace_access_management_v1_namespace__id__access_grant_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    graph_namespace_access_management_v1_namespace__id__access_graph_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_namespace_access_management_v1_namespace__id__access_list_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_namespace_permissions_management_v1_namespace__id__access_my_permissions_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_namespace_access_management_v1_namespace__id__access_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_namespace_managed_access_management_v1_namespace__id__managed_access_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_namespace_managed_access_management_v1_namespace__id__managed_access_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_namespace_policy_management_v1_namespace__id__policy_delete_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_namespace_policy_management_v1_namespace__id__policy_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_namespace_policy_management_v1_namespace__id__policy_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_namespace_protection_management_v1_namespace__id__protection_get: {
         parameters: {
             query?: {
@@ -9580,6 +10018,440 @@ export interface operations {
             };
         };
     };
+    delete_project_policy_management_v1_project__id__policy_delete_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_project_policy_management_v1_project__id__policy_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_project_policy_management_v1_project__id__policy_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_project_permissions_management_v1_projects__id__access_my_permissions_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_project_policies_management_v1_projects__id__policies_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectPoliciesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_table_access_management_v1_table__id__access_check_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessCheckResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    grant_table_access_management_v1_table__id__access_grant_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    graph_table_access_management_v1_table__id__access_graph_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGraphResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_table_access_management_v1_table__id__access_list_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_table_permissions_management_v1_table__id__access_my_permissions_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_table_access_management_v1_table__id__access_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     erase_subject_management_v1_table__id__erasure_post: {
         parameters: {
             query?: {
@@ -9612,6 +10484,124 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErasureReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_table_policy_management_v1_table__id__policy_delete_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    describe_table_policy_management_v1_table__id__policy_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_table_policy_management_v1_table__id__policy_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PolicyResponse"];
                 };
             };
             /** @description Validation Error */
@@ -9730,6 +10720,124 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RegisterTableResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_warehouse_permissions_management_v1_warehouse__id__access_my_permissions_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_warehouse_managed_access_management_v1_warehouse__id__managed_access_describe_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_warehouse_managed_access_management_v1_warehouse__id__managed_access_set_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedAccessRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAccessResponse"];
                 };
             };
             /** @description Validation Error */
@@ -10403,246 +11511,6 @@ export interface operations {
             };
         };
     };
-    check_namespace_access_v1_namespace__id__access_check_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessCheckRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessCheckResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    grant_namespace_access_v1_namespace__id__access_grant_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessGrantRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessGrantResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    graph_namespace_access_v1_namespace__id__access_graph_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessGraphResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_namespace_access_v1_namespace__id__access_list_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    my_namespace_permissions_v1_namespace__id__access_my_permissions_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MyPermissionsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revoke_namespace_access_v1_namespace__id__access_revoke_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessGrantRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessGrantResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     create_namespace_v1_namespace__id__create_post: {
         parameters: {
             query?: {
@@ -10844,204 +11712,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_namespace_managed_access_v1_namespace__id__managed_access_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedAccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_namespace_managed_access_v1_namespace__id__managed_access_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ManagedAccessRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedAccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_namespace_policy_v1_namespace__id__policy_delete_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyDeleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_namespace_policy_v1_namespace__id__policy_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_namespace_policy_v1_namespace__id__policy_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PolicyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -11286,124 +11956,6 @@ export interface operations {
             };
         };
     };
-    delete_project_policy_v1_project__id__policy_delete_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyDeleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_project_policy_v1_project__id__policy_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_project_policy_v1_project__id__policy_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PolicyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_transform_v1_project__id__transform_delete_post: {
         parameters: {
             query?: {
@@ -11593,82 +12145,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    my_project_permissions_v1_projects__id__access_my_permissions_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MyPermissionsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_project_policies_v1_projects__id__policies_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectPoliciesResponse"];
                 };
             };
             /** @description Validation Error */
@@ -12181,246 +12657,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    check_table_access_v1_table__id__access_check_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessCheckRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessCheckResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    grant_table_access_v1_table__id__access_grant_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessGrantRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessGrantResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    graph_table_access_v1_table__id__access_graph_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessGraphResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_table_access_v1_table__id__access_list_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    my_table_permissions_v1_table__id__access_my_permissions_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MyPermissionsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revoke_table_access_v1_table__id__access_revoke_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AccessGrantRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AccessGrantResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14041,124 +14277,6 @@ export interface operations {
             };
         };
     };
-    delete_table_policy_v1_table__id__policy_delete_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyDeleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    describe_table_policy_v1_table__id__policy_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_table_policy_v1_table__id__policy_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PolicyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PolicyResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     publish_table_v1_table__id__publish_post: {
         parameters: {
             query?: {
@@ -15524,124 +15642,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    my_warehouse_permissions_v1_warehouse__id__access_my_permissions_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MyPermissionsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_warehouse_managed_access_v1_warehouse__id__managed_access_describe_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedAccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_warehouse_managed_access_v1_warehouse__id__managed_access_set_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ManagedAccessRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedAccessResponse"];
-                };
             };
             /** @description Validation Error */
             422: {

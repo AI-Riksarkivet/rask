@@ -45,28 +45,6 @@ _SPEC_PREFIXES = ("/v1/namespace", "/v1/table", "/v1/materialized_view", "/v1/tr
 #: below rather than being quietly correct.
 _STILL_ON_THE_SPEC_SURFACE: frozenset[tuple[str, str]] = frozenset(
     {
-        # --- GOVERNANCE: grants, policies, managed access. rask's authorization model is not in the
-        # spec at all, and these are the largest group.
-        ("POST", "/v1/namespace/{}/access/check"),
-        ("POST", "/v1/namespace/{}/access/grant"),
-        ("POST", "/v1/namespace/{}/access/graph"),
-        ("POST", "/v1/namespace/{}/access/list"),
-        ("POST", "/v1/namespace/{}/access/my-permissions"),
-        ("POST", "/v1/namespace/{}/access/revoke"),
-        ("POST", "/v1/namespace/{}/managed-access/describe"),
-        ("POST", "/v1/namespace/{}/managed-access/set"),
-        ("POST", "/v1/namespace/{}/policy/delete"),
-        ("POST", "/v1/namespace/{}/policy/describe"),
-        ("POST", "/v1/namespace/{}/policy/set"),
-        ("POST", "/v1/table/{}/access/check"),
-        ("POST", "/v1/table/{}/access/grant"),
-        ("POST", "/v1/table/{}/access/graph"),
-        ("POST", "/v1/table/{}/access/list"),
-        ("POST", "/v1/table/{}/access/my-permissions"),
-        ("POST", "/v1/table/{}/access/revoke"),
-        ("POST", "/v1/table/{}/policy/delete"),
-        ("POST", "/v1/table/{}/policy/describe"),
-        ("POST", "/v1/table/{}/policy/set"),
         # --- MAINTENANCE: compaction, reclamation, index rebuilds, and the distributed compaction
         # pair the executor drives.
         ("POST", "/v1/table/{}/compaction_commit"),

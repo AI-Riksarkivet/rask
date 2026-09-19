@@ -126,7 +126,7 @@ def seed_catalog(catalog_url: str, namespace: str, doc_id: str) -> str:
         # Re-assert the maintenance policy: policies live OUTSIDE the table
         # (control-root records), but re-seeding should converge the whole state.
         client.post(
-            f"/v1/table/{table_id}/policy/set",
+            f"/management/v1/table/{table_id}/policy/set",
             json={"retention_days": 30, "retain_versions": 100, "compact_enabled": True},
         ).raise_for_status()
     return table_id

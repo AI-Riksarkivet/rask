@@ -46,10 +46,16 @@ MODEL_FGA = REPO / "packages" / "service-kit" / "src" / "service_kit" / "governe
 
 HTTP_METHODS = frozenset({"get", "post", "put", "patch", "delete", "head", "options"})
 
-#: `/v1/<resource>/{<param>}/<suffix>` — the shape `catalog.api.fga_deps.authorize` reads a route's
-#: implicit gate off. The param NAME varies by module (`id`, `warehouse_id`, `project_id`), so it is
-#: matched rather than assumed.
-ROUTE_WITH_ID = re.compile(r"^/v1/(?P<resource>[a-z_-]+)/\{[^}]+\}/(?P<suffix>.+)$")
+#: `[/management]/v1/<resource>/{<param>}/<suffix>` — the shape `catalog.api.fga_deps.authorize` reads
+#: a route's implicit gate off. The param NAME varies by module (`id`, `warehouse_id`, `project_id`),
+#: so it is matched rather than assumed.
+#:
+#: BOTH MOUNTS, because a route does not lose its gate by moving ([[LH-021]]) and this walk must not
+#: report that it did. `authorize` resolves against `fga_deps._MOUNTS`; matching only `/v1` here made
+#: every governance route that moved to `/management/v1` read as "[no readable gate]" — a false alarm
+#: on routes the runtime gates correctly, which is the failure mode that trains a reader to ignore it.
+#: The RELATION mapping below stays independent on purpose; only the mount list is a shared fact.
+ROUTE_WITH_ID = re.compile(r"^(?:/management)?/v1/(?P<resource>[a-z_-]+)/\{[^}]+\}/(?P<suffix>.+)$")
 
 Function = ast.FunctionDef | ast.AsyncFunctionDef
 

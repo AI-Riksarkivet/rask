@@ -59,16 +59,21 @@ from service_kit.governed.oidc import IDToken
 
 log = logging.getLogger(__name__)
 
-table_router = APIRouter(prefix="/v1/table", tags=["access"])
-namespace_router = APIRouter(prefix="/v1/namespace", tags=["access"])
+#: THE MANAGEMENT SURFACE ([[LH-021]]). rask's authorization model is not in the Lance namespace spec
+#: at ANY point — grants, policies and managed access are entirely rask's own — so a spec client
+#: discovering `/v1/table/{id}/access/grant` meets a verb the document never defines. These mount at
+#: `/management/v1` beside the rest of the estate's governance, and inherit the same authn/authz and
+#: delimiter guard from `api/v1/router.py` as the spec routers do.
+table_router = APIRouter(prefix="/management/v1/table", tags=["access"])
+namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["access"])
 # Warehouse is NOT in fga_deps._RESOURCES, so `authorize` returns early for these paths — every route
 # mounted here must gate itself explicitly (see `set_warehouse_managed_access`).
-warehouse_router = APIRouter(prefix="/v1/warehouse", tags=["access"])
+warehouse_router = APIRouter(prefix="/management/v1/warehouse", tags=["access"])
 # Same rule as the warehouse router above: `/v1/projects/…` is outside `fga_deps._RESOURCES`, so
 # `authorize` returns early and every route here gates itself. Its own router rather than a route on
 # the projects module so the access surface stays in one file — the place someone looks when asking
 # "what is gated, and how".
-project_router = APIRouter(prefix="/v1/projects", tags=["access"])
+project_router = APIRouter(prefix="/management/v1/projects", tags=["access"])
 
 
 # The base rungs an admin may directly assign. The model defines each as ``[user, role#assignee] or …``

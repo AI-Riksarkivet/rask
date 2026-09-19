@@ -1083,7 +1083,7 @@ def test_table_policy_set_requires_owner_via_can_drop(client: TestClient, monkey
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/v1/table/db1$users/policy/set",
+        "/management/v1/table/db1$users/policy/set",
         headers={"Authorization": "Bearer t"},
         json={"retention_days": 7},
     )
@@ -1097,7 +1097,7 @@ def test_namespace_policy_set_requires_owner_via_can_delete(client: TestClient, 
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
     resp = client.post(
-        "/v1/namespace/silver/policy/set",
+        "/management/v1/namespace/silver/policy/set",
         headers={"Authorization": "Bearer t"},
         json={"retain_versions": 5},
     )
@@ -1112,7 +1112,7 @@ def test_table_policy_describe_is_reader_tier(client: TestClient, monkeypatch) -
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=True))
 
-    resp = client.post("/v1/table/db1$users/policy/describe", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/db1$users/policy/describe", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 404  # gate passed; no policy stored in this fixture
     assert captured[-1] == {"user": "alice", "relation": "can_get_metadata", "obj": "table:db1$users"}
 
@@ -1130,7 +1130,7 @@ def test_project_policy_set_requires_project_admin(client: TestClient, monkeypat
     monkeypatch.setattr(wh_svc, "list_warehouses", lambda *a, **k: registry_reads.append("read") or [])
 
     resp = client.post(
-        "/v1/project/acme/policy/set",
+        "/management/v1/project/acme/policy/set",
         headers={"Authorization": "Bearer t"},
         json={"retention_days": 90},
     )
@@ -1146,7 +1146,7 @@ def test_project_policy_describe_and_delete_require_project_admin(client: TestCl
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
     for action in ("describe", "delete"):
-        resp = client.post(f"/v1/project/acme/policy/{action}", headers={"Authorization": "Bearer t"})
+        resp = client.post(f"/management/v1/project/acme/policy/{action}", headers={"Authorization": "Bearer t"})
         assert resp.status_code == 403, action
         assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
 
@@ -1167,7 +1167,7 @@ def test_project_policies_list_requires_project_admin(client: TestClient, monkey
 
     monkeypatch.setattr(wh_svc, "list_warehouses", lambda *a, **k: registry_reads.append("read") or [])
 
-    resp = client.get("/v1/projects/acme/policies", headers={"Authorization": "Bearer t"})
+    resp = client.get("/management/v1/projects/acme/policies", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1] == {"user": "alice", "relation": "can_administer", "obj": "project:acme"}
     assert registry_reads == []  # gate first, registry read only after an allow
@@ -1187,7 +1187,7 @@ def test_table_access_list_requires_owner_via_can_drop(client: TestClient, monke
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
-    resp = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1] == {"user": "alice", "relation": "can_drop", "obj": "table:db1$users"}
     assert queried == []  # the enumeration never ran for a denied reviewer
@@ -1198,7 +1198,7 @@ def test_namespace_access_list_requires_owner_via_can_delete(client: TestClient,
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "check", _fake_check(captured, allow=False))
 
-    resp = client.post("/v1/namespace/silver/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/namespace/silver/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1] == {"user": "alice", "relation": "can_delete", "obj": "namespace:silver"}
 
@@ -1215,7 +1215,7 @@ def test_access_list_enumerates_grants_for_an_owner(client: TestClient, monkeypa
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
-    resp = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["object"] == "table:db1$users"
@@ -1238,7 +1238,7 @@ def test_access_list_fails_closed_when_enumeration_hits_an_fga_outage(client: Te
 
     monkeypatch.setattr(fga_module, "list_users", down)
 
-    resp = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 503
 
 
@@ -1266,7 +1266,7 @@ def test_access_list_reports_truncation_instead_of_silently_shortening(client: T
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
 
-    resp = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
+    resp = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["truncated"] is True, "the roll-up must flag a review that is missing holders"
@@ -1287,6 +1287,6 @@ def test_access_list_is_not_flagged_truncated_when_it_is_complete(client: TestCl
         return ["user:alice", "user:bob"]
 
     monkeypatch.setattr(fga_module, "list_users", fake_list_users)
-    body = client.post("/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"}).json()
+    body = client.post("/management/v1/table/db1$users/access/list", headers={"Authorization": "Bearer t"}).json()
     assert body["truncated"] is False
     assert all(g["truncated"] is False for g in body["grants"])

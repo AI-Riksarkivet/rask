@@ -79,7 +79,9 @@ export const fetchManagedAccess = query(
 	TargetSchema,
 	async ({ kind, id }): Promise<ApiResult<ManagedAccess>> =>
 		parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/managed-access/describe`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/${kind}/${enc(id)}/managed-access/describe`, {
+				method: 'POST',
+			}),
 			ManagedAccessSchema,
 		),
 );
@@ -100,9 +102,12 @@ export const fetchMyPermissions = query(
 			// PERMISSION_SEGMENT, not `kind`: the catalog mounts warehouse at `/v1/warehouse` and
 			// project at `/v1/projects`, so the identity mapping 404s on project — and a 404 here reads
 			// as "no permissions", which would render every action on the page disabled.
-			await catalogJSON(`/v1/${PERMISSION_SEGMENT[kind]}/${enc(id)}/access/my-permissions`, {
-				method: 'POST',
-			}),
+			await catalogJSON(
+				`/management/v1/${PERMISSION_SEGMENT[kind]}/${enc(id)}/access/my-permissions`,
+				{
+					method: 'POST',
+				},
+			),
 			MyPermissionsSchema,
 		),
 );
@@ -114,7 +119,7 @@ export const fetchAccess = query(
 	TargetSchema,
 	async ({ kind, id }): Promise<ApiResult<AccessList>> =>
 		parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/access/list`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/${kind}/${enc(id)}/access/list`, { method: 'POST' }),
 			AccessListSchema,
 		),
 );
@@ -125,7 +130,7 @@ export const checkAccess = query(
 	SubjectSchema,
 	async ({ kind, id, user, relation }): Promise<ApiResult<AccessCheck>> =>
 		parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/access/check`, {
+			await catalogJSON(`/management/v1/${kind}/${enc(id)}/access/check`, {
 				method: 'POST',
 				body: JSON.stringify({ user, relation }),
 			}),
@@ -139,7 +144,7 @@ export const fetchAccessGraph = query(
 	TargetSchema,
 	async ({ kind, id }): Promise<ApiResult<AccessGraph>> =>
 		parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/access/graph`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/${kind}/${enc(id)}/access/graph`, { method: 'POST' }),
 			AccessGraphSchema,
 		),
 );
@@ -152,7 +157,7 @@ export const grantAccess = command(
 	SubjectSchema,
 	async ({ kind, id, user, relation }): Promise<ApiResult<AccessGrant>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/access/grant`, {
+			await catalogJSON(`/management/v1/${kind}/${enc(id)}/access/grant`, {
 				method: 'POST',
 				body: JSON.stringify({ user, relation }),
 			}),
@@ -172,7 +177,7 @@ export const revokeAccess = command(
 	SubjectSchema,
 	async ({ kind, id, user, relation }): Promise<ApiResult<AccessGrant>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/${kind}/${enc(id)}/access/revoke`, {
+			await catalogJSON(`/management/v1/${kind}/${enc(id)}/access/revoke`, {
 				method: 'POST',
 				body: JSON.stringify({ user, relation }),
 			}),

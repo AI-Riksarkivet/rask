@@ -58,7 +58,9 @@ export const fetchNamespacePolicy = query(
 	v.object({ namespace: v.string() }),
 	async ({ namespace }): Promise<ApiResult<NamespacePolicy>> =>
 		parsed(
-			await catalogJSON(`/v1/namespace/${enc(namespace)}/policy/describe`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/policy/describe`, {
+				method: 'POST',
+			}),
 			PolicyResponseSchema,
 		),
 );
@@ -70,7 +72,7 @@ export const setNamespacePolicy = command(
 	v.object({ namespace: v.string(), policy: PolicyDraftSchema }),
 	async ({ namespace, policy }): Promise<ApiResult<NamespacePolicy>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/namespace/${enc(namespace)}/policy/set`, {
+			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/policy/set`, {
 				method: 'POST',
 				body: JSON.stringify(policy),
 			}),
@@ -86,7 +88,9 @@ export const deleteNamespacePolicy = command(
 	v.object({ namespace: v.string() }),
 	async ({ namespace }): Promise<ApiResult<NamespacePolicyDelete>> => {
 		const result = parsed(
-			await catalogJSON(`/v1/namespace/${enc(namespace)}/policy/delete`, { method: 'POST' }),
+			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/policy/delete`, {
+				method: 'POST',
+			}),
 			PolicyDeleteResponseSchema,
 		);
 		if (result.ok) void fetchNamespacePolicy({ namespace }).refresh();

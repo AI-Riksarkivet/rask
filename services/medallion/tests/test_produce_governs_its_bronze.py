@@ -2,7 +2,7 @@
 
 THE ASYMMETRY THIS CLOSES. `transform.py` asks the catalog before every silver and gold write, and the
 separate ingest plane registers the bronze it lands — but `POST /produce` seeded `bronze$events` with
-no catalog call at all. The dataset held no `table:` object, so `POST /v1/table/bronze$events/policy/set`
+no catalog call at all. The dataset held no `table:` object, so `POST /management/v1/table/bronze$events/policy/set`
 answered 404 *"table has no storage location to police"*, no `_protection/` record could be reached, and
 no FGA grant could name it. The same tier was governed or not purely by which door produced it.
 

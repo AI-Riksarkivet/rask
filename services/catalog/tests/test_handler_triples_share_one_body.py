@@ -120,5 +120,8 @@ def test_every_user_state_route_survives_with_its_own_posture() -> None:
 
 def test_every_policy_route_survives() -> None:
     paths = {path for path, _ in _routes(p_ep.table_router, p_ep.namespace_router, p_ep.project_router, p_ep.projects_router)}
-    for prefix in ("/v1/table/{id}", "/v1/namespace/{id}", "/v1/project/{id}"):
+    # The MANAGEMENT mount ([[LH-021]]): rask's policy model is not in the Lance spec, so these left
+    # the spec prefix. The triple is what this asserts, not the mount — but naming the mount here is
+    # what makes a route silently falling back to `/v1` fail rather than pass.
+    for prefix in ("/management/v1/table/{id}", "/management/v1/namespace/{id}", "/management/v1/project/{id}"):
         assert {f"{prefix}/policy/set", f"{prefix}/policy/describe", f"{prefix}/policy/delete"} <= paths, f"{prefix} lost a policy route"

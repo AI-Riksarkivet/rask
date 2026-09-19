@@ -29,7 +29,7 @@ const DETAIL_ROUTES: Record<string, unknown> = {
 	[`POST /v1/table/${TABLE}/tags/list`]: ABSENT,
 	[`POST /v1/table/${TABLE}/branches/list`]: ABSENT,
 	[`POST /v1/table/${TABLE}/index/list`]: ABSENT,
-	[`POST /v1/table/${TABLE}/policy/describe`]: ABSENT,
+	[`POST /management/v1/table/${TABLE}/policy/describe`]: ABSENT,
 };
 
 // Three rows: an int column, a string column, and a binary (blob) column whose cells must render

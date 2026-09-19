@@ -39,7 +39,10 @@ const DETAIL_ROUTES = {
 	[`POST /v1/table/${TABLE}/tags/list`]: { tags: {} },
 	[`POST /v1/table/${TABLE}/branches/list`]: { branches: {} },
 	[`POST /v1/table/${TABLE}/index/list`]: { indexes: [] },
-	[`POST /v1/table/${TABLE}/policy/describe`]: { status: 404, body: { detail: 'no policy' } },
+	[`POST /management/v1/table/${TABLE}/policy/describe`]: {
+		status: 404,
+		body: { detail: 'no policy' },
+	},
 };
 
 let token: string;
@@ -61,9 +64,9 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 	await mockMe(page);
 	await seed(page, {
 		...DETAIL_ROUTES,
-		[`POST /v1/table/${TABLE}/access/graph`]: GRAPH,
-		[`POST /v1/table/${TABLE}/access/list`]: { object: 'table:db1$t', grants: [] },
-		[`POST /v1/table/${TABLE}/access/grant`]: {
+		[`POST /management/v1/table/${TABLE}/access/graph`]: GRAPH,
+		[`POST /management/v1/table/${TABLE}/access/list`]: { object: 'table:db1$t', grants: [] },
+		[`POST /management/v1/table/${TABLE}/access/grant`]: {
 			object: 'table:db1$t',
 			user: 'user:carol',
 			relation: 'reader',
@@ -100,6 +103,6 @@ test('inline grant on the graph reaches the catalog', async ({ page }) => {
 	await page.getByRole('option', { name: 'reader', exact: true }).click();
 	await graph.getByRole('button', { name: 'Grant', exact: true }).click();
 	await expect
-		.poll(async () => (await callTo(page, `/v1/table/${TABLE}/access/grant`))?.body)
+		.poll(async () => (await callTo(page, `/management/v1/table/${TABLE}/access/grant`))?.body)
 		.toEqual({ user: 'carol', relation: 'reader' });
 });
