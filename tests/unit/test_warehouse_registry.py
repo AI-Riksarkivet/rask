@@ -184,14 +184,27 @@ def test_ttl_zero_always_rereads(tmp_path: Path) -> None:
     assert project_root(str(tmp_path), {}, "acme", ttl_seconds=0) == "s3://new-root"
 
 
-@pytest.mark.parametrize("value", ["acme", "a", "Acme-2", "t_1", "x" * 64])
+@pytest.mark.parametrize("value", ["acme", "a72fcc0f", "acme-bronze", "abc", "x" * 63])
 def test_safe_project_ids_pass(value: str) -> None:
     assert is_safe_project(value)
 
 
-@pytest.mark.parametrize("value", ["", "-acme", "a/b", "a$b", "..", "a b", "a.b", "x" * 65, None, 7, ["acme"]])
+@pytest.mark.parametrize("value", ["", "-acme", "a/b", "a$b", "..", "a b", "a.b", "x" * 64, None, 7, ["acme"]])
 def test_unsafe_project_ids_are_rejected(value: object) -> None:
     # These become S3 key prefixes and lineage names — anything path-shaped must be refused, not repaired.
+    assert not is_safe_project(value)
+
+
+@pytest.mark.parametrize("value", ["a", "Acme-2", "t_1", "acme-"])
+def test_an_id_the_control_plane_could_not_MINT_is_refused(value: object) -> None:
+    """The consume rule is the mint rule ([[LH-069]]), so these four are refusals, not acceptances.
+
+    Each one is a shape the catalog can never issue — one character, uppercase, an underscore, a
+    trailing hyphen — and each was accepted here while the guard carried its own looser copy. An id in
+    that gap reaches an S3 key prefix, a Lance dataset URI and a lineage namespace qualifier with no
+    project behind it. `packages/service-kit/tests/test_the_consume_rule_is_the_mint_rule.py` holds the
+    two rules to one constant; this holds the four ids that used to pass.
+    """
     assert not is_safe_project(value)
 
 

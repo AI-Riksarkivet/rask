@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 
+from service_kit.lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
 from service_kit.lakehouse.objectfs import StorageOptions
 from service_kit.lakehouse.record_store import list_records
 from service_kit.schemas.storage import GOVERNED_TIERS
@@ -31,12 +31,23 @@ log = logging.getLogger(__name__)
 
 _REGISTRY_PREFIX = "_warehouses"
 
-#: One path-safe project id segment. Trigger ``project`` values become S3 key prefixes, Lance dataset
-#: URIs, and lineage namespace qualifiers — anything outside this shape (traversal dots, separators,
-#: whitespace) must be REJECTED at the boundary, never repaired. Same shape as the medallion train
-#: head's name rule (``services/medallion/services/train.py``).
-PROJECT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
-_PROJECT_RE = re.compile(PROJECT_PATTERN)
+#: One path-safe project id segment, published on the wire. Trigger ``project`` values become S3 key
+#: prefixes, Lance dataset URIs, and lineage namespace qualifiers — anything outside this shape
+#: (traversal dots, separators, whitespace) must be REJECTED at the boundary, never repaired.
+#:
+#: **IT IS THE MINT RULE, and the two used to differ.** The body is
+#: :data:`~service_kit.lakehouse.naming.CONTROL_ID_PATTERN`, the shape the catalog issues project ids
+#: against; this copy admitted uppercase, underscores, one-character ids and a trailing hyphen, so the
+#: consumers below accepted ids the control plane could never have issued. Measured before narrowing:
+#: all 93 projects registered on the deployed estate (2026-09-19) already satisfy the mint rule.
+#:
+#: **``$``, not ``\Z``, and the guard below does not rely on it.** This string is published as an
+#: OpenAPI ``pattern`` (``medallion.api.produce_auth.ProjectParam``), where it is read by pydantic's
+#: Rust regex and by JSON Schema consumers — neither knows ``\Z``. Python's ``$`` matches before a
+#: trailing newline, which is why :func:`is_safe_project` matches with ``fullmatch`` against the
+#: ``\Z``-anchored :data:`~service_kit.lakehouse.naming.CONTROL_ID_RE` instead of against this string.
+PROJECT_PATTERN = rf"^{CONTROL_ID_PATTERN}$"
+_PROJECT_RE = CONTROL_ID_RE
 
 #: Env override for the positive-cache TTL — operators trading resolver load against how long a
 #: DEACTIVATED warehouse may keep resolving (the stale-positive window).

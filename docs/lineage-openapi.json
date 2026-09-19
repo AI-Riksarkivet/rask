@@ -2527,6 +2527,24 @@
             }
           },
           {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
+            }
+          },
+          {
             "in": "header",
             "name": "dapr-api-token",
             "required": false,
@@ -2629,6 +2647,24 @@
             "schema": {
               "title": "Field",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 5,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
             }
           },
           {
@@ -2917,7 +2953,7 @@
     },
     "/datasets/{name}/downstream": {
       "get": {
-        "description": "What derives from ``name`` (impact). Gated; non-visible related datasets are dropped.",
+        "description": "What derives from ``name`` (impact). Gated; non-visible related datasets are dropped.\n\n``depth`` bounds the walk exactly as on `/upstream` \u2014 impact is the direction that fans OUT, so a\nhub dataset is where an unbounded walk costs most.",
         "operationId": "get_downstream_datasets__name__downstream_get",
         "parameters": [
           {
@@ -2927,6 +2963,24 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 20,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
             }
           },
           {
@@ -3855,7 +3909,7 @@
     },
     "/datasets/{name}/upstream": {
       "get": {
-        "description": "What ``name`` was derived from (provenance).\n\nGated on ``can_get_metadata`` for ``name``; related datasets the caller may not see are\ndropped so the graph can't disclose tables outside its reach.",
+        "description": "What ``name`` was derived from (provenance).\n\nGated on ``can_get_metadata`` for ``name``; related datasets the caller may not see are\ndropped so the graph can't disclose tables outside its reach.\n\n``depth`` bounds the walk, the same shape and ceiling `/graph` already offers. The repository has\naccepted it since the helper landed; only this door never declared it, so every request reached the\nunbounded `*1..` statement whatever the caller wanted. Omitted it stays unbounded \u2014 the previous\nbehaviour, and what an un-rooted caller asks for \u2014 but it is now a caller's CHOICE rather than the\nonly thing the door can do. `age.py` names that unbounded path over a grown graph as the reason a\npooled connection cannot be pinned.",
         "operationId": "get_upstream_datasets__name__upstream_get",
         "parameters": [
           {
@@ -3865,6 +3919,24 @@
             "schema": {
               "title": "Name",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 20,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Depth"
             }
           },
           {

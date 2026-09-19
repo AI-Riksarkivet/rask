@@ -34,7 +34,12 @@ from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
 
 #: The optional per-tenant project (#84) — shared by the auth gate and the /produce route (FastAPI
 #: deduplicates the identically-declared query param). Pattern-bound so an unsafe id 422s at the edge.
-ProjectParam = Annotated[str | None, Query(min_length=1, max_length=64, pattern=PROJECT_PATTERN)]
+#:
+#: The bounds MATCH the pattern rather than sitting outside it. ``PROJECT_PATTERN`` is the catalog's
+#: mint rule, which fixes the length at 3-63; a schema advertising 1-64 documents a project id no
+#: control plane can issue and the pattern then refuses, so a generated client's own validation and
+#: this door's disagree about which ids are worth sending.
+ProjectParam = Annotated[str | None, Query(min_length=3, max_length=63, pattern=PROJECT_PATTERN)]
 
 
 async def _require_admin(fga_client: OpenFgaClient, *, user: str, obj: str) -> None:

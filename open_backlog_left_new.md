@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**203 open items**, of which **98 are blocked on a decision** and **105 can be picked up today**.
+**202 open items**, of which **97 are blocked on a decision** and **105 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 59 | 21 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 58 | 21 | 14 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -424,13 +424,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* `governed/deps.py:181` and `:208` return `token.sub` verbatim as the FGA subject; no principal mapping, no configurable claim and no ruling in `docs/DECISIONS.md` (only the 2026-07-23 team/role WONTFIX at :412). After the ruling, land the principal id, the migration that re-keys existing tuples, and only then any configurable subject claim — it must not ship alone.
 - *Closes when:* Either DECISIONS.md records subject keys as permanent, or a principal-id seam plus tuple migration lands with a test that a connector rename keeps grants intact.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/deps.py:181,208` · `docs/DECISIONS.md:412 (only related ruling)`
-
-**LH-069 · The consume-side project-id rule is looser than the mint rule because pre-registry ghost ids were never adopted or revoked**
-`catalog, medallion, service-kit` · **MED**
-- **blocked:** Owner decision: adopt the pre-registry ghost project ids into the registry, or revoke them
-- *What is left:* Mint rule is `CONTROL_ID_RE` (`identifiers.py:33`: lowercase DNS-safe 3-63 chars, `\Z`-anchored); consume rule is `PROJECT_PATTERN` (`warehouse_registry.py:38`: `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`, used by `is_safe_project` in catalog lineage_emit, medallion ingest_trigger and transform). After the decision, migrate the live control root, tighten `PROJECT_PATTERN` to the mint rule and regenerate medallion's clients (wire-visible). The presence of ghost ids in the live registry was not verified this session (no cluster access).
-- *Closes when:* `PROJECT_PATTERN` equals the mint rule and every registered project id satisfies it.
-- *Evidence:* `services/catalog/src/catalog/core/identifiers.py:32-33` · `packages/service-kit/src/service_kit/lakehouse/warehouse_registry.py:38-39,143-145` · `services/medallion/src/medallion/services/ingest_trigger.py:205`
 
 **LH-072 · `VendedCredentials.storage_options` is one mapping that mixes secrets with endpoint/region config**
 `catalog, storage` · **MED**

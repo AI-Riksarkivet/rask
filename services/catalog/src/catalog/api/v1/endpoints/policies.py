@@ -49,13 +49,14 @@ from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
+from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyRequest, PolicyResponse, ProjectPoliciesResponse
 from catalog.services import native, warehouses
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse import maintenance_policies as policies
+from service_kit.lakehouse.naming import CONTROL_ID_RE
 
 
 log = logging.getLogger(__name__)

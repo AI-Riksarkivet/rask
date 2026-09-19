@@ -6,31 +6,17 @@ segment. The root namespace is represented by the delimiter itself.
 Object-id *canonicalization* (joining segments into the string OpenFGA stores)
 lives in :mod:`service_kit.governed.fga` (``canonical_object_id`` / ``parent_namespace_id``),
 so the FGA object string is defined in exactly one place and the grant + check
-paths cannot drift apart. This module owns the structural shape of an identifier:
-splitting it into segments. (Parent-namespace derivation lives in ``service_kit.governed.fga``.)
+paths cannot drift apart. The control-plane id SHAPE (``CONTROL_ID_RE``) lives in :mod:`service_kit.lakehouse.naming` for the same reason: the
+planes that CONSUME a project id decide with that rule too, and one the issuer owns alone is one the
+consumers copy and then diverge from. This module owns the structural shape of a Lance object
+identifier: splitting it into segments. (Parent-namespace derivation lives in
+``service_kit.governed.fga``.)
 """
 
 from __future__ import annotations
 
-import re
-
 from lance_namespace import InvalidInputError
 
-
-#: The shape a control-plane id (project, warehouse, bucket) must have: DNS-safe — lowercase
-#: alphanumeric plus hyphens, 3-63 characters, never starting or ending with a hyphen. It doubles as an
-#: S3 bucket name, a registry filename and an OpenFGA object id, so the strictest of those wins.
-#:
-#: **Anchored with ``\Z``, not ``$``, and that is load-bearing.** Python's ``$`` also matches just BEFORE
-#: a trailing newline, so ``"acme\n"`` satisfied a ``$``-anchored copy of this rule. That id then became a
-#: registry filename AND an FGA object id — and OpenFGA rejects whitespace in the latter, so the registry
-#: record landed and the tuple write failed: precisely the record-without-tuples drift Decision 1 exists to
-#: prevent. Found 2026-08-04 in an adversarial review, live in two of the three copies of this pattern.
-#:
-#: It is ONE constant because it was three copies that had already diverged. A shape rule duplicated per
-#: endpoint is a rule that holds until someone fixes one site.
-ID_PATTERN = r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
-CONTROL_ID_RE = re.compile(rf"^{ID_PATTERN}\Z")
 
 #: How deep a namespace tree may nest — an EXCLUSIVE bound: this depth is the first one NOT allowed,
 #: so the deepest legal namespace has ``MAX_NAMESPACE_DEPTH - 1`` segments. That is not a stylistic

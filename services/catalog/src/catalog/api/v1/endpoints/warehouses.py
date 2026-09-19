@@ -61,7 +61,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
-from catalog.core.identifiers import CONTROL_ID_RE, parse_identifier
+from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import CredentialVendor
 from catalog.schemas import (
     CreateWarehouseNamespaceRequest,
@@ -77,6 +77,7 @@ from catalog.services.vend_probe import CAS_CHECK, CAS_RESERVE, SCOPE_CHECK, Pro
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.ns_errors import PartiallyApplied
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError
 from storage import s3_client, split_s3_uri

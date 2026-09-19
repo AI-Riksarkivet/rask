@@ -36,7 +36,8 @@ from lance_namespace import InvalidInputError
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import namespaces as ns_endpoint
 from catalog.api.v1.endpoints import warehouses as wh_endpoint
-from catalog.core.identifiers import CONTROL_ID_RE, MAX_NAMESPACE_DEPTH, parse_identifier
+from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier
+from service_kit.lakehouse.naming import CONTROL_ID_RE
 
 
 DELIM = "$"

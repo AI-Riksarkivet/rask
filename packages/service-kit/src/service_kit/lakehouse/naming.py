@@ -1,6 +1,8 @@
-"""Catalog table-id naming — the ONE delimiter the estate's governed table ids use."""
+"""Estate-wide identifier naming — the delimiter governed table ids use, and the shape a control-plane id has."""
 
 from __future__ import annotations
+
+import re
 
 
 #: The catalog table-id delimiter (``gold$catalog``, ``silver$features``). ONE definition for the whole
@@ -20,6 +22,30 @@ from __future__ import annotations
 #: is no migration for it and nothing detects it — the symptom is a total, silent authorization
 #: outage on an estate whose logs report a healthy catalog.
 CATALOG_DELIMITER = "$"
+
+
+#: The shape a control-plane id (project, warehouse, bucket) must have: DNS-safe — lowercase
+#: alphanumeric plus hyphens, 3-63 characters, never starting or ending with a hyphen. It doubles as an
+#: S3 bucket name, a registry filename and an OpenFGA object id, so the strictest of those wins.
+#:
+#: **Anchored with ``\Z``, not ``$``, and that is load-bearing.** Python's ``$`` also matches just BEFORE
+#: a trailing newline, so ``"acme\n"`` satisfied a ``$``-anchored copy of this rule. That id then became a
+#: registry filename AND an FGA object id — and OpenFGA rejects whitespace in the latter, so the registry
+#: record landed and the tuple write failed: precisely the record-without-tuples drift Decision 1 exists to
+#: prevent. Found 2026-08-04 in an adversarial review, live in two of the three copies of this pattern.
+#:
+#: It is ONE constant because it was three copies that had already diverged. A shape rule duplicated per
+#: endpoint is a rule that holds until someone fixes one site.
+#:
+#: **IT LIVES IN SERVICE-KIT BECAUSE TWO PLANES DECIDE WITH IT, AND THEY DISAGREED.** The catalog MINTS
+#: against this rule; the planes downstream — `catalog.core.lineage_emit`, the medallion's ingest
+#: trigger and transform, `ingest.naming` — CONSUME with `warehouse_registry.is_safe_project`, which
+#: had its own looser copy admitting uppercase, underscores, single characters and a trailing hyphen.
+#: Anything in that gap is an id those planes would turn into an S3 key prefix, a Lance dataset URI and
+#: a lineage namespace qualifier, and that the control plane could never have issued. The rule a
+#: producer checks and the rule the issuer enforces cannot live in the issuer.
+CONTROL_ID_PATTERN = r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]"
+CONTROL_ID_RE = re.compile(rf"^{CONTROL_ID_PATTERN}\Z")
 
 
 #: The lineage namespaces that denote a source OUTSIDE the governed estate.

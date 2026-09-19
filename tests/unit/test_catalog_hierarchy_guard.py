@@ -144,7 +144,7 @@ def test_a_control_plane_id_cannot_end_in_a_newline() -> None:
     result is a record with no tuples — the exact record-without-tuples drift Decision 1 exists to
     prevent, produced by the guard meant to stop it.
     """
-    from catalog.core.identifiers import CONTROL_ID_RE
+    from service_kit.lakehouse.naming import CONTROL_ID_RE
 
     assert CONTROL_ID_RE.match("acme") is not None
     assert CONTROL_ID_RE.match("acme\n") is None
@@ -160,7 +160,7 @@ def test_every_control_plane_door_shares_ONE_id_pattern() -> None:
     compilations would drift again exactly the same way.
     """
     from catalog.api.v1.endpoints import policies, projects, warehouses
-    from catalog.core.identifiers import CONTROL_ID_RE
+    from service_kit.lakehouse.naming import CONTROL_ID_RE
 
     assert projects._ID_RE is CONTROL_ID_RE
     assert warehouses._ID_RE is CONTROL_ID_RE

@@ -15507,6 +15507,22 @@
           },
           {
             "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
             "name": "dapr-api-token",
             "required": false,
             "schema": {
@@ -15551,6 +15567,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -22414,6 +22446,7 @@
             }
           },
           {
+            "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -22426,6 +22459,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
               "title": "Branch"
             }
           },
@@ -22586,6 +22620,7 @@
             }
           },
           {
+            "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -22598,6 +22633,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
               "title": "Branch"
             }
           },
@@ -24291,6 +24327,7 @@
             }
           },
           {
+            "description": "The ref to describe. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -24303,6 +24340,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref to describe. Omit for main.",
               "title": "Branch"
             }
           },
@@ -25203,6 +25241,7 @@
             }
           },
           {
+            "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -25215,6 +25254,7 @@
                   "type": "null"
                 }
               ],
+              "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
               "title": "Branch"
             }
           },
@@ -25359,6 +25399,7 @@
             }
           },
           {
+            "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -25371,6 +25412,7 @@
                   "type": "null"
                 }
               ],
+              "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
               "title": "Branch"
             }
           },
@@ -25547,6 +25589,7 @@
             }
           },
           {
+            "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -25559,6 +25602,7 @@
                   "type": "null"
                 }
               ],
+              "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
               "title": "Branch"
             }
           },
@@ -25710,6 +25754,7 @@
             }
           },
           {
+            "description": "The ref to insert into. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -25722,6 +25767,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref to insert into. Omit for main.",
               "title": "Branch"
             }
           },
@@ -25884,6 +25930,7 @@
             }
           },
           {
+            "description": "REFUSED here: a rewrite on a branch would materialise the parent's bytes into it.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -25896,6 +25943,7 @@
                   "type": "null"
                 }
               ],
+              "description": "REFUSED here: a rewrite on a branch would materialise the parent's bytes into it.",
               "title": "Branch"
             }
           },
@@ -25915,6 +25963,22 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           },
           {
@@ -25963,6 +26027,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -26029,7 +26109,7 @@
     },
     "/v1/table/{id}/maintenance/preview": {
       "post": {
-        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` is DECLARED only so it can be REFUSED \u2014 see the module header.",
+        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is\nmeasured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns \u2014 so [[LH-094]]'s\nquestion about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``\nboth reclaim, and stay refused until that is decided for them.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather\nthan asserting the branch reached ``open_dataset``.",
         "operationId": "preview_maintenance_v1_table__id__maintenance_preview_post",
         "parameters": [
           {
@@ -26042,6 +26122,7 @@
             }
           },
           {
+            "description": "The ref to preview. Omit for main; this door reads the ref it is given.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -26054,6 +26135,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref to preview. Omit for main; this door reads the ref it is given.",
               "title": "Branch"
             }
           },
@@ -26182,6 +26264,7 @@
             }
           },
           {
+            "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -26194,6 +26277,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
               "title": "Branch"
             }
           },
@@ -26213,6 +26297,22 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           },
           {
@@ -26261,6 +26361,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -26340,6 +26456,7 @@
             }
           },
           {
+            "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -26352,6 +26469,7 @@
                   "type": "null"
                 }
               ],
+              "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
               "title": "Branch"
             }
           },
@@ -26608,6 +26726,7 @@
             }
           },
           {
+            "description": "The ref to merge into. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -26620,6 +26739,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref to merge into. Omit for main.",
               "title": "Branch"
             }
           },
@@ -28372,6 +28492,7 @@
             }
           },
           {
+            "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -28384,6 +28505,7 @@
                   "type": "null"
                 }
               ],
+              "description": "REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref.",
               "title": "Branch"
             }
           },
@@ -29772,7 +29894,7 @@
     },
     "/v1/table/{id}/version/create": {
       "post": {
-        "description": "Create one version entry for this table, from a manifest the table itself owns.",
+        "description": "Create one version entry for this table, from a manifest the table itself owns.\n\nTHE ONLY DOOR IN THIS MODULE THAT WRITES, and until [[LH-018]] it recorded nothing. It MOVES a\nmanifest into the table's version slot, so a version exists afterwards that did not before \u2014 and a\nversion minted through the SPEC's own commit door left no provenance, while the same table's\n`/commit` door emitted. Two doors onto one table, one of them silent.\n\nEmitted AFTER the native call, pinned to the version just minted, exactly as the column doors and\n`restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion\ncontrol, and two ops the dir backend answers 406) and stay quiet on purpose \u2014 an emit from those\nwould be provenance for work that never happened.\n\nNO `Idempotency-Key` SEAM HERE, DELIBERATELY: the version CAS already converges a replay, and\nwiring `catalog.api.idempotency` on top would add a second answer to a question the spec has\nsettled. Measured 2026-09-16 against a real `dir` namespace \u2014 a staged manifest committed at version\n2, then the identical request replayed::\n\n    attempt 1 -> OK, version 2\n    attempt 2 -> ConcurrentModificationError (code 14)\n\nwhich is precisely the error set `lance_docs/namespace.md:1772` declares for this operation\n(1 NamespaceNotFound, 4 TableNotFound, 14 ConcurrentModification). That is the seam's own bar and it\nis met without it: the replay is non-destructive (the slot is occupied, so nothing moves), it maps to\n409 rather than a bare 500, and the caller can tell its own commit from a competing writer's by\nreading `DescribeTableVersion` and comparing the `e_tag` of the manifest it staged. Contrast\n`create_table`, which the seam DOES wrap: there a replay's `AlreadyExists` is indistinguishable from\na name collision and the caller cannot learn whether its own write landed.",
         "operationId": "create_table_version_v1_table__id__version_create_post",
         "parameters": [
           {
@@ -29800,6 +29922,22 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
             }
           },
           {
@@ -29848,6 +29986,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -30229,6 +30383,7 @@
             }
           },
           {
+            "description": "The ref whose version history to list. Omit for main.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -30241,6 +30396,7 @@
                   "type": "null"
                 }
               ],
+              "description": "The ref whose version history to list. Omit for main.",
               "title": "Branch"
             }
           },

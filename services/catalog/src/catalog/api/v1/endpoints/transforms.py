@@ -31,7 +31,6 @@ from pydantic import ValidationError
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
-from catalog.core.identifiers import CONTROL_ID_RE
 from catalog.schemas import (
     ProjectTransformsResponse,
     RegisteredTaskResponse,
@@ -43,6 +42,7 @@ from catalog.schemas import (
 )
 from service_kit.control_emit import emit_control
 from service_kit.lakehouse import task_registry, transform_specs
+from service_kit.lakehouse.naming import CONTROL_ID_RE
 from service_kit.lakehouse.transform_specs import TransformSpec
 
 
