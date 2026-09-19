@@ -18,14 +18,14 @@ allow/deny/outage AND the service-token acceptance — is audited on the ``lance
 from __future__ import annotations
 
 import secrets
-from typing import Annotated
+from typing import Annotated, Protocol
 
 from fastapi import Header, Query, Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
-from service_kit.governed import fga
+from service_kit.governed import dapr_auth, fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.oidc import OIDCVerifier, verify_off_loop
@@ -54,6 +54,38 @@ async def _require_admin(fga_client: OpenFgaClient, *, user: str, obj: str) -> N
         raise PermissionDeniedError("produce needs project admin (can_administer) or the service token")
 
 
+class _HasAppApiToken(Protocol):
+    """The one field `_expected_app_token` reads.
+
+    A Protocol rather than `MedallionSettings` so the resolver is drivable without constructing the
+    whole settings surface — the rule under test is WHICH SOURCE ANSWERS FIRST, and a test that had to
+    build every unrelated field to ask that would be asserting through noise.
+    """
+
+    @property
+    def app_api_token(self) -> str: ...
+
+
+def _expected_app_token(settings: _HasAppApiToken) -> str:
+    """The app token THIS DOOR verifies, resolved the way every other inbound door resolves it.
+
+    ONE SECRET, ONE ACCESSOR. `core/config.py::outbound_app_token` exists because the outbound
+    credential read `settings.app_api_token` directly and went silent when the estate's secrets rule
+    moved the token off the environment; its docstring names `dapr_auth.expected_app_token` as "the
+    single resolver the inbound doors use". This door did not use it. Measured on the deployed producer
+    2026-09-19: `expected_app_token()` returns a token while `settings.app_api_token` is `''`, so the
+    gate read "unconfigured" on an estate that has one and took its dev-open path — `GET /stage-runners`
+    answered 200 with real data to a caller holding no credential at all.
+
+    The typed setting stays as the FALLBACK so a deployment still carrying the env value keeps working;
+    what changes is which source answers FIRST.
+
+    It does not catch `SecretStoreUnreadable`, for `outbound_app_token`'s reason: a store outage must
+    not degrade into an open door, which is the same argument one direction further in.
+    """
+    return dapr_auth.expected_app_token() or settings.app_api_token or ""
+
+
 async def authorize_produce(
     request: Request,
     settings: SettingsDep,
@@ -79,7 +111,7 @@ async def authorize_produce(
     before. The service-token path stays project-BLIND: the shared token authenticates the service, not
     a tenant, so it may only produce into the configured project — a different requested project is
     refused (403); crossing tenants takes a user bearer, which gets the per-project FGA check."""
-    expected = settings.app_api_token
+    expected = _expected_app_token(settings)
     # Dev: no service token configured → open, exactly as require_dapr_token was a no-op. No verified
     # subject exists on this path, so there is no originator to carry — `None`, never a guess.
     if not expected:

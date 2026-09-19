@@ -23,18 +23,24 @@ from pydantic import BaseModel
 
 from medallion.api.dependencies import SettingsDep
 from medallion.api.produce_auth import authorize_produce
+from medallion.core.config import MedallionSettings, outbound_app_token
 
 
-def _app_token_header(settings: Any) -> dict[str, str]:
-    """The service credential the stage runner's routes verify.
+def _app_token_header(settings: MedallionSettings) -> dict[str, str]:
+    """The service credential the stage runner's routes verify, resolved the way they verify it.
 
-    Built here rather than imported: `dapr_auth` exposes the VERIFIER (`require_dapr_token`) and no
-    sender-side helper, and the header name is the one Dapr itself injects. Read off the typed
-    settings surface (`app_api_token`, alias APP_API_TOKEN) like every other medallion read of this
-    credential — never the raw environment. Absent in the open dev default, where the stage runner's check
-    is a no-op too — so the two stay consistent.
+    THROUGH `outbound_app_token`, which is the sender-side helper this function once said did not
+    exist. It resolves `dapr_auth.expected_app_token()` first and falls back to the typed setting, so
+    the header this sends and the token `require_dapr_token` expects come from ONE accessor.
+
+    Reading `settings.app_api_token` directly was the same defect `outbound_app_token` was written to
+    fix one caller earlier, and its old justification — "absent in the open dev default, where the
+    stage runner's check is a no-op too, so the two stay consistent" — is false wherever the estate
+    keeps the token off the environment: measured on the deployed producer 2026-09-19,
+    `expected_app_token()` returns a token while `settings.app_api_token` is `''`. The receiving check
+    is NOT a no-op there, so the two were consistent only in the deployment that needed it least.
     """
-    token = settings.app_api_token
+    token = outbound_app_token(settings)
     return {"dapr-api-token": token} if token else {}
 
 
