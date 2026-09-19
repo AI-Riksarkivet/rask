@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Request, Response, status
+from fastapi import APIRouter, Header, Query, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api import lineage_deps
@@ -76,7 +76,14 @@ async def _base_refs(ds: object, so: dict[str, str]) -> maintenance.BaseRefs:
 
 
 @router.post("/{id}/maintenance/preview")
-async def preview_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, branch: str | None = None) -> GcPreview:
+async def preview_maintenance(
+    id: str,
+    body: GcRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    branch: Annotated[str | None, Query(description="The ref to preview. Omit for main; this door reads the ref it is given.")] = None,
+) -> GcPreview:
     """Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
     gated (``can_drop``); never mutates.
 
@@ -102,12 +109,24 @@ async def preview_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settin
 
 
 @router.post("/{id}/maintenance/run")
-async def run_maintenance(id: str, body: GcRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, branch: str | None = None) -> GcRunResult:
+async def run_maintenance(
+    id: str,
+    body: GcRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    branch: Annotated[str | None, Query(description="REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.")] = None,
+) -> GcRunResult:
     """Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
     (``can_drop``) — the same bar as scheduling it via the retention policy.
 
     ``branch`` is DECLARED only so it can be REFUSED — see the module header."""
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/run")
+    dataplane.refuse_a_branch_this_door_cannot_honour(
+        branch,
+        door="maintenance/run",
+        reason="this door reclaims, and what a reclaim may delete on a branch is decided per LOCATION by the estate-wide protected-base pre-pass the scheduled sweep runs; this door's `sibling_base_refs` lists one parent directory and cannot see a referrer under another root",
+        remedy="The scheduled sweep reclaims branches; it runs the pre-pass this door cannot.",
+    )
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     protected = await _base_refs(ds, so)
@@ -145,7 +164,7 @@ async def compact_maintenance(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
-    branch: str | None = None,
+    branch: Annotated[str | None, Query(description="REFUSED here: a rewrite on a branch would materialise the parent's bytes into it.")] = None,
 ) -> CompactResult | CompactAccepted:
     """Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
@@ -161,7 +180,12 @@ async def compact_maintenance(
     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
     whose fragment count nobody bounded.
     """
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="maintenance/compact")
+    dataplane.refuse_a_branch_this_door_cannot_honour(
+        branch,
+        door="maintenance/compact",
+        reason="a branch manifest registers its parent as a BASE (measured on pylance 11.0.0: `manifest_base_paths` is empty on main and names the parent on the branch), so a rewrite here would materialise the parent's bytes into `tree/<branch>/` rather than merge this ref's own fragments",
+        remedy="Compact the parent, which is where these fragments live.",
+    )
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments)
     protected = await _base_refs(ds, so)
@@ -242,7 +266,9 @@ async def reindex_maintenance(
     token: CurrentToken,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
-    branch: str | None = None,
+    branch: Annotated[
+        str | None, Query(description="The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.")
+    ] = None,
 ) -> ReindexResult | ReindexAccepted:
     """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
     index that is there, and an unmapped suffix would fall through to the writer rung.

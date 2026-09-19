@@ -23,10 +23,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import lance_namespace
 import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lance_namespace import LanceNamespace
 
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
@@ -54,9 +56,9 @@ def _rows(n: int, start: int = 0) -> pa.Table:
 
 
 @pytest.fixture
-def namespace(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
+def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at two versions, the branch at several — so a preview can tell the refs apart."""
-    ns = __import__("lance_namespace").connect("dir", {"root": str(tmp_path / "data")})
+    ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     create_table(ns, {}, TABLE_ID, _ipc(_rows(1)), mode="create")
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1, start=1))
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, None)
@@ -67,7 +69,7 @@ def namespace(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-onl
 
 
 @pytest.fixture
-def client(namespace: Any) -> Iterator[TestClient]:  # noqa: ANN401 — the runtime namespace handle
+def client(namespace: LanceNamespace) -> Iterator[TestClient]:
     settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
@@ -86,7 +88,7 @@ def _preview(client: TestClient, *, branch: str | None) -> dict[str, Any]:
     return response.json()
 
 
-def test_the_refs_really_diverged(namespace: Any) -> None:  # noqa: ANN401
+def test_the_refs_really_diverged(namespace: LanceNamespace) -> None:
     """Without this the comparison below could pass by previewing either ref."""
     main_versions = len(open_dataset(namespace, {}, TABLE_ID).versions())
     branch_versions = len(open_dataset(namespace, {}, TABLE_ID, branch=BRANCH).versions())
@@ -94,7 +96,7 @@ def test_the_refs_really_diverged(namespace: Any) -> None:  # noqa: ANN401
     assert branch_versions > main_versions, f"the fixture did not diverge the refs (main={main_versions}, branch={branch_versions})"
 
 
-def test_previewing_a_BRANCH_describes_the_branch(client: TestClient, namespace: Any) -> None:  # noqa: ANN401
+def test_previewing_a_BRANCH_describes_the_branch(client: TestClient, namespace: LanceNamespace) -> None:
     """THE DEFECT: previewing main and labelling it the branch's is a 200 that misinforms."""
     branch_current = open_dataset(namespace, {}, TABLE_ID, branch=BRANCH).version
 
@@ -103,7 +105,7 @@ def test_previewing_a_BRANCH_describes_the_branch(client: TestClient, namespace:
     assert body["current_version"] == branch_current, f"the preview describes version {body['current_version']} while the branch is at {branch_current}"
 
 
-def test_previewing_WITHOUT_a_branch_still_describes_main(client: TestClient, namespace: Any) -> None:  # noqa: ANN401
+def test_previewing_WITHOUT_a_branch_still_describes_main(client: TestClient, namespace: LanceNamespace) -> None:
     """The control. A door stamping every request with a branch would pass above and fail here."""
     main_current = open_dataset(namespace, {}, TABLE_ID).version
 

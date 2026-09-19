@@ -29,7 +29,7 @@ from typing import Any, cast
 import pytest
 from lance_namespace import PermissionDeniedError
 
-from lineage.models import UnauthoredRunError
+from lineage.models import RunEvent, UnauthoredRunError
 from lineage.services.consumer import handle_cloud_event
 
 
@@ -46,10 +46,17 @@ def _event(run_id: str = "11111111-2222-3333-4444-555555555555") -> dict[str, An
 
 
 class _Repo:
-    def __init__(self) -> None:
-        self.ingested: list[Any] = []
+    """A repository that records what it was asked to ingest.
 
-    async def ingest_event(self, event: Any) -> None:
+    Typed on `RunEvent` rather than `Any` because that IS the contract under test: every arm below
+    asserts the event did or did not reach the graph, and a fake that accepts anything cannot fail
+    when the door starts handing it something else.
+    """
+
+    def __init__(self) -> None:
+        self.ingested: list[RunEvent] = []
+
+    async def ingest_event(self, event: RunEvent) -> None:
         self.ingested.append(event)
 
 
@@ -66,7 +73,7 @@ async def test_a_MALFORMED_payload_is_acked_not_parked() -> None:
 async def test_an_UNAUTHORED_run_is_acked_not_parked() -> None:
     """36 re-parks of one run across restarts, measured. The author cannot be added after publication."""
 
-    async def refuse_unauthored(_event: Any) -> None:
+    async def refuse_unauthored(_event: RunEvent) -> None:
         # The TYPE is what carries the distinction, not the message — the gate raises this one, and a
         # test that hand-rolled a plain `PermissionDeniedError` here would be asserting on a string.
         raise UnauthoredRunError("a bus-delivered run must carry a verified author sub to be authorized")
@@ -85,7 +92,7 @@ async def test_a_PERSON_without_a_grant_still_parks() -> None:
     exactly the silent loss the dead-letter topic exists to prevent.
     """
 
-    async def refuse_person(_event: Any) -> None:
+    async def refuse_person(_event: RunEvent) -> None:
         raise PermissionDeniedError("can_write_data required on outputs: acme-ns$t1")
 
     repo = _Repo()
@@ -98,7 +105,7 @@ async def test_a_PERSON_without_a_grant_still_parks() -> None:
 async def test_an_UNAVAILABLE_authorizer_still_retries() -> None:
     """An outage is not a verdict. Acking here would delete provenance for its duration."""
 
-    async def boom(_event: Any) -> None:
+    async def boom(_event: RunEvent) -> None:
         raise RuntimeError("authorization service is not available")
 
     repo = _Repo()

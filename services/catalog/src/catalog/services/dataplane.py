@@ -1274,7 +1274,7 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
     )
 
 
-def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None) -> None:
+def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, remedy: str | None = None, reason: str | None = None) -> None:
     """Refuse a branch-scoped read the upstream implementation answers from MAIN.
 
     `query_table`, `explain_table_query_plan` and `analyze_table_query_plan` all declare `branch` and
@@ -1320,10 +1320,19 @@ def refuse_a_branch_this_door_cannot_honour(branch: str | None, *, door: str, re
         # A client dispatching on the 24 codes cannot tell two answers apart as one condition, so the
         # divergence was a contract defect rather than a wording one. Doors differ in what the caller
         # should do INSTEAD; they must not differ in what kind of thing happened.
+        # `reason` REPLACES the sentence rather than appending to it, and that distinction is the point:
+        # the default describes the query/index family, where the implementation genuinely answers from
+        # main (verified live 2026-08-31 — `/query?branch=work` returned main's rows twice, once for a
+        # branch that never existed). It is FALSE of the maintenance doors, which can open the ref and
+        # decline for an unrelated cause, so appending their reason to it would leave a refusal that
+        # states two things and is wrong about one. A caller acts on the cause; giving the wrong one
+        # sends them to the wrong remedy and makes a settled answer read as an unfinished door.
+        default = (
+            "the underlying implementation answers from the main branch regardless of `branch`, so "
+            f"honouring the parameter here would return main's rows labelled as {branch!r}"
+        )
         raise UnsupportedOperationError(
-            f"{door} cannot be scoped to a branch: the underlying implementation answers from the main "
-            f"branch regardless of `branch`, so honouring the parameter here would return main's rows "
-            f"labelled as {branch!r}. " + (remedy or "Read the branch through `count_rows`, or query it directly.")
+            f"{door} cannot be scoped to a branch {branch!r}: {reason or default}. " + (remedy or "Read the branch through `count_rows`, or query it directly.")
         )
 
 
