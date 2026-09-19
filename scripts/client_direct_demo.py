@@ -93,7 +93,7 @@ def main() -> None:
     assert r.status_code in (200, 409), r.text
 
     # Vend: get the write target (location) + optimistic base (read_version) + scoped creds in one call.
-    r = requests.post(f"{CATALOG}/v1/table/{TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30)
+    r = requests.post(f"{CATALOG}/management/v1/table/{TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30)
     assert r.status_code == 200, r.text
     cred = r.json()
     location, read_version = cred["location"], cred["read_version"]
@@ -118,7 +118,7 @@ def main() -> None:
 
     # Commit: the catalog folds the fragment metadata into a governed metadata-only Lance commit.
     r = requests.post(
-        f"{CATALOG}/v1/table/{TABLE}/commit",
+        f"{CATALOG}/management/v1/table/{TABLE}/commit",
         headers={**h, "content-type": "application/json"},
         data=body,
         timeout=30,

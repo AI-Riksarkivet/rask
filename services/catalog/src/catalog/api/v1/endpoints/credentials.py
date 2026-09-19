@@ -41,7 +41,10 @@ from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 log = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/v1/table", tags=["credentials"])
+#: THE MANAGEMENT SURFACE ([[LH-021]]). These are rask's own operations, not Lance namespace ones —
+#: a spec client discovering them on `/v1/table` meets verbs the document never defines. They mount at
+#: `/management/v1` and inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+router = APIRouter(prefix="/management/v1/table", tags=["credentials"])
 
 
 @router.post("/{id}/credentials", response_model_exclude_none=True)

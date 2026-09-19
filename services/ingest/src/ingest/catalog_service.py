@@ -12,7 +12,7 @@ version. Registering locally means the run lands its data and nothing downstream
   where the creation-time-only flags are applied, which is what A14 gates. We send an EMPTY Arrow
   stream, so "no byte transits the catalog" stays true rather than becoming false on every dataset's
   first run.
-* `POST /v1/table/{id}/commit` — APPENDS ARE CLIENT-DIRECT. Workers write fragments straight to
+* `POST /management/v1/table/{id}/commit` — APPENDS ARE CLIENT-DIRECT. Workers write fragments straight to
   object storage; this door takes only the serialized `FragmentMetadata` plus the `read_version` they
   were built against, folds them into a metadata-only Lance commit under root credentials, and emits
   the INSERT lineage. No data byte moves through the catalog on the bulk path.
@@ -250,7 +250,7 @@ class CatalogServiceClient:
 
         from ingest.http import shared_client
 
-        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/credentials"
+        url = f"{self._base}/management/v1/table/{self.table_id(namespace, dataset)}/credentials"
         try:
             # `params`, NOT `json`. The door declares `tier: Annotated[Tier, Query()] = "read"`, and
             # FastAPI ignores an unknown body on a query parameter — so a body-borne tier was invisible
@@ -435,7 +435,7 @@ class CatalogServiceClient:
             # with the version this run already committed (idempotent replay).
             "run_id": run_id,
         }
-        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/commit"
+        url = f"{self._base}/management/v1/table/{self.table_id(namespace, dataset)}/commit"
         try:
             response = shared_client().post(url, json=payload, headers=self._headers(), timeout=TIMEOUT_SECONDS)
         except Exception as exc:
@@ -476,7 +476,7 @@ class CatalogServiceClient:
         """
         from ingest.http import shared_client
 
-        url = f"{self._base}/v1/table/{self.table_id(namespace, dataset)}/publish"
+        url = f"{self._base}/management/v1/table/{self.table_id(namespace, dataset)}/publish"
         # `required_columns` adds one `column_declared` assertion each — the breaking-change detector,
         # which refuses a version that dropped a column a consumer depends on. `PublishRequest` has
         # always accepted it and no caller sent any, so the door ran two assertions where the

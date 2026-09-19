@@ -83,7 +83,7 @@ def client(namespace: LanceNamespace) -> Iterator[TestClient]:
 
 def _preview(client: TestClient, *, branch: str | None) -> dict[str, Any]:
     suffix = f"?branch={branch}" if branch else ""
-    response = client.post(f"/v1/table/rows/maintenance/preview{suffix}", json={"retain_versions": 1})
+    response = client.post(f"/management/v1/table/rows/maintenance/preview{suffix}", json={"retain_versions": 1})
     assert response.status_code == 200, response.text
     return response.json()
 

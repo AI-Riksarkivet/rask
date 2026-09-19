@@ -70,7 +70,7 @@ def test_no_route_declares_a_dependency_its_body_never_uses() -> None:
     assert not offences, "route parameters nothing in the handler reads — drop them:\n  " + "\n  ".join(offences)
 
 
-@pytest.mark.parametrize("path", ["/v1/table/db1$t/tasks", "/v1/namespace/db1/tasks"])
+@pytest.mark.parametrize("path", ["/management/v1/table/db1$t/tasks", "/management/v1/namespace/db1/tasks"])
 def test_the_task_routes_are_still_authenticated(path: str) -> None:
     """The removal must not be the thing that opens the door: with the router's gate refusing, the
     route must never run its body. A stand-in `authorize` proves the ROUTER dependency is what

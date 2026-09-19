@@ -4,7 +4,7 @@
 	// `version | committed | manifest` for the newest ten and hid the rest.
 	//
 	// Where each column comes from, and why it can only come from there:
-	//  · WHAT — Lance's own transaction log (`GET /v1/table/{id}/history`). Its `operation` is the FORMAT's
+	//  · WHAT — Lance's own transaction log (`GET /management/v1/table/{id}/history`). Its `operation` is the FORMAT's
 	//    vocabulary (`Overwrite`/`Append`/`Delete`/`Update`/`Merge`/`Rewrite`/`CreateIndex`/`Restore`), and
 	//    its detail fields are whatever that operation carries — absent, not null, when it does not. So
 	//    "what changed" is rendered from the keys present (see `summarizeChange`), never from a switch on
@@ -607,8 +607,8 @@
 		<div class="banner fail">{historyDrift}</div>
 	{:else if historyStatus === 404}
 		<div class="banner warn">
-			The catalog does not serve <code>/v1/table/{table}/history</code> (404) — this deployment
-			predates the endpoint. Showing the manifest list only: <em>operation</em>,
+			The catalog does not serve <code>/management/v1/table/{table}/history</code> (404) — this
+			deployment predates the endpoint. Showing the manifest list only: <em>operation</em>,
 			<em>what changed</em> and the raw transaction fields need it.
 		</div>
 	{:else if historyStatus === 403}

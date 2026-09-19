@@ -152,7 +152,7 @@ def _client_over(payload: bytes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
 
 def _publish(client: TestClient, **body: Any) -> Any:  # noqa: ANN401
-    return client.post("/v1/table/features/publish", json={"version": 1, **body})
+    return client.post("/management/v1/table/features/publish", json={"version": 1, **body})
 
 
 def test_a_tier_with_no_stage_or_lineage_column_is_REFUSED(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> None:

@@ -136,7 +136,7 @@ def test_commit_sends_fragments_as_DICTS_not_as_the_strings_the_plane_carries() 
     because a fragment has to survive a Dapr activity boundary. Sending the strings through would be
     a 422 at the very end of a run, after every unit had already been fetched.
     """
-    route = respx.post(f"{BASE}/v1/table/bronze$pages/commit").mock(return_value=httpx.Response(200, json={"version": 2, "row_count": 4}))
+    route = respx.post(f"{BASE}/management/v1/table/bronze$pages/commit").mock(return_value=httpx.Response(200, json={"version": 2, "row_count": 4}))
 
     version, rows = _client().commit("bronze", "pages", ['{"id": 0}', '{"id": 1}'], read_version=1, run_id="r1")
 
@@ -153,7 +153,7 @@ def test_a_commit_CONFLICT_is_raised_rather_than_swallowed() -> None:
     The recovery is re-read and re-commit, which the activity's own retry performs. Swallowing it
     into a success would report a version this run did not produce and drop its fragments.
     """
-    respx.post(f"{BASE}/v1/table/bronze$pages/commit").mock(return_value=httpx.Response(409, json={"detail": "conflict"}))
+    respx.post(f"{BASE}/management/v1/table/bronze$pages/commit").mock(return_value=httpx.Response(409, json={"detail": "conflict"}))
 
     with pytest.raises(CatalogError, match="conflict"):
         _client().commit("bronze", "pages", ['{"id": 0}'], read_version=1, run_id="r1")

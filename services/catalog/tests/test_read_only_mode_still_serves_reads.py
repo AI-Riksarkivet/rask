@@ -45,7 +45,7 @@ WRITES = [
     "/v1/table/pages/update",
     "/v1/table/pages/delete",
     "/v1/table/pages/drop",
-    "/v1/table/pages/publish",
+    "/management/v1/table/pages/publish",
     "/v1/table/pages/tags/create",
     "/v1/table/pages/tags/delete",
     "/v1/table/pages/merge_insert",

@@ -30,7 +30,7 @@
 		// The catch-all BFF forwards the query + the session bearer + the binary body → an <img> src works.
 		// base-prefixed so the <img> hits THIS zone's proxy under its base path (not a bare origin /capi).
 		blobSrc = bffPath(
-			`/capi/v1/table/${encodeURIComponent(table)}/blobs?column=${encodeURIComponent(blobCol)}&row=${blobRow}`,
+			`/capi/management/v1/table/${encodeURIComponent(table)}/blobs?column=${encodeURIComponent(blobCol)}&row=${blobRow}`,
 		);
 	}
 </script>

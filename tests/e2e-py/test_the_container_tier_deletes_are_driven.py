@@ -279,7 +279,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
 
         # The deadline the owner has to act within. An undrop window nobody can see is not a safety
         # feature, so the door that shows it is driven here rather than assumed.
-        queued = requests.get(f"{catalog}/v1/namespace/{quote(top, safe='')}/tasks", headers=_auth(), timeout=30)
+        queued = requests.get(f"{catalog}/management/v1/namespace/{quote(top, safe='')}/tasks", headers=_auth(), timeout=30)
         assert queued.status_code == 200, f"the trash door did not answer: {queued.status_code} {queued.text[:200]}"
         assert queued.json(), "a recoverable cascade queued no expiry, so the owner cannot see how long recovery is open"
         assert queued.json()[0].get("expires_at"), f"the queued entry names no deadline: {queued.text[:300]}"
@@ -305,7 +305,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
             assert listed.status_code == 200, f"cannot list {namespace_id!r} after recovery: {listed.status_code}"
             assert expected in listed.json().get("tables", []), f"{namespace_id!r} came back without {expected!r}: {listed.text[:300]}"
 
-        settled = requests.get(f"{catalog}/v1/namespace/{quote(top, safe='')}/tasks", headers=_auth(), timeout=30)
+        settled = requests.get(f"{catalog}/management/v1/namespace/{quote(top, safe='')}/tasks", headers=_auth(), timeout=30)
         assert settled.json() == [], f"the trash record survived the recovery it completed: {settled.text[:300]}"
     finally:
         # RECOVER FIRST, then purge — in that order, because a failure ANYWHERE above can leave the

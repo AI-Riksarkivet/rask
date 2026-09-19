@@ -1,6 +1,6 @@
 """The on-demand compaction door hands the rewrite to the maintenance queue instead of doing it inline.
 
-``POST /v1/table/{id}/maintenance/compact`` rewrote every fragment of the named table INSIDE the request
+``POST /management/v1/table/{id}/maintenance/compact`` rewrote every fragment of the named table INSIDE the request
 handler. The work is unbounded in the only dimension that matters here — a table's fragment count is a
 property of the data, not of the request — so a click on a large table held a threadpool slot for as long
 as the rewrite took, and the caller held an HTTP connection for the same span with no handle on the work
@@ -107,7 +107,7 @@ def inline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClie
 
 
 def test_with_a_queue_the_door_accepts_and_does_not_rewrite_in_the_handler(queued: TestClient, published: _Published, compacted: list[str]) -> None:
-    response = queued.post("/v1/table/ns$events/maintenance/compact", json={"target_rows_per_fragment": 262144})
+    response = queued.post("/management/v1/table/ns$events/maintenance/compact", json={"target_rows_per_fragment": 262144})
     assert response.status_code == 202, response.text
     assert compacted == [], "the request handler performed the rewrite it was supposed to enqueue"
     assert len(published.calls) == 1, f"expected exactly one unit on the work topic, got {published.calls}"
@@ -117,7 +117,7 @@ def test_the_enqueued_unit_is_the_one_the_executor_already_consumes(queued: Test
     """A second message type would need a second executor. The unit must round-trip as `DatasetWorkItem`."""
     from service_kit.lakehouse.work_items import DatasetWorkItem
 
-    queued.post("/v1/table/ns$events/maintenance/compact", json={"target_rows_per_fragment": 262144})
+    queued.post("/management/v1/table/ns$events/maintenance/compact", json={"target_rows_per_fragment": 262144})
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert item.uri == "s3://warehouse/aa3bed10_ns$events"
     assert item.plan.target_rows_per_fragment == 262144
@@ -130,7 +130,7 @@ def test_the_enqueued_unit_reclaims_nothing(queued: TestClient, published: _Publ
     'compact and reclaim history now' the moment the work moved lanes."""
     from service_kit.lakehouse.work_items import DatasetWorkItem
 
-    queued.post("/v1/table/ns$events/maintenance/compact", json={})
+    queued.post("/management/v1/table/ns$events/maintenance/compact", json={})
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert item.plan.cleanup_enabled is False
     assert item.plan.optimize_indices_enabled is False
@@ -143,7 +143,7 @@ def test_the_protection_verdict_rides_the_unit(monkeypatch: pytest.MonkeyPatch, 
     from service_kit.lakehouse.work_items import DatasetWorkItem
 
     monkeypatch.setattr(door.base_refs, "sibling_base_refs", lambda uri, so: base_refs.BaseRefs(protected={base_refs.normalise(uri)}))
-    queued.post("/v1/table/ns$events/maintenance/compact", json={})
+    queued.post("/management/v1/table/ns$events/maintenance/compact", json={})
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert item.protected_by == base_refs.normalise("s3://warehouse/aa3bed10_ns$events")
 
@@ -151,7 +151,7 @@ def test_the_protection_verdict_rides_the_unit(monkeypatch: pytest.MonkeyPatch, 
 def test_without_a_queue_the_door_stays_synchronous(inline: TestClient, published: _Published, compacted: list[str]) -> None:
     """No work topic means `register_work_route` registered no executor. A 202 here accepts work that
     nothing will ever perform."""
-    response = inline.post("/v1/table/ns$events/maintenance/compact", json={})
+    response = inline.post("/management/v1/table/ns$events/maintenance/compact", json={})
     assert response.status_code == 200, response.text
     assert response.json()["fragments_removed"] == 3
     assert compacted == ["s3://warehouse/aa3bed10_ns$events"]

@@ -292,6 +292,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/namespace/{id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Namespace Tasks
+         * @description What is queued for THIS namespace — a pending trash expiry after a recoverable cascade (#96).
+         *     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
+         *     feature. Reader-gated by the router (``tasks`` is a metadata read).
+         */
+        get: operations["namespace_tasks_management_v1_namespace__id__tasks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/namespace/{id}/undrop": {
         parameters: {
             query?: never;
@@ -601,6 +623,191 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/blobs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Table Blob
+         * @description Serve one blob payload over plain HTTP — the credential-less consumer path (§9 P1).
+         *
+         *     A browser/notebook/service with NO storage credentials fetches blob bytes straight from the
+         *     catalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=…`` is
+         *     honoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes *\/size``,
+         *     and every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``
+         *     (``"<version>-<column>-<row>"``) so clients can resume safely: an ``If-Range`` that no longer
+         *     matches (the table was overwritten mid-download) downgrades the range to a full 200 instead of
+         *     silently splicing bytes from two incarnations. The body is STREAMED in bounded windows (each a
+         *     lazy ``BlobFile.read_range``), so a multi-GB payload never buffers in the catalog — the
+         *     read-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the
+         *     served version (pin ``version`` for a stable address across overwrites).
+         *
+         *     Authz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``
+         *     (same rung as ``/query``) — this endpoint serves DATA, so credential-vending tiers apply
+         *     unchanged; it just removes the need for the credentials themselves.
+         */
+        get: operations["read_table_blob_management_v1_table__id__blobs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Table Changes
+         * @description Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
+         *
+         *     Composes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is
+         *     `dataplane.read_changes`, which is its OWN scan and not the query door's — `QueryTableRequest`
+         *     requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
+         *     with nothing to do with similarity. What the two doors DO share is the framing they answer in.
+         *
+         *     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
+         *     one (§ J1), because following every row a table ever received is the most disclosing read
+         *     available, not a metadata lookup.
+         *
+         *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
+         *     shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
+         *     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
+         *     reader who was not also a writer — the feed's whole audience — was refused. Pinned by
+         *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
+         */
+        post: operations["table_changes_management_v1_table__id__changes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit Fragments
+         * @description Client-DIRECT append commit (#2) — the catalog as the governed commit coordinator.
+         *
+         *     The client wrote data fragments straight to object storage with vended, table-scoped creds (never
+         *     through here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``
+         *     and folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So
+         *     NO data byte transits the catalog — the byte-proxy's scaling + OOM liability is gone for the bulk-append
+         *     path (the read-modify-write ops — insert/merge_insert/update/delete — and the 2.2-centralizing create
+         *     stay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps
+         *     ``/commit`` to ``can_write_data``. Conflict → 409 (re-read the version + re-commit); schema/version
+         *     mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``).
+         */
+        post: operations["commit_fragments_management_v1_table__id__commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/compaction_commit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Commit Table Compaction
+         * @description Commit the workers' rewrite results as ONE metadata-only version.
+         *
+         *     Every data file this publishes was written by the worker that executed the task and already exists
+         *     when this is called, so no data byte transits the catalog — the same property that makes the sibling
+         *     ``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite
+         *     is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
+         *     malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
+         *
+         *     The lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and
+         *     recording it as one would put phantom writes on the graph at every maintenance pass.
+         */
+        post: operations["commit_table_compaction_management_v1_table__id__compaction_commit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/compaction_plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Plan Table Compaction
+         * @description Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
+         *
+         *     Rewriting a table's data files is unbounded work whose cost is set by the table rather than by the
+         *     request. Doing it here would make this pod's memory ceiling a function of the largest table anyone
+         *     owns and turn a maintenance pass into an availability incident for every other door on it. So the
+         *     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
+         *     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
+         *     and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
+         *
+         *     Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
+         *     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
+         *     ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
+         *
+         *     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
+         *     to queue.
+         */
+        post: operations["plan_table_compaction_management_v1_table__id__compaction_plan_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Vend Credentials
+         * @description Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.
+         *
+         *     ``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the
+         *     object store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.
+         */
+        post: operations["vend_credentials_management_v1_table__id__credentials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/erasure": {
         parameters: {
             query?: never;
@@ -628,6 +835,180 @@ export interface paths {
          *     erased a subject when they had narrowed the operation to one ref.
          */
         post: operations["erase_subject_management_v1_table__id__erasure_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Table History
+         * @description The table's commit log — one row per version, newest first: **what** changed and **when**.
+         *
+         *     Answers the question a catalog history view asks, from the format itself rather than from a
+         *     side-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so
+         *     ``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the
+         *     delete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and
+         *     whether the schema was set at that version.
+         *
+         *     **It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not
+         *     have one — identity is this estate's concern, not the format's. The actor per version already lives in
+         *     the lineage store, on the ``author`` run facet
+         *     (``GET /datasets/{name}/producers`` → ``dataset_version`` + ``author`` + ``operation``), which is written
+         *     from the verified OIDC subject on every governed write. A who/when/what view joins the two on the version
+         *     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
+         *     of one of them, free to drift.
+         *
+         *     Reader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
+         *     metadata about the data, and it leaks real information (predicates name values, field names name
+         *     columns), so it is gated exactly like the schema is rather than being treated as public.
+         *
+         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
+         *     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
+         *     dependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever
+         *     arrives to be metadata-checked. Pinned by
+         *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
+         *
+         *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
+         *     into 10k object-store round trips.
+         */
+        get: operations["table_history_management_v1_table__id__history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/maintenance/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Compact Maintenance
+         * @description Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
+         *     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
+         *
+         *     WHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two
+         *     answers are not a feature flag — they are the same choice ``services/maintenance`` already makes for
+         *     the scheduled lane, read off the same topic name so the two cannot disagree about whether a worker
+         *     exists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever
+         *     execute that unit, so the rewrite runs here as it always has.
+         *
+         *     What stays in the handler either way is the BOUNDED half — parsing the identifier, opening the
+         *     dataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half
+         *     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
+         *     whose fragment count nobody bounded.
+         */
+        post: operations["compact_maintenance_management_v1_table__id__maintenance_compact_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/maintenance/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Maintenance
+         * @description Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
+         *     gated (``can_drop``); never mutates.
+         *
+         *     ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
+         *     measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
+         *     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns — so [[LH-094]]'s
+         *     question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
+         *     both reclaim, and stay refused until that is decided for them.
+         *
+         *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
+         *     version of it: the caller acts on the version list, so
+         *     ``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather
+         *     than asserting the branch reached ``open_dataset``.
+         */
+        post: operations["preview_maintenance_management_v1_table__id__maintenance_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/maintenance/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reindex Maintenance
+         * @description Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
+         *     index that is there, and an unmapped suffix would fall through to the writer rung.
+         *
+         *     **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
+         *     than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
+         *     `create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name
+         *     vector rebuild is refused at the default — ``LanceError(Index): Index name 'x' already exists`` —
+         *     and accepted under ``replace=True``. So the vector index, the one that cannot repair itself
+         *     through the create doors, is repaired by a flag pylance already has. Dropping first would open a
+         *     window in which the table has NO index — a search silently degrading to a full scan — and would
+         *     leave it with none if the rebuild then failed, which is worse than the mis-parameterised index
+         *     being repaired.
+         *
+         *     **THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live
+         *     index's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`
+         *     merges OVER that reading for the caller who is deliberately changing something.
+         *
+         *     WHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service
+         *     reads, so the two cannot disagree about whether a worker exists. With a queue: publish one
+         *     `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
+         *     runs here.
+         */
+        post: operations["reindex_maintenance_management_v1_table__id__maintenance_reindex_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/maintenance/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Maintenance
+         * @description Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
+         *     (``can_drop``) — the same bar as scheduling it via the retention policy.
+         *
+         *     ``branch`` is DECLARED only so it can be REFUSED — see the module header.
+         */
+        post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -720,6 +1101,59 @@ export interface paths {
          *     and unreachable from the future properties write door (#78).
          */
         post: operations["set_table_protection_management_v1_table__id__protection_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/publish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Publish Table
+         * @description Gate `version` and, if it passes, advance `published` to it.
+         *
+         *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
+         *     and the system did exactly what it should. Errors are reserved for the caller getting it wrong —
+         *     an unknown version (404), a backwards move (409), a malformed one (400) — all raised as
+         *     `lance_namespace` typed errors so the shared problem-body handler renders them.
+         */
+        post: operations["publish_table_management_v1_table__id__publish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/table/{id}/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Table Tasks
+         * @description What is queued for THIS table (#75 brings §2.4). Today that is exactly one thing: a pending
+         *     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
+         *     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
+         *     scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
+         *
+         *     `expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item
+         *     5). Undrop does not check the clock — it checks whether the record is still there — so a passed
+         *     deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
+         *     finality would push an owner to give up on data that is still on storage and still recoverable.
+         */
+        get: operations["table_tasks_management_v1_table__id__tasks_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1433,28 +1867,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/namespace/{id}/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Namespace Tasks
-         * @description What is queued for THIS namespace — a pending trash expiry after a recoverable cascade (#96).
-         *     Same contract as the table door: an undrop deadline the owner cannot see is not a safety
-         *     feature. Reader-gated by the router (``tasks`` is a metadata read).
-         */
-        get: operations["namespace_tasks_v1_namespace__id__tasks_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/outbox/credentials": {
         parameters: {
             query?: never;
@@ -2029,41 +2441,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/table/{id}/blobs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Read Table Blob
-         * @description Serve one blob payload over plain HTTP — the credential-less consumer path (§9 P1).
-         *
-         *     A browser/notebook/service with NO storage credentials fetches blob bytes straight from the
-         *     catalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=…`` is
-         *     honoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes *\/size``,
-         *     and every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``
-         *     (``"<version>-<column>-<row>"``) so clients can resume safely: an ``If-Range`` that no longer
-         *     matches (the table was overwritten mid-download) downgrades the range to a full 200 instead of
-         *     silently splicing bytes from two incarnations. The body is STREAMED in bounded windows (each a
-         *     lazy ``BlobFile.read_range``), so a multi-GB payload never buffers in the catalog — the
-         *     read-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the
-         *     served version (pin ``version`` for a stable address across overwrites).
-         *
-         *     Authz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``
-         *     (same rung as ``/query``) — this endpoint serves DATA, so credential-vending tiers apply
-         *     unchanged; it just removes the need for the credentials themselves.
-         */
-        get: operations["read_table_blob_v1_table__id__blobs_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/table/{id}/branches/create": {
         parameters: {
             query?: never;
@@ -2118,133 +2495,6 @@ export interface paths {
          * @description List a table's Git-like branches (paginated) — wraps the pylance ``list_branches`` data-plane op.
          */
         post: operations["list_table_branches_v1_table__id__branches_list_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/changes": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Table Changes
-         * @description Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
-         *
-         *     Composes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is
-         *     `dataplane.read_changes`, which is its OWN scan and not the query door's — `QueryTableRequest`
-         *     requires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question
-         *     with nothing to do with similarity. What the two doors DO share is the framing they answer in.
-         *
-         *     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
-         *     one (§ J1), because following every row a table ever received is the most disclosing read
-         *     available, not a metadata lookup.
-         *
-         *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
-         *     shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
-         *     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
-         *     reader who was not also a writer — the feed's whole audience — was refused. Pinned by
-         *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
-         */
-        post: operations["table_changes_v1_table__id__changes_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/commit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Commit Fragments
-         * @description Client-DIRECT append commit (#2) — the catalog as the governed commit coordinator.
-         *
-         *     The client wrote data fragments straight to object storage with vended, table-scoped creds (never
-         *     through here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``
-         *     and folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So
-         *     NO data byte transits the catalog — the byte-proxy's scaling + OOM liability is gone for the bulk-append
-         *     path (the read-modify-write ops — insert/merge_insert/update/delete — and the 2.2-centralizing create
-         *     stay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps
-         *     ``/commit`` to ``can_write_data``. Conflict → 409 (re-read the version + re-commit); schema/version
-         *     mismatch → 400; store outage → 503 (see ``dataplane._classify_commit_error``).
-         */
-        post: operations["commit_fragments_v1_table__id__commit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/compaction_commit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Commit Table Compaction
-         * @description Commit the workers' rewrite results as ONE metadata-only version.
-         *
-         *     Every data file this publishes was written by the worker that executed the task and already exists
-         *     when this is called, so no data byte transits the catalog — the same property that makes the sibling
-         *     ``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite
-         *     is a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a
-         *     malformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).
-         *
-         *     The lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and
-         *     recording it as one would put phantom writes on the graph at every maintenance pass.
-         */
-        post: operations["commit_table_compaction_v1_table__id__compaction_commit_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/compaction_plan": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Plan Table Compaction
-         * @description Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
-         *
-         *     Rewriting a table's data files is unbounded work whose cost is set by the table rather than by the
-         *     request. Doing it here would make this pod's memory ceiling a function of the largest table anyone
-         *     owns and turn a maintenance pass into an availability incident for every other door on it. So the
-         *     protocol is split by credential: this door plans under ROOT creds (a manifest read — no data byte,
-         *     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
-         *     and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
-         *
-         *     Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
-         *     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
-         *     ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
-         *
-         *     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
-         *     to queue.
-         */
-        post: operations["plan_table_compaction_v1_table__id__compaction_plan_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2355,29 +2605,6 @@ export interface paths {
          *     CREATE_INDEX lineage event at the new version.
          */
         post: operations["create_scalar_index_v1_table__id__create_scalar_index_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Vend Credentials
-         * @description Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.
-         *
-         *     ``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the
-         *     object store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.
-         */
-        post: operations["vend_credentials_v1_table__id__credentials_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2593,53 +2820,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/table/{id}/history": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Table History
-         * @description The table's commit log — one row per version, newest first: **what** changed and **when**.
-         *
-         *     Answers the question a catalog history view asks, from the format itself rather than from a
-         *     side-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so
-         *     ``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the
-         *     delete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and
-         *     whether the schema was set at that version.
-         *
-         *     **It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not
-         *     have one — identity is this estate's concern, not the format's. The actor per version already lives in
-         *     the lineage store, on the ``author`` run facet
-         *     (``GET /datasets/{name}/producers`` → ``dataset_version`` + ``author`` + ``operation``), which is written
-         *     from the verified OIDC subject on every governed write. A who/when/what view joins the two on the version
-         *     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
-         *     of one of them, free to drift.
-         *
-         *     Reader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
-         *     metadata about the data, and it leaks real information (predicates name values, field names name
-         *     columns), so it is gated exactly like the schema is rather than being treated as public.
-         *
-         *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
-         *     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
-         *     dependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever
-         *     arrives to be metadata-checked. Pinned by
-         *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
-         *
-         *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
-         *     into 10k object-store round trips.
-         */
-        get: operations["table_history_v1_table__id__history_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/table/{id}/index/list": {
         parameters: {
             query?: never;
@@ -2743,133 +2923,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/v1/table/{id}/maintenance/compact": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Compact Maintenance
-         * @description Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) — the same bar as
-         *     the retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.
-         *
-         *     WHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two
-         *     answers are not a feature flag — they are the same choice ``services/maintenance`` already makes for
-         *     the scheduled lane, read off the same topic name so the two cannot disagree about whether a worker
-         *     exists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever
-         *     execute that unit, so the rewrite runs here as it always has.
-         *
-         *     What stays in the handler either way is the BOUNDED half — parsing the identifier, opening the
-         *     dataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half
-         *     whose cost is a property of the data rather than of the request: rewriting every fragment of a table
-         *     whose fragment count nobody bounded.
-         */
-        post: operations["compact_maintenance_v1_table__id__maintenance_compact_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/maintenance/preview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Preview Maintenance
-         * @description Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
-         *     gated (``can_drop``); never mutates.
-         *
-         *     ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
-         *     measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
-         *     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns — so [[LH-094]]'s
-         *     question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
-         *     both reclaim, and stay refused until that is decided for them.
-         *
-         *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
-         *     version of it: the caller acts on the version list, so
-         *     ``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather
-         *     than asserting the branch reached ``open_dataset``.
-         */
-        post: operations["preview_maintenance_v1_table__id__maintenance_preview_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/maintenance/reindex": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reindex Maintenance
-         * @description Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
-         *     index that is there, and an unmapped suffix would fall through to the writer rung.
-         *
-         *     **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
-         *     than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
-         *     `create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name
-         *     vector rebuild is refused at the default — ``LanceError(Index): Index name 'x' already exists`` —
-         *     and accepted under ``replace=True``. So the vector index, the one that cannot repair itself
-         *     through the create doors, is repaired by a flag pylance already has. Dropping first would open a
-         *     window in which the table has NO index — a search silently degrading to a full scan — and would
-         *     leave it with none if the rebuild then failed, which is worse than the mis-parameterised index
-         *     being repaired.
-         *
-         *     **THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live
-         *     index's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`
-         *     merges OVER that reading for the caller who is deliberately changing something.
-         *
-         *     WHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service
-         *     reads, so the two cannot disagree about whether a worker exists. With a queue: publish one
-         *     `IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild
-         *     runs here.
-         */
-        post: operations["reindex_maintenance_v1_table__id__maintenance_reindex_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/maintenance/run": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Maintenance
-         * @description Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
-         *     (``can_drop``) — the same bar as scheduling it via the retention policy.
-         *
-         *     ``branch`` is DECLARED only so it can be REFUSED — see the module header.
-         */
-        post: operations["run_maintenance_v1_table__id__maintenance_run_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/v1/table/{id}/merge_insert": {
         parameters: {
             query?: never;
@@ -2900,31 +2953,6 @@ export interface paths {
          *     version gap, not a lost write.
          */
         post: operations["merge_insert_into_table_v1_table__id__merge_insert_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/publish": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Publish Table
-         * @description Gate `version` and, if it passes, advance `published` to it.
-         *
-         *     A refused gate is a 200 with `published=False`, not an error status: the request was well-formed
-         *     and the system did exactly what it should. Errors are reserved for the caller getting it wrong —
-         *     an unknown version (404), a backwards move (409), a malformed one (400) — all raised as
-         *     `lance_namespace` typed errors so the shared problem-body handler renders them.
-         */
-        post: operations["publish_table_v1_table__id__publish_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3185,34 +3213,6 @@ export interface paths {
          * @description Resolve which table version a tag points to — wraps lance_namespace GetTableTagVersion.
          */
         post: operations["get_table_tag_version_v1_table__id__tags_version_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/v1/table/{id}/tasks": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Table Tasks
-         * @description What is queued for THIS table (#75 brings §2.4). Today that is exactly one thing: a pending
-         *     trash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see
-         *     is not a safety feature — the estate's task surfaces are otherwise all estate-global, so "what is
-         *     scheduled against my table" was unanswerable. Reader-gated by the router alongside describe.
-         *
-         *     `expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item
-         *     5). Undrop does not check the clock — it checks whether the record is still there — so a passed
-         *     deadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as
-         *     finality would push an owner to give up on data that is still on storage and still recoverable.
-         */
-        get: operations["table_tasks_v1_table__id__tasks_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9980,6 +9980,44 @@ export interface operations {
             };
         };
     };
+    namespace_tasks_management_v1_namespace__id__tasks_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashEntry"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     undrop_namespace_management_v1_namespace__id__undrop_post: {
         parameters: {
             query?: {
@@ -10452,6 +10490,264 @@ export interface operations {
             };
         };
     };
+    read_table_blob_management_v1_table__id__blobs_get: {
+        parameters: {
+            query: {
+                column: string;
+                row: number;
+                version?: number | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                Range?: string | null;
+                "If-Range"?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    table_changes_management_v1_table__id__changes_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TableChangesRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_fragments_management_v1_table__id__commit_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CommitFragmentsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CommitFragmentsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    commit_table_compaction_management_v1_table__id__compaction_commit_post: {
+        parameters: {
+            query?: {
+                /** @description The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompactionCommitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactionCommitResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    plan_table_compaction_management_v1_table__id__compaction_plan_post: {
+        parameters: {
+            query?: {
+                /** @description The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["CompactionPlanRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactionPlanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    vend_credentials_management_v1_table__id__credentials_post: {
+        parameters: {
+            query?: {
+                tier?: "read" | "write";
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     erase_subject_management_v1_table__id__erasure_post: {
         parameters: {
             query?: {
@@ -10484,6 +10780,245 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErasureReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    table_history_management_v1_table__id__history_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    compact_maintenance_management_v1_table__id__maintenance_compact_post: {
+        parameters: {
+            query?: {
+                /** @description The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CompactRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactResult"] | components["schemas"]["CompactAccepted"];
+                };
+            };
+            /** @description Enqueued onto the maintenance work queue; no fragment counts exist yet. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompactAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_maintenance_management_v1_table__id__maintenance_preview_post: {
+        parameters: {
+            query?: {
+                /** @description The ref to preview. Omit for main; this door reads the ref it is given. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GcRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reindex_maintenance_management_v1_table__id__maintenance_reindex_post: {
+        parameters: {
+            query?: {
+                /** @description The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReindexRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReindexResult"] | components["schemas"]["ReindexAccepted"];
+                };
+            };
+            /** @description Enqueued onto the index lane; the rebuilt version does not exist yet. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReindexAccepted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_maintenance_management_v1_table__id__maintenance_run_post: {
+        parameters: {
+            query?: {
+                /** @description REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs. */
+                branch?: string | null;
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GcRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GcRunResult"];
                 };
             };
             /** @description Validation Error */
@@ -10682,6 +11217,87 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ProtectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    publish_table_management_v1_table__id__publish_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublishRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublishResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    table_tasks_management_v1_table__id__tasks_get: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrashEntry"][];
                 };
             };
             /** @description Validation Error */
@@ -11762,44 +12378,6 @@ export interface operations {
             };
         };
     };
-    namespace_tasks_v1_namespace__id__tasks_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrashEntry"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     vend_outbox_credentials_v1_outbox_credentials_post: {
         parameters: {
             query?: {
@@ -12838,49 +13416,6 @@ export interface operations {
             };
         };
     };
-    read_table_blob_v1_table__id__blobs_get: {
-        parameters: {
-            query: {
-                column: string;
-                row: number;
-                version?: number | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                Range?: string | null;
-                "If-Range"?: string | null;
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     create_table_branch_v1_table__id__branches_create_post: {
         parameters: {
             query?: {
@@ -12996,182 +13531,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    table_changes_v1_table__id__changes_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TableChangesRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    commit_fragments_v1_table__id__commit_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CommitFragmentsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CommitFragmentsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    commit_table_compaction_v1_table__id__compaction_commit_post: {
-        parameters: {
-            query?: {
-                /** @description The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompactionCommitRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactionCommitResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    plan_table_compaction_v1_table__id__compaction_plan_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": components["schemas"]["CompactionPlanRequest"] | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactionPlanResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13395,45 +13754,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    vend_credentials_v1_table__id__credentials_post: {
-        parameters: {
-            query?: {
-                tier?: "read" | "write";
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CredentialResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13796,47 +14116,6 @@ export interface operations {
             };
         };
     };
-    table_history_v1_table__id__history_get: {
-        parameters: {
-            query?: {
-                limit?: number;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_table_indices_v1_table__id__index_list_post: {
         parameters: {
             query?: {
@@ -14022,204 +14301,6 @@ export interface operations {
             };
         };
     };
-    compact_maintenance_v1_table__id__maintenance_compact_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CompactRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactResult"] | components["schemas"]["CompactAccepted"];
-                };
-            };
-            /** @description Enqueued onto the maintenance work queue; no fragment counts exist yet. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CompactAccepted"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    preview_maintenance_v1_table__id__maintenance_preview_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to preview. Omit for main; this door reads the ref it is given. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GcRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GcPreview"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reindex_maintenance_v1_table__id__maintenance_reindex_post: {
-        parameters: {
-            query?: {
-                /** @description The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                authorization?: string | null;
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReindexRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReindexResult"] | components["schemas"]["ReindexAccepted"];
-                };
-            };
-            /** @description Enqueued onto the index lane; the rebuilt version does not exist yet. */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReindexAccepted"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_maintenance_v1_table__id__maintenance_run_post: {
-        parameters: {
-            query?: {
-                /** @description REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs. */
-                branch?: string | null;
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GcRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GcRunResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     merge_insert_into_table_v1_table__id__merge_insert_post: {
         parameters: {
             query?: {
@@ -14268,49 +14349,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    publish_table_v1_table__id__publish_post: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PublishRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PublishResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -14823,44 +14861,6 @@ export interface operations {
             };
             /** @description Validation Error */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    table_tasks_v1_table__id__tasks_get: {
-        parameters: {
-            query?: {
-                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
-                delimiter?: string | null;
-            };
-            header?: {
-                "dapr-api-token"?: string | null;
-                "x-lance-service-identity"?: string | null;
-                "dapr-caller-app-id"?: string | null;
-            };
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TrashEntry"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -267,7 +267,7 @@ Recorded so nobody "cleans them up" back into the trap.
 ## FEATURE-GAP §1 (serving) — blob serving is a governed proxy, not presigned URLs
 
 **Decision.** Credential-less consumers (browser, notebook) fetch blob bytes back through the catalog:
-`GET /v1/table/{id}/blobs?column=&row=[&version=]` streams the bytes with RFC 9110 Range support — a
+`GET /management/v1/table/{id}/blobs?column=&row=[&version=]` streams the bytes with RFC 9110 Range support — a
 `Range: bytes=…` request reads only the window from storage via the lazy `BlobFile` (206 +
 `Content-Range`; 416 when unsatisfiable) — governed at reader-tier `can_read_data` like `/query`.
 Deliberately a governed proxy, **not** presigned URLs: a signed URL bypasses ReBAC for its TTL.
@@ -326,7 +326,7 @@ shaped tuples become event-synced, resource-shaped tuples stay app-written.
 
 **Decision.** The planes-vs-UI completeness sweep (every mutating backend op vs its MFE surface) closed with
 two lists. The following are **WONTFIX — no UI surface, by design**, each for the stated reason:
-- **Credential vending** (`POST /v1/table/{id}/credentials`) — client/API-only: the browser talks through
+- **Credential vending** (`POST /management/v1/table/{id}/credentials`) — client/API-only: the browser talks through
   the BFF and must never receive S3 credentials.
 - **Bare namespace create** (`POST /v1/namespace/{id}/create`) — the warehouse-**bind** flow
   (`POST /v1/warehouses/{id}/namespaces`, in WarehouseAdmin) is the governed creation path; a second,

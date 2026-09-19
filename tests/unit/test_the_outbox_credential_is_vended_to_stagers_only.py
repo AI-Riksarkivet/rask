@@ -11,7 +11,7 @@ THE MECHANISM WAS DECIDED BY THE STANDING RULE, not by this door: "STS for STORA
 key is not a fix". `vending.build_session_policy(bucket, prefix, tier, bases)` is prefix-GENERIC
 rather than table-keyed, so it already expresses `(lance-catalog, _lineage_outbox, write)` and can
 only RESTRICT the catalog's role, never widen it. What was missing was a door — the sole vending route
-was `POST /v1/table/{id}/credentials`, and a control prefix is not a table.
+was `POST /management/v1/table/{id}/credentials`, and a control prefix is not a table.
 
 THE DOOR TAKES NO PATH. It vends for the estate's OWN configured outbox and nothing else, so there is
 no caller-supplied prefix to traverse and no way to ask it for a tenant's bucket. That is what keeps a

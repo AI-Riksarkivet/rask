@@ -241,7 +241,7 @@ DEMO_ESTATE = Estate(
         Grant("user:dave", "writer", "warehouse:acme-bucket"),
         # ---- THE CASCADE'S OWN IDENTITIES ---------------------------------------------------------
         # Observed live 2026-08-23: a seeded estate produced bronze, moved it to silver, and then DIED.
-        # `POST /v1/table/acme-silver$features/publish` answered 403 three times and the trigger parked
+        # `POST /management/v1/table/acme-silver$features/publish` answered 403 three times and the trigger parked
         # in the DLQ, so the run reported nothing and gold never existed.
         #
         # The stage runner already had `writer` — the create seeds that — and writer is deliberately not

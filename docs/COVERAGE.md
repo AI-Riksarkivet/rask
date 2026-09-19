@@ -36,8 +36,8 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 | Materialized views (2) | — | `create` / `refresh` |
 | Credentials + stats (2+) | all | — |
 
-**Beyond-spec extensions** (ours, not counted in the 54): `POST /v1/table/{id}/credentials` (scoped
-credential vending) and `GET /v1/table/{id}/blobs` (credential-less blob serving with RFC 9110 Range +
+**Beyond-spec extensions** (ours, not counted in the 54): `POST /management/v1/table/{id}/credentials` (scoped
+credential vending) and `GET /management/v1/table/{id}/blobs` (credential-less blob serving with RFC 9110 Range +
 ETag/If-Range, 2026-07-12) — both governed by the same router-level authorize (reader tier).
 
 The **6 remaining 406s are genuine native-backend stubs**, not catalog gaps:

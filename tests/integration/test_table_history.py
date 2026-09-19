@@ -1,4 +1,4 @@
-"""``GET /v1/table/{id}/history`` — the commit log, read out of the format.
+"""``GET /management/v1/table/{id}/history`` — the commit log, read out of the format.
 
 The question this answers is the Lakekeeper-console one the owner asked for: *what changed in the data, and
 when*. Lance is immutable and append-only at the manifest level, so the answer is already in the dataset —
@@ -44,7 +44,7 @@ def _seed(client: TestClient) -> None:
 
 def test_history_reports_what_changed_per_version(real_ns_client: TestClient) -> None:
     _seed(real_ns_client)
-    r = real_ns_client.get("/v1/table/h1$t/history")
+    r = real_ns_client.get("/management/v1/table/h1$t/history")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["table"] == "h1$t"
@@ -85,7 +85,7 @@ def test_history_carries_no_actor_and_does_not_pretend_to(real_ns_client: TestCl
     audit trail, which is worse than no actor at all.
     """
     _seed(real_ns_client)
-    rows = real_ns_client.get("/v1/table/h1$t/history").json()["versions"]
+    rows = real_ns_client.get("/management/v1/table/h1$t/history").json()["versions"]
     for row in rows:
         assert "author" not in row
         assert "actor" not in row
@@ -95,12 +95,12 @@ def test_history_carries_no_actor_and_does_not_pretend_to(real_ns_client: TestCl
 def test_history_limit_bounds_the_transaction_reads(real_ns_client: TestClient) -> None:
     """`limit` exists so a table with many versions cannot turn one UI page into N object-store reads."""
     _seed(real_ns_client)
-    rows = real_ns_client.get("/v1/table/h1$t/history?limit=2").json()["versions"]
+    rows = real_ns_client.get("/management/v1/table/h1$t/history?limit=2").json()["versions"]
     assert [row["version"] for row in rows] == [3, 2], rows  # the NEWEST 2, not the first 2
 
 
 def test_history_of_a_missing_table_is_not_a_500(real_ns_client: TestClient) -> None:
-    r = real_ns_client.get("/v1/table/h1$nope/history")
+    r = real_ns_client.get("/management/v1/table/h1$nope/history")
     assert r.status_code in (400, 404), r.text
 
 
@@ -131,7 +131,7 @@ def test_history_reports_restore_index_and_column_changes(real_ns_client: TestCl
     restored = real_ns_client.post("/v1/table/h1$t/restore", json={"version": 1})
     assert restored.status_code == 200, restored.text
 
-    rows = real_ns_client.get("/v1/table/h1$t/history?limit=50").json()["versions"]
+    rows = real_ns_client.get("/management/v1/table/h1$t/history?limit=50").json()["versions"]
     by_op: dict[str, dict[str, object]] = {}
     for row in rows:
         by_op.setdefault(str(row.get("operation")), row)

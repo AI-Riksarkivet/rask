@@ -201,7 +201,7 @@ def test_a_missing_index_answers_the_specs_404_rather_than_an_internal_error(dat
     """A name that is simply not there is a CALLER mistake, and must not surface as a 500.
 
     Measured on the deployed catalog 2026-09-15: as a bare `LookupError` this reached the app's
-    catch-all and `POST /v1/table/{id}/maintenance/reindex` answered 500 for an index name that did
+    catch-all and `POST /management/v1/table/{id}/maintenance/reindex` answered 500 for an index name that did
     not exist. The estate's contract is that an endpoint raises a `lance_namespace` typed error and
     `install_problem_handlers` translates it — clients dispatch on the spec CODE, and there is no code
     for "something went wrong inside".

@@ -32,7 +32,7 @@ from ingest.catalog_service import CatalogServiceClient, VendingUnavailableError
 
 
 SCHEMA = pa.schema([("id", pa.string())])
-URL = "http://catalog:2333/v1/table/ns$ds/credentials"
+URL = "http://catalog:2333/management/v1/table/ns$ds/credentials"
 
 
 def _client(**kw: object) -> CatalogServiceClient:

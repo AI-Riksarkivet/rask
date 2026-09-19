@@ -59,8 +59,14 @@ _MAX_LIST_LIMIT = 1000
 
 router = APIRouter(prefix="/v1/table", tags=["version"])
 
+#: THE MANAGEMENT SURFACE ([[LH-021]]). This module serves SPEC operations on `router` and rask's own
+#: on this one — split by AUDIENCE rather than by topic, because a spec client discovering a verb like
+#: `blobs` or `commit` on a spec prefix meets something the Lance namespace document never defines.
+#: Both routers inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+management_router = APIRouter(prefix="/management/v1/table", tags=["version-management"])
 
-@router.get("/{id}/history", response_model_exclude_none=True)
+
+@management_router.get("/{id}/history", response_model_exclude_none=True)
 async def table_history(
     id: str,
     ns: NamespaceDep,

@@ -840,7 +840,7 @@ async def get_table_protection(id: str, settings: SettingsDep) -> ProtectionResp
     return ProtectionResponse(id=canonical, protected=bool(record), set_by=(record or {}).get("set_by"))
 
 
-@router.get("/{id}/tasks", response_model_exclude_none=True)
+@management_router.get("/{id}/tasks", response_model_exclude_none=True)
 async def table_tasks(
     id: str,
     settings: SettingsDep,

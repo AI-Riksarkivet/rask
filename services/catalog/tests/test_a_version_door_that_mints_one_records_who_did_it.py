@@ -37,7 +37,7 @@ _MINTS_A_VERSION = ("/v1/table/{id}/version/create",)
 #: deletion control); a read mints nothing; `batch-create` and `batch-commit` answer
 #: `UnsupportedOperationError` on the dir backend, so an emit there would describe work that never happened.
 _MINTS_NO_VERSION = (
-    "/v1/table/{id}/history",
+    "/management/v1/table/{id}/history",
     "/v1/table/version/batch-create",
     "/v1/table/batch-commit",
     "/v1/table/{id}/version/list",
@@ -51,7 +51,9 @@ def _routes() -> dict[str, Callable[..., Any]]:
     estate forbids the `# type: ignore` that would paper over that — so the cast is narrowed to exactly
     the two attributes this file reads."""
     found: dict[str, Callable[..., Any]] = {}
-    for route in versions.router.routes:
+    # BOTH routers: `/history` moved to the management mount ([[LH-021]]) and a walk over `router`
+    # alone would silently stop classifying it — the classification is the point of this file.
+    for route in (*versions.router.routes, *versions.management_router.routes):
         if hasattr(route, "endpoint") and hasattr(route, "path"):
             found[cast("str", route.path)] = cast("Callable[..., Any]", route.endpoint)
     return found

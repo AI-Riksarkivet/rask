@@ -1,7 +1,7 @@
 """STS vending could never sign its own AssumeRole call, so the mode was dead.
 
 Measured on the deployed estate 2026-09-03: flipping `vending.mode=sts` and asking
-`POST /v1/table/{id}/credentials` for a write-tier credential answered **503**, with
+`POST /management/v1/table/{id}/credentials` for a write-tier credential answered **503**, with
 `botocore.exceptions.NoCredentialsError: Unable to locate credentials` in the catalog log.
 
 `storage.sts_client(region=..., endpoint=...)` builds `boto3.client("sts", ...)` with no key pair, so

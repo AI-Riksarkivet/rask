@@ -7,7 +7,7 @@ table is `acme-bronze$vendproof`.
 
 MEASURED in-cluster 2026-09-03 — the deployed catalog answered
 
-    POST /v1/table/acme$vendproof/commit  403 Forbidden
+    POST /management/v1/table/acme$vendproof/commit  403 Forbidden
 
 because nobody holds any relation on a table that does not exist. And the probe swallows every
 exception by design ("I cannot tell" and "it never committed" lead to the same honest report), so the

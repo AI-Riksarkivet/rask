@@ -14,7 +14,7 @@ currently unexpressible." That was true before `accept_assertions`, and false af
 trusts it concludes the review path is BLOCKED behind a missing catalog endpoint — measured, that is
 exactly what happened on 2026-08-23.
 
-The door exists. `POST /v1/table/{id}/publish` with `accept_assertions=[...]` is gated on
+The door exists. `POST /management/v1/table/{id}/publish` with `accept_assertions=[...]` is gated on
 `can_promote` (the validator rung, deliberately above the ordinary publish's `can_update_tag`), and
 `services/catalog/services/publication.py` waives exactly the named findings —
 `waved = set(accept_assertions) - STRUCTURAL_ASSERTIONS`, so a structural finding can never be

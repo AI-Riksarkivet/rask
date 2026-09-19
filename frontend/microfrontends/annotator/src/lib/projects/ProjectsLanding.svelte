@@ -616,9 +616,9 @@
 												>
 													{field.name}
 													<span class="text-muted-foreground">
-														{field.options.length ? field.options.join(' | ') : field.type}{field.required
-															? ' · required'
-															: ''}
+														{field.options.length
+															? field.options.join(' | ')
+															: field.type}{field.required ? ' · required' : ''}
 													</span>
 												</span>
 											{/each}

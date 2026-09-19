@@ -14112,6 +14112,124 @@
         ]
       }
     },
+    "/management/v1/namespace/{id}/tasks": {
+      "get": {
+        "description": "What is queued for THIS namespace \u2014 a pending trash expiry after a recoverable cascade (#96).\nSame contract as the table door: an undrop deadline the owner cannot see is not a safety\nfeature. Reader-gated by the router (``tasks`` is a metadata read).",
+        "operationId": "namespace_tasks_management_v1_namespace__id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrashEntry"
+                  },
+                  "title": "Response Namespace Tasks Management V1 Namespace  Id  Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Namespace Tasks",
+        "tags": [
+          "namespace-management"
+        ]
+      }
+    },
     "/management/v1/namespace/{id}/undrop": {
       "post": {
         "description": "Recover a cascade-dropped SUBTREE from the trash (#96) \u2014 the plural undrop.\n\nThe unit of a cascade is the subtree, so the unit of its recovery is too: every trashed\nnamespace under (and including) ``id`` is re-created shallowest-first, then every trashed table\nis re-registered at its old id from its still-present bytes, and each record is cleared as its\nobject recovers. Owner-gated like the table door (``undrop`` maps to the delete rung).\n\nResumable, not atomic: namespace creates run ``exist_ok`` and an already-registered table is\ntreated as recovered, so a rerun after a mid-recovery failure finishes the job instead of\n409-ing on what the first attempt already rebuilt. 404 when there is no trash record: an expired\nor never-trashed drop is genuinely unrecoverable, and saying so beats a 200 that recovers\nnothing. A declared-only table (empty recorded location) is skipped with a warning \u2014 there were\nno bytes to lose.",
@@ -15520,6 +15638,916 @@
         ]
       }
     },
+    "/management/v1/table/{id}/blobs": {
+      "get": {
+        "description": "Serve one blob payload over plain HTTP \u2014 the credential-less consumer path (\u00a79 P1).\n\nA browser/notebook/service with NO storage credentials fetches blob bytes straight from the\ncatalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=\u2026`` is\nhonoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes */size``,\nand every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``\n(``\"<version>-<column>-<row>\"``) so clients can resume safely: an ``If-Range`` that no longer\nmatches (the table was overwritten mid-download) downgrades the range to a full 200 instead of\nsilently splicing bytes from two incarnations. The body is STREAMED in bounded windows (each a\nlazy ``BlobFile.read_range``), so a multi-GB payload never buffers in the catalog \u2014 the\nread-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the\nserved version (pin ``version`` for a stable address across overwrites).\n\nAuthz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``\n(same rung as ``/query``) \u2014 this endpoint serves DATA, so credential-vending tiers apply\nunchanged; it just removes the need for the credentials themselves.",
+        "operationId": "read_table_blob_management_v1_table__id__blobs_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "column",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Column",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "row",
+            "required": true,
+            "schema": {
+              "minimum": 0,
+              "title": "Row",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Range"
+            }
+          },
+          {
+            "in": "header",
+            "name": "If-Range",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "If-Range"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Read Table Blob",
+        "tags": [
+          "data-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/changes": {
+      "post": {
+        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route\nshipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded\n`can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every\nreader who was not also a writer \u2014 the feed's whole audience \u2014 was refused. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.",
+        "operationId": "table_changes_management_v1_table__id__changes_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TableChangesRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Changes",
+        "tags": [
+          "data-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/commit": {
+      "post": {
+        "description": "Client-DIRECT append commit (#2) \u2014 the catalog as the governed commit coordinator.\n\nThe client wrote data fragments straight to object storage with vended, table-scoped creds (never\nthrough here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``\nand folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So\nNO data byte transits the catalog \u2014 the byte-proxy's scaling + OOM liability is gone for the bulk-append\npath (the read-modify-write ops \u2014 insert/merge_insert/update/delete \u2014 and the 2.2-centralizing create\nstay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps\n``/commit`` to ``can_write_data``. Conflict \u2192 409 (re-read the version + re-commit); schema/version\nmismatch \u2192 400; store outage \u2192 503 (see ``dataplane._classify_commit_error``).",
+        "operationId": "commit_fragments_management_v1_table__id__commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitFragmentsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitFragmentsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Commit Fragments",
+        "tags": [
+          "data-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/compaction_commit": {
+      "post": {
+        "description": "Commit the workers' rewrite results as ONE metadata-only version.\n\nEvery data file this publishes was written by the worker that executed the task and already exists\nwhen this is called, so no data byte transits the catalog \u2014 the same property that makes the sibling\n``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite\nis a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a\nmalformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).\n\nThe lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and\nrecording it as one would put phantom writes on the graph at every maintenance pass.",
+        "operationId": "commit_table_compaction_management_v1_table__id__compaction_commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompactionCommitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactionCommitResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Commit Table Compaction",
+        "tags": [
+          "data-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/compaction_plan": {
+      "post": {
+        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, \"The lakehouse cloud-native cutover\".\n\nWriter tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the\ntable default, which is the correct rung \u2014 a compaction preserves every row (Lance commits it as a\n``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
+        "operationId": "plan_table_compaction_management_v1_table__id__compaction_plan_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/CompactionPlanRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactionPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Plan Table Compaction",
+        "tags": [
+          "data-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/credentials": {
+      "post": {
+        "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\n``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the\nobject store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.",
+        "operationId": "vend_credentials_management_v1_table__id__credentials_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "default": "read",
+              "enum": [
+                "read",
+                "write"
+              ],
+              "title": "Tier",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Vend Credentials",
+        "tags": [
+          "credentials"
+        ]
+      }
+    },
     "/management/v1/table/{id}/erasure": {
       "post": {
         "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any\nretained version still answers the predicate after every step ran \u2014 which happens on a table with\na branch, because deleting rows on a branch does not remove that branch's pin on the parent's\nhistory ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller\nreading the status code reports the wrong thing.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
@@ -15675,6 +16703,802 @@
         "summary": "Erase Subject",
         "tags": [
           "erasure"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/history": {
+      "get": {
+        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\nTHE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.\nThe check below is the second one a request meets, not the first: ``authorize`` is a router-wide\ndependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever\narrives to be metadata-checked. Pinned by\n``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
+        "operationId": "table_history_management_v1_table__id__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Table History Management V1 Table  Id  History Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table History",
+        "tags": [
+          "version-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/maintenance/compact": {
+      "post": {
+        "description": "Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) \u2014 the same bar as\nthe retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.\n\nWHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two\nanswers are not a feature flag \u2014 they are the same choice ``services/maintenance`` already makes for\nthe scheduled lane, read off the same topic name so the two cannot disagree about whether a worker\nexists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever\nexecute that unit, so the rewrite runs here as it always has.\n\nWhat stays in the handler either way is the BOUNDED half \u2014 parsing the identifier, opening the\ndataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half\nwhose cost is a property of the data rather than of the request: rewriting every fragment of a table\nwhose fragment count nobody bounded.",
+        "operationId": "compact_maintenance_management_v1_table__id__maintenance_compact_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompactRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CompactResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/CompactAccepted"
+                    }
+                  ],
+                  "title": "Response Compact Maintenance Management V1 Table  Id  Maintenance Compact Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompactAccepted"
+                }
+              }
+            },
+            "description": "Enqueued onto the maintenance work queue; no fragment counts exist yet."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Compact Maintenance",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/maintenance/preview": {
+      "post": {
+        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is\nmeasured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns \u2014 so [[LH-094]]'s\nquestion about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``\nboth reclaim, and stay refused until that is decided for them.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather\nthan asserting the branch reached ``open_dataset``.",
+        "operationId": "preview_maintenance_management_v1_table__id__maintenance_preview_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ref to preview. Omit for main; this door reads the ref it is given.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ref to preview. Omit for main; this door reads the ref it is given.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcPreview"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Preview Maintenance",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/maintenance/reindex": {
+      "post": {
+        "description": "Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) \u2014 it destroys the\nindex that is there, and an unmapped suffix would fall through to the writer rung.\n\n**IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather\nthan assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and\n`create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name\nvector rebuild is refused at the default \u2014 ``LanceError(Index): Index name 'x' already exists`` \u2014\nand accepted under ``replace=True``. So the vector index, the one that cannot repair itself\nthrough the create doors, is repaired by a flag pylance already has. Dropping first would open a\nwindow in which the table has NO index \u2014 a search silently degrading to a full scan \u2014 and would\nleave it with none if the rebuild then failed, which is worse than the mis-parameterised index\nbeing repaired.\n\n**THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live\nindex's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`\nmerges OVER that reading for the caller who is deliberately changing something.\n\nWHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service\nreads, so the two cannot disagree about whether a worker exists. With a queue: publish one\n`IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild\nruns here.",
+        "operationId": "reindex_maintenance_management_v1_table__id__maintenance_reindex_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReindexRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ReindexResult"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ReindexAccepted"
+                    }
+                  ],
+                  "title": "Response Reindex Maintenance Management V1 Table  Id  Maintenance Reindex Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReindexAccepted"
+                }
+              }
+            },
+            "description": "Enqueued onto the index lane; the rebuilt version does not exist yet."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Reindex Maintenance",
+        "tags": [
+          "maintenance"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/maintenance/run": {
+      "post": {
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` is DECLARED only so it can be REFUSED \u2014 see the module header.",
+        "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
+              "title": "Branch"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GcRunResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Run Maintenance",
+        "tags": [
+          "maintenance"
         ]
       }
     },
@@ -16261,6 +18085,264 @@
           }
         ],
         "summary": "Set Table Protection",
+        "tags": [
+          "table-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/publish": {
+      "post": {
+        "description": "Gate `version` and, if it passes, advance `published` to it.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. Errors are reserved for the caller getting it wrong \u2014\nan unknown version (404), a backwards move (409), a malformed one (400) \u2014 all raised as\n`lance_namespace` typed errors so the shared problem-body handler renders them.",
+        "operationId": "publish_table_management_v1_table__id__publish_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Publish Table",
+        "tags": [
+          "publication"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/tasks": {
+      "get": {
+        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item\n5). Undrop does not check the clock \u2014 it checks whether the record is still there \u2014 so a passed\ndeadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as\nfinality would push an owner to give up on data that is still on storage and still recoverable.",
+        "operationId": "table_tasks_management_v1_table__id__tasks_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TrashEntry"
+                  },
+                  "title": "Response Table Tasks Management V1 Table  Id  Tasks Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Table Tasks",
         "tags": [
           "table-management"
         ]
@@ -19608,124 +21690,6 @@
         ]
       }
     },
-    "/v1/namespace/{id}/tasks": {
-      "get": {
-        "description": "What is queued for THIS namespace \u2014 a pending trash expiry after a recoverable cascade (#96).\nSame contract as the table door: an undrop deadline the owner cannot see is not a safety\nfeature. Reader-gated by the router (``tasks`` is a metadata read).",
-        "operationId": "namespace_tasks_v1_namespace__id__tasks_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/TrashEntry"
-                  },
-                  "title": "Response Namespace Tasks V1 Namespace  Id  Tasks Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Namespace Tasks",
-        "tags": [
-          "namespace"
-        ]
-      }
-    },
     "/v1/outbox/credentials": {
       "post": {
         "description": "Vend a write-tier credential scoped to the estate's lineage outbox prefix.\n\nAnswers `server_mediated` when no outbox is configured or the vendor declines \u2014 the same shape the\ntable door uses, so a caller has one response contract rather than two. A caller that receives it\nstages nothing and its events stay on the primary publish path, which is the honest degradation:\nthe backstop is absent, not silently broken.",
@@ -22888,187 +24852,6 @@
         ]
       }
     },
-    "/v1/table/{id}/blobs": {
-      "get": {
-        "description": "Serve one blob payload over plain HTTP \u2014 the credential-less consumer path (\u00a79 P1).\n\nA browser/notebook/service with NO storage credentials fetches blob bytes straight from the\ncatalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=\u2026`` is\nhonoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes */size``,\nand every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``\n(``\"<version>-<column>-<row>\"``) so clients can resume safely: an ``If-Range`` that no longer\nmatches (the table was overwritten mid-download) downgrades the range to a full 200 instead of\nsilently splicing bytes from two incarnations. The body is STREAMED in bounded windows (each a\nlazy ``BlobFile.read_range``), so a multi-GB payload never buffers in the catalog \u2014 the\nread-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the\nserved version (pin ``version`` for a stable address across overwrites).\n\nAuthz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``\n(same rung as ``/query``) \u2014 this endpoint serves DATA, so credential-vending tiers apply\nunchanged; it just removes the need for the credentials themselves.",
-        "operationId": "read_table_blob_v1_table__id__blobs_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "column",
-            "required": true,
-            "schema": {
-              "minLength": 1,
-              "title": "Column",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "row",
-            "required": true,
-            "schema": {
-              "minimum": 0,
-              "title": "Row",
-              "type": "integer"
-            }
-          },
-          {
-            "in": "query",
-            "name": "version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Version"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "Range",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Range"
-            }
-          },
-          {
-            "in": "header",
-            "name": "If-Range",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "If-Range"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Read Table Blob",
-        "tags": [
-          "data"
-        ]
-      }
-    },
     "/v1/table/{id}/branches/create": {
       "post": {
         "description": "Create a branch from main (or a source branch/version) \u2014 wraps pylance ``create_branch``.",
@@ -23462,607 +25245,6 @@
         "summary": "List Table Branches",
         "tags": [
           "branch"
-        ]
-      }
-    },
-    "/v1/table/{id}/changes": {
-      "post": {
-        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route\nshipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded\n`can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every\nreader who was not also a writer \u2014 the feed's whole audience \u2014 was refused. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.",
-        "operationId": "table_changes_v1_table__id__changes_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TableChangesRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Table Changes",
-        "tags": [
-          "data"
-        ]
-      }
-    },
-    "/v1/table/{id}/commit": {
-      "post": {
-        "description": "Client-DIRECT append commit (#2) \u2014 the catalog as the governed commit coordinator.\n\nThe client wrote data fragments straight to object storage with vended, table-scoped creds (never\nthrough here); this endpoint receives only the tiny serialized ``FragmentMetadata`` + the ``read_version``\nand folds them into a metadata-only Lance ``commit`` under ROOT creds, then emits the INSERT lineage. So\nNO data byte transits the catalog \u2014 the byte-proxy's scaling + OOM liability is gone for the bulk-append\npath (the read-modify-write ops \u2014 insert/merge_insert/update/delete \u2014 and the 2.2-centralizing create\nstay server-side; transaction.md/namespace.md). Writer tier: the router ``authorize`` gate maps\n``/commit`` to ``can_write_data``. Conflict \u2192 409 (re-read the version + re-commit); schema/version\nmismatch \u2192 400; store outage \u2192 503 (see ``dataplane._classify_commit_error``).",
-        "operationId": "commit_fragments_v1_table__id__commit_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CommitFragmentsRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CommitFragmentsResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Commit Fragments",
-        "tags": [
-          "data"
-        ]
-      }
-    },
-    "/v1/table/{id}/compaction_commit": {
-      "post": {
-        "description": "Commit the workers' rewrite results as ONE metadata-only version.\n\nEvery data file this publishes was written by the worker that executed the task and already exists\nwhen this is called, so no data byte transits the catalog \u2014 the same property that makes the sibling\n``/commit`` append door safe. Conflict taxonomy is shared: a result that lost a race to an Overwrite\nis a NON-retryable 400 telling the caller to re-plan (its plan is void, not just its commit), a\nmalformed result is a 400, a store outage a 503 (``dataplane._classify_commit_error``).\n\nThe lineage emit is ``compact_table``, deliberately not a data op: a compaction changes no row, and\nrecording it as one would put phantom writes on the graph at every maintenance pass.",
-        "operationId": "commit_table_compaction_v1_table__id__compaction_commit_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompactionCommitRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompactionCommitResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Commit Table Compaction",
-        "tags": [
-          "data"
-        ]
-      }
-    },
-    "/v1/table/{id}/compaction_plan": {
-      "post": {
-        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, \"The lakehouse cloud-native cutover\".\n\nWriter tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the\ntable default, which is the correct rung \u2014 a compaction preserves every row (Lance commits it as a\n``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
-        "operationId": "plan_table_compaction_v1_table__id__compaction_plan_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/CompactionPlanRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompactionPlanResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Plan Table Compaction",
-        "tags": [
-          "data"
         ]
       }
     },
@@ -24902,134 +26084,6 @@
         "summary": "Create Scalar Index",
         "tags": [
           "index"
-        ]
-      }
-    },
-    "/v1/table/{id}/credentials": {
-      "post": {
-        "description": "Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.\n\n``web_identity_token`` is the caller's raw bearer JWT (via the shared HTTPBearer seam), forwarded to the\nobject store for the web_identity flow (AssumeRoleWithWebIdentity exchanges it); other vendors ignore it.",
-        "operationId": "vend_credentials_v1_table__id__credentials_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "tier",
-            "required": false,
-            "schema": {
-              "default": "read",
-              "enum": [
-                "read",
-                "write"
-              ],
-              "title": "Tier",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CredentialResponse"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Vend Credentials",
-        "tags": [
-          "credentials"
         ]
       }
     },
@@ -26376,134 +27430,6 @@
         ]
       }
     },
-    "/v1/table/{id}/history": {
-      "get": {
-        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\nTHE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.\nThe check below is the second one a request meets, not the first: ``authorize`` is a router-wide\ndependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever\narrives to be metadata-checked. Pinned by\n``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
-        "operationId": "table_history_v1_table__id__history_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "limit",
-            "required": false,
-            "schema": {
-              "default": 50,
-              "maximum": 200,
-              "minimum": 1,
-              "title": "Limit",
-              "type": "integer"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Table History V1 Table  Id  History Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Table History",
-        "tags": [
-          "version"
-        ]
-      }
-    },
     "/v1/table/{id}/index/list": {
       "post": {
         "description": "List the indices defined on a table (paged) \u2014 wraps the native ``list_table_indices`` op.\n\n``branch`` is DECLARED here only so it can be refused. The route did not accept it at all, which\nread as safe and was not: a caller who asked for a branch's indices got 200 and MAIN's list.\nVerified live 2026-08-31 against a table whose branch carried a BTREE on `id` that main did not \u2014\nthis door reported an empty list for the branch, for main, and for a branch never created. Being\ntold \"no indices\" about the wrong dataset is a worse answer than an error, because it is actionable.",
@@ -27227,674 +28153,6 @@
         ]
       }
     },
-    "/v1/table/{id}/maintenance/compact": {
-      "post": {
-        "description": "Compact small fragments on demand (#76 'compact now'). Owner-gated (``can_drop``) \u2014 the same bar as\nthe retention policy that schedules maintenance. Non-destructive: writes a new version, removes none.\n\nWHERE THE REWRITE HAPPENS depends on whether this deployment has a maintenance queue, and the two\nanswers are not a feature flag \u2014 they are the same choice ``services/maintenance`` already makes for\nthe scheduled lane, read off the same topic name so the two cannot disagree about whether a worker\nexists. With a queue: publish one unit, 202, done in milliseconds. Without one: nothing would ever\nexecute that unit, so the rewrite runs here as it always has.\n\nWhat stays in the handler either way is the BOUNDED half \u2014 parsing the identifier, opening the\ndataset, and the ``sibling_base_refs`` pre-pass (one non-recursive listing). What leaves is the half\nwhose cost is a property of the data rather than of the request: rewriting every fragment of a table\nwhose fragment count nobody bounded.",
-        "operationId": "compact_maintenance_v1_table__id__maintenance_compact_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to compact. A branch is answered by the evidence gate, which refuses on COST when fragments still resolve through the parent.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CompactRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/CompactResult"
-                    },
-                    {
-                      "$ref": "#/components/schemas/CompactAccepted"
-                    }
-                  ],
-                  "title": "Response Compact Maintenance V1 Table  Id  Maintenance Compact Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CompactAccepted"
-                }
-              }
-            },
-            "description": "Enqueued onto the maintenance work queue; no fragment counts exist yet."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Compact Maintenance",
-        "tags": [
-          "maintenance"
-        ]
-      }
-    },
-    "/v1/table/{id}/maintenance/preview": {
-      "post": {
-        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is\nmeasured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns \u2014 so [[LH-094]]'s\nquestion about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``\nboth reclaim, and stay refused until that is decided for them.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather\nthan asserting the branch reached ``open_dataset``.",
-        "operationId": "preview_maintenance_v1_table__id__maintenance_preview_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to preview. Omit for main; this door reads the ref it is given.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to preview. Omit for main; this door reads the ref it is given.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GcRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GcPreview"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Preview Maintenance",
-        "tags": [
-          "maintenance"
-        ]
-      }
-    },
-    "/v1/table/{id}/maintenance/reindex": {
-      "post": {
-        "description": "Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) \u2014 it destroys the\nindex that is there, and an unmapped suffix would fall through to the writer rung.\n\n**IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather\nthan assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and\n`create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name\nvector rebuild is refused at the default \u2014 ``LanceError(Index): Index name 'x' already exists`` \u2014\nand accepted under ``replace=True``. So the vector index, the one that cannot repair itself\nthrough the create doors, is repaired by a flag pylance already has. Dropping first would open a\nwindow in which the table has NO index \u2014 a search silently degrading to a full scan \u2014 and would\nleave it with none if the rebuild then failed, which is worse than the mis-parameterised index\nbeing repaired.\n\n**THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live\nindex's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`\nmerges OVER that reading for the caller who is deliberately changing something.\n\nWHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service\nreads, so the two cannot disagree about whether a worker exists. With a queue: publish one\n`IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild\nruns here.",
-        "operationId": "reindex_maintenance_v1_table__id__maintenance_reindex_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReindexRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/ReindexResult"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ReindexAccepted"
-                    }
-                  ],
-                  "title": "Response Reindex Maintenance V1 Table  Id  Maintenance Reindex Post"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "202": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReindexAccepted"
-                }
-              }
-            },
-            "description": "Enqueued onto the index lane; the rebuilt version does not exist yet."
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Reindex Maintenance",
-        "tags": [
-          "maintenance"
-        ]
-      }
-    },
-    "/v1/table/{id}/maintenance/run": {
-      "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` is DECLARED only so it can be REFUSED \u2014 see the module header.",
-        "operationId": "run_maintenance_v1_table__id__maintenance_run_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
-            "in": "query",
-            "name": "branch",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
-              "title": "Branch"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GcRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GcRunResult"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Run Maintenance",
-        "tags": [
-          "maintenance"
-        ]
-      }
-    },
     "/v1/table/{id}/merge_insert": {
       "post": {
         "description": "Upsert Arrow-IPC rows \u2014 ``merge_insert_into_table``; emits a MERGE_INSERT lineage event.\nThe ``*_filt`` SQL filters, ``timeout``, ``use_index`` and ``branch`` are spec-0.9 query params.\n\nTraining-shaped lineage (optional, catalog stays un-opinionated): ``source`` + ``source_version``\nrecord the version-pinned upstream this merge DERIVED FROM (a stage runner's merge from ``source@N`` \u2014 the\nreproducibility pin surfaced on the lineage READ edge), and the ``X-Lance-Run-Facets`` header carries\nproducer run metadata (e.g. training ``params``) verbatim onto the emitted RunEvent.\n\nIMPLICIT DDL (\u00a74): after the merge commits, a best-effort BTREE index is ensured on the ``on``\nkey (pylance's ``use_index`` only helps *if an index exists*, and nothing else ever builds one \u2014\nwithout it every upsert full-scans). The FIRST merge on a ``(table, on)`` pays the build\nsynchronously; later merges pay one cheap list call. Passing ``use_index=false`` opts out of the\nimplicit build too (a caller declining index USAGE shouldn't be charged index CREATION). The\nbuild commits its OWN Lance version with no lineage event (consistent with\n``/create_scalar_index`` today), so the first indexed merge leaves the table at\n``response.version + 1`` while the MERGE_INSERT lineage points at ``response.version`` \u2014 a\nversion gap, not a lost write.",
@@ -28245,146 +28503,6 @@
         "summary": "Merge Insert Into Table",
         "tags": [
           "data"
-        ]
-      }
-    },
-    "/v1/table/{id}/publish": {
-      "post": {
-        "description": "Gate `version` and, if it passes, advance `published` to it.\n\nA refused gate is a 200 with `published=False`, not an error status: the request was well-formed\nand the system did exactly what it should. Errors are reserved for the caller getting it wrong \u2014\nan unknown version (404), a backwards move (409), a malformed one (400) \u2014 all raised as\n`lance_namespace` typed errors so the shared problem-body handler renders them.",
-        "operationId": "publish_table_v1_table__id__publish_post",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/PublishRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PublishResult"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Publish Table",
-        "tags": [
-          "publication"
         ]
       }
     },
@@ -30069,124 +30187,6 @@
         "summary": "Get Table Tag Version",
         "tags": [
           "tag"
-        ]
-      }
-    },
-    "/v1/table/{id}/tasks": {
-      "get": {
-        "description": "What is queued for THIS table (#75 brings \u00a72.4). Today that is exactly one thing: a pending\ntrash expiry. It exists the moment expiry does, because an undrop deadline the owner cannot see\nis not a safety feature \u2014 the estate's task surfaces are otherwise all estate-global, so \"what is\nscheduled against my table\" was unanswerable. Reader-gated by the router alongside describe.\n\n`expires_at` is when the object becomes PURGE-ELIGIBLE, not when recovery stops (diff2 F10 item\n5). Undrop does not check the clock \u2014 it checks whether the record is still there \u2014 so a passed\ndeadline is a warning, not a verdict, and `expired` says which state you are in. Reporting it as\nfinality would push an owner to give up on data that is still on storage and still recoverable.",
-        "operationId": "table_tasks_v1_table__id__tasks_get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "id",
-            "required": true,
-            "schema": {
-              "title": "Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-            "in": "query",
-            "name": "delimiter",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
-              "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-api-token",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Api-Token"
-            }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-service-identity",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Service-Identity"
-            }
-          },
-          {
-            "in": "header",
-            "name": "dapr-caller-app-id",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Dapr-Caller-App-Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "items": {
-                    "$ref": "#/components/schemas/TrashEntry"
-                  },
-                  "title": "Response Table Tasks V1 Table  Id  Tasks Get",
-                  "type": "array"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "security": [
-          {
-            "HTTPBearer": []
-          }
-        ],
-        "summary": "Table Tasks",
-        "tags": [
-          "table"
         ]
       }
     },

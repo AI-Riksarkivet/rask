@@ -47,7 +47,7 @@ def test_the_plan_door_hands_back_tasks_without_minting_a_version(real_ns_client
     location = _fragmented_table(real_ns_client)
     before = lance.dataset(location).version
 
-    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000})
 
     assert response.status_code == 200, response.text
     body: dict[str, Any] = response.json()
@@ -61,7 +61,7 @@ def test_a_worker_executes_the_plan_and_the_commit_door_lands_it(real_ns_client:
     location = _fragmented_table(real_ns_client)
     before = lance.dataset(location)
 
-    plan = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000}).json()
+    plan = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000}).json()
     # The WORKER half — a separate process in production, holding vended creds and the task string it
     # read off the queue. Nothing here touches the catalog.
     # pylance's ``optimize.pyi`` stops at ``execute``; ``from_json``/``json`` exist on the Rust class and
@@ -70,7 +70,7 @@ def test_a_worker_executes_the_plan_and_the_commit_door_lands_it(real_ns_client:
     task_cls: Any = CompactionTask
     results = [task_cls.from_json(task).execute(lance.dataset(location)).json() for task in plan["tasks"]]
 
-    response = real_ns_client.post("/v1/table/db$t/compaction_commit", json={"results": results})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_commit", json={"results": results})
 
     assert response.status_code == 200, response.text
     body = response.json()
@@ -85,7 +85,7 @@ def test_a_worker_executes_the_plan_and_the_commit_door_lands_it(real_ns_client:
 
 def test_a_healthy_table_plans_no_work_and_is_not_an_error(real_ns_client: TestClient) -> None:
     _fragmented_table(real_ns_client, appends=0)
-    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000})
     assert response.status_code == 200, response.text
     assert response.json()["tasks"] == []
 
@@ -102,7 +102,7 @@ def test_an_option_the_door_does_not_forward_is_refused_at_the_wire(real_ns_clie
     nothing.
     """
     _fragmented_table(real_ns_client)
-    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"io_buffer_size": 8192})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"io_buffer_size": 8192})
     assert response.status_code == 422, response.text
 
 
@@ -115,20 +115,20 @@ def test_the_executors_own_MEMORY_BOUNDS_are_accepted_at_the_wire(real_ns_client
     could not be bounded at all.
     """
     _fragmented_table(real_ns_client)
-    response = real_ns_client.post("/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 1024, "batch_size": 64, "num_threads": 2})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 1024, "batch_size": 64, "num_threads": 2})
     assert response.status_code == 200, response.text
 
 
 def test_the_commit_door_refuses_an_empty_result_set(real_ns_client: TestClient) -> None:
     _fragmented_table(real_ns_client)
-    response = real_ns_client.post("/v1/table/db$t/compaction_commit", json={"results": []})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_commit", json={"results": []})
     assert response.status_code == 422, response.text
 
 
 def test_a_malformed_worker_result_is_a_client_error_not_a_crash(real_ns_client: TestClient) -> None:
     # Results arrive off a queue and are client-controlled. A missing field must be a 4xx.
     _fragmented_table(real_ns_client)
-    response = real_ns_client.post("/v1/table/db$t/compaction_commit", json={"results": ['{"nope": 1}']})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_commit", json={"results": ['{"nope": 1}']})
     assert response.status_code == 400, response.text
 
 

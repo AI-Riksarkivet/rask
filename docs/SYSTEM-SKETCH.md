@@ -75,7 +75,7 @@ emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); pr
 | OIDC authn | PyJWT/JWKS, fail-closed | ✅ built |
 | OpenFGA authz | op→`can_*`, concentric+cascade, roles-as-`#assignee`, `grant_on_create` | ✅ built |
 | Resilience | transient-aware retries; network → 503 (never 500) | ✅ built |
-| `CredentialVendor` | pluggable modes: mode_b / web_identity / sts / static (`services/catalog/core/vending.py`) | ✅ built + wired (`POST /v1/table/{id}/credentials`) |
+| `CredentialVendor` | pluggable modes: mode_b / web_identity / sts / static (`services/catalog/core/vending.py`) | ✅ built + wired (`POST /management/v1/table/{id}/credentials`) |
 | Maintenance read-only | 503+Retry-After middleware (`services/catalog/api/maintenance.py`) | ✅ built (default off) |
 | Lineage service | OpenLineage ingest → AGE graph (`services/lineage/`) | ✅ built, deployed (`chart/`), in-service authz gate (default off) |
 | OpenBao SecretStore | secrets out of env | ✅ built + deployed (two-tier; app services fail-closed on it) |
@@ -94,7 +94,7 @@ emit an OpenLineage event. Layers are **separate Lance tables** (namespaces); pr
 |---|---|---|---|---|
 | 1 | **Lineage read endpoints unauthenticated** | provenance | leaks the data estate (which tables exist, how they connect, who ran what) | **P0** |
 | 2 | **Lineage ingest endpoint unauthenticated** | provenance | anyone can inject false provenance / flood the graph (no producer trust) | **P0** |
-| 3 | ~~CredentialVendor not wired~~ ✅ CLOSED — vending shipped at its own `POST /v1/table/{id}/credentials?tier=read\|write` (superseded the describe-param idea) | data | — | done |
+| 3 | ~~CredentialVendor not wired~~ ✅ CLOSED — vending shipped at its own `POST /management/v1/table/{id}/credentials?tier=read\|write` (superseded the describe-param idea) | data | — | done |
 | 4 | ~~STS vending not wired~~ ✅ CLOSED — four modes in `vending.py` (`sts`, `mode_b` default, `web_identity` = RustFS-native scoped STS, `static`) | data | — | done |
 | 5 | ~~Secrets in env~~ ✅ CLOSED — OpenBao deployed as the two-tier Dapr secret store (app tier via sidecar; infra tier via external-secrets pattern) | security | — | done |
 | 6 | ~~medallion jobs absent~~ ✅ CLOSED — event-driven producer + stage runners + compaction sweeper built & deployed ([`FLOW.md`](FLOW.md)); distributed Ray Data variant = rask merge | data/medallion | — | done |
@@ -156,7 +156,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 
 | # | Pattern | Maps to | Our state | Recommendation | Priority | Effort |
 |---|---------|---------|-----------|----------------|----------|--------|
-| 1 | ~~Wire vending into `describe_table?vend_credentials`~~ ✅ **SHIPPED as its own endpoint** | CREDENTIAL_VENDING / SECRETS | `POST /v1/table/{id}/credentials?tier=read\|write` with four modes (`sts`, default `mode_b`, `web_identity` = RustFS-native scoped STS, `static`), base credential from OpenBao (`credentials.py`, `vending.py`). | The describe-param shape was dropped for a dedicated endpoint — cleaner authz tiering. | done | — |
+| 1 | ~~Wire vending into `describe_table?vend_credentials`~~ ✅ **SHIPPED as its own endpoint** | CREDENTIAL_VENDING / SECRETS | `POST /management/v1/table/{id}/credentials?tier=read\|write` with four modes (`sts`, default `mode_b`, `web_identity` = RustFS-native scoped STS, `static`), base credential from OpenBao (`credentials.py`, `vending.py`). | The describe-param shape was dropped for a dedicated endpoint — cleaner authz tiering. | done | — |
 | 2 | **Always-present `expires_at_millis` + separate `credentials` vs `config`** in vended/load-table response | CREDENTIAL_VENDING | `VendedCredentials` mixes everything into `storage_options`; `expires_at_millis` optional (vending.py:36-45). | Mirror Lakekeeper `TableConfig` (s3.rs:499,568,599): add a `config` dict beside `storage_options`; require `expires_at_millis` whenever an expiring token is vended (STS). Keep null/absent for Mode B and static. | **P0** | M |
 | 3 | **Trace-ID + actor propagation on every request** (UUID request_id + OIDC sub) | OBSERVABILITY/EVENTS | Absent — no request_id, no actor threaded to a context. OIDC token verified but not propagated. | Add a tiny middleware/dependency generating `request_id` (UUID) and capturing actor (OIDC sub); store on request scope. This is the cheap precondition for events, audit, and lineage correlation. | **P0** | S |
 | 4 | **Emit only table/namespace mutation events** (NOT warehouse/role/multi-format) | OBSERVABILITY/EVENTS / GOVERNANCE_P1 | Absent. | Deliberately scope events to create/drop/rename of namespace/table. Add project_* events only when GOVERNANCE_P1 lands. (Avoids Lakekeeper's role/warehouse event sprawl — publisher.rs:223-251.) | **P0** | S |
@@ -188,7 +188,7 @@ _The three sections below are the **cited Lakekeeper study output** (study `wfb2
 
 ### 1. Wire the credential vendor into `describe_table?vend_credentials` (STS-first)
 > ✅ **Superseded & shipped (2026-07):** vending landed as its OWN endpoint — `POST
-> /v1/table/{id}/credentials?tier=read|write` (`services/catalog/api/v1/endpoints/credentials.py`)
+> /management/v1/table/{id}/credentials?tier=read|write` (`services/catalog/api/v1/endpoints/credentials.py`)
 > — not as a describe param, with FOUR modes (`sts`, default `mode_b`, `web_identity` for
 > RustFS-native scoped STS, `static`) sourcing the base credential from OpenBao. The paragraphs
 > below are the original (historical) recommendation.

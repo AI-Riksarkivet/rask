@@ -13,7 +13,7 @@ write, checked at the catalog's own door, and the decision — allow or deny —
 stream keyed to the table and the tier.
 
 That is the whole reason the call is made for its SIDE EFFECT and its answer discarded. Measured on
-the live estate before this shipped: `POST /v1/table/bind86-gold$catalog/credentials?tier=write` with
+the live estate before this shipped: `POST /management/v1/table/bind86-gold$catalog/credentials?tier=write` with
 the stage runner's dedicated credential answers `200 {"mode":"server_mediated"}` — the rung passes and no
 credential is issued, so a cascade cannot break on it today. The day vending becomes real, this is
 already the call that would carry it.

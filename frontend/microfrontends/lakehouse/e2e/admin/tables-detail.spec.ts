@@ -84,7 +84,7 @@ const WRITE_ROUTES: Record<string, unknown> = {
 	[`POST /v1/table/${TABLE}/create_index`]: { transaction_id: 'ix1' },
 	[`POST /v1/table/${TABLE}/create_scalar_index`]: { transaction_id: 'ix1' },
 	[`POST /v1/table/${TABLE}/index/id_idx/drop`]: { transaction_id: 'ix2' },
-	[`POST /v1/table/${TABLE}/maintenance/preview`]: {
+	[`POST /management/v1/table/${TABLE}/maintenance/preview`]: {
 		current_version: 3,
 		total_versions: 3,
 		eligible_versions: [1],
@@ -92,12 +92,12 @@ const WRITE_ROUTES: Record<string, unknown> = {
 		retention_days: null,
 		retain_versions: 2,
 	},
-	[`POST /v1/table/${TABLE}/maintenance/run`]: {
+	[`POST /management/v1/table/${TABLE}/maintenance/run`]: {
 		ok: true,
 		old_versions_removed: 1,
 		bytes_removed: 512,
 	},
-	[`POST /v1/table/${TABLE}/maintenance/compact`]: {
+	[`POST /management/v1/table/${TABLE}/maintenance/compact`]: {
 		ok: true,
 		fragments_removed: 6,
 		fragments_added: 1,
@@ -168,7 +168,7 @@ test.beforeEach(async ({ context, page }, testInfo) => {
 		...DETAIL_ROUTES,
 		...WRITE_ROUTES,
 		'GET /v1/table': { tables: ['db1$t', 'db1$other'] },
-		[`GET /v1/table/${TABLE}/history`]: HISTORY,
+		[`GET /management/v1/table/${TABLE}/history`]: HISTORY,
 	});
 });
 
@@ -278,7 +278,7 @@ test('GC preview lists reclaimable versions + protected tags (#75)', async ({ pa
 	await section.getByRole('button', { name: 'Preview' }).click();
 	await expect(section.locator('.gc')).toContainText('1 version reclaimable');
 	await expect(section.locator('.gc')).toContainText('blessed→v2'); // tag protection surfaced
-	expect(await bodyOf(page, `/v1/table/${TABLE}/maintenance/preview`)).toEqual({
+	expect(await bodyOf(page, `/management/v1/table/${TABLE}/maintenance/preview`)).toEqual({
 		retention_days: null,
 		retain_versions: 2,
 	});
@@ -291,9 +291,11 @@ test('GC reclaim is a two-click confirm and posts to /maintenance/run (#75)', as
 	await gc.getByRole('button', { name: 'Preview' }).click();
 	await gc.getByRole('button', { name: 'Reclaim now' }).click();
 	// first click only arms the confirm — no run yet
-	expect(await callTo(page, `/v1/table/${TABLE}/maintenance/run`)).toBeUndefined();
+	expect(await callTo(page, `/management/v1/table/${TABLE}/maintenance/run`)).toBeUndefined();
 	await gc.getByRole('button', { name: 'Confirm reclaim' }).click();
-	await expect.poll(() => callTo(page, `/v1/table/${TABLE}/maintenance/run`)).toBeDefined();
+	await expect
+		.poll(() => callTo(page, `/management/v1/table/${TABLE}/maintenance/run`))
+		.toBeDefined();
 	await expect(gc).toContainText('Reclaimed 1 version');
 });
 
@@ -304,7 +306,7 @@ test('compact-now posts to /maintenance/compact with the policy target size (#76
 	const gc = page.locator('section', { hasText: 'Maintenance policy' }).locator('.gc');
 	await gc.getByRole('button', { name: 'Compact now' }).click();
 	await expect
-		.poll(() => bodyOf(page, `/v1/table/${TABLE}/maintenance/compact`))
+		.poll(() => bodyOf(page, `/management/v1/table/${TABLE}/maintenance/compact`))
 		.toEqual({ target_rows_per_fragment: 1048576 });
 	await expect(gc).toContainText('6 fragment'); // "Compacted · 6 fragment(s) → 1."
 });
@@ -747,7 +749,7 @@ const TRASH_ENTRY = {
 /** A dropped table: `describe` 404s (it is deregistered) but a trash record still exists. */
 const droppedRoutes = (entry: unknown = TRASH_ENTRY): Record<string, unknown> => ({
 	[`POST /v1/table/${GONE}/describe`]: { status: 404, body: { detail: 'Table not found' } },
-	[`GET /v1/table/${GONE}/tasks`]: entry === null ? [] : [entry],
+	[`GET /management/v1/table/${GONE}/tasks`]: entry === null ? [] : [entry],
 });
 
 test('a dropped-but-recoverable table offers undrop, with the real deadline (#75)', async ({
@@ -780,7 +782,10 @@ test('an unreadable trash record is NAMED, never rendered as "your data is gone"
 	// anomaly — and an anomaly must not be reported to the owner of a recoverable table as a verdict.
 	await seed(page, {
 		[`POST /v1/table/${GONE}/describe`]: { status: 404, body: { detail: 'Table not found' } },
-		[`GET /v1/table/${GONE}/tasks`]: { status: 500, body: { detail: 'trash store unreachable' } },
+		[`GET /management/v1/table/${GONE}/tasks`]: {
+			status: 500,
+			body: { detail: 'trash store unreachable' },
+		},
 	});
 	await page.goto(`/lakehouse/catalog/tables/${GONE}`);
 

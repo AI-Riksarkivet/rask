@@ -75,29 +75,29 @@ def _unit(published: _Published) -> IndexWorkItem:
 
 
 def test_the_door_no_longer_refuses_a_branch(client: TestClient, published: _Published) -> None:
-    response = client.post("/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
+    response = client.post("/management/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
 
     assert response.status_code == 202, response.text
 
 
 def test_the_published_unit_names_the_branch(client: TestClient, published: _Published) -> None:
     """The assertion that matters: a 202 whose unit says main is the wrong-but-plausible answer."""
-    client.post("/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
+    client.post("/management/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
 
     assert _unit(published).branch == "work"
 
 
 def test_a_branchless_request_still_publishes_a_unit_for_main(client: TestClient, published: _Published) -> None:
     """The control. Without it, a door stamping every unit with a branch would pass above."""
-    client.post("/v1/table/ns$events/maintenance/reindex", json={"index_name": "vec_idx"})
+    client.post("/management/v1/table/ns$events/maintenance/reindex", json={"index_name": "vec_idx"})
 
     assert _unit(published).branch == ""
 
 
 def test_the_two_refs_publish_two_units(client: TestClient, published: _Published) -> None:
     """The caller follows `transaction_id`, so one id for two builds points them at the wrong one."""
-    client.post("/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
+    client.post("/management/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
     on_branch = _unit(published).unit_id
-    client.post("/v1/table/ns$events/maintenance/reindex", json={"index_name": "vec_idx"})
+    client.post("/management/v1/table/ns$events/maintenance/reindex", json={"index_name": "vec_idx"})
 
     assert on_branch != _unit(published).unit_id

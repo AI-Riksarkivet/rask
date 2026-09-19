@@ -79,7 +79,7 @@ def test_the_catalog_client_vends_scoped_options() -> None:
     schema = pa.schema([("id", pa.int64())])
     client = CatalogServiceClient(schema, base_url="http://catalog:2333", token="t")
     with respx.mock:
-        respx.post("http://catalog:2333/v1/table/ns$ds/credentials").mock(
+        respx.post("http://catalog:2333/management/v1/table/ns$ds/credentials").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -109,7 +109,7 @@ def test_server_mediated_vends_nothing_and_that_is_not_an_error() -> None:
 
     client = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog:2333", token="t")
     with respx.mock:
-        respx.post("http://catalog:2333/v1/table/ns$ds/credentials").mock(
+        respx.post("http://catalog:2333/management/v1/table/ns$ds/credentials").mock(
             return_value=httpx.Response(200, json={"mode": "server_mediated", "credentials": None})
         )
         assert client.vend_storage_options("ns", "ds", tier="write") is None
@@ -133,6 +133,6 @@ def test_a_vending_failure_REFUSES_rather_than_signing_with_the_storage_root() -
 
     client = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog:2333", token="t")
     with respx.mock:
-        respx.post("http://catalog:2333/v1/table/ns$ds/credentials").mock(return_value=httpx.Response(503, json={"detail": "vendor down"}))
+        respx.post("http://catalog:2333/management/v1/table/ns$ds/credentials").mock(return_value=httpx.Response(503, json={"detail": "vendor down"}))
         with pytest.raises(VendingUnavailableError):
             client.vend_storage_options("ns", "ds", tier="write")

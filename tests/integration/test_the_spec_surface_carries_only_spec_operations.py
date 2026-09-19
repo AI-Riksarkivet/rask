@@ -43,29 +43,25 @@ _SPEC_PREFIXES = ("/v1/namespace", "/v1/table", "/v1/materialized_view", "/v1/tr
 #: rask-only operation a spec client meets on a spec prefix. They leave this set by moving to the
 #: management API — nothing else removes an entry, and an entry that stops being true fails the gate
 #: below rather than being quietly correct.
-_STILL_ON_THE_SPEC_SURFACE: frozenset[tuple[str, str]] = frozenset(
+_STILL_ON_THE_SPEC_SURFACE: frozenset[tuple[str, str]] = frozenset()
+
+#: PERMANENT, JUSTIFIED DEVIATIONS — a SEPARATE set because they are not debt and will never move.
+#:
+#: The Lance namespace spec defines `count_rows` and `tags/list` as POST at every tag from v0.9.0 to
+#: v0.12.0. But the REST client pylance BUNDLES (`rust/lance-namespace-impls/src/rest.rs`) calls
+#: `get_json` for exactly those two, and the reference SERVER it bundles mounts them as GET — the lance
+#: repo disagrees with its own document on both sides of the wire, and `lance_namespace.connect("rest",
+#: …)` resolves to that class. rask dual-mounts so the stock client works; mounting POST only gave it
+#: FastAPI's 405, which carries no `code` and surfaced as `InternalError 18`.
+#:
+#: So these are not rask-only verbs a spec client should never meet — they are SPEC operations reached
+#: by the method the shipped client actually sends. Moving them to `/management/v1` would break the
+#: stock client, and deleting them would too. Recording them as violations would make this gate
+#: permanently un-closable and teach a reader that the remaining count is debt when it is not.
+#: `tests/integration/test_spec_method_and_status_conformance.py` (A3) holds the behaviour; the real
+#: fix is upstream, a one-line change in lance, and this set shrinks when that lands.
+_METHOD_ALIASES_THE_STOCK_CLIENT_SENDS: frozenset[tuple[str, str]] = frozenset(
     {
-        # --- MAINTENANCE: compaction, reclamation, index rebuilds, and the distributed compaction
-        # pair the executor drives.
-        ("POST", "/v1/table/{}/compaction_commit"),
-        ("POST", "/v1/table/{}/compaction_plan"),
-        ("POST", "/v1/table/{}/maintenance/compact"),
-        ("POST", "/v1/table/{}/maintenance/preview"),
-        ("POST", "/v1/table/{}/maintenance/reindex"),
-        ("POST", "/v1/table/{}/maintenance/run"),
-        # --- OPERATIONS a spec client has no vocabulary for: async task polling, the promotion gate,
-        # the vending extension, the blob sidecar, the commit door and the change feed.
-        ("GET", "/v1/namespace/{}/tasks"),
-        ("GET", "/v1/table/{}/tasks"),
-        ("GET", "/v1/table/{}/blobs"),
-        ("GET", "/v1/table/{}/history"),
-        ("POST", "/v1/table/{}/changes"),
-        ("POST", "/v1/table/{}/commit"),
-        ("POST", "/v1/table/{}/credentials"),
-        ("POST", "/v1/table/{}/publish"),
-        # --- ALIASES the spec defines with a DIFFERENT METHOD, which the audit's prose list missed
-        # entirely. A spec client discovering the surface sees a verb the document does not define,
-        # and `test_spec_conformance.py` cannot see them because it only checks the other direction.
         ("GET", "/v1/table/{}/count_rows"),  # spec: POST
         ("GET", "/v1/table/{}/tags/list"),  # spec: POST
     }
@@ -93,7 +89,7 @@ def _on_the_spec_surface(routes: set[tuple[str, str]]) -> set[tuple[str, str]]:
 
 def test_no_NEW_rask_route_appears_on_a_spec_prefix(client: TestClient) -> None:
     """The ratchet's forward half: a route added to a spec prefix must be a spec operation."""
-    intruders = _on_the_spec_surface(_served(client)) - SPEC_ROUTES - _STILL_ON_THE_SPEC_SURFACE
+    intruders = _on_the_spec_surface(_served(client)) - SPEC_ROUTES - _STILL_ON_THE_SPEC_SURFACE - _METHOD_ALIASES_THE_STOCK_CLIENT_SENDS
 
     assert not intruders, (
         f"{len(intruders)} rask-only operation(s) were added to the SPEC surface, where a spec client "
@@ -123,3 +119,21 @@ def test_the_allowlist_and_the_spec_do_not_overlap() -> None:
     overlap = _STILL_ON_THE_SPEC_SURFACE & SPEC_ROUTES
 
     assert not overlap, f"these are SPEC operations and must not be recorded as violations: {sorted(overlap)}"
+
+
+def test_every_method_alias_is_still_served(client: TestClient) -> None:
+    """The justified set gets the same backward check as the violation set, for the same reason.
+
+    An alias recorded here but no longer mounted would silently widen what the forward gate permits,
+    and the stock client would be broken with nothing saying so — this set is small and permanent,
+    which is exactly the condition under which nobody re-reads it.
+    """
+    missing = _METHOD_ALIASES_THE_STOCK_CLIENT_SENDS - _on_the_spec_surface(_served(client))
+
+    assert not missing, f"the stock client sends these and the catalog no longer answers them: {sorted(missing)}"
+
+
+def test_the_two_sets_are_disjoint() -> None:
+    """A route cannot be both debt to move and a permanent deviation — the first would demand it leave
+    the spec surface and the second forbids it, so an entry in both makes the gate un-closable."""
+    assert not (_STILL_ON_THE_SPEC_SURFACE & _METHOD_ALIASES_THE_STOCK_CLIENT_SENDS)

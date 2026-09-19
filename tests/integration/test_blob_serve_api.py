@@ -1,4 +1,4 @@
-"""§9 P1 blob serving over HTTP — GET /v1/table/{id}/blobs end to end.
+"""§9 P1 blob serving over HTTP — GET /management/v1/table/{id}/blobs end to end.
 
 Unlike the sibling integration suites (MagicMock namespace), these run a REAL ``dir`` namespace +
 real pylance behind the endpoint: the value under test is the HTTP contract — status codes
@@ -59,7 +59,7 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
 
 
 def test_get_blob_full_200(blob_client: TestClient) -> None:
-    resp = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 0})
+    resp = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0})
     assert resp.status_code == 200
     assert resp.content == b"hello-world"
     assert resp.headers["content-type"] == "application/octet-stream"
@@ -71,7 +71,7 @@ def test_get_blob_full_200(blob_client: TestClient) -> None:
 
 def test_get_blob_range_206_with_content_range(blob_client: TestClient) -> None:
     resp = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 0},
         headers={"Range": "bytes=0-3"},
     )
@@ -83,7 +83,7 @@ def test_get_blob_range_206_with_content_range(blob_client: TestClient) -> None:
 
 def test_get_blob_suffix_range_206(blob_client: TestClient) -> None:
     resp = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 0},
         headers={"Range": "bytes=-5"},
     )
@@ -94,7 +94,7 @@ def test_get_blob_suffix_range_206(blob_client: TestClient) -> None:
 
 def test_get_blob_unsatisfiable_range_416(blob_client: TestClient) -> None:
     resp = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 0},
         headers={"Range": "bytes=999-"},
     )
@@ -106,7 +106,7 @@ def test_get_blob_unsatisfiable_range_416(blob_client: TestClient) -> None:
 def test_get_blob_malformed_range_ignored_full_200(blob_client: TestClient) -> None:
     # RFC 9110 §14.1.1: a server MAY ignore a Range it doesn't support — multi-range falls back to 200.
     resp = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 0},
         headers={"Range": "bytes=0-3,6-9"},
     )
@@ -115,43 +115,43 @@ def test_get_blob_malformed_range_ignored_full_200(blob_client: TestClient) -> N
 
 
 def test_get_blob_non_blob_column_400(blob_client: TestClient) -> None:
-    resp = blob_client.get("/v1/table/clips/blobs", params={"column": "src", "row": 0})
+    resp = blob_client.get("/management/v1/table/clips/blobs", params={"column": "src", "row": 0})
     assert resp.status_code == 400
     assert "not a blob column" in resp.json()["detail"]
 
 
 def test_get_blob_unknown_column_404(blob_client: TestClient) -> None:
-    resp = blob_client.get("/v1/table/clips/blobs", params={"column": "nope", "row": 0})
+    resp = blob_client.get("/management/v1/table/clips/blobs", params={"column": "nope", "row": 0})
     assert resp.status_code == 404
     assert resp.json()["title"] == "TableColumnNotFoundError"
 
 
 def test_get_blob_row_out_of_range_400(blob_client: TestClient) -> None:
-    resp = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 99})
+    resp = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 99})
     assert resp.status_code == 400
     assert "out of range" in resp.json()["detail"]
 
 
 def test_get_blob_missing_table_404(blob_client: TestClient) -> None:
-    resp = blob_client.get("/v1/table/ghost/blobs", params={"column": "payload", "row": 0})
+    resp = blob_client.get("/management/v1/table/ghost/blobs", params={"column": "payload", "row": 0})
     assert resp.status_code == 404
 
 
 def test_get_blob_negative_row_422(blob_client: TestClient) -> None:
-    resp = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": -1})
+    resp = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": -1})
     assert resp.status_code == 422
 
 
 def test_get_blob_zero_length_payload_200_empty(blob_client: TestClient) -> None:
     # A zero-length (or null — stored identically at pylance 8.0.0) payload is valid empty bytes,
     # not an error; any Range against it is unsatisfiable.
-    resp = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 2})
+    resp = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 2})
     assert resp.status_code == 200
     assert resp.content == b""
     assert resp.headers["content-length"] == "0"
 
     ranged = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 2},
         headers={"Range": "bytes=0-3"},
     )
@@ -168,19 +168,19 @@ def test_get_blob_version_param_over_http(blob_client: TestClient) -> None:
     ns = blob_client.app.dependency_overrides[get_namespace]()
     recreate(ns, {}, ["clips"], _blob_ipc([b"replacement"]), mode="overwrite")
 
-    head = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 0})
+    head = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0})
     assert head.status_code == 200 and head.content == b"replacement"
 
-    pinned = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 0, "version": 1})
+    pinned = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0, "version": 1})
     assert pinned.status_code == 200
     assert pinned.content == b"hello-world"
     assert pinned.headers["etag"] == '"1-payload-0"'
 
-    missing = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 0, "version": 999})
+    missing = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0, "version": 999})
     assert missing.status_code == 404
     assert missing.json()["title"] == "TableVersionNotFoundError"
 
-    zero = blob_client.get("/v1/table/clips/blobs", params={"column": "payload", "row": 0, "version": 0})
+    zero = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0, "version": 0})
     assert zero.status_code == 422
 
 
@@ -189,7 +189,7 @@ def test_get_blob_if_range_downgrades_stale_resume_to_200(blob_client: TestClien
     # current payload (200), never a 206 spliced from a different incarnation; a matching
     # validator keeps the 206.
     stale = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 0},
         headers={"Range": "bytes=6-", "If-Range": '"999-payload-0"'},
     )
@@ -197,7 +197,7 @@ def test_get_blob_if_range_downgrades_stale_resume_to_200(blob_client: TestClien
     assert stale.content == b"hello-world"
 
     fresh = blob_client.get(
-        "/v1/table/clips/blobs",
+        "/management/v1/table/clips/blobs",
         params={"column": "payload", "row": 0},
         headers={"Range": "bytes=6-", "If-Range": '"1-payload-0"'},
     )

@@ -134,7 +134,7 @@ def test_client_direct_commit_lands_with_zero_byte_ingress(catalog: str) -> None
     assert r.status_code in (200, 409), r.text
 
     # Vend → the client's write target + optimistic base version.
-    r = requests.post(f"{catalog}/v1/table/{_TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30)
+    r = requests.post(f"{catalog}/management/v1/table/{_TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30)
     assert r.status_code == 200, r.text
     cred = r.json()
     location, read_version = cred["location"], cred["read_version"]
@@ -156,7 +156,7 @@ def test_client_direct_commit_lands_with_zero_byte_ingress(catalog: str) -> None
     body = json.dumps({"fragments": [f.to_json() for f in frags], "read_version": read_version})
 
     r = requests.post(
-        f"{catalog}/v1/table/{_TABLE}/commit",
+        f"{catalog}/management/v1/table/{_TABLE}/commit",
         headers={**h, "content-type": "application/json"},
         data=body,
         timeout=30,
@@ -204,7 +204,7 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
     assert r.status_code in (200, 409), r.text
 
     def _vend() -> tuple[str, int, dict]:
-        c = requests.post(f"{catalog}/v1/table/{_TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30).json()
+        c = requests.post(f"{catalog}/management/v1/table/{_TABLE}/credentials", headers=h, params={"tier": "write"}, timeout=30).json()
         so = _reachable((c.get("credentials") or {}).get("storage_options") or {
             "endpoint": S3, "access_key_id": "minioadmin", "secret_access_key": "minioadmin",
             "allow_http": "true", "virtual_hosted_style_request": "false", "region": "us-east-1",
@@ -223,7 +223,7 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
             if attempt == 1:
                 barrier.wait()  # all N fire their FIRST commit simultaneously → guaranteed contention
             resp = requests.post(
-                f"{catalog}/v1/table/{_TABLE}/commit",
+                f"{catalog}/management/v1/table/{_TABLE}/commit",
                 headers={**h, "content-type": "application/json"},
                 data=body,
                 timeout=30,
@@ -274,7 +274,7 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
     )
     stale_body = json.dumps({"fragments": [f.to_json() for f in stale_frags], "read_version": stale_rv})
     r = requests.post(
-        f"{catalog}/v1/table/{_TABLE}/commit",
+        f"{catalog}/management/v1/table/{_TABLE}/commit",
         headers={**h, "content-type": "application/json"},
         data=stale_body,
         timeout=30,
@@ -286,9 +286,9 @@ def test_commit_is_governed(catalog: str) -> None:
     # No token → 401 (OIDC); a valid token without a grant → 403 (FGA) — /commit is NOT an anonymous write.
     body = json.dumps({"fragments": [{"id": 0}], "read_version": 1})
     h = {"content-type": "application/json"}
-    assert requests.post(f"{catalog}/v1/table/{_TABLE}/commit", headers=h, data=body, timeout=10).status_code == 401
+    assert requests.post(f"{catalog}/management/v1/table/{_TABLE}/commit", headers=h, data=body, timeout=10).status_code == 401
     # A REAL outsider, not bob — he is a project admin on this estate. This leg used to pass only
     # because `_NS` had never been created, so the commit 403'd on a missing parent rather than on a
     # missing grant; creating the parent (as this suite now does) exposed the wrong oracle.
     outsider = {**h, "Authorization": f"Bearer {_token(OUTSIDER)}"}
-    assert requests.post(f"{catalog}/v1/table/{_TABLE}/commit", headers=outsider, data=body, timeout=10).status_code == 403
+    assert requests.post(f"{catalog}/management/v1/table/{_TABLE}/commit", headers=outsider, data=body, timeout=10).status_code == 403

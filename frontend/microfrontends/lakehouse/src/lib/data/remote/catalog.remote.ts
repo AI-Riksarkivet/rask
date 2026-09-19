@@ -106,7 +106,7 @@ const TrashEntrySchema = v.object({
 export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;
 
 export const fetchTableTasks = query(v.string(), async (table): Promise<ApiResult<TrashEntry[]>> =>
-	parsed(await catalogJSON(`/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
+	parsed(await catalogJSON(`/management/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
 );
 
 /** Recover a dropped table from the trash (#75). Owner-gated at the catalog; a 404 means the grace
@@ -194,7 +194,9 @@ export const fetchTableDetail = query(
 export const previewMaintenance = query(
 	v.object({ table: v.string(), bounds: GcBoundsSchema }),
 	async ({ table, bounds }: { table: string; bounds: GcBounds }): Promise<ApiResult<GcPreview>> =>
-		typedAs<GcPreview>(await post(`/v1/table/${enc(table)}/maintenance/preview`, bounds)),
+		typedAs<GcPreview>(
+			await post(`/management/v1/table/${enc(table)}/maintenance/preview`, bounds),
+		),
 );
 
 // ── maintenance + policy writes ────────────────────────────────────────────────────────────────
@@ -219,7 +221,7 @@ export const deleteTablePolicy = command(
 export const runMaintenance = command(
 	v.object({ table: v.string(), bounds: GcBoundsSchema }),
 	async ({ table, bounds }: { table: string; bounds: GcBounds }): Promise<ApiResult<GcRunResult>> =>
-		typedAs<GcRunResult>(await post(`/v1/table/${enc(table)}/maintenance/run`, bounds)),
+		typedAs<GcRunResult>(await post(`/management/v1/table/${enc(table)}/maintenance/run`, bounds)),
 );
 
 /** #76 compact small fragments on demand (non-destructive — writes a new version). Owner-gated. */
@@ -227,7 +229,7 @@ export const compactTable = command(
 	v.object({ table: v.string(), targetRowsPerFragment: v.optional(v.nullable(v.number())) }),
 	async ({ table, targetRowsPerFragment }): Promise<ApiResult<CompactResult>> =>
 		typedAs<CompactResult>(
-			await post(`/v1/table/${enc(table)}/maintenance/compact`, {
+			await post(`/management/v1/table/${enc(table)}/maintenance/compact`, {
 				target_rows_per_fragment: targetRowsPerFragment ?? null,
 			}),
 		),

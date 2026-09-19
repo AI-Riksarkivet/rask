@@ -54,7 +54,7 @@ def plan_via_catalog(table_id: str, policy: dict[str, Any], *, settings: Mainten
     table is already at target, and a door outage that borrowed that spelling would report every
     unreachable table as healthy — the sweep's most expensive silent failure.
     """
-    url = f"{settings.catalog_url.rstrip('/')}/v1/table/{table_id}/compaction_plan"
+    url = f"{settings.catalog_url.rstrip('/')}/management/v1/table/{table_id}/compaction_plan"
     try:
         response = httpx.post(url, json=policy or {}, headers=service_headers(settings), timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:
@@ -83,7 +83,7 @@ def commit_via_catalog(table_id: str, results: list[str], *, settings: Maintenan
     already on the store, so a caller that swallowed the failure would leave them unreferenced and
     report a compaction that never happened.
     """
-    url = f"{settings.catalog_url.rstrip('/')}/v1/table/{table_id}/compaction_commit"
+    url = f"{settings.catalog_url.rstrip('/')}/management/v1/table/{table_id}/compaction_commit"
     try:
         response = httpx.post(url, json={"results": results}, headers=service_headers(settings), timeout=_TIMEOUT_SECONDS)
     except httpx.HTTPError as exc:

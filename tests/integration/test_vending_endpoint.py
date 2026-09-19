@@ -1,4 +1,4 @@
-"""The credential-vending endpoint (Track B): POST /v1/table/{id}/credentials.
+"""The credential-vending endpoint (Track B): POST /management/v1/table/{id}/credentials.
 
 Exercises our layer — location resolution (describe_table) → vendor.vend → response shape — with the
 backend namespace + vendor injected via dependency override. The vendor classes themselves are unit-tested
@@ -24,7 +24,7 @@ def _described(location: str | None) -> DescribeTableResponse:
 def test_mode_b_returns_server_mediated(client: TestClient, fake_ns: MagicMock) -> None:
     # The lifespan builds a ModeBVendor by default → vend() returns None → no direct credential.
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
-    resp = client.post("/v1/table/db$t/credentials")
+    resp = client.post("/management/v1/table/db$t/credentials")
     assert resp.status_code == 200
     body = resp.json()
     assert body["mode"] == "server_mediated"
@@ -44,7 +44,7 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
             )
 
     client.app.dependency_overrides[get_vendor] = lambda: _FakeVendor()
-    resp = client.post("/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
     assert resp.status_code == 200
     body = resp.json()
     assert body["mode"] == "direct"
@@ -56,14 +56,14 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
 
 def test_missing_location_falls_back_to_server_mediated(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table.return_value = _described(None)
-    resp = client.post("/v1/table/db$t/credentials")
+    resp = client.post("/management/v1/table/db$t/credentials")
     assert resp.status_code == 200
     assert resp.json()["mode"] == "server_mediated"
 
 
 def test_invalid_tier_is_rejected(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_table.return_value = _described("s3://lance-catalog/db$t")
-    assert client.post("/v1/table/db$t/credentials?tier=admin").status_code == 422
+    assert client.post("/management/v1/table/db$t/credentials?tier=admin").status_code == 422
 
 
 # --------------------------------------------------------------------------------------------------

@@ -44,8 +44,12 @@ def test_an_unmounted_path_resolves_to_nothing(path: str = "/livez") -> None:
     ("path", "expected"),
     [
         (f"/management/v1/table/{_ID}/erasure", "erasure"),
-        (f"/v1/table/{_ID}/maintenance/run", "maintenance/run"),
         (f"/management/v1/table/{_ID}/maintenance/run", "maintenance/run"),
+        # The `/v1` leg uses a SPEC route on purpose. Every rask-only verb has left that mount
+        # ([[LH-021]]), so pairing the two with the same suffix is no longer possible — and a pair
+        # that degenerated into the same path twice would assert the management mount twice and
+        # prove nothing about `/v1`, which still carries the whole spec surface.
+        (f"/v1/table/{_ID}/describe", "describe"),
     ],
 )
 def test_the_suffix_survives_either_mount(path: str, expected: str) -> None:

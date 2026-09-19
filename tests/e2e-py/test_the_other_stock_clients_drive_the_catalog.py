@@ -71,7 +71,7 @@ def _vended(token: str) -> dict[str, str]:
     stock client must know to ask.
     """
     response = requests.post(
-        f"{CATALOG}/v1/table/{NAMESPACE}%24{TABLE}/credentials?tier=read",
+        f"{CATALOG}/management/v1/table/{NAMESPACE}%24{TABLE}/credentials?tier=read",
         json={"id": [NAMESPACE, TABLE]},
         headers={"Authorization": f"Bearer {token}"},
         timeout=30,

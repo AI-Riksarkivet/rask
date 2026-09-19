@@ -402,11 +402,11 @@ def test_undrop_converges_when_a_record_was_left_on_a_live_table(moto_client_rec
     # The residue: the table is LIVE and its trash record still stands, so the sweep would exclude it
     # from maintenance indefinitely (F6(d)) — which is why the retry has to converge, not 409.
     assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
-    assert moto_client_recoverable.get("/v1/table/f3c$t/tasks").json() != []
+    assert moto_client_recoverable.get("/management/v1/table/f3c$t/tasks").json() != []
 
     retried = moto_client_recoverable.post("/management/v1/table/f3c$t/undrop", json={})
     assert retried.status_code == 200, retried.text
-    assert moto_client_recoverable.get("/v1/table/f3c$t/tasks").json() == [], "the record was never cleared"
+    assert moto_client_recoverable.get("/management/v1/table/f3c$t/tasks").json() == [], "the record was never cleared"
     assert int(moto_client_recoverable.post("/v1/table/f3c$t/count_rows", json={}).text) == 1
 
 
@@ -650,7 +650,7 @@ def test_an_expired_but_unpurged_drop_still_undrops(moto_client_recoverable: Tes
     _expire_trash_record(moto_endpoint, "exp$t")
 
     # /tasks now SAYS it is expired rather than implying it is gone…
-    tasks = moto_client_recoverable.get("/v1/table/exp$t/tasks").json()
+    tasks = moto_client_recoverable.get("/management/v1/table/exp$t/tasks").json()
     assert tasks and tasks[0]["expired"] is True
 
     # …and the undrop still works, with the rows intact.
@@ -666,7 +666,7 @@ def test_a_live_deadline_is_not_reported_as_expired(moto_client_recoverable: Tes
     assert _create(moto_client_recoverable, "live$t", rows).status_code == 200
     assert moto_client_recoverable.post("/v1/table/live$t/drop", json={}).status_code == 200
 
-    tasks = moto_client_recoverable.get("/v1/table/live$t/tasks").json()
+    tasks = moto_client_recoverable.get("/management/v1/table/live$t/tasks").json()
     assert tasks and tasks[0]["expired"] is False
     assert tasks[0]["expires_at"]
 

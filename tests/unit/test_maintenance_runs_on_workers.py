@@ -301,12 +301,12 @@ def _clone_shaped(tmp_path: Path) -> str:
 def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: Path) -> None:
     """CONTRACT: `compaction_commit` applies the same gate `/maintenance/compact` applies.
 
-    The catalog exposes TWO ways to rewrite a table's fragments. `POST /v1/table/{id}/maintenance/compact`
+    The catalog exposes TWO ways to rewrite a table's fragments. `POST /management/v1/table/{id}/maintenance/compact`
     goes through `catalog.services.maintenance.compact_now`, which calls `require_compactable` — the
     feature-flag evidence gate plus the #114 shallow-clone base-refs guard, the same pair
     `maintenance.services.optimize` asks before its own `compact_files`.
 
-    `POST /v1/table/{id}/compaction_plan` and `POST /v1/table/{id}/compaction_commit` go straight to
+    `POST /management/v1/table/{id}/compaction_plan` and `POST /management/v1/table/{id}/compaction_commit` go straight to
     `dataplane` and ask NEITHER. They are writer-tier and published at the ingress under `/api/catalog`,
     and the commit half removes fragments — so the estate shipped a gated door and an ungated one onto
     the same operation, and a caller reaching the ungated pair gets a rewrite the button would have

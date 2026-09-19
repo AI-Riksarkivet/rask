@@ -87,7 +87,7 @@ async def _no_refs(ds: object, so: object) -> Any:
 
 
 def test_a_branch_is_no_longer_refused_on_its_shape(client: TestClient) -> None:
-    response = client.post("/v1/table/ns$events/maintenance/compact?branch=work", json={})
+    response = client.post("/management/v1/table/ns$events/maintenance/compact?branch=work", json={})
 
     assert response.status_code == 200, response.text
 
@@ -98,14 +98,14 @@ def test_the_door_opens_the_REF_the_request_names(client: TestClient, opened: _O
     This is the wrong-but-plausible answer the row exists to remove — compacting main and reporting it
     as the branch's is worse than the refusal was, because nothing downstream can tell.
     """
-    client.post("/v1/table/ns$events/maintenance/compact?branch=work", json={})
+    client.post("/management/v1/table/ns$events/maintenance/compact?branch=work", json={})
 
     assert opened.refs == ["work"]
 
 
 def test_a_branchless_request_still_opens_main(client: TestClient, opened: _Opened) -> None:
     """The control. Without it, a door stamping every open with a branch would pass above."""
-    client.post("/v1/table/ns$events/maintenance/compact", json={})
+    client.post("/management/v1/table/ns$events/maintenance/compact", json={})
 
     assert opened.refs == [None]
 
@@ -115,7 +115,7 @@ def test_the_wire_contract_no_longer_advertises_a_refusal(client: TestClient) ->
     schema = client.get("/openapi.json")
     if schema.status_code != 200:
         pytest.skip("this app mounts no openapi route")
-    params = schema.json()["paths"]["/v1/table/{id}/maintenance/compact"]["post"]["parameters"]
+    params = schema.json()["paths"]["/management/v1/table/{id}/maintenance/compact"]["post"]["parameters"]
     description = next(p["description"] for p in params if p["name"] == "branch")
 
     assert "REFUSED" not in description

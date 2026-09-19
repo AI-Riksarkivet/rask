@@ -40,7 +40,7 @@ CATALOG = "http://catalog.test"
 
 def _routes() -> respx.Route:
     """The publish door, which is ONE call — so the assertions read the credential, not a sequence."""
-    return respx.post(f"{CATALOG}/v1/table/silver$features/publish").mock(return_value=httpx.Response(200, json={"published": True}))
+    return respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(return_value=httpx.Response(200, json={"published": True}))
 
 
 def _publish(*, token: str | None = None, app_token: str | None = None, service_identity: str | None = None) -> None:
@@ -245,7 +245,7 @@ class TestTheFailurePostureIsUnchangedByTheDoorThatWent:
     @respx.mock
     def test_a_refusal_names_the_status_and_the_table(self) -> None:
         """`RegisterError` still carries both, which is what an operator reads out of a dead-letter."""
-        respx.post(f"{CATALOG}/v1/table/silver$features/publish").mock(return_value=httpx.Response(403, text="denied"))
+        respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(return_value=httpx.Response(403, text="denied"))
 
         with pytest.raises(RegisterError, match="HTTP 403"):
             _publish()

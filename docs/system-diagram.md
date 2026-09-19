@@ -107,7 +107,7 @@ The toggle is the *credential-delivery* shape — both modes run on the **same**
 7. **Catalog → Client** — `201`; caller is the table's **owner** (⇒ writer ⇒ reader).
 
 ### 2. Read / query — `GET describe_table` (+ read)
-1. **Client → Catalog** — describe; creds via the dedicated **`POST /v1/table/{id}/credentials?tier=read|write`** (vending is its own endpoint, not a describe param).
+1. **Client → Catalog** — describe; creds via the dedicated **`POST /management/v1/table/{id}/credentials?tier=read|write`** (vending is its own endpoint, not a describe param).
 2. **Catalog → OIDC** — verify token.
 3. **Catalog → OpenFGA** — `check can_read_data` (reader rung; cascades).
 4. **Catalog → OpenBao** *(vending modes on S3)* — read the catalog's **own base key** (Dapr secret store) to mint the scoped token; **Mode B fetches nothing** (compute jobs never read OpenBao — see the Secrets note above).

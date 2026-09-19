@@ -705,7 +705,7 @@ async def drop_namespace(
     return response
 
 
-@router.get("/{id}/tasks", response_model_exclude_none=True)
+@management_router.get("/{id}/tasks", response_model_exclude_none=True)
 async def namespace_tasks(
     id: str,
     settings: SettingsDep,

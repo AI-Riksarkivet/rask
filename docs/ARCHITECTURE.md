@@ -60,7 +60,7 @@ authorizes, locates, and records. Compute is a **client** of the catalog. This i
 
 ### Credential vending & STS — how, and why it matters for the lakehouse
 
-A client opens a table, then calls `POST /v1/table/{id}/credentials?tier=read|write` to get a
+A client opens a table, then calls `POST /management/v1/table/{id}/credentials?tier=read|write` to get a
 **credential** to reach object storage directly. Four pluggable modes (`chart` `vending.mode`;
 `services/catalog/core/vending.py`), strongest first:
 

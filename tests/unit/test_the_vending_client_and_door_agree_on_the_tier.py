@@ -46,7 +46,7 @@ def door() -> FastAPI:
     """
     app = FastAPI()
 
-    @app.post("/v1/table/{id}/credentials")
+    @app.post("/management/v1/table/{id}/credentials")
     async def vend(id: str, tier: Annotated[Tier, Query()] = "read") -> dict[str, str]:
         return {"tier": tier}
 
@@ -90,8 +90,8 @@ def test_the_client_asks_for_the_write_tier_in_a_form_the_door_reads(door: FastA
 def test_a_write_tier_request_does_not_arrive_as_a_read(door: FastAPI) -> None:
     """The defect itself, stated as the property that was violated: a body-borne tier is INVISIBLE."""
     with TestClient(door) as transport:
-        as_body = transport.post("/v1/table/acme-bronze$events/credentials", json={"tier": "write"})
-        as_query = transport.post("/v1/table/acme-bronze$events/credentials", params={"tier": "write"})
+        as_body = transport.post("/management/v1/table/acme-bronze$events/credentials", json={"tier": "write"})
+        as_query = transport.post("/management/v1/table/acme-bronze$events/credentials", params={"tier": "write"})
 
     assert as_body.json()["tier"] == "read", "premise changed: the door now reads a body tier"
     assert as_query.json()["tier"] == "write"

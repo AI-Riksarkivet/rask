@@ -116,7 +116,7 @@ def client(app: FastAPI) -> Iterator[TestClient]:
 
 
 def _publish(client: TestClient, **body: Any) -> Any:  # noqa: ANN401 — httpx.Response
-    return client.post("/v1/table/pages/publish", json={"version": 1, **body})
+    return client.post("/management/v1/table/pages/publish", json={"version": 1, **body})
 
 
 def _assertion(payload: dict[str, Any], name: str) -> dict[str, Any] | None:

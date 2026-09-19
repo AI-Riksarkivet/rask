@@ -152,7 +152,7 @@ class Estate:
         body: dict[str, Any] = {"version": version, "key_column": key_column}
         if gate_only:
             body["gate_only"] = True
-        return requests.post(f"{CATALOG}/v1/table/{self.table_id(name)}/publish", json=body, headers=_auth(), timeout=120)
+        return requests.post(f"{CATALOG}/management/v1/table/{self.table_id(name)}/publish", json=body, headers=_auth(), timeout=120)
 
     def branch(self, name: str, branch: str) -> None:
         r = requests.post(f"{CATALOG}/v1/table/{self.table_id(name)}/branches/create", json={"name": branch}, headers=_auth(), timeout=60)

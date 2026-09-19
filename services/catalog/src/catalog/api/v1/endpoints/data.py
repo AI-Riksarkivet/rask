@@ -66,6 +66,12 @@ ARROW_FILE = "application/vnd.apache.arrow.file"
 
 router = APIRouter(prefix="/v1/table", tags=["data"])
 
+#: THE MANAGEMENT SURFACE ([[LH-021]]). This module serves SPEC operations on `router` and rask's own
+#: on this one — split by AUDIENCE rather than by topic, because a spec client discovering a verb like
+#: `blobs` or `commit` on a spec prefix meets something the Lance namespace document never defines.
+#: Both routers inherit the same authn/authz and delimiter guard from `api/v1/router.py`.
+management_router = APIRouter(prefix="/management/v1/table", tags=["data-management"])
+
 
 # The LANCE-ONLY guard now lives in `catalog.core.formats` — four other doors take the same
 # `properties` map and none of them called it while it was private to this module.
@@ -140,7 +146,7 @@ async def create_table(
     return response
 
 
-@router.post("/{id}/commit", response_model_exclude_none=True)
+@management_router.post("/{id}/commit", response_model_exclude_none=True)
 async def commit_fragments(
     id: str,
     ns: NamespaceDep,
@@ -181,7 +187,7 @@ async def commit_fragments(
     return CommitFragmentsResponse(version=version, row_count=row_count)
 
 
-@router.post("/{id}/compaction_plan", response_model_exclude_none=True)
+@management_router.post("/{id}/compaction_plan", response_model_exclude_none=True)
 async def plan_table_compaction(
     id: str,
     ns: NamespaceDep,
@@ -220,7 +226,7 @@ async def plan_table_compaction(
     return CompactionPlanResponse(read_version=plan.read_version, tasks=plan.tasks)
 
 
-@router.post("/{id}/compaction_commit", response_model_exclude_none=True)
+@management_router.post("/{id}/compaction_commit", response_model_exclude_none=True)
 async def commit_table_compaction(
     id: str,
     ns: NamespaceDep,
@@ -509,7 +515,7 @@ def _parse_range(header: str | None) -> tuple[int | None, int | None] | None:
     return None if hi < lo else (lo, hi)
 
 
-@router.get("/{id}/blobs")
+@management_router.get("/{id}/blobs")
 async def read_table_blob(
     id: str,
     ns: NamespaceDep,
@@ -626,7 +632,7 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 # method it happened to register last — so the generated OpenAPI flipped between `_get` and
 # `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
-@router.post("/{id}/changes")
+@management_router.post("/{id}/changes")
 def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 

@@ -79,7 +79,7 @@ def test_the_rewrite_is_signed_by_the_vended_credential(door: list[dict[str, Any
 
 def test_the_vend_names_the_table_and_asks_for_the_write_tier(door: list[dict[str, Any]]) -> None:
     credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
-    assert door[0]["url"].endswith("/v1/table/acme-bronze$events/credentials")
+    assert door[0]["url"].endswith("/management/v1/table/acme-bronze$events/credentials")
     assert door[0]["params"] == {"tier": "write"}, "a read-tier credential 200s and then 403s on the PUT"
 
 

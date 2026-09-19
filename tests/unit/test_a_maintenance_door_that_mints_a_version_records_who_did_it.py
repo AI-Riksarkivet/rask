@@ -32,13 +32,13 @@ from catalog.api.v1.endpoints import maintenance
 
 #: Verbs whose in-pod lane COMMITS A NEW VERSION. Lance mints one for a fragment rewrite and one for an
 #: index replace, so each is a version an operator can be asked to account for.
-_MINTS_A_VERSION = ("/v1/table/{id}/maintenance/compact", "/v1/table/{id}/maintenance/reindex")
+_MINTS_A_VERSION = ("/management/v1/table/{id}/maintenance/compact", "/management/v1/table/{id}/maintenance/reindex")
 
 #: Verbs that mint no version, with the reason, because an unexplained exemption is how a door quietly
 #: stops being checked. `preview` never mutates. `run` reclaims OLD versions and creates none — whether
 #: reclaiming history deserves its own event is a separate question with no operation in
 #: `catalog.core.lineage_emit` to carry it, and is deliberately not decided by this gate.
-_MINTS_NO_VERSION = ("/v1/table/{id}/maintenance/preview", "/v1/table/{id}/maintenance/run")
+_MINTS_NO_VERSION = ("/management/v1/table/{id}/maintenance/preview", "/management/v1/table/{id}/maintenance/run")
 
 
 def _maintenance_handlers() -> list[tuple[str, Callable[..., Any]]]:

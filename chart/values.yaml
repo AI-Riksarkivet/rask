@@ -957,7 +957,7 @@ auth:
   bootstrapAdmin: ""
 
 # --- Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ----
-# POST /v1/table/<id>/credentials?tier=read|write returns scoped creds (or mode=server_mediated). Modes:
+# POST /management/v1/table/<id>/credentials?tier=read|write returns scoped creds (or mode=server_mediated). Modes:
 #   mode_b        (default) — nothing vended; clients use the server-mediated Arrow-IPC data endpoints.
 #   web_identity  — the caller's Dex id_token is exchanged via AssumeRoleWithWebIdentity for creds bound
 #                   to ROLE_POLICY, narrowed per-table by an inline session policy. Requires

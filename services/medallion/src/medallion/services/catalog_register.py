@@ -203,7 +203,7 @@ def publish_stage_output(
     }
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
-            response = client.post(f"/v1/table/{table_id}/publish", json=body, headers=headers)
+            response = client.post(f"/management/v1/table/{table_id}/publish", json=body, headers=headers)
         except httpx.HTTPError as exc:
             raise RegisterError(f"catalog unreachable publishing {table_id!r}: {exc}") from exc
     if response.status_code >= 400:
@@ -256,7 +256,7 @@ def authorize_stage_write(
     headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
     with _catalog_client(catalog_url, timeout_seconds, client) as client:
         try:
-            response = client.post(f"/v1/table/{table_id}/credentials", params={"tier": "write"}, headers=headers)
+            response = client.post(f"/management/v1/table/{table_id}/credentials", params={"tier": "write"}, headers=headers)
         except httpx.HTTPError as exc:
             raise RegisterError(f"catalog unreachable authorizing the write of {table_id!r}: {exc}") from exc
     if response.status_code >= 400:

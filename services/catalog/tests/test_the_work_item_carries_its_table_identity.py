@@ -1,7 +1,7 @@
 """An enqueued maintenance unit names the TABLE it is for, not only the path it lives at.
 
 The executor must be able to ask the catalog for a credential scoped to the dataset it is about to
-rewrite, and the catalog is addressed by IDENTIFIER — `POST /v1/table/{id}/credentials` — never by
+rewrite, and the catalog is addressed by IDENTIFIER — `POST /management/v1/table/{id}/credentials` — never by
 location. So a unit carrying only a URI can be executed, but cannot be executed with a scoped
 credential; it can only be signed by whatever ambient key the process holds.
 
@@ -73,7 +73,7 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClie
 
 
 def test_the_unit_names_the_table_the_door_was_called_on(client: TestClient, published: _Published) -> None:
-    client.post("/v1/table/bronze%24events/maintenance/compact", json={})
+    client.post("/management/v1/table/bronze%24events/maintenance/compact", json={})
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert item.table_id == "bronze$events", "the unit carries no table identity, so the executor can only sign this rewrite with the ambient credential"
 
@@ -82,7 +82,7 @@ def test_the_identity_survives_a_uri_no_parser_can_read(client: TestClient, publ
     """`s3://lance-catalog/medallion/bronze` yields no id to `table_id_from_uri`. The door still knows."""
     from maintenance.core.lineage_emit import table_id_from_uri
 
-    client.post("/v1/table/bronze%24events/maintenance/compact", json={})
+    client.post("/management/v1/table/bronze%24events/maintenance/compact", json={})
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert table_id_from_uri(item.uri) is None, "pick a URI the parser genuinely cannot read, or this proves nothing"
     assert item.table_id == "bronze$events"

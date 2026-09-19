@@ -26,7 +26,7 @@ CATALOG = "http://catalog.test"
 
 def _route(**body: object) -> respx.Route:
     payload = {"table": "s3://b/t", "published": True, "from_version": 1, "to_version": 2, "assertions": [], "accepted": []}
-    return respx.post(f"{CATALOG}/v1/table/silver$features/publish").mock(return_value=httpx.Response(200, json={**payload, **body}))
+    return respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(return_value=httpx.Response(200, json={**payload, **body}))
 
 
 def _publish(
@@ -124,7 +124,7 @@ class TestFailurePosture:
         that never becomes ready."""
         from medallion.services.catalog_register import RegisterError
 
-        respx.post(f"{CATALOG}/v1/table/silver$features/publish").mock(side_effect=httpx.ConnectError("down"))
+        respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(side_effect=httpx.ConnectError("down"))
 
         with pytest.raises(RegisterError, match="unreachable"):
             _publish()
@@ -135,7 +135,7 @@ class TestFailurePosture:
         outage as a bad batch and ask a person to review data that is fine."""
         from medallion.services.catalog_register import RegisterError
 
-        respx.post(f"{CATALOG}/v1/table/silver$features/publish").mock(return_value=httpx.Response(403, json={"detail": "nope"}))
+        respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(return_value=httpx.Response(403, json={"detail": "nope"}))
 
         with pytest.raises(RegisterError):
             _publish()

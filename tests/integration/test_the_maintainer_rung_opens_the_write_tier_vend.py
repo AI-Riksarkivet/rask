@@ -114,7 +114,7 @@ def test_a_maintainer_gets_the_write_tier_credential(governed: tuple[TestClient,
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain"})
 
-    resp = client.post("/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mode"] == "direct"
@@ -126,7 +126,7 @@ def test_a_writer_still_gets_it_WITHOUT_the_second_probe(governed: tuple[TestCli
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_write_data"})
 
-    resp = client.post("/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
 
     assert resp.status_code == 200, resp.text
     assert checked == ["can_write_data"], f"a granted first rung must short-circuit: {checked}"
@@ -137,7 +137,7 @@ def test_holding_NEITHER_rung_is_still_refused(governed: tuple[TestClient, list[
     client, checked = governed
     _grant(monkeypatch, checked, allow=set())
 
-    resp = client.post("/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
 
     assert resp.status_code == 403, resp.text
     assert checked == ["can_write_data", "can_maintain"]
@@ -148,7 +148,7 @@ def test_the_READ_tier_never_consults_either_rung(governed: tuple[TestClient, li
     client, checked = governed
     _grant(monkeypatch, checked, allow=set())
 
-    resp = client.post("/v1/table/db$t/credentials")
+    resp = client.post("/management/v1/table/db$t/credentials")
 
     assert resp.status_code == 200, resp.text
     assert checked == []
@@ -175,7 +175,7 @@ def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, 
     client, checked = governed
     _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
 
-    resp = client.post("/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["mode"] == "direct"
@@ -186,7 +186,7 @@ def test_holding_NEITHER_router_rung_is_still_refused_at_the_route(governed: tup
     client, checked = governed
     _grant(monkeypatch, checked, allow=set(), router_grants=set())
 
-    resp = client.post("/v1/table/db$t/credentials?tier=write")
+    resp = client.post("/management/v1/table/db$t/credentials?tier=write")
 
     assert resp.status_code == 403, resp.text
 

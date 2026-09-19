@@ -3,7 +3,7 @@ import { ME_ADMIN, mockMe, signIn, TOKEN } from './session';
 import { MOCK_CATALOG } from '../ports';
 
 // #113 the commit log, hermetic. Every fixture below is a REAL payload, not an imagined one:
-//  · the history rows are what `GET /v1/table/{id}/history` returned when driven through the real dir
+//  · the history rows are what `GET /management/v1/table/{id}/history` returned when driven through the real dir
 //    backend and real pylance writes (create → insert → delete → update → create_scalar_index) — note
 //    `operation` is Lance's vocabulary, the detail keys are ABSENT rather than null per operation, the
 //    predicate is verbatim, and `fields_modified` is 0 on an Update that did modify a column;
@@ -231,7 +231,7 @@ async function stub(page: Page): Promise<void> {
 		return json(route, { dataset: 'db1$t', version: Number(version), fields });
 	});
 	// The commit log's own read — a GET through the keep-bytes proxy, so it stays interceptable here.
-	await page.route('**/capi/v1/table/*/history*', (route) => {
+	await page.route('**/capi/management/v1/table/*/history*', (route) => {
 		historyCalls.push(new URL(route.request().url()).search);
 		return historyStatus === 200
 			? json(route, historyBody)
@@ -409,7 +409,7 @@ test('history 404 states the missing route and keeps the manifest rows (#113)', 
 	await openLog(page);
 	const section = page.locator('section.hist');
 	await expect(section).toContainText('does not serve');
-	await expect(section).toContainText('/v1/table/db1$t/history');
+	await expect(section).toContainText('/management/v1/table/db1$t/history');
 	// The manifest half still renders — degraded, not blank.
 	await expect(page.getByTestId('commit-log').locator('tbody tr')).toHaveCount(4);
 	await expect(rowFor(page, 5)).toContainText('2023-11-14 22:20Z');

@@ -40,7 +40,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> CatalogServiceClient:
 
 
 def _route() -> respx.Route:
-    return respx.post(f"{CATALOG}/v1/table/bronze$pages/publish").mock(
+    return respx.post(f"{CATALOG}/management/v1/table/bronze$pages/publish").mock(
         return_value=httpx.Response(200, json={"published": True, "from_version": 1, "to_version": 2})
     )
 

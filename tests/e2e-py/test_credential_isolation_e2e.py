@@ -103,7 +103,7 @@ def _vend(catalog: str, token: str, ident: str, tier: str) -> dict[str, str]:
     that never runs cannot fail. The unit pin in ``tests/unit/test_vending.py`` exists so the SHAPE is
     now checked by something that runs on every commit.
     """
-    r = requests.post(f"{catalog}/v1/table/{ident}/credentials?tier={tier}", headers=_auth(token), timeout=30)
+    r = requests.post(f"{catalog}/management/v1/table/{ident}/credentials?tier={tier}", headers=_auth(token), timeout=30)
     assert r.status_code == 200, r.text
     body = r.json()
     if body.get("mode") != "direct":
