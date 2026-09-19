@@ -158,7 +158,7 @@ def test_a_REAL_key_column_still_publishes(client: TestClient) -> None:
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["published"] is True
-    assert _assertion(payload, "not_null") == {"assertion": "not_null", "success": True, "column": "id"}
+    assert _assertion(payload, "not_null") == {"assertion": "not_null", "success": True, "column": "id", "severity": "error"}
 
 
 # --- 2 PARITY: the declared gate governs this door too --------------------------------------------
@@ -175,7 +175,7 @@ def test_the_DECLARED_key_column_governs_over_the_callers(client: TestClient, re
     payload = _publish(client, key_column="payload").json()
 
     assert payload["published"] is True
-    assert _assertion(payload, "not_null") == {"assertion": "not_null", "success": True, "column": "id"}
+    assert _assertion(payload, "not_null") == {"assertion": "not_null", "success": True, "column": "id", "severity": "error"}
 
 
 def test_the_DECLARED_required_columns_are_enforced_on_a_caller_that_named_none(client: TestClient, registry_root: str) -> None:
@@ -185,7 +185,7 @@ def test_the_DECLARED_required_columns_are_enforced_on_a_caller_that_named_none(
     payload = _publish(client, key_column="id").json()
 
     declared = [a for a in payload["assertions"] if a["assertion"] == "column_declared"]
-    assert declared == [{"assertion": "column_declared", "success": True, "column": "payload"}], payload["assertions"]
+    assert declared == [{"assertion": "column_declared", "success": True, "column": "payload", "severity": "warn"}], payload["assertions"]
 
 
 def test_a_DECLARED_column_the_table_lost_BLOCKS_the_publish(client: TestClient, registry_root: str, ns) -> None:  # noqa: ANN001

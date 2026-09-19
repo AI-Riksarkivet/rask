@@ -115,7 +115,15 @@ def _dataset(
             "rowCount": row_count,
             "size": size_bytes,
         }
-    # dataQualityAssertions is an OUTPUT facet — present only when the quality gate validated the write.
+    # `DataQualityAssertionsDatasetFacet` is an INPUT facet in the spec
+    # (`openlineage.client.generated.data_quality_assertions_dataset` subclasses `InputDatasetFacet`),
+    # and it is written here onto the dataset this run WROTE — deliberately, because the spec has no
+    # output-side equivalent and the assertions are about that dataset, not about anything read. It
+    # rides the plain `facets` slot for the same reason: `outputFacets` is typed for
+    # `OutputDatasetFacet` subclasses, so parking an input facet there would be a second wrong answer.
+    # `lineage.models.Dataset.facet` reads all three slots, so rask's own consumers find it either way
+    # ([[LIN-002]] carries what a standard consumer sees).
+    # Present only when the quality gate validated the write.
     if assertions:
         facets["dataQualityAssertions"] = {
             "_producer": _PRODUCER,

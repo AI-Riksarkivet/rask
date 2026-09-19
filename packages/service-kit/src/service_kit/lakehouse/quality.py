@@ -23,7 +23,7 @@ from typing import Final
 
 import lance
 import pyarrow as pa
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from service_kit.lakehouse import blobs
 from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, SOURCE_ROWID_COLUMN, STAGE_COLUMN
@@ -44,6 +44,12 @@ COLUMN_DECLARED = "column_declared"
 #: them — so a caller that bypasses the workflow cannot publish corrupt data either. One definition,
 #: two enforcement points, the same shape `blob_column_resolves` already has.
 STRUCTURAL_ASSERTIONS: frozenset[str] = frozenset({NOT_NULL, BLOB_RESOLVES})
+
+#: The spec's two severity values (`DataQualityAssertionsDatasetFacet`). `error` means the failure
+#: blocks the pipeline, `warn` means it does not — the distinction `STRUCTURAL_ASSERTIONS` already
+#: draws, named in the vocabulary a standard consumer reads.
+ERROR: Final = "error"
+WARN: Final = "warn"
 
 
 #: The provenance contract's verdict name. Reported as an assertion like every other gate answer, so a
@@ -126,11 +132,35 @@ def tier_contract_violations(schema: pa.Schema, *, has_stable_row_ids: bool | No
 
 
 class Assertion(BaseModel):
-    """One data-quality check on a produced dataset (the OpenLineage ``dataQualityAssertions`` shape)."""
+    """One data-quality check on a produced dataset (the OpenLineage ``dataQualityAssertions`` shape).
+
+    ``severity`` is DERIVED, never passed. The spec's values are ``error`` (the failure blocks the
+    pipeline) and ``warn`` (it does not), and this estate already draws that line once, in
+    :data:`STRUCTURAL_ASSERTIONS` — findings no approval can wave through. Deriving it from that set
+    rather than taking it as an argument is what keeps the wire and the gate from disagreeing about
+    which failures are blocking: a caller cannot mark a structural finding as a warning, and a new
+    structural assertion becomes ``error`` on the wire by being added to the set.
+
+    Without it a standard consumer reads a list of `success: false` with no way to tell a broken join
+    from an unusual-but-accepted one — the two outcomes this estate treats most differently. A caller may
+    label a non-structural check; nothing may downgrade a structural one.
+    """
 
     assertion: str
     success: bool
     column: str | None = None
+    severity: str | None = None
+
+    @model_validator(mode="after")
+    def _derive_severity(self) -> Assertion:
+        """STRUCTURAL ALWAYS WINS. A caller may label a non-structural check, but nothing may downgrade
+        one the gate refuses to waive — an `error` that arrives as `warn` tells a consumer the pipeline
+        continued past a broken join."""
+        if self.assertion in STRUCTURAL_ASSERTIONS:
+            object.__setattr__(self, "severity", ERROR)
+        elif self.severity is None:
+            object.__setattr__(self, "severity", WARN)
+        return self
 
 
 def assert_quality(
