@@ -39,17 +39,37 @@ def _known(name: str) -> ReconcileStatus:
 
 
 _STATUSES = [_known("acme-bronze$events"), _known("acme-gold$catalog")]
+#: What the GRAPH listed. Equal to the statuses' names only when every dataset produced one, which is
+#: not the normal case — see `test_a_dataset_the_sweep_SKIPPED_is_not_accused`.
+_GRAPH = {s.dataset for s in _STATUSES}
 
 
 def test_a_governed_table_with_no_graph_node_is_reported() -> None:
-    report = summarize_sweep(_STATUSES, governed={"acme-bronze$events", "acme-gold$catalog", "models$e2etrain16211"})
+    report = summarize_sweep(_STATUSES, governed={*_GRAPH, "models$e2etrain16211"}, graph=_GRAPH)
 
     assert report.unknown_to_graph == ["models$e2etrain16211"]
 
 
+def test_a_dataset_the_sweep_SKIPPED_is_not_accused() -> None:
+    """The second operand is the GRAPH'S LISTING, never the statuses. Found by deploying it.
+
+    `reconcile_all` skips a dataset with no ``dataSource`` URI and one carrying a drop stamp — both are
+    known to the graph and produce no status. Differenced against the statuses, every one of them is
+    accused of being invisible. Measured on the deployed estate 2026-09-19 with exactly that bug live:
+    the sweep listed 1,297 datasets, produced 438 statuses, and reported **1,007** governed tables as
+    unknown where the graph's own listing gives 127. The unit tier could not see it because its
+    fixtures produce a status per dataset; only a real sweep has skips.
+    """
+    graph = {*_GRAPH, "acme-bronze$dropped", "acme-bronze$no_uri"}
+
+    report = summarize_sweep(_STATUSES, governed=graph, graph=graph)
+
+    assert report.unknown_to_graph == []
+
+
 def test_a_graph_that_covers_every_governed_table_reports_nothing() -> None:
     """The control. Without it, a field that always listed the governed set would pass above."""
-    report = summarize_sweep(_STATUSES, governed={"acme-bronze$events", "acme-gold$catalog"})
+    report = summarize_sweep(_STATUSES, governed=_GRAPH, graph=_GRAPH)
 
     assert report.unknown_to_graph == []
 
@@ -60,7 +80,7 @@ def test_an_unasked_governed_question_condemns_nothing() -> None:
     An empty set would report every dataset in the estate as invisible at exactly the moment the sweep
     lost its ability to ask, which is the failure `governed_tables` returns an optional to avoid.
     """
-    assert summarize_sweep(_STATUSES, governed=None).unknown_to_graph is None
+    assert summarize_sweep(_STATUSES, governed=None, graph=_GRAPH).unknown_to_graph is None
 
 
 def test_an_unasked_question_is_not_a_clean_bill_of_health() -> None:
@@ -70,22 +90,22 @@ def test_an_unasked_question_is_not_a_clean_bill_of_health() -> None:
     and zero is the number an operator trusts. `record_provenance_gaps` publishes NO point for ``None``
     so the series goes stale instead.
     """
-    asked = summarize_sweep(_STATUSES, governed={s.dataset for s in _STATUSES})
+    asked = summarize_sweep(_STATUSES, governed=_GRAPH, graph=_GRAPH)
 
     assert asked.unknown_to_graph == []
-    assert summarize_sweep(_STATUSES, governed=None).unknown_to_graph is not asked.unknown_to_graph
+    assert summarize_sweep(_STATUSES, governed=None, graph=_GRAPH).unknown_to_graph is None
 
 
 def test_the_finding_is_sorted_so_two_ticks_are_comparable() -> None:
     """A set iterates in hash order, so an unsorted field makes every tick's log line look like a change."""
-    governed = {"z$last", "a$first", "m$middle", *{s.dataset for s in _STATUSES}}
+    governed = {"z$last", "a$first", "m$middle", *_GRAPH}
 
-    assert summarize_sweep(_STATUSES, governed=governed).unknown_to_graph == ["a$first", "m$middle", "z$last"]
+    assert summarize_sweep(_STATUSES, governed=governed, graph=_GRAPH).unknown_to_graph == ["a$first", "m$middle", "z$last"]
 
 
 def test_the_class_gets_its_own_warning(caplog: pytest.LogCaptureFixture) -> None:
     """One body per finding class, like every sibling in `log_sweep` — an operator filters on it."""
-    report = summarize_sweep(_STATUSES, governed={"models$e2etrain16211", *{s.dataset for s in _STATUSES}})
+    report = summarize_sweep(_STATUSES, governed={"models$e2etrain16211", *_GRAPH}, graph=_GRAPH)
     with caplog.at_level(logging.WARNING):
         log_sweep(report)
 
@@ -96,7 +116,7 @@ def test_the_class_gets_its_own_warning(caplog: pytest.LogCaptureFixture) -> Non
 
 def test_a_clean_sweep_warns_about_nothing(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING):
-        log_sweep(summarize_sweep(_STATUSES, governed={s.dataset for s in _STATUSES}))
+        log_sweep(summarize_sweep(_STATUSES, governed=_GRAPH, graph=_GRAPH))
 
     assert [r for r in caplog.records if r.message == "lineage_reconcile_unknown_to_graph"] == []
 
@@ -120,7 +140,7 @@ def gauge(monkeypatch: pytest.MonkeyPatch) -> _Gauge:
 
 def test_the_count_reaches_a_series_an_alert_can_read(gauge: _Gauge) -> None:
     """A WARN cannot page: `chart/alerting/rules.yml` evaluates series, not log bodies."""
-    record_sweep(summarize_sweep(_STATUSES, governed={"models$e2etrain16211", *{s.dataset for s in _STATUSES}}))
+    record_sweep(summarize_sweep(_STATUSES, governed={"models$e2etrain16211", *_GRAPH}, graph=_GRAPH))
 
     assert (1, "unknown_to_graph") in gauge.points
 
@@ -131,14 +151,14 @@ def test_a_blind_sweep_publishes_NO_point_rather_than_zero(gauge: _Gauge) -> Non
     With no point the series goes STALE, which a staleness alert notices; with a zero it reads as a
     clean bill of health at exactly the moment the sweep lost the ability to look.
     """
-    record_sweep(summarize_sweep(_STATUSES, governed=None))
+    record_sweep(summarize_sweep(_STATUSES, governed=None, graph=_GRAPH))
 
     assert [p for p in gauge.points if p[1] == "unknown_to_graph"] == []
 
 
 def test_the_sibling_class_still_publishes_when_the_first_is_blind(gauge: _Gauge) -> None:
     """The control: `versions_below_tip` is read off the statuses and does not depend on FGA at all."""
-    record_sweep(summarize_sweep(_STATUSES, governed=None))
+    record_sweep(summarize_sweep(_STATUSES, governed=None, graph=_GRAPH))
 
     assert [p for p in gauge.points if p[1] == "versions_below_tip"] == [(0, "versions_below_tip")]
 
@@ -148,6 +168,6 @@ def test_versions_are_counted_not_datasets(gauge: _Gauge) -> None:
     holed = ReconcileStatus(
         dataset="acme-bronze$events", graph_version=9, storage_version=9, in_sync=True, status=ReconcileState.IN_SYNC, versions_without_lineage=[4, 6, 7]
     )
-    record_sweep(summarize_sweep([holed], governed=None))
+    record_sweep(summarize_sweep([holed], governed=None, graph=_GRAPH))
 
     assert (3, "versions_below_tip") in gauge.points

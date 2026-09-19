@@ -111,23 +111,27 @@ class DrainOutcome(BaseModel):
     refused: int = 0
 
 
-def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | None = None) -> SweepReport:
+def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | None = None, graph: set[str] | None = None) -> SweepReport:
     """Partition one sweep's statuses into the tick's finding classes.
 
     Pure and public so the unit tier can drive a partition from a handful of statuses instead of standing
     up a whole sweep. ``outbox_drained`` / ``pruned_runs`` / ``pruned_events`` are not derived from
     statuses — the caller stamps them on.
 
-    ``governed`` IS THE ONLY INPUT NOT DERIVED FROM ``statuses``, and it has to be: there is exactly one
-    status per dataset the GRAPH knows, so a governed table the graph never recorded appears in no
-    status and no partition of them can find it. The set is already loaded once per tick by
-    ``governed_tables``; this reads it in the second direction. ``None`` means the question was not asked
-    (FGA off, no client, an unreadable store) and must find NOTHING — an empty set would report every
-    table in the estate as invisible at the moment the sweep lost the ability to ask.
+    ``governed`` AND ``graph`` ARE THE TWO INPUTS NOT DERIVED FROM ``statuses``, and both have to be.
+    A governed table the graph never recorded appears in no status, so no partition of statuses can
+    find it — that is ``governed``. And a status is produced only for a dataset the sweep actually
+    reconciled, while a dataset with no ``dataSource`` URI or a drop stamp is skipped though the graph
+    knows it perfectly well — so ``{s.dataset for s in statuses}`` is the wrong second operand. Measured
+    on the deployed estate 2026-09-19: differencing against the statuses reported 1,007 invisible
+    tables where the graph's own listing gives 127.
+
+    ``None`` on either side means the question was not asked (FGA off, no client, an unreadable store,
+    or a caller that did not collect the enumeration) and must find NOTHING — an empty set would report
+    every table in the estate as invisible at the moment the sweep lost the ability to ask.
     """
-    graph = {s.dataset for s in statuses}
     return SweepReport(
-        unknown_to_graph=sorted(governed - graph) if governed is not None else None,
+        unknown_to_graph=sorted(governed - graph) if governed is not None and graph is not None else None,
         checked=len(statuses),
         backfilled=[s.dataset for s in statuses if s.status in BACKFILLABLE_STATES],
         storage_loss=[s.dataset for s in statuses if s.status is ReconcileState.MISSING_ON_STORAGE],
@@ -275,15 +279,37 @@ async def governed_tables(request: Request, settings: LineageSettings) -> set[st
         return None
 
 
-async def _sweep(repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], governed: set[str] | None = None) -> list[ReconcileStatus]:
+async def _swept_report(request: Request, repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str]) -> SweepReport:
+    """Run one sweep and partition it — the two halves that must agree about the same two sets.
+
+    Named rather than inlined in the tick for the reason `test_reconcile_sweep_shape.py` enforces, and
+    because the three sets here are easy to pair up wrongly. The governed enumeration is read in BOTH
+    directions (mark a graph dataset nobody governs; find a governed table the graph never recorded),
+    and the graph's listing is what the second direction differences against — NOT the statuses, which
+    omit every dataset the sweep skipped. Computing them in one place is what keeps the two directions
+    from being asked of two different answers.
+    """
+    governed = await governed_tables(request, settings)
+    graph: set[str] = set()
+    statuses = await _sweep(repository, settings, opts, governed, graph)
+    return summarize_sweep(statuses, governed=governed, graph=graph)
+
+
+async def _sweep(
+    repository: RepositoryDep, settings: SettingsDep, opts: dict[str, str], governed: set[str] | None = None, enumerated: set[str] | None = None
+) -> list[ReconcileStatus]:
     """Reconcile every dataset against storage, back-filling any write whose lineage event was lost.
 
     The Lance reads all run in the threadpool so the object-store I/O never stalls the event loop.
+
+    ``enumerated`` is passed straight through so the caller learns what the GRAPH holds, which is a
+    superset of what produced a status — see :func:`reconcile_all`.
     """
     return await reconcile_all(
         repository,
         lambda uri: run_in_threadpool(read_storage_version, uri, opts),
         backfill=True,
+        enumerated=enumerated,
         # Recover the per-version schema for a back-filled write too (#24) — pinned to the version
         # being back-filled so a mid-sweep write can't attach a later schema to the recovered edge.
         read_schema=lambda uri, ver: run_in_threadpool(read_storage_schema, uri, opts, ver),
@@ -411,8 +437,7 @@ async def _on_cron(
         # ONE enumeration, read in BOTH directions. `_sweep` uses it to mark a graph dataset nobody
         # governs; `summarize_sweep` uses it to find a governed table the graph never recorded. Computed
         # here rather than inline so the two directions cannot be asked of two different answers.
-        governed = await governed_tables(request, settings)
-        report = summarize_sweep(await _sweep(repository, settings, opts, governed), governed=governed)
+        report = await _swept_report(request, repository, settings, opts)
         report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
         report.pruned_runs = await _prune_old_runs(repository, settings)
         report.pruned_events = await _prune_old_events(repository, settings)

@@ -351,6 +351,7 @@ async def reconcile_all(
     freshness_budget_hours: float = 0,
     declared: dict[str, list[str]] | None = None,
     governed: set[str] | None = None,
+    enumerated: set[str] | None = None,
 ) -> list[ReconcileStatus]:
     """Reconcile every dataset the graph knows against storage; optionally back-fill dropped writes (B4).
 
@@ -365,6 +366,15 @@ async def reconcile_all(
     ``dangling_blob_columns`` on the status; only run when a storage version exists (an unreadable dataset
     is already the version check's finding).
 
+    ``enumerated`` (optional) is FILLED with every dataset name the graph returned — not the names that
+    produced a status. The two differ: a dataset with no ``dataSource`` URI or a drop stamp is known to
+    the graph and skips every axis, so ``{s.dataset for s in statuses}`` is a SUBSET of what the graph
+    holds. Measured on the deployed estate 2026-09-19: 1,297 datasets listed, 438 statuses. A caller
+    asking "which governed tables does the graph not know" against the statuses therefore accuses every
+    skipped dataset — it reported 1,007 where the true answer was 127. An out-parameter rather than a
+    second ``list_datasets()`` in the caller, because two listings of a live graph can disagree and the
+    difference between them would surface as a table that appeared or vanished between two queries.
+
     ``governed`` (optional) is the set of table ids anyone holds an authorization tuple on. A dataset
     absent from it is classified UNGOVERNED and skips every axis below, because those axes all reason
     about a table someone owns and this one nobody can read, maintain, drop or re-create — reporting its
@@ -374,6 +384,10 @@ async def reconcile_all(
     """
     results: list[ReconcileStatus] = []
     for summary in await repository.list_datasets():
+        if enumerated is not None:
+            # BEFORE every skip below, deliberately: this records what the GRAPH holds, and a dataset
+            # skipped for a missing URI or a drop stamp is still a dataset the graph knows about.
+            enumerated.add(summary.name)
         # Issued TOGETHER, not one after another: three independent point lookups on the same graph,
         # none of which needs another's answer. Sequenced, they made every dataset three round-trips
         # deep, so a sweep over an estate of N datasets paid 3N serial round-trips. A dataset that
