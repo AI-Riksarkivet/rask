@@ -139,7 +139,12 @@ def list_table_indices(
     body: ListTableIndicesRequest | None = None,
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
-    branch: str | None = None,
+    branch: Annotated[
+        str | None,
+        Query(
+            description="REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref."
+        ),
+    ] = None,
 ) -> ListTableIndicesResponse:
     """List the indices defined on a table (paged) — wraps the native ``list_table_indices`` op.
 
@@ -162,7 +167,17 @@ def list_table_indices(
 
 @router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
 def describe_table_index_stats(
-    id: str, index_name: str, ns: NamespaceDep, settings: SettingsDep, body: DescribeTableIndexStatsRequest | None = None, branch: str | None = None
+    id: str,
+    index_name: str,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    body: DescribeTableIndexStatsRequest | None = None,
+    branch: Annotated[
+        str | None,
+        Query(
+            description="REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref."
+        ),
+    ] = None,
 ) -> DescribeTableIndexStatsResponse:
     """Report stats for a named index on a table — wraps the native ``describe_table_index_stats`` op.
 
@@ -188,7 +203,12 @@ async def drop_table_index(
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
     body: DropTableIndexRequest | None = None,
-    branch: str | None = None,
+    branch: Annotated[
+        str | None,
+        Query(
+            description="REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref."
+        ),
+    ] = None,
 ) -> DropTableIndexResponse:
     """Drop a named index from a table — wraps the native ``drop_table_index`` op; emits a DROP_INDEX
     lineage event at the new version.

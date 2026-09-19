@@ -188,7 +188,9 @@ async def plan_table_compaction(
     settings: SettingsDep,
     so: StorageOptionsDep,
     body: CompactionPlanRequest | None = None,
-    branch: str | None = None,
+    branch: Annotated[
+        str | None, Query(description="The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.")
+    ] = None,
 ) -> CompactionPlanResponse:
     """Plan a compaction and hand the work to a queue — the catalog does NOT execute it.
 
@@ -228,7 +230,9 @@ async def commit_table_compaction(
     emitter: LineageEmitterDep,
     body: CompactionCommitRequest,
     authorization: Annotated[str | None, Header()] = None,
-    branch: str | None = None,
+    branch: Annotated[
+        str | None, Query(description="The ref the plan was made on. Omit for main; the commit applies the worker's results to this ref.")
+    ] = None,
 ) -> CompactionCommitResponse:
     """Commit the workers' rewrite results as ONE metadata-only version.
 
@@ -281,7 +285,7 @@ async def insert_into_table(
     emitter: LineageEmitterDep,
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
-    branch: str | None = None,
+    branch: Annotated[str | None, Query(description="The ref to insert into. Omit for main.")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> InsertIntoTableResponse:
     """Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
@@ -334,7 +338,7 @@ async def merge_insert_into_table(
     when_not_matched_by_source_delete_filt: str | None = None,
     timeout: str | None = None,
     use_index: bool | None = None,
-    branch: str | None = None,
+    branch: Annotated[str | None, Query(description="The ref to merge into. Omit for main.")] = None,
     source: str | None = None,
     source_version: Annotated[int | None, Query(ge=1)] = None,
     run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,

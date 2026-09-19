@@ -334,7 +334,7 @@ def describe_table(
     check_declared: bool | None = None,
     version: int | None = None,
     tag: str | None = None,
-    branch: str | None = None,
+    branch: Annotated[str | None, Query(description="The ref to describe. Omit for main.")] = None,
     vend_credentials: bool | None = None,
 ) -> DescribeTableResponse:
     """Describe the table at ``id`` (schema / uri / detailed metadata) via ``describe_table``, optionally
@@ -1185,7 +1185,16 @@ async def restore_table(
 
 @router.post("/{id}/stats", response_model_exclude_none=True)
 def get_table_stats(
-    id: str, ns: NamespaceDep, settings: SettingsDep, body: GetTableStatsRequest | None = None, branch: str | None = None
+    id: str,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    body: GetTableStatsRequest | None = None,
+    branch: Annotated[
+        str | None,
+        Query(
+            description="REFUSED: the upstream implementation answers from main regardless, so honouring this would return main's data labelled as this ref."
+        ),
+    ] = None,
 ) -> GetTableStatsResponse:
     """Return storage/row statistics for the table at ``id`` via ``get_table_stats``.
 

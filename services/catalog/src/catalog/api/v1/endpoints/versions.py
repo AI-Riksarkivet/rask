@@ -215,7 +215,7 @@ def list_table_versions(
     page_token: str | None = None,
     limit: Annotated[int | None, Query(ge=1, le=_MAX_LIST_LIMIT)] = None,
     descending: bool | None = None,
-    branch: str | None = None,
+    branch: Annotated[str | None, Query(description="The ref whose version history to list. Omit for main.")] = None,
 ) -> ListTableVersionsResponse:
     """List the versions of table ``id`` via ``list_table_versions``; ``descending=true`` guarantees
     latest-to-oldest ordering, ``branch`` targets a non-main branch (spec 0.9 query params).
