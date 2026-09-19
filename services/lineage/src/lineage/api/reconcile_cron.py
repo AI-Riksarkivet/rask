@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field, ValidationError
 from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import LineageSettings, declared_columns_map, storage_options
+from lineage.core.metrics import record_provenance_gaps
 from lineage.core.reconcile import (
     BACKFILLABLE_STATES,
     read_dangling_blob_columns,
@@ -48,7 +49,7 @@ log = logging.getLogger(__name__)
 class SweepReport(BaseModel):
     """One cron tick's findings — the tick's response body and the shape its log line counts.
 
-    A model rather than a hand-built ``dict[str, Any]``: the tick reports EIGHT independent finding classes
+    A model rather than a hand-built ``dict[str, Any]``: the tick reports NINE independent finding classes
     plus two counters, and the response was assembled twice in one function body (once as a log ``extra``,
     once as the return) from literal keys that could drift apart silently.
     """
@@ -66,6 +67,16 @@ class SweepReport(BaseModel):
     stale: list[str] = Field(default_factory=list)
     contract_violations: dict[str, list[str]] = Field(default_factory=dict)
     provenance_holes: dict[str, list[int]] = Field(default_factory=dict)
+    #: Governed tables the graph holds NO dataset node for — the commit->stage gap on a FIRST write,
+    #: which every other axis here is structurally blind to because they all start from the graph.
+    #: Measured on the deployed estate 2026-09-19: 1,424 governed tables against 1,297 graph datasets,
+    #: 127 of them with no node, and 0 graph datasets that were not governed.
+    #:
+    #: ``None`` IS NOT ``[]``, for the reason `record_provenance_gaps` states about the gauge: an empty
+    #: list means the sweep ASKED and every governed table has a node — a clean bill of health — while
+    #: ``None`` means FGA was off or its store unreadable and the question went unasked. Collapsing the
+    #: two would report the moment the sweep lost its sight as the moment the estate became healthy.
+    unknown_to_graph: list[str] | None = None
     outbox_drained: int = 0
     outbox_stranded: int = 0
     outbox_refused: int = 0
@@ -100,14 +111,23 @@ class DrainOutcome(BaseModel):
     refused: int = 0
 
 
-def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
+def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | None = None) -> SweepReport:
     """Partition one sweep's statuses into the tick's finding classes.
 
     Pure and public so the unit tier can drive a partition from a handful of statuses instead of standing
     up a whole sweep. ``outbox_drained`` / ``pruned_runs`` / ``pruned_events`` are not derived from
     statuses — the caller stamps them on.
+
+    ``governed`` IS THE ONLY INPUT NOT DERIVED FROM ``statuses``, and it has to be: there is exactly one
+    status per dataset the GRAPH knows, so a governed table the graph never recorded appears in no
+    status and no partition of them can find it. The set is already loaded once per tick by
+    ``governed_tables``; this reads it in the second direction. ``None`` means the question was not asked
+    (FGA off, no client, an unreadable store) and must find NOTHING — an empty set would report every
+    table in the estate as invisible at the moment the sweep lost the ability to ask.
     """
+    graph = {s.dataset for s in statuses}
     return SweepReport(
+        unknown_to_graph=sorted(governed - graph) if governed is not None else None,
         checked=len(statuses),
         backfilled=[s.dataset for s in statuses if s.status in BACKFILLABLE_STATES],
         storage_loss=[s.dataset for s in statuses if s.status is ReconcileState.MISSING_ON_STORAGE],
@@ -118,6 +138,23 @@ def summarize_sweep(statuses: list[ReconcileStatus]) -> SweepReport:
         stale=[s.dataset for s in statuses if s.stale],
         contract_violations={s.dataset: s.missing_declared_columns for s in statuses if s.missing_declared_columns},
         provenance_holes={s.dataset: s.versions_without_lineage for s in statuses if s.versions_without_lineage},
+    )
+
+
+def record_sweep(report: SweepReport) -> None:
+    """Publish the tick's two provenance-completeness gauges — the metric half of :func:`log_sweep`.
+
+    Named and beside it rather than inlined in the tick, because the tick's body is budgeted
+    (`test_reconcile_sweep_shape.py` caps `_on_cron` at 45 lines) and because a WARN alone cannot page:
+    `chart/alerting/rules.yml` evaluates series, not log bodies.
+
+    THE TWO CLASSES ARE COUNTED DIFFERENTLY ON PURPOSE. `unknown_to_graph` counts TABLES — one per
+    governed table with no node — while `versions_below_tip` counts VERSIONS across datasets, because a
+    single dataset missing forty versions is forty lost writes, not one.
+    """
+    record_provenance_gaps(
+        unknown_to_graph=len(report.unknown_to_graph) if report.unknown_to_graph is not None else None,
+        versions_below_tip=sum(len(v) for v in report.provenance_holes.values()),
     )
 
 
@@ -174,6 +211,12 @@ def log_sweep(report: SweepReport) -> None:
         log.warning("lineage_reconcile_stale", extra={"datasets": report.stale, "count": len(report.stale)})
     if report.contract_violations:
         log.warning("lineage_reconcile_contract_violation", extra={"datasets": report.contract_violations, "count": len(report.contract_violations)})
+    if report.unknown_to_graph:
+        # ITS OWN BODY, like every sibling. This is the only class naming a table the sweep has no node
+        # for, so it is the only one an operator cannot chase from the graph — the name here is the
+        # entire lead. NOT auto-fixed: a node invented for a table the graph never saw would assert a
+        # write nobody observed, and the dataset has no `dataSource` URI to check it against.
+        log.warning("lineage_reconcile_unknown_to_graph", extra={"tables": report.unknown_to_graph, "count": len(report.unknown_to_graph)})
     if report.provenance_holes:
         log.warning(
             "lineage_reconcile_provenance_holes",
@@ -196,6 +239,7 @@ def log_sweep(report: SweepReport) -> None:
             "stale": len(report.stale),
             "contract_violations": len(report.contract_violations),
             "provenance_holes": sum(len(v) for v in report.provenance_holes.values()),
+            "unknown_to_graph": len(report.unknown_to_graph) if report.unknown_to_graph is not None else None,
             "outbox_drained": report.outbox_drained,
             "outbox_stranded": report.outbox_stranded,
             "outbox_refused": report.outbox_refused,
@@ -364,10 +408,15 @@ async def _on_cron(
                 outcome = await _drain_outbox(request, repository, settings, opts, publisher)
             except Exception as exc:
                 log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
-        report = summarize_sweep(await _sweep(repository, settings, opts, await governed_tables(request, settings)))
+        # ONE enumeration, read in BOTH directions. `_sweep` uses it to mark a graph dataset nobody
+        # governs; `summarize_sweep` uses it to find a governed table the graph never recorded. Computed
+        # here rather than inline so the two directions cannot be asked of two different answers.
+        governed = await governed_tables(request, settings)
+        report = summarize_sweep(await _sweep(repository, settings, opts, governed), governed=governed)
         report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
         report.pruned_runs = await _prune_old_runs(repository, settings)
         report.pruned_events = await _prune_old_events(repository, settings)
+    record_sweep(report)
     log_sweep(report)
     return report.model_dump()
 

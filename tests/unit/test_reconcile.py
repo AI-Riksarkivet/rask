@@ -530,6 +530,13 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "graph_ahead": [],
         "unreadable": {},
         "provenance_holes": {},
+        # `unknown_to_graph` takes its neighbours' contract ONE STEP FURTHER, and the extra step is the
+        # point. Every key above is present-when-empty so that "the axis found nothing" cannot be
+        # confused with "the axis did not run". This axis can tell those apart, so it does: `[]` means
+        # the sweep asked OpenFGA and every governed table has a node, `None` means it could not ask.
+        # `None` here because this fixture wires no FGA client — the unasked case, asserted rather than
+        # incidental, since collapsing it to `[]` would report a blind sweep as a clean estate.
+        "unknown_to_graph": None,
         "dangling_blobs": {},
         "stale": [],
         "contract_violations": {},

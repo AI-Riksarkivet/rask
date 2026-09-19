@@ -40,6 +40,49 @@ _ingest_duration = _meter.create_histogram(
 )
 
 
+_provenance_missing = _meter.create_gauge(
+    "lineage.reconcile.provenance_missing",
+    unit="{table}",
+    description="Tables whose committed provenance the graph does not hold, as of the last reconcile sweep, by class.",
+)
+
+
+class ProvenanceGap(StrEnum):
+    """WHY a committed write's provenance is absent from the graph — the gauge's only attribute.
+
+    Two values, because they are found by different means and answered by different actions.
+    """
+
+    #: A GOVERNED table with no dataset node at all. Found by the set difference the sweep's every other
+    #: axis cannot reach, since they all enumerate the graph. Nothing repairs it automatically: the
+    #: graph holds no `dataSource` URI for a table it has never seen, so a node invented here would
+    #: assert a write nobody observed.
+    UNKNOWN_TO_GRAPH = "unknown_to_graph"
+    #: Versions on disk, below a KNOWN dataset's tip, carrying no WROTE edge. The sweep back-fills these,
+    #: and the count still matters: the recovered edge carries ``author='reconcile'`` and no inputs, so
+    #: the version's actor and derivation are gone for good. A count that keeps returning on the same
+    #: dataset names a producer that is not emitting.
+    VERSIONS_BELOW_TIP = "versions_below_tip"
+
+
+def record_provenance_gaps(*, unknown_to_graph: int | None, versions_below_tip: int) -> None:
+    """Publish one sweep's provenance-completeness counts.
+
+    SYNCHRONOUS gauge, for the reason `medallion.services.cascade_lag` already states: an observable
+    gauge computes inside an SDK callback, and these numbers come from a graph query and an FGA
+    enumeration. IO in a collection callback blocks the exporter and fails invisibly. The cron tick
+    already did the reads; this records what it found.
+
+    ``unknown_to_graph=None`` PUBLISHES NO POINT. A gauge has no "unknown", and every sentinel becomes a
+    number someone reads: ``0`` is exactly what a healthy estate reports, so publishing it when FGA was
+    off or its store unreadable turns a blind sweep into a clean bill of health. Publishing nothing
+    leaves the series STALE, which is what a staleness alert is built to notice.
+    """
+    if unknown_to_graph is not None:
+        _provenance_missing.set(unknown_to_graph, {"lance.lineage.provenance_gap": ProvenanceGap.UNKNOWN_TO_GRAPH.value})
+    _provenance_missing.set(versions_below_tip, {"lance.lineage.provenance_gap": ProvenanceGap.VERSIONS_BELOW_TIP.value})
+
+
 class Outcome(StrEnum):
     """The bounded set of terminal outcomes for one delivered event (the only metric attribute)."""
 

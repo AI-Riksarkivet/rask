@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**202 open items**, of which **97 are blocked on a decision** and **105 can be picked up today**.
+**201 open items**, of which **97 are blocked on a decision** and **104 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 58 | 21 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 57 | 20 | 13 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -208,13 +208,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
   drives recorded above.
 - *Closes when:* make e2e-spec-conformance drives pylance, lancedb and lance-ray against a live catalog and passes.
 - *Evidence:* `.venv/lib/python3.13/site-packages/lancedb/namespace.py:573-577 — open_table takes namespace_path` · `Makefile:953-955` · `tests/e2e-py/test_the_other_stock_clients_drive_the_catalog.py (3 cases, marked spec_conformance)` · `pytest -m spec_conformance --collect-only → 17 across 2 files (14 + 3)` · `uv.lock:1675-1676 (lance-ray 0.5.0), 1691-1692 (lancedb 0.34.0)`
-
-**LH-004 · The Lance-commit→lineage-publish window is accepted in writing, but nothing asserts the repair bound the ruling depends on**
-`lineage, catalog, service-kit` · **HIGH** · **REWRITTEN — the original ask would be wrong**
-- **THE RULING EXISTS AND THIS ROW'S HEADER DENIED IT — corrected 2026-09-19 by re-audit.** `docs/DECISIONS.md:766-812` (2026-08-15) accepts the window in writing and keeps the durable producer, in terms: "Atomicity between object storage and a message broker does not exist … So the goal is not atomicity; it is NO SILENT LOSS: every gap must be detected and repaired by something", and "`stage_event` runs AFTER the Lance commit, so a crash in the commit→stage gap still loses the event. That ordering is deliberate". The row's own evidence line searched `grep -i 'projection|source of truth|commit log'` — none of which that entry uses — and reported no hits as proof no ruling exists.
-- *What is left:* Do not do the row's closing clause: the four emit kernels differ by transport, authority and failure posture, the three builders by purpose, the one real mirror is pinned at zero drift by `test_openlineage_spec_conformance.py`, and the outbox-before-transport half is shipped (`service_kit/lakehouse/outbox.py`; `reconcile_cron.py` back-fills and reports `refused` separately; both alert rules guarded in `chart/alerting/rules.yml:33,52`). What remains is one ruling. Once ratified, add a COMPLETENESS gate on the reconcile sweep: every committed Lance version reaches the graph within a measured lateness bound. `docs/DECISIONS.md` carries no projection/source-of-truth entry today.
-- *Closes when:* A test asserts the repair bound the ruling leans on — every committed Lance version reaches the graph within a measured lateness bound. The ruling half is already recorded; "every gap must be detected and repaired by something" is a claim about the reconcile sweep that nothing currently measures, and that is the whole remainder.
-- *Evidence:* `packages/service-kit/src/service_kit/lakehouse/outbox.py (exists)` · `services/lineage/src/lineage/api/reconcile_cron.py:71-84 (refused counted apart from stranded)` · `chart/alerting/rules.yml:33,52` · `grep -i 'projection|source of truth|commit log' docs/DECISIONS.md: no hits`
 
 **LH-016 · `silver-media$features` still occupies a medallion namespace in `lakehouse-wh` under two spellings, and the unbind door refuses a non-empty namespace**
 `catalog` · **HIGH**

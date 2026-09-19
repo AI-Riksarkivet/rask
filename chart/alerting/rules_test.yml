@@ -1353,3 +1353,125 @@ tests:
       - eval_time: 7m
         alertname: LineageOutboxStagingFailing
         exp_alerts: []
+
+  # [[LH-004]] a. A GOVERNED TABLE BECAME INVISIBLE — the count rises, so a write lost its provenance.
+  # Shaped on the deployed estate's real standing backlog (127 at 2026-09-19) so the proof is that the
+  # RISE fires, not that a non-zero level does.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="unknown_to_graph"}'
+        values: "127+0x150 130+0x60"
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: LineageProvenanceLostOnWrite
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+              lance_lineage_provenance_gap: "unknown_to_graph"
+            exp_annotations:
+              summary: "A governed table just became invisible to the lineage graph — a write lost its provenance"
+              description: "The reconcile sweep found MORE governed tables with no dataset node than it did two hours ago. A table reaches this set when its FIRST write's event was lost in the commit->stage window, so the graph never learned the table exists — and every other axis of the sweep is structurally blind to it, because they all enumerate the graph. This one cannot be auto-repaired: with no dataSource URI recorded, a node invented for it would assert a write nobody observed. Find the names in the `lineage_reconcile_unknown_to_graph` log line, then decide per table whether it was created-and-never-written (benign) or written-with-its-event-lost (provenance gone). Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # THE STANDING BACKLOG MUST NOT PAGE. 127 invisible tables, flat, is a triage queue and not an
+  # incident — and an alert firing on the first sweep after deploy over a backlog no on-call can clear
+  # is exactly how a rule ends up in a muted channel. This is the case the delta shape exists for.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="unknown_to_graph"}'
+        values: "127+0x220"
+    alert_rule_test:
+      - eval_time: 3h30m
+        alertname: LineageProvenanceLostOnWrite
+        exp_alerts: []
+
+  # A BACKLOG BEING DRAINED MUST NOT PAGE EITHER — someone is fixing it, and delta() goes negative.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="unknown_to_graph"}'
+        values: "127-0.5x220"
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: LineageProvenanceLostOnWrite
+        exp_alerts: []
+
+  # [[LH-004]] b. HOLES BEING MADE AS FAST AS THEY ARE FILLED — sustained, so a producer is not emitting.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="versions_below_tip"}'
+        values: "3+0x150"
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: LineageProvenanceHolesRecurring
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+            exp_annotations:
+              summary: "Lineage holes keep reappearing below the tip — a producer is not emitting"
+              description: "Versions exist on disk that the graph holds no WROTE edge for, and they have kept appearing for an hour despite the sweep back-filling them each tick. The back-fill is not a repair of record: the recovered edge carries author='reconcile' and no inputs, so every version it rescues has lost its ACTOR and its DERIVATION permanently. A count that keeps returning names a producer that is not emitting at all. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # ONE SWEEP FINDING HOLES IS THE SWEEP WORKING. It back-fills them and the next tick reports zero —
+  # the 1h `for` is what tells that apart from holes being created continuously.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="versions_below_tip"}'
+        values: "3 0+0x150"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: LineageProvenanceHolesRecurring
+        exp_alerts: []
+
+  # [[LH-004]] c. THE AXIS IS BLIND. The sweep is alive (its self-healing series is published) and the
+  # governed count is absent, so `governed_tables` returned None. Without this rule, breaking FGA
+  # silently disables LineageProvenanceLostOnWrite and the silence reads as health.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="versions_below_tip"}'
+        values: "0+0x220"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: LineageProvenanceAxisBlind
+        exp_alerts:
+          # `absent()` synthesises the matcher's own labels onto its result, so the firing alert carries
+          # the very label whose series is missing — which is what makes the notification self-describing.
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+              lance_lineage_provenance_gap: "unknown_to_graph"
+            exp_annotations:
+              summary: "No governed-table provenance count — LineageProvenanceLostOnWrite cannot fire"
+              description: "The reconcile sweep has published no count of governed tables missing from the graph for two hours, so the axis that detects a write losing its provenance is blind and its silence means nothing. Two causes, both of which end here: the sweep is not running (check the lineage pod and its Dapr cron binding), or it is running and `governed_tables` returned None — authorization disabled, no FGA client wired, or the store unreadable (check lineage's `lineage_reconcile_governed_set_unreadable` warning and OpenFGA's health). The sibling series `versions_below_tip` tells the two apart: present means the sweep is alive and FGA is not. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # BOTH SERIES PRESENT IS THE HEALTHY SWEEP — the blindness rule must stay quiet.
+  - interval: 1m
+    input_series:
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="versions_below_tip"}'
+        values: "0+0x220"
+      - series: 'lineage_reconcile_provenance_missing{lance_lineage_provenance_gap="unknown_to_graph"}'
+        values: "127+0x220"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: LineageProvenanceAxisBlind
+        exp_alerts: []
+
+  # A SWEEP THAT IS NOT RUNNING AT ALL FIRES THIS TOO, and that is the intended reading rather than a
+  # gap: whether the sweep is dead or merely blind, LineageProvenanceLostOnWrite cannot fire, so
+  # provenance could be vanishing with nothing to say so. The alternative shape — `absent(X) and on()
+  # (count(Y) > 0)` — is the one GreptimeDB REJECTS outright, so separating the two causes here would
+  # buy a distinction at the cost of the rule never firing at all.
+  - interval: 1m
+    input_series:
+      - series: "lineage_events_processed_total"
+        values: "0+0x220"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: LineageProvenanceAxisBlind
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lineage"
+              lance_lineage_provenance_gap: "unknown_to_graph"
+            exp_annotations:
+              summary: "No governed-table provenance count — LineageProvenanceLostOnWrite cannot fire"
+              description: "The reconcile sweep has published no count of governed tables missing from the graph for two hours, so the axis that detects a write losing its provenance is blind and its silence means nothing. Two causes, both of which end here: the sweep is not running (check the lineage pod and its Dapr cron binding), or it is running and `governed_tables` returned None — authorization disabled, no FGA client wired, or the store unreadable (check lineage's `lineage_reconcile_governed_set_unreadable` warning and OpenFGA's health). The sibling series `versions_below_tip` tells the two apart: present means the sweep is alive and FGA is not. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
