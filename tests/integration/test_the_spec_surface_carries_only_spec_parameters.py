@@ -113,3 +113,46 @@ def test_a_hidden_parameter_is_still_bound_on_the_wire(client: TestClient, path:
         f"{response.json()}) — the parameter is no longer bound, so hiding it from the document has "
         "become removing it from the wire"
     )
+
+
+#: Non-spec headers the owner ruled STAY in the document (2026-09-20, `docs/DECISIONS.md`). Hiding them
+#: would weaken `generated-client-freshness.test.ts`, which exists because a client that lost
+#: `dapr-caller-app-id` shipped broken for 19 days — so the document keeps them and this bounds the set.
+#: `authorization` is standard HTTP and needs no exception.
+_RECORDED_HEADER_EXCEPTIONS = frozenset(
+    {
+        "authorization",
+        "dapr-api-token",
+        "x-lance-service-identity",
+        "dapr-caller-app-id",
+        "x-lance-originator",
+        "Idempotency-Key",
+        "X-Lance-Run-Facets",
+    }
+)
+
+
+def test_no_UNRECORDED_header_appears_on_a_spec_route(client: TestClient) -> None:
+    """The ruling is a bound, not a licence: a FOURTH non-spec header is a new decision, not a precedent.
+
+    Deliberately not the same shape as the query-parameter gate above. That one drives the count to
+    zero; this one holds a set the owner decided to keep, so it can only catch something ARRIVING.
+    """
+    vocabulary = _spec_vocabulary() | _RECORDED_HEADER_EXCEPTIONS
+    paths: dict[str, Any] = cast(FastAPI, client.app).openapi().get("paths", {})
+    unrecorded: dict[tuple[str, str], list[str]] = {}
+    for path, operations in paths.items():
+        if not path.startswith(_SPEC_PREFIXES):
+            continue
+        for method, operation in operations.items():
+            if not isinstance(operation, dict):
+                continue
+            extra = sorted(p["name"] for p in operation.get("parameters", []) if p.get("in") == "header" and p["name"] not in vocabulary)
+            if extra:
+                unrecorded[(method.upper(), path)] = extra
+
+    assert not unrecorded, (
+        "these spec routes carry a non-spec header nobody ruled on — either hide it with "
+        "`Header(include_in_schema=False)` or add it to `_RECORDED_HEADER_EXCEPTIONS` with a reason in "
+        "`docs/DECISIONS.md`:\n  " + "\n  ".join(f"{m} {p}: {n}" for (m, p), n in sorted(unrecorded.items()))
+    )
