@@ -949,7 +949,7 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (governed-union, gateway, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = auth cas compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability spec-conformance track-a user-state ray-batch ray-train
+E2E_SUITES = auth cas chaos compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability spec-conformance track-a user-state ray-batch ray-train
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
@@ -961,6 +961,12 @@ e2e-auth:           ## Live OIDC/FGA authorization proof (Dex + OpenFGA + govern
 e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v
+e2e-chaos:          ## Pull-a-service resilience: scales lineage to 0, writes, asserts replay (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL + LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-chaos needs LANCE_E2E_CATALOG_URL + LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@# DELIBERATELY NOT IN `e2e-ci`: it scales a Deployment to 0, so a shared lane running it would
+	@# take lineage down under every other suite.
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m chaos -v
 e2e-compaction:     ## Maintenance sweep / compaction / GC proofs (needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL)
 	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

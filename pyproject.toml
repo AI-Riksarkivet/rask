@@ -289,6 +289,7 @@ markers = [
     # per-suite selectors used by the e2e make targets (e.g. `pytest -m media`); all of them ALSO carry e2e
     "auth: live OIDC/FGA authorization e2e (Dex + OpenFGA + a governed catalog)",
     "cas: object-store conditional-write (CAS) e2e",
+    "chaos: pull-a-service resilience e2e — SCALES a deployment, so it is out of e2e-ci",
     "compaction: compaction/GC sweep e2e",
     "duckdb: duckdb-over-Lance e2e",
     "dummy_lane: the GPU-free dummy medallion lane, end to end (declare -> baked Ray entrypoint -> silver)",

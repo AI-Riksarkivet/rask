@@ -33,6 +33,7 @@ MAKEFILE = Path(__file__).resolve().parents[2] / "Makefile"
 #: target stem -> the env vars its suite's own skip guards are keyed on.
 REQUIRED_ENV: dict[str, tuple[str, ...]] = {
     "auth": ("LANCE_E2E_AUTH_SERVER",),
+    "chaos": ("LANCE_E2E_CATALOG_URL", "LANCE_E2E_LINEAGE_URL"),
     # `live` guards NOTHING, and that is the entry rather than an omission. Every other target takes
     # its addresses from the environment, so a missing variable is what tells it there is no target;
     # `e2e-live` DISCOVERS them from the cluster instead and fails on the cluster's own answers —

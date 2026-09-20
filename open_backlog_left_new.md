@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**201 open items**, of which **97 are blocked on a decision** and **104 can be picked up today**.
+**200 open items**, of which **97 are blocked on a decision** and **103 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 57 | 20 | 13 |
+| **PHASE 1 · LAKEHOUSE** | 56 | 19 | 13 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -357,12 +357,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - **THE GATE IS OPEN (2026-09-20).** `report_is_clean` now returns None on the live estate — `total=0`, `orphan_files=0`, `unavailable=[] skipped=[] incomplete=[]` across three ticks. The 13 files that blocked it cleared themselves; [[LH-094]] closed on the same measurement.
 - **THE PURGE HAS NOW RUN, IN DRY RUN, AND IT FOUND TWO DEFECTS.** `MAINTENANCE_TRASH_PURGE_ENABLED=false` on the deployed chart, which is why it had never run. Enabled in dry-run: **1,021 trash records, 884 already expired**, `capped=859`, `would_purge=7`, `refused=18`. The 18 are refused as "outside the maintained estate" — warehouses that no longer exist — and `trash_purge_max_per_tick` slices the due list BEFORE the refusal checks, so with an oldest-first order they held 18 of every 25 slots permanently. Fixed: `due_from` orders by refusal count then expiry, so a record refused N times yields to one never tried. The refusal reason also rendered all ~100 maintained roots per record (~36 KB per tick); it now carries the count. Reason length observed 2 KB -> 166 chars.
 - *What is left:* **a real (destructive) purge run, which needs authorisation.** The reorder cannot be observed in dry run — `_refuse` skips `trash.note_refusal` when `dry_run` is set (`purge.py:548`), so `attempts` is never written and the order never changes; it is unit-proven only. The estate currently runs `MAINTENANCE_TRASH_PURGE_ENABLED=true` + `DRY_RUN=true` as a hand-set env (non-destructive, reverts on the next helm deploy). Draining 884 records at 25/tick is ~36 ticks.
-**LH-106 · No automated chaos harness exists; the pull-a-service rows and lineage scale-0→restart-replay are hand-driven only**
-`lineage, chart, tests` · **MED**
-- *What is left:* Write `tests/e2e-py/test_chaos_e2e.py` driving the pull-a-service rows, including lineage scale-0 → three events published while it is down → restart-replay, against a uuid-suffixed throwaway namespace (the `test_maintenance_s3_e2e.py` shape). Gate it behind an env-gated `make e2e-chaos` target kept OUT of `e2e-ci`'s suite list, the way the other per-suite targets are gated. Hand-driving replay on the live estate is not acceptable: a synthetic author is refused by `enforce_bus_authz` and bumps a watched refusal counter, and an authorized one injects fabricated provenance. DLQ poison parking and the cascade retry window are already driven and gated; do not redo them.
-- *Closes when:* `make e2e-chaos` runs the harness against a throwaway namespace and asserts replay after a lineage scale-0, and `e2e-ci` does not list it.
-- *Evidence:* `ls tests/e2e-py/ → no test_chaos_e2e.py` · `grep -c -i chaos Makefile → 0` · `Makefile:888 (`e2e-ci` suite list), :940-946 (env-gated per-suite target pattern)` · `tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py (exists — retry window already gated)`
-
 **LH-127 · Eight orphaned Dapr durables sit on six streams until the chart-durables orphan pass runs, and nothing surfaces an unexpected consumer**
 `lineage, compute, chart` · **MED** · PARTIAL
 - *What is left:* The orphan pass is written: `chart/templates/_durables.tpl` renders `lance.chartDurables`, `nats-stream-job.yaml:255-258` deletes any `*-durable` on a walked stream absent from `EXP_DURABLES`, and `tests/unit/test_a_durable_the_chart_owns_is_a_durable_the_drift_loop_walks.py` pins the set. **THE EIGHT ORPHANS ARE GONE, verified 2026-09-18** against the live NATS monitor (`/jsz?consumers=true`): no `lance-ray`, no `pages-to-gold-htr`, no `maintenance-durable`, no `maintenance-work-durable` on any stream. What remains is exactly the chart-rendered set — MEDALLION 4, DLQ 6, CATALOG_CONTROL 2, LINEAGE 2, TRAINING 1. Then surface the inverse signal: the lakehouse admin `/streams` view shows `num_pending` and `push_bound` and flags an EXPECTED group that is unbound (`jetstream.ts:113-122`), but nothing flags a consumer that is NOT in the expected set, so the next orphan is still invisible without a NATS client. **IT MUST FLAG UNEXPECTED DURABLES, NOT UNEXPECTED CONSUMERS** — measured the same day, CATALOG_CONTROL carries an EPHEMERAL consumer (`xP0FWBl7`, no `durable_name`, `_INBOX` delivery, `num_pending: 0`) which is the catalog's own control-buffer subscription: each replica subscribes WITHOUT a queueGroupName by design (`core/control_buffer.py`), so broadcast subscribers are ephemeral and auto-named. A signal keyed on "not in the expected set" would flag that one permanently, and a permanently-firing signal is how the real orphan gets ignored. The orphan PASS has the same blind spot from the other side: `nats-stream-job.yaml:255-258` deletes `*-durable` names only, so a non-durable orphan survives it. `MAINTENANCE_WORK` and the index lane stay excluded from the walk by design (work-sized backoff).
