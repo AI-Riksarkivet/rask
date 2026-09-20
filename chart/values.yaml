@@ -1758,6 +1758,52 @@ maintenance:
   # an uncapped pass would turn one cron fire into an estate-wide authorization write. The remainder is
   # reported (`tuple_rebuild.capped`).
   tupleRebuildMaxPerTick: 50
+  # [[LH-061]] — revoke authorization tuples whose OBJECT no longer exists.
+  #
+  # The destructive counterpart to `tupleRebuild` above, and the bound is what makes it safe: it
+  # deletes TUPLES and nothing else — never a byte, a registry record or a catalog table. It acts only
+  # on `ghost_projects`/`ghost_warehouses`/`ghost_tables`, which are one fact under three names (a
+  # tuple on an object no registry record names), so a revoke removes nobody's access to anything:
+  # there is no door to open and no bytes behind it. `ungoverned_tables` is the INVERSE shape — a real
+  # table carrying no tuples — and is refused BY NAME, because a pass that "repaired drift" by acting
+  # on it would destroy live data to close an authorization gap.
+  #
+  # IT REFUSES A CATEGORY WHOSE LISTING WAS READ ONLY IN PART. The inference is a subtraction, so it
+  # holds only against a complete record set; an unreadable warehouse root is reported as an
+  # IncompleteScan rather than an error, and without that refusal one transient manifest failure would
+  # strip authorization from every table in that warehouse.
+  #
+  # Measured on this estate 2026-09-20: 1,041 ghost tables, residue of the warehouse-delete cascade
+  # [[LH-148]] fixed at source — a producer already closed, leaving a backlog nothing else can clear.
+  driftRepair: false
+  # Plan and report, delete nothing. Defaults TRUE — stricter than `trashPurgeDryRun` above, and
+  # deliberately: the purge's targets are already-expired records on a maintained root, while this
+  # writes to the AUTHORIZATION store, where a wrong revoke is felt by a person holding a grant rather
+  # than by a reclaimer.
+  driftRepairDryRun: true
+  # Per-tick ceiling on objects revoked. The remainder is reported (`drift_repair.capped`) and taken on
+  # the next tick, so a large backlog drains over ticks instead of becoming one unreviewable batch of
+  # authorization deletes. Edge cuts are NOT counted against it: one cut removes a single tuple from a
+  # live object, and counting them here would let a backlog of ghosts starve the smaller, safer repair.
+  driftRepairMaxPerTick: 50
+  # [[LH-061]]'s STORAGE tier — clear a trash record whose bytes are PROVEN gone.
+  #
+  # `driftRepair` refuses `orphaned_trash` because the record is the only remaining pointer to those
+  # bytes. This pass satisfies that objection rather than overturning it: it PROBES the location first
+  # and sweeps only when the listing comes back empty, so it deletes a bookkeeping row and never a
+  # byte. A location that still holds objects, or that cannot be read at all, is refused by id with the
+  # count that refused it.
+  #
+  # That probe is also why this pass needs no incompleteness guard of its own: its decision rests on a
+  # direct observation of the store rather than on an absence from a listing.
+  tombstoneSweep: false
+  # Plan and report. Defaults TRUE for its sibling's reason — turning the pass on to SEE what it would
+  # clear must not clear it.
+  tombstoneSweepDryRun: true
+  # Per-tick ceiling on records swept, applied BEFORE the probing so a large backlog cannot turn one
+  # tick into an unbounded listing storm against object storage. The remainder is reported
+  # (`tombstone_sweep.capped`).
+  tombstoneSweepMaxPerTick: 50
   # The reconciler's per-dataset FILE scan — the unreferenced-file category (#128a).
   #
   # THIS IS THE LEVER TRASHPURGE ABOVE DEPENDS ON, and until 2026-08-15 it did not exist at any values

@@ -35,6 +35,22 @@ THE REFUSALS ARE NOT A BACKLOG THIS MODULE WILL GROW INTO. The storage tier is a
 work — it needs a listing, a floor and an age, and it can destroy something unrecoverable — so it is a
 separate pass with its own evidence, not a flag on this one.
 
+A REVOKE IS JUSTIFIED BY AN ABSENCE, SO A PARTIAL READ JUSTIFIES NOTHING. Every category here is
+derived by subtraction — a tuple whose id appears in no registry record — which is evidence only while
+the listing it was measured against was COMPLETE. `_run_category` refuses a category whose source
+reported an error, so an outage produces no findings; a partial read travels on a different channel
+and does not (`_tables_across` returns unreadable roots beside the rows it did get, filed as
+`IncompleteScan`, with `tables_error` still None). One transient manifest failure on one warehouse
+root would therefore classify every table under it as a ghost. `_SUBTRACTED_FROM` names the source
+behind each category and the pass refuses that category — by name, with the partial source in the
+reason — when it was read in part. The check is PER CATEGORY: this estate carries a storage-tier
+`IncompleteScan` on most ticks, and none of those feed a revoke.
+
+THE TOMBSTONE SWEEP NEEDS NO SUCH GUARD, and the contrast is the reason this one does. That pass
+PROBES each location and refuses unless the bytes are provably gone, so its decision rests on a direct
+observation rather than on an absence from a listing. Here there is nothing to probe: an FGA object
+that does not exist cannot be asked whether it exists.
+
 OFF AND DRY-RUN BY DEFAULT. `drift_repair_dry_run` defaults TRUE, which is stricter than the trash
 purge's default and deliberately so: the purge's targets are already-expired records on a maintained
 root, while this writes to the authorization store, where a wrong revoke is felt by a person holding a
@@ -69,6 +85,33 @@ _REVOCABLE: tuple[str, ...] = ("ghost_projects", "ghost_warehouses", "ghost_tabl
 #: and keeps every other grant it holds. Its own list rather than a flag on `_REVOCABLE` because the
 #: two acts differ in blast radius, and a reader must not have to infer which one a category gets.
 _EDGE_ONLY: tuple[str, ...] = ("orphaned_annotation_tasks",)
+
+#: The SOURCE each repairable category's "it is gone" inference is subtracted from, keyed by category.
+#:
+#: A revoke is justified by an ABSENCE — a tuple whose id appears in no registry record — and an
+#: absence is only evidence when the listing it was measured against was complete. `_run_category`
+#: already refuses a category whose source reported an ERROR, so an outage yields no findings; a
+#: PARTIAL read travels on a different channel and does not. `_tables_across` returns its unreadable
+#: roots beside the rows it did get and `_build_sources` files them as
+#: `IncompleteScan(source="catalog:tables:<root>")` while `tables_error` stays None, so the category
+#: runs against a record set missing exactly those roots. One transient manifest failure would then
+#: classify every table under that warehouse as a ghost and strip its authorization.
+#:
+#: Matched as a PREFIX because the catalog sources are per-root (`catalog:tables:s3://acme-wh`) while
+#: the registry sources are not (`registry:projects`).
+#:
+#: `fga:tuples` is deliberately absent. A truncated tuple scan finds FEWER objects carrying tuples,
+#: so it under-reports ghosts — the safe direction, and guarding it would refuse work for a partial
+#: read that cannot produce a false positive.
+_SUBTRACTED_FROM: dict[str, str] = {
+    "ghost_projects": "registry:projects",
+    "ghost_warehouses": "registry:warehouses",
+    "ghost_tables": "catalog:tables",
+    # The edge cut reads the SAME projects registry: a skipped record makes a live tenant look retired,
+    # and the cut would strip the `tenant` edge off an annotation project whose owner still exists.
+    "orphaned_annotation_tasks": "registry:projects",
+}
+
 
 #: Why each non-revocable category is refused. Phrased as what the finding IS, because the reason a
 #: pass must not delete it is a property of the object rather than of this module's scope.
@@ -118,18 +161,35 @@ class RepairReport(BaseModel):
     error: str | None = None
 
 
+def _partial(report: ReconcileReport, category: str) -> str | None:
+    """The reason ``category``'s inference cannot be trusted this tick, or None.
+
+    Returns the SOURCE that was read partially rather than a boolean, because the refusal has to name
+    it: a tick that revoked nothing must be distinguishable from an estate with nothing to revoke.
+    """
+    prefix = _SUBTRACTED_FROM.get(category)
+    if prefix is None:
+        return None
+    hit = [scan for scan in report.incomplete or [] if scan.source.startswith(prefix)]
+    return None if not hit else ", ".join(f"{scan.source} ({scan.reason})" for scan in hit)
+
+
 def plan_repair_edges(report: ReconcileReport) -> tuple[list[RevokedObject], list[CutEdge], dict[str, str]]:
     """The full plan: whole-object revokes, exact-edge cuts, and the categories refused with reasons."""
     planned, refused = plan_repair(report)
-    edges = [
-        CutEdge(
-            user=f"project:{finding.tenant}",
-            relation="tenant",
-            object=f"annotation_project:{finding.annotation_project}",
-            justified_by="orphaned_annotation_tasks",
-        )
-        for finding in report.orphaned_annotation_tasks or []
-    ]
+    edges: list[CutEdge] = []
+    if (why := _partial(report, "orphaned_annotation_tasks")) is not None:
+        refused["orphaned_annotation_tasks"] = f"the registry this tenant check subtracts from was read only in part — {why}"
+    else:
+        edges = [
+            CutEdge(
+                user=f"project:{finding.tenant}",
+                relation="tenant",
+                object=f"annotation_project:{finding.annotation_project}",
+                justified_by="orphaned_annotation_tasks",
+            )
+            for finding in report.orphaned_annotation_tasks or []
+        ]
     return planned, edges, refused
 
 
@@ -141,11 +201,21 @@ def plan_repair(report: ReconcileReport) -> tuple[list[RevokedObject], dict[str,
     revoke an object the report never classified.
     """
     planned: list[RevokedObject] = []
+    refused = {name: why for name, why in _REFUSED.items() if getattr(report, name, None)}
     for category in _REVOCABLE:
-        for finding in getattr(report, category, []) or []:
+        findings = getattr(report, category, []) or []
+        if not findings:
+            continue
+        # PER CATEGORY, never per report. This estate's reconcile carries a storage-tier IncompleteScan
+        # on most ticks (`storage:datasets`, depth limits), and none of those feed a revoke — stopping
+        # the whole pass on any incompleteness would refuse every tick for a reason that cannot produce
+        # a false ghost.
+        if (why := _partial(report, category)) is not None:
+            refused[category] = f"the listing this absence was measured against was read only in part — {why}"
+            continue
+        for finding in findings:
             obj = getattr(finding, "fga_object", None) or f"annotation_project:{finding.annotation_project}"
             planned.append(RevokedObject(fga_object=obj, tuples=getattr(finding, "tuples", 0), justified_by=category))
-    refused = {name: why for name, why in _REFUSED.items() if getattr(report, name, None)}
     return planned, refused
 
 

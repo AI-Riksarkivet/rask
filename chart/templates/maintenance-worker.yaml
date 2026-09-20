@@ -194,6 +194,20 @@ spec:
             - { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary .Values.maintenance.tupleRebuild false | quote }} }
             - { name: MAINTENANCE_TUPLE_REBUILD_DRY_RUN, value: {{ hasKey .Values.maintenance "tupleRebuildDryRun" | ternary .Values.maintenance.tupleRebuildDryRun true | quote }} }
             - { name: MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tupleRebuildMaxPerTick") | ternary .Values.maintenance.tupleRebuildMaxPerTick 50 | quote }} }
+            {{- /* [[LH-061]]'s two DESTRUCTIVE halves, rendered here for the reason stated at the top of
+                   this file: the worker is generated from the same block as the planner so the two
+                   cannot disagree about what the service is configured to do. The worker's cron
+                   bindings are blanked, so it never fires the reconcile route that reads these — which
+                   is exactly why they must still be present and identical. A pod whose environment
+                   describes a different service from its sibling is one an operator cannot reason
+                   about from `kubectl describe`, and the gap would only be discovered by whichever
+                   change first gives the worker a reconcile path. */}}
+            - { name: MAINTENANCE_DRIFT_REPAIR_ENABLED, value: {{ hasKey .Values.maintenance "driftRepair" | ternary .Values.maintenance.driftRepair false | quote }} }
+            - { name: MAINTENANCE_DRIFT_REPAIR_DRY_RUN, value: {{ hasKey .Values.maintenance "driftRepairDryRun" | ternary .Values.maintenance.driftRepairDryRun true | quote }} }
+            - { name: MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "driftRepairMaxPerTick") | ternary .Values.maintenance.driftRepairMaxPerTick 50 | quote }} }
+            - { name: MAINTENANCE_TOMBSTONE_SWEEP_ENABLED, value: {{ hasKey .Values.maintenance "tombstoneSweep" | ternary .Values.maintenance.tombstoneSweep false | quote }} }
+            - { name: MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN, value: {{ hasKey .Values.maintenance "tombstoneSweepDryRun" | ternary .Values.maintenance.tombstoneSweepDryRun true | quote }} }
+            - { name: MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tombstoneSweepMaxPerTick") | ternary .Values.maintenance.tombstoneSweepMaxPerTick 50 | quote }} }
             {{- /* #128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
                    because the whole defect was that the setting existed in config.py and had NO path
                    from values — an env var that appears only when enabled is one nobody can discover
