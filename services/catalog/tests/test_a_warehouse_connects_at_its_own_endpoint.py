@@ -203,3 +203,69 @@ def test_every_namespace_for_root_CALLER_passes_an_endpoint() -> None:
                 offenders.append(f"{path.name}:{node.lineno}")
 
     assert offenders == [], f"{offenders} build a warehouse connection without the record's `endpoint`, so they open the ESTATE's store"
+
+
+def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """A store that will not answer is an OUTAGE, and a 500 says the catalog is broken when it is fine.
+
+    Measured live 2026-09-20 on the deployed catalog: a warehouse pointed at `http://127.0.0.1:1`
+    answered `500 InternalError code 18`, which sends whoever is on call to the wrong system. pylance
+    raises a BARE `ValueError` here — the same shape `open_dataset` already converts for a missing
+    dataset, and for the same reason.
+
+    WHICH STORE reaches the LOG, not the caller. `ns_errors` redacts every 5xx detail to "Internal
+    Server Error" on purpose — a 5xx is a fault and its text leaks, and an endpoint is exactly the
+    internal hostname that must not go out. So the assertion below is on the exception the handler
+    receives and on the log record, not on a wire body that will never carry it.
+    """
+    from lance_namespace import ServiceUnavailableError
+
+    def _boom(impl: str, properties: dict[str, str]) -> Any:
+        raise ValueError(
+            "Failed to construct namespace impl lance.namespace.DirectoryNamespace: LanceError(IO): "
+            "Generic S3 error: Error performing list request: error sending request"
+        )
+
+    monkeypatch.setattr(namespace_module, "connect", _boom)
+
+    with pytest.raises(ServiceUnavailableError) as caught, caplog.at_level("WARNING"):
+        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
+
+    assert "http://tenant.store:9000" in str(caught.value), f"the refusal does not name the store: {caught.value}"
+
+
+def test_a_NON_TRANSPORT_construction_failure_is_left_alone(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The control, and the reason the rule reads the error rather than catching ValueError.
+
+    A bogus impl raises the same bare `ValueError` and is NOT an outage — measured, its message carries
+    no `LanceError(IO)`. Converting it to 503 would tell an operator to wait for a store to come back
+    when the configuration names a module that does not exist.
+    """
+
+    def _boom(impl: str, properties: dict[str, str]) -> Any:
+        raise ValueError("Failed to construct namespace impl no.such.Impl: No module named 'no'")
+
+    monkeypatch.setattr(namespace_module, "connect", _boom)
+
+    with pytest.raises(ValueError, match="No module named"):
+        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
+
+
+def test_the_unreachable_store_is_NAMED_in_the_log(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """The operator's half. The 503's detail is redacted on the wire, so if the address is not logged
+    it exists nowhere an operator can read it — a 503 that says only "unavailable" is barely better
+    than the 500 it replaced."""
+    from lance_namespace import ServiceUnavailableError
+
+    def _boom(impl: str, properties: dict[str, str]) -> Any:
+        raise ValueError("LanceError(IO): Generic S3 error: error sending request")
+
+    monkeypatch.setattr(namespace_module, "connect", _boom)
+
+    with caplog.at_level("WARNING", logger=namespace_module.__name__), pytest.raises(ServiceUnavailableError):
+        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
+
+    logged = [r for r in caplog.records if r.message == "warehouse_store_unreachable"]
+    assert logged, f"nothing logged the unreachable store: {[r.message for r in caplog.records]}"
+    assert getattr(logged[0], "endpoint", None) == "http://tenant.store:9000"
+    assert getattr(logged[0], "root", None) == "s3://tenant-bucket"

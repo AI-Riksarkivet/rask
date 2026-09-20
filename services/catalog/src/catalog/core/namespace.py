@@ -8,10 +8,13 @@ the data-plane service for operations the native backend does not implement.
 
 from __future__ import annotations
 
+import logging
+
 import lance
 from lance_namespace import (
     DescribeTableRequest,
     LanceNamespace,
+    ServiceUnavailableError,
     TableBranchNotFoundError,
     TableNotFoundError,
     TableVersionNotFoundError,
@@ -19,6 +22,9 @@ from lance_namespace import (
 )
 
 from catalog.core.config import Settings, shared_lance_session
+
+
+log = logging.getLogger(__name__)
 
 
 def build_namespace(settings: Settings) -> LanceNamespace:
@@ -45,7 +51,30 @@ def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str
 
     Callers cache the result per (root, endpoint) — a warehouse's root never changes, but its endpoint
     is caller-owned and may be corrected."""
-    return connect(settings.impl, settings.namespace_properties(root=root_uri, endpoint=endpoint))
+    target = endpoint or settings.s3_endpoint
+    try:
+        return connect(settings.impl, settings.namespace_properties(root=root_uri, endpoint=endpoint))
+    except ValueError as exc:
+        # A STORE THAT WILL NOT ANSWER IS AN OUTAGE, NOT A BROKEN CATALOG. pylance raises a bare
+        # `ValueError` for every construction failure, so an unreachable warehouse store surfaced as
+        # `500 InternalError` — measured on the deployed catalog 2026-09-20, a warehouse pointed at a
+        # dead endpoint — which sends whoever is on call to the wrong system. Same conversion, and the
+        # same reasoning, as the missing-dataset case below.
+        #
+        # READ THE ERROR, never just the type: `LanceError(IO)` marks the transport failure, and a
+        # construction failure WITHOUT it is not an outage (measured: a bogus impl says "No module
+        # named 'no'"). Telling an operator to wait for a store to come back when the configuration
+        # names a module that does not exist is the wrong answer delivered confidently.
+        #
+        # WHICH STORE reaches the LOG, not the caller, and that split is the estate's rule rather than
+        # an oversight: `ns_errors` redacts every 5xx detail to "Internal Server Error" because those
+        # are faults whose text leaks — and an endpoint is exactly the internal hostname that must not
+        # go out on the wire. So the caller learns the store is unavailable (which is what 503 is FOR,
+        # and what a 500 got wrong) and the operator gets the address from here.
+        if "LanceError(IO)" not in str(exc):
+            raise
+        log.warning("warehouse_store_unreachable", extra={"root": root_uri, "endpoint": target, "error": str(exc)[:200]})
+        raise ServiceUnavailableError(f"the object store for {root_uri!r} is unreachable at {target!r}") from exc
 
 
 def _branch_checkout_error(
