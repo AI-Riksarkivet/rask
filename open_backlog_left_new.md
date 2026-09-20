@@ -132,13 +132,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**192 open items**, of which **99 are blocked on a decision** and **93 can be picked up today**.
+**191 open items**, of which **99 are blocked on a decision** and **92 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 41 | 3 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 45 | 22 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 44 | 21 | 9 |
 | **PHASE 2 · COMPUTE** | 51 | 34 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -688,11 +688,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **XC-034 · `submit_or_reattach`'s delete-and-resubmit branch has no test asserting the DELETE**
 `medallion` · **LOW** · PARTIAL
-- *What is left:* Six of the seven seams now have direct tests: `lakehouse/blobs.py` (`tests/unit/test_blob_create.py`, `test_blob_null_alignment.py`), `lancekit/store.py` (`packages/service-kit/tests/test_a_vended_credential_survives_the_storage_seam.py`, `test_s3fs_is_memoized.py`), `lancekit/reader.py`'s REST path (`tests/unit/test_annotate_catalog_versions.py:112` drives `RestCatalogTransport` with a fake; `test_catalog_caller_token.py`), `governed/audit.py` (`tests/unit/test_audit.py`), `middleware.py` (`packages/service-kit/tests/test_shared_body_cap.py`, `test_cors_is_the_outermost_layer.py`) and `lakehouse/objectfs.py` (`test_explicit_credentials_beat_the_ambient_environment.py`, `test_a_warehouse_can_require_encryption_at_rest.py`). Write one medallion test for `ray_jobs_api.py:185-194`: present a job whose status is in `TERMINAL_BAD` with `on_terminal_failure="resubmit"` and assert `DELETE /api/jobs/{sub_id}` then `POST /api/jobs/` and the `"resubmitted"` return. Today only the negative (`report` never deletes, `test_train_rides_the_shared_kernel.py:116`) and the workflow-level activity count (`test_a_vanished_stage_is_resubmitted.py:36`) exist.
-- *Closes when:* A medallion test asserts the DELETE-then-POST sequence on `submit_or_reattach`'s resubmit branch.
-- *Evidence:* `services/medallion/src/medallion/services/ray_jobs_api.py:153,185-194` · `services/medallion/tests/test_train_rides_the_shared_kernel.py:57-58,116 (negative assertion only)` · `tests/unit/test_audit.py:10; tests/unit/test_annotate_catalog_versions.py:112; packages/service-kit/tests/test_shared_body_cap.py:29` · `tests/unit/test_blob_create.py:28,73; packages/service-kit/tests/test_a_vended_credential_survives_the_storage_seam.py`
-
-**XC-036 · Two subchart values hardcode `rask-`-prefixed Secret names while the estate renders them as `<release>-…`, so any release not named `rask` points at Secrets that do not exist**
+- **CLOSED 2026-09-20.** `services/medallion/tests/test_a_terminally_failed_job_is_deleted_before_it_is_resubmitted.py` asserts the ORDER, not just the presence: `POST -> GET -> DELETE -> POST` with the outcome `"resubmitted"`. The order is the point — Ray's Jobs API refuses a submission id that already exists, so a POST before the DELETE fails against a live cluster while the branch still reports `"resubmitted"` for a job it never replaced, and the return value is what the caller acts on. Parametrised over BOTH members of `TERMINAL_BAD` (`FAILED`, `STOPPED`), since a branch keyed on one would leave the other re-attaching forever. Three further legs: a failed resubmit RAISES rather than reporting success (`fresh.raise_for_status()`, previously untested — answering `"resubmitted"` for a refused POST tells the workflow work is running when nothing is); `report` never deletes, beside the branch it diverges from; and a RUNNING job reattaches without a delete or a second POST, which is the control that stops the branch firing too widely — deleting live work and restarting it from nothing is worse than the failure the row exists to fix. The double SCRIPTS successive POST outcomes rather than returning one status, because the branch posts twice and a single-outcome fake cannot tell the two apart. Mutation-checked three ways: dropping the DELETE reds 2 legs, dropping `raise_for_status` reds 1, and removing `STOPPED` from `TERMINAL_BAD` reds the STOPPED parametrisation.**XC-036 · Two subchart values hardcode `rask-`-prefixed Secret names while the estate renders them as `<release>-…`, so any release not named `rask` points at Secrets that do not exist**
 `chart` · **LOW**
 - *What is left:* The mechanism is inverted from the row's wording: `lance.fullname` IS `{{ .Release.Name }}` (helpers.tpl:478), so the estate's own templates render `<release>-infra-credentials` and `<release>-observability-s3`, while two SUBCHART values hardcode the literal — `openfga.datastore.existingSecret: rask-infra-credentials` (values.yaml:2719) and `greptimedb-standalone.objectStorage.credentials.existingSecretName: "rask-observability-s3"` (:3023). Subchart values cannot template, so either give those two Secrets a release-independent name in the estate templates or add a render-time gate that fails any release not named `rask`. No test pins the pairing today.
 - *Closes when:* `helm template` under a release name other than `rask` either renders matching Secret names for the openfga and greptimedb subcharts or fails loudly at render.
