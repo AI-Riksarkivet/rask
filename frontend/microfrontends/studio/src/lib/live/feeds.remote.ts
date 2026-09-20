@@ -1,6 +1,7 @@
 import { getRequestEvent, query } from '$app/server';
 import { env } from '$env/dynamic/private';
 import { lineageAuthHeaders, lineagePulse, type LineagePulse } from '@rask/api/runs-feed';
+import { readSecretFile } from '@rask/api/bff';
 
 export type { LineagePulse, RunNotice } from '@rask/api/runs-feed';
 
@@ -22,7 +23,7 @@ const LINEAGE_API = env.LINEAGE_API ?? 'http://localhost:8001';
 
 function lineageHeaders(): Record<string, string> {
 	return lineageAuthHeaders({
-		serviceToken: env.LINEAGE_SERVICE_TOKEN,
+		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
 		serviceId: env.LINEAGE_SERVICE_ID,
 	});
 }

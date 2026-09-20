@@ -4,6 +4,7 @@ import { command, query, getRequestEvent } from '$app/server';
 import { env } from '$env/dynamic/private';
 import { lineageAuthHeaders } from '@rask/api/runs-feed';
 import { isIngestJob } from './ingest-job';
+import { readSecretFile } from '@rask/api/bff';
 import {
 	getIngestRun,
 	IngestRefusal,
@@ -258,7 +259,7 @@ export const listIngestRuns = query(async (): Promise<IngestRunRow[]> => {
 	const res = await fetch(`${LINEAGE_API}/runs`, {
 		headers: lineageAuthHeaders({
 			accessToken: locals.session?.accessToken,
-			serviceToken: env.LINEAGE_SERVICE_TOKEN,
+			serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
 			serviceId: env.LINEAGE_SERVICE_ID,
 		}),
 	});

@@ -282,21 +282,15 @@ spec:
             # Governed READ fallback: with no user session the BFF authenticates to lineage
             # as a SERVICE (bounded by frontend.serviceIdentity's FGA READER rung), so the
             # read-only UI works without a per-user browser login.
-            - name: LINEAGE_SERVICE_TOKEN
-              valueFrom:
-                secretKeyRef:
-{{- if $root.Values.auth.dedicatedServiceCredentials }}
-                  {{- /* ITS OWN CREDENTIAL, not the estate's shared bearer. `service_principal` refuses a
-                       PRIVILEGED subject presenting the shared token, and `frontend.serviceIdentity` is on
-                       that list under this same flag — so the two move together or every BFF call 401s.
-                       No sidecar here, so it takes the Ray head's route: infra-credentials, which
-                       external-secrets already syncs from OpenBao. */}}
-                  name: {{ include "lance.fullname" $root }}-infra-credentials
-                  key: service-token-{{ $root.Values.frontend.serviceIdentity }}
-{{- else }}
-                  name: {{ $root.Release.Name }}-dapr-app-token
-                  key: token
-{{- end }}
+            {{- /* THE PATH, NOT THE SECRET ([[XC-001]], [[LH-160]]). A zone has no Dapr sidecar, so its
+                 sanctioned delivery is an ESO-managed Secret taken as a MOUNT; what rides in the
+                 environment is where to read it. Two things follow that `secretKeyRef` could not give:
+                 the value never enters the process environment, and `readSecretFile` re-reads it per
+                 request — so an ESO rotation reaches a running pod with no restart and no reloader,
+                 which is the whole of XC-001's mechanism (2). kubelet updates a projected Secret
+                 volume in place, so the file is simply newer on the next read. */}}
+            - name: LINEAGE_SERVICE_TOKEN_FILE
+              value: /etc/rask/service-token/token
             - name: LINEAGE_SERVICE_ID
               value: {{ $fe.serviceIdentity | quote }}
             {{- if $fe.oidc.enabled }}
@@ -386,8 +380,31 @@ spec:
             {{- toYaml $tier | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" $root | nindent 12 }}
+            - name: service-token
+              mountPath: /etc/rask/service-token
+              readOnly: true
       volumes:
         {{- include "lance.tmpVolume" $root | nindent 8 }}
+        {{- /* ITS OWN CREDENTIAL, not the estate's shared bearer. `service_principal` refuses a
+             PRIVILEGED subject presenting the shared token, and `frontend.serviceIdentity` is on that
+             list under the same flag — so the two move together or every BFF call 401s. No sidecar
+             here, so it takes the Ray head's route: infra-credentials, which external-secrets already
+             syncs from OpenBao. `items` narrows the mount to ONE key: the Secret also holds MinIO and
+             Postgres credentials, and mounting it whole would put every one of them in the zone's
+             filesystem to deliver a single token. */}}
+        - name: service-token
+          secret:
+{{- if $root.Values.auth.dedicatedServiceCredentials }}
+            secretName: {{ include "lance.fullname" $root }}-infra-credentials
+            items:
+              - key: service-token-{{ $root.Values.frontend.serviceIdentity }}
+                path: token
+{{- else }}
+            secretName: {{ $root.Release.Name }}-dapr-app-token
+            items:
+              - key: token
+                path: token
+{{- end }}
 ---
 apiVersion: v1
 kind: Service

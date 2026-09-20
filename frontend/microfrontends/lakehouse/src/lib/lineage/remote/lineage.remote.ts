@@ -9,6 +9,7 @@ import {
 	type DlqReplayResponse,
 } from '@rask/api/lineage';
 import { lineageAuthHeaders } from '@rask/api/runs-feed';
+import { readSecretFile } from '@rask/api/bff';
 
 // The lineage plane's WRITE surface plus the two reads that belong to it, in the zone's
 // remote-function dialect (the transport ruling, area 2) — same names, same `ApiResult` shapes as the
@@ -41,7 +42,7 @@ function authHeaders(isRead: boolean): Record<string, string> {
 	if (!isRead) return accessToken ? { authorization: `Bearer ${accessToken}` } : {};
 	return lineageAuthHeaders({
 		accessToken,
-		serviceToken: env.LINEAGE_SERVICE_TOKEN,
+		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
 		serviceId: env.LINEAGE_SERVICE_ID,
 	});
 }

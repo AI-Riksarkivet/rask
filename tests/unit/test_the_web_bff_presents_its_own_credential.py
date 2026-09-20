@@ -45,15 +45,27 @@ ON = "auth.dedicatedServiceCredentials=true"
 
 
 def _web_token_refs(*set_values: str) -> dict[str, dict]:
-    """`{deployment: secretKeyRef}` for every Deployment mounting `LINEAGE_SERVICE_TOKEN`."""
+    """`{deployment: {name, key}}` for every Deployment taking the lineage token.
+
+    READ OFF THE VOLUME, not off `env`. The credential moved to a MOUNTED FILE ([[XC-001]], [[LH-160]]):
+    a zone has no Dapr sidecar, so its sanctioned delivery is an ESO-managed Secret taken as a mount,
+    and what rides in the environment is the PATH. The property this suite guards is unchanged — each
+    web pod presents its OWN credential off `infra-credentials` — so the shape is re-read rather than
+    the assertion relaxed. `items` narrows the mount to the one key, which is where the key name lives.
+    """
     found: dict[str, dict] = {}
     for doc in _rendered_docs(*set_values):
         if doc.get("kind") != "Deployment":
             continue
-        for container in doc["spec"]["template"]["spec"]["containers"]:
-            for env in container.get("env") or []:
-                if env["name"] == "LINEAGE_SERVICE_TOKEN":
-                    found[doc["metadata"]["name"]] = (env.get("valueFrom") or {}).get("secretKeyRef") or {}
+        spec = doc["spec"]["template"]["spec"]
+        takes_it = any(env["name"] == "LINEAGE_SERVICE_TOKEN_FILE" for container in spec["containers"] for env in (container.get("env") or []))
+        if not takes_it:
+            continue
+        for volume in spec.get("volumes") or []:
+            secret = volume.get("secret") or {}
+            items = secret.get("items") or []
+            if volume.get("name") == "service-token" and items:
+                found[doc["metadata"]["name"]] = {"name": secret.get("secretName", ""), "key": items[0].get("key", "")}
     return found
 
 

@@ -36,9 +36,12 @@ import yaml
 from tests.unit.test_invariants import _helm_template
 
 
-#: The rendered count on 2026-09-17, measured not guessed. **This number may only go DOWN.**
+#: The rendered count on 2026-09-20, measured not guessed. **This number may only go DOWN.**
+#: 30 -> 23 when the seven zones' `LINEAGE_SERVICE_TOKEN` became a MOUNTED FILE ([[XC-001]]): the
+#: value left the environment, and `readSecretFile` re-reads it per request so an ESO rotation reaches
+#: a running pod without the watcher that row's other option would have needed.
 #: Lowering it is the point; raising it means a workload took the banned path and the rule lost ground.
-SECRET_ENV_BASELINE = 30
+SECRET_ENV_BASELINE = 23
 
 #: Entries whose pod carries a Dapr sidecar, so the Dapr secret store is available to it and is the
 #: path the rule names. These are the cheapest to migrate: the mechanism is already in the pod. The one

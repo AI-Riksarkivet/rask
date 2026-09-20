@@ -6,6 +6,11 @@ import { sequence } from '@sveltejs/kit/hooks';
 import { makeGatewayHandleFetch } from './gateway';
 import { makeTelemetryHandle, startZoneTelemetry } from './telemetry';
 import { fetchMe } from './me';
+import { readSecretFile } from './secret-file';
+
+// Re-exported from the SERVER-ONLY subpath on purpose: it reads `node:fs`, so it must never
+// reach the client-safe `.` entry. Zones' `.remote.ts` files take it from here.
+export { readSecretFile } from './secret-file';
 import {
 	SESSION_COOKIE,
 	decodeSession,
@@ -366,7 +371,12 @@ export function makeLineageProxy(env: Env): RequestHandler {
 	return makeBackendProxy({
 		backendUrl: env.LINEAGE_API ?? DEFAULT_LINEAGE_API,
 		stripPrefix: /^\/api/,
-		serviceToken: env.LINEAGE_SERVICE_TOKEN,
+		// FROM A FILE, RE-READ PER REQUEST ([[XC-001]], [[LH-160]]). A zone has no Dapr sidecar, so the
+		// sanctioned path is an ESO-managed Secret taken as a mount; what rides in the environment is
+		// the PATH, which is not a secret. Reading it here rather than once at module load is what lets
+		// a rotation reach a running pod — delivered through `env` the value is fixed at exec, and the
+		// only remedy left was a watcher that restarts consumers.
+		serviceToken: readSecretFile(env.LINEAGE_SERVICE_TOKEN_FILE),
 		serviceId: env.LINEAGE_SERVICE_ID,
 	});
 }
