@@ -542,12 +542,15 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* Every file under `lance_docs/` names the upstream commit it was scraped at.
 - *Evidence:* `lance_docs/PROVENANCE.md ("Not machine-checked" table: no commit column)` · ``ls -la lance_docs/` → five bundles unchanged since vendoring, spec.yaml re-vendored` · `tests/integration/test_spec_conformance.py:81,155,227 (spec-only gates)`
 
-**LH-048 · Two upstream lance-namespace defects rask works around are unfiled, so no fix version is tracked**
+**LH-048 · Two measured upstream pylance defects are unfiled, and they are not the two this row named**
 `catalog` · **LOW**
-- *What is left:* File the pylance bundled-REST-client GET-vs-POST issue (the dual-mount workaround at data.py:613-622 and tags.py:28 says "worth filing") and the 0.12.0 `header.`/`headers.` prefix issue against lancedb/lance, then record each issue URL beside its workaround and track the fix version. The `header.` prefix workaround site is not locatable by grep in services/ or packages/ this session; the lock pins `lance-namespace 0.11.1`, so confirm where that workaround lives (or whether it only applies at the 0.12.0 bump, itself gated at data.py:325-329) before filing.
-- *Closes when:* Both workaround comments cite an upstream issue URL and the tracked fix version.
-- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:613-622 (dual-mount rationale, "worth filing", no URL)` · `grep -rn 'lance/issues' services/catalog packages docs .claude → nothing` · `uv.lock:1648-1649 (`lance-namespace` 0.11.1), :3276-3277 (`pylance` 11.0.0)`
-
+- **THE INVENTORY IS CORRECTED (2026-09-20), both halves measured.** The `header.`/`headers.` prefix workaround this row's second entry pointed at **does not exist** — no site in `services/` or `packages/`, so there is nothing to file and nothing to track. In its place, today's LH-022 measurement produced a real one.
+- *What is left:* file two issues against `lancedb/lance` and record each URL beside its workaround:
+  1. the bundled REST client sends **GET** for `count_rows` and `tags/list` where the spec says POST at every tag v0.9.0-v0.12.0, forcing the dual mount at `data.py:613-622` and `tags.py:28`;
+  2. the Rust `merge_insert_into_table` rejects a **list** for `on` — `TypeError: 'list' object is not an instance of 'str'` — while the Dataset API accepts one and lance-namespace types it `list[str]` from 0.12, which is what pins rask at `<0.12` ([[LH-022]]).
+  Filing is an outward-facing action on someone else's tracker and has not been done.
+- *Closes when:* both issues are filed and their URLs sit beside the workarounds.
+- *Evidence:* `grep -rn 'header\.' services/ packages/ → no workaround site` · `services/catalog/src/catalog/api/v1/endpoints/data.py:613-622` · measured on pylance 11.0.0 + lance-namespace 0.13.0
 **LH-050 · No query store for catalog listings, deliberately, until interactive-frequency listing load is measured**
 `catalog` · **LOW**
 - **blocked:** the tripwire: measured evidence that catalog listings (`ListNamespaces`/`ListTables`/warehouses) are hit at interactive frequency
