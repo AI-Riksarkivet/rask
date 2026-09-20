@@ -76,10 +76,11 @@ class DatasetResult(BaseModel):
     #: into either is what made a shallow clone's silent full materialization invisible.
     refused: str | None = None
     #: WHICH GATE refused it: ``protected_base`` (another dataset resolves its files through this
-    #: location) or ``manifest_flags`` (this manifest sets a feature this pass cannot correctly
-    #: rewrite). A count that merges them is not actionable — the first is someone else's clone and
-    #: stays true forever, the second is a pylance upgrade away from being supported — and the sweep's
-    #: one WARNING carries this breakdown in place of a line per dataset.
+    #: location), ``manifest_flags`` (this manifest sets a feature this pass cannot correctly rewrite)
+    #: or ``invalid_ref`` (a branch directory whose NAME Lance will not parse). A count that merges
+    #: them is not actionable — the first is someone else's clone and stays true forever, the second is
+    #: a pylance upgrade away from being supported, and the third clears when somebody removes a
+    #: directory — and the sweep's one WARNING carries this breakdown in place of a line per dataset.
     refused_by: str | None = None
     #: #F6(d) — this dataset is in the TRASH: dropped with a grace window, recoverable until it expires,
     #: and therefore frozen. Names the record id and its deadline so a record stuck long past its
@@ -548,6 +549,31 @@ def _reclaim_versions(
         result.bytes_removed = int(getattr(stats, "bytes_removed", 0))
 
 
+#: The prefix pylance puts on every ref-name rejection. Matched as a PREFIX rather than by enumerating
+#: the five message bodies the live estate produces, because the bodies are upstream's wording and a
+#: list of them would silently stop matching the day upstream rephrases one — leaving those datasets
+#: failing every tick again while this module looked fixed.
+_INVALID_REF = "Ref is invalid:"
+
+
+def classify_maintain_failure(message: str) -> str | None:
+    """The refusal gate a maintain failure belongs to, or ``None`` when it is a real failure.
+
+    A ref whose NAME Lance will not parse can never be maintained — no retry, no upgrade and no action
+    on this pass changes it — so it is a REFUSAL in the sense `DatasetResult.refused` already defines:
+    "we declined, before touching a byte", as opposed to "something failed". Reported as an error it
+    would sit in every sweep as a failure nothing can clear.
+
+    Measured on the live estate 2026-09-20: eleven such datasets across three parents, all branch
+    directories under `<dataset>/tree/` that `discover_datasets` sweeps like any other dataset.
+
+    NARROW ON PURPOSE. Everything that is not this prefix stays a failure, because classifying too
+    broadly would file genuine faults as "declined" — which is worse than reporting them every tick,
+    the one outcome this function exists to end.
+    """
+    return "invalid_ref" if message.startswith(_INVALID_REF) else None
+
+
 def summarize_refusals(results: list[DatasetResult]) -> dict[str, int]:
     """How many datasets each gate refused this sweep — empty when none were.
 
@@ -782,6 +808,15 @@ def compact_one(
         # turns a partial problem into a total outage, which is exactly what happened.
         if isinstance(exc, KeyboardInterrupt | SystemExit):
             raise
-        result.error = f"maintain: {exc}"
-        result.error_type = type(exc).__name__
+        # A ref name Lance will never accept is a REFUSAL, not this tick's failure — see
+        # `classify_maintain_failure`. Checked here rather than at the call site because this is the
+        # one place that has the exception, and a caller re-deriving it from the message string would
+        # be a second copy of the same rule.
+        if (gate := classify_maintain_failure(str(exc))) is not None:
+            log.warning("maintenance_ref_unmaintainable", extra={"uri": uri, "reason": str(exc)})
+            result.refused = str(exc)
+            result.refused_by = gate
+        else:
+            result.error = f"maintain: {exc}"
+            result.error_type = type(exc).__name__
     return result
