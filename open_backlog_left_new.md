@@ -132,13 +132,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**192 open items**, of which **98 are blocked on a decision** and **94 can be picked up today**.
+**192 open items**, of which **99 are blocked on a decision** and **93 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 41 | 3 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 45 | 22 | 9 |
 | **PHASE 2 · COMPUTE** | 51 | 34 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -493,6 +493,9 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **XC-003 · `lance.audit` shares `opentelemetry_logs` with all telemetry under the estate-wide 14d TTL, and `:4000/v1/sql` accepts unauthenticated writes and DELETEs in-cluster**
 `catalog, lineage, medallion` · **HIGH**
+- **blocked:** HOW the GreptimeDB credential is delivered, because the obvious path is closed and the row's own sentence hides it. The row says "the subchart supports `auth.enabled` with a static `passwd` file" — true, and measured 2026-09-20 it builds that file from `.Values.auth.users[].password`: `greptimedb-standalone/templates/users-auth-secret.yaml` renders `stringData` straight out of values into a FIXED-name Secret (`<fullname>-users-auth`), and the pod mounts that name unconditionally. So taking the supported path means putting a password in a chart value, which the standing secrets rule forbids in as many words ("not a chart value"). The subchart offers `existingSecretName` for OBJECT STORAGE credentials and nothing equivalent for auth, so ESO — which is live on this estate and syncing (3 ExternalSecrets, all `SecretSynced` against `rask-vault`) — has nowhere to write. The choice is therefore: (a) vendor the subchart and add `auth.existingSecretName`, mirroring the object-storage block it already has, (b) take auth away from the subchart entirely and have rask own the volume and `USER_PROVIDER` path with ESO writing the Secret, or (c) upstream the same field and wait. **A NetworkPolicy is NOT an available answer** — the defect is that GreptimeDB is configured to accept unauthenticated SQL, so fencing it at the network is the outer-layer workaround `CLAUDE.md` refuses.
+- **THE HOLE IS STILL OPEN, RE-VERIFIED 2026-09-20 on the deployed estate:** against a scratch table, unauthenticated `CREATE` 200, `INSERT` 200, `DELETE … WHERE v='probe'` **200 `{"affectedrows":1}`**, `DROP` 200. The governance trail remains erasable by anything that can reach `:4000`.
+- **AND THE BLAST RADIUS IS SMALLER THAN THE ROW IMPLIES, measured.** "Put a credential in front of `:4000` carried by the Collector, the TTL hook, vmalert, Perses and all seven zones" reads estate-wide; it is not. **23 of the fleet's deployments export OTLP to `rask-otel-collector:4318`, not to Greptime** — every one of them is insulated, and 0 deployments name `:4000` in an OTEL endpoint. The direct consumers are the Collector and the TTL job (writers) plus vmalert, Perses and the home zone's audit viewer (readers). Five, in seven chart templates. That is a bounded change once the delivery question above is answered.
 - **THE TABLE SPLIT IS DONE AND OBSERVED (2026-09-18); the CREDENTIAL clause is what is left.** The Collector routes `body == "audit"` to `lance_audit` via `x-greptime-log-table-name` (verified against the running GreptimeDB v1.1.1 with a real protobuf record, not from docs), the retention hook gives that table its own TTL, and the viewer reads it from the same chart value. **Measured after the upgrade:** `lance_audit` carries `ttl = '1year 1month 4days'` against `opentelemetry_logs`' `14days`; over 90 s, **672** audit rows landed in `lance_audit` and **0** in the shared table. The hook WAITS for the table (36 × 5 s) because the Collector creates it on the first audit record and creates it INHERITING the database TTL — a single attempt left the live table on 14 days, which is how this was found.
 - *What is left:* The credential clause, unchanged and now measured rather than assumed. `:4000/v1/sql` accepts an unauthenticated in-cluster caller: CREATE 200, INSERT 200, `DELETE … WHERE v = 'probe'` **200 `affectedrows: 1`**, DROP 200, from inside the cluster with no auth at all. So the governance trail is erasable by anything in the cluster; the split changed what ages out, never who may erase it. Put a credential in front of `:4000` carried by the Collector, the TTL hook, vmalert, Perses and all seven zones, with read separated from write — and note it collides with the 'never a secret through env' rule, so the delivery path is part of the decision. The subchart supports `auth.enabled` with a static `passwd` file (`GREPTIMEDB_STANDALONE__USER_PROVIDER`).
 - *Closes when:* An unauthenticated in-cluster `POST /v1/sql` DELETE is refused (the table, its TTL and the viewer are done).
