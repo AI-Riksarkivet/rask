@@ -116,3 +116,30 @@ def test_the_focus_block_exists_and_stays_small() -> None:
 def test_the_stub_points_at_the_register() -> None:
     """A superseded file that does not say where the work went sends its next reader to 9,378 dead lines."""
     assert BACKLOG.name in STUB.read_text(), f"{STUB.name} does not name {BACKLOG.name}"
+
+
+def test_no_row_header_is_SWALLOWED_by_the_line_above_it() -> None:
+    """A header sharing a line with the previous row's body is invisible to every reader here.
+
+    MEASURED 2026-09-20: closing XC-034 joined `**XC-036 · …**` onto the end of the closure note, and
+    XC-036 vanished from the register — not from the FILE, from every parser of it. Both readers anchor
+    on `^\\*\\*<ID> · ` (this module and `scripts/backlog_close.py`), so the row parsed as body text of a
+    CLOSED row.
+
+    THE COUNT GATE ABOVE CANNOT CATCH THIS, which is why the check is written separately. The table
+    stayed green because two errors cancelled exactly: a closed row still occupying a slot, and an open
+    row not occupying one. Arithmetic neutrality is precisely the condition under which a counting gate
+    reports health about the thing it is blind to.
+
+    AND IT IS A DATA-LOSS PATH, not only a reporting one: `backlog_close.py` cuts header-to-next-header,
+    so closing the row above would have deleted the swallowed row's entire body with it.
+    """
+    text = BACKLOG.read_text(encoding="utf-8")
+    swallowed = [
+        line[:90]
+        for line in text.splitlines()
+        # A header ANYWHERE but column 0 on a line that has other content before it.
+        if re.search(r"\S.*\*\*[A-Z]+-\d+ · ", line) and not line.startswith("**")
+    ]
+
+    assert swallowed == [], "these row headers share a line with other text, so no parser here can see them:\n  " + "\n  ".join(swallowed)

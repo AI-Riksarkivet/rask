@@ -2717,6 +2717,37 @@ openfga:
   enabled: true
   replicaCount: 1
 
+  # TELEMETRY ([[XC-047]]). Metrics come from the Collector's `openfga` scrape job and are the
+  # STANDING signal. Tracing is a DEBUGGING tool here and is OFF by default, which is a measured
+  # decision rather than timidity.
+  #
+  # MEASURED 2026-09-20, AND THE FIRST ATTEMPT AT THIS GOT IT WRONG. Sizing the ratio off the request
+  # rate (9.4/s) says 0.05 is modest. It is not: OpenFGA emits a span PER GRAPH EDGE and PER DATASTORE
+  # READ, not per request — `ResolveEdge` 102k, `sqlcommon.fetchBuffer` 74k, `postgres.read` 41k in one
+  # ten-minute window — so a single traced Check is roughly 1,900 spans. At ratio 0.05 this component
+  # produced **532,192 spans in ten minutes, 25x the whole rest of the estate combined** (lineage 21.9k,
+  # catalog 20.2k, maintenance 5.6k, notifications 494, medallion 343). That is the `ray_data_*`
+  # firehose again, one signal over, and it was created and reverted within the hour.
+  #
+  # So: enable it deliberately while diagnosing a slow Check, and pick the ratio against SPANS. A ratio
+  # of 0.001 lands near 18 spans/s — comparable to the catalog's own share — and still traces one Check
+  # every ~100 s, which is enough to see the shape of a resolution.
+  #
+  # TO THE COLLECTOR, not to GreptimeDB: the Collector's `otlphttp/greptime_traces` exporter sets
+  # `x-greptime-pipeline-name` (otel-collector.yaml:486) because that is a GreptimeDB INGESTION
+  # requirement rather than an OTLP one, so OpenFGA speaks plain OTLP and the header is added
+  # downstream — which is the point of the Collector being the single seam.
+  telemetry:
+    trace:
+      enabled: false
+      otlp:
+        # LITERAL, because Helm does not template values.yaml — a subchart's values are data, not a
+        # template. The estate already names in-cluster services this way (`http://rask-lineage:8000`).
+        endpoint: "rask-otel-collector:4317"
+      # A NUMBER, not a string: the subchart's schema types this `null or number` and a quoted value
+      # fails the render outright — the good failure, caught before deploy.
+      sampleRatio: 0.001
+
   # MEMORY BOUND (#139). Every workload below ran with NO `limits.memory`, which does not mean
   # "unbounded and fine" — it means the container can never be OOMKilled by its OWN cgroup, so it
   # grows until the NODE is under pressure and the kernel picks a victim by badness score. The pod
