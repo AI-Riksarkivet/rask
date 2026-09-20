@@ -55,6 +55,19 @@ explorer:
 # again. The value being correct is not the same as the value being durable.
 medallion:
   rayAddress: http://rask-ray-head-svc:8265
+  # THE QUALITY GATE, IN A FILE FOR THE REASON THE PARAGRAPH ABOVE GIVES. It was live as a
+  # `kubectl set env` on the producer and absent from `helm get values`, so the next upgrade would
+  # have silently turned it off — measured 2026-09-20 by diffing every live deployment's env against
+  # `helm template`. `values.yaml` defaults it FALSE, and the default render also drops
+  # MEDALLION_PROMOTION_REVIEW_BAND, which is nested inside the same conditional.
+  quality: true
+
+# Distributed compaction was live the same way and would have gone the same way: declared at
+# `values.yaml:1598`, defaulting false, inside a `vendWriteCredentials` conditional. The catalog plans
+# and commits under its own key and only the byte rewrite happens in maintenance, signed by the
+# table-scoped credential the vend issues.
+maintenance:
+  distributedCompaction: true
 
 # THE OPERATOR-MANAGED HEAD ([[CP-042]]), which is what makes the derivation above unnecessary: a
 # RayCluster named `<release>-ray` gives KubeRay's own `<release>-ray-head-svc`, the exact name the
