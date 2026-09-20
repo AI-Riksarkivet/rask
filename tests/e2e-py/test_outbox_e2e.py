@@ -175,7 +175,17 @@ def test_reconcile_sweep_drains_a_staged_outbox_event(lineage: str, probe_author
         job_namespace="medallion",
         inputs=[("external", "e2e_outbox_src")],
         output_namespace=PROBE_NAMESPACE,
-        output_name=PROBE_TABLE,
+        # QUALIFIED, because `output_name` carries the CATALOG ID and `output_namespace` is the
+        # OpenLineage domain label — two different things that both happen to be called a namespace.
+        # Production emits the pair that way (`lineage_emit.py:58`: namespace `media`, name
+        # `media$documents`), and the feed's own events read `inputs: ["bronze$events"]`.
+        #
+        # The bus door authorizes against the id in `name`, so a bare one resolves to
+        # `table:e2e_outbox_ds` — an object no catalog ever created, therefore carrying no tuples and
+        # deniable for every author. Measured live 2026-09-20: `lineage_outbox_drained drained=0
+        # stranded=0 refused=6`, with `ingest_run_mutation_denied … outputs=['e2e_outbox_ds']`, while
+        # the table this fixture creates one function up is `bronze$e2e_outbox_ds`.
+        output_name=f"{PROBE_NAMESPACE}${PROBE_TABLE}",
         version=1,
         token="e2e-outbox-probe",
     )
