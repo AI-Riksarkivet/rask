@@ -361,7 +361,10 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
     report = estate.run(monkeypatch)
     assert {u.category for u in report.unavailable} == _FGA_DERIVED_CATEGORIES
     assert all("ServiceUnavailableError" in u.reason for u in report.unavailable)
-    assert set(report.counts) == {"unbound_namespaces", "orphan_buckets", "dangling_bindings"}
+    # The storage-only categories this fixture exercises. `orphan_files` is absent for a reason of its
+    # own rather than an FGA one, which is why this cannot simply be `CATEGORIES - _FGA_DERIVED` —
+    # tried, 2026-09-20. The DERIVED claim in the docstring is about the unavailable set above.
+    assert set(report.counts) == {"unbound_namespaces", "orphan_buckets", "orphaned_trash", "dangling_bindings"}
     assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"]
     assert [b.bucket for b in report.orphan_buckets] == ["bkt-orphan"]
     assert [d.top_ns for d in report.dangling_bindings] == ["stranded_ns"]

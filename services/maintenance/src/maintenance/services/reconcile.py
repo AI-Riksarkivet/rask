@@ -59,6 +59,8 @@ log = logging.getLogger(__name__)
 _PROJECTS_PREFIX = "_projects"
 _WAREHOUSES_PREFIX = "_warehouses"
 _BINDINGS_PREFIX = "_warehouses/bindings"
+#: Trash records are keyed `<kind>/<id>` UNDER this prefix, so the listing is recursive by nature.
+_TRASH_PREFIX = "_trash"
 
 #: The FGA object the estate-admin gates check against (`Settings.fga_root_object`'s default). It is the
 #: platform's own root, NOT a tenant warehouse, so it has no registry record BY DESIGN — without this
@@ -90,6 +92,7 @@ CATEGORIES: tuple[str, ...] = (
     "unreferenced_projects",
     "unbound_namespaces",
     "orphan_buckets",
+    "orphaned_trash",
     "dangling_bindings",
     "orphaned_annotation_tasks",
     "ungoverned_tables",
@@ -124,7 +127,7 @@ CATEGORIES: tuple[str, ...] = (
 #:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
 #:     on it would make the gate unsatisfiable again, which this comment already argues is not a safety
 #:     property.
-NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables"})
+NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables", "orphaned_trash"})
 
 
 # --------------------------------------------------------------------------- #
@@ -183,6 +186,23 @@ class OrphanBucket(BaseModel):
     """A bucket no warehouse record claims — the "deleted without purge" residue."""
 
     bucket: str
+
+
+class OrphanedTrash(BaseModel):
+    """A trash record naming a root the estate no longer maintains, so no purge tick can reclaim it.
+
+    A dropped table leaves a trash record so it can be undropped inside the retention window. Deleting
+    its warehouse removes the registry entry that made the location maintainable, and the record
+    outlives it — promising a recovery the estate can no longer perform and holding a purge slot it can
+    never use. Measured live 2026-09-20: 869 of 877 expired records, across 45 deleted warehouses.
+
+    The catalog no longer creates these (`delete_warehouse_record` clears them with the warehouse), so
+    a non-zero count here is RESIDUE from before that, or a path nobody has found yet. Either way it is
+    worth a number rather than a silence."""
+
+    id: str
+    kind: str
+    location: str
 
 
 class DanglingBinding(BaseModel):
@@ -260,6 +280,8 @@ class ReconcileReport(BaseModel):
     unbound_namespaces: list[UnboundNamespace] = Field(default_factory=list)
     ungoverned_tables: list[UngovernedTable] = Field(default_factory=list)
     orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
+    #: Trash naming a root nothing maintains. Reported, never gating — see `NON_GATING_CATEGORIES`.
+    orphaned_trash: list[OrphanedTrash] = Field(default_factory=list)
     dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
     #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
@@ -562,6 +584,28 @@ def _unbound_namespaces(namespaces: Iterable[tuple[str, str]], bound: set[str]) 
     return [UnboundNamespace(namespace=name, root=root) for name, root in sorted(namespaces) if name not in bound]
 
 
+def _orphaned_trash(records: list[dict[str, Any]], *, claimed: set[str]) -> list[OrphanedTrash]:
+    """Trash whose location sits in a bucket no live warehouse claims, so no purge tick can reclaim it.
+
+    Keyed on the BUCKET rather than the warehouse id: the two are separate fields on a warehouse record
+    and a record naming a bucket that is not its own id would otherwise read as orphaned while it is
+    perfectly reachable. Platform buckets count as claimed for the same reason they do for
+    `_orphan_buckets` — they are the estate's own, held by no tenant warehouse.
+
+    A location that names no bucket at all is NOT reported. It is malformed rather than orphaned, and
+    inventing a tenant for it would put a guess into a report whose whole value is that it does not.
+    """
+    out: list[OrphanedTrash] = []
+    for record in records:
+        location = str(record.get("location") or "")
+        if not location.startswith("s3://"):
+            continue
+        bucket = location[len("s3://") :].split("/", 1)[0]
+        if bucket and bucket not in claimed:
+            out.append(OrphanedTrash(id=str(record.get("id") or ""), kind=str(record.get("kind") or "table"), location=location))
+    return sorted(out, key=lambda o: (o.location, o.id))
+
+
 def _orphan_buckets(buckets: Iterable[str], *, claimed: set[str], platform: set[str]) -> list[OrphanBucket]:
     """Buckets no warehouse record claims and no platform role explains.
 
@@ -600,6 +644,8 @@ class Sources(BaseModel):
     project_records_error: str | None = None
     warehouse_records: list[dict[str, str]] | None = None
     warehouse_records_error: str | None = None
+    trash: list[dict[str, str]] | None = None
+    trash_error: str | None = None
     bindings: list[dict[str, str]] | None = None
     bindings_error: str | None = None
     namespaces: list[tuple[str, str]] | None = None
@@ -704,6 +750,7 @@ async def load_sources(
         (sources.warehouse_records, sources.warehouse_records_error),
         (sources.bindings, sources.bindings_error),
         (sources.buckets, sources.buckets_error),
+        (sources.trash, sources.trash_error),
     ) = await asyncio.gather(
         _fga_source(sources, client),
         _registry_source(
@@ -726,6 +773,14 @@ async def load_sources(
             required=("top_ns", "warehouse_id"),
         ),
         _bucket_source(sources, bucket_client),
+        _registry_source(
+            sources,
+            source_name="registry:trash",
+            control_root=control_root,
+            storage_options=storage_options,
+            prefix=_TRASH_PREFIX,
+            required=("id", "location"),
+        ),
     )
     # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
     # than reading it again — two reads would be two answers, and the second could disagree with the one
@@ -858,6 +913,12 @@ def build_report(
         "orphan_buckets",
         inputs=(sources.buckets_error, sources.warehouse_records_error),
         detect=lambda: _orphan_buckets(sources.buckets or [], claimed={str(r["bucket"]) for r in sources.warehouse_records or []}, platform=platform_buckets),
+    )
+    report.orphaned_trash = _run_category(
+        report,
+        "orphaned_trash",
+        inputs=(sources.trash_error, sources.warehouse_records_error),
+        detect=lambda: _orphaned_trash(sources.trash or [], claimed={str(r["bucket"]) for r in sources.warehouse_records or []} | platform_buckets),
     )
     report.dangling_bindings = _run_category(
         report,
