@@ -53,6 +53,12 @@ tuples:
   - { user: user:grace, relation: security_admin, object: project:acme }
   - { user: user:frank, relation: assignee, object: role:estate_auditors }
   - { user: "role:validators#assignee", relation: validator, object: namespace:acme_gold }
+  # A role assigned to a ROLE — `role#assignee` accepts `role#assignee`, so the grant graph recurses.
+  # hana holds nothing on acme directly; she reaches the gold stage through two hops of userset
+  # nesting. This is the shape `weighted_graph_check` most plausibly alters and the fixture had no
+  # instance of it (see the userset row near the end of this file).
+  - { user: "role:senior_validators#assignee", relation: assignee, object: role:validators }
+  - { user: user:hana, relation: assignee, object: role:senior_validators }
   - { user: user:carol, relation: reader, object: warehouse:acme_bucket }
   # a materialized view + a transaction under the silver stage — only the `parent` edge is stored, so
   # they inherit the stage's owner/writer/reader rungs (no per-object grants needed).
@@ -564,12 +570,18 @@ tests:
     # enumeration is the check that a plain writer never appears. A stage runner owning the table it wrote
     # (see the P5 test above) does not put it in this list — promotion is gated on the DESTINATION
     # namespace, which no amount of table ownership reaches.
+    #
+    # hana is the one to read carefully: she is granted NOTHING on acme. She is an assignee of
+    # `role:senior_validators`, which is an assignee of `role:validators`, which holds `validator` here
+    # — two hops of userset nesting, and the enumeration resolves all of it. That is the property worth
+    # having in an audience list rather than only in a Check: a fan-out that enumerates promoters gets
+    # the transitively-granted human, not just the directly-granted one.
     list_users:
       - object: namespace:acme_gold
         user_filter: [{ type: user }]
         assertions:
           can_promote:
-            users: [user:alice, user:bob, user:carol, user:service-silver-to-gold]
+            users: [user:alice, user:bob, user:carol, user:hana, user:service-silver-to-gold]
 
   - name: which buckets can the writer dave see? (list_objects) — only acme, by isolation
     list_objects:
@@ -1384,3 +1396,85 @@ tests:
       - user: user:service-ingest
         object: warehouse:acme_bucket
         assertions: { can_stage_events: false }
+
+  - name: a USERSET is a subject too — `role:validators#assignee` and `team:eng#member` asked directly
+    # [[XC-018]]. Measured 2026-09-20 before writing this: of 169 `check` cases in this file, **zero**
+    # named a userset as the subject — every one asked about a `user:`. That is a hole under exactly the
+    # thing the model is built out of: `role#assignee`, `team#member` and `user:*` appear in fourteen
+    # relation definitions, and the tuple four hundred lines up (`role:validators#assignee` → validator
+    # on `namespace:acme_gold`) is a userset SUBJECT the file stored and then never asked about.
+    #
+    # IT IS NOT AN ACADEMIC SHAPE — the estate runs `weighted_graph_check` (chart/values.yaml, via
+    # OPENFGA_EXPERIMENTALS), which replaces Check's resolution with a weighted-graph walk. Userset
+    # expansion is precisely the part of that walk that differs from the old resolver, so the flag
+    # altered a path nothing here exercised. These cases are the difference between "the estate's authz
+    # is covered" and "the estate's authz is covered for the subject shape that needed it least".
+    #
+    # EVERY VALUE BELOW IS THE ENGINE'S ANSWER, NOT A PREDICTION. Each was first asserted inverted and
+    # corrected to what `fga model test` returned, because two of them are not what a reader expects.
+    check:
+      # THE ONE WORTH READING TWICE: a userset that holds `validator` may PROMOTE into the gold stage
+      # and may neither READ it nor be NOTIFIED about it. That is the rung separation the `validator`
+      # comment claims ("SEPARATE from writer") holding for a userset subject — and it is sharper than
+      # the comment says, because `validator` does not imply `reader` either. Whoever grants a promotion
+      # role and expects the holder to see the stage must grant `reader` as a second, deliberate act.
+      - user: "role:validators#assignee"
+        object: namespace:acme_gold
+        assertions:
+          can_promote: true
+          can_create_table: false # validator is not writer
+          can_delete: false # validator is not owner
+          can_get_metadata: false # validator is not reader — the promoter cannot list the stage
+          can_be_notified: false # and is not in its audience, for the same reason
+      # A userset resolving through an INHERITED edge rather than a stored one: nothing grants
+      # `team:eng#member` anything on project:acme — `admin` is `member from team`, so the answer is
+      # computed. It then cascades to the warehouse exactly as a `user:` subject's would.
+      - user: "team:eng#member"
+        object: project:acme
+        assertions: { can_administer: true, can_create_warehouse: true }
+      - user: "team:eng#member"
+        object: warehouse:acme_bucket
+        assertions: { can_get_metadata: true }
+      # Tenant isolation holds for userset subjects. team:partners owns project:beta and this must not
+      # widen merely because the subject is a set rather than a person.
+      - user: "team:partners#member"
+        object: project:acme
+        assertions: { can_administer: false }
+      # A userset with NO grant on the object answers false — the vacuity check. Without it every
+      # assertion above could be passing because userset subjects resolve true generally.
+      - user: "role:estate_auditors#assignee"
+        object: namespace:acme_gold
+        assertions: { can_promote: false, can_get_metadata: false }
+      # THE SELF-REFERENTIAL CASE: `role#assignee: [user, team#member, role#assignee]` — a role may be
+      # assigned to a role, so the subject graph recurses through itself. `role:senior_validators` holds
+      # nothing on any namespace; it is an assignee of `role:validators`, which holds `validator` on
+      # gold. The rung separation survives the recursion intact — two hops in, it still cannot read.
+      - user: "role:senior_validators#assignee"
+        object: namespace:acme_gold
+        assertions: { can_promote: true, can_get_metadata: false }
+      # And the recursion reaches a PERSON: hana is an assignee of the nested role and nothing else.
+      - user: user:hana
+        object: namespace:acme_gold
+        assertions: { can_promote: true, can_get_metadata: false }
+    # And the ENUMERATION side of the same hole: both `list_users` blocks in this file filter
+    # `[{ type: user }]`, so a userset holder is invisible to every audience question asked here. A
+    # fan-out that enumerates only `user:` misses the role the promotion was actually granted to.
+    list_users:
+      - object: namespace:acme_gold
+        user_filter: [{ type: role, relation: assignee }]
+        assertions:
+          # The grant, seen from the object's side.
+          can_promote:
+            users: ["role:validators#assignee", "role:senior_validators#assignee"]
+          # The two rungs it does NOT carry, enumerated to prove the filter is not simply returning
+          # every role that appears anywhere.
+          can_delete:
+            users: []
+          can_get_metadata:
+            users: []
+      - object: project:acme
+        user_filter: [{ type: team, relation: member }]
+        assertions:
+          # Computed rather than stored: no tuple grants team:eng#member anything here.
+          can_administer:
+            users: ["team:eng#member"]

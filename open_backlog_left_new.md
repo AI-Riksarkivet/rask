@@ -132,13 +132,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**191 open items**, of which **100 are blocked on a decision** and **91 can be picked up today**.
+**190 open items**, of which **100 are blocked on a decision** and **90 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 39 | 3 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 35 | 13 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 34 | 12 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -559,12 +559,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Owner acknowledgement of R11 is given (R1–R11 stand). Individual tests now pin §F2-1, -2, -3, -4, -8, -9 and -11 from the sweep's ordered gap list, but no single test or `make` target encodes the 19 §A controls and re-derives matched/partial/missing. Encode that list, then close the remaining §B items against it — 5 (Dapr access-control policy + NetworkPolicy on by default), 6 (TLS to every store), 7 (`register_table` location validation), 10 (audit correlation ids), 12 (image signing/attestation). Whether any of those five has since shipped is not re-measured this session.
 - *Closes when:* One checked list re-derives the 19 §F controls' status on every run and reports zero missing and zero partial.
 - *Evidence:* `docs/audits/lakehouse-2026-09/sweeps/zero-trust.md:5-27 (§A control table), :29-42 (§B ordered gaps)` · `grep -rhoE '§F[0-9]+-[0-9]+' tests services/*/tests packages/*/tests → §F2-1,2,3,4,8,9,11` · `open_backlog_left.md:164 (R1–R11 STAND)` · `grep -rln 'zero.trust|§F' Makefile scripts → none`
-
-**XC-018 · `model.fga.yaml` has no `check` case with a userset subject and no `list_users` with a userset filter, the exact behaviours `weighted_graph_check` alters**
-`service-kit` · **MED**
-- *What is left:* The CLI blocker is gone: `.localbin/fga` is installed. At HEAD the file holds 169 `check` subjects, 0 of the form `type:id#relation`, and 5 `list_users` blocks all filtering `[{ type: user }]`, while `weighted_graph_check` is on in `chart/values.yaml:2710`. Add `check` cases with `role:x#assignee` and `team:eng#member` as the subject, the self-referential userset case, and `list_users` with a userset filter for the admin-console rungs; run `.localbin/fga model test --tests packages/service-kit/src/service_kit/governed/auth/model.fga.yaml` and wire it wherever the existing model test runs.
-- *Closes when:* `fga model test` passes with userset-subject checks and userset `list_users` filters in the file.
-- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml (grep -E '^\s*- user: [a-z_]+:[^ #]+#' → 0 of 169)` · `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:484-485,525-526 (user_filter: [{ type: user }])` · `chart/values.yaml:2710 (experimentals: weighted_graph_check)` · `ls .localbin/fga → present`
 
 **XC-031 · No ordered prod install runbook exists; the FGA seed / OpenBao unseal / PSA-label ordering is documented only as warnings in values-prod**
 `chart` · **MED**
