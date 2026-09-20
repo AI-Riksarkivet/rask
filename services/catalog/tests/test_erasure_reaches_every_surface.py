@@ -127,7 +127,7 @@ def test_the_report_names_every_surface_it_touched(table: str) -> None:
     retry the caller can shrug at."""
     report = _erase(table)
 
-    assert {s.surface for s in report.surfaces} == {"branch:work", "branch:review", "tag:pinned", "main", "history", "verify"}
+    assert {s.surface for s in report.surfaces} == {"branch:work", "branch:review", "tag:pinned", "main", "compact", "history", "verify"}
 
 
 def test_complete_is_EVIDENCE_not_the_absence_of_an_error(table: str) -> None:
@@ -240,3 +240,20 @@ def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
     assert [s.outcome for s in report.surfaces if s.surface == "history"] == ["reclaimed"]
     assert "trained-on-v1" in lance.dataset(uri).tags.list(), "the clean tag had to survive for this to be the right test"
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
+
+
+def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Path) -> None:
+    # A row delete leaves the payload bytes in `data/<stem>/*.blob`. Measured on pylance 11.0.0:
+    # `cleanup_old_versions` takes the sidecar with its data file, so step 4 already reclaims them —
+    # an erasure that reclaimed only the .lance would leave the subject's payload on storage.
+    from lance import blob_array
+
+    uri = str(tmp_path / "blobs")
+    big = b"A" * (5 * 1024 * 1024)
+    lance.write_dataset(pa.table({"id": pa.array([1, 2]), "payload": blob_array([big, b"B" * (5 * 1024 * 1024)])}), uri, data_storage_version="2.2")
+    assert list(Path(uri).rglob("*.blob")), "the fixture produced no sidecar — raise the payload past the dedicated threshold"
+
+    report = _erase(uri)
+
+    assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
+    assert report.bytes_reclaimed > 1024 * 1024, f"only {report.bytes_reclaimed} bytes freed — the sidecar was left behind"

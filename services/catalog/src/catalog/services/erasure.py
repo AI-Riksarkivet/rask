@@ -91,6 +91,8 @@ class _Dataset(Protocol):
     def checkout_version(self, version: Any, /) -> Any: ...
     def versions(self) -> Any: ...
     def to_table(self, *args: Any, **kwargs: Any) -> Any: ...
+    @property
+    def optimize(self) -> Any: ...
     def cleanup_old_versions(
         self, older_than: timedelta | None = None, *, delete_unverified: bool = False, error_if_tagged_old_versions: bool = True
     ) -> Any: ...
@@ -153,7 +155,24 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
         log.warning("erasure_main_failed", extra={"table": table, "error": str(exc)})
         report.surfaces.append(SurfaceResult(surface="main", outcome="failed", detail=str(exc)))
 
-    # 4. RECLAIM, last, because every step above was removing something that pinned this.
+    # 4. COMPACT, because a predicate delete writes a DELETION FILE and leaves the data file live for
+    #    the rows that survive — so the erased subject's bytes stay on storage, and a blob column's
+    #    payload sidecar with them. Measured on pylance 11.0.0 with two 5 MiB blob rows: after the
+    #    delete the directory is still 10.5 MB and `cleanup_old_versions` frees 1,188 bytes; compacting
+    #    first rewrites the fragment without the row, and the same cleanup then frees 10.5 MB.
+    #
+    #    Best-effort like every other surface: a table that cannot be compacted still gets its rows
+    #    deleted and its history reclaimed, and the report says the bytes may remain rather than
+    #    implying they are gone.
+    try:
+        dataset.optimize.compact_files()
+        report.surfaces.append(SurfaceResult(surface="compact", outcome="rewritten"))
+    except Exception as exc:  # noqa: BLE001
+        failed = True
+        log.warning("erasure_compact_failed", extra={"table": table, "error": str(exc)})
+        report.surfaces.append(SurfaceResult(surface="compact", outcome="failed", detail=f"{exc} — the subject's bytes may remain in a live data file"))
+
+    # 5. RECLAIM, last, because every step above was removing something that pinned this.
     try:
         # `error_if_tagged_old_versions=False` SKIPS a tagged version instead of failing the whole call.
         # Found by driving the deployed door: step 2 deliberately keeps a tag over a version the subject
@@ -171,7 +190,7 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
         log.warning("erasure_cleanup_failed", extra={"table": table, "error": str(exc)})
         report.surfaces.append(SurfaceResult(surface="history", outcome="failed", detail=str(exc)))
 
-    # 5. VERIFY, because every step above is an ATTEMPT and only this is evidence. Measured while
+    # 6. VERIFY, because every step above is an ATTEMPT and only this is evidence. Measured while
     #    building this: deleting rows ON a branch does NOT remove that branch's pin on the parent's
     #    history — the branch reads clean and the parent's pre-delete version survives cleanup still
     #    holding the subject. So a run can perform every step successfully and leave the row readable,

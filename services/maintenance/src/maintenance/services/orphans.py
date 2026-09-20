@@ -256,8 +256,11 @@ def referenced_paths_of(ds: lance.LanceDataset, dataset_uri: str) -> tuple[set[s
                 # referenced too.
                 #
                 # Sidecars whose parent data file is referenced by NO live version are still reported,
-                # and legitimately so: Lance's own `cleanup_old_versions` reclaims the `.lance` and
-                # leaves the sidecar, which is precisely the reclamation gap this pass exists to name.
+                # but they are NOT a reclamation gap: measured 2026-09-20 on pylance 11.0.0 with a
+                # blob-v2 column past the dedicated threshold, `cleanup_old_versions` took the `.lance`
+                # AND its sidecar (`data_files_removed: 2`, 5.2 MB freed). They are reported because a
+                # scan that omitted them could not tell a sidecar Lance will take from one it cannot
+                # see, and `reclaimable_by_lance` is what separates the two.
                 referenced_dirs.add(f"{_DATA_DIR}/{data_file.path.removesuffix('.lance')}")
             # OVERLAY FILES (feature flag 64). An overlay writes new values for a subset of cells to
             # `data/overlay-<uuid>.lance` — inside `data/`, where a false positive deletes real
