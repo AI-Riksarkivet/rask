@@ -40,7 +40,14 @@ _PRIMARY_BUCKET = "lance-catalog"
 #: EXACTLY these and nothing else. Kept as one named set rather than repeated literals: a new
 #: authz-derived category that forgets to degrade is the failure this pins, and a hand-copied literal
 #: in two tests is how that gets "fixed" by editing the expectation instead of the code.
-_FGA_DERIVED_CATEGORIES = {"ghost_projects", "ghost_warehouses", "unreferenced_projects", "orphaned_annotation_tasks", "ungoverned_tables"}
+_FGA_DERIVED_CATEGORIES = {
+    "ghost_projects",
+    "ghost_warehouses",
+    "ghost_tables",
+    "unreferenced_projects",
+    "orphaned_annotation_tasks",
+    "ungoverned_tables",
+}
 
 
 # --------------------------------------------------------------------------- #

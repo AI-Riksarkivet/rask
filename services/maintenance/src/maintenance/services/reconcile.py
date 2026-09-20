@@ -94,6 +94,7 @@ CATEGORIES: tuple[str, ...] = (
     "unbound_namespaces",
     "orphan_buckets",
     "orphaned_trash",
+    "ghost_tables",
     "dangling_bindings",
     "orphaned_annotation_tasks",
     "ungoverned_tables",
@@ -128,7 +129,7 @@ CATEGORIES: tuple[str, ...] = (
 #:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
 #:     on it would make the gate unsatisfiable again, which this comment already argues is not a safety
 #:     property.
-NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables", "orphaned_trash"})
+NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables", "orphaned_trash", "ghost_tables"})
 
 
 # --------------------------------------------------------------------------- #
@@ -280,6 +281,8 @@ class ReconcileReport(BaseModel):
     unreferenced_projects: list[UnreferencedProject] = Field(default_factory=list)
     unbound_namespaces: list[UnboundNamespace] = Field(default_factory=list)
     ungoverned_tables: list[UngovernedTable] = Field(default_factory=list)
+    #: The INVERSE of `ungoverned_tables`: tuples with no table. Reported, never gating.
+    ghost_tables: list[GhostObject] = Field(default_factory=list)
     orphan_buckets: list[OrphanBucket] = Field(default_factory=list)
     #: Trash naming a root nothing maintains. Reported, never gating — see `NON_GATING_CATEGORIES`.
     orphaned_trash: list[OrphanedTrash] = Field(default_factory=list)
@@ -900,6 +903,14 @@ def build_report(
             detect=lambda: _unbound_namespaces(sources.namespaces or [], {str(b["top_ns"]) for b in sources.bindings or []}),
         )
 
+    report.ghost_tables = _run_category(
+        report,
+        "ghost_tables",
+        # THE SAME TWO INPUTS as its inverse, and for the same reason: without the tuple scan every
+        # table reads as ghostly, turning an OpenFGA outage into a report naming the whole estate.
+        inputs=(sources.tables_error, sources.tuples_error),
+        detect=lambda: _ghosts("table", _by_type(sources, "table"), record_ids={table for table, _root in sources.tables or []}, exclude=set()),
+    )
     report.ungoverned_tables = _run_category(
         report,
         "ungoverned_tables",
