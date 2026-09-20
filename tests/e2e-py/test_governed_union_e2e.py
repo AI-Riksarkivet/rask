@@ -98,29 +98,50 @@ WAREHOUSE = (
     or ("warehouse:lakehouse-wh" if os.environ.get("LANCE_E2E_PROJECT") else "warehouse:lance_catalog")
 )
 #: the silver→gold stage runner's validator rung, on the tier the drive actually targets (can_promote).
-GOLD_VALIDATOR = {
-    "user": "user:service-silver-to-gold",
-    "relation": "validator",
-    "object": "namespace:{}".format(f"{os.environ.get('LANCE_E2E_PROJECT')}-gold" if os.environ.get("LANCE_E2E_PROJECT") else "gold"),
-}
+#:
+#: BOTH RUNGS, for the reason `SILVER_WRITER_RUNGS` records below: `seed_medallion_fga.sh` grants the
+#: cascade identities at the WAREHOUSE, so a namespace-only delete is a no-op and the leg's own
+#: precondition guard refuses to proceed. Measured against the deployed release 2026-09-20:
+#: `validator` on `warehouse:acme-bucket` for this subject is true.
+GOLD_VALIDATOR_RUNGS = [
+    {
+        "user": "user:service-silver-to-gold",
+        "relation": "validator",
+        "object": "namespace:{}".format(f"{os.environ.get('LANCE_E2E_PROJECT')}-gold" if os.environ.get("LANCE_E2E_PROJECT") else "gold"),
+    },
+    {"user": "user:service-silver-to-gold", "relation": "validator", "object": WAREHOUSE},
+]
 #: the bronze→silver stage runner's writer rung — revoked in test 2's writer-gate sub-phase (can_create_table).
-#: On a tenant drive this is the NAMESPACE rung, not the warehouse one: the stage runner also holds
-#: `owner` on the warehouse from `seed_ownership`, so revoking a warehouse-level writer denies nothing.
-SILVER_WRITER = (
+#:
+#: BOTH RUNGS, because only one of them is where the grant actually lives and which one depends on the
+#: bring-up. `seed_medallion_fga.sh:94` writes `w user:service-bronze-to-silver writer "$WAREHOUSE"` —
+#: the WAREHOUSE rung, by the model's stated shape ("one tuple per warehouse per rung, enumerable and
+#: revocable per tenant"). Measured against the deployed release 2026-09-20: `writer` on
+#: `namespace:acme-silver` is true, `writer` on `warehouse:acme-bucket` is true, and the namespace
+#: carries no writer tuple for this subject at all — so a namespace-only delete is a no-op and the
+#: precondition guard below correctly refuses to proceed.
+#:
+#: The warehouse rung is NOT defeated by `owner` here, which is the assumption a namespace-only revoke
+#: rested on: measured the same day, `owner` on `warehouse:acme-bucket` for this subject is FALSE.
+#: `seed_ownership` grants owner to whoever CREATED an object, and the stage runner created tables, not
+#: the warehouse.
+#:
+#: Deleting the rung that is absent is free — `_tuples` tolerates delete-of-absent by design — so
+#: naming both keeps the leg honest under either seed instead of encoding one bring-up's layout.
+SILVER_WRITER_RUNGS = [
     {
         "user": "user:service-bronze-to-silver",
         "relation": "writer",
         "object": "namespace:{}".format(f"{os.environ.get('LANCE_E2E_PROJECT')}-silver" if os.environ.get("LANCE_E2E_PROJECT") else "silver"),
-    }
-    if os.environ.get("LANCE_E2E_PROJECT")
-    else {"user": "user:service-bronze-to-silver", "relation": "writer", "object": WAREHOUSE}
-)
+    },
+    {"user": "user:service-bronze-to-silver", "relation": "writer", "object": WAREHOUSE},
+]
 
 
 #: THE OWNER TUPLES `seed_ownership` WRITES, which a single-rung revoke cannot see past.
 #:
 #: A stage runner that CREATED a table is its owner, and owner outranks the rung the deny is aiming at.
-#: Measured live 2026-08-25 with GOLD_VALIDATOR deleted:
+#: Measured live 2026-08-25 with the validator rung deleted:
 #:     warehouse:lakehouse-wh        user:service-silver-to-gold  owner
 #:     table:lakehouse-gold$catalog  user:service-silver-to-gold  owner
 #:     check can_promote namespace:lakehouse-gold -> allowed = True
@@ -571,7 +592,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
     # ever proven.
     silver_owner = _owner_tuples("user:service-bronze-to-silver", _ds("silver"), _ds("silver$features"))
-    _tuples(fga_store, deletes=[SILVER_WRITER, *silver_owner])
+    _tuples(fga_store, deletes=[*SILVER_WRITER_RUNGS, *silver_owner])
     # THE REVOKE IS A PRECONDITION, so it is verified rather than assumed. An unverified one is how
     # this leg reported "gate NOT enforcing" about a revoke that never happened — see `_tuples`.
     assert not _check(fga_store, "user:service-bronze-to-silver", "can_create_table", f"namespace:{_ds('silver')}"), (
@@ -600,11 +621,11 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
         denied_state = _run_states(lineage, alice).get(denied_silver_rid)
         assert denied_state != "COMPLETE", f"silver run {denied_silver_rid} COMPLETED despite the revoked writer tuple — gate NOT enforcing"
     finally:
-        _tuples(fga_store, writes=[SILVER_WRITER, *silver_owner])  # restore even if the assert above fails
+        _tuples(fga_store, writes=[*SILVER_WRITER_RUNGS, *silver_owner])  # restore even if the assert above fails
 
     # -- sub-phase B: VALIDATOR deny — revoke the gold validator, the cascade stops at silver.
     gold_owner = _owner_tuples("user:service-silver-to-gold", _ds("gold"), _ds("gold$catalog"))
-    _tuples(fga_store, deletes=[GOLD_VALIDATOR, *gold_owner])
+    _tuples(fga_store, deletes=[*GOLD_VALIDATOR_RUNGS, *gold_owner])
     assert not _check(fga_store, "user:service-silver-to-gold", "can_promote", f"namespace:{_ds('gold')}"), (
         f"the validator revoke did not take: service-silver-to-gold still holds can_promote on namespace:{_ds('gold')}"
     )
@@ -627,7 +648,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
             f"a new gold run appeared despite the revoked validator tuple — gate NOT enforcing (new: {_gold_runs(lineage, alice) - gold_before})"
         )
     finally:
-        _tuples(fga_store, writes=[GOLD_VALIDATOR, *gold_owner])  # restore even if the assert above fails
+        _tuples(fga_store, writes=[*GOLD_VALIDATOR_RUNGS, *gold_owner])  # restore even if the assert above fails
 
     # Positive control: with both tuples back, the next drive cascades to gold — the tuple was the only
     # delta each time.
