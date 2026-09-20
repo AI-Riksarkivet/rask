@@ -137,12 +137,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 41 | 3 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 20 | 9 |
-| **PHASE 2 · COMPUTE** | 51 | 34 | 16 |
-| **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 3 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 35 | 13 | 9 |
+| **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
+| **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
-| **LOW PRIORITY** | 20 | 15 | 0 |
+| **LOW PRIORITY** | 25 | 20 | 0 |
 
 
 ## PHASE 1 · LAKEHOUSE
@@ -306,13 +306,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* The ruling is recorded (and, under (b), the upstream conditional update is consumed).
 - *Evidence:* `services/catalog/src/catalog/services/publication.py:298` · `services/catalog/src/catalog/services/models.py:213-215` · `uv.lock:3276-3277 (pylance 11.0.0)` · `chart/values.yaml:2022-2023 (minio.enabled: true)`
 
-**LH-043 · Unknown whether MemWAL server-id sharding fits append-only bronze landing (coordinator-free ingest)**
-`ingest, medallion` · **MED**
-- **blocked:** §K — the Dapr-retreat / BYO-engine cutover must land first; the row sequences itself after it (a sequencing gate, not a ruling).
-- *What is left:* Prototype MemWAL one-shard-per-pod (`uuid5(instance_id)`, PUT-IF-NOT-EXISTS with epoch fencing, reads unioning all shards) against bronze landing and record whether it fits append-only ingest. The only MemWAL awareness at HEAD is the maintenance orphan scan recognising `_mem_wal/` as a known layout; no ingest path uses it. The audit records that blob v2 columns read `None` through the MemWAL scanner, so the prototype must re-check that on the installed pylance (11.0.0) before any design rests on it.
-- *Closes when:* A prototype run against bronze landing answers, with a recorded result, whether MemWAL server-id sharding fits coordinator-free ingest.
-- *Evidence:* `docs/audits/lakehouse-2026-09/lakehouse-analysis.md:230 (option C′, blob v2 reads None through MemWAL)` · `services/maintenance/src/maintenance/services/orphans.py:84-87,354-355 (only MemWAL awareness in code)` · `uv.lock:3276-3277 (pylance 11.0.0)`
-
 **LH-061 · Reconcile is report-only: stranded objects are detected but not repaired or dropped beyond expired trash, and FGA tuples cannot be rebuilt from the catalog registries**
 `maintenance, catalog` · **MED** · PARTIAL
 - **IT INHERITS THREE MEASURED RESIDUES (2026-09-20), each from a producer now FIXED.** [[LH-102]] closed with its purge authorised, run and durable, but 869 expired trash records name roots the estate no longer maintains — reported as `orphaned_trash` (989 live, including not-yet-expired). [[LH-148]]'s warehouse cascade left **1,033 `ghost_tables`** — FGA tuples on tables the catalog no longer has. And [[LH-016]]'s duplicate spellings sit in `lakehouse-wh`. All three are now COUNTED by the drift report and none can be cleared by any existing door: the purge cannot touch an unmaintained root or a tuple, and nothing else writes. So this row is no longer 'should a repair pass exist' — it is the only thing standing between a measured drift report and a clean one.
@@ -466,14 +459,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* One answer stands in the tree and the other is gone; if keys survive, the RFC carries the store and rotation design.
 - *Evidence:* `grep -rn 'x-api-key' services/catalog/src services/gateway/src packages/service-kit/src → 0 hits` · `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:122-124,367` · `grep -n -i 'api.key\|bearer' docs/DECISIONS.md → no ruling`
 
-**LH-082 · The gateway proxies the catalog's full all-method write surface to the public ingress and nothing says whether that is intended**
-`gateway, catalog` · **LOW**
-- **blocked:** Owner ruling on whether all-method public exposure of `/api/catalog/*` (behind catalog-side OIDC+FGA only) is intended
-- *What is left:* `Route("/api/catalog", "", *catalog)` at services/gateway/src/gateway/__init__.py:225 forwards every method from the ingress `- path: /api` rule (chart/templates/ingress.yaml:66); the row carries no rationale comment and docs/DECISIONS.md has no entry for it. Record the ruling — a rationale comment on that Route row plus a line in docs/DECISIONS.md stating the write surface is deliberately internet-facing behind catalog OIDC+FGA — or narrow the row's method set.
-- *Closes when:* Either the Route row carries the rationale and docs/DECISIONS.md records the ruling, or the row forwards a narrowed method set.
-- *Evidence:* `services/gateway/src/gateway/__init__.py:225 `Route("/api/catalog", "", *catalog)` with no rationale comment (context :200-226)` · `grep -n -i 'api/catalog\|all-method\|write surface\|internet-facing' docs/DECISIONS.md → empty` · `chart/templates/ingress.yaml:66 `- path: /api``
-
-
 **ZT-001 · Every privileged service's "dedicated" credential is derived from the shared app token, so holding one yields all of them**
 `chart, service-kit` · **HIGH**
 - **blocked:** a deployment-policy call — either the prod values enable ESO so an operator's own material reaches OpenBao, or each dedicated token must be supplied and the render FAILS without it. Both make a prod estate undeployable in a way it is not today, which is the owner's to choose; the property itself is now pinned and measured either way.
@@ -486,6 +471,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **XC-001 · Helm-written Secrets carry no content checksum and ESO-written Secrets have no watcher, so a rotation never reaches running pods**
 `chart, frontend-zones, lineage` · **HIGH**
+- **OVERLAP WITH [[LH-160]] RECORDED, NOT FOLDED (2026-09-20).** The audit called this a duplicate ratchet —
+  23 residue entries of which 14 are zone OIDC/session, 1 compute, 8 third-party images. The overlap is
+  real and the two must be worked together. They are NOT the same row: LH-160 counts what is delivered
+  through env, while this one is about whether a ROTATION reaches a running pod, which is a different
+  property with a different fix — the lineage token now arrives as a file and is re-read per request,
+  which lowered LH-160's count as a side effect rather than as the point.
 - **MECHANISM (1) IS DONE (2026-09-19) and the premise is now measured rather than reasoned.** Every zone carries `checksum/frontend-session`, hashed over the two fields the Secret actually holds (`frontend.oidc.sessionSecret` + `dex.clientSecret`) rather than over the template — `include`-ing `frontends.yaml` from inside itself recurses until helm gives up, since the Secret and its seven consumers live in one file, and hashing the values is the tighter answer anyway (an unrelated template edit no longer rolls seven zones). The row's claim that `checksum/infra-credentials` is inert under ESO is now A TEST, not a reading: `test_the_infra_checksum_IS_a_constant_under_external_secrets` renders with `externalSecrets.enabled=true`, rotates `age.password`, and asserts the annotation is UNCHANGED. Beside it, `test_rotating_the_SESSION_secret_rolls_every_zone_under_external_secrets` rotates the sealing key under the same values and asserts all seven move together — half the fleet on the old key and half on the new is a cookie that verifies on one zone and 401s on the next, indistinguishable from a user who is simply signed out.
 - **MECHANISM (2) IS DONE FOR THE LINEAGE TOKEN (2026-09-20), and it needed no watcher.** The row offered two shapes — "install a Secret-object watcher that restarts consumers, or read the token from a projected volume per request" — and the second is strictly better here because the standing secrets rule already requires it: a zone has no Dapr sidecar, so its sanctioned delivery is an ESO-managed Secret taken as a MOUNTED FILE, and what rides in the environment is the PATH. `readSecretFile` (`@rask/api/bff`) re-reads per call, so an ESO rotation lands with no restart and no reloader in the chart. A watcher would have entrenched the banned delivery while treating its symptom. **This also moves [[LH-160]]'s ratchet: `SECRET_ENV_BASELINE` 30 -> 23**, the seven zones' `LINEAGE_SERVICE_TOKEN` leaving the environment together. The mount uses `items` to narrow to ONE key — `infra-credentials` also holds MinIO and Postgres credentials, and mounting it whole would put all of them in a zone's filesystem to deliver one token. **THE FIRST ATTEMPT WAS SILENTLY WRONG AND THAT IS WHY THERE IS A GATE.** Changing `makeLineageProxy` in `@rask/api` and dropping the chart env looked complete; measured, seven zones never call that factory — they read `env.LINEAGE_SERVICE_TOKEN` directly in nine `.remote.ts` files, so the removal left all nine reading `undefined` while the zone still served 200 at its root, because the token is only consulted on a lineage call. All nine now take the file, and `frontend/packages/zone-contract/src/secret-from-file.test.ts` walks every zone and package source to refuse `env.<SECRET>` as a value while allowing the `_FILE` path. Mutation-checked both ways: pointing a zone at another identity's key reds `test_the_web_bff_presents_its_own_credential`, and restoring one `env.LINEAGE_SERVICE_TOKEN` reds the new gate. **OBSERVED on the deployed estate (`web-home:xc001-file2`):** `LINEAGE_SERVICE_TOKEN` absent from the pod's environment, `LINEAGE_SERVICE_TOKEN_FILE=/etc/rask/service-token/token` present, the file readable at 40 bytes, the zone serving 200 with a clean log — and the token read from that file authenticates, `GET /events` answering **200** from inside the pod with `dapr-api-token` + `x-lance-service-identity`. Rotation proven on a scratch mount: `original-value` -> `ROTATED-value` in the SAME pod uid, no restart.
 - *What is left:* **The remaining 23, and the two OIDC secrets first.** `SESSION_SECRET` and `OIDC_CLIENT_SECRET` are still `secretKeyRef` env on all seven zones (14 of the 23) and take the same mount — they are held back only because they are the sign-in path, where a mistake locks every user out rather than degrading one feed. The other nine are `rask-minio` (2), `openfga` (1), `otel-collector` (1), `age` (1), three Jobs (3), and `compute` (1, the one WITH a sidecar, whose path is the Dapr secret store and which `_UNREACHABLE_STORE` records as not in `lance-secrets`' scopes).
@@ -551,12 +542,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* The prod render has a real issuer, durable storage, an org connector, no static users and no client secret in a ConfigMap.
 - *Evidence:* `chart/templates/dex.yaml:13,20,37,40 (kind: ConfigMap)` · `grep '^dex:' chart/values-prod.yaml — no match` · `chart/values.yaml:2769-2777` · `chart/templates/external-secrets.yaml:78`
 
-**XC-009 · No Dapr `accessControl` policy exists in any chart template and the actor/workflow invocation planes are uncharacterised**
-`chart, medallion, notifications, gateway, annotator, ingest` · **MED**
-- *What is left:* `accessControl`, `defaultAction`, `trustDomain` and `WorkflowAccessPolicy` appear in zero files under `chart/`; `networkPolicy.enabled` is false (`values.yaml:761`). Characterise actor-to-actor (ActorProxy) and Dapr Workflow invocation on the live estate first — Dapr excludes workflows from service-invocation access control — then write `policies:` plus `defaultAction: deny` and `trustDomain` into the shared `lance-tracing` Configuration (`chart/templates/observability.yaml:72`), add a `WorkflowAccessPolicy`, validate by driving every gateway route live, and add the missing test. NetworkPolicy stays a separate prod-hardening half (no-op on k3s flannel).
-- *Closes when:* The rendered Configuration carries `defaultAction: deny` with per-app policies and every gateway route and cascade hop still succeeds on a live drive.
-- *Evidence:* `grep -rn 'accessControl|defaultAction|WorkflowAccessPolicy|trustDomain' chart/: no hits` · `chart/values.yaml:761 (networkPolicy.enabled: false)` · `chart/templates/observability.yaml:72-76 (Configuration lance-tracing)`
-
 **XC-011 · Estate bootstrap writes no `_control/bootstrap.json` record; `provision()` is already content-gated**
 `chart, service-kit, catalog` · **MED** · PARTIAL
 - *What is left:* `provision()` no longer rewrites every boot: it compares `_canonical_model(current) == _canonical_model(model)` and logs `openfga_model_unchanged` instead of writing (fga.py:574-575), which is the content-hash answer to C-Q2, with `RASK_FGA_MODEL_ID` as the production pin. The `_control/bootstrap.json {subject, store_id, model_id, at}` record via `records.create_json` is not written: `bootstrap-admin.yaml` remains check-then-write and treats a duplicate 400/409 "already exists" as success (:21, :251). Its original purpose (gating provision) is now served, so either write the record for its audit value alone or close the row on the content gate.
@@ -580,12 +565,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* The CLI blocker is gone: `.localbin/fga` is installed. At HEAD the file holds 169 `check` subjects, 0 of the form `type:id#relation`, and 5 `list_users` blocks all filtering `[{ type: user }]`, while `weighted_graph_check` is on in `chart/values.yaml:2710`. Add `check` cases with `role:x#assignee` and `team:eng#member` as the subject, the self-referential userset case, and `list_users` with a userset filter for the admin-console rungs; run `.localbin/fga model test --tests packages/service-kit/src/service_kit/governed/auth/model.fga.yaml` and wire it wherever the existing model test runs.
 - *Closes when:* `fga model test` passes with userset-subject checks and userset `list_users` filters in the file.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml (grep -E '^\s*- user: [a-z_]+:[^ #]+#' → 0 of 169)` · `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:484-485,525-526 (user_filter: [{ type: user }])` · `chart/values.yaml:2710 (experimentals: weighted_graph_check)` · `ls .localbin/fga → present`
-
-**XC-019 · The Lance `TableWriter` seam has no create-if-absent verb, so the first annotation save on a fresh estate has no table to merge into**
-`service-kit, annotator` · **MED**
-- *What is left:* Add a create-if-absent verb to the `TableWriter` Protocol and its three implementations in `service_kit/lancekit/writer.py` (today: `merge_upsert`, `merge_insert_only`, `delete` only). Call it from `annotator/annotations/save.py` before `reader.table_version()` at :86 and the merge; the annotator's only `create_table` is the publish saga's in `projects/lakehouse.py`, which does not create the annotations table. Pin with a RED test that saves into an estate where the annotations table does not exist. Do not widen an except clause instead.
-- *Closes when:* A save against a project with no annotations table creates it and commits, under a test.
-- *Evidence:* `packages/service-kit/src/service_kit/lancekit/writer.py:44-51 (Protocol: three verbs), :98-108, :118-120, :131-134 (implementations)` · `services/annotator/src/annotator/annotations/save.py:82-86 (`open_reader` then unguarded `reader.table_version()`)` · `grep -rn 'create_table' services/annotator/src → only projects/lakehouse.py:161-294`
 
 **XC-031 · No ordered prod install runbook exists; the FGA seed / OpenBao unseal / PSA-label ordering is documented only as warnings in values-prod**
 `chart` · **MED**
@@ -631,20 +610,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* Prod dumps land outside the lakehouse bucket, `backup-snapshot.yaml` prunes snapshots beyond a `keep` count, and `values-prod.yaml` names a real VolumeSnapshotClass.
 - *Evidence:* `chart/templates/backup-pg.yaml:88-95 (same bucket; keep-N pruning present)` · `chart/templates/backup-snapshot.yaml:85 (kubectl create only, no delete)` · `chart/values-prod.yaml:139-144 (snapshotClassName: "")` · `chart/values.yaml:1965-1973 (pgDump.keep, volumeSnapshot.snapshotClassName)`
 
-**XC-014 · The Ray head is a hand-applied `deploy/ray-lance-demo.yaml` the chart does not render**
-`chart, compute, medallion` · **MED** · PARTIAL
-- **blocked:** The same owner ruling as CP-012: a chart-owned RayCluster/RayService versus the standing hand-applied head. Reconciling the head presumes that answer.
-- *What is left:* The OpenBao half is done and must not be retouched: `chart/templates/openbao.yaml:137` is a chart-owned Job that seeds KV (`:174`, `:283`) and enables/configures the kubernetes auth mount, policy and role idempotently (`:310-318`). Only the Ray head remains. After the ruling, render the head from the release (`chart/templates/rayservice.yaml` is gated on `ray.enabled && singleTenant.enabled`, default false) and delete `deploy/ray-lance-demo.yaml` together with its apply at `scripts/ray_e2e_stack.sh:121` and the references at `Makefile:433`, `chart/values.yaml:766` and `chart/templates/medallion.yaml:549`.
-- *Closes when:* A fresh `make k3s-up` produces the Ray head from the chart and `deploy/ray-lance-demo.yaml` no longer exists.
-- *Evidence:* `chart/templates/openbao.yaml:137,174,310-318` · `deploy/ray-lance-demo.yaml (9,845 bytes at HEAD; last touched 85fe0830)` · `scripts/ray_e2e_stack.sh:121` · `chart/templates/rayservice.yaml:1 + chart/values.yaml:65-66 (singleTenant.enabled: false)`
-
-**XC-027 · `chart/values-prod.yaml` sets `ingress.enabled/className/host` but no `tls:` block, so OIDC tokens and vended S3 credentials traverse plaintext at the edge**
-`chart, gateway` · **MED**
-- **blocked:** Owner decision on the prod hostname and the certificate issuer.
-- *What is left:* `chart/values-prod.yaml:221-224` supplies only `enabled`, `className: nginx` and an empty `host`; `chart/templates/ingress.yaml:44-45` renders `tls:` only `with .Values.ingress.tls`. Add an `ingress.tls` block plus the cert-manager issuer annotation to `values-prod.yaml`, then re-run `bash scripts/prod_render_check.sh` to pin it. In-cluster Dapr mTLS covers service invocation only, not the edge.
-- *Closes when:* `helm template -f chart/values-prod.yaml` renders an Ingress with a `tls:` entry and an issuer annotation, and `scripts/prod_render_check.sh` fails without them.
-- *Evidence:* `chart/values-prod.yaml:221-224` · `chart/templates/ingress.yaml:44-45` · `scripts/prod_render_check.sh (exists)`
-
 **XC-030 · Images are unsigned and the estate runs no admission-time signature verifier**
 `chart, dagger` · **MED**
 - **blocked:** Owner names a signing-key custodian and approves an admission-time verifier (Kyverno or sigstore policy-controller); signing without a verifier is decoration.
@@ -668,16 +633,16 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **XC-052 · A helm-LABELLED `rask-assist` Deployment/Service the release does not own will fail the next upgrade that renders it**
 `chart` · **MED**
+- **KEPT IN PHASE 1 AGAINST THE AUDIT'S RECOMMENDATION (2026-09-20).** The audit grouped this with the
+  annotator rows because the orphan is named `rask-assist` and its hazard "only fires if someone enables
+  the annotator's assist runner". That reads the SUBJECT and not the FAILURE: a helm-labelled object the
+  release does not own fails the next `helm upgrade` that renders it, and a failed upgrade is estate-wide —
+  it blocks every service in this chart, lakehouse included. The blast radius is the chart, not the
+  annotator, so it stays where the chart is.
 - **blocked:** Whether `rask-assist` becomes chart-rendered and helm-adopted (enable `runners.enabled` and annotate the live objects for adoption) or is deleted as hand-applied residue.
 - *What is left:* The chart renders `Deployment/<fullname>-assist` + its Service behind `runners.enabled` (`chart/templates/runners.yaml:1-15`), which defaults `false` (`chart/values.yaml:1851`), so the live hand-applied pair carries release labels no release owns and the first upgrade with the flag on meets an object it cannot adopt. Either set `runners.enabled` in the deploy values and add `meta.helm.sh/release-name` / `release-namespace` annotations plus `managed-by: Helm` on the live objects so the upgrade adopts them, or delete them; record the choice. Live state not re-verified (no cluster access).
 - *Closes when:* `helm get manifest rask` contains `rask-assist`, or no such objects exist in the cluster, and the choice is recorded.
 - *Evidence:* `chart/templates/runners.yaml:1-20` · `chart/values.yaml:1850-1853 (runners.enabled: false)`
-
-**LH-168 · The live `lance-secrets` Dapr Component is two scopes short of the chart and nothing detects Component-scope drift**
-`chart, viewer, search` · **LOW**
-- *What is left:* The chart's `lance.secretScopes` (`chart/templates/_helpers.tpl:1332-1357`) grants every `explorer.services` app-id (search, viewer) and the `lance-secrets` Component (`chart/templates/dapr-component.yaml:317`) renders them; helm does not re-patch an unchanged field, so out-of-band drift survives every upgrade. Re-apply the rendered Component so the live scopes match, then add a render-vs-live diff on Dapr Component scopes — `scripts/k3s-pins.sh --check-only` (`make k3s-stem-check`, `Makefile:766-776`) compares image stems only. Live drift (13 rendered vs 11 live) not re-verified (no cluster access).
-- *Closes when:* The live `lance-secrets` scopes equal the rendered set and a pre-upgrade check refuses on Component-scope drift.
-- *Evidence:* `chart/templates/_helpers.tpl:1332-1357` · `chart/templates/dapr-component.yaml:317-320` · `Makefile:766-776 (k3s-stem-check is image-stem only)` · ``grep -in 'component\|scopes' scripts/k3s-pins.sh` → image parsing only`
 
 **XC-020 · `transaction.can_set_property` and `transaction.can_cancel` are defined in `model.fga` and used by no relation and no code path**
 `service-kit, catalog` · **LOW**
@@ -693,42 +658,16 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* `helm template` under a release name other than `rask` either renders matching Secret names for the openfga and greptimedb subcharts or fails loudly at render.
 - *Evidence:* `chart/templates/_helpers.tpl:478 (lance.fullname = .Release.Name)` · `chart/values.yaml:2719 and :3023 (hardcoded rask- names)` · `chart/templates/observability.yaml:10 and external-secrets.yaml:138 (`{{ .Release.Name }}-observability-s3`)` · `grep over tests/unit for the pairing → no gate`
 
-**XC-037 · `pytest-xdist` is not a dependency and ~20 test files roll their own `subprocess` helm render**
-`chart, service-kit` · **MED**
-- **RAISED LOW -> MED, and HALF SHIPPED 2026-09-19, because the cost was measured rather than guessed.** `pytest-xdist` is added and `make check-fast` runs the pre-push suite (`tests/unit` + `tests/integration`) at `-n 16 --dist loadfile`: **1m17s against 9m57s serial, 4,947 passed, zero failures** — 7.7x on a 64-core host, because the suite is a broad front with no hotspot. The three file-level unsafe suites this row names are handled by `--dist loadfile` exactly as it predicted. What made this MED rather than LOW: measured over one session, **519 minutes — 8.6 hours — went to 58 serial runs of that suite.** It is the iteration loop, not a nicety.
-- **A FOURTH UNSAFE SUITE, which this row did not name:** `services/compute/tests/test_ray.py` passes 16/16 serially and fails 8 under `-n 16`, with `404 == 422` — the routes are not mounted. Its conftest sets `RASK_API_PREFIX`/`RAY_DASHBOARD_URL`, imports `compute` (whose `make_service_app` BAKES settings at import), then restores the environment. Correct serially, where pytest collects every module before running any test; under xdist a worker may import `compute` from another file first and bake the wrong prefix. That is an import-order dependency, not a parallelism bug — parallelism only made it visible.
-- *What is left:* Add `pytest-xdist` (absent from `pyproject.toml` dev deps and `uv.lock`) and group the three parallel-unsafe suites (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) with `--dist loadfile`. Convert the cleanly-convertible hand-rolled helm renders onto the cached `_rendered_docs`/`render(*flags)` helper in `tests/unit/test_invariants.py` keyed on the verbatim flag tuple; 21 files invoke helm through their own `subprocess` today (20 excluding `test_invariants.py`, which hosts the helper). Leave alone the ones needing a real subprocess (`check=False` x3, `CalledProcessError` in `test_invariants`) and the two deliberate variants (`test_chart_gitops_ready._render` omits `image.localImages=true`; `test_prod_ha_posture` renders `-f chart/values-prod.yaml`).
-- *Closes when:* the WHOLE suite passes green in parallel (`make check-fast` already covers the pre-push half) and the only `subprocess` helm calls left are the named exceptions. The compute conftest's import-order dependency is the remaining blocker on the full run.
-- *Evidence:* `rg 'xdist' pyproject.toml uv.lock -> no hits` · `rg -l subprocess tests services packages | xargs rg -l '"helm"' -> 21 files` · `tests/unit/conftest.py:21 (nineteen files import _rendered_docs from test_invariants)`
-
 **XC-039 · Live e2e legs skip on a 5 s `/livez` timeout while the medallion producer is up and serving the cascade**
 `medallion, e2e` · **LOW**
 - **CLOSED 2026-09-20 on its own condition — the medallion legs no longer skip a slow producer.** `tests/e2e-py/liveness.py::wait_until_live` polls within a BUDGET instead of probing once: 15 s per attempt, 3 s apart, 60 s total, and the medallion fixture now reports `not reachable after {waited}s ({error})` rather than a bare "not reachable". **The budget is the fix, not a bigger timeout** — one long timeout still fails a service restarting mid-probe and makes every genuinely-absent target cost the full timeout, while a bounded retry waits for a healthy-but-slow service and gives up on an absent one in predictable steps. 60 s is measured against what the estate does: a rolling Deployment's replacement pod passes readiness in ~30 s here, so a shorter budget would still skip across an ordinary rollout. **The probe, the clock and the sleep are INJECTED**, so `tests/unit/test_the_liveness_probe_waits_before_it_skips.py` runs in the ordinary suite with no live estate and no real waiting. It sits in `tests/unit` rather than beside the helper because `test_e2e_collection_gate` refuses a module in the live-suite directory that no marker or make target selects — correctly, since a file that collects, deselects and never runs is this row's own failure in miniature, and it caught my first placement. Eight legs, including that ONE attempt is made even at a zero budget (checking the clock first would call a service absent having never asked) and that the per-attempt timeout actually reaches the probe. Mutation-checked: collapsing it back to a single attempt reds 2, moving the budget check before the attempt reds 1.
 - *What is left:* **Sixteen identical probes in fifteen OTHER e2e modules**, named rather than swept: `test_governance_e2e` (2), and one each in `test_e2e`, `test_client_direct_e2e`, `test_outbox_crash_e2e`, `test_dummy_lane_e2e`, `test_outbox_e2e`, `test_governed_union_e2e`, `test_warehouses_e2e`, `test_auth_e2e`, `test_media_e2e`, `test_maintenance_e2e`, `test_credential_isolation_e2e`, `test_user_state_e2e`, `test_the_container_tier_deletes_are_driven`, `test_multibase_e2e`. The helper they need now exists and the change is one line each; they are left for a deliberate sweep because none of these suites can be RUN without a live estate, so a batch edit would land unverified — which is the same "reports green, covers nothing" problem this row is about.
 - *Evidence:* `tests/e2e-py/liveness.py` · `tests/unit/test_the_liveness_probe_waits_before_it_skips.py` · `tests/e2e-py/test_medallion_e2e.py:82-92` · `grep -rn 'timeout=5)' tests/e2e-py/*.py | grep livez | wc -l → 16`
-**XC-040 · The dangling-locator gate checks pointers INTO a register but nothing gates a register's sidecar outliving it**
-`e2e` · **LOW**
-- *What is left:* `tests/unit/test_no_locator_names_a_deleted_register.py` has two tests (locator into a gone register; carried list only shrinks) and its `_register_exists` at :52-53 accepts a `.findings.json` as a valid target, but no test fails when an `open_*.findings.json` (or similar sidecar) exists with no `open_*.md` beside it. Add that assertion over `git ls-files`. Decide how it classifies the tracked, uncited root `open_stack.html` (no `open_stack.md` exists) — sidecar or standalone document — so the gate is not vacuous: at HEAD no `*.findings.json` exists.
-- *Closes when:* A test fails on a root `open_*` sidecar whose register is gone, and it passes at HEAD with `open_stack.html` classified explicitly.
-- *Evidence:* `tests/unit/test_no_locator_names_a_deleted_register.py:52-53,64,85` · `find . -maxdepth 2 -name '*.findings.json' → none` · `git ls-files open_stack.html → tracked; no open_stack.md; grep -rn open_stack.html → uncited`
-
-**XC-041 · `make seed-dev` chmods the whole corpus root, hardcodes one release name, host path and ports, and seeds labeling doc ids with a literal `dataset_version`**
-`scripts` · **LOW**
-- *What is left:* `scripts/seed_demo_corpus.py:344-362` `_make_world_readable(root)` walks `root.rglob("*")` and chmods everything under the corpus root rather than the paths the run wrote, and does nothing for the re-seed case. `scripts/seed_dev_estate.sh` hardcodes `rask-search`/`rask-viewer`/`rask-annotator`/`rask-minio`/`rask-catalog` (:28,34,48,113-114,126,128), the host path `/home/gabriel/media-corpus` (:22) and ports 19900/12433. `scripts/seed_labeling_task.sh:124-126` hardcodes `fe00cd746463ad2c/{0,1,2}` keys with `"dataset_version": 1`. Track and chmod only what the run wrote; take release name, namespace, host path and ports as parameters; derive the labeling keys and `dataset_version` from the live fixture and the catalog's table version, the way the corpus half already reads `MEDIA_DB` and `/v1/me`.
-- *Closes when:* A seed against a differently named release on another host, run twice, leaves only its own files readable and a labeling task whose keys and version match the fixture it read.
-- *Evidence:* `scripts/seed_demo_corpus.py:344-362` · `scripts/seed_dev_estate.sh:22,28,34,113-114,126,128` · `scripts/seed_labeling_task.sh:124-126` · `Makefile:527-528 (seed-dev → scripts/seed_dev_estate.sh)`
-
 **XC-042 · `/capi/v1/me` 502s under `dev-micro.sh` because the fleet starts no catalog; the BFF's 502 is honest and the consumer already degrades**
 `annotator, home-zone, scripts` · **LOW** · **REWRITTEN — the original ask would be wrong**
 - *What is left:* Do not make the BFF answer anything but 502 for an unreachable catalog: `makeBackendProxy` reports the failure, `fetchMeViaBff` returns `null` on ANY failure, and the layout renders base entries fail-closed — silencing the 502 would mask an outage. The `:8103` clause is shipped (`dev-micro.sh` starts `annotator` on `ANNOTATOR_PORT`). The only residue is that `scripts/dev-micro.sh` starts no catalog service at all, so `/capi/v1/me` 502s there by construction; if a local identity call matters, add the catalog to the roster as its own row.
 - *Closes when:* Closed as written; a catalog-in-dev-micro row exists if wanted.
 - *Evidence:* `scripts/dev-micro.sh:41,96 (`ANNOTATOR_PORT` 8103, `run annotator`); grep -i catalog → no catalog process` · `frontend/packages/api/src/bff.ts:224-228 (fetch failure → 502), :353-358 (`makeCatalogProxy`)` · `frontend/packages/api/src/client.ts:67-73 (`fetchMeViaBff`: null on any failure)` · `frontend/microfrontends/annotator/src/routes/+layout.svelte:113-116 (null → base entries, fail-closed)`
-
-**XC-043 · Ten docs still describe the orchestrator, `core_api`/`search_api`/`volumes_api`, `packages/htr` or `/default/<zone>` bases in their body, tombstone or not**
-`docs` · **LOW** · PARTIAL
-- *What is left:* Rewrite the bodies, not only the headers. Tombstone admonitions are in place on `system-overview.md`, `microservices.md`, `packages/htr.md`, `frontend-conventions.md` and `frontend-microfrontends.md`, but the prose under them still presents the dead things as live (`microservices.md:59-60` lists volumes-api/search-api as services, `frontend-microfrontends.md:94-95` diagrams `/default/` bases, `components/ui.md:8`, `components/progress.md:191,258`, `layout.md:64` names `media`/`train` zones, `frontend-conventions.md:55`). The gate grep returns 10 files at HEAD, not 6: `DECISIONS.md`, `deployment.md` and `packages/htr.md` hit only as explicit tombstones; the other seven carry live stale text. `docs/reference/htr.md` no longer exists. Keep the zensical nav gate green (`zensical.toml` serves layout, deployment, microservices, frontend-microfrontends, system-overview, packages/htr, components/ui, DECISIONS).
-- *Closes when:* `grep -rl "core_api\|search_api\|volumes_api\|packages/htr\|/default/" docs/ --exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files whose every hit is an explicit tombstone, with the nav gate green.
-- *Evidence:* `grep -rl … docs/ → 10 files (DECISIONS 1, frontend-microfrontends 26, layout 1, packages/htr 1, deployment 1, frontend-conventions 8, microservices 10, system-overview 10, progress 2, ui 2)` · `docs/architecture/microservices.md:59-60,185-200 (live prose for volumes-api/search-api/orchestrator, 'Auth: none')` · `docs/architecture/frontend-microfrontends.md:94-95; docs/components/ui.md:8` · `zensical.toml:22-59`
 
 **XC-044 · `fga model validate` is not in the `ms-authz` CI job, so weighted-graph compatibility stays a hand audit**
 `service-kit` · **LOW**
@@ -781,6 +720,34 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 2 · COMPUTE
+
+**LH-043 · Unknown whether MemWAL server-id sharding fits append-only bronze landing (coordinator-free ingest)**
+`ingest, medallion` · **MED**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** An ingest lander spike, double-gated behind [[XC-023]], with ZERO MemWAL consumers at HEAD. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- **blocked:** §K — the Dapr-retreat / BYO-engine cutover must land first; the row sequences itself after it (a sequencing gate, not a ruling).
+- *What is left:* Prototype MemWAL one-shard-per-pod (`uuid5(instance_id)`, PUT-IF-NOT-EXISTS with epoch fencing, reads unioning all shards) against bronze landing and record whether it fits append-only ingest. The only MemWAL awareness at HEAD is the maintenance orphan scan recognising `_mem_wal/` as a known layout; no ingest path uses it. The audit records that blob v2 columns read `None` through the MemWAL scanner, so the prototype must re-check that on the installed pylance (11.0.0) before any design rests on it.
+- *Closes when:* A prototype run against bronze landing answers, with a recorded result, whether MemWAL server-id sharding fits coordinator-free ingest.
+- *Evidence:* `docs/audits/lakehouse-2026-09/lakehouse-analysis.md:230 (option C′, blob v2 reads None through MemWAL)` · `services/maintenance/src/maintenance/services/orphans.py:84-87,354-355 (only MemWAL awareness in code)` · `uv.lock:3276-3277 (pylance 11.0.0)`
+
+
+**XC-037 · `pytest-xdist` is not a dependency and ~20 test files roll their own `subprocess` helm render**
+`chart, service-kit` · **MED**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** xdist shipped; the only blocker left is the COMPUTE service's import-order conftest. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- **RAISED LOW -> MED, and HALF SHIPPED 2026-09-19, because the cost was measured rather than guessed.** `pytest-xdist` is added and `make check-fast` runs the pre-push suite (`tests/unit` + `tests/integration`) at `-n 16 --dist loadfile`: **1m17s against 9m57s serial, 4,947 passed, zero failures** — 7.7x on a 64-core host, because the suite is a broad front with no hotspot. The three file-level unsafe suites this row names are handled by `--dist loadfile` exactly as it predicted. What made this MED rather than LOW: measured over one session, **519 minutes — 8.6 hours — went to 58 serial runs of that suite.** It is the iteration loop, not a nicety.
+- **A FOURTH UNSAFE SUITE, which this row did not name:** `services/compute/tests/test_ray.py` passes 16/16 serially and fails 8 under `-n 16`, with `404 == 422` — the routes are not mounted. Its conftest sets `RASK_API_PREFIX`/`RAY_DASHBOARD_URL`, imports `compute` (whose `make_service_app` BAKES settings at import), then restores the environment. Correct serially, where pytest collects every module before running any test; under xdist a worker may import `compute` from another file first and bake the wrong prefix. That is an import-order dependency, not a parallelism bug — parallelism only made it visible.
+- *What is left:* Add `pytest-xdist` (absent from `pyproject.toml` dev deps and `uv.lock`) and group the three parallel-unsafe suites (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) with `--dist loadfile`. Convert the cleanly-convertible hand-rolled helm renders onto the cached `_rendered_docs`/`render(*flags)` helper in `tests/unit/test_invariants.py` keyed on the verbatim flag tuple; 21 files invoke helm through their own `subprocess` today (20 excluding `test_invariants.py`, which hosts the helper). Leave alone the ones needing a real subprocess (`check=False` x3, `CalledProcessError` in `test_invariants`) and the two deliberate variants (`test_chart_gitops_ready._render` omits `image.localImages=true`; `test_prod_ha_posture` renders `-f chart/values-prod.yaml`).
+- *Closes when:* the WHOLE suite passes green in parallel (`make check-fast` already covers the pre-push half) and the only `subprocess` helm calls left are the named exceptions. The compute conftest's import-order dependency is the remaining blocker on the full run.
+- *Evidence:* `rg 'xdist' pyproject.toml uv.lock -> no hits` · `rg -l subprocess tests services packages | xargs rg -l '"helm"' -> 21 files` · `tests/unit/conftest.py:21 (nineteen files import _rendered_docs from test_invariants)`
+
+
+**XC-014 · The Ray head is a hand-applied `deploy/ray-lance-demo.yaml` the chart does not render**
+`chart, compute, medallion` · **MED** · PARTIAL
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** Every remaining step is Ray-lane — flip `ray.cluster.enabled`, repoint `medallion.rayAddress`, delete `deploy/ray-lance-demo.yaml`; its blocking template already landed. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- **blocked:** The same owner ruling as CP-012: a chart-owned RayCluster/RayService versus the standing hand-applied head. Reconciling the head presumes that answer.
+- *What is left:* The OpenBao half is done and must not be retouched: `chart/templates/openbao.yaml:137` is a chart-owned Job that seeds KV (`:174`, `:283`) and enables/configures the kubernetes auth mount, policy and role idempotently (`:310-318`). Only the Ray head remains. After the ruling, render the head from the release (`chart/templates/rayservice.yaml` is gated on `ray.enabled && singleTenant.enabled`, default false) and delete `deploy/ray-lance-demo.yaml` together with its apply at `scripts/ray_e2e_stack.sh:121` and the references at `Makefile:433`, `chart/values.yaml:766` and `chart/templates/medallion.yaml:549`.
+- *Closes when:* A fresh `make k3s-up` produces the Ray head from the chart and `deploy/ray-lance-demo.yaml` no longer exists.
+- *Evidence:* `chart/templates/openbao.yaml:137,174,310-318` · `deploy/ray-lance-demo.yaml (9,845 bytes at HEAD; last touched 85fe0830)` · `scripts/ray_e2e_stack.sh:121` · `chart/templates/rayservice.yaml:1 + chart/values.yaml:65-66 (singleTenant.enabled: false)`
+
 
 **LH-129 · The three Ray job scripts read `S3_KEY`/`S3_SECRET` from process env, `RASK_CREDENTIAL_REF` has no consumer, and nothing gates dead work-order fields**
 `medallion, ray-kit, service-kit, chart, scripts` · **HIGH**
@@ -1137,6 +1104,33 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## PHASE 3 · CONTROLPLANE
 
+**XC-027 · `chart/values-prod.yaml` sets `ingress.enabled/className/host` but no `tls:` block, so OIDC tokens and vended S3 credentials traverse plaintext at the edge**
+`chart, gateway` · **MED**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** Prod TLS Ingress — edge work, and blocked on a hostname that does not exist. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- **blocked:** Owner decision on the prod hostname and the certificate issuer.
+- *What is left:* `chart/values-prod.yaml:221-224` supplies only `enabled`, `className: nginx` and an empty `host`; `chart/templates/ingress.yaml:44-45` renders `tls:` only `with .Values.ingress.tls`. Add an `ingress.tls` block plus the cert-manager issuer annotation to `values-prod.yaml`, then re-run `bash scripts/prod_render_check.sh` to pin it. In-cluster Dapr mTLS covers service invocation only, not the edge.
+- *Closes when:* `helm template -f chart/values-prod.yaml` renders an Ingress with a `tls:` entry and an issuer annotation, and `scripts/prod_render_check.sh` fails without them.
+- *Evidence:* `chart/values-prod.yaml:221-224` · `chart/templates/ingress.yaml:44-45` · `scripts/prod_render_check.sh (exists)`
+
+
+**LH-082 · The gateway proxies the catalog's full all-method write surface to the public ingress and nothing says whether that is intended**
+`gateway, catalog` · **LOW**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** The defect note is catalog; every deliverable is GATEWAY plus a `docs/DECISIONS.md` line. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- **blocked:** Owner ruling on whether all-method public exposure of `/api/catalog/*` (behind catalog-side OIDC+FGA only) is intended
+- *What is left:* `Route("/api/catalog", "", *catalog)` at services/gateway/src/gateway/__init__.py:225 forwards every method from the ingress `- path: /api` rule (chart/templates/ingress.yaml:66); the row carries no rationale comment and docs/DECISIONS.md has no entry for it. Record the ruling — a rationale comment on that Route row plus a line in docs/DECISIONS.md stating the write surface is deliberately internet-facing behind catalog OIDC+FGA — or narrow the row's method set.
+- *Closes when:* Either the Route row carries the rationale and docs/DECISIONS.md records the ruling, or the row forwards a narrowed method set.
+- *Evidence:* `services/gateway/src/gateway/__init__.py:225 `Route("/api/catalog", "", *catalog)` with no rationale comment (context :200-226)` · `grep -n -i 'api/catalog\|all-method\|write surface\|internet-facing' docs/DECISIONS.md → empty` · `chart/templates/ingress.yaml:66 `- path: /api``
+
+
+
+**XC-009 · No Dapr `accessControl` policy exists in any chart template and the actor/workflow invocation planes are uncharacterised**
+`chart, medallion, notifications, gateway, annotator, ingest` · **MED**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** `defaultAction: deny` is one Configuration every sidecar references unconditionally, and its closing condition needs a live drive of every GATEWAY route. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- *What is left:* `accessControl`, `defaultAction`, `trustDomain` and `WorkflowAccessPolicy` appear in zero files under `chart/`; `networkPolicy.enabled` is false (`values.yaml:761`). Characterise actor-to-actor (ActorProxy) and Dapr Workflow invocation on the live estate first — Dapr excludes workflows from service-invocation access control — then write `policies:` plus `defaultAction: deny` and `trustDomain` into the shared `lance-tracing` Configuration (`chart/templates/observability.yaml:72`), add a `WorkflowAccessPolicy`, validate by driving every gateway route live, and add the missing test. NetworkPolicy stays a separate prod-hardening half (no-op on k3s flannel).
+- *Closes when:* The rendered Configuration carries `defaultAction: deny` with per-app policies and every gateway route and cascade hop still succeeds on a live drive.
+- *Evidence:* `grep -rn 'accessControl|defaultAction|WorkflowAccessPolicy|trustDomain' chart/: no hits` · `chart/values.yaml:761 (networkPolicy.enabled: false)` · `chart/templates/observability.yaml:72-76 (Configuration lance-tracing)`
+
+
 **LH-073 · Right to erasure is a Lance row delete only — it reaches no blob sidecar, clone/branch or version-pinning tag**
 `catalog, maintenance, notifications` · **HIGH**
 - **RAISED MED -> HIGH 2026-09-19.** Not new evidence about the defect — new evidence about what rests on it. Erasure traceability is named as a PRIMARY driver for column-level lineage in the reference material (GDPR Art. 17, plus CCPA/HIPAA/SOX): "show me every system that touched this record". rask HAS the column-level lineage that question needs (`ColumnLineageDatasetFacet`, emitted by catalog and medallion) and cannot act on the answer, which is the worse half of the pair to be missing: the estate can prove what it would have to erase and cannot erase it.
@@ -1379,6 +1373,46 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## LOW PRIORITY
+
+**XC-043 · Ten docs still describe the orchestrator, `core_api`/`search_api`/`volumes_api`, `packages/htr` or `/default/<zone>` bases in their body, tombstone or not**
+`docs` · **LOW** · PARTIAL
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** 5 of its 7 stale files are MFE docs. `microservices.md` and `system-overview.md` fold into a lakehouse docs pass opportunistically. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- *What is left:* Rewrite the bodies, not only the headers. Tombstone admonitions are in place on `system-overview.md`, `microservices.md`, `packages/htr.md`, `frontend-conventions.md` and `frontend-microfrontends.md`, but the prose under them still presents the dead things as live (`microservices.md:59-60` lists volumes-api/search-api as services, `frontend-microfrontends.md:94-95` diagrams `/default/` bases, `components/ui.md:8`, `components/progress.md:191,258`, `layout.md:64` names `media`/`train` zones, `frontend-conventions.md:55`). The gate grep returns 10 files at HEAD, not 6: `DECISIONS.md`, `deployment.md` and `packages/htr.md` hit only as explicit tombstones; the other seven carry live stale text. `docs/reference/htr.md` no longer exists. Keep the zensical nav gate green (`zensical.toml` serves layout, deployment, microservices, frontend-microfrontends, system-overview, packages/htr, components/ui, DECISIONS).
+- *Closes when:* `grep -rl "core_api\|search_api\|volumes_api\|packages/htr\|/default/" docs/ --exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files whose every hit is an explicit tombstone, with the nav gate green.
+- *Evidence:* `grep -rl … docs/ → 10 files (DECISIONS 1, frontend-microfrontends 26, layout 1, packages/htr 1, deployment 1, frontend-conventions 8, microservices 10, system-overview 10, progress 2, ui 2)` · `docs/architecture/microservices.md:59-60,185-200 (live prose for volumes-api/search-api/orchestrator, 'Auth: none')` · `docs/architecture/frontend-microfrontends.md:94-95; docs/components/ui.md:8` · `zensical.toml:22-59`
+
+
+**XC-040 · The dangling-locator gate checks pointers INTO a register but nothing gates a register's sidecar outliving it**
+`e2e` · **LOW**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** A gate over register sidecars with ZERO instances — measured, it would guard nothing. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- *What is left:* `tests/unit/test_no_locator_names_a_deleted_register.py` has two tests (locator into a gone register; carried list only shrinks) and its `_register_exists` at :52-53 accepts a `.findings.json` as a valid target, but no test fails when an `open_*.findings.json` (or similar sidecar) exists with no `open_*.md` beside it. Add that assertion over `git ls-files`. Decide how it classifies the tracked, uncited root `open_stack.html` (no `open_stack.md` exists) — sidecar or standalone document — so the gate is not vacuous: at HEAD no `*.findings.json` exists.
+- *Closes when:* A test fails on a root `open_*` sidecar whose register is gone, and it passes at HEAD with `open_stack.html` classified explicitly.
+- *Evidence:* `tests/unit/test_no_locator_names_a_deleted_register.py:52-53,64,85` · `find . -maxdepth 2 -name '*.findings.json' → none` · `git ls-files open_stack.html → tracked; no open_stack.md; grep -rn open_stack.html → uncited`
+
+
+**LH-168 · The live `lance-secrets` Dapr Component is two scopes short of the chart and nothing detects Component-scope drift**
+`chart, viewer, search` · **LOW**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** Its two missing scopes are VIEWER and SEARCH, both on the do-not-work list. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- *What is left:* The chart's `lance.secretScopes` (`chart/templates/_helpers.tpl:1332-1357`) grants every `explorer.services` app-id (search, viewer) and the `lance-secrets` Component (`chart/templates/dapr-component.yaml:317`) renders them; helm does not re-patch an unchanged field, so out-of-band drift survives every upgrade. Re-apply the rendered Component so the live scopes match, then add a render-vs-live diff on Dapr Component scopes — `scripts/k3s-pins.sh --check-only` (`make k3s-stem-check`, `Makefile:766-776`) compares image stems only. Live drift (13 rendered vs 11 live) not re-verified (no cluster access).
+- *Closes when:* The live `lance-secrets` scopes equal the rendered set and a pre-upgrade check refuses on Component-scope drift.
+- *Evidence:* `chart/templates/_helpers.tpl:1332-1357` · `chart/templates/dapr-component.yaml:317-320` · `Makefile:766-776 (k3s-stem-check is image-stem only)` · ``grep -in 'component\|scopes' scripts/k3s-pins.sh` → image parsing only`
+
+
+**XC-041 · `make seed-dev` chmods the whole corpus root, hardcodes one release name, host path and ports, and seeds labeling doc ids with a literal `dataset_version`**
+`scripts` · **LOW**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** A dev seeding script; it touches no lakehouse service. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- *What is left:* `scripts/seed_demo_corpus.py:344-362` `_make_world_readable(root)` walks `root.rglob("*")` and chmods everything under the corpus root rather than the paths the run wrote, and does nothing for the re-seed case. `scripts/seed_dev_estate.sh` hardcodes `rask-search`/`rask-viewer`/`rask-annotator`/`rask-minio`/`rask-catalog` (:28,34,48,113-114,126,128), the host path `/home/gabriel/media-corpus` (:22) and ports 19900/12433. `scripts/seed_labeling_task.sh:124-126` hardcodes `fe00cd746463ad2c/{0,1,2}` keys with `"dataset_version": 1`. Track and chmod only what the run wrote; take release name, namespace, host path and ports as parameters; derive the labeling keys and `dataset_version` from the live fixture and the catalog's table version, the way the corpus half already reads `MEDIA_DB` and `/v1/me`.
+- *Closes when:* A seed against a differently named release on another host, run twice, leaves only its own files readable and a labeling task whose keys and version match the fixture it read.
+- *Evidence:* `scripts/seed_demo_corpus.py:344-362` · `scripts/seed_dev_estate.sh:22,28,34,113-114,126,128` · `scripts/seed_labeling_task.sh:124-126` · `Makefile:527-528 (seed-dev → scripts/seed_dev_estate.sh)`
+
+
+**XC-019 · The Lance `TableWriter` seam has no create-if-absent verb, so the first annotation save on a fresh estate has no table to merge into**
+`service-kit, annotator` · **MED**
+- **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** The seam is `service-kit`, but only the ANNOTATOR reaches it, and the annotator is on the do-not-work list. The work is unchanged; only the label is, so phase 1 stops claiming it.
+- *What is left:* Add a create-if-absent verb to the `TableWriter` Protocol and its three implementations in `service_kit/lancekit/writer.py` (today: `merge_upsert`, `merge_insert_only`, `delete` only). Call it from `annotator/annotations/save.py` before `reader.table_version()` at :86 and the merge; the annotator's only `create_table` is the publish saga's in `projects/lakehouse.py`, which does not create the annotations table. Pin with a RED test that saves into an estate where the annotations table does not exist. Do not widen an except clause instead.
+- *Closes when:* A save against a project with no annotations table creates it and commits, under a test.
+- *Evidence:* `packages/service-kit/src/service_kit/lancekit/writer.py:44-51 (Protocol: three verbs), :98-108, :118-120, :131-134 (implementations)` · `services/annotator/src/annotator/annotations/save.py:82-86 (`open_reader` then unguarded `reader.table_version()`)` · `grep -rn 'create_table' services/annotator/src → only projects/lakehouse.py:161-294`
+
 
 **LOW-002 · Consensus replicas mint `{gid}-r{k}` task ids that can exceed the 64-char task route bound, wedging that project's publish**
 `annotator` · **MED** · PARTIAL
