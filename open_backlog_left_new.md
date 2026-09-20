@@ -137,9 +137,9 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 45 | 6 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 44 | 5 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 48 | 31 | 15 |
+| **PHASE 2 · COMPUTE** | 49 | 32 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -289,12 +289,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* **enforcement.** Owner answer 2026-09-20: the quota belongs on the WAREHOUSE, as a warehouse-scoped sub-resource under the management prefix, absent by default (absent = unlimited, so adding the mechanism changes nothing until someone sets a value) and never a field in a spec create payload. Accounting is already per BUCKET and a warehouse maps to a bucket, so the limit sits where the measurement already lands. Recorded in `docs/DECISIONS.md`. The `by_root` symbol the row's other claim referenced does not exist anywhere.
 - *Closes when:* a byte quota is enforced at the create/write doors with a typed refusal.
 - *Evidence:* `services/maintenance/src/maintenance/services/orphans.py (total_bytes, bytes_by_dataset)` · `services/maintenance/src/maintenance/services/reconcile.py (_roll_up, bytes_by_bucket)` · observed on the deployed maintenance pod 2026-09-20
-**LH-085 · The media write lane is driver-only for its DERIVERS, not for blob typing — distributing it is untried**
-`medallion` · **MED**
-- **THE UNMEASURED ASSUMPTION IS MEASURED AND FALSE (2026-09-20).** In the deployed `ray-lance` image at the row's exact pins (pylance 11.0.0, pyarrow 25.0.0, lance-ray 0.5.0): `write_lance(..., data_storage_version="2.2")` PRESERVES blob-v2 — `extension<lance.blob.v2<BlobType>>` round-trips intact. Omit that argument and it writes V2_1, and Lance refuses the column outright ("Blob v2 requires file version >= 2.2"); that refusal is what the "strips blob typing / exposes plain LargeBinary" reading came from. The three copies of that claim in `ray_stage_job.py` are corrected and the measurement sits beside `MEDIA_BATCH_ROWS`.
-- *What is left:* distributing the lane, which now rests on the REAL constraint: the derivers (inline thumbnail + embedding) run on the driver because they need the payload bytes. Moving them into `map_batches` is the change — `_derivable_blob_column`'s "first non-null decides" contract has to survive it, since the derived columns are part of the schema and a later batch that disagreed with the first would fail the append.
-- *Closes when:* the media lane writes through `lance_ray` with the derivers distributed.
-- *Evidence:* `scripts/ray_stage_job.py:13-17,168,747` · measured on pod `ray-lance-head` 2026-09-20
 **LH-144 · Three live datasets carry no FGA tuples and no drop run, and a lost drop-event emit pages nobody**
 `catalog, lineage` · **MED** · PARTIAL
 - **blocked:** downstream of [[LH-061]]'s standing deferral ('No — not yet' on a write-capable reconcile). Measured 2026-09-19: an ungoverned table cannot be read by ANY subject, including the estate admin (`403 can_get_metadata required`, a per-object check deriving from `reader`), so there is no door through which this row's remaining instruction can be carried out until that repair pass exists.
@@ -807,6 +801,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 2 · COMPUTE
+
+**LH-085 · The media write lane is driver-only for its DERIVERS, not for blob typing — distributing it is untried**
+`medallion (RAY half), scripts` · **MED**
+- **MOVED FROM PHASE 1 (2026-09-20): what remains is the RAY driver, not the lakehouse.** Re-measured before working it. The derivers themselves live in `services/medallion/services/derivers.py` and are consumed by `services/medallion/services/compute.py` — the in-service media path, which is phase 1 and is DONE. What this row still asks for is distributing `scripts/ray_stage_job.py`'s lane into `map_batches`, and that script is baked into the `ray-lance` image and gated by `MEDALLION_RAY_ENABLED`, which defaults **false** in the medallion's own config (`core/config.py:316`). So the medallion's media lane works with no Ray at all, and an undistributed Ray driver does not make the LAKEHOUSE incomplete — condition 3 is that Ray is something the lakehouse can be driven BY, never something it depends ON. Same class as "maintenance's Ray half", which the focus already places here.
+- **THE UNMEASURED ASSUMPTION IS MEASURED AND FALSE (2026-09-20).** In the deployed `ray-lance` image at the row's exact pins (pylance 11.0.0, pyarrow 25.0.0, lance-ray 0.5.0): `write_lance(..., data_storage_version="2.2")` PRESERVES blob-v2 — `extension<lance.blob.v2<BlobType>>` round-trips intact. Omit that argument and it writes V2_1, and Lance refuses the column outright ("Blob v2 requires file version >= 2.2"); that refusal is what the "strips blob typing / exposes plain LargeBinary" reading came from. The three copies of that claim in `ray_stage_job.py` are corrected and the measurement sits beside `MEDIA_BATCH_ROWS`.
+- *What is left:* distributing the lane, which now rests on the REAL constraint: the derivers (inline thumbnail + embedding) run on the driver because they need the payload bytes. Moving them into `map_batches` is the change — `_derivable_blob_column`'s "first non-null decides" contract has to survive it, since the derived columns are part of the schema and a later batch that disagreed with the first would fail the append.
+- *Closes when:* the media lane writes through `lance_ray` with the derivers distributed.
+- *Evidence:* `scripts/ray_stage_job.py:13-17,168,747` · `services/medallion/src/medallion/core/config.py:316 (ray_enabled defaults false)` · measured on pod `ray-lance-head` 2026-09-20
 
 **LIN-003 · The runner lanes emit no START and emit inline, where the reference implementation does neither**
 `runners, lineage-kit` · **MED**
