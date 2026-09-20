@@ -44,6 +44,11 @@ tuples:
   - { user: user:dave, relation: writer, object: warehouse:acme_bucket }
   # carol: a VALIDATOR on the gold stage via role:validators, + reader on the warehouse (to read silver)
   - { user: user:carol, relation: assignee, object: role:validators }
+  # role:validators BELONGS to acme. Its tenant is what lets a grant door refuse a cross-project
+  # grant of this role onto another project's namespace; role:estate_auditors below carries no
+  # project and is deliberately estate-wide.
+  - { user: project:acme, relation: project, object: role:validators }
+  - { user: user:frank, relation: assignee, object: role:estate_auditors }
   - { user: "role:validators#assignee", relation: validator, object: namespace:acme_gold }
   - { user: user:carol, relation: reader, object: warehouse:acme_bucket }
   # a materialized view + a transaction under the silver stage — only the `parent` edge is stored, so
@@ -187,6 +192,23 @@ tuples:
   - { user: 'user:service-silver-to-gold', relation: validator, object: 'namespace:acme_gold' }
 
 tests:
+  - name: a role carries its tenant, and an unscoped role carries none
+    # The edge exists so a grant door can tell `role:validators` (acme's) from an estate-wide role.
+    # Nothing in the model GRANTS through it — the refusal is the door's — so this pins the fact the
+    # door reads rather than an authorization outcome.
+    check:
+      - user: project:acme
+        object: role:validators
+        assertions:
+          project: true
+      - user: project:beta
+        object: role:validators
+        assertions:
+          project: false
+      - user: project:acme
+        object: role:estate_auditors
+        assertions:
+          project: false
   - name: a stage runner can PUBLISH what it registered, and only what it registered
     # P5 of "stage runners publish the tag". `publish` is gated at `can_update_tag`, which is OWNER-tier —
     # strictly above the writer/validator rungs the stage runners are seeded with. It resolves anyway,

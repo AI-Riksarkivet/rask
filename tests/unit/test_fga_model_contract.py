@@ -434,6 +434,12 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     # pointing at a project that is gone. Known, and reported by the reconciler as drift rather than
     # repaired — the annotator owns that object and the catalog's revoke does not reach across.
     ("annotation_project", "tenant", "project"): "KNOWN RESIDUAL: reconciler-reported drift",
+    # A role scoped to a deleted project keeps pointing at it, and that is the SAFE direction rather
+    # than a leak: the grant door reads this edge to refuse a cross-tenant grant, so a role whose
+    # tenant is gone stops being grantable anywhere instead of becoming estate-wide. Repairing it
+    # would have to decide whether such a role is re-homed or retired, which is a lifecycle question
+    # nothing else in the model answers yet.
+    ("role", "project", "project"): "KNOWN RESIDUAL: fails CLOSED at the grant door",
 }
 
 

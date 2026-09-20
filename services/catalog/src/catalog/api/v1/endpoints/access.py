@@ -31,6 +31,7 @@ from functools import lru_cache
 from fastapi import APIRouter
 from lance_namespace import InvalidInputError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
+from starlette.concurrency import run_in_threadpool
 
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
@@ -51,6 +52,7 @@ from catalog.schemas import (
     MyPermissionsResponse,
     RelationGrants,
 )
+from catalog.services import warehouses
 from service_kit.control_emit import ControlEmitter, emit_control
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
@@ -312,6 +314,49 @@ async def my_project_permissions(id: str, client: FgaClientDep, settings: Settin
     return await _my_permissions(client, settings, token, "project", id)
 
 
+#: Object types whose tenant resolves through the binding registry (namespace -> warehouse -> project).
+#: A `project:` object IS its own tenant and a `warehouse:` one carries a direct tuple, so neither needs
+#: the registry; they are left out rather than guessed at.
+_TENANT_RESOLVES_BY_NAMESPACE = frozenset({"namespace", "table", "materialized_view"})
+
+
+async def _refuse_a_cross_tenant_role_grant(client: OpenFgaClient, grantee: str, *, fga_type: str, segments: list[str], settings: Settings) -> None:
+    """Refuse granting a role from one tenant a rung on another tenant's object.
+
+    A role name is estate-global unless the model says otherwise, so `role:analyst#assignee` minted in
+    one project could be granted on any other project's namespace and every layer below would honour
+    it: the tuple is well-formed, the rung is real, and the grantor holds the owner rung on the object
+    they are granting. Nothing downstream can tell the role came from somewhere else.
+
+    FAIL-OPEN FOR AN UNSCOPED ROLE, DELIBERATELY. A role carrying no `project` edge is estate-wide and
+    keeps exactly the reach it has today, so this refuses something that was previously possible only
+    where the model now carries the fact to refuse it on. The alternative — refusing every role whose
+    tenant is unknown — would break every existing grant on the day the edge landed, which is how a
+    security control gets reverted rather than adopted.
+
+    Also fail-open when the OBJECT's tenant cannot be established: an unbound namespace has no tenant
+    to disagree with, and inventing a refusal from a failed registry read would turn a registry blip
+    into a governance outage on a path that already has an owner check in front of it.
+
+    InvalidInput (13 -> 400), matching the bad-rung refusal above and lance-ns's own vocabulary: the
+    grantor may well hold every rung this needs, so it is a malformed request rather than a denial.
+    """
+    if not grantee.startswith("role:") or fga_type not in _TENANT_RESOLVES_BY_NAMESPACE or not segments:
+        return
+    role_object = grantee.split("#", 1)[0]
+    owned_by = {
+        tup.user.removeprefix("project:")
+        for tup in await fga.read_object_tuples(client, role_object)
+        if tup.relation == "project" and tup.user.startswith("project:")
+    }
+    if not owned_by:
+        return
+    target = await run_in_threadpool(warehouses.project_for_namespace, settings.registry_root, settings.storage_options(), segments[0])
+    if target is None or target in owned_by:
+        return
+    raise InvalidInputError(f"{grantee!r} belongs to project {min(owned_by)!r} and cannot be granted on {segments[0]!r}, which belongs to project {target!r}")
+
+
 async def _access_mutate(
     client: OpenFgaClient | None,
     control: ControlEmitter,
@@ -352,6 +397,8 @@ async def _access_mutate(
     # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a bare id is a
     # user; a qualified userset (``role:…#assignee`` / ``team:…#member``) is passed through verbatim.
     grantee = body.user if ":" in body.user else f"user:{body.user}"
+    if grant:
+        await _refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
     tup = fga.ClientTuple(user=grantee, relation=body.relation, object=obj)
     event = "access_grant" if grant else "access_revoke"
     try:

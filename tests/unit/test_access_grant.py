@@ -36,6 +36,14 @@ def _run(
 ) -> tuple[access.AccessGrantResponse, list[Any]]:
     captured: list[Any] = []
 
+    # The grant path reads a `role:` grantee's tenant to refuse a cross-tenant grant ([[LH-062]]).
+    # Answering EMPTY keeps these cases about what they test: an unscoped role is estate-wide, which is
+    # the pass-through this file pins. The refusal itself has its own suite.
+    async def fake_read(_client: object, _obj: str) -> list[object]:
+        return []
+
+    monkeypatch.setattr(access.fga, "read_object_tuples", fake_read)
+
     async def fake_write(_client: object, tuples: list[object], **_kw: object) -> None:
         if outage:
             raise ServiceUnavailableError("fga down")

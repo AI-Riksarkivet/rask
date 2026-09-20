@@ -49,6 +49,11 @@ type team
 # users, whole teams, or other roles (nesting).
 type role
   relations
+    # THE TENANT THIS ROLE BELONGS TO. Without it a role name is estate-global, so `role:analyst` minted
+    # in one project can be granted a rung on another project's namespace and the model cannot tell.
+    # Optional by construction: a role carrying no project is estate-wide and keeps its existing reach,
+    # so adding the edge grants nothing and takes nothing away until a role is scoped.
+    define project: [project]
     define assignee: [user, team#member, role#assignee]
 
 # A project = a tenant. Owned by a team (members become admins). Holds one warehouse.
