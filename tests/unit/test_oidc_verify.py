@@ -47,6 +47,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from lance_namespace import UnauthenticatedError
 
+from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed import oidc as oidc_module
 from service_kit.governed.oidc import IDToken, OIDCVerifier, _Discovery, _Provider
 
@@ -423,6 +424,12 @@ def test_split_horizon_discovery_issuer_mismatch_still_rejects(rsa_keypair: tupl
     # (b) The security anchor is untouched: a discovery doc whose ``issuer`` differs from
     # the CONFIGURED issuer is rejected even when fetched from the override (e.g. the
     # in-cluster Dex misconfigured with its internal URL as issuer).
+    #
+    # REJECTED AS OURS, 503, NOT AS THE CALLER'S 401 — and this row's own example is why. A Dex
+    # "misconfigured with its internal URL as issuer" is a deployment fault; the presented token is
+    # never read in reaching it, so answering 401 tells a caller with a perfectly good bearer that
+    # their credential is bad, and the door audits it as `invalid_token` against their subject. The
+    # security property asserted here is that it is REFUSED, and it still is.
     _, public_key = rsa_keypair
     _stub_network(monkeypatch, document=_dex_document(INTERNAL_DEX), public_key=public_key)
     verifier = OIDCVerifier(
@@ -433,7 +440,7 @@ def test_split_horizon_discovery_issuer_mismatch_still_rejects(rsa_keypair: tupl
     )
     token = _sign(private_pem, _claims(iss=PUBLIC_ISSUER))
 
-    with pytest.raises(UnauthenticatedError):
+    with pytest.raises(ServiceUnavailableError):
         verifier.verify(token)
 
 

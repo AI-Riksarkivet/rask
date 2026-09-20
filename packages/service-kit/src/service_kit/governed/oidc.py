@@ -46,6 +46,8 @@ import jwt
 from lance_namespace import UnauthenticatedError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from service_kit.exceptions import ServiceUnavailableError
+
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 
@@ -207,15 +209,40 @@ class OIDCVerifier:
             label="issuer" if override is None else "discovery override",
             allow_insecure=self._allow_insecure,
         )
-        with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
-            response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
-            response.raise_for_status()
-            spec = _Discovery.model_validate(response.json())
+        # OURS, NOT THE CALLER'S. Everything from here to the mismatch check below is a statement
+        # about this deployment's configuration and the issuer it points at — the presented token is
+        # not read and plays no part. Left unmapped these escape `verify`'s `(PyJWTError,
+        # PyJWKClientError, ValidationError)` tuple entirely (they are raised before its try block,
+        # from `_provider_for`), so the door's `except Exception` audited a configuration outage as
+        # `invalid_token` against a real subject and answered 500. `ServiceUnavailableError` is the
+        # vocabulary `deps.py` already uses for a verifier it does not have; this is the same fact
+        # arriving later.
+        try:
+            with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
+                response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
+                response.raise_for_status()
+                spec = _Discovery.model_validate(response.json())
+        except httpx.HTTPError as exc:
+            # The message names the LOCATION rather than the exception: an operator reading a 503
+            # needs to know which URL this deployment could not use, and a split-horizon override is
+            # precisely the setting most likely to be the one that is wrong.
+            log.warning("oidc_discovery_unreachable", extra={"discovery_base": discovery_base, "error": str(exc)})
+            raise ServiceUnavailableError(f"The OIDC issuer could not be reached at {discovery_base}{_DISCOVERY_SUFFIX}") from exc
+        except ValidationError as exc:
+            log.warning("oidc_discovery_malformed", extra={"discovery_base": discovery_base, "error": str(exc)})
+            raise ServiceUnavailableError(f"The OIDC discovery document at {discovery_base}{_DISCOVERY_SUFFIX} is not a discovery document") from exc
 
         # The discovery document's own ``issuer`` is authoritative for token validation;
         # it must match what we configured (defends against a tampered discovery doc).
+        #
+        # A 503, not a 401, and that is the deliberate half of this change: the check compares the
+        # DOCUMENT against this deployment's configuration, so a caller whose bearer is perfectly
+        # good is told their credential is bad. The honest statement is that this service cannot
+        # currently trust its own issuer. `_provider_for`'s "Unrecognized token issuer" stays a 401 —
+        # that one IS about the token.
         if spec.issuer.rstrip("/") != configured_issuer:
-            raise UnauthenticatedError("OIDC discovery issuer mismatch")
+            log.warning("oidc_discovery_issuer_mismatch", extra={"configured": configured_issuer, "advertised": spec.issuer})
+            raise ServiceUnavailableError("The OIDC discovery document advertises a different issuer than this deployment is configured for")
 
         # A jwks_uri the provider advertises under its (public) issuer must be fetched from
         # the same split-horizon location as discovery; anything not under the issuer is a

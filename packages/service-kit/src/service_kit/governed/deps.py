@@ -154,6 +154,15 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             raise UnauthenticatedError("Missing bearer token")
         try:
             token = verifier.verify(credentials.credentials)
+        except ServiceUnavailableError:
+            # OUR fault, not theirs. A verifier that cannot reach or trust its issuer fails for a
+            # reason the caller's bearer had no part in, and recording it as `invalid_token` writes
+            # a false statement into the estate's own evidence of who was refused and why — one
+            # record per request, for the whole duration of a configuration outage. Same reason and
+            # same status as the missing-verifier branch above, because it is the same fact arriving
+            # later.
+            audit("authn", FAILURE, reason="verifier_unavailable")
+            raise
         except Exception:
             audit("authn", FAILURE, reason="invalid_token")
             raise
@@ -202,6 +211,12 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             return ANONYMOUS_SUBJECT
         try:
             token = verifier.verify(credentials.credentials)
+        except ServiceUnavailableError:
+            # The same split as `authenticate`. Applying it to one door only would leave the other
+            # writing the false records, and this door is the one an anonymous-capable endpoint uses
+            # — so it is the one most likely to be called during an outage.
+            audit("authn", FAILURE, reason="verifier_unavailable")
+            raise
         except Exception:
             audit("authn", FAILURE, reason="invalid_token")
             raise
