@@ -257,3 +257,11 @@ def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Pat
 
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
     assert report.bytes_reclaimed > 1024 * 1024, f"only {report.bytes_reclaimed} bytes freed — the sidecar was left behind"
+
+
+def test_erase_compaction_leaves_a_branch_readable(table: str) -> None:
+    # Compaction rewrites main's fragments, and a branch resolves inherited fragments through the
+    # parent — so a rewrite that stranded them would make the branch unreadable.
+    _erase(table)
+
+    assert _pii(lance.dataset(table).checkout_version(("work", None))) == ["bob", "carol", "dan"]
