@@ -136,6 +136,11 @@ class DatasetOrphanScan(BaseModel):
     orphans: list[OrphanFile] = Field(default_factory=list)
     versions_scanned: int = 0
     reason: str | None = None
+    #: EVERY file under the dataset prefix, not just the orphans — the storage this dataset occupies.
+    #: Free: the scan already lists them with sizes to find orphans at all, and summing the same pass
+    #: costs no extra I/O. Zero when `checked` is False, for the reason `orphans` is empty there.
+    total_bytes: int = 0
+    total_files: int = 0
     #: TRUE when the orphan method does not APPLY to this layout, as opposed to applying and failing
     #: to run. Only the second is a partial answer, and only the second may block reclamation
     #: (`purge.report_is_clean`) — a refusal that no retry can change would freeze that gate shut.
@@ -160,6 +165,13 @@ class OrphanReport(BaseModel):
     #: Datasets the method does not APPLY to — correctly excluded, nothing missed.
     datasets_excluded: int = 0
     orphans: list[OrphanFile] = Field(default_factory=list)
+    #: Bytes and files under each SCANNED dataset — the storage it occupies, not its orphans
+    #: ([[LH-074]]). Keyed by dataset URI so a caller can roll up by whatever it knows: the bucket is
+    #: a prefix of the key, and the warehouse registry maps a bucket to its project. Unreadable and
+    #: excluded datasets are absent rather than zero, so a roll-up cannot report a partial estate as
+    #: a small one.
+    bytes_by_dataset: dict[str, int] = Field(default_factory=dict)
+    files_by_dataset: dict[str, int] = Field(default_factory=dict)
     #: Sources that answered PARTIALLY — a version ceiling, an unlistable prefix. Named so the reader
     #: knows which findings to distrust rather than assuming completeness. **This list gates the
     #: purge** (`purge.report_is_clean`), so only a scan that TRIED and failed belongs in it.
@@ -514,9 +526,13 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
     # dataset, on the same hot path as the probe batching above (the audit's HOUSE-RULE-16 addendum).
     referenced_dirs = tuple(d for d in referenced if d.endswith("/"))
 
+    total_bytes = 0
+    total_files = 0
     for info in entries:
         if info.type != pafs.FileType.File:
             continue
+        total_bytes += info.size or 0
+        total_files += 1
         rel = posixpath.relpath(info.path, prefix)
         if rel in referenced:
             continue
@@ -539,7 +555,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         )
 
     _classify_against_floor(orphans, ds, dataset_uri)
-    return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions)
+    return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions, total_bytes=total_bytes, total_files=total_files)
 
 
 def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_options: dict[str, str] | None = None) -> OrphanReport:
@@ -557,6 +573,8 @@ def scan_datasets(fs: pafs.FileSystem, datasets: list[tuple[str, str]], storage_
         if result.checked:
             report.datasets_scanned += 1
             report.orphans.extend(result.orphans)
+            report.bytes_by_dataset[dataset_uri] = result.total_bytes
+            report.files_by_dataset[dataset_uri] = result.total_files
             continue
         reason = result.reason or f"{dataset_uri}: unreadable"
         if result.structural:

@@ -270,6 +270,11 @@ class ReconcileReport(BaseModel):
     #: rather than a control. Measured 2026-09-18, `orphan_files` fell 1011 -> 32 in ten minutes when
     #: 979 of them passed 7 days; the 32 that stayed are the finding.
     orphan_files_blocking: int = 0
+    #: Storage occupied per bucket, from the orphan scan's own listing ([[LH-074]]). Only SCANNED
+    #: datasets contribute, so a bucket whose datasets were excluded or unreadable is absent rather
+    #: than zero — a roll-up must not report a partly-seen estate as a small one.
+    bytes_by_bucket: dict[str, int] = Field(default_factory=dict)
+    files_by_bucket: dict[str, int] = Field(default_factory=dict)
     #: Datasets the unreferenced-file method does not APPLY to — a shallow clone, a branch, an
     #: unsupported feature flag. Reported so the coverage stays visible: "we correctly excluded 419"
     #: and "we scanned everything" are different facts. Deliberately not in `incomplete`, which gates
@@ -976,6 +981,20 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
     # and never `counts` (which feeds `report.total` above and `report_is_clean`'s "drifting" message,
     # so a key here would either inflate the finding total or name a correct exclusion as drift).
     report.excluded_datasets = list(scan.excluded)
+    # STORAGE ACCOUNTING ([[LH-074]]), rolled up from the same listing the orphan scan already read —
+    # no extra I/O. Per BUCKET, because that is the unit the scan walks and the warehouse registry
+    # maps a bucket to its project; a dataset-level map would be unbounded in the log.
+    report.bytes_by_bucket = _roll_up(scan.bytes_by_dataset)
+    report.files_by_bucket = _roll_up(scan.files_by_dataset)
+
+
+def _roll_up(by_dataset: dict[str, int]) -> dict[str, int]:
+    """Sum a per-dataset map by bucket. `s3://bucket/prefix` -> `bucket`."""
+    totals: dict[str, int] = {}
+    for uri, value in by_dataset.items():
+        bucket = uri.removeprefix("s3://").split("/", 1)[0]
+        totals[bucket] = totals.get(bucket, 0) + value
+    return totals
 
 
 async def reconcile(

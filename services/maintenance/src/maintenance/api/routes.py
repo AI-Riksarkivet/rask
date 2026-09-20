@@ -205,6 +205,9 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             # WHICH OF THEM WILL CLEAR THEMSELVES, beside the distribution — the difference between a
             # finding to act on and a clock to wait out. Same omit-when-empty rule as the line above.
             **({"orphans_by_reclaimability": split} if (split := _orphans_by_reclaimability(report)) else {}),
+            # STORAGE PER BUCKET ([[LH-074]]), largest first and bounded — the roll-up is only useful
+            # if the biggest tenants are the ones an operator sees. Omitted when the scan is off.
+            **({"bytes_by_bucket": _largest(report.bytes_by_bucket)} if report.bytes_by_bucket else {}),
         }
         # A category that could not be checked is NOT clean, so an unavailable/incomplete run is as
         # loud as a drifting one — otherwise a permanently-broken FGA connection reads as "no drift".
@@ -292,6 +295,11 @@ async def ack_reconcile_binding() -> dict[str, str]:
 #: one WARNING must not become the report; a truncated list SAYS it was truncated, so a reader can never
 #: mistake the sample for the set.
 _DRIFT_NAMES_PER_CATEGORY = 10
+
+
+def _largest(totals: dict[str, int], limit: int = 10) -> dict[str, int]:
+    """The `limit` biggest entries, descending. A whole-estate map would be hundreds of keys on one line."""
+    return dict(sorted(totals.items(), key=lambda kv: -kv[1])[:limit])
 
 
 def _drift_names(report: ReconcileReport) -> dict[str, list[str]]:
