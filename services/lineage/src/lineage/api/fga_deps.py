@@ -384,7 +384,21 @@ async def enforce_output_authz(
         prior = await repository.run_output_names(event.run.run_id)
         if prior:
             refused = await _denied_objects(client, user=token.sub, relations=relations, names=prior, object_type=object_type)
-            if refused:
+            # AN UNGOVERNED PRIOR CANNOT GATE, because it cannot be satisfied. A name carrying no
+            # tuples is holdable by no subject, so a run that recorded one is unamendable by EVERYONE,
+            # for ever, and no grant repairs it — there is no object to grant on. The output check
+            # below already draws this line (`UngovernedOutputError`: "there is nothing to grant on" is
+            # a different answer from "you may not"); this one did not.
+            #
+            # THE PROPERTY IS UNCHANGED FOR EVERYTHING ANYONE CAN HOLD: every GOVERNED prior still
+            # refuses, so a subject must still be able to write everything this run wrote that is
+            # writable at all, and the event's OWN outputs are authorized by the check below either
+            # way. Dropping an unsatisfiable term grants nobody anything.
+            #
+            # Measured on the deployed estate 2026-09-20: `ingest_run_mutation_denied … run_id=
+            # '36944760…' outputs=['e2e_outbox_ds']` — a bare id no catalog object ever carried,
+            # recorded by an earlier run, refusing its staged event on every sweep for six days.
+            if refused and not await _none_are_governed(client, names=refused, object_type=object_type):
                 log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run.run_id, "outputs": refused})
                 raise PermissionDeniedError(f"{' or '.join(relations)} required to amend run {event.run.run_id}: {', '.join(refused)}")
     outputs = [d.name for d in event.outputs if d.name]

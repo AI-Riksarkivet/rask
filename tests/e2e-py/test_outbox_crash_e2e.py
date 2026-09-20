@@ -215,7 +215,14 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
         # would skip this leg on the open deployments it was written for.
         author=author or "e2e",
         job_namespace="medallion",
-        inputs=[("external", "e2e_crash_src")],
+        # THE NAMESPACE IS THE EXTERNAL MARKER, and `"external"` is not one. `is_external_source`
+        # exempts an input from `can_get_metadata` in exactly two forms — a namespace carrying a URI
+        # scheme (`s3://…`), or one of the bare identifiers in `EXTERNAL_SOURCE_NAMESPACES`
+        # (`{"file", "lance"}`). A namespace that is neither reads as a CATALOG namespace, so a
+        # notional source outside the estate is authorized like a governed table and refused on an
+        # object that can never carry a tuple. Measured live 2026-09-20:
+        # `can_get_metadata required on inputs: e2e_crash_src`.
+        inputs=[("s3://e2e-crash-src", "e2e_crash_src")],
         output_namespace=PROBE_NAMESPACE,
         output_name=f"{PROBE_NAMESPACE}${PROBE_TABLE}",
         version=1,

@@ -88,7 +88,14 @@ def test_reconcile_sweep_drains_a_staged_outbox_event(lineage: str, probe_author
         # The subject that OWNS the output table (see `probe_author`); `"e2e"` only where authz is off.
         author=probe_author or "e2e",
         job_namespace="medallion",
-        inputs=[("external", "e2e_outbox_src")],
+        # THE NAMESPACE IS THE EXTERNAL MARKER, and `"external"` is not one. `is_external_source`
+        # exempts an input from `can_get_metadata` in exactly two forms — a namespace carrying a URI
+        # scheme (`s3://…`), or one of the bare identifiers in `EXTERNAL_SOURCE_NAMESPACES`
+        # (`{"file", "lance"}`). A namespace that is neither reads as a CATALOG namespace, so a
+        # notional source outside the estate is authorized like a governed table and refused on an
+        # object that can never carry a tuple. Measured live 2026-09-20:
+        # `can_get_metadata required on inputs: e2e_crash_src`.
+        inputs=[("s3://e2e-outbox-src", "e2e_outbox_src")],
         output_namespace=PROBE_NAMESPACE,
         # QUALIFIED, because `output_name` carries the CATALOG ID and `output_namespace` is the
         # OpenLineage domain label — two different things that both happen to be called a namespace.
