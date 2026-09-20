@@ -245,6 +245,12 @@ error-on-warning = true
 
 [tool.ty.environment]
 python-version = "3.13"
+# `tests/e2e-py` is a FLAT helper directory, not a package: its own conftest puts it on `sys.path` so
+# the live suites can `import topology` / `import liveness` by bare name. A unit test exercising one of
+# those helpers makes the same insert at runtime, and without this ty resolves the import against the
+# repo root only and calls it unresolved — a diagnostic about the checker's search path rather than
+# about the code, and exactly the kind that gets silenced with the `type: ignore` this estate bans.
+extra-paths = ["tests/e2e-py"]
 
 [tool.ty.src]
 # ty otherwise walks these and reports on code we neither own nor can fix:

@@ -21,6 +21,7 @@ import uuid
 
 import pytest
 import requests
+from liveness import wait_until_live
 from promotion_review import approve_if_held
 
 
@@ -78,11 +79,17 @@ pytestmark = [pytest.mark.e2e, pytest.mark.medallion]
 def urls() -> tuple[str, str]:
     if not (LANCERAY and LINEAGE):
         pytest.skip("set LANCE_E2E_LANCERAY_URL and LANCE_E2E_LINEAGE_URL (see module docstring)")
+    # WAITED FOR, NOT PROBED ONCE ([[XC-039]]). A bare `timeout=5` turned a producer that was up and
+    # serving the cascade — loaded, mid-rollout, or on a cold Lance open — into "not reachable", and a
+    # skip is indistinguishable from a pass once it reaches a CI log. The budget is what makes the
+    # difference readable; the message now says how long it actually waited.
     for name, url in (("medallion-producer", LANCERAY), ("lineage", LINEAGE)):
-        try:
-            requests.get(f"{url.rstrip('/')}/livez", timeout=5).raise_for_status()
-        except Exception:
-            pytest.skip(f"{name} not reachable at {url}")
+        live, waited, error = wait_until_live(
+            f"{url.rstrip('/')}/livez",
+            probe=lambda u, timeout: requests.get(u, timeout=timeout).raise_for_status(),
+        )
+        if not live:
+            pytest.skip(f"{name} not reachable at {url} after {waited:.0f}s ({error})")
     return LANCERAY.rstrip("/"), LINEAGE.rstrip("/")
 
 
