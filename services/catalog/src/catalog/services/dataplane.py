@@ -1603,7 +1603,8 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     ``float64`` for every JS number — otherwise hits the native ``insert_into_table`` with a ``float64``
     batch against an ``int64`` column, which raises a bare **500** ("Internal Server Error"). That is both
     a broken insert AND the wrong status for a client-side mismatch (browser-driven find 2026-07-21). Here we
-    select the table's columns BY NAME (extra columns dropped; a missing one is a 400) and cast each to its
+    select the table's columns BY NAME (a column the table lacks is dropped and LOGGED by name
+    -- `insert_dropped_columns`; a missing one is a 400) and cast each to its
     real column type — so ``4.0 → 4`` just works — turning a genuinely incompatible payload (e.g. ``4.5`` →
     ``int``, or a non-castable type) into a clean ``400``, never a 500. Blocking IO (opens the dataset for the
     live schema); the caller runs it in a threadpool.
@@ -1627,6 +1628,15 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     missing = [f.name for f in target if f.name not in present]
     if missing:
         raise InvalidInputError(f"insert rows are missing column(s): {', '.join(missing)}")
+    discarded = sorted(present - {f.name for f in target})
+    if discarded:
+        # DROPPING IS NOT THE DEFECT, SILENCE IS. The table has no such column, so there is nowhere to
+        # put these values and the only choices are refuse or discard; discarding is what keeps the
+        # browser client this coercion exists for working. But a caller that is never told cannot tell
+        # a stored value from a lost one, and the sibling above already raises for the other half of
+        # the same schema mismatch. Reported, not refused: accept -> refuse on a live door is a
+        # contract change rather than a bug fix.
+        log.warning("insert_dropped_columns", extra={"table": table_id, "columns": discarded})
     try:
         selected = pa.table({f.name: incoming.column(f.name) for f in target})
         aligned = selected.cast(pa.schema([pa.field(f.name, f.type, f.nullable) for f in target]))
