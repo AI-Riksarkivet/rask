@@ -37,6 +37,21 @@ pytestmark = pytest.mark.e2e
 #: producer chose, so it does not count as a hop closing itself.
 _TERMINAL = {"COMPLETE", "FAIL"}
 
+#: Job-name prefix of the SYNTHETIC events other suites write straight into the feed, excluded because
+#: this module is about CASCADE HOPS and those are not one.
+#:
+#: `test_lineage_e2e.py:596` writes `job="e2e/write.events_feed"` with `author="data_eng"` and event
+#: times backdated to 2026-07-06, to exercise the feed's retention and read-audit behaviour — a START
+#: with no terminal is part of what it is testing. Measured 2026-09-20 after running that suite's
+#: destructive leg for the first time: the fixture's run was the ONLY `e2e/*` job in the 300-event
+#: window and the only unterminated run, and it failed two legs here that are about the medallion
+#: cascade and had nothing to say about it.
+#:
+#: SCOPING, NOT SILENCING. The control leg below still requires a real run to be present, so this
+#: cannot empty the fixture and pass vacuously; and a cascade hop never carries an `e2e/` job name —
+#: the producer names its jobs for the transition it runs.
+_SYNTHETIC_JOB_PREFIX = "e2e/"
+
 
 @pytest.fixture(scope="module")
 def runs() -> dict[str, list[str]]:
@@ -50,6 +65,8 @@ def runs() -> dict[str, list[str]]:
 
     grouped: dict[str, list[str]] = defaultdict(list)
     for event in response.json().get("events", []):
+        if str(event.get("job") or "").startswith(_SYNTHETIC_JOB_PREFIX):
+            continue
         payload = event.get("event") or {}
         if isinstance(payload, str):
             payload = json.loads(payload)

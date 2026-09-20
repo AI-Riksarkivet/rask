@@ -70,7 +70,11 @@ def _bearer() -> str:
         return ""
     if probe.status_code != 401:
         return ""
-    dex = os.environ.get("LANCE_E2E_DEX_URL", "").rstrip("/")
+    # `LANCE_E2E_DEX` is the estate's name for this: `scripts/e2e_live.sh:145` exports it and nine
+    # other live suites read it. A spelling only this module knows is one the script never sets, so
+    # the mint returns "" and the suite dies in setup on `401 Missing bearer token` — which reads as a
+    # governed door refusing rather than as a variable nobody assigned (measured 2026-09-20).
+    dex = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
     if not dex:
         return ""
     form = {
