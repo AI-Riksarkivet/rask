@@ -68,6 +68,20 @@ medallion:
 # table-scoped credential the vend issues.
 maintenance:
   distributedCompaction: true
+  # RECLAMATION ON, for THIS estate only — the chart default stays false and should, because
+  # `trashPurge` is the permission to make an expired drop permanently unrecoverable and no shared
+  # default should carry it. Authorised by the owner 2026-09-20 and exercised the same day: the first
+  # real run reclaimed 7 records / 75,166 bytes, exactly what three preceding dry-run ticks predicted.
+  #
+  # IT IS HERE RATHER THAN SET BY HAND because the deploy that landed this file proved the point: a
+  # `kubectl set env` enable is absent from `helm get values`, so revision 193 reverted it mid-task and
+  # the purge had to be re-armed before it could fire. A permission that disarms on every deploy is not
+  # a policy, it is a chore.
+  #
+  # The blast radius is bounded by three things that are NOT this flag: the grace window decides what
+  # is expired at all, `trashPurgeMaxPerTick` caps a tick at 25 with the remainder REPORTED as capped,
+  # and the purge only runs on a tick whose drift report is clean.
+  trashPurge: true
 
 # THE OPERATOR-MANAGED HEAD ([[CP-042]]), which is what makes the derivation above unnecessary: a
 # RayCluster named `<release>-ray` gives KubeRay's own `<release>-ray-head-svc`, the exact name the
