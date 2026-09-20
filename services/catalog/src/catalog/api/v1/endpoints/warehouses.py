@@ -29,6 +29,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
+from typing import Any
 
 from fastapi import APIRouter, Request, Response
 from fastapi.concurrency import run_in_threadpool
@@ -60,6 +61,7 @@ from catalog.api.dependencies import (
     namespace_for_root,
 )
 from catalog.api.security import CurrentToken
+from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import CredentialVendor
@@ -732,6 +734,42 @@ def _tables_in_namespace(ns: LanceNamespace, top_ns: str) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
+async def _revoke_descendants_of(
+    ns_conn: Any,
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: IDToken | None,
+    segments: list[str],
+) -> int:
+    """Revoke the tuples of every table and nested namespace under ``segments``. Returns the count.
+
+    CALLED BEFORE THE DROP, which is the whole of it: `drop_namespace` destroys its children inside one
+    native call, and afterwards they cannot be listed, so a revoke that ran after would have nothing to
+    enumerate. The namespace door already learned this — `_collect_descendants` exists there for exactly
+    this ordering — and the warehouse cascade took the same destructive action without it, leaving every
+    destroyed table's tuples behind. Those orphans then sit in the lineage reconcile's `governed_tables`
+    ("ids carrying at least one authorization tuple") with no dataset to match, which is how they
+    surface as a PROVENANCE gap rather than as the authorization residue they are.
+
+    The enumerator is REUSED rather than reimplemented: it caps depth and reports truncation, and a
+    second walker here would be a second place for an incomplete revoke to hide.
+
+    Best-effort per object, like the revokes around it: a cascade that stopped on one failed revoke
+    would leave MORE orphans than one that continues and says so.
+    """
+    try:
+        descendants = await run_in_threadpool(namespaces_api._collect_descendants, ns_conn, segments)  # noqa: SLF001 — one walker, deliberately
+    except Exception as exc:  # noqa: BLE001 — an unenumerable subtree must not block the delete
+        log.warning("warehouse_cascade_descendants_unlistable", extra={"namespace": segments, "error": f"{type(exc).__name__}: {exc}"})
+        return 0
+    removed = 0
+    for resource, child in descendants:
+        removed += await _revoke_tuples(client, settings, token, f"{resource}:{fga.canonical_object_id(child, delimiter=settings.delimiter)}")
+    if removed:
+        log.info("warehouse_cascade_descendants_revoked", extra={"namespace": segments, "objects": len(descendants), "tuples": removed})
+    return removed
+
+
 async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token: IDToken | None, obj: str) -> int:
     """Delete every FGA tuple on ``obj`` and return the count (0 when FGA is off/unwired).
 
@@ -879,6 +917,9 @@ async def delete_warehouse(
             ns_conn = namespace_for_root(request, settings, root_uri)
             for top_ns in bound:
                 segments = parse_identifier(top_ns, settings.delimiter)
+                # BEFORE the drop: `drop_namespace` destroys the children in one native call, and a
+                # revoke that ran after would have nothing left to enumerate.
+                revoked += await _revoke_descendants_of(ns_conn, client, settings, token, segments)
                 try:
                     await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=segments))
                 except NamespaceNotFoundError:
