@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**193 open items**, of which **98 are blocked on a decision** and **95 can be picked up today**.
+**193 open items**, of which **99 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 45 | 7 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 45 | 6 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 48 | 31 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
@@ -257,6 +257,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **blocked:** [[ZT-001]]'s deployment-policy call. This row's own *Closes when* requires that "the signing key is not derivable from `dapr.appToken`", and that is precisely what ZT-001 must deliver — it is blocked on the owner choosing between prod values that enable ESO and a render that FAILS without supplied material. Re-measured 2026-09-20 and all three premises hold: no signature or HMAC verification exists in `services/lineage/src` or `packages/lineage-kit/src`, `fga_deps.py:263-264` still states the gap in `_StampedAuthor` ("nothing proves the stamp"), and `test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py` still passes — which pins the tokens as STILL derivable, since that file is deleted rather than inverted when ZT-001 lands. So the work is not merely weaker before ZT-001, it cannot meet its own closing bar: an HMAC keyed on today's material refuses an unauthenticated forger but not any of the 13 pods holding the shared token, and shipping it would read as non-repudiation without being it.
 - *What is left:* Add a transport-independent producer signature over the CloudEvent and verify it in the bus door (`on_lineage_event` / `enforce_bus_authz`), with the signing seam in `packages/lineage-kit` so it survives a Dapr retreat; `_StampedAuthor` states the gap ("nothing proves the stamp"). Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
 - **ITS STRENGTH IS CAPPED BY [[ZT-001]], and that should be settled first.** A producer signature needs
   a KEY, and every key a producer holds today is derivable from `dapr.appToken`: the shared app token
