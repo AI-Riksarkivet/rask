@@ -575,6 +575,12 @@ def _clear_trash_under(control_root: str, storage_options: StorageOptions, wareh
 
     Best-effort by contract: the registry delete is the operation, and a trash sweep that raised would
     turn a completed delete into an error the caller would retry against a record that is already gone.
+
+    DELETION ONLY, NEVER DEACTIVATION, though both drop a bucket out of `maintained_roots`. Deactivate
+    is offboarding step ONE and is reversible — `maintainable_buckets` excludes it so no process rewrites
+    a quarantined tenant's data, and "a reactivated warehouse is swept again on the next tick, having
+    lost nothing". Clearing its trash would take the one thing a reactivation is supposed to restore.
+    A delete has no such return, which is what makes the same sweep right here and wrong there.
     """
     record = get_warehouse(control_root, storage_options, warehouse_id) or {}
     bucket = str(record.get("bucket") or warehouse_id)
