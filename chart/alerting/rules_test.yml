@@ -1475,3 +1475,45 @@ tests:
             exp_annotations:
               summary: "No governed-table provenance count — LineageProvenanceLostOnWrite cannot fire"
               description: "The reconcile sweep has published no count of governed tables missing from the graph for two hours, so the axis that detects a write losing its provenance is blind and its silence means nothing. Two causes, both of which end here: the sweep is not running (check the lineage pod and its Dapr cron binding), or it is running and `governed_tables` returned None — authorization disabled, no FGA client wired, or the store unreadable (check lineage's `lineage_reconcile_governed_set_unreadable` warning and OpenFGA's health). The sibling series `versions_below_tip` tells the two apart: present means the sweep is alive and FGA is not. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # [[LH-099]] THE DRIFT REPORT REACHED A LOG LINE AND NOTHING ELSE until `maintenance.drift.items`
+  # landed. Shaped on the deployed estate's REAL standing residue — `orphaned_trash` measured 989 on
+  # 2026-09-20 — so the proof is that a RISE fires rather than that a non-zero level does.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_drift_items{category="orphaned_trash"}'
+        values: "989+0x150 1010+0x60"
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: MaintenanceDriftRising
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+              category: "orphaned_trash"
+            exp_annotations:
+              summary: "A reconcile drift category grew in the last two hours — orphaned_trash"
+              description: "The maintenance reconcile is finding MORE of this drift category than it did two hours ago. Each category names a different disagreement between the registry, OpenFGA and object storage, and a rising one means something is producing it now rather than leaving residue from before. A gating category also blocks the expired-trash purge, so reclamation stops until it clears. Find the named objects in the `maintenance_reconcile` log line for the matching category; `orphaned_trash` and the other non-gating categories are counted and reported but never block the purge. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+
+  # THE 989 MUST NOT PAGE. It is residue from warehouse deletes that predate the fix clearing them —
+  # a triage queue, not an incident, and nothing an on-call window can drain. This is the case the
+  # delta shape exists for, and without it the alert would fire on the first tick after deploy and stay
+  # firing, which is how a rule ends up in a muted channel.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_drift_items{category="orphaned_trash"}'
+        values: "989+0x220"
+    alert_rule_test:
+      - eval_time: 3h30m
+        alertname: MaintenanceDriftRising
+        exp_alerts: []
+
+  # A CATEGORY BEING REPAIRED MUST NOT PAGE EITHER — someone is clearing it and delta() goes negative.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_drift_items{category="ghost_warehouses"}'
+        values: "40-1x40 0+0x180"
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: MaintenanceDriftRising
+        exp_alerts: []

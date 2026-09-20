@@ -575,6 +575,38 @@ groups:
   # so neither could ever page. A real sweep failed on 11 datasets that day and nothing said so.
   - name: lance-maintenance
     rules:
+      # The drift report decides whether the purge may run at all and is the estate's answer to "is the
+      # storage state understood". It reached a log line and nothing else until `maintenance.drift.items`
+      # landed, so nothing here could name it.
+      #
+      # THE DELTA IS THE INCIDENT, not the level, for the reason the lineage rules above already give:
+      # this estate carries a KNOWN backlog — 989 orphaned trash records measured 2026-09-20, residue
+      # from warehouse deletes that predate the fix clearing them — and a `> 0` on the level would fire
+      # on the first tick after deploy and stay firing on something no on-call window can clear. That is
+      # how an alert becomes one people route to a muted channel. Drift that appeared TODAY is a
+      # different claim: something started producing it.
+      #
+      # No `category` in the expr on purpose. A per-category rule is a hand-kept list, and the drift
+      # categories are exactly the thing that grows — `orphaned_trash` itself was added the same day.
+      # The label rides the firing series, so the alert still says WHICH category moved.
+      - alert: MaintenanceDriftRising
+        expr: delta(maintenance_drift_items[2h]) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "A reconcile drift category grew in the last two hours — {{ $labels.category }}"
+          description: >-
+            The maintenance reconcile is finding MORE of this drift category than it did two hours ago.
+            Each category names a different disagreement between the registry, OpenFGA and object
+            storage, and a rising one means something is producing it now rather than leaving residue
+            from before. A gating category also blocks the expired-trash purge, so reclamation stops
+            until it clears. Find the named objects in the `maintenance_reconcile` log line for the
+            matching category; `orphaned_trash` and the other non-gating categories are counted and
+            reported but never block the purge.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
+
       - alert: MaintenanceDatasetsFailing
         expr: sum(increase(compaction_datasets_failed_total[30m])) > 0
         for: 30m
