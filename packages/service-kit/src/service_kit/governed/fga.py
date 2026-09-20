@@ -1618,6 +1618,13 @@ TupleOrigin = Literal[
     # the row can be read to mean: the registry justifies the SEED and nothing after it, so a
     # `registry_rebuild` row is evidence of recovery, never of an authorization decision.
     "registry_rebuild",
+    # REVOKING a tuple whose OBJECT no longer exists ([[LH-061]]'s repair half). Its own value for the
+    # same reason `registry_rebuild` has one, in the other direction: an auditor reading a revoke needs
+    # to know whether a person dropped the object or a reconciler swept authz for an object already
+    # gone. `lifecycle_delete` says a door destroyed something; this says nothing was destroyed because
+    # there was nothing left to destroy. It also bounds the row: a `drift_repair` revoke is only ever
+    # justified by a drift finding, so it can never be evidence of an access decision.
+    "drift_repair",
     "lifecycle_delete",
     "train",
     "annotator",

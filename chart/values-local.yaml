@@ -83,6 +83,12 @@ maintenance:
   # and the purge only runs on a tick whose drift report is clean.
   trashPurge: true
 
+  # [[LH-061]]'s repair half, ARMED on local but DRY-RUN: the estate carries 1,033 `ghost_tables`
+  # (residue of the warehouse cascade [[LH-148]] fixed at source), and a first run must be readable
+  # before it is destructive. `driftRepairDryRun: false` is the second, separate act that arms it.
+  driftRepair: true
+  driftRepairDryRun: true
+
 # THE OPERATOR-MANAGED HEAD ([[CP-042]]), which is what makes the derivation above unnecessary: a
 # RayCluster named `<release>-ray` gives KubeRay's own `<release>-ray-head-svc`, the exact name the
 # chart already derives and which resolved to nothing here.

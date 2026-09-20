@@ -37,6 +37,7 @@ from maintenance.services.purge import purge_expired_trash, refusal_log_entry
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
+from maintenance.services.repair import repair_drift
 from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -239,6 +240,26 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
                         "error": rebuilt.error,
                     },
                 )
+        # AFTER the rebuild, and the order is load-bearing rather than tidy: the rebuild REVIVES a
+        # tenant by re-asserting the tenancy pointer its registry record justifies, and this pass
+        # revokes authz for objects no record names. Running the revoke first would let one tick revoke
+        # a pointer the next tick re-writes, and an operator reading the audit stream would see an
+        # estate arguing with itself. Both read THIS tick's report, never a fresh scan.
+        repaired = await repair_drift(settings, report=report, fga_client=client)
+        payload["drift_repair"] = repaired.model_dump(mode="json")
+        if repaired.revoked or repaired.error:
+            # NAMED at WARNING for the rebuild's reason in the other direction: every entry removed a
+            # grant surface, and "revoked 50 objects" tells an operator nothing they can check.
+            log.warning(
+                "drift_repair_result",
+                extra={
+                    "dry_run": repaired.dry_run,
+                    "revoked": [f"{r.fga_object} ({r.tuples} tuples) <- {r.justified_by}" for r in repaired.revoked],
+                    "refused": repaired.refused,
+                    "capped": repaired.capped,
+                    "error": repaired.error,
+                },
+            )
         floors = await run_in_threadpool(raise_listing_floors, settings, orphans=report.orphan_files, storage_options=settings.storage_options())
         payload["floor_raise"] = floors.model_dump(mode="json")
         # WARNING and NAMED, like the purge line below, because this writes a version to a GOVERNED

@@ -350,6 +350,19 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: cron fire into an estate-wide authorization write.
     tuple_rebuild_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK")
 
+    #: [[LH-061]]'s REPAIR half — revoking tuples whose object no longer exists. OFF and DRY-RUN by
+    #: default, the same two flags the rebuild and the floor raise carry, and for the same reason:
+    #: "does this estate want the behaviour" and "does this tick act" are different questions, and an
+    #: operator turning it on to SEE what it would revoke must not thereby write to the authz store.
+    #: The default here is the stricter of the two available defaults on purpose — this pass DELETES,
+    #: and `trash_purge_dry_run` defaulting false is a choice made for a pass whose targets are already
+    #: expired records, not for one that writes to OpenFGA.
+    drift_repair_enabled: bool = Field(default=False, alias="MAINTENANCE_DRIFT_REPAIR_ENABLED")
+    drift_repair_dry_run: bool = Field(default=True, alias="MAINTENANCE_DRIFT_REPAIR_DRY_RUN")
+    #: Capped per tick so a first armed run on an estate carrying [[LH-148]]'s 1,033 ghost tables
+    #: revokes a reviewable batch rather than sweeping the backlog in one unreviewable write.
+    drift_repair_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK")
+
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and
     # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. The component
