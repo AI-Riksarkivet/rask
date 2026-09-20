@@ -9,13 +9,22 @@ work (open dataset, list versions, cleanup) runs in a threadpool so the event lo
 optional either way: FastAPI drops an undeclared query parameter in silence, so a door that "takes no
 branch" is exactly the shape that answers 200 for a branch it ignored.
 
-The split is by what the verb can REACH, measured per door, not by how risky it sounds:
+ALL FOUR VERBS HONOUR IT, and each for a reason measured on the door rather than inferred from how
+destructive it sounds. Reindex carries the ref on the work item so the worker opens what the request
+named. Preview calls ``_base_refs`` zero times and mutates nothing. Compact is answered by
+``require_compactable``, an evidence gate that refuses a real shallow clone on COST. Run reclaims, and
+its reclaim is contained by the LAYOUT: a branch keeps its own ``_versions``/``_transactions``/``data``
+under ``tree/{branch}/`` (``lance_docs/file_format.md:2746-2761``), so ``cleanup_old_versions`` through
+a branch handle deletes the branch's own files. Measured on pylance 11.0.0, on a branch that had
+overwritten every parent fragment — the sharpest case, where all of the parent's bytes are garbage from
+the branch's point of view — one data file went and it was the branch's own; the parent's ``data/``
+stayed byte-identical and still time-travelled to v1.
 
-* ``maintenance/reindex`` and ``maintenance/preview`` HONOUR it. Reindex carries the ref on the work
-  item so the worker opens what the request named; preview calls ``_base_refs`` zero times and mutates
-  nothing, so [[LH-094]]'s question about what a reclaim may delete on a branch never reaches it.
-* ``maintenance/run`` and ``maintenance/compact`` still REFUSE it. Both reclaim, both consult
-  ``_base_refs``, and what they may delete on a branch is that question exactly.
+A branch handle reports the DATASET ROOT as its ``uri`` (measured: ``main.uri == branch.uri``), so
+``_base_refs`` lists the same directory and ``is_protected`` checks the same location whichever ref the
+request named. That is why ``/run``'s refusal bought nothing and was deleted: it cited a bound — one
+parent listing, blind to a referrer under another root — that applies identically to the MAIN request
+this door has always accepted.
 
 A door that honours a ref must answer ABOUT that ref: previewing main and labelling it the branch's is
 the same defect as reclaiming main, delivered as information instead of as deletion.
@@ -43,7 +52,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import COMPACT_TABLE, CREATE_INDEX
 from catalog.core.namespace import open_dataset
 from catalog.schemas import CompactAccepted, CompactRequest, CompactResult, GcPreview, GcRequest, GcRunResult, ReindexAccepted, ReindexRequest, ReindexResult
-from catalog.services import dataplane, index_specs, maintenance
+from catalog.services import index_specs, maintenance
 from service_kit import dapr_publish
 from service_kit.lakehouse import base_refs
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem, IndexWorkItem
@@ -118,20 +127,23 @@ async def run_maintenance(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
-    branch: Annotated[str | None, Query(description="REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.")] = None,
+    branch: Annotated[
+        str | None, Query(description="The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.")
+    ] = None,
 ) -> GcRunResult:
     """Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
     (``can_drop``) — the same bar as scheduling it via the retention policy.
 
-    ``branch`` is DECLARED only so it can be REFUSED — see the module header."""
-    dataplane.refuse_a_branch_this_door_cannot_honour(
-        branch,
-        door="maintenance/run",
-        reason="this door reclaims, and what a reclaim may delete on a branch is decided per LOCATION by the estate-wide protected-base pre-pass the scheduled sweep runs; this door's `sibling_base_refs` lists one parent directory and cannot see a referrer under another root",
-        remedy="The scheduled sweep reclaims branches; it runs the pre-pass this door cannot.",
-    )
+    ``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's — see the
+    module header for the measurement. The pre-pass below runs on both paths and is the same listing
+    either way, because a branch handle's ``uri`` is the dataset root.
+
+    Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
+    irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
+    parent's data files, counted before and after — rather than that the branch reached
+    ``open_dataset``."""
     segments = parse_identifier(id, settings.delimiter)
-    ds = await run_in_threadpool(open_dataset, ns, so, segments)
+    ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     protected = await _base_refs(ds, so)
     result = await run_in_threadpool(
         maintenance.run_gc,
