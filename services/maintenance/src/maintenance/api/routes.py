@@ -459,7 +459,13 @@ def _finding_identity(finding: BaseModel) -> str:
     # path is not merely unhelpful — it is not unique across the report.
     if (root := dumped.get("dataset")) and (relative := dumped.get("path")):
         return f"{root}/{relative}"
-    for field in ("fga_object", "bucket", "namespace", "top_ns", "path", "task", "id"):
+    # `location` is LAST, and the position is the whole care required: `OrphanedTrash` carries one
+    # too and is identified by its `id`, so putting `location` ahead of `id` would silently rename an
+    # existing category's findings in the report an operator reads every tick. Last, it reaches only
+    # the models that offer nothing else — `UnregisteredDataset`, whose entire content is that no
+    # root claims the table, so a table id (unique only WITHIN a root) cannot be its identity and the
+    # URI is the only answer to "where do I go and look".
+    for field in ("fga_object", "bucket", "namespace", "top_ns", "path", "task", "id", "location"):
         if value := dumped.get(field):
             return str(value)
     return str(dumped)

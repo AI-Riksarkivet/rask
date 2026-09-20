@@ -164,3 +164,33 @@ def test_a_CATALOG_OUTAGE_reports_UNAVAILABLE_rather_than_the_whole_estate(monke
     assert [u.reason for u in report.unavailable if u.category == "unregistered_datasets"], (
         f"the category is silently absent rather than reported unavailable: {[(u.category, u.reason) for u in report.unavailable]}"
     )
+
+
+def test_the_finding_renders_as_its_LOCATION_in_the_drift_summary() -> None:
+    """The drift WARNING is where an operator meets this category, and a dict is not an identity.
+
+    `_finding_identity` picks the first present field from a known list, and neither `table_id` nor
+    `location` was on it — so the finding fell through to the deliberate `str(dumped)` fallback and
+    rendered as `{'table_id': …, 'location': …}` while every sibling category rendered a bare name.
+
+    THE LOCATION, NOT THE ID, is the right identity for this one: a table id is unique within a root
+    and this finding's whole content is that no root claims it, so only the URI answers "where do I
+    go and look".
+    """
+    from maintenance.api.routes import _finding_identity
+
+    finding = UnregisteredDataset(table_id="ns$t", location="s3://lance-catalog/aa11bb22_ns$t")
+
+    assert _finding_identity(finding) == "s3://lance-catalog/aa11bb22_ns$t"
+
+
+def test_an_orphaned_trash_record_STILL_renders_as_its_id() -> None:
+    """The regression this change could cause. `OrphanedTrash` carries a `location` too, so adding
+    that field to the lookup ahead of `id` would silently rename an existing category's findings in
+    the report an operator reads every tick."""
+    from maintenance.api.routes import _finding_identity
+    from maintenance.services.reconcile import OrphanedTrash
+
+    record = OrphanedTrash(id="tr-1", kind="table", location="s3://gone/t.lance")
+
+    assert _finding_identity(record) == "tr-1"

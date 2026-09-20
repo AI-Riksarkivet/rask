@@ -369,13 +369,28 @@ async def _read_blocking[T](source: str, fn: Callable[..., T], *args: Any, **kwa
     return await _read_async(source, run_in_threadpool(fn, *args, **kwargs))
 
 
-def _list_json_records(root: str, storage_options: StorageOptions, *, prefix: str, required: tuple[str, ...]) -> tuple[list[dict[str, str]], list[str]]:
+def _list_json_records(
+    root: str,
+    storage_options: StorageOptions,
+    *,
+    prefix: str,
+    required: tuple[str, ...],
+    non_empty: tuple[str, ...] = (),
+) -> tuple[list[dict[str, str]], list[str]]:
     """Every readable JSON record directly under ``<root>/<prefix>``, plus a reason per record SKIPPED.
 
     Non-recursive, so ``_warehouses`` does not swallow ``_warehouses/bindings``. Per-record tolerance
     matches the catalog's own listings — but here a skip is not merely survived, it is REPORTED: a
     record this cannot read is a tenant it cannot see, and a category computed without it may name a
     live object as drift.
+
+    PRESENT AND EMPTY IS NOT MISSING, and the two rules are separate because the trash registry needs
+    both at once. ``required`` asks only that the key EXIST; ``non_empty`` additionally asks that it
+    carry a value. A namespace trash record is written with ``location=""`` deliberately — a namespace
+    is not a directory and owns no bytes — while its ``id`` is its identity and an empty one names
+    nothing. A single truthiness test cannot express that, and the cost of getting it wrong is not
+    cosmetic: every skip becomes an `IncompleteScan`, and `purge.py::report_is_clean` refuses to
+    certify an estate with ANY incomplete entry, so correctly-written records disable the reclaimer.
     """
     fs, base = fs_and_base(root, storage_options)
     records: list[dict[str, str]] = []
@@ -389,10 +404,17 @@ def _list_json_records(root: str, storage_options: StorageOptions, *, prefix: st
         except Exception as exc:
             skipped.append(f"{info.path} is unreadable ({type(exc).__name__}: {exc})")
             continue
-        if isinstance(record, dict) and all(record.get(key) for key in required):
-            records.append(record)
+        if not isinstance(record, dict):
+            skipped.append(f"{info.path} is not a JSON object")
+        elif absent := [key for key in required if key not in record]:
+            skipped.append(f"{info.path} is missing {absent}")
+        elif blank := [key for key in non_empty if not record.get(key)]:
+            # NAMED SEPARATELY from an absent key: "present but blank" and "not there at all" are
+            # different defects at the writer, and an operator chasing one should not be handed the
+            # other's wording.
+            skipped.append(f"{info.path} carries an empty {blank}")
         else:
-            skipped.append(f"{info.path} is missing one of {list(required)}")
+            records.append(record)
     return records, skipped
 
 
@@ -758,14 +780,18 @@ async def _registry_source(
     storage_options: StorageOptions,
     prefix: str,
     required: tuple[str, ...],
+    non_empty: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, str]] | None, str | None]:
     """One registry listing, folding its per-record skips into ``sources.incomplete``.
 
     Keyword-only past ``sources``: three of its five inputs are ``str`` and two of those are a ROOT and
     a PREFIX, which a positional call site cannot distinguish and which silently list the wrong place
     when swapped (MAINT-16).
+
+    ``non_empty`` is forwarded rather than interpreted — see :func:`_list_json_records` for why a
+    present-but-blank field is a different fact from an absent one.
     """
-    listing, error = await _read_blocking(source_name, _list_json_records, control_root, storage_options, prefix=prefix, required=required)
+    listing, error = await _read_blocking(source_name, _list_json_records, control_root, storage_options, prefix=prefix, required=required, non_empty=non_empty)
     if listing is None:
         return None, error
     records, skipped = listing
@@ -838,7 +864,11 @@ async def load_sources(
             control_root=control_root,
             storage_options=storage_options,
             prefix=_TRASH_PREFIX,
+            # `location` must EXIST; only `id` must carry a value. A namespace trash record's
+            # location is deliberately "" (see `namespaces.py`'s cascade write) and ten of them were
+            # reported as malformed on every tick, which blocked the trash purge outright.
             required=("id", "location"),
+            non_empty=("id",),
         ),
     )
     # EVERY root, not just the shared one (diff2 F3.3). Reuses the warehouse registry loaded above rather
