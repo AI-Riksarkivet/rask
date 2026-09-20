@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**190 open items**, of which **99 are blocked on a decision** and **91 can be picked up today**.
+**190 open items**, of which **98 are blocked on a decision** and **92 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 4 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 34 | 12 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -156,7 +156,8 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LH-176 · A 300-row dataset sits in `lance-catalog` with no catalog record and no project, and the only category that counts it is `orphan_files`**
 `maintenance, catalog` · **MED**
-- **blocked:** Owner call on what happens to an unregistered dataset holding real rows: adopt it into a project and register the table, or destroy it. Both are estate mutations on live bytes, which is the same class of decision [[LH-094]]'s was.
+- **THE MARKER GATED THE WHOLE ROW AND ONLY EVER GATED HALF OF IT.** This row's *Closes when* has two clauses: a REPORTING one ("the reconciler reports unregistered dataset prefixes as their own category") and a DISPOSITION one ("this dataset is either registered or gone"). The first needs no ruling at all and was never blocked — it is the reason the estate could not see the dataset in the first place. **It is DONE** (`reconcile.py::_unregistered_datasets`, `UnregisteredDataset`, refused by name in `repair.py`, mutation-checked). The second is answered: the dataset is `m2-proof-<unix ts>`, a proof artefact, and the standing ruling is that the deployed estate's data is test and demo — so it is destroyed, not adopted.
+- *What remains is the destroy itself*, which needs a bearer: the dataset is in no project, so no subject holds a relation on it and `can_delete` resolves for nobody — the same shape [[LH-144]] records for ungoverned tables. Reaching it needs a path that acts as the service identity rather than as a subject.
 - *What is left:* Measured 2026-09-19 on the deployed estate: `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` holds 300 rows across one live version, `GET /v1/table/m2proof_silver$m2-proof-1788537252` answers **404**, and `m2proof` is absent from the 93 registered projects. Nothing in the reconciler names this: `ungoverned_tables` compares REGISTERED tables against FGA tuples, so a dataset in neither set is invisible to it, and `orphan_buckets` looks at buckets rather than prefixes inside one. It surfaces only as 13 `orphan_files`, which reads as residue inside a governed table and is not — and that misreading is in this register's own history, where [[LH-094]] and [[LH-102]] both asserted the dataset was live and governed. The sweep cannot touch it either: maintenance is refused a write credential for it (403), correctly, because the catalog cannot authorize a table it has no record of. Add the reconciler category FIRST — a dataset prefix under a maintained root with no catalog record — so the estate can see how many others there are before anyone rules on this one.
 - *Closes when:* The reconciler reports unregistered dataset prefixes as their own category, and this dataset is either registered or gone.
 - *Evidence:* live 2026-09-19: `/v1/table/m2proof_silver$m2-proof-1788537252` 404, `/v1/projects` 93 entries without `m2proof`, `reconcile_drift counts.ungoverned_tables=0` while `orphan_files=13` · `services/maintenance/src/maintenance/services/reconcile.py (ungoverned_tables, orphan_buckets)` · sweep refusal: "the catalog REFUSED a write credential for m2proof_silver$m2-proof-1788537252 (403)"

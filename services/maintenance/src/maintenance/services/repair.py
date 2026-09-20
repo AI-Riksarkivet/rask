@@ -116,6 +116,7 @@ _SUBTRACTED_FROM: dict[str, str] = {
 #: Why each non-revocable category is refused. Phrased as what the finding IS, because the reason a
 #: pass must not delete it is a property of the object rather than of this module's scope.
 _REFUSED: dict[str, str] = {
+    "unregistered_datasets": "a REAL dataset on storage that no catalog record names — the resolution is REGISTRATION, never deletion; deleting it would destroy live rows to close a bookkeeping gap",
     "ungoverned_tables": "a REAL table carrying no tuples — deleting it would destroy live data to close an authorization gap; it needs a grant, not a revoke",
     "unbound_namespaces": "a real top-level namespace missing a warehouse BINDING record — it needs binding, and the data under it is live",
     "unreferenced_projects": "a real project record holding no tuples — it needs an admin grant, which is a decision a person makes (see `rebuild.py`)",

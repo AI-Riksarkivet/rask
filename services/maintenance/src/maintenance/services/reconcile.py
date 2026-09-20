@@ -50,6 +50,7 @@ from maintenance.services.optimize import discover_datasets
 from maintenance.services.orphans import OrphanFile, scan_datasets
 from service_kit.governed import fga
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
+from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ CATEGORIES: tuple[str, ...] = (
     "dangling_bindings",
     "orphaned_annotation_tasks",
     "ungoverned_tables",
+    "unregistered_datasets",
     "orphan_files",
 )
 
@@ -129,7 +131,9 @@ CATEGORIES: tuple[str, ...] = (
 #:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
 #:     on it would make the gate unsatisfiable again, which this comment already argues is not a safety
 #:     property.
-NON_GATING_CATEGORIES: frozenset[str] = frozenset({"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables", "orphaned_trash", "ghost_tables"})
+NON_GATING_CATEGORIES: frozenset[str] = frozenset(
+    {"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables", "orphaned_trash", "ghost_tables", "unregistered_datasets"}
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -160,6 +164,28 @@ class UnboundNamespace(BaseModel):
     #: The root it was found on — the shared default bucket, which is exactly where an unbound
     #: namespace silently resolves to.
     root: str
+
+
+class UnregisteredDataset(BaseModel):
+    """A dataset on storage that no catalog table record names — the inverse of `UngovernedTable`.
+
+    WHY IT NEEDED ITS OWN CATEGORY. Measured live 2026-09-19 and unchanged 2026-09-20,
+    `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` holds 300 rows across one live version and
+    answers 404 from the table door, and NOTHING in this report counted it. The two neighbours that
+    sound like they should each miss it structurally: `ungoverned_tables` compares REGISTERED tables
+    against FGA tuples, so a dataset in neither set is outside its domain; `orphan_buckets` is per
+    bucket and `lance-catalog` is claimed by a real warehouse. `orphan_files` counted some of its
+    FILES, which is worse than silence — it described the residue of a thing the report never said
+    existed.
+
+    IT IS REAL BYTES, so `repair.py` refuses it by name for the same reason it refuses
+    `ungoverned_tables`: the resolution is registration, never deletion.
+    """
+
+    #: The identifier recovered from the location — what a `GET /v1/table/{id}` would be asked for.
+    table_id: str
+    #: WHERE, because the whole finding is that no record says. An id alone cannot be acted on here.
+    location: str
 
 
 class UngovernedTable(BaseModel):
@@ -289,6 +315,7 @@ class ReconcileReport(BaseModel):
     dangling_bindings: list[DanglingBinding] = Field(default_factory=list)
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
     #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
+    unregistered_datasets: list[UnregisteredDataset] = Field(default_factory=list)
     orphan_files: list[OrphanFile] = Field(default_factory=list)
     #: How many of `orphan_files` the purge GATES on — those Lance can never reclaim, plus any whose
     #: class could not be decided. Its own field because it is not `len(orphan_files)`: an orphan below
@@ -567,6 +594,34 @@ def _orphaned_annotation_tasks(edges: Iterable[tuple[str, str]], project_ids: se
     is the category that exists precisely because the delete door was right to let it happen.
     """
     return [OrphanedAnnotationTask(annotation_project=task_id, tenant=tenant_id) for task_id, tenant_id in sorted(set(edges)) if tenant_id not in project_ids]
+
+
+def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], trashed: set[str]) -> list[UnregisteredDataset]:
+    """Discovered datasets whose recovered table id no catalog record names.
+
+    THE INVERSE OF :func:`_ungoverned_tables`: there the catalog knows a table and authorization does
+    not; here storage holds a dataset and the catalog does not. The id has to be RECOVERED from the
+    location before the comparison means anything — the catalog lays a table out as
+    ``<root>/<uuid8>_<ns>$<name>``, so a detector comparing raw leaves would report every table in the
+    estate as unregistered.
+
+    ``trashed`` is excluded rather than filtered downstream, because a dropped table's bytes stay on
+    disk under a trash record that names them while its table record is gone BY DEFINITION. Counting
+    those would make this category loudest exactly when the estate is behaving correctly.
+
+    A location :func:`table_id_from_location` cannot answer for is skipped, never reported: it names a
+    directory rather than a table, and calling it an unregistered TABLE would assert into the report
+    the one thing the report is for not doing.
+    """
+    seen: dict[str, UnregisteredDataset] = {}
+    for uri in discovered:
+        if uri.rstrip("/") in trashed:
+            continue
+        table_id = table_id_from_location(uri)
+        if table_id is None or table_id in registered or table_id in seen:
+            continue
+        seen[table_id] = UnregisteredDataset(table_id=table_id, location=uri.rstrip("/"))
+    return [seen[key] for key in sorted(seen)]
 
 
 def _ungoverned_tables(tables: Iterable[tuple[str, str]], governed: dict[str, int]) -> list[UngovernedTable]:
@@ -1013,6 +1068,15 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         # blocks `report_is_clean`, and therefore the #79 purge — reclaiming bytes on the strength of
         # a scan that never opened a dataset is the failure the report-first rule exists to prevent.
         report.skipped.append(CategorySkipped(category="orphan_files", reason=_ORPHAN_SCAN_OFF, coverage_gap=True))
+        # [[LH-176]] rides the SAME walk, so it is unrun for the same reason and must say so — a
+        # category silently absent from counts, unavailable AND skipped is the failure
+        # `test_a_fully_consistent_estate_reports_no_drift` exists to catch.
+        #
+        # NOT a coverage_gap, unlike its neighbour one line up. The flag blocks the #79 purge, and the
+        # purge reclaims expired TRASH bytes — which an unregistered dataset is not and which no
+        # amount of not-looking-for-one can change. Same reasoning that keeps this category out of
+        # `report.total`: it is a registration fact, not a storage one the purge can act differently on.
+        report.skipped.append(CategorySkipped(category="unregistered_datasets", reason=_ORPHAN_SCAN_OFF, coverage_gap=False))
         return
     # GUARDED, like every other source in this module. The three storage calls on this path — the
     # filesystem construction here, `discover_datasets` per bucket, and `scan_datasets` below — used to
@@ -1040,6 +1104,28 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         # gate the #79 purge waits on — must not certify an estate whose file layer we only partly saw.
         for prefix in found.truncated:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
+    # [[LH-176]] — the DISCOVERY half, taken before the expensive per-dataset scan below and
+    # deliberately not gated on it: knowing a dataset exists that no catalog record names is a
+    # different question from knowing which files inside it are unreferenced, and the second one is
+    # meaningless when the first is unanswered. Measured 2026-09-19, `orphan_files` counted this
+    # dataset's FILES while no category said the dataset itself was unknown.
+    #
+    # GUARDED ON THE TABLE LISTING, because the finding is an ABSENCE from it — the same caution
+    # `repair.py` carries. Without it a catalog read failure would report every dataset in the estate
+    # as unregistered, which is the loudest possible way to say nothing.
+    if sources.tables_error is not None:
+        report.unavailable.append(
+            CategoryUnavailable(category="unregistered_datasets", reason=f"the catalog table listing could not be read: {sources.tables_error}")
+        )
+    else:
+        report.unregistered_datasets = _unregistered_datasets(
+            discovered=[uri for uri, _key in datasets],
+            registered={table for table, _root in sources.tables or []},
+            # A dropped table's bytes are still on disk under the record that names them.
+            trashed={str(record["location"]).rstrip("/") for record in (sources.trash or []) if record.get("location")},
+        )
+        report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
+
     try:
         scan = scan_datasets(fs, datasets, settings.storage_options())
     except Exception as exc:  # noqa: BLE001 — same rule as the filesystem guard above
