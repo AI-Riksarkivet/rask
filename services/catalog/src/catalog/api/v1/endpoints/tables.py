@@ -52,6 +52,7 @@ from catalog.api.dependencies import (
     namespace_for_top_ns,
 )
 from catalog.api.pagination import paginate
+from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
@@ -489,8 +490,8 @@ async def drop_table(
     token: CurrentToken,
     so: StorageOptionsDep,
     authorization: Annotated[str | None, Header()] = None,
-    force: bool = False,
-    purge: bool = False,
+    force: RaskFlag = False,
+    purge: RaskFlag = False,
     idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> DropTableResponse:
     """Drop the table at ``id`` via ``drop_table``, then revoke its FGA tuples and
@@ -612,7 +613,7 @@ async def deregister_table(
     so: StorageOptionsDep,
     body: DeregisterTableRequest | None = None,
     authorization: Annotated[str | None, Header()] = None,
-    force: bool = False,
+    force: RaskFlag = False,
     idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> DeregisterTableResponse:
     """Deregister the table at ``id`` (detach it without deleting data) via lance_namespace
@@ -999,7 +1000,7 @@ async def rename_table(
     emitter: LineageEmitterDep,
     control: ControlEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
-    force: bool = False,
+    force: RaskFlag = False,
     idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RenameTableResponse:
     """Rename the table at ``id`` by moving its POINTER, then migrate its FGA ownership and emit lineage.

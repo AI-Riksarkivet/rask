@@ -40,6 +40,7 @@ from lance_namespace import (
 from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, namespace_for_root
 from catalog.api.pagination import paginate
+from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
@@ -544,8 +545,8 @@ async def drop_namespace(
     control: ControlEmitterDep,
     emitter: LineageEmitterDep,
     body: DropNamespaceRequest | None = None,
-    force: bool = False,
-    purge: bool = False,
+    force: RaskFlag = False,
+    purge: RaskFlag = False,
     authorization: Annotated[str | None, Header()] = None,
 ) -> DropNamespaceResponse:
     """Drop namespace ``id`` (``drop_namespace``); revoke its FGA tuples — and, for a Cascade drop, every

@@ -40,6 +40,7 @@ from catalog.api.dependencies import (
     SettingsDep,
     StorageOptionsDep,
 )
+from catalog.api.rask_params import RaskDataBase, RaskSource, RaskSourceVersion
 from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -90,9 +91,9 @@ async def create_table(
     data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)],
     mode: str | None = None,
     properties: str | None = None,
-    data_base: Annotated[list[str], Query()] = [],  # noqa: B006 — FastAPI Query default, not mutated
-    source: str | None = None,
-    source_version: Annotated[int | None, Query(ge=1)] = None,
+    data_base: RaskDataBase = [],  # noqa: B006 — FastAPI Query default, not mutated
+    source: RaskSource = None,
+    source_version: RaskSourceVersion = None,
     run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
@@ -345,8 +346,8 @@ async def merge_insert_into_table(
     timeout: str | None = None,
     use_index: bool | None = None,
     branch: Annotated[str | None, Query(description="The ref to merge into. Omit for main.")] = None,
-    source: str | None = None,
-    source_version: Annotated[int | None, Query(ge=1)] = None,
+    source: RaskSource = None,
+    source_version: RaskSourceVersion = None,
     run_facets_json: Annotated[str | None, Header(alias="X-Lance-Run-Facets")] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> MergeInsertIntoTableResponse:

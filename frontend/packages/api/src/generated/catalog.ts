@@ -12214,8 +12214,6 @@ export interface operations {
     drop_namespace_v1_namespace__id__drop_post: {
         parameters: {
             query?: {
-                force?: boolean;
-                purge?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13629,9 +13627,6 @@ export interface operations {
             query?: {
                 mode?: string | null;
                 properties?: string | null;
-                data_base?: string[];
-                source?: string | null;
-                source_version?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13854,7 +13849,6 @@ export interface operations {
     deregister_table_v1_table__id__deregister_post: {
         parameters: {
             query?: {
-                force?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -13950,8 +13944,6 @@ export interface operations {
     drop_table_v1_table__id__drop_post: {
         parameters: {
             query?: {
-                force?: boolean;
-                purge?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -14314,8 +14306,6 @@ export interface operations {
                 use_index?: boolean | null;
                 /** @description The ref to merge into. Omit for main. */
                 branch?: string | null;
-                source?: string | null;
-                source_version?: number | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -14448,7 +14438,6 @@ export interface operations {
     rename_table_v1_table__id__rename_post: {
         parameters: {
             query?: {
-                force?: boolean;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };

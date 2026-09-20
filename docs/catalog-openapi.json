@@ -21096,26 +21096,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Force",
-              "type": "boolean"
-            }
-          },
-          {
-            "in": "query",
-            "name": "purge",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Purge",
-              "type": "boolean"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -25551,52 +25531,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "data_base",
-            "required": false,
-            "schema": {
-              "default": [],
-              "items": {
-                "type": "string"
-              },
-              "title": "Data Base",
-              "type": "array"
-            }
-          },
-          {
-            "in": "query",
-            "name": "source",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source"
-            }
-          },
-          {
-            "in": "query",
-            "name": "source_version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Version"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -26421,16 +26355,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Force",
-              "type": "boolean"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -26855,26 +26779,6 @@
             "schema": {
               "title": "Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Force",
-              "type": "boolean"
-            }
-          },
-          {
-            "in": "query",
-            "name": "purge",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Purge",
-              "type": "boolean"
             }
           },
           {
@@ -28314,39 +28218,6 @@
             }
           },
           {
-            "in": "query",
-            "name": "source",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source"
-            }
-          },
-          {
-            "in": "query",
-            "name": "source_version",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Source Version"
-            }
-          },
-          {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
             "name": "delimiter",
@@ -28815,16 +28686,6 @@
             "schema": {
               "title": "Id",
               "type": "string"
-            }
-          },
-          {
-            "in": "query",
-            "name": "force",
-            "required": false,
-            "schema": {
-              "default": false,
-              "title": "Force",
-              "type": "boolean"
             }
           },
           {
