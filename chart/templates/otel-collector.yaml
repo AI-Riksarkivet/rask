@@ -265,6 +265,42 @@ data:
             #
             # Selector verified live: pod label app.kubernetes.io/name=greptimedb-standalone, and
             # the HTTP port is named `http` (4000), not `metrics` — it serves /v1/otlp, /v1/sql,
+            # OPENFGA (:2112) — a FOURTH job, unreachable by the three above for the Ray job's exact
+            # reason: `dapr-sidecars` and `dapr-control-plane` both `keep` on a `dapr.io/*` pod
+            # annotation at their first relabel step and an OpenFGA pod carries neither, so it was
+            # dropped before any later rule ran. Every governed read and write in this estate blocks
+            # on a Check, so a slow or datastore-thrashing authz store was the first thing an operator
+            # needed to see and the one thing no series existed for.
+            #
+            # CARDINALITY IS BOUNDED BEFORE IT LANDS, because the ray-pods job is what broke this
+            # store once. Measured on the deployed pod 2026-09-20: 653 series, 561 of them
+            # `openfga_*`. The distinction that matters there is UNBOUNDED, not merely large —
+            # `ray_data_*` grows per dataset and per operator, while `openfga_request_duration_ms` is
+            # gRPC-method x bucket, fixed by the API surface. So the openfga families stay and only
+            # the Go runtime goes.
+            - job_name: openfga
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: pod
+                  namespaces: { names: [{{ .Release.Namespace }}] }
+              relabel_configs:
+                - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+                  action: keep
+                  regex: openfga
+                - source_labels: [__meta_kubernetes_pod_container_port_name]
+                  action: keep
+                  regex: metrics
+                - source_labels: [__meta_kubernetes_namespace]
+                  target_label: namespace
+                - source_labels: [__meta_kubernetes_pod_name]
+                  target_label: pod
+              metric_relabel_configs:
+                # 44 of the 653 are the Go runtime and carry no OpenFGA signal. Dropped here rather
+                # than tolerated because every Go service in the estate would otherwise duplicate
+                # them, and the store's ceiling is a shared resource.
+                - source_labels: [__name__]
+                  action: drop
+                  regex: "(go_|process_).*"
             # /v1/prometheus AND /metrics on the one port, so keying on the port NAME the way the
             # ray-pods job does would select nothing here.
             #

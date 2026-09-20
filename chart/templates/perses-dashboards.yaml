@@ -256,6 +256,24 @@ data:
                   "query": "sum(rate(catalog_lineage_emit_failed_total[5m]))", "seriesNameFormat": "catalog emit failed /s" } } } }
               ]
             }
+          },
+          "authzLatency": {
+            "kind": "Panel",
+            "spec": {
+              "display": {
+                "name": "Authz store — OpenFGA Check latency and datastore reads ([[XC-047]])",
+                "description": "Every governed read and write in this estate blocks on an OpenFGA Check, so this is the latency the catalog's doors actually pay. Scraped from OpenFGA's own :2112 by the Collector's `openfga` job — the three jobs before it all keep on a `dapr.io/*` annotation an OpenFGA pod does not carry, so none of these series existed until that job was added. `iter_query_duration` is the datastore side: a Check that is slow because Postgres is slow looks identical to one that is slow because the model is deep, until these two are plotted together."
+              },
+              "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
+              "queries": [
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "histogram_quantile(0.95, sum by (le) (rate(openfga_request_duration_ms_bucket[5m])))", "seriesNameFormat": "request p95 (ms)" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "histogram_quantile(0.95, sum by (le) (rate(openfga_iter_query_duration_ms_bucket[5m])))", "seriesNameFormat": "datastore iter p95 (ms)" } } } },
+                { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
+                  "query": "sum(rate(openfga_datastore_query_count_sum[5m]))", "seriesNameFormat": "datastore queries /s" } } } }
+              ]
+            }
           }
         },
         "layouts": [
@@ -270,7 +288,8 @@ data:
                 { "x": 12, "y": 8, "width": 12, "height": 8, "content": { "$ref": "#/spec/panels/compactionSweeps" } },
                 { "x": 0, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/errorRate" } },
                 { "x": 8, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/outboxDurability" } },
-                { "x": 16, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/governanceGates" } }
+                { "x": 16, "y": 16, "width": 8, "height": 8, "content": { "$ref": "#/spec/panels/governanceGates" } },
+                { "x": 0, "y": 24, "width": 24, "height": 8, "content": { "$ref": "#/spec/panels/authzLatency" } }
               ]
             }
           }
