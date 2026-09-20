@@ -1555,6 +1555,20 @@ def read_deleted_row_ids(
     return cast("bytes", sink.getvalue().to_pybytes())
 
 
+#: Schema-metadata keys the catalog writes for itself. They are the coordinates that make the Lance file
+#: self-describing, not user properties, so no door may hand them back as one.
+_INTERNAL_METADATA_PREFIX = "lineage."
+
+
+def filter_internal_metadata(metadata: dict[str, str]) -> dict[str, str]:
+    """Drop the catalog's own bookkeeping keys from a metadata map a caller will see.
+
+    The map a caller holds is the map it saves back, and `update_schema_metadata` can only promise not
+    to destroy these because it MERGES. Handing them out invites a caller to treat them as its own.
+    """
+    return {k: v for k, v in metadata.items() if not k.startswith(_INTERNAL_METADATA_PREFIX)}
+
+
 def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[str]) -> dict[str, str]:
     """The table's schema-level metadata as ``{str: str}`` — the read twin of ``schema_metadata/update``.
 
@@ -1568,10 +1582,8 @@ def read_schema_metadata(ns: LanceNamespace, so: StorageOptions, table_id: list[
     out: dict[str, str] = {}
     for k, v in meta.items():
         key = k.decode() if isinstance(k, bytes) else str(k)
-        if key.startswith("lineage."):
-            continue
         out[key] = v.decode() if isinstance(v, bytes) else str(v)
-    return out
+    return filter_internal_metadata(out)
 
 
 def update_schema_metadata(
@@ -1593,7 +1605,7 @@ def update_schema_metadata(
     Returns the table's new full map with ``lineage.*`` filtered out, matching what the read twin reports.
     """
     result = open_dataset(ns, so, table_id, branch=branch).update_schema_metadata(values)
-    return {k: v for k, v in result.items() if not k.startswith("lineage.")}
+    return filter_internal_metadata(result)
 
 
 def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None) -> bytes:

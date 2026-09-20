@@ -257,6 +257,11 @@ async def update_table_schema_metadata(
     else:
         req = UpdateTableSchemaMetadataRequest(id=segments, metadata={k: v for k, v in values.items() if v is not None}, branch=branch)
         response = await run_in_threadpool(native.call, ns, "update_table_schema_metadata", req)
+        # ONE DOOR, ONE ANSWER. The dataplane route above already hides the catalog's own `lineage.*`
+        # keys; the native op returns them verbatim, so without this the same door described a table
+        # two different ways depending on which route the request happened to take — and the map a
+        # caller sees is the map it saves back.
+        response.metadata = dataplane.filter_internal_metadata(response.metadata or {})
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
