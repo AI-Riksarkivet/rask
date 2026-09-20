@@ -17,11 +17,18 @@
 # unchanged. Measured on the gateway image: the export dominates at ~78 s (it is the BUILD), and the
 # `docker load` adds ~5 s. --push publishes straight to a registry instead, skipping the daemon.
 #
-# THE ENGINE. Dagger always speaks HTTPS to a registry and `publish` has no --insecure flag, so pushing
-# to the plain-HTTP dev registry needs the engine provisioned by `make dagger-engine`. Only --push needs
-# it; --load does not touch a registry. When _EXPERIMENTAL_DAGGER_RUNNER_HOST is already exported we
-# respect it, otherwise we point at that engine if it happens to be running, and otherwise we let the
-# Dagger CLI auto-provision its own — which is correct for --load and would fail only on --push.
+# THE ENGINE, AND WHY BOTH MODES NEED THE SAME ONE. Dagger always speaks HTTPS to a registry and
+# `publish` has no --insecure flag, so pushing to the plain-HTTP dev registry needs the engine
+# provisioned by `make dagger-engine`. --load does not touch a registry and so does not need that
+# CONFIG — but an engine owns its BuildKit cache, and letting --load auto-provision a second engine
+# splits the cache in two: a build warms one, the next build reads the other cold, and the layer cache
+# silently buys nothing. Measured 2026-09-20 on this host — two engines up at once,
+# `dagger-engine-rask` holding 5.2 GB against an auto-provisioned `dagger-engine-v0.21.7` with its own
+# anonymous volume, the split invisible because a cold build looks exactly like a slow one.
+# So: respect _EXPERIMENTAL_DAGGER_RUNNER_HOST when the operator exports it, otherwise require the
+# repo's engine for both modes. `make dagger-engine` is idempotent and once per host; it reuses the
+# NAMED state volume, so running it costs nothing and never discards the cache.
+# CI is unaffected — it calls `dagger call` directly and never this script.
 set -euo pipefail
 
 NAME="" ZONE="" RUNNER="" TAG="" MODE="load" ADDRESS=""
@@ -53,8 +60,11 @@ if [[ -z "${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-}" ]]; then
   engine="${DAGGER_ENGINE_NAME:-dagger-engine-rask}"
   if [[ "$(docker inspect -f '{{.State.Running}}' "$engine" 2>/dev/null || echo false)" == "true" ]]; then
     export _EXPERIMENTAL_DAGGER_RUNNER_HOST="docker-container://$engine"
-  elif [[ "$MODE" == "push" ]]; then
-    echo "!! --push needs the insecure-registry engine: run 'make dagger-engine'" >&2; exit 1
+  else
+    echo "!! $engine is not running: run 'make dagger-engine'" >&2
+    echo "!! (--push needs its insecure-registry config; --load needs its CACHE — auto-provisioning a" >&2
+    echo "!!  second engine builds cold against a separate one)" >&2
+    exit 1
   fi
 fi
 
