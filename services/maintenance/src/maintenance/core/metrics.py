@@ -102,6 +102,17 @@ _trash_bytes = _meter.create_counter(
     unit="By",
     description="Bytes reclaimed by the expired-trash purge.",
 )
+
+#: THE DRIFT REPORT, which until now reached a log line and nothing else. It decides whether the purge
+#: may run at all, and it is the estate's own answer to "is the storage state understood" — so a count
+#: only a reader of pod logs can see is a gate nobody can alert on. A GAUGE rather than a counter:
+#: drift is a level that rises and falls, and `delta()` over a counter would read a repaired estate as
+#: no change at all.
+_drift_items = _meter.create_gauge(
+    "maintenance.drift.items",
+    unit="{item}",
+    description="Items the reconcile found per drift category (`category` label) on the last tick.",
+)
 _trash_planned = _meter.create_counter(
     "maintenance.trash.purge_planned",
     unit="{record}",
@@ -249,3 +260,15 @@ def record_credential_tier(*, tier: str) -> None:
     accept a table id as readily as a tier and the series would be unreadable before anyone noticed.
     """
     _credential_tier.add(1, {"tier": tier})
+
+
+def record_drift(counts: dict[str, int]) -> None:
+    """Record the last tick's drift, one series per CHECKED category.
+
+    ONLY WHAT WAS CHECKED, which is the report's own discipline carried onto the wire: `counts` omits a
+    category that was unavailable or skipped rather than zeroing it, precisely so a 0 can never read as
+    "clean". Emitting 0 for an absent category here would undo that where it matters most — on the
+    series an alert fires from.
+    """
+    for category, value in counts.items():
+        _drift_items.set(value, {"category": category})

@@ -44,6 +44,7 @@ import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, shared_lance_session
 from maintenance.services.optimize import discover_datasets
 from maintenance.services.orphans import OrphanFile, scan_datasets
@@ -936,6 +937,13 @@ def build_report(
     # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still
     # reported. See `NON_GATING_CATEGORIES` for why these two are reported without gating.
     report.total = sum(count for name, count in report.counts.items() if name not in NON_GATING_CATEGORIES)
+    # ON THE WIRE, not just in a log line. This report gates the purge and answers whether the estate's
+    # storage state is understood; a number only a reader of pod logs can see is one no alert can fire
+    # on. Best-effort — a telemetry failure must never fail the reconcile that produced the finding.
+    try:
+        metrics.record_drift(report.counts)
+    except Exception as exc:  # noqa: BLE001 — reporting about a report must not outrank it
+        log.warning("drift_metric_not_recorded", extra={"error": f"{type(exc).__name__}: {exc}"})
     return report
 
 
