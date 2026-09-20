@@ -132,14 +132,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**193 open items**, of which **100 are blocked on a decision** and **93 can be picked up today**.
+**192 open items**, of which **98 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 43 | 3 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 41 | 3 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 50 | 33 | 15 |
+| **PHASE 2 · COMPUTE** | 51 | 34 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -221,13 +221,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types, no column)` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
 
-**LH-129 · The three Ray job scripts read `S3_KEY`/`S3_SECRET` from process env, `RASK_CREDENTIAL_REF` has no consumer, and nothing gates dead work-order fields**
-`medallion, ray-kit, service-kit, chart, scripts` · **HIGH**
-- **blocked:** The row's own phase ruling — 'Phase 2, do not work ahead of the lakehouse'
-- *What is left:* Wire the trust chain: the catalog accepts the cluster's OIDC issuer for the Ray identity; that identity gets `can_write_data`/`can_maintain` tuples on the tables a write-tier vend checks; `scripts/ray_stage_job.py:87-88`, `ray_train_job.py:64-65` and `ray_lance_job.py:45-46` read `RASK_CREDENTIAL_REF` plus the projected service-account token FILE and vend a 900 s triple through the catalog's STS door (`lance_storage_options` already takes `session_token`, `objectfs.py:35`); `deploy/ray-lance-demo.yaml` drops `S3_KEY` (:64) and `S3_SECRET` (:83) and moves the five `RASK_LINEAGE_TOKEN_SERVICE_*` secretKeyRefs (:101-126) to a mounted file. A scoped static key in env is not an acceptable interim. Add a gate over `work_order.to_env` (`work_order.py:126`) asserting every emitted name has a consumer — `RASK_TASK`, `RASK_MERGE_KEY`, `RASK_WRITE_MODE`, `RASK_CODE_VERSION`, `RASK_CREDENTIAL_REF` have zero (`RASK_IDEMPOTENCY_KEY` has one at `ray_stage_job.py:832`); `test_the_submitter_and_the_job_agree_on_the_wire.py:107` covers only the reverse direction. The head is hand-applied, so a chart-only fix cannot reach it.
-- *Closes when:* The Ray job vends its storage credential keyed on RASK_CREDENTIAL_REF, no secret rides pod env, and the to_env consumer gate is green.
-- *Evidence:* `scripts/ray_stage_job.py:87-88; scripts/ray_train_job.py:64-65; scripts/ray_lance_job.py:45-46` · `grep -rn RASK_CREDENTIAL_REF services packages scripts runners --include=*.py — only work_order.py:159` · `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py:107` · `deploy/ray-lance-demo.yaml:64,83,101-126`
-
 **LH-137 · silver→gold refuses every tabular-lane publication — the catalog stamps a tenant on a tenant-less lane id from the namespace binding, the gold runner composes a different table, and a confinement window narrowed to one vended string refuses the trigger's location**
 `medallion, catalog` · **HIGH** · PARTIAL
 - **blocked:** Owner picks among three NON-equivalent fixes: (i) `publication_extra` stops stamping `project` on a table id that carries no `<project>-` prefix (the binding lookup stays; only the emit is gated); (ii) `transform.py:636` stops narrowing `read_root` to the vended table — this reverts a deliberate narrowing pinned by `test_the_stage_runner_reads_where_the_catalog_says.py:92` and fixes nothing on its own; (iii) treat the `silver -> bind86-wh` registry binding as dev residue and repair estate config with no code change.
@@ -294,7 +287,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LH-035 · The query door has no inline-bytes opt-in, and the `/blobs` docstring never names `read_blob_ranges` as the batched path**
 `catalog` · **MED**
-- **blocked:** Owner acknowledgement of 'R8' — a ruling the register no longer defines anywhere (its only occurrence is this row's header); confirm what R8 is or drop the gate.
+- **blocked:** WHERE a rask-only query parameter may live — and the gate this marker used to name was spurious. It asked for "owner acknowledgement of 'R8'", a ruling the register defines nowhere (measured 2026-09-20: the string occurs twice in this file and both are inside this row saying it is undefined), so it gated on a name rather than on a question. The real gate is conformance. `blob_handling`/`all_binary` appear **zero times** in `lance_docs/ns_catalog/spec.yaml` and the stock `QueryTableRequest` carries neither (21 fields, none blob-related), so adding the opt-in to the SPEC query door would put a rask-only parameter on a spec route — precisely what [[LH-021]] moved off and what `test_the_spec_surface_carries_only_spec_parameters` refuses. The shape is therefore a choice: a rask-only door under `/management/v1`, or an upstream proposal to lance-namespace. **The DOC half needed no gate at all and is DONE** — `data.py`'s `/blobs` docstring now names `read_blob_ranges` as the batched path, verified against the installed pylance 11.0.0 (`(blob_column, requests, selector=…)` over `(row, offset, length)` tuples, planned as one call).
 - *What is left:* The query door delegates the body to `native.call(ns, "query_table", body)`, and neither it nor installed `lance_namespace` 0.11.1's `QueryTableRequest` carries `blob_handling`/`all_binary` (both absent from `model_fields`), so a caller cannot ask for inline bytes. Add the opt-in to the query request model. `read_blob_ranges` is documented in docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:424-426 but `data.py` never names it; add the cross-reference to the `GET /{id}/blobs` docstring (data.py:509).
 - *Closes when:* A query request can carry an inline-bytes flag that the door honours, and the `/blobs` docstring points at `read_blob_ranges` for many-rows-one-range clients.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/data.py:509 (`/blobs` door)` · ``grep -n 'blob_handling|all_binary|read_blob_ranges' data.py` → no matches` · ``uv run python -c` → QueryTableRequest.model_fields lacks blob_handling and all_binary` · `open_backlog_left.md:3780 (sole 'R8' occurrence)`
@@ -333,15 +326,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* **The two ARMED runs, and the byte half if a finding ever justifies it.** Neither shipped pass has been ARMED — `driftRepairDryRun: false` irreversibly revokes tuples and `tombstoneSweepDryRun: false` irreversibly removes recovery records, and each is a second, separate act needing the owner's authorisation exactly as [[LH-102]]'s purge run did. The byte-deleting pass over `orphan_buckets`/`orphan_files` is unbuilt and currently unjustified (both at 0) and blocked on the credential question above; [[LH-176]] is the one row that would want it. The detection half is unchanged: `reconcile.py` reports seven drift categories, AST-gated read-only by `tests/unit/test_reconcile_report.py`. Keep the report/reclaim module split.
 - *Closes when:* Both destructive passes have been armed once against the real backlog — the additive rebuild, the authz repair (whole-object and exact-edge) and the tombstone sweep all exist and are dry-run observed.
 - *Evidence:* `services/maintenance/src/maintenance/services/reconcile.py:1-4,969-983` · `services/maintenance/src/maintenance/services/purge.py:1-12` · `services/maintenance/src/maintenance/api/routes.py:11-19`
-
-**LH-062 · `type role` in `model.fga` has no `project` edge, so a global role name can be granted a rung on any tenant's namespace**
-`catalog, service-kit` · **MED**
-- **SHIPPED 2026-09-20 — the edge AND the enforcement.** `type role` now declares `define project: [project]`, synced across `model.fga`, `model.fga.yaml` and `model.json` (50/50 tests, 353/353 checks, no drift). `access.py::_refuse_a_cross_tenant_role_grant` runs before `write_tuples` and refuses InvalidInput (13 -> 400, the code `lance_docs/namespace.md:1678` defines and the neighbouring bad-rung refusal already uses — the grantor may hold every rung, so it is malformed input, not a denial). **IT FAILS OPEN IN TWO PLACES, DELIBERATELY:** a role with no project edge is estate-wide and keeps today's reach, because refusing every role of unknown tenant would break every existing grant the day the edge landed; and an unresolvable namespace has no tenant to disagree with, so a registry blip cannot become a governance outage on a path that already has an owner check in front of it. Both halves are asserted, since the fail-open half is the one that rots silently. **THE MODEL GATE CAUGHT A REAL CONSEQUENCE:** `project:` in the USER position on `role:` is invisible to `revoke_object_tuples`, so a deleted project leaves the edge dangling — recorded in `_OBJECT_AS_USER_SHAPES` as fails-CLOSED, which is the safe direction: a role whose tenant is gone stops being grantable rather than becoming estate-wide. **OBSERVED on the deployed catalog (`lance-rest-catalog:lh062-tenant`):** role relations `['assignee', 'project']`, guard present, guarding `['materialized_view', 'namespace', 'table']`.
-- **THE EDGE THIS ROW PROPOSES IS THE ONE LAKEKEEPER SHIPS:** `type role` there declares `define project: [project]` beside `assignee` (see [[LH-055]]), so the model half is confirmed rather than speculative; the sequencing hold is about landing one coordinated edit, not about the shape.
-- **blocked:** Owner decision: the `model.fga` change is held alongside the FGA model-shape item so the two land as one coordinated edit rather than two.
-- *What is left:* Add `define project: [project]` to `type role` (`model.fga:50-52`, currently only `assignee`), updating `model.fga.yaml` and `model.json` together (`make fga-test` diffs all three). Then in `access.py::_access_mutate` (`:310`), before `fga.write_tuples` (`:354`), validate that a `role:` grantee's project matches the object's tenant resolved namespace → binding → warehouse → project; today a qualified `role:…#assignee` userset passes through verbatim (`:348-350`). The enforcing half is the real work because a namespace's tenant resolves only through the binding registry — a registry read on a security-critical grant path.
-- *Closes when:* A grant of a `role:` userset onto a namespace in a different project is refused 4xx, pinned by an FGA test and a catalog test.
-- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:50-52` · `services/catalog/src/catalog/api/v1/endpoints/access.py:310,348-354`
 
 **LH-063 · FGA grants are keyed on the raw IdP `sub`, so changing the Dex connector or IdP re-keys every grant**
 `service-kit, catalog` · **MED**
@@ -799,6 +783,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 2 · COMPUTE
+
+**LH-129 · The three Ray job scripts read `S3_KEY`/`S3_SECRET` from process env, `RASK_CREDENTIAL_REF` has no consumer, and nothing gates dead work-order fields**
+`medallion, ray-kit, service-kit, chart, scripts` · **HIGH**
+- **MOVED FROM PHASE 1 (2026-09-20): its own marker said so.** The row was blocked in phase 1 on "the row's own phase ruling — 'Phase 2, do not work ahead of the lakehouse'", which is a PHASE placement rather than a decision: it names where the work belongs, not something an owner must answer. Its subject is the three Ray job scripts' credential path, which is the Ray lane — phase 2 by the focus's own split, the same reading that moved [[LH-085]] and [[LH-010]]. Filed here it is workable rather than blocked, and phase 1's count stops claiming it.
+- *What is left:* Wire the trust chain: the catalog accepts the cluster's OIDC issuer for the Ray identity; that identity gets `can_write_data`/`can_maintain` tuples on the tables a write-tier vend checks; `scripts/ray_stage_job.py:87-88`, `ray_train_job.py:64-65` and `ray_lance_job.py:45-46` read `RASK_CREDENTIAL_REF` plus the projected service-account token FILE and vend a 900 s triple through the catalog's STS door (`lance_storage_options` already takes `session_token`, `objectfs.py:35`); `deploy/ray-lance-demo.yaml` drops `S3_KEY` (:64) and `S3_SECRET` (:83) and moves the five `RASK_LINEAGE_TOKEN_SERVICE_*` secretKeyRefs (:101-126) to a mounted file. A scoped static key in env is not an acceptable interim. Add a gate over `work_order.to_env` (`work_order.py:126`) asserting every emitted name has a consumer — `RASK_TASK`, `RASK_MERGE_KEY`, `RASK_WRITE_MODE`, `RASK_CODE_VERSION`, `RASK_CREDENTIAL_REF` have zero (`RASK_IDEMPOTENCY_KEY` has one at `ray_stage_job.py:832`); `test_the_submitter_and_the_job_agree_on_the_wire.py:107` covers only the reverse direction. The head is hand-applied, so a chart-only fix cannot reach it.
+- *Closes when:* The Ray job vends its storage credential keyed on RASK_CREDENTIAL_REF, no secret rides pod env, and the to_env consumer gate is green.
+- *Evidence:* `scripts/ray_stage_job.py:87-88; scripts/ray_train_job.py:64-65; scripts/ray_lance_job.py:45-46` · `grep -rn RASK_CREDENTIAL_REF services packages scripts runners --include=*.py — only work_order.py:159` · `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py:107` · `deploy/ray-lance-demo.yaml:64,83,101-126`
+
 
 **LH-010 · The htr runner drives `build_source`/`build_sink` into ALTO writers, never reads bronze Lance or emits gold rows, and no geometry stage exists**
 `runners/htr, chart` · **MED** · PARTIAL

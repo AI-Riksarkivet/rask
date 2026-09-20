@@ -542,6 +542,13 @@ async def read_table_blob(
     read-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the
     served version (pin ``version`` for a stable address across overwrites).
 
+    ONE ROW PER REQUEST, and a client wanting the same byte range from MANY rows should not loop here
+    ([[LH-035]]). pylance's ``LanceDataset.read_blob_ranges(blob_column, requests, selector=…)`` takes a
+    sequence of ``(row, offset, length)`` tuples and plans them as ONE call — verified against the
+    installed pylance 11.0.0 — so N loops over this endpoint become N round trips and N independent
+    plans where the batched API makes one. This door is deliberately the credential-less SINGLE-blob
+    path; it is not the shape to build a scan on, and nothing here would tell a caller that.
+
     Authz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``
     (same rung as ``/query``) — this endpoint serves DATA, so credential-vending tiers apply
     unchanged; it just removes the need for the credentials themselves.
