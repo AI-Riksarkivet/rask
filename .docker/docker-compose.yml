@@ -55,7 +55,6 @@ services:
       LANCE_S3_ACCESS_KEY_ID: minioadmin
       LANCE_S3_SECRET_ACCESS_KEY: minioadmin
       LANCE_S3_REGION: us-east-1
-      LANCE_S3_ALLOW_HTTP: "true"
       LANCE_S3_VIRTUAL_HOSTED: "false"
       # --- Auth is OFF by default. Uncomment to enforce OIDC (Dex) + OpenFGA authz.
       #   The openfga/postgres/dex services below provide the infra.

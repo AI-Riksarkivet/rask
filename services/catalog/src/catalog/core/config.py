@@ -75,13 +75,16 @@ class CatalogStorageSettings(BaseSettings):
 
     # Object store (MinIO / S3). Credentials are required — no default — so a
     # missing secret fails loudly at startup instead of silently using a default.
+    #: The scheme here is the ONLY source of `storage.allow_http` (see `namespace_properties`).
+    #: It was a separate bool the chart pinned to "true" for every deployment, which let a TLS
+    #: endpoint keep permission to fall back to plaintext — silent, because object_store consults
+    #: the flag only when a request would otherwise be refused. One fact, so the two cannot disagree.
     s3_endpoint: str = Field(default="http://minio:9000", alias="LANCE_S3_ENDPOINT")
     s3_access_key_id: str = Field(alias="LANCE_S3_ACCESS_KEY_ID")
     # Optional default: with secrets_from_dapr on, the secret comes from the store (no plaintext env), and
     # the lifespan fails closed if neither the store nor env provides it.
     s3_secret_access_key: SecretStr = Field(default=SecretStr(""), alias="LANCE_S3_SECRET_ACCESS_KEY")
     s3_region: str = Field(default="us-east-1", alias="LANCE_S3_REGION")
-    s3_allow_http: bool = Field(default=True, alias="LANCE_S3_ALLOW_HTTP")
     s3_virtual_hosted: bool = Field(default=False, alias="LANCE_S3_VIRTUAL_HOSTED")
     s3_assume_role_arn: str | None = Field(default=None, alias="LANCE_S3_ASSUME_ROLE_ARN")
     #: ENCRYPTION AT REST, carried INTO the vended credential (§ J5). A client vended credentials writes
@@ -600,7 +603,7 @@ class Settings(
             f"{_STORAGE_PREFIX}access_key_id": self.s3_access_key_id,
             f"{_STORAGE_PREFIX}secret_access_key": self.s3_secret_access_key.get_secret_value(),
             f"{_STORAGE_PREFIX}region": self.s3_region,
-            f"{_STORAGE_PREFIX}allow_http": str(self.s3_allow_http).lower(),
+            f"{_STORAGE_PREFIX}allow_http": "true" if self.s3_endpoint.startswith("http://") else "false",
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
         }
 

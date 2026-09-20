@@ -67,7 +67,6 @@ services:
       LANCE_S3_ENDPOINT: http://rustfs:9000
       LANCE_S3_ACCESS_KEY_ID: rustfsadmin
       LANCE_S3_SECRET_ACCESS_KEY: rustfsadmin
-      LANCE_S3_ALLOW_HTTP: "true"
       LANCE_S3_VIRTUAL_HOSTED: "false"   # RustFS is path-style only
 
 volumes:
