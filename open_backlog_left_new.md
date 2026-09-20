@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**193 open items**, of which **99 are blocked on a decision** and **94 can be picked up today**.
+**193 open items**, of which **100 are blocked on a decision** and **93 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 44 | 5 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 44 | 4 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 49 | 32 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
@@ -282,6 +282,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LH-074 · Storage is accounted per bucket; quota ENFORCEMENT has no limit source yet**
 `catalog, maintenance` · **MED** · PARTIAL
+- **blocked:** Owner choice of USAGE SOURCE for the refusal — this row's own text already says "Neither is plumbing", and the two shapes have genuinely different costs. (1) Maintenance writes a last-known usage onto the warehouse record: cheap at the write door, and the refusal is exactly as stale as the last reconcile tick, so a tenant can overshoot by a tick's worth of writes. (2) The catalog lists the bucket per write: always current, and an unbounded S3 listing on the hot path — the very cost the periodic sweep exists to avoid. A third the row never names is incremental accounting (add on write, subtract on delete), which is current and cheap and introduces a counter that drifts from the bytes the moment anything writes outside the door. Re-measured 2026-09-20: [[LH-061]]'s write-capability ruling HAS landed, so shape (1) is no longer blocked on that — maintenance already writes registry records (`purge.py` deletes trash ones) — and what remains is the trade-off itself, which is the owner's. The LIMIT half is answered and needs nothing: a warehouse-scoped sub-resource under the management prefix, absent = unlimited.
 - **THE LIMIT SOURCE IS ANSWERED AND ENFORCEMENT IS STILL BLOCKED — by a USAGE source, which this row does not name (measured 2026-09-20).** A refusal at a write door needs two numbers, not one: the limit (answered — a warehouse-scoped sub-resource under the management prefix) and the CURRENT BYTES at the moment of the write. The estate has no path to the second. Accounting lives in MAINTENANCE's periodic reconcile; the catalog's `warehouses.py` holds no usage field and no reader; and maintenance never writes to the warehouse registry at all — it is report-only, which is exactly [[LH-061]]'s deferred write-capability question. So the two available shapes are: maintenance writes a last-known usage back onto the warehouse record (needs LH-061's ruling, and makes the refusal as stale as the last tick), or the catalog lists the bucket per write (an unbounded S3 listing on the hot path, which is the cost the sweep exists to avoid). Neither is plumbing. **This row is therefore downstream of [[LH-061]], not merely of a configuration choice.**
 - **THE ROW'S APPROACH MEASURED THE WRONG BYTES, corrected 2026-09-20.** It said to roll up `size_bytes` from `orphans.py` — but that field is on `OrphanFile`, so the roll-up would have totalled UNREFERENCED bytes, not storage. The listing one level up (`get_file_info(FileSelector(prefix, recursive=True))`) already reads EVERY file with its size — that is how orphans are found at all — and the loop discards the referenced ones. Summing the same pass costs no extra I/O.
 - **ACCOUNTING SHIPPED AND OBSERVED.** `DatasetOrphanScan` carries `total_bytes`/`total_files`, `OrphanReport` carries them per dataset, and the reconcile report rolls them up per bucket. Unreadable and excluded datasets are ABSENT rather than zero, so a partly-seen estate cannot report as a small one. Observed on the deployed estate: `bytes_by_bucket={'lance-catalog': 3706801, 'acme-bucket': 437886, 'bind86-wh': 181173, 'lakehouse-wh': 59274, …}` across 570 datasets, largest-first and capped at 10 keys on the log line.
