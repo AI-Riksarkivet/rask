@@ -132,13 +132,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**191 open items**, of which **99 are blocked on a decision** and **92 can be picked up today**.
+**191 open items**, of which **100 are blocked on a decision** and **91 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 41 | 3 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 21 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 44 | 20 | 9 |
 | **PHASE 2 · COMPUTE** | 51 | 34 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -682,6 +682,8 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **XC-020 · `transaction.can_set_property` and `transaction.can_cancel` are defined in `model.fga` and used by no relation and no code path**
 `service-kit, catalog` · **LOW**
+- **blocked:** [[LH-077]]'s ruling, which is the SAME decision this row states as two alternatives — "authorize `alter_transaction` per state-action (making `can_set_property`/`can_cancel` real doors) or keep one check and delete both relations". One decision gated two rows while only one of them said so; measured 2026-09-20 and the choice is unchanged, so this row now names it too.
+- **THE SWEEP THIS ROW ASKED FOR IS RUN — the `fga` CLI IS available, contrary to the row's own evidence.** It reads "`which fga` → not found"; measured 2026-09-20 it is at `.localbin/fga` (v0.6.4, installed by `make bootstrap`), so "where the CLI is available, re-run the usage sweep" is satisfiable here and is done. `fga model test` is **green as it stands: 51/51 tests, 361/361 checks, 8/8 ListObjects, 2/2 ListUsers** — so neither alternative is being held up by a red model. The relations are defined at `model.fga:528,530` (not 514/516) and asserted at `model.fga.yaml:664-670` (not 621-627, which holds materialized-view assertions); the only non-model reference is still a DOCSTRING, now at `catalog/api/fga_deps.py:446-447`. Every line number in the row's evidence had drifted, which is worth stating because a reader checking them would conclude the claim was wrong rather than merely stale.
 - *What is left:* Where the `fga` CLI is available (it is not on PATH here), re-run the usage sweep, then either delete both relations from `packages/service-kit/src/service_kit/governed/auth/model.fga` (lines 514 and 516) and their assertions in `model.fga.yaml:621-627`, or grow `alter_transaction` into the property/cancel actions so they are used. Run `fga model test` green and regenerate `model.json`. The only non-model references are a docstring at `catalog/api/fga_deps.py:423-424`; `fga_deps.py` picks only between `can_describe` and `can_set_status`.
 - *Closes when:* `fga model test` is green with the two relations either removed or exercised by a code path, and `model.json` is regenerated.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:505-516` · `packages/service-kit/src/service_kit/governed/auth/model.fga.yaml:621-627` · `grep -rn 'can_set_property\|can_cancel' services/ packages/ --include=*.py → only fga_deps.py:423-424 docstring` · `which fga → not found`
