@@ -363,6 +363,17 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: revokes a reviewable batch rather than sweeping the backlog in one unreviewable write.
     drift_repair_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK")
 
+    #: [[LH-061]]'s STORAGE tier — removing an orphaned trash record once the bytes it names are
+    #: PROVEN gone. `repair.py` refuses `orphaned_trash` because the record is the only remaining
+    #: pointer to those bytes; this pass satisfies that objection rather than overturning it, by
+    #: probing the location first and refusing anything that still holds objects. It deletes no bytes.
+    #: OFF and DRY-RUN by default, the same pair every destructive pass here carries.
+    tombstone_sweep_enabled: bool = Field(default=False, alias="MAINTENANCE_TOMBSTONE_SWEEP_ENABLED")
+    tombstone_sweep_dry_run: bool = Field(default=True, alias="MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN")
+    #: Capped per tick because the probe is one listing PER RECORD — 989 of them in a single tick would
+    #: turn a reconcile pass into a whole-estate scan, which is the cost this service exists to bound.
+    tombstone_sweep_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK")
+
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and
     # best-effort when on: a bus outage must never fail — or half-fail — a reclamation. The component

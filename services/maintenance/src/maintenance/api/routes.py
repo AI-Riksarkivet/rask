@@ -24,6 +24,7 @@ import logging
 from collections import Counter
 from typing import Any
 
+import pyarrow.fs as pafs
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -39,8 +40,11 @@ from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcil
 from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.repair import repair_drift
 from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
+from maintenance.services.tombstones import Tombstone, sweep_tombstones
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
+from service_kit.lakehouse import trash
+from service_kit.lakehouse.objectfs import fs_and_base
 
 
 log = logging.getLogger(__name__)
@@ -258,6 +262,35 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
                     "refused": repaired.refused,
                     "capped": repaired.capped,
                     "error": repaired.error,
+                },
+            )
+
+        # [[LH-061]]'s STORAGE tier, and it deletes no bytes: a trash record goes only where the
+        # location it names is PROVEN to hold nothing. `repair.py` refuses `orphaned_trash` because the
+        # record is the only remaining pointer to those bytes; probing first satisfies that objection
+        # rather than overturning it. AFTER the authz repair and BEFORE the purge, because the purge's
+        # gate is the drift report as MEASURED and a record cleared here was never purgeable anyway —
+        # its root is one no purge tick can reach.
+        def _objects_at(location: str) -> int:
+            fs, base = fs_and_base(location, settings.storage_options())
+            return len([i for i in fs.get_file_info(pafs.FileSelector(base, recursive=True, allow_not_found=True)) if i.type == pafs.FileType.File])
+
+        def _clear(record: Tombstone) -> None:
+            trash.clear(settings.resolved_control_root, settings.storage_options(), record.id, kind=record.kind)
+
+        swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=_objects_at, delete=_clear)
+        payload["tombstone_sweep"] = swept.model_dump(mode="json")
+        if swept.swept or swept.refused or swept.error:
+            # NAMED at WARNING like its siblings: each entry removed a recovery record, and "swept 50"
+            # tells an operator nothing they can check against the store.
+            log.warning(
+                "tombstone_sweep_result",
+                extra={
+                    "dry_run": swept.dry_run,
+                    "swept": [f"{s.kind}:{s.id} <- {s.location} ({s.probed_objects} objects)" for s in swept.swept],
+                    "refused": swept.refused,
+                    "capped": swept.capped,
+                    "error": swept.error,
                 },
             )
         floors = await run_in_threadpool(raise_listing_floors, settings, orphans=report.orphan_files, storage_options=settings.storage_options())

@@ -89,6 +89,12 @@ maintenance:
   driftRepair: true
   driftRepairDryRun: true
 
+  # [[LH-061]]'s storage tier, armed on local but DRY-RUN: 989 orphaned trash records name roots no
+  # purge tick can reach, and all 989 were measured to point at a bucket holding nothing. The pass
+  # proves that per record before removing one. `tombstoneSweepDryRun: false` is the separate act.
+  tombstoneSweep: true
+  tombstoneSweepDryRun: true
+
 # THE OPERATOR-MANAGED HEAD ([[CP-042]]), which is what makes the derivation above unnecessary: a
 # RayCluster named `<release>-ray` gives KubeRay's own `<release>-ray-head-svc`, the exact name the
 # chart already derives and which resolved to nothing here.

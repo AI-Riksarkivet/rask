@@ -244,6 +244,14 @@ spec:
             - { name: MAINTENANCE_DRIFT_REPAIR_ENABLED, value: {{ hasKey .Values.maintenance "driftRepair" | ternary .Values.maintenance.driftRepair false | quote }} }
             - { name: MAINTENANCE_DRIFT_REPAIR_DRY_RUN, value: {{ hasKey .Values.maintenance "driftRepairDryRun" | ternary .Values.maintenance.driftRepairDryRun true | quote }} }
             - { name: MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "driftRepairMaxPerTick") | ternary .Values.maintenance.driftRepairMaxPerTick 50 | quote }} }
+            {{- /* [[LH-061]]'s STORAGE tier — removing a trash record once the bytes it names are
+                   PROVEN gone. It deletes no bytes: the pass probes the location and refuses anything
+                   that still holds objects, which is how it satisfies `repair.py`'s refusal of
+                   `orphaned_trash` rather than overturning it. Capped because the probe is one
+                   listing PER RECORD. */}}
+            - { name: MAINTENANCE_TOMBSTONE_SWEEP_ENABLED, value: {{ hasKey .Values.maintenance "tombstoneSweep" | ternary .Values.maintenance.tombstoneSweep false | quote }} }
+            - { name: MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN, value: {{ hasKey .Values.maintenance "tombstoneSweepDryRun" | ternary .Values.maintenance.tombstoneSweepDryRun true | quote }} }
+            - { name: MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "tombstoneSweepMaxPerTick") | ternary .Values.maintenance.tombstoneSweepMaxPerTick 50 | quote }} }
             {{- /* #128a: the orphan scan's lever. Rendered unconditionally rather than behind an `if`,
                    because the whole defect was that the setting existed in config.py and had NO path
                    from values — an env var that appears only when enabled is one nobody can discover
