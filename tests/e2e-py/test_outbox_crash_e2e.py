@@ -32,6 +32,7 @@ import uuid
 
 import pytest
 import requests
+from outbox_probe import owned_output_table
 
 from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
@@ -48,6 +49,12 @@ S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 # is a real bug this repo has already shipped once (a drained run visible on /runs but SILENTLY absent from
 # /events). Assert both, at the source of truth.
 DSN = os.environ.get("LINEAGE_DATABASE_URL", "")
+
+#: The output this probe's staged event names. NAMESPACE AND TABLE SEPARATELY because the event needs
+#: both spellings: `output_namespace` is the OpenLineage domain label and `output_name` carries the
+#: CATALOG ID, which is `<namespace>$<table>`.
+PROBE_NAMESPACE = "bronze"
+PROBE_TABLE = "e2e_crash_ds"
 
 pytestmark = pytest.mark.e2e
 
@@ -192,13 +199,25 @@ def test_sigkilled_producer_loses_nothing(lineage: str) -> None:
     # was already in the graph, and "the relay recovered it into the graph" would then pass VACUOUSLY even
     # if the relay did nothing at all. The pre-flight assertion below is what caught it; keep both.
     token = f"e2e-crash-probe-{uuid.uuid4()}"
+    # THE AUTHOR MUST BE A SUBJECT AND THE OUTPUT MUST EXIST, or the relay can never drain what this
+    # leg stages — `enforce_bus_authz` resolves the event's `author.sub` and asks whether it may write
+    # the table the event names. A role LITERAL matches no subject and a table the catalog never
+    # created carries no tuples, so an event with either is refused by every identity, for ever.
+    #
+    # Measured on the deployed estate 2026-09-20 before this fixture existed: five objects dated
+    # 2026-09-14, one per run of this leg, all `author="e2e"` / `output_name="e2e_crash_ds"`, reported
+    # as `refused` on every sweep and never drained. A leg that cannot pass is bad; a leg that leaves
+    # permanent residue behind each time it cannot pass is worse.
+    author = owned_output_table(PROBE_NAMESPACE, PROBE_TABLE)
     event = build_run_event(
         operation="e2e_crash_probe",
-        author="e2e",
+        # `"e2e"` only where authz is off — there is nothing to resolve against and demanding a token
+        # would skip this leg on the open deployments it was written for.
+        author=author or "e2e",
         job_namespace="medallion",
         inputs=[("external", "e2e_crash_src")],
-        output_namespace="bronze",
-        output_name="e2e_crash_ds",
+        output_namespace=PROBE_NAMESPACE,
+        output_name=f"{PROBE_NAMESPACE}${PROBE_TABLE}",
         version=1,
         token=token,
     )

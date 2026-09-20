@@ -17,15 +17,14 @@ as "the check cannot be run" rather than "the command was wrong".
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import time
 from typing import Any
 
-import pyarrow as pa
 import pytest
 import requests
+from outbox_probe import owned_output_table
 
 from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
@@ -56,103 +55,19 @@ def _so() -> dict[str, str]:
     }
 
 
-def _bearer() -> str:
-    """The deployed stack's bearer token, or ``""`` when it serves the catalog open.
-
-    Probed rather than configured, the same way `test_observability_e2e` does it: an open stack must
-    keep working with no Dex forward, and a governed one must not be driven unauthenticated.
-    """
-    if not CATALOG:
-        return ""
-    try:
-        probe = requests.get(f"{CATALOG}/v1/namespace/$/list", timeout=5)
-    except Exception:
-        return ""
-    if probe.status_code != 401:
-        return ""
-    # `LANCE_E2E_DEX` is the estate's name for this: `scripts/e2e_live.sh:145` exports it and nine
-    # other live suites read it. A spelling only this module knows is one the script never sets, so
-    # the mint returns "" and the suite dies in setup on `401 Missing bearer token` — which reads as a
-    # governed door refusing rather than as a variable nobody assigned (measured 2026-09-20).
-    dex = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
-    if not dex:
-        return ""
-    form = {
-        "grant_type": "password",
-        "client_id": os.environ.get("LANCE_E2E_OIDC_CLIENT_ID", "lance-catalog"),
-        "client_secret": os.environ.get("LANCE_E2E_OIDC_CLIENT_SECRET", "lance-catalog-secret"),
-        "scope": "openid email",
-        "username": os.environ.get("LANCE_E2E_OIDC_USERNAME", "alice@example.com"),
-        "password": os.environ.get("LANCE_E2E_OIDC_PASSWORD", "password"),
-    }
-    try:
-        resp = requests.post(f"{dex}/token", data=form, timeout=15)
-        resp.raise_for_status()
-    except Exception:
-        return ""
-    return str(resp.json().get("id_token", ""))
-
-
-def _subject_of(token: str) -> str:
-    """The `sub` claim, which is the FGA subject verbatim — `deps.py` uses the raw IdP sub.
-
-    Read from the token rather than configured, because the AUTHOR the probe stamps and the OWNER the
-    catalog grants have to be the same principal or the bus door refuses an event about a table the
-    author does not hold.
-    """
-    payload = token.split(".")[1] if token.count(".") == 2 else ""
-    if not payload:
-        return ""
-    padded = payload + "=" * (-len(payload) % 4)
-    return str(json.loads(base64.urlsafe_b64decode(padded)).get("sub", ""))
-
-
 @pytest.fixture(scope="module")
 def probe_author() -> str:
     """Create the probe's OUTPUT table through the catalog, and answer the identity that now owns it.
 
-    [[LH-152]], owner ruling 2026-09-15. The suite used to stage an event naming `bronze$e2e_outbox_ds`
-    — a name no catalog object ever carried — so the table had NO FGA object and therefore no identity
-    could be authorized for it. `enforce_bus_authz` refused the drained event every run, and the leg
-    could not pass for any author, which is why it is a fixture rather than a different assertion.
+    [[LH-152]], owner ruling 2026-09-15. An event naming a table no catalog object carries has NO FGA
+    object, so no identity can be authorized for it and `enforce_bus_authz` refuses the drained event
+    every run — which is why this is a fixture rather than a different assertion.
 
-    BOTH HALVES ARE NEEDED AND THE SECOND IS THE NON-OBVIOUS ONE. Creating the table gives it an FGA
-    parent and owner tuples; but the bus door authorizes AS `author.sub`, so an event authored by
-    anyone else is still refused on a table that now exists. The fixture therefore returns the creating
-    subject and the probe stamps it, which is what makes the drained event land.
-
-    An OPEN stack answers `""` and the probe keeps its old author: with authz off there is nothing to
-    authorize against, and demanding a token there would skip the suite on the deployments it was
-    written for.
+    IN `outbox_probe` RATHER THAN HERE because `test_outbox_crash_e2e` stages into the same outbox and
+    needs the same two guarantees. It had neither, and left one permanently-refused object per run
+    (five, dated 2026-09-14, measured 2026-09-20). One copy is what stops the two drifting again.
     """
-    token = _bearer()
-    if not CATALOG:
-        return ""
-    auth = {"Authorization": f"Bearer {token}"} if token else {}
-    table_id = f"{PROBE_NAMESPACE}${PROBE_TABLE}"
-    if WAREHOUSE:
-        requests.post(
-            f"{CATALOG}/v1/warehouses/{WAREHOUSE}/namespaces",
-            json={"namespace": PROBE_NAMESPACE, "adopt_existing": True},
-            headers=auth,
-            timeout=30,
-        )
-    else:
-        requests.post(f"{CATALOG}/v1/namespace/{PROBE_NAMESPACE}/create", json={}, headers=auth, timeout=30)
-    rows = pa.table({"id": pa.array([1], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
-    # `mode=overwrite` so a re-run adopts the table a previous run created rather than 409ing in setup,
-    # which would report every test in the file as an ERROR.
-    created = requests.post(
-        f"{CATALOG}/v1/table/{table_id}/create?mode=overwrite",
-        data=sink.getvalue().to_pybytes(),
-        headers={**auth, "Content-Type": "application/vnd.apache.arrow.stream"},
-        timeout=60,
-    )
-    assert created.status_code == 200, f"could not create the probe's output table: {created.status_code} {created.text[:300]}"
-    return _subject_of(token)
+    return owned_output_table(PROBE_NAMESPACE, PROBE_TABLE)
 
 
 @pytest.fixture(scope="module")
