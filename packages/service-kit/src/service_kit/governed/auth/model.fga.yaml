@@ -48,6 +48,9 @@ tuples:
   # grant of this role onto another project's namespace; role:estate_auditors below carries no
   # project and is deliberately estate-wide.
   - { user: project:acme, relation: project, object: role:validators }
+  # grace holds ONLY security_admin on acme — the split's whole point is that this is grantable
+  # without admin, so she governs access without gaining it.
+  - { user: user:grace, relation: security_admin, object: project:acme }
   - { user: user:frank, relation: assignee, object: role:estate_auditors }
   - { user: "role:validators#assignee", relation: validator, object: namespace:acme_gold }
   - { user: user:carol, relation: reader, object: warehouse:acme_bucket }
@@ -192,6 +195,24 @@ tuples:
   - { user: 'user:service-silver-to-gold', relation: validator, object: 'namespace:acme_gold' }
 
 tests:
+  - name: the project admin split is additive, and a split rung does not imply the others
+    # Two claims, and the second is the one worth a test: `admin` reaching every rung is what makes
+    # this safe to add, and a security_admin NOT reaching data_admin is what makes it worth adding.
+    check:
+      - user: user:alice # acme admin via team:eng
+        object: project:acme
+        assertions:
+          admin: true
+          security_admin: true
+          data_admin: true
+          role_creator: true
+      - user: user:grace # security_admin ONLY
+        object: project:acme
+        assertions:
+          security_admin: true
+          role_creator: true
+          data_admin: false
+          admin: false
   - name: a role carries its tenant, and an unscoped role carries none
     # The edge exists so a grant door can tell `role:validators` (acme's) from an estate-wide role.
     # Nothing in the model GRANTS through it — the refusal is the door's — so this pins the fact the

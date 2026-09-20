@@ -62,6 +62,15 @@ type project
     define team: [team]
     define admin: [user, role#assignee] or member from team
     define member: [user, team#member, role#assignee] or admin
+    # ---- the admin SPLIT. Additive: `admin` implies all three, so nobody loses a rung by their
+    # arrival, and each exists to be granted WITHOUT the other two.
+    # Security work (grants, ownership) without the power to read or change the data it governs.
+    define security_admin: [user, role#assignee] or admin
+    # Warehouse/data work without the power to hand out access to it.
+    define data_admin: [user, role#assignee] or admin
+    # Minting a role is not the same authority as deciding who is IN one, so this sits under
+    # security_admin rather than beside it.
+    define role_creator: [user, role#assignee] or security_admin
     # ---- actions ----
     define can_administer: admin
     define can_create_warehouse: admin
