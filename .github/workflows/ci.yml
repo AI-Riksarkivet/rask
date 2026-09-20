@@ -205,6 +205,20 @@ jobs:
           # pointed at it until 2026-07-28 — so this entire step was failing on a missing file and
           # the authz-model gate had not actually run since the merge. Paths are now the real ones.
           AUTH=packages/service-kit/src/service_kit/governed/auth
+          # VALIDITY FIRST — and it reads `.is_valid`, not the exit code. Measured with this exact
+          # CLI version: `fga model validate` prints `{"is_valid":false,"error":"…"}` and EXITS 0,
+          # so a bare call here would run, print the error and pass — a step naming a check it does
+          # not perform.
+          #
+          # The suite below DOES fail on an invalid model (exit 1), so this is not the only thing
+          # standing between one and the estate. What it adds: the defect is named as a MODEL defect
+          # before the suite runs, instead of as `rpc error: code = Code(2056)` from the test runner;
+          # and it covers the path the drift check cannot, since `model transform` exits 0 and emits
+          # well-formed JSON for an invalid model — regenerate `model.json` as this file's own header
+          # instructs and the two copies agree perfectly while both are invalid.
+          fga model validate --file $AUTH/model.fga > /tmp/model.validate.json
+          jq -e '.is_valid == true' /tmp/model.validate.json > /dev/null \
+            || { echo "model.fga is INVALID:"; cat /tmp/model.validate.json; exit 1; }
           fga model test --tests $AUTH/model.fga.yaml
           # The model exists in three copies (model.fga authored, model.fga.yaml tested above,
           # model.json the app LOADS). CI previously exercised only the yaml copy — a drift between

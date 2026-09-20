@@ -252,10 +252,18 @@ check: fmt lint typecheck knip fga-test
 # runtime. Testing the yaml while shipping the json is how a tested model and a deployed model drift
 # apart in silence, so the transform-and-diff is not optional decoration — it is the half that makes
 # the other half mean anything.
-fga-test: ## The OpenFGA model's own suite + the three-copy drift check
+# `validate` reads `.is_valid` rather than the exit code: measured with fga v0.6.4, an INVALID model
+# prints `{"is_valid":false,...}` and exits 0, so gating on `$$?` passes on one. It runs FIRST because
+# `model test` does fail on an invalid model (exit 1) but reports it as an rpc error from the test
+# runner; and because `model transform` does NOT — it emits well-formed JSON from an invalid model, so
+# regenerating `model.json` as `model.fga.yaml`'s header instructs makes the drift check agree.
+fga-test: ## The OpenFGA model's validity + its own suite + the three-copy drift check
 	@AUTH=packages/service-kit/src/service_kit/governed/auth; \
 	FGA=$$(command -v fga 2>/dev/null || echo $(LOCALBIN)/fga); \
 	test -x "$$FGA" || { echo "fga not found — run 'make bootstrap'"; exit 1; }; \
+	"$$FGA" model validate --file $$AUTH/model.fga > $(LOCALBIN)/model.validate.json; \
+	jq -e '.is_valid == true' $(LOCALBIN)/model.validate.json > /dev/null \
+	  || { echo "model.fga is INVALID:"; cat $(LOCALBIN)/model.validate.json; exit 1; }; \
 	"$$FGA" model test --tests $$AUTH/model.fga.yaml; \
 	"$$FGA" model transform --file $$AUTH/model.fga > $(LOCALBIN)/model.transformed.json; \
 	jq -S . $(LOCALBIN)/model.transformed.json > $(LOCALBIN)/model.a.json; \
