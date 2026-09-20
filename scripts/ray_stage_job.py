@@ -11,11 +11,10 @@ the written version + statistics for the OpenLineage WROTE edge, exactly as the 
 
 TWO paths, chosen by whether the upstream carries a blob-v2 column:
 * TABULAR → the distributed lance_ray read→map_batches(stamp)→write path (Ray workers, one commit).
-* MEDIA (blob-v2 present) → a pylance-native round-trip on the driver: lance_ray's write strips blob
-  typing (exposes plain LargeBinary), so a blob column must be re-materialised via a
-  ``blob_handling="all_binary"`` scan (NOT ``read_blobs`` — it drops null rows) and
-  re-wrapped with ``blob_array`` before a 2.2 write, and image payloads get an inline thumbnail +
-  embedding derived here. This is the SAME contract as compute.transform_stage / derivers, and by the
+* MEDIA (blob-v2 present) → a pylance-native round-trip on the driver, for the DERIVERS: image
+  payloads get an inline thumbnail + embedding computed here. A blob column is re-materialised via a
+  ``blob_handling="all_binary"`` scan (NOT ``read_blobs`` — it drops null rows) and re-wrapped with
+  ``blob_array`` before a 2.2 write. This is the SAME contract as compute.transform_stage / derivers, and by the
   same code: the derivers are IMPORTED from ``service_kit.lakehouse.media``, not inlined and
   drift-pinned (B14 — the pin was the wrong fix, and this docstring described it long after the copies
   were gone). Closes the Phase-3 gap that forced media stages onto the in-process fallback.
@@ -165,14 +164,20 @@ def _target_schema(upstream: lance.LanceDataset, stage: str, lineage: str, datas
 
 #: How many rows the media lane holds in the driver at once.
 #:
-#: The MEDIA branch cannot go through lance_ray (its write strips blob typing), so the round-trip
-#: happens on the driver — but it used to happen ALL AT ONCE: one `to_table()` over every blob
+#: The MEDIA branch runs its round-trip on the driver, and that used to happen ALL AT ONCE: one `to_table()` over every blob
 #: payload, a second full copy as Python bytes from `to_pylist()`, and two more as the thumbnail and
 #: embedding lists. Peak RSS scaled with the dataset, so the cascade had an OOM ceiling nothing
 #: announced (ray-project's own `patterns/generators.rst`: yield in chunks rather than materialise).
 #: Bounded, the driver holds ~4x one batch of payloads; at the media lane's ~1.8 MB page images 128
 #: rows is a few hundred MB. `RASK_STAGE_MEDIA_BATCH_ROWS` tunes it for other payload sizes.
 MEDIA_BATCH_ROWS = int(os.environ.get("RASK_STAGE_MEDIA_BATCH_ROWS", "128"))
+
+#: MEASURED 2026-09-20 in the deployed `ray-lance` image (pylance 11.0.0, pyarrow 25.0.0,
+#: lance-ray 0.5.0): `write_lance(..., data_storage_version="2.2")` PRESERVES blob-v2 —
+#: `extension<lance.blob.v2<BlobType>>` round-trips intact. Without that argument it writes V2_1 and
+#: Lance refuses the column outright ("Blob v2 requires file version >= 2.2"), which is what the
+#: "strips blob typing" reading came from. So blob typing is not what keeps MEDIA on the driver; the
+#: derivers are ([[LH-085]]).
 
 
 def _derivable_blob_column(ds: Any, blob_cols: list[str]) -> str | None:
@@ -744,7 +749,7 @@ def _run_stage(
     retracted = 0
 
     if blob_field_names(upstream.schema):
-        # MEDIA path: lance_ray strips blob typing on write, so round-trip + derive via pylance (below).
+        # MEDIA path: the derivers need the payload bytes, so round-trip + derive via pylance (below).
         _media_transform(from_uri, to_uri, so, stage=stage, lineage=lineage, dataset_id=dataset_id)
     elif delta is not None:
         # BACKFILL LANE. The delta is by construction small, so it is stamped and merged on the driver
