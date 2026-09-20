@@ -137,9 +137,9 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 44 | 4 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 43 | 3 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 49 | 32 | 15 |
+| **PHASE 2 · COMPUTE** | 50 | 33 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -248,12 +248,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* Wire `RayJobsApiExecutor` in place of the direct imports at `workflow.py:488` (`submit_stage_job`), `:528`/`:979` (`job_status`) and `:708` (`job_failure`); the adapter wraps exactly those three and is reachable only through `engine_registry.executor_for`, whose sole production caller is `transform.py:793` for the in-process lane. Handle the undeclared-task case: `ray_submit.py:167` falls back to `settings.ray_entrypoint` while the adapter takes `registration.command` — synthesize a registration as `transform.py:797` does. Resolve the job-id split: the adapter posts under `order.idempotency_key` (`rayjobs_api_executor.py:105-110`) while the deployed submitter posts `stage_submission_id`, and `WorkOrder` carries `idempotency_key` but no `token`, so the adapter cannot derive the deployed shape. Design and a RED test can start now; landing needs the ruling. The refusal of unhosted engines, the `workflow` extra, the combination matrix test and an in-cluster in-process run are all shipped.
 - *Closes when:* `workflow.py` reaches Ray only through `executor_for(RAY_ENGINE)` and a test fails if `ray_submit`/`ray_jobs_api` are imported there again.
 - *Evidence:* `services/medallion/src/medallion/workflow.py:488,528,708,979 (direct ray_submit/ray_jobs_api imports)` · `services/medallion/src/medallion/services/rayjobs_api_executor.py:95-110 (submit posts order.idempotency_key)` · `packages/service-kit/src/service_kit/lakehouse/work_order.py:69,124 (stage, idempotency_key; no token field)` · `rg 'executor_for\(' services packages --glob '!*/tests/*' -> only transform.py:793`
-
-**LH-010 · The htr runner drives `build_source`/`build_sink` into ALTO writers, never reads bronze Lance or emits gold rows, and no geometry stage exists**
-`runners/htr, medallion, chart` · **MED** · PARTIAL
-- *What is left:* The in-dataset `lineage` column clause is shipped end-to-end (`transform.py:750` → `work_order.py:74,155` → `ray_stage_job.py:450` → `stage_stamp.py:146`); drop it. Re-cut the htr runner's stage job to read bronze Lance and emit gold rows: `runners/htr/src` imports no `lance` at all, `main.py:22,107` still drives `build_source`/`build_sink`, and `pipeline.py:8,180-186` still ends in `AltoExportActor`. Add the bronze→silver geometry stages under the placement constraint: the platform's stage runners are the three config rows at `chart/values.yaml:1472-1480` over a generic transform, and `medallion/schemas/htr.py` was removed for carrying a workload shape — so geometry stages live inside the sealed runner (its own Ray job/image) and surface to the platform as stage-runner config, never as a module under `services/medallion`. The owner-directed P7b shape is recorded nowhere in `docs/DECISIONS.md`.
-- *Closes when:* `runners/htr` opens a bronze Lance dataset and writes gold rows through the governed stamp, and the geometry stages run as stage-runner config rows with no workload-named module under `services/medallion`.
-- *Evidence:* `runners/htr/src/runner/main.py:22,107; runners/htr/src/runner/pipeline.py:8,180-186` · `grep -rln 'import lance\|from lance' runners/htr/src → empty` · `chart/values.yaml:1462-1480 (three stageRunners rows, no geometry)` · `scripts/ray_stage_job.py:450; packages/service-kit/src/service_kit/lakehouse/stage_stamp.py:146`
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
@@ -802,6 +796,14 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 2 · COMPUTE
+
+**LH-010 · The htr runner drives `build_source`/`build_sink` into ALTO writers, never reads bronze Lance or emits gold rows, and no geometry stage exists**
+`runners/htr, chart` · **MED** · PARTIAL
+- **MOVED FROM PHASE 1 (2026-09-20): the PLATFORM half is done, and what remains is one workload's own shape.** Re-measured before working it. Two of the row's three clauses are closed: the in-dataset `lineage` column shipped end-to-end (`transform.py:750` → `work_order.py:74,155` → `ray_stage_job.py:450` → `stage_stamp.py:146`), and the placement constraint — "no workload-named module under `services/medallion`" — is now PINNED by `tests/unit/test_the_medallion_names_no_workload.py`, which derives the vocabulary from the `runners/` directory names so a tenth workload inherits the gate without an edit, and checks module names AND identifiers while deliberately leaving PROSE alone (a comment reading "an audio deriver slots into `_DERIVERS` later" is the agnostic argument being made, not a modality leaking in). Mutation-checked against the exact file it exists to prevent: re-creating `medallion/schemas/htr.py` fires both legs, and an `HtrGoldRow` class dropped into the neutral `tier.py` fires the identifier leg alone. **AND THE CASCADE'S TIER CONTRACT IS NOT UNDEMONSTRATED** — measured across all nine runners, `runners/dummy/src/dummy_runner/job.py` opens a source Lance dataset and writes the target with `data_storage_version="2.2"` and stable row ids, so bronze→gold IS exercised by a runner. htr still driving `build_source`/`build_sink` into `AltoExportActor` is therefore that WORKLOAD's shape, not a hole in the platform — which is exactly what the seal says ("whatever a workload's stage graph, model or output format is, it reaches the platform as config"). Phase 2 is where BYO lives, and a runner is the BYO workload.
+- *What is left:* Re-cut the htr runner's stage job to read bronze Lance and emit gold rows: `runners/htr/src` imports no `lance` at all, `main.py:24,109,111` still drives `build_source`/`build_sink`, and `pipeline.py:8,114` still ends in `AltoExportActor` (line numbers re-measured 2026-09-20; the row's were stale). Add the bronze→silver geometry stages inside the sealed runner (its own Ray job/image), surfacing to the platform as stage-runner config rows beside the three at `chart/values.yaml:1472-1480` over the generic transform — never as a module under `services/medallion`, which the gate above now enforces rather than merely asks for. The owner-directed P7b shape is recorded nowhere in `docs/DECISIONS.md`.
+- *Closes when:* `runners/htr` opens a bronze Lance dataset and writes gold rows through the governed stamp, and the geometry stages run as stage-runner config rows with no workload-named module under `services/medallion`.
+- *Evidence:* `runners/htr/src/runner/main.py:22,107; runners/htr/src/runner/pipeline.py:8,180-186` · `grep -rln 'import lance\|from lance' runners/htr/src → empty` · `chart/values.yaml:1462-1480 (three stageRunners rows, no geometry)` · `scripts/ray_stage_job.py:450; packages/service-kit/src/service_kit/lakehouse/stage_stamp.py:146`
+
 
 **LH-085 · The media write lane is driver-only for its DERIVERS, not for blob typing — distributing it is untried**
 `medallion (RAY half), scripts` · **MED**
