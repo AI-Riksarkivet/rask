@@ -33,7 +33,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_run
 from maintenance.services.floor import raise_listing_floors
 from maintenance.services.optimize import summarize_refusals
-from maintenance.services.purge import purge_expired_trash
+from maintenance.services.purge import purge_expired_trash, refusal_log_entry
 from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
@@ -278,7 +278,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
                     "dry_run": purged.dry_run,
                     "purged": [f"{p.kind}:{p.id}" for p in purged.purged],
                     "would_purge": [{"id": f"{p.kind}:{p.id}", "location": p.location, "expires_at": p.expires_at} for p in purged.would_purge],
-                    "refused": [{"id": f"{r.kind}:{r.id}", "reason": r.reason} for r in purged.refused],
+                    "refused": [refusal_log_entry(r) for r in purged.refused],
                     "capped": purged.capped,
                     "bytes_reclaimed": sum(p.bytes_deleted for p in purged.purged),
                 },

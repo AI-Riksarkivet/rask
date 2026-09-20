@@ -552,6 +552,17 @@ async def _refuse(
     out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason, attempts=attempts))
 
 
+def refusal_log_entry(record: RefusedRecord) -> dict[str, object]:
+    """One refusal as the result line reports it, attempt count included.
+
+    `attempts` is what `_drain_order` sorts on, so a refusal reported without it leaves the operator
+    asking the one question the line exists to answer: is this record being demoted, or refused afresh
+    every tick? `None` is a DRY RUN answering honestly — a preview withholds `note_refusal` so it
+    cannot inflate the evidence it exists to show.
+    """
+    return {"id": f"{record.kind}:{record.id}", "reason": record.reason, "attempts": record.attempts}
+
+
 async def _delete_bytes_or_refuse(
     out: TrashPurgeReport,
     *,
