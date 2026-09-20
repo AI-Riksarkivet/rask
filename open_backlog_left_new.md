@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**194 open items**, of which **97 are blocked on a decision** and **97 can be picked up today**.
+**194 open items**, of which **98 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 46 | 9 | 11 |
+| **PHASE 1 · LAKEHOUSE** | 46 | 8 | 11 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 48 | 31 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
@@ -191,6 +191,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 **LIN-002 · The estate emits 8 of ~30 standard OpenLineage facets, and told a standard consumer nothing about what a write DID**
 `catalog, lineage, medallion, service-kit` · **MED**
+- **blocked:** Owner ruling on `NominalTimeRunFacet` — what LOGICAL WINDOW a cascade run covers. The spec's `nominalStartTime`/`nominalEndTime` are the interval the run is FOR, not when it executed, and a cascade hop has three defensible answers: the upstream tier's version timestamp, the trigger event's time, or the window the ORIGINAL ingest covered. Emitting the wrong one is worse than emitting none — a standard consumer schedules and back-fills on it. This is the row's ONLY remaining facet: everything else is either shipped, or left this row with its reason recorded (`DataQualityMetricsInputDatasetFacet` describes an OUTPUT but is an INPUT facet, `SQLJobFacet` has no subject until a query engine lands).
 - **TWO SHIPPED 2026-09-19, and the version audit is DONE and CLEAN.** Every one of the estate's eight pinned facet versions matches upstream exactly, read from `OpenLineage/OpenLineage/spec/facets`: ColumnLineage 1-2-0, DatasetVersion 1-0-1, Datasource 1-0-1, ErrorMessage 1-0-1, JobType 2-0-4, OutputStatistics 1-0-2, ParentRun 1-2-0, Schema 1-2-0, envelope 2-0-2. So a VERSION audit is not needed; a COVERAGE one was. Added: `LifecycleStateChangeDatasetFacet` (rask's 11 DDL operations mapped onto the spec's six-value enum — a DATA operation gets NO facet, because the enum has no member meaning "wrote rows" and `OVERWRITE` is a lie a reader acts on) and `ProcessingEngineRunFacet` (which engine wrote this, `version` being the spec's only required field). The rask `lance.operation` name stays beside both: it is more specific than the enum admits, so collapsing onto the standard field would lose what the estate's own consumers read.
 - **SEVERITY SHIPPED 2026-09-19, and the value was already in the estate.** The spec's `Assertion` carries `severity` — `error` when the failure blocks the pipeline, `warn` when it does not — and rask emitted neither, so a standard consumer read a list of `success: false` with no way to tell a broken join from an unusual-but-accepted row count. It is DERIVED from `STRUCTURAL_ASSERTIONS` ("findings NO approval can wave through", already enforced at the medallion's review and the catalog's publish door) rather than passed, so the wire and the gate cannot disagree about which failures are blocking; a structural finding cannot be downgraded even by an explicit argument. Pinned by `tests/unit/test_a_quality_assertion_says_how_bad_it_is.py`, parametrised over the SET so a new structural assertion becomes `error` on the wire by being added there and nowhere else. **OBSERVED on the deployed catalog:** `POST /management/v1/table/{id}/publish` with `gate_only` answers `not_null severity='error'` beside `row_count_positive` and both `column_declared` at `'warn'` — the mapping on the wire an external writer actually reads.
 - **A FALSIFIED CLAIM ABOUT FACET DIRECTION, and the code followed the wrong one.** `medallion/schemas/events.py` said "dataQualityAssertions is an OUTPUT facet"; it is an INPUT facet (`openlineage.client.generated.data_quality_assertions_dataset` subclasses `InputDatasetFacet`), which `lineage/models.py:73` already states correctly two files away. The placement itself is deliberate and now says so: the spec has no output-side quality facet, the assertions are about the dataset this run WROTE, and `outputFacets` is typed for `OutputDatasetFacet` subclasses — so it rides the plain `facets` slot, which `Dataset.facet` reads along with the other two.
