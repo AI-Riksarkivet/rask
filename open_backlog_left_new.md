@@ -137,9 +137,9 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 48 | 11 | 12 |
+| **PHASE 1 · LAKEHOUSE** | 47 | 10 | 12 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
-| **PHASE 2 · COMPUTE** | 47 | 30 | 15 |
+| **PHASE 2 · COMPUTE** | 48 | 31 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 20 | 15 | 0 |
@@ -198,12 +198,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* **one facet and one ruling.** `NominalTimeRunFacet` is the one that genuinely needs a ruling: what logical window a cascade run covers. **`DataQualityMetricsInputDatasetFacet` leaves this row** — the estate computes its numbers (`assert_quality` runs `count_rows()` and a null count, then keeps only the booleans) but it is an INPUT facet and those numbers describe an OUTPUT, so filling it would need the metrics carried to the next stage's input. That is a different change from emitting a facet. `SQLJobFacet` has no subject until a query engine lands. Emitting a facet the estate cannot fill truthfully is worse than omitting it.
 - *Closes when:* Each remaining applicable facet is emitted with a real value or recorded as deliberately omitted with its reason.
 - *Evidence:* `packages/service-kit/src/service_kit/openlineage.py (lifecycle_facet, processing_engine_facet)` · `tests/unit/test_a_standard_consumer_can_read_what_a_write_did.py` · upstream facet versions read via the GitHub API 2026-09-19 · `gh api repos/OpenLineage/OpenLineage/contents/spec/facets` (~30 published)
-
-**LIN-003 · The runner lanes emit no START and emit inline, where the reference implementation does neither**
-`runners, lineage-kit` · **MED**
-- *What is left:* Measured against `datafusion-contrib/datafusion-openlineage`, the closest reference for a lakehouse query/compute engine: it emits "`START` at plan time, `COMPLETE` / `FAIL` at end of execution, all under one run id" and sends events "through a bounded queue drained by a background task — lineage never stalls or fails a query". rask's runner lanes do neither. `runners/dummy` REFUSES a START in terms ("a START notifies nobody"), which is a notifications argument applied to a lineage decision: a START is what makes a run observable WHILE it runs and what a child's `ParentRunFacet` attaches to. `runners/htr` emits only COMPLETE/FAIL. Both call `emit()` inline, so a slow ingest slows the job. `medallion/services/transform.py:316` and `scripts/ray_train_job.py:461` DO emit START, so this is a runner-lane gap rather than an estate-wide one. **`lineage_kit.runs.LineageRun` already carries the lifecycle** — `start()`, terminal-once protection, per-run facets, the `on_undelivered` hook — and neither runner lane uses it: both hand-roll ~150 lines that duplicate it and omit the terminal-once guard, so either can emit COMPLETE twice.
-- *Closes when:* Both runner lanes drive `LineageRun`, emit START, and emit off the critical path; `_NOT_A_PERSON` and the originator/project read live in `lineage-kit` rather than once per lane.
-- *Evidence:* `runners/dummy/src/dummy_runner/lineage.py:91-92 (TERMINAL_STATES refusal)` · `runners/htr/src/runner/lineage.py (no START, inline emit)` · `packages/lineage-kit/src/lineage_kit/runs.py:188-215 (_emit_terminal, start)` · https://github.com/datafusion-contrib/datafusion-openlineage
 
 **LIN-004 · Every DDL change is emitted as a RunEvent, so half the Job nodes in the graph are jobs that never ran**
 `catalog, lineage` · **MED**
@@ -851,6 +845,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 2 · COMPUTE
+
+**LIN-003 · The runner lanes emit no START and emit inline, where the reference implementation does neither**
+`runners, lineage-kit` · **MED**
+- *What is left:* Measured against `datafusion-contrib/datafusion-openlineage`, the closest reference for a lakehouse query/compute engine: it emits "`START` at plan time, `COMPLETE` / `FAIL` at end of execution, all under one run id" and sends events "through a bounded queue drained by a background task — lineage never stalls or fails a query". rask's runner lanes do neither. `runners/dummy` REFUSES a START in terms ("a START notifies nobody"), which is a notifications argument applied to a lineage decision: a START is what makes a run observable WHILE it runs and what a child's `ParentRunFacet` attaches to. `runners/htr` emits only COMPLETE/FAIL. Both call `emit()` inline, so a slow ingest slows the job. `medallion/services/transform.py:316` and `scripts/ray_train_job.py:461` DO emit START, so this is a runner-lane gap rather than an estate-wide one. **`lineage_kit.runs.LineageRun` already carries the lifecycle** — `start()`, terminal-once protection, per-run facets, the `on_undelivered` hook — and neither runner lane uses it: both hand-roll ~150 lines that duplicate it and omit the terminal-once guard, so either can emit COMPLETE twice.
+- *Closes when:* Both runner lanes drive `LineageRun`, emit START, and emit off the critical path; `_NOT_A_PERSON` and the originator/project read live in `lineage-kit` rather than once per lane.
+- *Evidence:* `runners/dummy/src/dummy_runner/lineage.py:91-92 (TERMINAL_STATES refusal)` · `runners/htr/src/runner/lineage.py (no START, inline emit)` · `packages/lineage-kit/src/lineage_kit/runs.py:188-215 (_emit_terminal, start)` · https://github.com/datafusion-contrib/datafusion-openlineage
+- **MOVED HERE FROM PHASE 1 (2026-09-20).** Tagged `runners, lineage-kit`, and its close condition is entirely runner-lane work — "Both runner lanes drive `LineageRun`, emit START, and emit off the critical path". The lakehouse half of this row is already CORRECT and was measured rather than assumed: the medallion emits START (`transform.py:343`), and both catalog emit transports are bounded and best-effort, with the Dapr one carrying a comment that a hung sidecar cannot pin the request path. So nothing here is one of the four services.
 
 **LH-096 · Outside the four lakehouse services, Lance is still opened bare per request and the bundled runtime-hygiene clauses are unfinished**
 `ingest, viewer, search, catalog, service-kit` · **MED** · PARTIAL
