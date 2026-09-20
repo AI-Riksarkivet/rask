@@ -1833,7 +1833,7 @@ def refuse_a_branch_name_the_backend_cannot_use(name: str) -> None:
         raise InvalidInputError(f"invalid branch name {name!r}: a path-traversal segment is not a branch name")
 
 
-def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
+def _classify_ref_error(exc: Exception, *, kind: str, name: str, invalid_name: str | None = None) -> Exception:
     """Map a pylance tag/branch failure onto the Lance Namespace spec's coded error.
 
     Returns ``exc`` UNCHANGED when nothing matches, so an unrecognised failure stays an honest
@@ -1841,7 +1841,9 @@ def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
     """
     message = str(exc)
     if _REF_INVALID_MARKER in message.lower():
-        return InvalidInputError(f"invalid {kind} name {name!r}: {exc}")
+        # A branch create names its SOURCE for a missing version but the NEW name for a malformed one.
+        subject = name if invalid_name is None else invalid_name
+        return InvalidInputError(f"invalid {kind} name {subject!r}: {exc}")
     if any(marker in message.lower() for marker in _REF_VERSION_MISSING_MARKERS):
         return TableVersionNotFoundError(f"no such version for {kind} {name!r}: {exc}")
     match = _REF_FAILURE_RE.search(message)
@@ -1858,7 +1860,7 @@ def _classify_ref_error(exc: Exception, *, kind: str, name: str) -> Exception:
 
 
 @contextmanager
-def _ref_errors(kind: str, name: str) -> Iterator[None]:
+def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Iterator[None]:
     """Translate the tag/branch failures inside the block into their spec-coded errors.
 
     Without this every one of them reaches `install_problem_handlers` as a bare exception and is
@@ -1869,7 +1871,7 @@ def _ref_errors(kind: str, name: str) -> Iterator[None]:
     try:
         yield
     except (ValueError, OSError) as exc:
-        translated = _classify_ref_error(exc, kind=kind, name=name)
+        translated = _classify_ref_error(exc, kind=kind, name=name, invalid_name=invalid_name)
         if translated is exc:
             raise
         raise translated from exc
@@ -1994,7 +1996,7 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
     # which exists nowhere yet and tells the caller nothing about what was missing.
     source = req.from_branch if req.from_branch is not None else "main"
     try:
-        with _ref_errors("branch", source):
+        with _ref_errors("branch", source, invalid_name=req.name):
             dataset.create_branch(req.name, _branch_reference(req))
     except OSError:
         if req.name in open_dataset(ns, so, table_id).branches.list():

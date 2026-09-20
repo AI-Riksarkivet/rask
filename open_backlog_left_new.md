@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**202 open items**, of which **97 are blocked on a decision** and **105 can be picked up today**.
+**201 open items**, of which **97 are blocked on a decision** and **104 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 57 | 21 | 14 |
+| **PHASE 1 · LAKEHOUSE** | 57 | 20 | 13 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -535,12 +535,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* `_transforms/` holds 10 records in three shapes — one current, one with `name`+`entrypoint`, eight with `lane`+`entrypoint` — and `TransformSpec` (`extra="forbid"`, requires `name`, `task`) rejects nine of them; `_parse` at `transform_specs.py:182-193` logs `transform_spec_malformed` and skips. `cardinality` already defaults to `ONE_TO_ONE` in the model, so only the two mappings above need ruling. Once ruled: migrate or delete the nine (10 records total, 9 sharing one shape), then make an unparseable control record louder than a WARN or gate the set empty — no test asserts on `transform_spec_malformed` today. The live count is not re-measured this session.
 - *Closes when:* Every record under `<control_root>/_transforms/` validates against `TransformSpec`, and a record that does not is surfaced by more than a listing-path WARN.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84 (fields, extra=forbid, cardinality default), :182-193 (_parse warns and skips)` · `grep -rn transform_spec_malformed tests services/*/tests packages/*/tests → none` · `grep -rln 'migrate.*transform' scripts → none`
-
-**LH-046 · A malformed branch name on the S3-backed catalog may still answer `Internal 18` from Lance's clone-path panic, and no upstream issue is filed**
-`catalog` · **LOW**
-- *What is left:* At HEAD `_classify_ref_error` maps `Ref is invalid` to 13, and `refuse_a_branch_name_the_backend_cannot_use` refuses the three marker-less names (`main`, `""`, a `..` segment) at the door — measured on pylance 11.0.0 against the local backend only. Re-measure on S3 with pylance 11.0.0 whether a malformed name (a space, `~`, a trailing `/`) still reaches the clone path and dies `Clone operation should not enter build_manifest` before validation. If it does, file the upstream Lance issue (nothing in the tree references one) and, once Lance raises `Ref is invalid` on S3 too, the existing mapping closes it with no code change. Do not duplicate Lance's ref grammar locally.
-- *Closes when:* An S3 create with a malformed branch name answers `InvalidInput 13` through the existing classifier.
-- *Evidence:* `services/catalog/src/catalog/services/dataplane.py:1738-1769 (door guard, 'Driven on 11.0.0')` · `services/catalog/src/catalog/services/dataplane.py:1770-1778 (_REF_INVALID_MARKER → InvalidInputError)` · `tests/unit/test_a_branch_name_the_backend_cannot_use_is_a_caller_error.py:1-24 (no S3 case)` · `uv.lock:3276-3277 (pylance 11.0.0); grep 'lance/issues' across catalog/docs → 0 hits`
 
 **LH-047 · Five tool-generated `lance_docs/` bundles carry no scrape commit and are verified by nothing**
 `catalog` · **LOW** · PARTIAL

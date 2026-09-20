@@ -32,6 +32,7 @@ from __future__ import annotations
 import pytest
 from lance_namespace import InvalidInputError, TableBranchAlreadyExistsError
 
+from catalog.services import dataplane
 from catalog.services.dataplane import refuse_a_branch_name_the_backend_cannot_use
 
 
@@ -73,3 +74,18 @@ def test_a_name_lance_itself_rejects_is_left_to_lance(name: str) -> None:
     that rule would drift, and the copy here would be the one nobody tests against a new pylance.
     """
     refuse_a_branch_name_the_backend_cannot_use(name)
+
+
+def test_classify_ref_error_invalid_name_names_the_rejected_branch() -> None:
+    # A branch create scopes its errors to the SOURCE (right for a missing version), so a malformed
+    # new name was reported as `invalid branch name 'main'` — measured on S3 2026-09-20.
+    err = dataplane._classify_ref_error(OSError("Ref is invalid: Branch segment 'has space'"), kind="branch", name="main", invalid_name="has space")
+
+    assert "'has space'" in str(err)
+    assert "'main'" not in str(err)
+
+
+def test_classify_ref_error_invalid_name_defaults_to_the_scope_name() -> None:
+    err = dataplane._classify_ref_error(OSError("Ref is invalid: bad"), kind="tag", name="v1")
+
+    assert "'v1'" in str(err)
