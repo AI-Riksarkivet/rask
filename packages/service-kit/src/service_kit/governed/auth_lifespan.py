@@ -47,6 +47,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Protocol
 
+from starlette.concurrency import run_in_threadpool
+
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -207,7 +209,25 @@ async def attach_auth(
                 # broke every signed-in ingest; it is centralized here so there is no sixth door.
                 discovery_overrides=({settings.oidc_issuer: settings.oidc_discovery_url} if settings.oidc_discovery_url else None),
             )
-            log.info("%s: OIDC verifier ready (issuer=%s)", service, settings.oidc_issuer)
+            # PROVED, not asserted. The constructor above performs no I/O, so until this call the
+            # log line "verifier ready" said only that a Python object existed. `warm` resolves every
+            # configured issuer, which puts a wrong issuer, a wrong split-horizon override or an
+            # unreachable IdP in this pod's log AT BOOT with the URL that failed — instead of in a
+            # user's failed request minutes later.
+            #
+            # OFF THE EVENT LOOP: `warm` performs bounded but blocking HTTP, and this runs inside the
+            # lifespan of an async app. Awaiting it inline would stall the worker, which is the exact
+            # reason `verify_off_loop` exists one module over.
+            failures = await run_in_threadpool(app.state.oidc.warm)
+            if failures:
+                # NOT FATAL, and never readiness. Gating startup or `/readyz` on a downstream IdP
+                # turns one blip into every governed pod leaving its Service endpoints at once —
+                # worse than the 503 the door answers on its own. The pod serves and says what is
+                # wrong; an operator reads this line.
+                for issuer, reason in failures:
+                    log.error("%s: OIDC issuer unusable (issuer=%s): %s", service, issuer, reason)
+            else:
+                log.info("%s: OIDC verifier ready (issuer=%s, discovery reached)", service, settings.oidc_issuer)
         except Exception:
             if fatal:
                 raise

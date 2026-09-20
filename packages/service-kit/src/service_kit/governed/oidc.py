@@ -260,6 +260,36 @@ class OIDCVerifier:
         self._cache[configured_issuer] = (now, provider)
         return provider
 
+    def warm(self) -> list[tuple[str, str]]:
+        """Resolve every configured issuer NOW, and report the ones that failed.
+
+        THE CONSTRUCTOR PERFORMS NO I/O, so a verifier that was merely built proves nothing about the
+        IdP it points at. Discovery happens lazily in :meth:`_resolve` on the first request carrying a
+        bearer, so without this call a wrong issuer, a wrong split-horizon override or an unreachable
+        IdP surfaces as failed user traffic, long after the pod has reported healthy.
+
+        IT REPORTS, IT DOES NOT DECIDE, and that is the load-bearing half. Returning the failures
+        instead of raising keeps the decision with the caller, and today no caller treats an
+        unreachable IdP as fatal — deliberately. Readiness that gates on a downstream dependency turns
+        one IdP blip into every governed pod leaving its Service endpoints at once, which is strictly
+        worse than the 503 the door answers on its own. The pod stays up and says what is wrong.
+
+        Each entry is ``(configured_issuer, reason)``. The issuer is carried because a split-horizon
+        deployment fetches from an override, so the URL that failed is not the one an operator set as
+        the issuer — and that override is the setting most likely to be the wrong one.
+
+        Warming also moves the discovery round-trip off the first user request: `_resolve` caches per
+        issuer for ``cache_ttl``, so whoever signs in first after a rollout no longer pays for it.
+        """
+        failures: list[tuple[str, str]] = []
+        for configured in self._issuers:
+            try:
+                self._resolve(configured)
+            # Every failure is reported and none is raised — see this method docstring.
+            except Exception as exc:
+                failures.append((configured, str(exc)))
+        return failures
+
     def _provider_for(self, token: str) -> _Provider:
         """Select the configured provider whose issuer matches the token's ``iss`` claim.
 

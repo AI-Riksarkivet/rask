@@ -72,7 +72,16 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     monkeypatch.setattr(fga_mod, "provision", provision)
     monkeypatch.setattr(fga_mod, "resolve", resolve)
     monkeypatch.setattr(fga_mod, "make_client", make_client)
-    monkeypatch.setattr(oidc_mod, "OIDCVerifier", lambda *a, **k: object())
+
+    # A stand-in with the ONE method the startup path calls on it. `attach_auth` warms the verifier
+    # so a misconfigured issuer is in the pod's log at boot rather than in a user's failed request,
+    # and a bare `object()` cannot answer that — these postures are about the FGA half, so the OIDC
+    # half has to get far enough out of the way to reach it.
+    class _WarmVerifier:
+        def warm(self) -> list[tuple[str, str]]:
+            return []
+
+    monkeypatch.setattr(oidc_mod, "OIDCVerifier", lambda *a, **k: _WarmVerifier())
     return rec
 
 
