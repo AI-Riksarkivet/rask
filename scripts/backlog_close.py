@@ -51,12 +51,22 @@ _TOTAL = re.compile(r"^\*\*(\d+) open items\*\*, of which \*\*(\d+) are blocked 
 
 
 def _blocks(text: str) -> list[tuple[str, int, int]]:
-    """(id, start, end) for every rendered item, end-exclusive."""
+    """(id, start, end) for every rendered item, end-exclusive.
+
+    CLAMPED BY THE NEXT SECTION HEADING as well as the next row, the same `min(...)` the counting
+    reader below applies — and for the reason `_SECTION`'s own comment gives: the two readings of this
+    file have to be the same one. Cutting only to the next ROW means everything between a section's
+    last item and the next item belongs to that item, so closing it DELETES the heading in between.
+    Measured 2026-09-20 by doing exactly that: `backlog_close.py LH-181` removed
+    `## PHASE 1 · CROSS-CUTTING`, and 74 rows silently changed phase.
+    """
     starts = [(m.group(1), m.start()) for m in _ITEM_START.finditer(text)]
+    headings = [m.start() for m in _SECTION.finditer(text)]
     out = []
     for i, (num, start) in enumerate(starts):
         end = starts[i + 1][1] if i + 1 < len(starts) else len(text)
-        out.append((num, start, end))
+        # The first heading AFTER this row bounds it: a row never spans into the next section.
+        out.append((num, start, min(end, next((h for h in headings if h > start), len(text)))))
     return out
 
 

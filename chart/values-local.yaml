@@ -61,6 +61,20 @@ medallion:
   # `helm template`. `values.yaml` defaults it FALSE, and the default render also drops
   # MEDALLION_PROMOTION_REVIEW_BAND, which is nested inside the same conditional.
   quality: true
+  # THE CASCADE'S PER-HOP ReBAC, here for the same reason `quality` is: it was live as a
+  # `kubectl set env` on the three stage runners and absent from `helm get values`.
+  #
+  # `transform.py` says "an unauthorized stage runner returns DROP (redelivery won't grant the role),
+  # so the cascade enforces the ReBAC" — and that preflight is gated on this flag, which `values.yaml`
+  # defaults FALSE for the open-mode demo. Measured on this estate 2026-09-20: the producer had it on
+  # and all three stage runners did not, so a revoked writer rung was never DROPped. The denial
+  # surfaced deeper as a catalog 403, the handler acked RETRY, and the run COMPLETED once the grant
+  # came back — the deny was a delay, not a refusal.
+  #
+  # ON HERE BECAUSE THIS ESTATE MEETS THE PREREQUISITE the flag's own comment names: the stage-runner
+  # identity grants are seeded, and auth is on. `values-prod.yaml:24` already sets it; this brings the
+  # local release to the same posture instead of leaving the demo one under a governed estate.
+  fgaEnabled: true
 
 # Distributed compaction was live the same way and would have gone the same way: declared at
 # `values.yaml:1598`, defaulting false, inside a `vendWriteCredentials` conditional. The catalog plans

@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**189 open items**, of which **98 are blocked on a decision** and **91 can be picked up today**.
+**188 open items**, of which **98 are blocked on a decision** and **90 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 38 | 4 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 33 | 11 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -461,12 +461,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Measured:* **5 privileged identities render a dedicated token and all 5 are derivable** — `service-bronze-to-silver`, `service-media-to-silver`, `service-silver-to-gold`, `service-trainer`, `service-web`. Pinned by `tests/unit/test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py`, which derives each exactly as the chart does and reds if the helper changes shape. That file is deleted, not inverted, when the fix lands.
 - *Closes when:* A privileged identity's credential cannot be computed from `dapr.appToken`, and a prod render refuses rather than silently deriving one.
 - *Evidence:* `chart/templates/_helpers.tpl — lance.dedicatedServiceToken: printf "%s-%s" $identity $secret | sha256sum | trunc 40` · `chart/values.yaml:2811 externalSecrets.enabled: false` · `grep -nE '^externalSecrets:' chart/values-prod.yaml → no match` · `packages/service-kit/src/service_kit/governed/dapr_auth.py — service_principal binds a privileged subject to service-token-<identity>`
-
-**LH-181 · An FGA deny is retried like a broker blip, so an unauthorized stage completes once the grant returns**
-`medallion` · **HIGH**
-- *What is left:* `ACTIVITY_RETRY` (`workflow.py:76-81`) applies to every activity — 5 attempts, 2 s to 60 s backoff — and a 403 from the catalog goes through it unchanged. A denial is not transient: the answer is identical until someone writes a tuple. Classify an authorization denial as TERMINAL for the activity (report the stage FAILED, the path `workflow.py:279` already has) instead of raising into the retry policy.
-- *Closes when:* A stage whose writer rung is revoked reports FAILED rather than retrying, and `test_fga_deny_drops_promotion_and_regrant_restores` passes against the deployed release.
-- *Evidence:* live 2026-09-20, `bash scripts/e2e_live.sh tests/e2e-py/test_governed_union_e2e.py` → `silver run 357b947a… COMPLETED after the writer grant was restored — the deny was a RETRY (never actually checked), not a refusal` · `services/medallion/src/medallion/workflow.py:76-81,274-279` · surfaced only once the leg's preconditions revoked the rung the seed actually grants (the WAREHOUSE), which is why no run had reached this assertion before
 
 ## PHASE 1 · CROSS-CUTTING
 
