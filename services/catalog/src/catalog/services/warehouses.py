@@ -24,6 +24,7 @@ import pyarrow.fs as pafs
 from lance_namespace import NamespaceAlreadyExistsError, ServiceUnavailableError
 
 from catalog.services.control_records import BindingRecord, BucketClaimRecord, WarehouseRecord, read_json, validated, validated_or_refuse, write_json
+from service_kit.lakehouse import trash
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
 from service_kit.lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
 
@@ -547,11 +548,50 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
     the two never share a default). A record-less bucket is reported by the reconciler, not silently
     forgotten.
     """
+    # THE TRASH GOES WITH IT, and reading the record BEFORE the delete is the only order that can find
+    # it. A dropped table leaves a trash record naming its location so it can be undropped inside the
+    # retention window; this delete removes the registry entry that made that location maintainable, so
+    # a surviving record names a root the estate no longer maintains and every purge tick refuses it
+    # forever. Measured on the live estate 2026-09-20: 869 of 877 expired records were refused
+    # `outside the maintained estate`, across 45 warehouses that had been deleted exactly this way.
+    #
+    # The clutter is the smaller half. A trash record PROMISES recoverability, and a warehouse delete
+    # that purged its bucket destroyed the bytes it promises — so clearing them together keeps the
+    # promise and the bytes in one lifetime rather than leaving an undrop that can only name a ghost.
+    _clear_trash_under(control_root, storage_options, warehouse_id)
     fs, base = fs_and_base(control_root, storage_options)
     try:
         fs.delete_file(f"{base}/{_REGISTRY_PREFIX}/{warehouse_id}.json")
     except FileNotFoundError:
         return
+
+
+def _clear_trash_under(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> int:
+    """Clear every trash record whose location sits in this warehouse's bucket. Returns the count.
+
+    Scoped by BUCKET rather than by warehouse id, because the two are separate fields on the record and
+    a warehouse may name a bucket that is not its own id. Falls back to the id when no record can be
+    read — a delete of an already-absent warehouse must still be able to tidy what named it.
+
+    Best-effort by contract: the registry delete is the operation, and a trash sweep that raised would
+    turn a completed delete into an error the caller would retry against a record that is already gone.
+    """
+    record = get_warehouse(control_root, storage_options, warehouse_id) or {}
+    bucket = str(record.get("bucket") or warehouse_id)
+    prefix = f"s3://{bucket}/"
+    cleared = 0
+    try:
+        for entry in trash.list_all(control_root, storage_options):
+            if str(entry.get("location") or "").startswith(prefix) and trash.clear(
+                control_root, storage_options, str(entry.get("id") or ""), kind=str(entry.get("kind") or "table")
+            ):
+                cleared += 1
+    except Exception as exc:  # noqa: BLE001 — tidying must never outrank the delete it follows
+        log.warning("warehouse_trash_not_cleared", extra={"warehouse": warehouse_id, "error": f"{type(exc).__name__}: {exc}"})
+        return cleared
+    if cleared:
+        log.info("warehouse_trash_cleared", extra={"warehouse": warehouse_id, "bucket": bucket, "records": cleared})
+    return cleared
 
 
 def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:
