@@ -196,9 +196,9 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[dict
     reported and the thing that gets deleted can never be two different sets. ``trash.expired`` refuses
     an undated or unparseable record, which is the fail-toward-not-deleting direction.
 
-    Deterministic oldest-first ordering, NOT the shuffle the FAIL-emit cap uses: that cap shuffles so
-    every failing dataset eventually gets an event, while here the over-cap remainder is drained on the
-    next tick anyway and a stable order makes a capped run reproducible.
+    Ordered by refusal count, then oldest-first. `trash_purge_max_per_tick` slices this list BEFORE
+    the refusal checks run, so an oldest-first order lets a permanently-refused record hold the same
+    slot on every tick and the queue behind it never moves (measured 2026-09-20: 18 of a 25 cap).
     """
     return due_from(trash.list_all(control_root, storage_options))
 
@@ -213,7 +213,13 @@ def due_from(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     The rule itself is unchanged and stays in ONE place on purpose: the set that gets reported and the
     set that gets deleted can never be two different answers.
     """
-    return sorted(trash.expired(records), key=lambda r: str(r.get("expires_at") or ""))
+    return sorted(trash.expired(records), key=_drain_order)
+
+
+def _drain_order(record: dict[str, Any]) -> tuple[int, str]:
+    """Sort key: refusal count, then expiry. An unreadable count sorts as never-tried."""
+    attempts = record.get("attempts")
+    return (attempts if isinstance(attempts, int) and attempts > 0 else 0, str(record.get("expires_at") or ""))
 
 
 def report_is_clean(report: ReconcileReport) -> str | None:
@@ -376,7 +382,9 @@ def check(record: dict[str, Any], *, roots: set[str], live_ids: set[str] | None)
         return None
     root = _root_of(location, roots)
     if root is None:
-        return f"location {location!r} is outside the maintained estate {sorted(roots)}"
+        # The count, not the list: this reason repeats per refused record on a WARNING line, and
+        # rendering ~100 bucket URIs made one tick's line ~36 KB (measured 2026-09-20).
+        return f"location {location!r} is outside the maintained estate ({len(roots)} roots)"
     remainder = location[len(root) :].strip("/")
     if not remainder:
         return f"location {location!r} IS a store root — refusing to delete a whole bucket"
