@@ -251,7 +251,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
         # estate arguing with itself. Both read THIS tick's report, never a fresh scan.
         repaired = await repair_drift(settings, report=report, fga_client=client)
         payload["drift_repair"] = repaired.model_dump(mode="json")
-        if repaired.revoked or repaired.error:
+        if repaired.revoked or repaired.edges_cut or repaired.error:
             # NAMED at WARNING for the rebuild's reason in the other direction: every entry removed a
             # grant surface, and "revoked 50 objects" tells an operator nothing they can check.
             log.warning(
@@ -259,6 +259,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
                 extra={
                     "dry_run": repaired.dry_run,
                     "revoked": [f"{r.fga_object} ({r.tuples} tuples) <- {r.justified_by}" for r in repaired.revoked],
+                    "edges_cut": [f"{e.user} {e.relation} {e.object} <- {e.justified_by}" for e in repaired.edges_cut],
                     "refused": repaired.refused,
                     "capped": repaired.capped,
                     "error": repaired.error,
