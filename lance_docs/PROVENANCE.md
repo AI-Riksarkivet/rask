@@ -57,6 +57,20 @@ spot-check beside it, and no stronger.
 | `ray.md` | `lance-format/lance-ray` — `docs/src/` | `ae670c23` (2026-09-14), read 2026-09-20 | `write.md:31` declares `data_storage_version` on `write_lance`, which is what lets the media lane preserve blob typing |
 | `lance_sdk.md` | LanceDB's rendered Python API reference | **no commit exists** — a rendered docs site, not a repo file tree | — |
 
+**`namespace.md`'s REST-path prose is NOT the route authority — `ns_catalog/spec.yaml` is.** Its
+"HTTP Request" blocks (`:7169-7260` and the rest of that section) give 16 of the 47 operations they
+document at paths the OpenAPI contradicts: `POST /v1/table/{id}/index/create` where the spec says
+`create_index`, `.../tag/create` where it says `tags/create`, `.../count` where it says `count_rows`,
+`.../merge-insert` where it says `merge_insert`, `.../schema/metadata` where it says
+`schema_metadata/update`, plus `query/analyze` and `query/explain` for `analyze_plan`/`explain_plan`.
+Measured 2026-09-20 against three independent sources that all agree with each other and with the
+deployed catalog: the vendored `ns_catalog/spec.yaml` (54 paths), upstream `main`'s `spec.yaml` (54
+paths, fetched the same day), and the generated `lance_namespace_urllib3_client` (54 paths). So this
+is a property of the upstream PROSE, not of this vendoring or of a stale pin — and it is expensive to
+meet unaware: a reader citing that section concludes a conformant catalog is serving 16 operations at
+the wrong path. Cite `ns_catalog/spec.yaml` for a route; `namespace.md` is for vocabulary, error codes
+and semantics, which is what every other citation to it in this estate uses it for.
+
 `lance_sdk.md` is deliberately the one row with no commit, and that is a property of the SOURCE rather
 than a gap in this table: a rendered site has no revision to name. A claim from it is the weakest in
 this tree and must be checked against the installed package rather than against a document.

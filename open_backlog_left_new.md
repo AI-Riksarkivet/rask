@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**194 open items**, of which **98 are blocked on a decision** and **96 can be picked up today**.
+**193 open items**, of which **98 are blocked on a decision** and **95 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 46 | 8 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 45 | 7 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 48 | 31 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 25 | 10 | 6 |
@@ -146,13 +146,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 
 ## PHASE 1 · LAKEHOUSE
-
-**LH-180 · 38 rask-only routes are still mounted on the lance-ns spec prefix, and `namespace.md`'s REST prose contradicts the spec in its own bundle**
-`catalog` · **MED**
-- **[[LH-021]] CLOSED ON A CLAIM THE DEPLOYED SURFACE CONTRADICTS, measured 2026-09-20.** Its closing line — repeated in `services/catalog/tests/test_the_management_prefix_is_authorized.py:48` as "Every rask-only verb has left that mount" — reads "every rask-only route has left the spec prefixes and the ratchet allowlist holds 0 entries". The ALLOWLIST is empty; the ROUTES are not, and nothing gates the difference. Diffed the deployed catalog's OpenAPI (144 paths) against the STOCK `lance_namespace_urllib3_client`'s 54 and the vendored `lance_docs/ns_catalog/spec.yaml`'s 54 — the two agree exactly — and **38 live `/v1/…` paths belong to families neither knows**: `warehouses` 8, `access` 7, `project` 6, `projects` 5, `user-state` 4, `model` 3, `stores` 2, `events` 1, `me` 1, `outbox` 1. `access_admin.py:204` mounts `APIRouter(prefix="/v1/access")` and `stores.py:44` mounts `APIRouter(prefix="/v1")` outright. That "42 -> 0" was the allowlist's count, not the surface's.
-- **RASK IS CONFORMANT ON THE SPEC'S OWN 54, AND A CLAIM FILED HERE EARLIER THAT IT WAS NOT IS WITHDRAWN.** Measured both directions: every one of the stock client's 54 paths is served by the deployed catalog, **zero missing**. An earlier version of this row alleged five spec operations answering 404 at their spec spelling (`/v1/table/{id}/index/create`, `…/tag/create`, …). That came from `lance_docs/namespace.md`'s prose REST section (`:7169-7260`), and it is the PROSE that is stale: `lance_docs/ns_catalog/spec.yaml` — the vendored OpenAPI from `lance-format/lance-namespace` commit `eb1de88e` (2026-09-01), the authority `PROVENANCE.md` names — spells them `create_index`, `create_scalar_index`, `tags/create|delete|list|update|version`, `merge_insert`, `schema_metadata/update`, `analyze_plan`, `explain_plan`, `count_rows`, which is what rask serves and what the generated client calls. **The remaining work in this clause is the DOC, not the code**: `namespace.md`'s REST section describes 16 of 47 operations at paths the spec and the client both contradict, so anyone citing it for a route is misled — as this row was.
-- *Closes when:* the rask-only families are mounted where LH-021 said they would be, a test DERIVES the spec/rask split from the mounted routes against `ns_catalog/spec.yaml` rather than asserting it in a comment (the shape `test_the_maintenance_doors_refuse_a_branch_they_cannot_honour` uses, so a new rask-only router inherits the gate without an edit), and `lance_docs/namespace.md`'s REST prose either agrees with `ns_catalog/spec.yaml` or says it is not the authority.
-- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/access_admin.py:204 (prefix="/v1/access")` · `services/catalog/src/catalog/api/v1/endpoints/stores.py:44 (prefix="/v1")` · `services/catalog/tests/test_the_management_prefix_is_authorized.py:48 (the falsified comment)` · `lance_docs/ns_catalog/spec.yaml (54 paths) == stock client (54 paths) != lance_docs/namespace.md:7169-7260`
 
 **LH-177 · The catalog vends its own in-cluster address, so an off-cluster client gets a valid credential for a host it cannot resolve**
 `catalog` · **MED**
