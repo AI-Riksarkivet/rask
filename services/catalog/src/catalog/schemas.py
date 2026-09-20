@@ -735,6 +735,16 @@ class CreateWarehouseRequest(BaseModel):
     # Absent (default) keeps every existing record byte-identical; a re-POST carries an existing flag
     # forward, exactly as `serving` and `protected` do.
     primary: bool = False
+    # [[LH-067]] THE OBJECT STORE THIS WAREHOUSE'S BUCKET LIVES AT, when it is not the estate's. Absent
+    # (default) means the estate endpoint, which is every warehouse today, and keeps existing records
+    # byte-identical. Settable HERE rather than only in the registry for the reason the `primary`
+    # comment above records: a field the record honours and no door can set is hardening an operator
+    # cannot apply.
+    #
+    # NON-SECRET, and there is deliberately no credential beside it. Material never travels in a
+    # record; the estate resolves its S3 secret from the Dapr secret store, and a second store's key
+    # belongs behind that same door with the record naming a reference.
+    endpoint: str | None = None
 
 
 class WarehouseResponse(BaseModel):
@@ -751,6 +761,11 @@ class WarehouseResponse(BaseModel):
     # ambiguity has to be able to read back which record they marked; None on unmarked records
     # (exclude_none keeps them byte-identical on the wire).
     primary: bool | None = None
+    # [[LH-067]] Which object store this warehouse is reached at. Readable back for the same reason
+    # `primary` is: an operator who set it must be able to confirm what the record now says, and
+    # "which store" is the field whose being wrong looks like a missing table rather than like
+    # misconfiguration. None on records using the estate endpoint (every one today).
+    endpoint: str | None = None
     created_at: str | None = None
 
 

@@ -214,6 +214,13 @@ async def create_warehouse(
         # from the existing record; reactivation goes ONLY through the explicit /activate endpoint.
         "status": existing.get("status", "active") if existing is not None else "active",
         "created_at": (existing.get("created_at") if existing is not None else None) or datetime.now(UTC).isoformat(),
+        # [[LH-067]] Which object store this bucket is reached at. CALLER-OWNED, so unlike the
+        # arm-never-disarm fields above a re-POST may correct it — a warehouse that moved store must be
+        # re-pointable, and the alternative is a record only a hand-edited JSON can fix. Omitted from
+        # the request means "unchanged": the key is absent, so `_CALLER_OWNED`'s merge carries the live
+        # value forward. An explicit empty string is how a warehouse returns to the estate endpoint,
+        # which `_resolve_warehouse_root` reads as None.
+        **({"endpoint": body.endpoint} if body.endpoint is not None else {}),
     }
     # Serving carries FORWARD on an idempotent re-create (same rationale as status above): a GitOps
     # reconcile re-POSTing the gold warehouse WITHOUT the serving field must not silently demote it to a
@@ -553,7 +560,11 @@ async def create_warehouse_namespace(
     # above and before the native create.
     await fga_deps.require_no_live_trash(settings, segments, kind="namespace")
 
-    ns_conn = namespace_for_root(request, settings, root_uri)
+    # AT THE WAREHOUSE'S OWN ENDPOINT ([[LH-067]]). This door never routes through `get_namespace`,
+    # so the resolver that threads the record's endpoint does not run here — creating the namespace
+    # at the estate's store instead would put it in a different object store from every table
+    # later written to it.
+    ns_conn = namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
     req = CreateNamespaceRequest(id=segments)
     adopted = False
     try:
@@ -914,7 +925,9 @@ async def delete_warehouse(
     revoked = 0
     try:
         if bound:
-            ns_conn = namespace_for_root(request, settings, root_uri)
+            # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would
+            # find none of this warehouse's namespaces and report a clean delete having dropped nothing.
+            ns_conn = namespace_for_root(request, settings, root_uri, endpoint=record.get("endpoint") or None)
             for top_ns in bound:
                 segments = parse_identifier(top_ns, settings.delimiter)
                 # BEFORE the drop: `drop_namespace` destroys the children in one native call, and a

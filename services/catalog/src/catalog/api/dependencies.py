@@ -40,8 +40,13 @@ def get_user_state_store(request: Request) -> UserStateStore | None:
 UserStateStoreDep = Annotated[UserStateStore | None, Depends(get_user_state_store)]
 
 
-async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: str) -> str | None:
-    """The physical root_uri bound to top-level namespace ``top_ns`` (#3-A), or ``None`` → default root.
+async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: str) -> tuple[str, str | None] | None:
+    """The bound warehouse's ``(root_uri, endpoint)`` for ``top_ns`` (#3-A), or ``None`` → default root.
+
+    The ENDPOINT rides along because the same live record read already answers it ([[LH-067]]): a
+    warehouse whose bucket is in another object store names it, and a connection built without it is
+    opened against the estate's store — a wrong-bucket read that looks like a missing table. ``None``
+    for the endpoint means the estate default, which is every warehouse today.
 
     FAILS CLOSED. A registry read ERROR raises ``ServiceUnavailableError`` (503) — it is NOT swallowed to
     ``None``. Swallowing it would route a possibly-BOUND tenant's table to the shared default bucket on a
@@ -92,9 +97,14 @@ async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: 
     # warehouses are off). FAIL-CLOSED on BOTH failure kinds (audit #3/#5): a transient registry read error is
     # wrapped as 503 (NOT an unhandled 500) — symmetric with the binding read above; and a MISSING warehouse
     # record for a still-bound namespace (a clean status None) is NOT-active → 403, never silently allowed.
+    # THE WHOLE RECORD, not just the status, and it is the same single GET either way. The routing
+    # path also needs the warehouse's own `endpoint` when it declares one ([[LH-067]]), and reading it
+    # from this already-live read is what keeps "which store" as fresh as "is it active" — a cached
+    # endpoint would outlive a correction to it, and the failure would be an open against the wrong
+    # store rather than a stale allow.
     try:
-        status = await run_in_threadpool(
-            warehouses.warehouse_status,
+        record = await run_in_threadpool(
+            warehouses.get_warehouse,
             settings.registry_root,
             settings.storage_options(),
             binding["warehouse_id"],
@@ -105,11 +115,14 @@ async def _resolve_warehouse_root(request: Request, settings: Settings, top_ns: 
             extra={"top_ns": top_ns, "warehouse_id": binding["warehouse_id"], "error": str(exc)},
         )
         raise ServiceUnavailableError(f"warehouse status lookup failed for {binding['warehouse_id']!r}") from exc
-    if status != "active":
+    # A MISSING record is NOT active — the same fail-closed answer `warehouse_status` gave for a clean
+    # `None`, kept explicit here now that this reads the record itself. An ABSENT `status` field is
+    # active (records written before the lifecycle feature have none and are live).
+    if record is None or record.get("status", "active") != "active":
         raise PermissionDeniedError(
             f"warehouse {binding['warehouse_id']!r} is deactivated (quarantined); operations on namespace {top_ns!r} are suspended until it is reactivated"
         )
-    return binding["root_uri"]
+    return binding["root_uri"], record.get("endpoint") or None
 
 
 #: Reserved key stamping when a cached binding was resolved. Underscore-prefixed so it cannot collide
@@ -148,17 +161,22 @@ def _fresh_cached_binding(cache: dict[str, dict[str, str]], top_ns: str, ttl_sec
     return entry
 
 
-def namespace_for_root(request: Request, settings: Settings, root_uri: str) -> LanceNamespace:
+def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, endpoint: str | None = None) -> LanceNamespace:
     """The (cached) namespace connection rooted at ``root_uri`` — one per warehouse bucket.
 
     PUBLIC on purpose — the warehouse/namespace lifecycle endpoints resolve bucket-rooted connections
     through it — and every caller must pair it with a warehouse deactivation-status gate
-    (``test_no_warehouse_bucket_access_bypasses_the_deactivation_gate`` refuses one that does not)."""
-    conns: dict[str, LanceNamespace] = request.app.state.warehouse_namespaces
-    conn = conns.get(root_uri)
+    (``test_no_warehouse_bucket_access_bypasses_the_deactivation_gate`` refuses one that does not).
+
+    KEYED ON ``(root, endpoint)``, not on the root alone ([[LH-067]]). A root is immutable but an
+    endpoint is caller-owned and may be corrected, and a root-only key would serve the connection built
+    against the OLD store for the life of the process — an open against the wrong endpoint, which reads
+    as a missing table rather than as stale configuration."""
+    conns: dict[tuple[str, str | None], LanceNamespace] = request.app.state.warehouse_namespaces
+    conn = conns.get((root_uri, endpoint))
     if conn is None:
-        conn = build_namespace_for_root(settings, root_uri)
-        conns[root_uri] = conn
+        conn = build_namespace_for_root(settings, root_uri, endpoint=endpoint)
+        conns[(root_uri, endpoint)] = conn
     return conn
 
 
@@ -191,10 +209,10 @@ async def get_namespace(request: Request, settings: SettingsDep) -> LanceNamespa
         # reachable with `warehouses_enabled`, since the branch above returns first when it is off —
         # which is why every id with a segment routed fine and the one naming the root did not.
         return default_ns
-    root = await _resolve_warehouse_root(request, settings, segments[0])
-    if not root or root == settings.root:
+    resolved = await _resolve_warehouse_root(request, settings, segments[0])
+    if resolved is None or resolved[0] == settings.root:
         return default_ns
-    return namespace_for_root(request, settings, root)
+    return namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
 
 
 async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str) -> LanceNamespace:
@@ -210,10 +228,10 @@ async def namespace_for_top_ns(request: Request, settings: Settings, top_ns: str
     default_ns: LanceNamespace = request.app.state.namespace
     if not settings.warehouses_enabled:
         return default_ns
-    root = await _resolve_warehouse_root(request, settings, top_ns)
-    if not root or root == settings.root:
+    resolved = await _resolve_warehouse_root(request, settings, top_ns)
+    if resolved is None or resolved[0] == settings.root:
         return default_ns
-    return namespace_for_root(request, settings, root)
+    return namespace_for_root(request, settings, resolved[0], endpoint=resolved[1])
 
 
 NamespaceDep = Annotated[LanceNamespace, Depends(get_namespace)]
@@ -231,8 +249,8 @@ async def assert_no_warehouse_bound_namespace(request: Request, settings: Settin
     for segments in id_segment_lists:
         if not segments:
             continue
-        root = await _resolve_warehouse_root(request, settings, segments[0])
-        if root is not None and root != settings.root:
+        resolved = await _resolve_warehouse_root(request, settings, segments[0])
+        if resolved is not None and resolved[0] != settings.root:
             raise InvalidInputError(f"batch operations are not supported for warehouse-bound namespace {segments[0]!r}; use the per-table routes")
 
 

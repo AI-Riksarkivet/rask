@@ -115,7 +115,13 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #: The fields an idempotent re-create OWNS. Everything else on the live record belongs to the
 #: record's own lifecycle and is carried forward from the record AS IT STANDS AT WRITE TIME — not as
 #: the caller read it, which is the whole of diff2 F4.
-_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project"})
+#:
+#: ``endpoint`` is OPTIONAL and non-secret ([[LH-067]]): the object-store address this warehouse's
+#: bucket lives at, when it is not the estate's. Absent means the estate default, which is every
+#: warehouse today. **No credential field belongs beside it** — material never travels in a record;
+#: the estate resolves its S3 secret from the Dapr secret store, and a second store's key belongs
+#: behind that same door with the record naming a reference.
+_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint"})
 
 
 class WarehouseProjectConflict(Exception):

@@ -442,7 +442,10 @@ def _wh_with_fake_backend(client: TestClient, tmp_path: Any, monkeypatch: pytest
 
     fake = _FakeNamespace(existing)
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
-    monkeypatch.setattr(wh_ep, "namespace_for_root", lambda request, settings, root_uri: fake)
+    # `endpoint` is keyword-only since [[LH-067]] — a warehouse may name its own object store, and every
+    # caller now passes the record's value. The stub takes it and ignores it: what these tests exercise
+    # is the create/compensate choreography, not which store the connection dialled.
+    monkeypatch.setattr(wh_ep, "namespace_for_root", lambda request, settings, root_uri, *, endpoint=None: fake)
     s = _settings(tmp_path, fga=True)
     client.app.dependency_overrides[get_settings] = lambda: s
     proj_svc.put_project(f"file://{tmp_path}", {}, {"id": "acme", "created_at": "t", "created_by": "seed", "protected": "false"})

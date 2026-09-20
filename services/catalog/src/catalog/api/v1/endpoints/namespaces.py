@@ -775,12 +775,16 @@ async def undrop_namespace(
         # precisely what it exists to stop. Fail-closed on both failure kinds, symmetric with
         # `dependencies.py`: an unreadable registry is 503, and a MISSING warehouse record (clean
         # `None`) is not-active → 403, never silently allowed.
+        # THE WHOLE RECORD, for the reason `dependencies._resolve_warehouse_root` reads it: the undrop
+        # also needs the warehouse's own `endpoint` ([[LH-067]]), and it is the same single GET. Opening
+        # the estate's store instead would recover the subtree into a different object store from the
+        # one its tables live in.
         try:
-            status = await run_in_threadpool(warehouses.warehouse_status, settings.registry_root, so, warehouse_id)
+            warehouse = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
         except Exception as exc:
             log.warning("warehouse_status_lookup_failed", extra={"top_ns": segments[0], "warehouse_id": warehouse_id, "error": str(exc)})
             raise ServiceUnavailableError(f"warehouse status lookup failed for {warehouse_id!r}") from exc
-        if status != "active":
+        if warehouse is None or (warehouse.get("status") or "active") != "active":
             raise PermissionDeniedError(
                 f"warehouse {warehouse_id!r} is deactivated (quarantined); namespace {segments[0]!r} cannot be recovered into it until it is reactivated"
             )
@@ -792,7 +796,7 @@ async def undrop_namespace(
             warehouse_id,
             str(bound["root_uri"]),
         )
-        ns = namespace_for_root(request, settings, str(bound["root_uri"]))
+        ns = namespace_for_root(request, settings, str(bound["root_uri"]), endpoint=warehouse.get("endpoint") or None)
     everything = await run_in_threadpool(trash.list_all, settings.registry_root, so)
     prefix = canonical + settings.delimiter
     subtree = [r for r in everything if str(r.get("id")) == canonical or str(r.get("id", "")).startswith(prefix)]

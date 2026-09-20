@@ -25,15 +25,27 @@ def build_namespace(settings: Settings) -> LanceNamespace:
     return connect(settings.impl, settings.namespace_properties())
 
 
-def build_namespace_for_root(settings: Settings, root_uri: str) -> LanceNamespace:
+def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str | None = None) -> LanceNamespace:
     """A namespace backend rooted at ``root_uri`` instead of the default ``settings.root`` (#3-A).
 
-    Same impl + object-store credentials/endpoint as the default connection — only the ``root`` (the S3
-    bucket) differs, since a warehouse is physically a separate bucket and the creds are bucket-agnostic on
-    the S3 target. Callers cache the result per root (a warehouse's root never changes)."""
-    properties = settings.namespace_properties()
-    properties["root"] = root_uri
-    return connect(settings.impl, properties)
+    Same impl and object-store CREDENTIALS as the default connection; ``endpoint`` overrides the target
+    when the warehouse record names one ([[LH-067]]). Without it a warehouse is reachable only at the
+    estate's single endpoint — fine while every bucket lives in one store, and the reason a second one
+    could not be registered at all.
+
+    ``allow_http`` IS RE-DERIVED from whichever endpoint is actually used, and that is the half worth
+    stating: the property is a function of the scheme, so leaving it on the estate's default gives an
+    ``http://`` warehouse behind an ``https://`` estate ``allow_http=false``, and every open fails with
+    a TLS error that names the store rather than the configuration.
+
+    CREDENTIALS ARE NOT OVERRIDABLE HERE, deliberately. Material never travels in a warehouse record —
+    the estate resolves its S3 secret from the Dapr secret store, and a second store's material belongs
+    behind that same door under its own key, with the record naming a reference rather than carrying a
+    key pair. An endpoint is not a secret, and it is what a second store needs first.
+
+    Callers cache the result per (root, endpoint) — a warehouse's root never changes, but its endpoint
+    is caller-owned and may be corrected."""
+    return connect(settings.impl, settings.namespace_properties(root=root_uri, endpoint=endpoint))
 
 
 def _branch_checkout_error(

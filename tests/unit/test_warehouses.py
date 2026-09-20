@@ -481,7 +481,9 @@ def test_resolver_refuses_when_warehouse_record_is_missing(monkeypatch: pytest.M
         "binding_for_namespace",
         lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
     )
-    monkeypatch.setattr(warehouses, "warehouse_status", lambda *_a, **_k: None)  # record gone
+    # The resolver reads the WHOLE record now ([[LH-067]] needs its `endpoint` too, at the same one
+    # GET), so a vanished record is a `get_warehouse` returning None rather than a status of None.
+    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: None)  # record gone
     with pytest.raises(PermissionDeniedError):
         asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
 
@@ -495,10 +497,10 @@ def test_resolver_fails_closed_503_on_status_read_error(monkeypatch: pytest.Monk
         lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
     )
 
-    def boom(*_a: object, **_k: object) -> str | None:
+    def boom(*_a: object, **_k: object) -> dict[str, str] | None:
         raise OSError("registry blip")
 
-    monkeypatch.setattr(warehouses, "warehouse_status", boom)
+    monkeypatch.setattr(warehouses, "get_warehouse", boom)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1"))
 
@@ -520,7 +522,7 @@ def test_batch_guard_rejects_warehouse_bound_namespace(monkeypatch: pytest.Monke
         "binding_for_namespace",
         lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
     )
-    monkeypatch.setattr(warehouses, "warehouse_status", lambda *_a, **_k: "active")
+    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: {"id": "wh-a", "status": "active"})
     with pytest.raises(InvalidInputError):
         asyncio.run(dependencies.assert_no_warehouse_bound_namespace(_bare_request(), on, [["db1", "t1"]]))
     monkeypatch.setattr(warehouses, "binding_for_namespace", lambda *_a, **_k: None)  # unbound → ok

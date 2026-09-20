@@ -595,15 +595,32 @@ class Settings(
             )
         return self
 
-    def namespace_properties(self) -> dict[str, str]:
-        """Return properties for ``lance_namespace.connect(impl, properties)``."""
+    def namespace_properties(self, *, root: str | None = None, endpoint: str | None = None) -> dict[str, str]:
+        """Return properties for ``lance_namespace.connect(impl, properties)``.
+
+        ``root`` and ``endpoint`` let a WAREHOUSE-rooted connection differ from the estate default
+        ([[LH-067]]). Both overrides live here rather than at the call site so the ``storage.`` property
+        vocabulary is spelled in one module — a caller composing these names itself is how one of them
+        drifts.
+
+        ``allow_http`` is DERIVED from whichever endpoint is in force, never carried from the estate's.
+        It is a function of the scheme, so an override that changed the endpoint and left this reading
+        `self.s3_endpoint` would give an ``http://`` warehouse behind an ``https://`` estate
+        ``allow_http=false`` — every open failing with a TLS error that names the store rather than the
+        configuration.
+
+        CREDENTIALS ARE NOT OVERRIDABLE, deliberately: material never travels in a warehouse record. A
+        second store's key belongs behind the Dapr secret store this estate already resolves its own S3
+        secret from, with the record naming a reference.
+        """
+        target = endpoint or self.s3_endpoint
         return {
-            "root": self.root,
-            f"{_STORAGE_PREFIX}endpoint": self.s3_endpoint,
+            "root": root or self.root,
+            f"{_STORAGE_PREFIX}endpoint": target,
             f"{_STORAGE_PREFIX}access_key_id": self.s3_access_key_id,
             f"{_STORAGE_PREFIX}secret_access_key": self.s3_secret_access_key.get_secret_value(),
             f"{_STORAGE_PREFIX}region": self.s3_region,
-            f"{_STORAGE_PREFIX}allow_http": "true" if self.s3_endpoint.startswith("http://") else "false",
+            f"{_STORAGE_PREFIX}allow_http": "true" if target.startswith("http://") else "false",
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
         }
 

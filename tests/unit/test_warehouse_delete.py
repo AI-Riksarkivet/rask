@@ -72,10 +72,16 @@ class _FakeNamespace:
 
 def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None, *, cached: tuple[str, ...] = ()) -> Any:
     """A stand-in request carrying the two pieces of app state the delete touches: the positive binding
-    cache (which it must evict) and the per-root connection cache (pre-seeded, so no real backend is built)."""
+    cache (which it must evict) and the per-root connection cache (pre-seeded, so no real backend is built).
+
+    The connection cache is keyed on ``(root, endpoint)`` since [[LH-067]] — a root is immutable but a
+    warehouse's endpoint is caller-owned, so a root-only key would serve a connection built against the
+    old store for the life of the process. ``None`` is the estate-endpoint case, which is this fixture's.
+    Seeding the old one-element key here did not fail loudly: it MISSED, and the miss built a real
+    backend against an unreachable host."""
     state = SimpleNamespace(
         warehouse_binding_cache={top_ns: {"warehouse_id": "acme-wh", "root_uri": root_uri} for top_ns in cached},
-        warehouse_namespaces={root_uri: ns if ns is not None else _FakeNamespace()},
+        warehouse_namespaces={(root_uri, None): ns if ns is not None else _FakeNamespace()},
     )
     return SimpleNamespace(app=SimpleNamespace(state=state))
 
