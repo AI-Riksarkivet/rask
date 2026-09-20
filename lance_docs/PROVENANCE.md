@@ -43,13 +43,23 @@ source path was confirmed to exist on 2026-09-14; none of the bundles records th
 scraped at, so **a citation from these is weaker than one from `spec.yaml` and should be spot-checked
 against the live docs when it is load-bearing.**
 
-| File | Source tree | Spot-checked |
-| --- | --- | --- |
-| `file_format.md` | `lance-format/lance` — `docs/src/format/` | 2026-09-19 against `main` (`docs/src/format/table` at commit `6bd1a86a`) — see below |
-| `guide.md` | `lance-format/lance` — `docs/src/guide/` |
-| `namespace.md` | `lance-format/lance-namespace` — `docs/src/` |
-| `ray.md` | `lance-format/lance-ray` — `docs/src/` |
-| `lance_sdk.md` | LanceDB's rendered Python API reference (a docs site, not a repo file tree) |
+**EACH NOW NAMES A COMMIT, AND IT IS A CHECKED-AGAINST COMMIT, NOT A SCRAPED-AT ONE.** The commit a
+bundle was generated at was never recorded and is not recoverable, so claiming one would be inventing
+provenance. What IS knowable is the upstream commit a bundle has been read against — so that is what
+the table carries, with the claim that was checked. A citation is therefore as strong as the
+spot-check beside it, and no stronger.
+
+| File | Source tree | Checked against | Claim verified |
+| --- | --- | --- | --- |
+| `file_format.md` | `lance-format/lance` — `docs/src/format/` | `6bd1a86a` (2026-09-18), read 2026-09-19 | three branch-reclaim claims — see below |
+| `guide.md` | `lance-format/lance` — `docs/src/guide/` | `1f7b847c` (2026-09-19), read 2026-09-20 | `guide/blob.md:42` writes blob v2 with `data_storage_version="2.2"` and `blob_array` — the pair [[LH-085]] rests on |
+| `namespace.md` | `lance-format/lance-namespace` — `docs/src/` | `62db3400` (2026-09-14), read 2026-09-20 | `catalog/rest/index.md:145-147` types `page_token`, `limit` and `delimiter` as Query parameters — the distinction [[LH-021]] used to separate spec vocabulary from rask dialect |
+| `ray.md` | `lance-format/lance-ray` — `docs/src/` | `ae670c23` (2026-09-14), read 2026-09-20 | `write.md:31` declares `data_storage_version` on `write_lance`, which is what lets the media lane preserve blob typing |
+| `lance_sdk.md` | LanceDB's rendered Python API reference | **no commit exists** — a rendered docs site, not a repo file tree | — |
+
+`lance_sdk.md` is deliberately the one row with no commit, and that is a property of the SOURCE rather
+than a gap in this table: a rendered site has no revision to name. A claim from it is the weakest in
+this tree and must be checked against the installed package rather than against a document.
 
 `ns_catalog/` also holds the per-model markdown generated from the spec, plus two images. They move
 with `spec.yaml` and were not re-vendored with it, so where a model page and `spec.yaml` disagree,

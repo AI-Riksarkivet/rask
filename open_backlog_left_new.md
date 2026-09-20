@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**199 open items**, of which **98 are blocked on a decision** and **101 can be picked up today**.
+**198 open items**, of which **98 are blocked on a decision** and **100 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 55 | 17 | 12 |
+| **PHASE 1 · LAKEHOUSE** | 54 | 16 | 12 |
 | **PHASE 1 · CROSS-CUTTING** | 45 | 23 | 9 |
 | **PHASE 2 · COMPUTE** | 46 | 29 | 15 |
 | **PHASE 3 · CONTROLPLANE** | 24 | 9 | 5 |
@@ -534,12 +534,6 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* `_transforms/` holds 10 records in three shapes — one current, one with `name`+`entrypoint`, eight with `lane`+`entrypoint` — and `TransformSpec` (`extra="forbid"`, requires `name`, `task`) rejects nine of them; `_parse` at `transform_specs.py:182-193` logs `transform_spec_malformed` and skips. `cardinality` already defaults to `ONE_TO_ONE` in the model, so only the two mappings above need ruling. Once ruled: migrate or delete the nine (10 records total, 9 sharing one shape), then make an unparseable control record louder than a WARN or gate the set empty — no test asserts on `transform_spec_malformed` today. The live count is not re-measured this session.
 - *Closes when:* Every record under `<control_root>/_transforms/` validates against `TransformSpec`, and a record that does not is surfaced by more than a listing-path WARN.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84 (fields, extra=forbid, cardinality default), :182-193 (_parse warns and skips)` · `grep -rn transform_spec_malformed tests services/*/tests packages/*/tests → none` · `grep -rln 'migrate.*transform' scripts → none`
-
-**LH-047 · Five tool-generated `lance_docs/` bundles carry no scrape commit and are verified by nothing**
-`catalog` · **LOW** · PARTIAL
-- *What is left:* `ns_catalog/spec.yaml` is pinned, provenance'd and gated (`lance_docs/PROVENANCE.md`, `tests/integration/test_spec_conformance.py`); the five bundles (`file_format.md`, `guide.md`, `namespace.md`, `ray.md`, `lance_sdk.md`) still record no source commit and no check reads them. Re-vendor each with the tool that produced it, record the commit per bundle in the "Not machine-checked" table of `PROVENANCE.md`, and add whatever drift check the tool's output permits. **RE-MEASURED 2026-09-19 and it is SIX bits behind, not four**: the bundle names 5 flags while `rust/lance-table/src/feature_flags.rs` allocates 11 plus a sentinel at `1 << 11` (the bundle lacks `disable_transaction_file`, `unstable_data_overlay_files`, `covered_index_metadata`, `mixed_data_file_versions`, `frag_reuse_with_stable_row_ids`, `fragment_reuse_index`). **The drift had reached CODE:** `features.py` put `FLAG_UNKNOWN` at `1 << 8` and called `mixed_data_file_versions` a bit at "the unknown boundary"; both were false. Fixed, and the two missing bits are now NAMED (not supported) — observed on release 188 in the deployed pod: bit 512 -> "fragment reuse with stable row ids", bit 1024 -> "fragment reuse index", bit 2048 -> "unknown", `SUPPORTED` unchanged at 15. **The three load-bearing citations this session made from the bundle were spot-checked against upstream `main` and all three are unchanged** (`branch_tag.md:49`, `layout.md:72`, `layout.md:156`), recorded in a new Spot-checks section of `PROVENANCE.md` with the commit. What is still left is the re-vendoring itself.
-- *Closes when:* Every file under `lance_docs/` names the upstream commit it was scraped at.
-- *Evidence:* `lance_docs/PROVENANCE.md ("Not machine-checked" table: no commit column)` · ``ls -la lance_docs/` → five bundles unchanged since vendoring, spec.yaml re-vendored` · `tests/integration/test_spec_conformance.py:81,155,227 (spec-only gates)`
 
 **LH-048 · Two measured upstream pylance defects are unfiled, and they are not the two this row named**
 `catalog` · **LOW**
