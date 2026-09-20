@@ -132,12 +132,12 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**188 open items**, of which **98 are blocked on a decision** and **90 can be picked up today**.
+**189 open items**, of which **98 are blocked on a decision** and **91 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 4 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 33 | 11 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -461,6 +461,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Measured:* **5 privileged identities render a dedicated token and all 5 are derivable** — `service-bronze-to-silver`, `service-media-to-silver`, `service-silver-to-gold`, `service-trainer`, `service-web`. Pinned by `tests/unit/test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py`, which derives each exactly as the chart does and reds if the helper changes shape. That file is deleted, not inverted, when the fix lands.
 - *Closes when:* A privileged identity's credential cannot be computed from `dapr.appToken`, and a prod render refuses rather than silently deriving one.
 - *Evidence:* `chart/templates/_helpers.tpl — lance.dedicatedServiceToken: printf "%s-%s" $identity $secret | sha256sum | trunc 40` · `chart/values.yaml:2811 externalSecrets.enabled: false` · `grep -nE '^externalSecrets:' chart/values-prod.yaml → no match` · `packages/service-kit/src/service_kit/governed/dapr_auth.py — service_principal binds a privileged subject to service-token-<identity>`
+
+**LH-182 · Six lineage events sit permanently refused in the outbox, and the drain has no terminal state for a refusal**
+`lineage` · **MED**
+- *What is left:* `lineage_outbox_drained drained=0 stranded=0 refused=6` on every sweep. A refusal is deliberately "STRANDED, NEVER DROPPED" (`reconcile_cron.py:575-589`), which is right for a transient answer and wrong for a permanent one: four of the six carry `author: "e2e"`, a role LITERAL rather than an OIDC subject, so `enforce_bus_authz` can never authorize them — [[LH-148]]'s unauthorizable-author class, arriving in the outbox. Decide what a permanently-refused event becomes (a reaping path, a dead-letter, or an explicit accept) instead of re-refusing it for ever.
+- **AND THE TWO GATES ARE NOT THE SAME ONE, which is what makes this hard to read.** `enforce_bus_authz` checks the OUTPUT (`can_write_data` on the output table) and a RUN-MUTATION. Measured live 2026-09-20: alice holds `can_write_data: true` on `table:bronze$e2e_outbox_ds` and is still denied — `ingest_run_mutation_denied sub='CiQwOGE4…' run_id='36944760…'`. So an author who may write the output may still not mutate the run, and the one log line an operator sees names only "unauthorized".
+- *Closes when:* A permanently-refused staged event reaches a terminal state rather than being re-refused every tick, and `test_reconcile_sweep_drains_a_staged_outbox_event` passes against the deployed release.
+- *Evidence:* live 2026-09-20 — `s3://lance-catalog/_lineage_outbox` holds 6 `@COMPLETE.json` objects; `lineage_outbox_event_unauthorized` per key per sweep; `fga query check user:<alice> can_write_data table:bronze$e2e_outbox_ds` → true · `services/lineage/src/lineage/api/reconcile_cron.py:575-605` · `services/lineage/src/lineage/api/fga_deps.py:72-89,277-308`
 
 ## PHASE 1 · CROSS-CUTTING
 
