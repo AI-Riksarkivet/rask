@@ -245,6 +245,30 @@ have no `uv.lock` and so cannot be built to emit anything.
   would prevent it. (ii) was already out: it reverts a deliberate narrowing pinned by
   `test_the_stage_runner_reads_where_the_catalog_says.py:92` and fixes nothing on its own. UNBLOCKED.
 - *What is left:* Drive one tabular-lane publication on the live estate and observe its silver→gold hop complete: a `medallion_stage_moved transition='silver->gold'` line (or any `medallion_stage_transitions_total` series on the `silver-to-gold` pod) and `gold$catalog` gaining a catalog location; absence of an `unconfined_uri` refusal is not closure. The chain at HEAD: `publication.py:165` stamps `project` from `warehouses.project_for_namespace` (namespace `silver` → `bind86-wh` → `bind86`) on lane id `silver$features`; `publication_trigger.py:127,147` carry that project plus `location=s3://bind86-wh/medallion/silver`; `transform.py:243` composes `bind86-silver$features`, `:636` narrows `read_root` to that table's vended path, and `:690` refuses because the two are different tables. Writable before the ruling: a RED test for that chain (none exists — `test_publish_names_the_tenant.py` covers only tenant-carrying and unbound namespaces, and no medallion test publishes an un-prefixed lane into a bound namespace) and a rewrite of the `_confine_from_uri` docstring at `transform.py:657`, which still claims the root is the tenant's warehouse when the code makes it the single vended table. Registry state (195 bindings, 96 warehouses; tier mis-bindings `silver -> bind86-wh`, `silver-media -> lakehouse-wh`, `bronze-media -> lakehouse-wh`) and the live recurrence are unverified this session (no cluster access); a deployed `gold-media` runner would light the second instance. Half (b) is closed — its residue is LH-141/LH-164 and must not be carried here; the side-flagged `RayWorkerOOMKills` (`chart/alerting/rules.yml:711`) names `ray_memory_manager_worker_eviction_total`, which nothing in-repo emits and the live store lacks, and belongs with the alerting row.
+- **FIX (i) IS IMPLEMENTED AND DEPLOYED (`main-0d2f8a8d`, 2026-09-21). WHAT IS PROVEN, EXACTLY.**
+  `publication_extra` stamps `project` only when `segments[0]` starts with `f"{project}-"`; the binding
+  LOOKUP is untouched, and a test pins that it still happens, because `resolve_effective_gate` resolves
+  through the same request-scoped cache and gating the call rather than the emit would weaken a
+  warehouse's own gate. Five cases, two RED before the change and mutation-checked: the tenant-less id,
+  an id EQUAL to the project (`project_namespace` always joins, so a bare equal id was never qualified),
+  a project id CONTAINING a dash (the case no string rule recovers — the registry chooses, this only
+  confirms the id agrees), the ordinary qualified id, and the lookup still being consulted.
+  **THE DEFECT'S INPUT IS STILL LIVE, re-measured 2026-09-21:** `_warehouses/bindings/silver.json` is
+  `{"top_ns": "silver", "warehouse_id": "bind86-wh"}` and `_warehouses/bind86-wh.json` carries
+  `"project": "bind86"`. So `project_for_namespace("silver")` still answers `bind86`, `silver` still does
+  not start with `bind86-`, and the gate is the thing now standing between that and the stamp.
+  **NO REGRESSION ON THE QUALIFIED PATH, OBSERVED LIVE:** after the deploy a real cascade hop completed
+  — `medallion_gate_resolved transition='silver->gold' project='acme'` then `medallion_stage_moved
+  transition='silver->gold' to='gold$catalog' duration_seconds=30.0`, targeting `acme-gold$catalog` from
+  `acme-silver$features`. That is the guard the fix could have broken and did not.
+  **WHAT IS NOT PROVEN: the TENANT-LESS publication has not been driven in-cluster,** so this row stays
+  open on its own bar. The blocker is mechanical rather than conceptual, and worth recording because it
+  bounds every future in-pod check: **a fresh `python -c` inside the catalog pod cannot read the
+  registry at all** — `settings.storage_options()` yields a key id and an EMPTY secret, because the
+  credential arrives through the app LIFESPAN from the Dapr secret store rather than through the
+  environment. That is the secrets rule working exactly as intended; it means deployed catalog behaviour
+  must be driven through its HTTP door, never by exec'ing beside it. The next step is a publish against
+  one of the tenant-less `silver$...` tables that already exist in `lance-catalog`.
 - *Closes when:* A driven publication's silver→gold hop is observed completing on the live estate (a `medallion_stage_moved transition='silver->gold'` line and `gold$catalog` resolving to a catalog location) — a positive observation, not the absence of a refusal and not an alert, since `observability.alerting.enabled` is false (`chart/values.yaml:2898`) and nothing evaluates the 44 rules.
 - *Evidence:* `services/medallion/src/medallion/services/transform.py:243,636,657,690 (pinned via `git show HEAD:`; composes `project_namespace(project, settings.from_dataset)`; `from_uri = read_root = vended`; docstring "TENANT'S WAREHOUSE for a project trigger"; `if not uri_within(read_root, supplied)` refusal)` · `services/catalog/src/catalog/api/v1/endpoints/publication.py:165 → services/catalog/src/catalog/services/warehouses.py:345 (`project_for_namespace`: binding → warehouse → project, no prefix check by design)` · `services/medallion/src/medallion/services/publication_trigger.py:127,147 (`project` and `from_uri` read verbatim from the publication's `extra`)` · ``uv run pytest services/medallion/tests/test_the_stage_runner_reads_where_the_catalog_says.py -q` → 5 passed (asserts `roots.read_root == VENDED_FROM` at :92); `chart/values.yaml:2898` `alerting: enabled: false`; `git log --grep=LH-137` shows docs-only commits, no fix landed`
 
