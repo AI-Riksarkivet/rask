@@ -3027,6 +3027,14 @@ cloudnative-pg:
 # in-image (Debian glibc 2.41): unset reserves 65 arenas, `2` reserves 1.
 allocator:
   arenaMax: 2
+  # WHICH ALLOCATOR ARROW USES, and the reason `arenaMax` above needs it ([[LH-183]]). `MALLOC_ARENA_MAX`
+  # is a glibc tunable, and pyarrow 25.0.0 allocates through **mimalloc** by default
+  # (`default_memory_pool().backend_name`), which that bound cannot reach. Measured: bounding the arenas
+  # drove the count 60 -> 0 and the worker still died OOMKilled at 442m, only later than the pre-fix 87m.
+  # `system` routes Arrow through plain malloc, so the bound already above governs it — this makes the
+  # existing lever reach the allocator doing the work rather than adding a second one.
+  # The variable name is read by the shipped `libarrow.so.2500` (verified with `strings`).
+  arrowMemoryPool: system
 
 # ---- observability stack ---------------------------------------------------
 # OTel-first: a single OpenTelemetry Collector is the telemetry hub, GreptimeDB the store, Perses the

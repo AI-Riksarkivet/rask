@@ -1421,4 +1421,5 @@ Pinned by `tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py`.
 {{- define "lance.allocatorEnv" -}}
 {{- $root := index . 0 -}}
 - { name: MALLOC_ARENA_MAX, value: {{ $root.Values.allocator.arenaMax | quote }} }
+- { name: ARROW_DEFAULT_MEMORY_POOL, value: {{ $root.Values.allocator.arrowMemoryPool | quote }} }
 {{- end -}}
