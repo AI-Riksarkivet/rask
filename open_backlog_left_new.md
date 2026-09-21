@@ -592,6 +592,30 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **NOT CAUSED BY [[LH-159]], checked before filing.** The dummy suite hand-builds its own `env_vars` and submits via `ray job submit` on the head (`_submit_on_head`), bypassing `submit_stage_job` entirely, and the refusal is an authorization decision about a tuple rather than about which env key carried the identity. It authenticated fine — a credential mismatch answers 401 here, not 403.
 - **blocked:** an owner ruling — may a stage lane's service subject hold `can_write_data` on the tables its own declared transform writes, or does a lane writing its declared output need its own rung in `model.fga` (the `can_maintain` precedent)? Granting the existing rung is a privilege decision; adding a rung is a model change. Neither is mine to pick.
 - *What is left:* After the ruling: either issue the tuple where a transform declares its output table, or add the rung and teach `relations_for_operation` to accept it for a declared-lane write. Then re-run `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane` — three legs are RED today and go green on the fix, so this needs no new test to prove it. Independently of the ruling, the SILENCE is its own defect and worth closing first: a refused ingest is invisible to everything but the lineage pod's log, and the reconciler does not count it.
+- **THE SILENCE HALF IS FIXED, DEPLOYED AND OBSERVED (2026-09-21) — the blocked half is untouched.**
+  The HTTP ingest door recorded `INGESTED` on success and NOTHING on refusal, while the Dapr subscriber
+  classified both and both of its outcomes already had alert rules (`chart/alerting/rules.yml:145,170`).
+  The alerts existed; that door was not feeding them. Its old rationale — that a 403 is a
+  "transport-level failure" the generic RED metrics cover — does not survive: this service answers 403
+  for ordinary reads too (a `can_get_metadata` denial on a GET, in the same log), so a status-code count
+  cannot separate a reader being told no from a producer's provenance being dropped.
+  **THE FIRST DEPLOY OF IT COULD NOT BE OBSERVED, AND THAT WAS THE MORE USEFUL FINDING.** Three doors —
+  subscriber, dead-letter, HTTP — write ONE counter from ONE pod, so no resource or instance attribute
+  separates them. A correctly-recorded refusal was arithmetically invisible: `unrepairable` stood at
+  15,398 and rose by **3,656 in 47 seconds** from the subscriber re-presenting one unauthored run. Proven
+  in a unit test and unobservable in the cluster is the wrong way round, and it is an operator's problem
+  too — a `refused` alert said provenance was lost and nothing about where to look, while the three doors
+  are repaired in three different places.
+  **SO THE COUNTER NAMES ITS DOOR, and the fix is now visible where it runs.** `Door` is a closed
+  StrEnum of three, cardinality bounded as `core/metrics.py` requires. Measured after deploying
+  `main-94628e6e` and re-driving the lane: `{door="http", outcome="unrepairable"} = 2` — the two
+  refusals that lane just produced, as their own series, beside `{door="subscriber", outcome="ingested"}
+  = 861`. The unlabelled series (7,702) are the pre-deploy pod's and age out.
+  **AND IT SETTLES WHICH REFUSAL THIS IS.** The dummy lane's output is UNGOVERNED rather than merely
+  denied — `_none_are_governed` is true for `acme-silver$dummy`, so the door raises
+  `UngovernedOutputError` and records `UNREPAIRABLE`, not `REFUSED`. That matters for the blocked
+  ruling below: the subject is not being refused a rung it might be granted, it is writing a table that
+  carries no tuples at all, so "issue the tuple" has no object to attach to until the table is governed.
 - *Closes when:* The dummy lane's run reads back from the lineage service after writing, and a refused ingest is counted somewhere a person looks rather than only in a log line.
 - *Evidence:* live 2026-09-21 — `ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']`, `POST /api/v1/lineage 403`, x2 · `tests/e2e-py/test_dummy_lane_e2e.py` 3 failed / 4 passed against the deployed release · `services/lineage/src/lineage/api/fga_deps.py:50-73 (_MAINTENANCE_OPERATIONS, _WRITE_RELATIONS, the 2026-09-08 rung ruling)` · `scripts/ray_stage_job.py` (zero `build_emitter`/`lineage_kit` references) vs `runners/dummy/src/dummy_runner/lineage.py:35,148` · `tests/e2e-py/test_dummy_lane_e2e.py:194 (_submit_on_head — this suite does not use the medallion submitter)`
 
