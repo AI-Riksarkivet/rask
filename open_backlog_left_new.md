@@ -138,7 +138,7 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 33 | 11 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 33 | 11 | 5 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -378,8 +378,8 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Evidence:* `services/maintenance/src/maintenance/core/metrics.py:182-188 (`record_reclaimed` takes fragments/versions/indices, no bytes); :91,158,179 (trash bytes only)` · `services/maintenance/src/maintenance/services/sweep.py:699,1010,1159 (`bytes_removed` in per-dataset, audit and summary)` · `grep -rn table_maintained --include=*.py --include=*.ts . → nothing; ControlAction literal has 41 members` · `services/maintenance/src/maintenance/services/purge.py:712 (the only `emit_control` in maintenance)`
 
 **LH-108 · The lineage + OpenFGA store is the hand-rolled `rask-age` StatefulSet; the CNPG cutover is built but off**
-`lineage, chart` · **MED**
-- **blocked:** Owner decision: keep the AGE StatefulSet or cut over to CNPG with the ImageVolume extension — plus a K8s 1.33+ / CNPG >= 1.27 cluster to run it on
+`lineage, chart` · **LOW**
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Owner decision: keep the AGE StatefulSet or cut over to CNPG with the ImageVolume extension — plus a K8s 1.33+ / CNPG >= 1.27 cluster to run it on
 - *What is left:* `age.cnpgCluster.enabled` defaults false with `extensionImage: ""` (chart/values.yaml:2762-2766) while the CNPG operator is installed with nothing to reconcile (values.yaml:2834 `enabled: true`); chart/templates/age-cluster.yaml:3 fails the render if both paths are on, so this is one-way. If CNPG: build and publish `.docker/cnpg-age-ext.dockerfile`, set `extensionImage` and flip `age.cnpgCluster.enabled` (with `age.enabled=false`) in chart/values-prod.yaml, and migrate the `lineage` + `openfga` databases. If StatefulSet: record the ruling and drop the idle operator toggle.
 - *Closes when:* Exactly one graph-store path is the recorded choice and, if CNPG, the two databases run on the `Cluster` with the extension image.
 - *Evidence:* `chart/values.yaml:2762-2766 `cnpgCluster: enabled: false` / `extensionImage: ""`` · `chart/templates/age-cluster.yaml:3 `fail "age.enabled and age.cnpgCluster.enabled are mutually exclusive ..."`` · `.docker/cnpg-age-ext.dockerfile exists (2032 bytes)` · `chart/values.yaml:2834 cnpg operator `enabled: true`; no `cnpgCluster` key in chart/values-prod.yaml`
@@ -525,29 +525,29 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Evidence:* `chart/templates/openbao.yaml:50,137` · `chart/templates/external-secrets.yaml:27,39,136,150,174,188` · ``grep -n helm.sh/hook chart/templates/openbao.yaml chart/templates/external-secrets.yaml` → empty`
 
 **XC-006 · OpenBao has no auto-unseal, so any restart leaves it sealed and the fail-closed fleet hangs at startup**
-`chart, catalog, lineage, medallion, notifications` · **HIGH**
-- **blocked:** Owner decision on the unseal mechanism: bank-vaults, vault-operator, or a KMS/transit auto-unseal stanza. Note external-secrets (`externalSecrets.enabled`, values.yaml:2811) is a secret READER and cannot unseal, so it is not a candidate for this row.
+`chart, catalog, lineage, medallion, notifications` · **LOW**
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Owner decision on the unseal mechanism: bank-vaults, vault-operator, or a KMS/transit auto-unseal stanza. Note external-secrets (`externalSecrets.enabled`, values.yaml:2811) is a secret READER and cannot unseal, so it is not a candidate for this row.
 - *What is left:* `openbao.yaml:5,118` and `values.yaml:2798` state an operator must `bao operator init` and unseal by hand; `values-prod.yaml:146` carries only that prose; `chart/alerting/rules.yml` has no seal-status rule. After the ruling, wire the chosen auto-unseal into `chart/templates/openbao.yaml` and `values-prod.yaml`, and add a sealed-status alert to `rules.yml`.
 - *Closes when:* A restarted OpenBao pod serves secrets without operator action, and a sealed instance fires an alert.
 - *Evidence:* `chart/templates/openbao.yaml:4-5,118` · `chart/values.yaml:2796-2798,2811-2817` · `chart/values-prod.yaml:146` · `rg -i seal chart/alerting/rules.yml → 0`
 
 **XC-007 · Every in-cluster store the fleet dials is plaintext: RustFS S3, OpenFGA, the AGE DSN (sslmode=disable), OpenBao, NATS and OTLP**
-`catalog, lineage, maintenance, medallion, chart` · **HIGH**
-- **blocked:** Owner decision on introducing a certificate source — the estate has neither cert-manager nor a chart-generated certificate.
+`catalog, lineage, maintenance, medallion, chart` · **LOW**
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Owner decision on introducing a certificate source — the estate has neither cert-manager nor a chart-generated certificate.
 - *What is left:* With a certificate source chosen, flip each rendered scheme: chart/templates/_helpers.tpl:682 (RustFS https, ALLOW_HTTP=false), :744 (tls:// NATS), :1208 (OpenFGA https plus a preshared key or OIDC), :729/:741 (OpenBao https), the AGE DSNs at infra-credentials.yaml:93, external-secrets.yaml:81 and openbao.yaml:178 (sslmode=disable -> verify-full), and dapr-component.yaml:343 whose skipVerify is derived from the scheme. Then add the missing TLS-on-store-hops test; the only plaintext test today (test_invariants.py:2447) checks credential VALUES, not transport. Dapr Sentry mTLS covers sidecar hops only.
 - *Closes when:* helm template renders no http://, nats:// or sslmode=disable store URL for an in-cluster store, and a unit test refuses a plaintext store scheme.
 - *Evidence:* `chart/templates/_helpers.tpl:682,729,741,744,1208 (http:// / nats:// stores)` · `chart/templates/infra-credentials.yaml:93; external-secrets.yaml:81; openbao.yaml:178 (sslmode=disable)` · `chart/templates/dapr-component.yaml:343 (skipVerify from scheme)` · `grep -in cert-manager chart/Chart.yaml chart/values.yaml -> no matches`
 
 **XC-008 · `rask-age` serves TLS-off Postgres for the lineage graph and OpenFGA; the AGE→CNPG cutover is built but not taken**
-`lineage, catalog, chart` · **HIGH**
-- **blocked:** owner decision to run the data migration of the lineage AGE graph and OpenFGA's tables off the `rask-age` StatefulSet PVC into the CNPG Cluster
+`lineage, catalog, chart` · **LOW**
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: owner decision to run the data migration of the lineage AGE graph and OpenFGA's tables off the `rask-age` StatefulSet PVC into the CNPG Cluster
 - *What is left:* Set `age.cnpgCluster.enabled: true` and `age.enabled: false` (`age-cluster.yaml:1-3` fails the render if both are on; defaults are `age.enabled: true` at values.yaml:2736 and `cnpgCluster.enabled: false` at :2763). Move the lineage graph and OpenFGA tables into the CNPG Cluster, retire the `age-postgres.yaml` StatefulSet, and prove the round-trip with `scripts/age_restore_drill.sh`. Then, and only then, drop `sslmode=disable` from the four client strings (`external-secrets.yaml:81`, `infra-credentials.yaml:93`, `openbao.yaml:178`, `otel-collector.yaml:335`) — a client-side `require` before the server change is an outage. The extension image builds from `.docker/cnpg-age-ext.dockerfile`. Live TLS state was not re-measured this session.
 - *Closes when:* The CNPG Cluster serves both databases with TLS, the `rask-age` StatefulSet is gone, and the restore drill passes.
 - *Evidence:* `chart/templates/age-cluster.yaml:1-3` · `chart/values.yaml:2736,2762-2763` · `chart/templates/{external-secrets.yaml:81,infra-credentials.yaml:93,openbao.yaml:178,otel-collector.yaml:335} (`sslmode=disable`)` · `scripts/age_restore_drill.sh; .docker/cnpg-age-ext.dockerfile; chart/templates/age-postgres.yaml (StatefulSet)`
 
 **XC-025 · `chart/templates/dex.yaml` ships in-memory storage, static demo users and a plaintext client secret in a ConfigMap, and `values-prod.yaml` has no `dex:` stanza**
-`chart, catalog, lineage, gateway` · **HIGH**
-- **blocked:** Which real IdP prod federates to
+`chart, catalog, lineage, gateway` · **LOW**
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Which real IdP prod federates to
 - *What is left:* Add a `dex:` block to `chart/values-prod.yaml` (none exists) with an externally-reachable HTTPS issuer, a Postgres storage backend and an org-IdP connector. In `chart/templates/dex.yaml` (a ConfigMap): replace `storage: type: memory` (:13), keep `staticPasswords` (:20) off the prod path, and stop rendering `staticClients[].secret: {{ .Values.dex.clientSecret }}` (:40) — the ESO template already syncs a `dex-client-secret` key (`external-secrets.yaml:78`), so read it from there. The default issuer is `http://rask-dex:5556/dex` (`values.yaml:2773`).
 - *Closes when:* The prod render has a real issuer, durable storage, an org connector, no static users and no client secret in a ConfigMap.
 - *Evidence:* `chart/templates/dex.yaml:13,20,37,40 (kind: ConfigMap)` · `grep '^dex:' chart/values-prod.yaml — no match` · `chart/values.yaml:2769-2777` · `chart/templates/external-secrets.yaml:78`
@@ -611,15 +611,15 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Evidence:* `deploy/ray-lance-demo.yaml:83,101,117,120,123,126` · `tests/unit/test_the_ray_credential_has_one_source.py:3-8` · `.claude/skills/rask-dapr/SKILL.md:151-154` · `grep -n secretKeyRef docs/DECISIONS.md → 0 hits`
 
 **XC-013 · pg dumps land in the lakehouse bucket the VolumeSnapshot protects, old VolumeSnapshots are never pruned, and `snapshotClassName` is empty in prod**
-`chart, lineage` · **MED** · PARTIAL
-- **blocked:** Where off-cluster pg dumps go — the bucket/endpoint `chart/values-prod.yaml` should point `backups.pgDump` at instead of the lakehouse's own `minio.bucket`.
+`chart, lineage` · **LOW** · PARTIAL
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Where off-cluster pg dumps go — the bucket/endpoint `chart/values-prod.yaml` should point `backups.pgDump` at instead of the lakehouse's own `minio.bucket`.
 - *What is left:* pg-dump retention is shipped (`backups.pgDump.keep: 7`, pruning at `backup-pg.yaml:90-95`). Point the dump at an off-cluster destination: `backup-pg.yaml:88-89` still writes to `{{ .Values.minio.bucket }}/_backups/pg/` via `lance.s3Endpoint`, the same store a PVC loss takes out. Add pruning of old VolumeSnapshots in `backup-snapshot.yaml`, which only `kubectl create`s (line 85) and never deletes — this clause needs no ruling. Set a real `snapshotClassName` in `chart/values-prod.yaml:144`, still `""`.
 - *Closes when:* Prod dumps land outside the lakehouse bucket, `backup-snapshot.yaml` prunes snapshots beyond a `keep` count, and `values-prod.yaml` names a real VolumeSnapshotClass.
 - *Evidence:* `chart/templates/backup-pg.yaml:88-95 (same bucket; keep-N pruning present)` · `chart/templates/backup-snapshot.yaml:85 (kubectl create only, no delete)` · `chart/values-prod.yaml:139-144 (snapshotClassName: "")` · `chart/values.yaml:1965-1973 (pgDump.keep, volumeSnapshot.snapshotClassName)`
 
 **XC-030 · Images are unsigned and the estate runs no admission-time signature verifier**
-`chart, dagger` · **MED**
-- **blocked:** Owner names a signing-key custodian and approves an admission-time verifier (Kyverno or sigstore policy-controller); signing without a verifier is decoration.
+`chart, dagger` · **LOW**
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Owner names a signing-key custodian and approves an admission-time verifier (Kyverno or sigstore policy-controller); signing without a verifier is decoration.
 - *What is left:* `.dagger/images.go:46-53` emits only the three OCI provenance labels; no cosign or attestation code exists in any `.dagger/*.go` (the SBOM at `scan.go:346` is the only supply-chain artefact); `chart/` has no kyverno, policy-controller, sigstore or ClusterImagePolicy. After the ruling, add cosign signing to the `dagger call image … publish` path and the verifying admission policy to the chart.
 - *Closes when:* A published image carries a cosign signature and an unsigned image is refused at admission on the deployed cluster.
 - *Evidence:* `.dagger/images.go:46-53` · `rg -i cosign|signature|attest .dagger/*.go → 0` · `.dagger/scan.go:346 (SBOM only)` · `rg -i kyverno|policy-controller|sigstore|ClusterImagePolicy chart/ → 0`
