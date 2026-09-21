@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **100 are blocked on a decision** and **100 can be picked up today**.
+**200 open items**, of which **101 are blocked on a decision** and **99 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 20 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 19 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -634,6 +634,8 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **RUN BY HAND 2026-09-20 AND IT PAID IMMEDIATELY, which is the argument this row needs.** `bash scripts/e2e_live.sh tests/e2e-py/test_{catalog_live,lineage_e2e,maintenance_e2e}.py` against the deployed release: 13 passed, 1 skipped, **1 failed** — and the failure was real, not fixture rot. `test_maintenance_e2e` found eleven datasets reporting `maintain: Ref is invalid: …` every sweep, branch directories under `<dataset>/tree/` whose names Lance will not parse (`has space`, `tilde~name`, `a\b`, `feat.lock`, `trailing`). Fixed the same day by classifying them as a REFUSAL rather than a per-tick failure (`optimize.classify_maintain_failure`). No unit or integration test saw it: the names only exist on the deployed estate's disk.
 - **ALL 11 `test_lineage_e2e.py` CASES ARE GREEN AGAINST THE DEPLOYED RELEASE (2026-09-20) — the row's other clause, met.** `LINEAGE_E2E_DESTRUCTIVE=1 bash scripts/e2e_live.sh tests/e2e-py/test_lineage_e2e.py` → **11 passed in 17.69s**. The 11th had never run: it is opt-in destructive by design ("so the suite stays runnable against a real estate with only this one test sitting out"), and the standing position that the deployed estate holds test and demo data only is what makes opting in correct here rather than reckless. `LINEAGE_DATABASE_URL` needed nothing — `e2e_live.sh:269` already derives it from the `rask-age` service and the postgres password, and the other direct-AGE legs were passing all along.
 - **THE CLOSING CONDITION NEEDS A RUNNER THAT CAN REACH THE RELEASE, and GitHub Actions cannot.** "A scheduled job runs `scripts/e2e_live.sh` against the deployed release" — the release is this host's k3s, discovered through a kubeconfig no hosted runner has. So the cadence is a self-hosted runner or a timer on the host, not a `schedule:` block in `ci.yml`; deciding which is the work, and it is not blocked on anything.
+- **blocked:** the closing bar as written is not reachable from this CI. Owner picks: stand up a self-hosted runner with a path to the cluster, expose the deployed release to a hosted runner, or RESTATE the bar as a scheduled run against an ephemeral stack (which `e2e-stack` already approximates).
+- **RE-MEASURED 2026-09-21, and the missing piece is NOT the cadence.** A nightly schedule already exists (`ci.yml`, `cron: '0 3 * * *'`). What does not exist is a runner that can reach the estate: **all 14 `runs-on` across `.github/workflows/` are `ubuntu-latest`**, and a GitHub-hosted runner has no network path to this k3s cluster — so "runs `scripts/e2e_live.sh` against the DEPLOYED RELEASE on a cadence" cannot be satisfied by adding a schedule. Two line references in this row had also drifted: `make e2e-live` is `Makefile:895` (cited 885) and `e2e-lineage` is `ci.yml:436` (cited 417-420).
 - *What is left:* `make e2e-live` (Makefile:885) and `scripts/e2e_live.sh` exist, and the lineage suite runs hermetically in CI as job `e2e-lineage` (`dagger call test-lineage`, .github/workflows/ci.yml:417-420). The two failing `test_lineage_e2e.py` cases are unnamed in the row; LH-109 records the suite at 14 passed after the AGE memory fix and the cases cannot be reproduced offline (needs AGE), so treat them as unconfirmed rather than open. Wire `scripts/e2e_live.sh` into a scheduled run against the k3s release — no workflow or cron references it. Note the CI signal itself is absent at HEAD: the last three ci.yml runs on e198b61b/6a6ecc3a are `failure` with `ms-test` red, `e2e-lineage` is skipped because it `needs: ms-test`, and `gh api …/workflows/ci.yml/runs?status=success` returns no run at all. Update the script header's `111` to the current 133.
 - *Closes when:* A scheduled job runs `scripts/e2e_live.sh` against the deployed release on a cadence and its latest run is green including all 11 `test_lineage_e2e.py` cases.
 - *Evidence:* `Makefile:885-886; scripts/e2e_live.sh:1-20` · `rg -n 'e2e_live|e2e-live' .github/workflows/ → no hits; ci.yml:417-420 runs dagger call test-lineage` · `gh run list --workflow=ci.yml --limit 3 → all failure; jobs of 35301962075: ms-test failure, e2e-lineage skipped` · `rg -c '^(async )?def test_' over the 30 e2e-marked files → 133`
