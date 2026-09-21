@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **103 are blocked on a decision** and **98 can be picked up today**.
+**202 open items**, of which **103 are blocked on a decision** and **99 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 45 | 19 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -886,6 +886,16 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **NOTE FOR WHOEVER TAKES [[LH-159]]:** `WorkOrder.to_env` already does the right thing (`env.update({k: v for k, v in optional if v})`), so migrating this hand-rolled block onto the port is a BEHAVIOUR change rather than a refactor, and must not be claimed as equivalent.
 - *Closes when:* An unset OTLP name produces no key in the submitted `runtime_env`, pinned by a test.
 - *Evidence:* `services/medallion/src/medallion/services/ray_submit.py` (the `env_vars` block, six `os.environ.get(..., "")` OTLP names) · the same file's two-owners comment, measured twice live · `packages/service-kit/src/service_kit/lakehouse/work_order.py:164-166`
+
+**XC-067 · `HttpServerLatencyHigh` CANNOT FIRE — its threshold is above the histogram's top bucket, for every service**
+`observability, chart` · **HIGH**
+- *What is left:* Make the fleet's latency alert able to fire. Either give `http_server_duration_milliseconds` explicit bucket boundaries that cover the real range (an OTel View in `service_kit.setup_otel`; `maintenance` legitimately runs ~40s and the default layout stops at 10s), or key the rule on a statistic that is not bucket-bounded. Raising buckets alone is not enough without re-checking the threshold against them, which is the mistake being fixed.
+- **MEASURED LIVE 2026-09-21, by evaluating the alert's OWN expression against the deployed GreptimeDB.** `chart/alerting/rules.yml:1123` is `histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[10m]))) > 15000`. Run without the threshold it answers `maintenance -> 10000 ms`; run **as written it returns ZERO series**. Ground truth from the same store at the same moment: `maintenance` mean duration **39,504 ms**. A service running at 39.5 seconds reports a p95 of 10 seconds and pages nobody.
+- **THE CAUSE IS THE BUCKET LAYOUT, not the engine.** The exported histogram carries the OTel default explicit boundaries `0,5,10,25,50,75,100,250,500,750,1000,2500,5000,7500,10000,+Inf`. Counted live for `maintenance`: `le=10000` holds **4** observations and `le=+Inf` holds **37** — so **89% of requests are past the top finite bucket**. `histogram_quantile` returns at most the upper bound of the highest finite bucket when the quantile lands in `+Inf`, so the expression is CAPPED at 10,000 and a threshold of 15,000 is unreachable at any latency, for any service, forever.
+- **THE ROW'S OWN COMMENT SHOWS HOW IT PASSED REVIEW, which is the lesson.** It records verifying that "`histogram_quantile` over the bucket series is supported by GreptimeDB — verified by running this exact expression against the live store, because promtool accepting it proves nothing about the engine that evaluates it". That check was real and insufficient: it proved the expression EVALUATES, never that its threshold was REACHABLE given the buckets. Same family as [[XC-054]]'s first two gates and the `compaction_mode` reading in `docs/DECISIONS.md` — a number that cannot move, read as a measurement.
+- **THE BLAST RADIUS IS WIDER THAN ONE RULE:** `chart/templates/perses-dashboards.yaml` uses `histogram_quantile` in **11** panels, all against the same capped buckets, so every latency panel in the estate saturates at 10s too.
+- *Closes when:* The alert fires against a service exceeding its threshold, proven by a mutation (point it at a real duration and watch it go from silent to firing) rather than by the expression parsing.
+- *Evidence:* live evaluation 2026-09-21 — alert expression returns 0 series while `maintenance` mean is 39,504 ms · bucket counts `le=10000` 4 vs `le=+Inf` 37 · `chart/alerting/rules.yml:1122-1134` · `chart/templates/perses-dashboards.yaml` (11 `histogram_quantile` uses)
 
 ## PHASE 2 · COMPUTE
 
