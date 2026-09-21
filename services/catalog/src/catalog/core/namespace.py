@@ -113,6 +113,7 @@ def open_dataset(
     *,
     version: int | None = None,
     branch: str | None = None,
+    base_store_params: dict[str, dict[str, str]] | None = None,
 ) -> lance.LanceDataset:
     """Open the table's Lance dataset — on ``branch`` when the request names one, otherwise on main.
 
@@ -123,6 +124,18 @@ def open_dataset(
     tuple form ``dataplane._tag_reference`` uses — and the handle it returns is WRITABLE: schema evolution
     through it commits to the branch and leaves main at its version. ``version`` pins within whichever ref
     is selected (branch-local numbering when a branch is named).
+
+    ``base_store_params`` carries the object-store options for a registered data base needing DIFFERENT
+    credentials or endpoint from the estate's ([[LH-067]]). Without it, a base written with its own
+    credentials is unreadable — `dataplane._write_blob` composes these on the write side and records
+    that consequence in its own comment, which is the worst shape a storage bug takes: the write
+    succeeds and the data is unreachable later by a component that looks correct.
+
+    Keyed by BASE PATH URI and **runtime-only** — pylance 11.0.0 states these are "not persisted to the
+    manifest", which is what makes this the only form a credential may take here, as against the
+    `base_<id>.<key>` spelling in ``storage_options`` which carries no such guarantee. ``None`` is
+    byte-identical to passing nothing: pylance falls back to the top-level options for any base with no
+    entry.
     """
     resp = ns.describe_table(DescribeTableRequest(id=list(table_id), with_table_uri=True))
     location = getattr(resp, "table_uri", None) or getattr(resp, "location", None)
@@ -130,7 +143,13 @@ def open_dataset(
         raise TableNotFoundError(f"Table not found: {table_id}")
     if branch is None:
         try:
-            return lance.dataset(location, storage_options=storage_options, version=version, session=shared_lance_session())
+            return lance.dataset(
+                location,
+                storage_options=storage_options,
+                version=version,
+                session=shared_lance_session(),
+                base_store_params=base_store_params,
+            )
         except ValueError as exc:
             # pylance raises a bare ValueError for BOTH "no dataset here" and "no such version", and
             # letting either through produced a 500 — which says "the catalog is broken" when the
@@ -152,7 +171,9 @@ def open_dataset(
             if version is not None and "_versions/" in message and ".manifest" in message:
                 raise TableVersionNotFoundError(f"table version {version} was not found") from exc
             raise TableNotFoundError(f"table has no readable dataset at its declared location ({location!r})") from exc
-    dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
+    # BOTH LEGS, because a branch read opens the dataset before checking out — forwarding on only the
+    # main leg would leave branch reads of a foreign-credentialled base failing exactly as before.
+    dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session(), base_store_params=base_store_params)
     try:
         return dataset.checkout_version((branch, version))
     except (ValueError, OSError) as exc:
