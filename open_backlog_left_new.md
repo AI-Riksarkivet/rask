@@ -274,6 +274,22 @@ have no `uv.lock` and so cannot be built to emit anything.
   to the estate key, because returning that would make a misconfigured record indistinguishable from a
   resolved one and start writing somewhere nobody intended. Five cases, RED first, both legs
   mutation-checked.
+  **THE READ HALF SHIPPED AND IS DEPLOYED (`main-6b2d67d2`, 2026-09-21).** `open_dataset` forwards
+  `base_store_params` on BOTH legs — a branch read opens the dataset before `checkout_version`, so the
+  main leg alone would have left branch reads of a foreign-credentialled base failing exactly as
+  before, and that leg is mutation-checked on its own. This closes the asymmetry `_write_blob`'s own
+  comment records: the write side already composed per-base params while the read side passed none, so
+  a base needing different credentials "would write OK but be unreadable" — the worst shape a storage
+  bug takes, because the write succeeds and nobody is told.
+  **VERIFYING THE API AGAINST THE INSTALLED SOURCE CHANGED THE ANSWER.** This row proposed
+  "`base_store_params`/`base_<id>.<key>`" as if interchangeable. pylance 11.0.0 documents them as not:
+  `base_store_params` is "Runtime-only ... not persisted to the manifest" and takes PRECEDENCE over the
+  `base_<id>.<key>` entries in `storage_options`. The non-persistence is what makes it the only form a
+  CREDENTIAL may take, so the composition below should use it exclusively rather than either.
+  **ADDITIVE, AND OBSERVED SO:** pylance falls back to the top-level options for any base with no entry,
+  so passing `None` is byte-identical to before — pinned as its own case, and confirmed in-cluster,
+  where a full bronze->gold cascade passed against the deployed image (5 legs, 64s). `open_dataset` is
+  on every read path, which is why a signature change there was deployed and driven rather than trusted.
   **WHAT REMAINS IS NARROWER THAN THE CLAUSE READS:** the composition itself — `base_store_params` /
   `base_<id>.<key>` on the write door (`dataplane.py:224-228`) and `base_store_params` on the read path
   — plus an in-cluster drive of a table in a base needing different credentials. The mechanism the
