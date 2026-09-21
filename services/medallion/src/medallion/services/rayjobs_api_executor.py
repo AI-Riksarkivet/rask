@@ -92,6 +92,31 @@ class RayJobsApiExecutor:
         if registration.engine != RAY_ENGINE:
             raise WrongEngineError(f"task {registration.task!r} is registered for engine {registration.engine!r}, and this executor runs {RAY_ENGINE!r}")
 
+    def job_metadata(self, order: WorkOrder) -> dict[str, str]:
+        """Ray job metadata, DERIVED from the order ([[LH-159]]).
+
+        These five facts are read BACK off the Jobs API, which is why they are stamped at all:
+        `rask.originator` is how a job that died is still attributed to the person it was for, and
+        `rask.transform` names the declaration an operator wrote. A submission without them is not
+        merely thinner — `.claude/skills/rask-notifications` prices it exactly: a run that names nobody
+        is undeliverable rather than under-delivered, and fails silently.
+
+        DERIVED RATHER THAN HANDED IN. Every fact lives on the order, so this needs no widening of
+        `submit()`: metadata passed per call would let each adapter render the same facts its own way,
+        which is the divergence `to_env()` being "the ONE serialization" exists to prevent.
+
+        EMPTY IS OMITTED, matching the lane and [[XC-066]]'s rule for `runtime_env`: a key carrying
+        `""` reads as a stamped fact that is simply absent, and absence is the honest claim.
+        """
+        facts = (
+            ("rask.originator", order.identity.originator),
+            ("rask.project", order.identity.project),
+            ("rask.token", order.stamp.token),
+            ("rask.stage", order.stamp.stage),
+            ("rask.transform", order.stamp.transform),
+        )
+        return {key: value for key, value in facts if value}
+
     async def submit(self, order: WorkOrder, registration: TaskRegistration) -> tuple[RunHandle, SubmitOutcome]:
         """Start the job, or re-attach to the one already doing this work.
 
@@ -105,6 +130,11 @@ class RayJobsApiExecutor:
             "submission_id": order.idempotency_key,
             "entrypoint": registration.command,
             "runtime_env": {"env_vars": order.to_env()},
+            # STAMPED FROM THE ORDER ([[LH-159]]) — see `job_metadata`. Without it a submission through
+            # the port would lose the facts that are read BACK off the Jobs API, and losing
+            # `rask.originator` means a job that dies can no longer be attributed to the person it was
+            # for: undeliverable rather than under-delivered.
+            "metadata": self.job_metadata(order),
         }
         answered = await ray_jobs_api.submit_or_reattach(client, order.idempotency_key, body, on_terminal_failure="resubmit")
         return RunHandle(engine=RAY_ENGINE, handle=order.idempotency_key), _SUBMIT_OUTCOME[answered]
