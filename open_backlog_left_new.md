@@ -132,13 +132,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**197 open items**, of which **98 are blocked on a decision** and **99 can be picked up today**.
+**200 open items**, of which **98 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 41 | 19 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 44 | 22 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -767,6 +767,24 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *What is left:* `securityContext` is repeated per template rather than defaulted chart-wide, so coverage drifts silently and the two workloads that most need it — the secret store and the IdP — render without it. Hoist the baseline to one chart-wide default that a template opts OUT of with a stated reason, and gate the render.
 - *Closes when:* Every first-party container and Job renders the baseline, and a test refuses a new one that does not.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream sets the baseline once, chart-wide
+
+**XC-062 · Nothing proposes dependency bumps: the estate detects CVEs and has no mechanism that fixes them**
+`ci` · **MED**
+- *What is left:* `make audit` scans six lockfiles plus `.dagger/go.mod` for CVEs, so a vulnerable dependency is DETECTED — and then nothing raises the PR that would close it. There is no `renovate.json` and no `.github/dependabot.yml` anywhere in the tree (verified 2026-09-21). Detection without remediation means the scan's output ages into noise, which is the state every unattended scanner reaches. Add one bot, scoped to the six locks and the Go module, with the runner locks grouped separately so a workload's heavy stack cannot churn the fleet's.
+- *Closes when:* A dependency bump reaches `main` as a bot-raised PR that the existing gates ran against.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 · `ls renovate.json .github/dependabot.yml` → neither exists
+
+**XC-063 · A pinned tool version that never re-installs is not a pin — `.localbin` keeps whatever it downloaded first**
+`scripts, ci` · **MED**
+- *What is left:* `make bootstrap` installs `kind`, `kubectl`, `fga`, `k9s` and friends into `.localbin`, and a host that already has the file keeps the version it fetched the first time — so raising the pinned version in the Makefile changes nothing on any developer machine that ran bootstrap before the bump, and CI and local silently diverge. The install step must compare the installed binary's VERSION against the pin and re-fetch on mismatch, not test for the file's existence.
+- *Closes when:* Changing a pinned version and re-running bootstrap replaces the binary, proven by a test or a scripted check that asserts the version after a downgrade.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 · `Makefile:151,198,204-205,248,816`
+
+**XC-064 · Every kind/e2e stack renders with `observability.enabled=false`, so the estate's OTLP path is gated by nothing**
+`ci, chart, observability` · **MED**
+- *What is left:* `scripts/e2e_stack.sh:112` and `scripts/ray_e2e_stack.sh:103` both pass `--set observability.enabled=false`, so the Collector, GreptimeDB and every OTLP export are absent from the one place the estate is assembled automatically. The telemetry plane is therefore proven only by hand on the live k3s estate — which is exactly how [[CP-040]]'s permanently-firing `RayMetricsMissing` and [[XC-047]]'s zero OpenFGA series survived. Turn it on for at least one lane and assert a span and a metric land, rather than only that the fleet starts.
+- *Closes when:* An e2e lane runs with observability ON and asserts a trace and a metric series reached the backend.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream proves the telemetry plane in CI rather than in a drill · `scripts/e2e_stack.sh:112` · `scripts/ray_e2e_stack.sh:103`
 
 ## PHASE 2 · COMPUTE
 
