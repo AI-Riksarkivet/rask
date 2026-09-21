@@ -133,6 +133,36 @@ CREATE_READS_TABLE: Final = (
     "read_at timestamptz NOT NULL DEFAULT now())"
 )
 INSERT_READ: Final = "INSERT INTO public.lineage_reads (reader, dataset) VALUES (%s, %s)"
+
+# The outbox's TERMINAL STATE for a governance refusal ([[LH-182]]). A refused event is settled — the
+# payload is well-formed, the answer is deterministic, and it will never enter the graph — so leaving the
+# object staged makes the drain re-read, re-parse, re-refuse and re-log the same seven events forever
+# (measured live 2026-09-21, unchanged since 2026-09-14: `drained=0 refused=7` every tick).
+#
+# WHY A TABLE AND NOT A PREFIX. Moving the object to `<outbox>/_refused/` is a PutObject and the chart
+# grants this service exactly `s3:DeleteObject` on `*/_lineage_outbox/*` (`DrainItsOwnOutboxAndNothingElse`,
+# pinned by `test_the_lineage_plane_writes_nothing_it_does_not_own.py`). Delete it may; it simply had
+# nowhere to put the evidence first. This service already provisions its own schema at boot, so recording
+# the verdict here needs no capability it does not hold.
+#
+# THE EVENT COLUMN IS THE POINT, not decoration. Once the object is deleted this row is the only surviving
+# record of provenance someone tried and failed to record — deleting without it would convert a governance
+# refusal into silent data loss, which is worse than the loop it replaces. `reason` is what an operator
+# acts on when asked to grant; `author` is the verified `sub`, never the producer-supplied display name.
+CREATE_REFUSALS_TABLE: Final = (
+    "CREATE TABLE IF NOT EXISTS public.lineage_outbox_refusals ("
+    "outbox_key text PRIMARY KEY, run_id text, author text, reason text NOT NULL, "
+    "event jsonb NOT NULL, refused_at timestamptz NOT NULL DEFAULT now())"
+)
+# IDEMPOTENT BY KEY, because the tick can legitimately see the same event twice: a crash between this
+# insert and the DeleteObject leaves the object staged, so the next drain re-refuses an event already
+# recorded. That must be a no-op update rather than a second row, which is why the key is the PRIMARY KEY
+# rather than a bigserial with a unique index bolted on.
+RECORD_REFUSAL: Final = (
+    "INSERT INTO public.lineage_outbox_refusals (outbox_key, run_id, author, reason, event) "
+    "VALUES (%s, %s, %s, %s, %s) "
+    "ON CONFLICT (outbox_key) DO UPDATE SET reason = EXCLUDED.reason, refused_at = now()"
+)
 # The read-audit QUERY (the #41 log was capture-only): who read a dataset, aggregated per principal with
 # their last-read time + count, most-recent first. GROUP BY collapses the append log's repeat rows.
 READERS: Final = (

@@ -1078,6 +1078,11 @@ class LineageRepository:
                 # ACCESS EXCLUSIVE lock and must not be able to hang boot behind a long reader.
                 await conn.execute(pg.ADD_EVENTS_RECEIVED_AT)
                 await conn.execute(pg.CREATE_EVENTS_RECEIVED_AT_INDEX)
+                # The outbox's terminal state ([[LH-182]]). Created HERE, beside the feed, because it is
+                # the same kind of thing: durable storage this service owns and provisions for itself.
+                # It is what makes deleting a permanently-refused staged object safe — the evidence
+                # outlives the object — and it needs no capability the relay does not already hold.
+                await conn.execute(pg.CREATE_REFUSALS_TABLE)
         except psycopg.errors.DuplicateTable:
             pass
 
