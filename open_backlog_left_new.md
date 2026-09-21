@@ -235,6 +235,21 @@ have no `uv.lock` and so cannot be built to emit anything.
   question. What replaces it is smaller and spec-cited: the vend door accepts a branch, and a
   branch-scoped write vends write on `<table>/tree/<branch>/*` with main granted READ only — literally
   "read-only on main and write-only on the branch".
+- **"THE BRANCH QUESTION GATES SEVEN ROWS" WAS MINE AND IT WAS WRONG (corrected 2026-09-21).** I put
+  that to the owner when asking for the ruling. Read back, the sibling markers ask different questions
+  entirely: [[LH-041]] is tag-MOVE semantics (last-writer-wins vs a conditional `Tags::update`
+  upstream), [[LH-056]] is who a tag/branch control event TARGETS, [[LH-099]] is whether a compaction
+  should tell anybody, [[LH-178]] is what a GDPR erasure does when it meets a branch, and [[LH-058]] is
+  the `column` relation and classified-table vending. Only THIS row carried the branch-authz question,
+  and it carries four others besides.
+  **THE RULING STILL EARNED ITS KEEP, which is why this is a correction and not a retraction:** it
+  turned into shipped code — branch-scoped credential vending, closing a real gap where any table
+  writer's credential could write every branch. The error was in the ROW COUNT I used to justify
+  asking, not in the answer.
+  **AND [[LH-178]] WAS CHECKED AGAINST THE SPEC BEFORE BEING LEFT BLOCKED.** The branching brief
+  mentions GDPR twice and neither passage rules on erasing a branch: one argues branches beat scattered
+  clones ("no GDPR compliance break from a forgotten clone"), the other is about external blob refs
+  breaking row lifecycle. So that row is a genuine owner call, not one the spec could have answered.
 - *Closes when:* model.fga declares branch, column and estate types and a project role split, every new rung has a .fga.yaml case, and fga_root_object names the estate object.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types: no branch/column/estate)` · `packages/service-kit/src/service_kit/governed/auth/model.fga:55-88 (project: team/admin/member only)` · `services/catalog/src/catalog/api/fga_deps.py:158,237 ('protection': 'can_drop')` · `services/catalog/src/catalog/core/config.py:320 (fga_root_object)`
 
