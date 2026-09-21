@@ -90,7 +90,8 @@ from pydantic import BaseModel
 from catalog.core.config import shared_lance_session
 from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
-from catalog.services import changes, native
+from catalog.services import changes, native, warehouse_credentials
+from catalog.services.base_credentials import compose_base_store_params
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
@@ -219,6 +220,9 @@ def _write_blob(
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
     properties: dict[str, str] | None = None,
+    base_credential_refs: dict[str, str] | None = None,
+    secret_store: str = "",
+    secret_field: str = "",
 ) -> lance.LanceDataset:
     """Write a table at file format 2.2 with stable row ids.
 
@@ -251,12 +255,35 @@ def _write_blob(
     # /insert append route which has no data_base param) concentrates its NEW fragments in the primary root —
     # create-time distribution is the firm guarantee; per-write distribution needs the bases re-supplied.
     target_bases = data_names or None
-    # base_store_params: each base's object-store creds at RUNTIME (pylance does NOT persist these to the
-    # manifest — verified against the write_dataset/dataset docstrings). INVARIANT: every allowlisted data
-    # base MUST share the catalog's endpoint/creds — the READ path (open_dataset) passes only the top-level
-    # storage_options, so a base needing DIFFERENT creds/endpoint would write OK but be unreadable. The
-    # allowlist is operator-configured to hold this; see LANCE_MULTIBASE_DATA_BASES in core/config.py.
-    base_store_params = {u: dict(so) for u in data_bases} if data_bases else None
+    # base_store_params: each base's object-store options at RUNTIME (pylance does NOT persist these to
+    # the manifest — verified against the write_dataset/dataset docstrings, which also state they take
+    # precedence over `base_<id>.<key>` in storage_options; that non-persistence is what makes this the
+    # only form a CREDENTIAL may take here).
+    #
+    # PER BASE NOW, NOT ONE DICT FOR ALL ([[LH-067]]). A base with a configured credential REFERENCE
+    # gets its own entry, resolved through the Dapr secret store; a base without one is OMITTED, and
+    # pylance's documented fallback ("when a base has no explicit entry here, the top-level
+    # storage_options is used") makes that byte-identical to sending the estate options explicitly. So
+    # an estate configuring no references renders `{}` and behaves exactly as before.
+    #
+    # The READ path forwards these too now (`core/namespace.open_dataset`), which is what retires the
+    # operator obligation this comment used to carry: a base needing different credentials no longer
+    # "writes OK but is unreadable".
+    base_store_params = (
+        (
+            compose_base_store_params(
+                bases=data_bases,
+                storage_options=so,
+                refs=base_credential_refs or {},
+                resolve=warehouse_credentials.resolve,
+                store=secret_store,
+                field=secret_field,
+            )
+            or None
+        )
+        if data_bases
+        else None
+    )
     try:
         return lance.write_dataset(
             table,
