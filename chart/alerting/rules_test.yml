@@ -1517,3 +1517,76 @@ tests:
       - eval_time: 4h
         alertname: MaintenanceDriftRising
         exp_alerts: []
+
+  # [[XC-067]] THE LATENCY ALERTS, PROVEN TO FIRE — the half that was missing when `HttpServerLatencyHigh`
+  # shipped. promtool `check rules` said SUCCESS and the live drill said the expression evaluates, and
+  # the rule still could not fire, because its threshold sat above the histogram's top bucket. A
+  # synthetic series that crosses the threshold is what distinguishes "parses" from "fires".
+  #
+  # The buckets here are CUMULATIVE, as a Prometheus histogram is: nothing at or below 15s, everything
+  # between 15s and 30s, so p95 interpolates into that band and lands above the 15,000 threshold.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog", le="15000"}'
+        values: "0+0x40"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog", le="30000"}'
+        values: "0+10x40"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="catalog", le="+Inf"}'
+        values: "0+10x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HttpServerLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fleet
+              service_name: catalog
+            exp_annotations:
+              summary: "One service's p95 HTTP latency is above 15s"
+              description: >-
+                Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
+                call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
+                `maintenance` legitimately runs long during a sweep; any other service here is a defect.
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+
+  # THE EXCLUSION IS ALSO PROVEN, because it is the half that keeps the rule from being muted. Identical
+  # series, `service_name="maintenance"`, far past the threshold: `HttpServerLatencyHigh` must stay
+  # silent. A sweep measured at 39.5s would otherwise fire it on every evaluation forever.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="15000"}'
+        values: "0+0x40"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="30000"}'
+        values: "0+10x40"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="+Inf"}'
+        values: "0+10x40"
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: HttpServerLatencyHigh
+        exp_alerts: []
+
+  # AND THE SWEEP'S OWN RULE FIRES when it overruns the 120s schedule it runs on. Nothing at or below
+  # 120s, everything between 120s and 300s — only representable at all because the histogram's tail now
+  # reaches 300s; with the default 10s ceiling this expression would cap at 10000 and never trip.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="120000"}'
+        values: "0+0x80"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="300000"}'
+        values: "0+10x80"
+      - series: 'http_server_duration_milliseconds_bucket{service_name="maintenance", le="+Inf"}'
+        values: "0+10x80"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: MaintenanceSweepOverrunsItsSchedule
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              service_name: maintenance
+            exp_annotations:
+              summary: "The maintenance sweep is taking longer than the interval it runs on"
+              description: >-
+                p95 sweep duration is above the 120s cron interval, so ticks overlap and two sweeps share
+                one container's memory budget. Expect RSS to climb and the worker to be OOMKilled.
+                Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph

@@ -1119,8 +1119,14 @@ groups:
       # `histogram_quantile` over the bucket series is supported by GreptimeDB — verified by running
       # this exact expression against the live store, because promtool accepting it proves nothing
       # about the engine that evaluates it.
+      # `maintenance` IS EXCLUDED BY NAME, and that is a consequence of making this rule fireable at
+      # all ([[XC-067]]). Its buckets now reach 300s, so a sweep measured at 39.5s would trip a 15s
+      # threshold on every evaluation — and a warning that is always firing is muted, which is worse
+      # than the silence it replaced. The annotation below already stated the intent ("`maintenance`
+      # legitimately runs long during a sweep; any other service here is a defect"); this makes the
+      # expression say it. `MaintenanceSweepOverrunsItsSchedule` covers that service on its own terms.
       - alert: HttpServerLatencyHigh
-        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket[10m]))) > 15000
+        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name!="maintenance"}[10m]))) > 15000
         for: 15m
         labels:
           severity: warning
@@ -1131,6 +1137,27 @@ groups:
             Sustained p95 over 15 seconds means requests are queueing behind something — a blocking
             call on the event loop, an exhausted threadpool, or an upstream that stopped answering.
             `maintenance` legitimately runs long during a sweep; any other service here is a defect.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+
+      # THE THRESHOLD IS THE SWEEP'S OWN SCHEDULE, not a round number. `maintenance.schedule` is
+      # `@every 120s` (chart/values.yaml), so a sweep whose p95 exceeds 120s has not merely slowed —
+      # the next tick fires while the previous one is still running, and the two contend for the same
+      # 512Mi tier. Measured 2026-09-21 the sweep ran ~39.5s, so this has ~3x headroom before it says
+      # anything, which is what keeps it from being muted.
+      #
+      # It is only MEASURABLE because the duration histogram now reaches past 10s ([[XC-067]]); with
+      # the default buckets this expression would be capped at 10000 and could never fire either.
+      - alert: MaintenanceSweepOverrunsItsSchedule
+        expr: histogram_quantile(0.95, sum by (service_name, le) (rate(http_server_duration_milliseconds_bucket{service_name="maintenance"}[30m]))) > 120000
+        for: 30m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "The maintenance sweep is taking longer than the interval it runs on"
+          description: >-
+            p95 sweep duration is above the 120s cron interval, so ticks overlap and two sweeps share
+            one container's memory budget. Expect RSS to climb and the worker to be OOMKilled.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
 
       # The watcher's watcher. Both rules above evaluate over an empty vector and go quiet if the
