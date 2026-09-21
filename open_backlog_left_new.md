@@ -550,6 +550,17 @@ have no `uv.lock` and so cannot be built to emit anything.
 
   **THE RSS QUESTION IS STILL OPEN AND THAT IS THE ONE THAT CLOSES THIS ROW.** At 28 minutes the fixed worker reads 246Mi with 0 restarts; the pre-fix pod interpolates to ~294Mi at the same age and died at 87. Lower, outside the ~10Mi sampling noise, and NOT yet a plateau — 238/232/232/246Mi across 20-28 minutes is a series this row has been fooled by before (see the flat-from-two-readings note above). What settles it is surviving past 87 minutes, then a full day.
 - **THE DEPLOY WAS BLOCKED BY [[XC-054]], WHICH STOPPED BEING A FILED ROW.** `helm upgrade` failed outright: `Secret "sh.helm.release.v1.rask.v194" is invalid: data: Too long`. Revision 193 decoded to 1,041,774 bytes of the 1,048,576 etcd cap — 99.35% — so no upgrade could succeed by anyone, for any change. Cleared by converting `#` comments in 14 templates to `{{/* */}}` (Helm copies the former into the stored manifest and strips the latter), which freed 38,540 gzipped bytes and cost no prose. Headroom 6,802 -> 43,858 bytes, now gated by `tests/unit/test_the_release_secret_stays_under_its_ceiling.py`.
+- **THE KNOWN TRADE-OFF DID NOT MATERIALISE, and it was checked rather than assumed.** Capping arenas at 2 makes 100+ threads contend on one allocator lock, which is the standard cost of this fix and would be a regression nobody would attribute to it later. Measured against the estate's own RED metrics in GreptimeDB (mean `http_server_duration_milliseconds`, 15m window, now versus `offset 3h` across the deploy):
+
+  | service | 3h ago | after | change |
+  | --- | --- | --- | --- |
+  | catalog | 49.7 ms | 34.3 ms | -30.9% |
+  | lineage | 1,242.7 ms | 372.9 ms | -70.0% |
+  | maintenance | 47,440.9 ms | 38,782.6 ms | -18.3% |
+  | medallion-producer | 1,361.0 ms | 1,066.0 ms | -21.7% |
+  | **notifications (CONTROL)** | 32.0 ms | 30.3 ms | **-5.3%** |
+
+  **`notifications` is the control and is why the other rows are readable**: it did NOT receive the bound, and it still moved -5.3%, so roughly that much is ambient — node-level memory pressure easing, or load variation — and not attributable here. The four bounded services moved 18-70%, well clear of that floor. The load-bearing result is the NEGATIVE one: no latency regression, so the contention cost this fix is supposed to pay is not visible at this thread count and request rate.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
