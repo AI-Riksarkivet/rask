@@ -142,12 +142,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**198 open items**, of which **101 are blocked on a decision** and **97 can be picked up today**.
+**197 open items**, of which **102 are blocked on a decision** and **95 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 6 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 38 | 4 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -235,42 +235,6 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *What is left:* The gap stands: `model.fga` declares user/team/role/project/warehouse/namespace/table/materialized_view/transaction/annotation_project and nothing column-shaped, and no classification field exists. `columns.py` IS gated at table level via the router-wide `authorize` (`api/v1/router.py:47`, writer tier), so the title's 'no FGA check' is only true per column. Do not implement 'masking on query' as written: `credentials` is a data-read action (`fga_deps.py:88`) that vends a whole-prefix S3 session, so a reader gets raw bytes without passing any query door. Once the model shape is ruled, put classification on column metadata, add the relation, and enforce at the credential-vending door (refuse or narrow the session for tables carrying classified columns) rather than at `query`.
 - *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types, no column)` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
-
-**LH-137 · silver→gold refuses every tabular-lane publication — the catalog stamps a tenant on a tenant-less lane id from the namespace binding, the gold runner composes a different table, and a confinement window narrowed to one vended string refuses the trigger's location**
-`medallion, catalog` · **HIGH** · PARTIAL
-- **RULED 2026-09-21 (owner): FIX (i) — GATE THE EMIT.** `publication_extra` stops stamping `project` on
-  a table id that carries no `<project>-` prefix; the binding lookup stays and only the emit is gated.
-  Chosen over (iii) "repair estate config" because a config repair is not a fix that travels with the
-  code — the defect would return on any estate whose binding looks like this one, and nothing in the code
-  would prevent it. (ii) was already out: it reverts a deliberate narrowing pinned by
-  `test_the_stage_runner_reads_where_the_catalog_says.py:92` and fixes nothing on its own. UNBLOCKED.
-- *What is left:* Drive one tabular-lane publication on the live estate and observe its silver→gold hop complete: a `medallion_stage_moved transition='silver->gold'` line (or any `medallion_stage_transitions_total` series on the `silver-to-gold` pod) and `gold$catalog` gaining a catalog location; absence of an `unconfined_uri` refusal is not closure. The chain at HEAD: `publication.py:165` stamps `project` from `warehouses.project_for_namespace` (namespace `silver` → `bind86-wh` → `bind86`) on lane id `silver$features`; `publication_trigger.py:127,147` carry that project plus `location=s3://bind86-wh/medallion/silver`; `transform.py:243` composes `bind86-silver$features`, `:636` narrows `read_root` to that table's vended path, and `:690` refuses because the two are different tables. Writable before the ruling: a RED test for that chain (none exists — `test_publish_names_the_tenant.py` covers only tenant-carrying and unbound namespaces, and no medallion test publishes an un-prefixed lane into a bound namespace) and a rewrite of the `_confine_from_uri` docstring at `transform.py:657`, which still claims the root is the tenant's warehouse when the code makes it the single vended table. Registry state (195 bindings, 96 warehouses; tier mis-bindings `silver -> bind86-wh`, `silver-media -> lakehouse-wh`, `bronze-media -> lakehouse-wh`) and the live recurrence are unverified this session (no cluster access); a deployed `gold-media` runner would light the second instance. Half (b) is closed — its residue is LH-141/LH-164 and must not be carried here; the side-flagged `RayWorkerOOMKills` (`chart/alerting/rules.yml:711`) names `ray_memory_manager_worker_eviction_total`, which nothing in-repo emits and the live store lacks, and belongs with the alerting row.
-- **FIX (i) IS IMPLEMENTED AND DEPLOYED (`main-0d2f8a8d`, 2026-09-21). WHAT IS PROVEN, EXACTLY.**
-  `publication_extra` stamps `project` only when `segments[0]` starts with `f"{project}-"`; the binding
-  LOOKUP is untouched, and a test pins that it still happens, because `resolve_effective_gate` resolves
-  through the same request-scoped cache and gating the call rather than the emit would weaken a
-  warehouse's own gate. Five cases, two RED before the change and mutation-checked: the tenant-less id,
-  an id EQUAL to the project (`project_namespace` always joins, so a bare equal id was never qualified),
-  a project id CONTAINING a dash (the case no string rule recovers — the registry chooses, this only
-  confirms the id agrees), the ordinary qualified id, and the lookup still being consulted.
-  **THE DEFECT'S INPUT IS STILL LIVE, re-measured 2026-09-21:** `_warehouses/bindings/silver.json` is
-  `{"top_ns": "silver", "warehouse_id": "bind86-wh"}` and `_warehouses/bind86-wh.json` carries
-  `"project": "bind86"`. So `project_for_namespace("silver")` still answers `bind86`, `silver` still does
-  not start with `bind86-`, and the gate is the thing now standing between that and the stamp.
-  **NO REGRESSION ON THE QUALIFIED PATH, OBSERVED LIVE:** after the deploy a real cascade hop completed
-  — `medallion_gate_resolved transition='silver->gold' project='acme'` then `medallion_stage_moved
-  transition='silver->gold' to='gold$catalog' duration_seconds=30.0`, targeting `acme-gold$catalog` from
-  `acme-silver$features`. That is the guard the fix could have broken and did not.
-  **WHAT IS NOT PROVEN: the TENANT-LESS publication has not been driven in-cluster,** so this row stays
-  open on its own bar. The blocker is mechanical rather than conceptual, and worth recording because it
-  bounds every future in-pod check: **a fresh `python -c` inside the catalog pod cannot read the
-  registry at all** — `settings.storage_options()` yields a key id and an EMPTY secret, because the
-  credential arrives through the app LIFESPAN from the Dapr secret store rather than through the
-  environment. That is the secrets rule working exactly as intended; it means deployed catalog behaviour
-  must be driven through its HTTP door, never by exec'ing beside it. The next step is a publish against
-  one of the tenant-less `silver$...` tables that already exist in `lance-catalog`.
-- *Closes when:* A driven publication's silver→gold hop is observed completing on the live estate (a `medallion_stage_moved transition='silver->gold'` line and `gold$catalog` resolving to a catalog location) — a positive observation, not the absence of a refusal and not an alert, since `observability.alerting.enabled` is false (`chart/values.yaml:2898`) and nothing evaluates the 44 rules.
-- *Evidence:* `services/medallion/src/medallion/services/transform.py:243,636,657,690 (pinned via `git show HEAD:`; composes `project_namespace(project, settings.from_dataset)`; `from_uri = read_root = vended`; docstring "TENANT'S WAREHOUSE for a project trigger"; `if not uri_within(read_root, supplied)` refusal)` · `services/catalog/src/catalog/api/v1/endpoints/publication.py:165 → services/catalog/src/catalog/services/warehouses.py:345 (`project_for_namespace`: binding → warehouse → project, no prefix check by design)` · `services/medallion/src/medallion/services/publication_trigger.py:127,147 (`project` and `from_uri` read verbatim from the publication's `extra`)` · ``uv run pytest services/medallion/tests/test_the_stage_runner_reads_where_the_catalog_says.py -q` → 5 passed (asserts `roots.read_root == VENDED_FROM` at :92); `chart/values.yaml:2898` `alerting: enabled: false`; `git log --grep=LH-137` shows docs-only commits, no fix landed`
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
@@ -483,6 +447,43 @@ have no `uv.lock` and so cannot be built to emit anything.
   key. An ungoverned prefix has no catalog record, so nothing can be vended for it (the 403 [[LH-176]]
   records). The estate therefore reports a class of residue that its own sweep is structurally unable to
   remove, and clearing it is an operator action with the root identity by construction, not by oversight.
+- **THE RESIDUE IS NOT INERT — IT BLOCKS A LEGITIMATE CREATE (measured 2026-09-21).** Driving
+  [[LH-137]]'s verification, `POST /v1/table/silver$features/create` against the live catalog answered
+  **500** with `OSError: Dataset already exists: s3://bind86-wh/medallion/silver` from
+  `catalog/services/dataplane.py:261 _write_blob -> lance.write_dataset`. That path is
+  `bind86-wh/medallion/silver` (31KiB, 33 objects) — one of the ten chart-path prefixes left unreaped
+  because the ruling authorised four. So this class of residue is not merely reported-and-ignored: it
+  occupies a location the catalog composes for a real table id and makes that table impossible to
+  create, on an estate where nothing references the residue.
+  **AND THE REFUSAL IS THE WRONG SHAPE, which is a defect of its own.** A create colliding with bytes
+  already at the composed location is a CONFLICT the caller can act on; it surfaces as a raw `OSError`
+  through a 500 `InternalError` with `detail: "Internal Server Error"`, so the caller is told nothing
+  and the reason exists only in the pod's traceback. Whatever is ruled about the ten, a create that
+  lands on an occupied location should answer 409 with the location it collided on.
+- **THE EIGHT TIER-SHAPED PREFIXES ARE REAPED (owner ruling 2026-09-21, extending the first four), AND
+  ONE MORE WENT WITH THEM BY MISTAKE.** Authorised and reaped: `lakehouse$bronze`,
+  `lakehouse$bronze-media`, `lakehouse$silver-media`, `bronze`, `silver`, `gold`, `bronze-media` and
+  `bind86-wh/medallion/silver` — all verified empty afterwards. `models/` was to be KEPT and is intact
+  at 388KiB / 126 objects.
+  **`bronze-pages/` (1.7MiB, 4 objects) WAS ALSO DELETED AND SHOULD NOT HAVE BEEN.** `mc rm --recursive`
+  matches by PREFIX, not by directory, so `mc rm --recursive loc/lance-catalog/medallion/bronze` removed
+  everything beginning `medallion/bronze` — which took `bronze-media/` (authorised) and `bronze-pages/`
+  (explicitly excluded) with it. The bucket is **un-versioned**, confirmed with `mc version info`, so it
+  is not recoverable.
+  **THE IMPACT IS BOUNDED AND WAS CHECKED RATHER THAN ASSUMED:** a GOVERNED table lives at
+  `s3://<bucket>/<hash>_<ns>$<table>/`, never under `medallion/`, so everything under that prefix is
+  chart-path residue with no catalog record — which is this row's entire premise. `bronze-pages/` was in
+  the same ungoverned class as the eight, and nothing resolved to it. What was lost is 1.7MiB of
+  unreferenced residue; what was violated is the boundary of what had been authorised, which is the part
+  worth recording.
+  **THE LESSON IS THE TOOL'S, AND IT GENERALISES:** an object store has no directories. Any prefix
+  delete must be anchored — `medallion/bronze/` with the trailing delimiter, never `medallion/bronze` —
+  and a dry-run listing must be taken with the SAME pattern the delete will use, not a similar one.
+- **blocked:** one prefix remains and it is not a tier — `lance-catalog/medallion/models` (388KiB, 126
+  objects, every entry an `e2etrain*` Lance dataset). Both reap rulings covered TIER-shaped residue; a
+  model registry is a different thing and nothing has established what reads this one. Either it is
+  named as residue and reaped with the rest, or it is a real store that must be REGISTERED — and until
+  that is answered the closing bar ("zero UNGOVERNED medallion datasets") cannot be met either way.
 - *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
 - *Evidence:* `services/maintenance/src/maintenance/services/compaction_executor.py:107` · `services/maintenance/src/maintenance/services/reconcile.py:95,127,261` · `chart/templates/medallion.yaml:293,523` · ``grep -i 'two homes\|bind86' docs/DECISIONS.md` → no ruling recorded`
 
