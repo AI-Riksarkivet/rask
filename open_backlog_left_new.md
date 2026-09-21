@@ -481,30 +481,21 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *Closes when:* A permanently-refused staged event reaches a terminal state rather than being re-refused every tick, and `test_reconcile_sweep_drains_a_staged_outbox_event` passes against the deployed release.
 - *Evidence:* live 2026-09-20 — `s3://lance-catalog/_lineage_outbox` holds 6 `@COMPLETE.json` objects; `lineage_outbox_event_unauthorized` per key per sweep; `fga query check user:<alice> can_write_data table:bronze$e2e_outbox_ds` → true · `services/lineage/src/lineage/api/reconcile_cron.py:575-605` · `services/lineage/src/lineage/api/fga_deps.py:72-89,277-308`
 
-**LH-183 · The maintenance worker is OOMKilled and the Lance session cache is NOT why — measured at 2.1% of its cap**
+**LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
-- **THE CACHE IS ELIMINATED, and that is this row's result so far.** The obvious suspect was the Lance session: `config.py::shared_lance_session` says its caps are LRU SOFT bounds ("the size the cache grows toward, not a ceiling it stops at"), and the pod was OOMKilled six times (exit 137) against a 512Mi limit. Nothing reported the occupancy, so the argument ran twice on inference. It is reported now, and measured on the deployed estate 2026-09-21 immediately after a full tick: **`datasets=585 refused=271 lance_session_bytes=4,569,792 lance_session_cap_bytes=214,748,364`** — the cache holds **4.4 MB against a 204.8 MB cap, 2.1% full**, while pod RSS sat at **191Mi**. Capping it harder, scoping it per tick or evicting between ticks would each reclaim approximately nothing, and would cost the cache-hit rate the session exists for.
-- **MEASURED PER TICK on the deployed estate 2026-09-21**, all sampled at the same point in each cycle (ad-hoc spot checks disagreed with these by up to 15Mi because they landed mid-pass, so only the per-tick series is used):
+- **THE CAUSE IS NARROWED TO NATIVE ALLOCATION, and every Python-side fix is eliminated by measurement.** Two readings now ride the tick summary (`lance_session_bytes`, `python_blocks`), and on the deployed estate they answer the question the row was opened on:
 
-  | tick | RSS | session |
-  | --- | --- | --- |
-  | 1 | 192Mi | 4.4 MB |
-  | 2 | 201Mi | 4.4 MB |
-  | 3 | 218Mi | 14.6 MB |
-  | 4 | 223Mi | 14.6 MB |
-  | 5 | 243Mi | 14.6 MB |
-  | 6 | 242Mi | 14.6 MB |
-  | 7 | 251Mi | 14.6 MB |
+  | tick | RSS | python_blocks | session |
+  | --- | --- | --- | --- |
+  | 1 | 187Mi | 895,442 | 4.4 MB |
+  | 2 | 210Mi | 895,661 | 4.4 MB |
+  | 3 | 229Mi | 896,308 | 14.6 MB |
 
-  **The session held at 14.6 MB for FIVE consecutive ticks while RSS added 33Mi**, which is the cleanest separation the data gives: the cache is stable and the process is not. RSS is +59Mi over seven ticks with deltas of +9/+17/+5/+20/-1/+9 — **tick 6 fell by 1Mi and tick 7 resumed the climb**, so the one non-increase is a pause and not a plateau. That distinction is recorded because a series truncated at tick 6 reads as levelling and would retire this row on a single sample. A working set would have settled by now; something RETAINS across ticks.
-
-  *No time-to-OOM is projected.* The deltas span -1 to +20, so the rate is not stable enough to extrapolate, and this register was already wrong once today from reading a trend out of noise.
-
-  Two behaviours, not one trend. The session is a STEP (4.4 -> 14.6 MB once, then held across tick 4 while RSS rose a further 5Mi), so the growth and the cache are not the same thing — and at 14.6 MB against a 204.8 MB cap the cache is at **7.1%**, which is why tightening the cap remains the one fix already ruled out. RSS also excursions ~15Mi DURING a pass and settles after, so the OOM is decided by the in-pass peak rather than the between-tick baseline.
-- **The OTel log queue is eliminated by arithmetic:** `service_kit/otel.py:163` constructs `BatchLogRecordProcessor(OTLPLogExporter())` with no bounds and the pod sets no `OTEL_BLRP_*` (verified in the running pod), so it runs on the SDK defaults — `max_queue_size=2048`. The sweep emits 585 records a tick with large `extra=` payloads, but a bounded queue drops rather than grows, capping this at single-digit MB.
-- *What is left:* Find where the rest lives. The sweep opens 585 datasets a tick (`maintenance-cron` `@every 120s`) and the reconcile pass walks the estate on its own `@every 300s`, so the candidates are per-open allocations Lance does NOT charge to the session, pyarrow/S3 buffers, or retained Python objects in the per-tick result set (`summarize` holds a `DatasetResult` per dataset plus `refusals`, `trashed_datasets`, `index_findings` and `errors` maps). Measure before choosing: the estate has now been wrong about this workload twice from reasoning rather than measurement.
+  **RSS CARRIES ~10Mi OF SAMPLING NOISE and the block count does not**, which is why the conclusion rests on the latter: two independent samplers read tick 3 as 229Mi and 220Mi seconds apart, and an in-pass spot check read 235Mi. So the RSS rise is *tens of Mi* rather than a precise 42. The allocator count has no such spread — **+866 blocks on ~895,000, 0.1%**, against an RSS rise two orders of magnitude larger in relative terms. The session stepped once (4.4 -> 14.6 MB at tick 3, the same step the previous pod made at its tick 3) and accounts for ~10 MB of that; the Python heap accounts for effectively none. So roughly 32Mi of the 42 is outside both: native buffers behind the 585 dataset opens a tick, in Lance or pyarrow, charged to neither the session's caps nor the Python heap.
+- **FIVE CANDIDATE FIXES ARE RULED OUT, none of which would have failed a test or a deploy.** Tick-scoping the session, evicting between ticks and lowering the caps all target a cache measured at **7.1% of its 204.8 MB ceiling** and flat across ticks. Trimming `summarize`'s retained `DatasetResult` set and its four side maps (`refusals`, `trashed_datasets`, `index_findings`, `errors`) targets a Python heap that moves 0.1% while RSS moves 26%. The OTel `BatchLogRecordProcessor` runs on the SDK default `max_queue_size=2048` (no `OTEL_BLRP_*` set in the pod), so a bounded queue drops rather than grows — single-digit MB at 585 records a tick.
+- *What is left:* Find which native allocation retains. The sweep opens 585 datasets a tick at `@every 120s` and the reconcile pass walks the estate at `@every 300s`, so the candidates are pyarrow buffers, the S3 filesystem's own pooling, or Lance handles whose native side outlives the Python object. An allocator-level instrument (jemalloc/malloc stats, or `PYTHONMALLOC` accounting) is the next measurement — `tracemalloc` will NOT see this, for the same reason `python_blocks` does not.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
-- *Evidence:* live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · first tick under the reporting build: `lance_session_bytes=4569792` against `lance_session_cap_bytes=214748364` · `config.py::shared_lance_session` · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
+- *Evidence:* live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
 ## PHASE 1 · CROSS-CUTTING
 
