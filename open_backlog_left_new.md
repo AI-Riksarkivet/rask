@@ -290,6 +290,27 @@ have no `uv.lock` and so cannot be built to emit anything.
   so passing `None` is byte-identical to before — pinned as its own case, and confirmed in-cluster,
   where a full bronze->gold cascade passed against the deployed image (5 legs, 64s). `open_dataset` is
   on every read path, which is why a signature change there was deployed and driven rather than trusted.
+  **THE COMPOSITION SHIPPED AND IS DEPLOYED (`main-92ce156b`, 2026-09-21).**
+  `catalog.services.base_credentials.compose_base_store_params` gives each registered data base its own
+  options: a base with a configured credential REFERENCE gets the material resolved through the Dapr
+  secret store, and one without keeps the estate's. That retires the operator obligation
+  `core/config.py`'s allowlist comment carried — "every base here MUST share the catalog's S3 endpoint
+  + creds" — which was only ever an obligation because the read path could not carry per-base options.
+  **TWO REFUSALS, NOT A FALLBACK, both mutation-checked.** A reference naming a base the write does not
+  register raises, because configuration that does nothing is this row's own failure shape: the write
+  then succeeds on the estate credential and looks correct. A reference that does not RESOLVE raises
+  for the stronger version — falling back would put the caller's bytes in a store under an identity
+  they did not choose and report success.
+  **THE INVARIANT LAYER CAUGHT A DESIGN REGRESSION AND WAS RIGHT.** `tests/unit/test_multibase.py` pins
+  that every base gets an entry; the first implementation made unreferenced bases ABSENT, leaning on
+  pylance's documented fallback. Behaviourally identical today, but it rested this code's correctness
+  on an upstream fallback for no benefit. Fixed in the implementation rather than the test.
+  **Deployed and driven:** a full bronze->gold cascade passed against the image (5 legs, 50s), which is
+  the non-regression proof the write door needs — with no references configured the composed map is
+  exactly today's.
+  **STILL OPEN:** wiring an operator-facing ref map through `table_create` to `_write_blob`, and an
+  in-cluster drive of a base that genuinely needs different credentials — which needs a second store to
+  point at.
   **WHAT REMAINS IS NARROWER THAN THE CLAUSE READS:** the composition itself — `base_store_params` /
   `base_<id>.<key>` on the write door (`dataplane.py:224-228`) and `base_store_params` on the read path
   — plus an in-cluster drive of a table in a base needing different credentials. The mechanism the
