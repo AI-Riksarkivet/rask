@@ -66,6 +66,7 @@ spec:
             - "--port={{ .Values.services.catalog.port }}"
           ports: [{ name: http, containerPort: {{ .Values.services.catalog.port }} }]
           env:
+            {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root "catalog") | nindent 12 }}
             {{- end }}
@@ -501,6 +502,7 @@ spec:
             - "--port={{ .Values.services.lineage.port }}"
           ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
           env:
+            {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root "lineage") | nindent 12 }}
             {{- end }}

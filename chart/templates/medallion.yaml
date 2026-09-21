@@ -61,6 +61,7 @@ spec:
             - "--port={{ $port }}"
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
+            {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root .Values.medallion.producer.daprAppId) | nindent 12 }}
             {{- /* #41. The SAME `auth.audit` key the catalog reads, because this service declares the

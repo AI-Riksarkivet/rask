@@ -103,6 +103,7 @@ spec:
             - "--port={{ $port }}"
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
+            {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
             {{- if include "lance.otelEnabled" $root }}
             {{- include "lance.otelEnv" (list $root .Values.maintenance.daprAppId) | nindent 12 }}
             {{- end }}

@@ -3020,6 +3020,14 @@ cloudnative-pg:
       failurePolicy: Ignore
 
 
+# ---- allocator ------------------------------------------------------------
+# The glibc allocator bound applied to every lakehouse container. See `lance.allocatorEnv` in
+# `_helpers.tpl` for the measurement: glibc sizes its arena cap from the HOST's cores (64 here) while the
+# cgroup grants one CPU, and the four lakehouse pods held 34-59 secondary arenas of 64MB each. Measured
+# in-image (Debian glibc 2.41): unset reserves 65 arenas, `2` reserves 1.
+allocator:
+  arenaMax: 2
+
 # ---- observability stack ---------------------------------------------------
 # OTel-first: a single OpenTelemetry Collector is the telemetry hub, GreptimeDB the store, Perses the
 # dashboards. GreptimeDB is ONE unified store for metrics+logs+traces, backed by the in-cluster S3. The

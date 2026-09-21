@@ -1399,3 +1399,26 @@ Usage: {{- include "lance.appTokenEnv" (list $root "catalog") | nindent 12 }}
     secretKeyRef: { name: {{ $root.Release.Name }}-dapr-app-token, key: token }
 {{- end -}}
 {{- end -}}
+
+{{/*
+The glibc allocator bound every lakehouse container carries.
+
+WHY IT IS NOT A DEFAULT WORTH INHERITING: glibc sizes its arena cap from `sysconf(_SC_NPROCESSORS_ONLN)`
+— the HOST's core count — and a cgroup CPU *quota* does not reduce visible CPUs. Measured 2026-09-21 in
+these containers, `nproc` reads 64 while `cpu.max` reads `100000 100000` (one CPU), and the four
+lakehouse pods held 34/41/42/59 secondary arenas of 64MB each. Each arena keeps its own free lists and
+is trimmed independently, so RSS settles at the SUM of per-arena high-water marks and climbs until every
+arena has seen its worst case — which is how `rask-maintenance` reached its 512Mi limit with a flat
+Python heap and a Lance session at 7% of its cap.
+
+MEASURED, NOT ASSUMED, in the image these pods run (Debian glibc 2.41): 64 threads forcing arena growth
+reserved 65 arenas unset and 1 at `MALLOC_ARENA_MAX=2`. Two rather than one because a single arena
+serialises every allocation in a 100+ thread process on one lock.
+
+NOT A SECRET: a libc tunable with no confidentiality, read by glibc at startup and by nothing else.
+Pinned by `tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py`.
+*/}}
+{{- define "lance.allocatorEnv" -}}
+{{- $root := index . 0 -}}
+- { name: MALLOC_ARENA_MAX, value: {{ $root.Values.allocator.arenaMax | quote }} }
+{{- end -}}
