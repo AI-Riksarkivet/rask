@@ -90,16 +90,16 @@ def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     return asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), {}))
 
 
-def _drive_capturing(uri: str) -> _Repo:
-    """Drive a drain and hand back the REPOSITORY, so a test can assert what was written to it.
+def _drive_capturing(uri: str) -> tuple[_Repo, Any]:
+    """Drive a drain and hand back the REPOSITORY and the outcome, so a test can assert both.
 
-    Separate from `_drive` rather than changing its return: every other test here reads the outcome
-    counters, and widening the shared helper to a tuple would edit them all to assert nothing new.
+    Separate from `_drive` rather than changing its return: every other test here reads only the
+    counters, and widening the shared helper would edit them all to assert nothing new.
     """
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
     repo = _Repo()
-    asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), _settings(uri), {}))
-    return repo
+    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), _settings(uri), {}))
+    return repo, outcome
 
 
 def test_a_refused_event_counts_as_REFUSED_not_stranded(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,11 +142,21 @@ def test_the_refused_event_is_RECORDED_BEFORE_IT_IS_RETIRED(tmp_path: Any, monke
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="e2e", run="bronze$refused", token="refused-probe")
 
-    repo = _drive_capturing(uri)
+    repo, first = _drive_capturing(uri)
 
     assert repo.refusals, "the refusal was not recorded, so retiring the object would be data loss"
     assert repo.refusals[0]["event_json"], "the record kept no event; a refusal with no payload is loss, not a loss RECORD"
     assert not list(outbox.list_events(uri, {})), "the object survived a settled refusal, so it will be re-refused every tick forever"
+
+    # AND THE TICK SAYS SO ([[LH-182]]). `refused` counts refusals HANDLED and reads identically whether
+    # the object was retired or re-refused for the hundredth time — measured on the deployed estate,
+    # `refused=7` before the drain existed and `refused=7` after it, with no way to tell them apart.
+    assert first.recorded == first.refused == 1, f"the tick reported recorded={first.recorded} against refused={first.refused}"
+
+    # THE SECOND TICK IS THE PROOF THE FIRST ONE CANNOT GIVE: a re-refusing loop would report the same
+    # numbers again forever, and a closed loop finds nothing left to refuse.
+    _, second = _drive_capturing(uri)
+    assert second.refused == second.recorded == 0, f"a second tick still saw refused={second.refused}; the object was not retired"
 
 
 def test_a_TRANSIENT_failure_still_strands(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -80,6 +80,10 @@ class SweepReport(BaseModel):
     outbox_drained: int = 0
     outbox_stranded: int = 0
     outbox_refused: int = 0
+    #: Refusals whose verdict reached Postgres ([[LH-182]]). Beside `outbox_refused` because the pair is
+    #: what makes the drain verifiable: equal means the loop closes, `0` against a non-zero refusal count
+    #: means it does not, and `outbox_refused` alone cannot distinguish them.
+    outbox_refusals_recorded: int = 0
     pruned_runs: int = 0
     pruned_events: int = 0
 
@@ -109,6 +113,18 @@ class DrainOutcome(BaseModel):
     drained: int = 0
     stranded: int = 0
     refused: int = 0
+    #: Refusals whose verdict reached Postgres, and whose object was therefore safe to drop.
+    #:
+    #: [[LH-182]] `refused` COUNTS REFUSALS HANDLED, NOT OBJECTS REMAINING, so it reads identically
+    #: whether a tick retired seven staged events or re-refused the same seven for the hundredth time.
+    #: Measured 2026-09-21 on the deployed estate, that is exactly what happened: the tick logged
+    #: `refused=7` before the drain existed and `refused=7` after it, and no amount of log-reading
+    #: could tell the two apart. A number that answers the same thing in opposite states is the shape
+    #: `compaction_mode` already cost this estate once.
+    #:
+    #: It is the TERMINAL action that is worth counting: `recorded == refused` means the loop is
+    #: closing, and `recorded == 0` with `refused > 0` means it is not.
+    recorded: int = 0
 
 
 def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | None = None, graph: set[str] | None = None) -> SweepReport:
@@ -247,6 +263,7 @@ def log_sweep(report: SweepReport) -> None:
             "outbox_drained": report.outbox_drained,
             "outbox_stranded": report.outbox_stranded,
             "outbox_refused": report.outbox_refused,
+            "outbox_refusals_recorded": report.outbox_refusals_recorded,
             "pruned_runs": report.pruned_runs,
             "pruned_events": report.pruned_events,
         },
@@ -439,6 +456,7 @@ async def _on_cron(
         # here rather than inline so the two directions cannot be asked of two different answers.
         report = await _swept_report(request, repository, settings, opts)
         report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
+        report.outbox_refusals_recorded = outcome.recorded
         report.pruned_runs = await _prune_old_runs(repository, settings)
         report.pruned_events = await _prune_old_events(repository, settings)
     record_sweep(report)
@@ -493,7 +511,7 @@ async def _drain_outbox(
 
     cap = settings.outbox_drain_limit or None  # 0 => unbounded (the pre-P1.2 behavior)
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.outbox_uri, opts, limit=cap)))
-    drained = stranded = refused = 0
+    drained = stranded = refused = recorded = 0
     for key, event_json in staged:
         try:
             event = RunEvent.model_validate_json(event_json)
@@ -616,6 +634,7 @@ async def _drain_outbox(
             # `s3:DeleteObject` on its own outbox (`DrainItsOwnOutboxAndNothingElse`). Building it anyway
             # broke the drain here — the AccessDenied is the tick's error boundary, so it aborted the
             # whole pass and the sweep then reported `refused=0`, a zero meaning "did not look".
+            recorded += 1
             await repository.record_refusal(
                 outbox_key=key,
                 run_id=event.run.run_id,
@@ -643,7 +662,7 @@ async def _drain_outbox(
     # operator greps before any dashboard exists, so it carries what the outcome carries.
     if drained or stranded or refused:
         log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded, "refused": refused})
-    return DrainOutcome(drained=drained, stranded=stranded, refused=refused)
+    return DrainOutcome(drained=drained, stranded=stranded, refused=refused, recorded=recorded)
 
 
 async def _ack_binding() -> dict[str, str]:

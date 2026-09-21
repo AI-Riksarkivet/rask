@@ -118,3 +118,28 @@ def test_the_drain_records_before_it_drops() -> None:
     assert branch.index("record_refusal") < branch.index("drop_event"), (
         "the object is dropped BEFORE the refusal is recorded; a crash between them loses the provenance"
     )
+
+
+def test_the_tick_reports_how_many_refusals_it_RECORDED() -> None:
+    """`refused` cannot tell a retired refusal from a re-refused one, so it cannot confirm this fix.
+
+    MEASURED 2026-09-21, trying to verify the drain on the deployed estate: the tick logs
+    `drained=0 stranded=0 refused=7` both when it re-refuses seven objects forever AND when it records
+    and retires them, because the number counts refusals HANDLED, not objects remaining. Two opposite
+    states, one reading — the same shape as `compaction_mode` in `docs/DECISIONS.md`, which counted a
+    default as an outcome.
+
+    The reads that WOULD settle it are unreachable from outside the service: the refusals table needs
+    the database credential the pod resolves from its Dapr secret store, and `outbox.list_events` needs
+    the storage options it vends per run. So the tick has to say it itself.
+
+    `recorded` is the honest number because it counts the terminal action: a refusal that reached
+    Postgres and whose object was therefore safe to drop. `recorded == refused` means the loop is
+    closing; `recorded == 0` with `refused > 0` means it is not, and no log-reading can currently tell
+    those apart.
+    """
+    from lineage.api import reconcile_cron
+
+    outcome = reconcile_cron.DrainOutcome()
+
+    assert hasattr(outcome, "recorded"), "the tick cannot say how many refusals it retired, so the drain is unverifiable from its own logs"

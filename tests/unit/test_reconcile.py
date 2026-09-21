@@ -527,6 +527,11 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         "outbox_stranded": 0,
         # [[LH-004]] A governance refusal is not a failed tick, so it is reported apart from `stranded`.
         "outbox_refused": 0,
+        # [[LH-182]] Beside `outbox_refused` because the PAIR is the signal: `refused` counts refusals
+        # handled and reads the same whether objects were retired or re-refused forever, so only
+        # `recorded` says the loop closed. Asserted in the exact body because that is this route's
+        # contract — a field that appears without the contract moving is a silent API change.
+        "outbox_refusals_recorded": 0,
         "backfilled": [],
         "storage_loss": [],
         # `ungoverned` is on the same contract as its two neighbours, and for the reason they establish:
