@@ -484,7 +484,21 @@ have no `uv.lock` and so cannot be built to emit anything.
 **LH-183 · The maintenance worker is OOMKilled and the Lance session cache is NOT why — measured at 2.1% of its cap**
 `maintenance` · **HIGH**
 - **THE CACHE IS ELIMINATED, and that is this row's result so far.** The obvious suspect was the Lance session: `config.py::shared_lance_session` says its caps are LRU SOFT bounds ("the size the cache grows toward, not a ceiling it stops at"), and the pod was OOMKilled six times (exit 137) against a 512Mi limit. Nothing reported the occupancy, so the argument ran twice on inference. It is reported now, and measured on the deployed estate 2026-09-21 immediately after a full tick: **`datasets=585 refused=271 lance_session_bytes=4,569,792 lance_session_cap_bytes=214,748,364`** — the cache holds **4.4 MB against a 204.8 MB cap, 2.1% full**, while pod RSS sat at **191Mi**. Capping it harder, scoping it per tick or evicting between ticks would each reclaim approximately nothing, and would cost the cache-hit rate the session exists for.
-- *What is left:* Find where the other ~185 MB lives. The sweep opens 585 datasets a tick (`maintenance-cron` `@every 120s`) and the reconcile pass walks the estate on its own `@every 300s`, so the candidates are per-open allocations Lance does NOT charge to the session, pyarrow/S3 buffers, or retained Python objects in the per-tick result set (`summarize` holds a `DatasetResult` per dataset plus `refusals`, `trashed_datasets`, `index_findings` and `errors` maps). Measure before choosing: the estate has now been wrong about this workload twice from reasoning rather than measurement.
+- **MEASURED PER TICK on the deployed estate 2026-09-21**, all sampled at the same point in each cycle (ad-hoc spot checks disagreed with these by up to 15Mi because they landed mid-pass, so only the per-tick series is used):
+
+  | tick | RSS | session |
+  | --- | --- | --- |
+  | 1 | 192Mi | 4.4 MB |
+  | 2 | 201Mi | 4.4 MB |
+  | 3 | 218Mi | 14.6 MB |
+  | 4 | 223Mi | 14.6 MB |
+  | 5 | 243Mi | 14.6 MB |
+
+  **The session held at 14.6 MB for three consecutive ticks while RSS added 42Mi**, which is the cleanest separation the data gives: the cache is stable and the process is not. RSS is monotonic across all five (+51Mi, mean +12.75Mi/tick, deltas swinging 5-20), so a working set that plateaus is hard to sustain — a working set would have levelled by tick 5. Something RETAINS across ticks.
+
+  Two behaviours, not one trend. The session is a STEP (4.4 -> 14.6 MB once, then held across tick 4 while RSS rose a further 5Mi), so the growth and the cache are not the same thing — and at 14.6 MB against a 204.8 MB cap the cache is at **7.1%**, which is why tightening the cap remains the one fix already ruled out. RSS also excursions ~15Mi DURING a pass and settles after, so the OOM is decided by the in-pass peak rather than the between-tick baseline.
+- **The OTel log queue is eliminated by arithmetic:** `service_kit/otel.py:163` constructs `BatchLogRecordProcessor(OTLPLogExporter())` with no bounds and the pod sets no `OTEL_BLRP_*` (verified in the running pod), so it runs on the SDK defaults — `max_queue_size=2048`. The sweep emits 585 records a tick with large `extra=` payloads, but a bounded queue drops rather than grows, capping this at single-digit MB.
+- *What is left:* Find where the rest lives. The sweep opens 585 datasets a tick (`maintenance-cron` `@every 120s`) and the reconcile pass walks the estate on its own `@every 300s`, so the candidates are per-open allocations Lance does NOT charge to the session, pyarrow/S3 buffers, or retained Python objects in the per-tick result set (`summarize` holds a `DatasetResult` per dataset plus `refusals`, `trashed_datasets`, `index_findings` and `errors` maps). Measure before choosing: the estate has now been wrong about this workload twice from reasoning rather than measurement.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · first tick under the reporting build: `lance_session_bytes=4569792` against `lance_session_cap_bytes=214748364` · `config.py::shared_lance_session` · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
