@@ -26,7 +26,7 @@ import pyarrow.fs as pafs
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
-from maintenance.core.config import MaintenanceSettings, shared_lance_session
+from maintenance.core.config import MaintenanceSettings, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter, declared_table_id, table_id_from_uri
 from maintenance.core.metrics import (
     record_dataset_swept,
@@ -43,6 +43,7 @@ from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import base_refs, maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.objectfs import s3_filesystem
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 
@@ -1182,4 +1183,36 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # in one warning. The estate paid for the diagnosis every 120s and never received it.
         "index_findings": {r.uri: r.index_findings for r in results if r.index_findings},
         "errors": {r.uri: r.error for r in results if r.error},
+        # WHAT THIS TICK IS HOLDING, beside what it reclaimed — the only number the OOM turns on and
+        # the one the summary never carried. `shared_lance_session`'s caps are LRU SOFT bounds ("the
+        # size the cache grows toward, not a ceiling it stops at"), so the estate needs the occupancy
+        # AND its denominator to tell "the cache is the problem" from "the cache is fine and something
+        # else is resident". Measured in the pod 2026-09-21: cgroup 512 MB, caps clamped from 128+256
+        # to 68+136 MB — a denominator no values file carries, because `affordable_cache_bytes`
+        # derives it from the cgroup at runtime.
+        **_session_occupancy(),
     }
+
+
+def _session_occupancy() -> dict[str, int]:
+    """The shared Lance session's current size and the cap it is growing toward, in bytes.
+
+    NEVER RAISES, and that is deliberate: this is diagnostics riding the summary of a cron tick that
+    reclaims disk, so a pylance version whose `Session` drops `size_bytes` must cost the estate a
+    metric rather than the sweep. Answering -1 rather than omitting the key keeps the field's presence
+    a fixed contract — a reader can tell "unavailable" from "nobody reported it", which a missing key
+    cannot.
+
+    The session is process-wide (`lance_session` is `@cache`d on the two cap ints, so equal caps share
+    one object), so one number describes the whole process rather than this call site.
+    """
+    settings = get_settings()
+    metadata, index = affordable_cache_bytes(settings.lance_metadata_cache_mb << 20, settings.lance_index_cache_mb << 20)
+    try:
+        # CALLED, not read: `Session.size_bytes` is a method_descriptor on pylance 11.0.0, so reading it
+        # yields a bound method and `int()` of that raises — which the guard below would then report as
+        # -1 forever, a diagnostic that is always "unavailable" and therefore worse than none.
+        size = int(shared_lance_session().size_bytes())
+    except (AttributeError, TypeError, ValueError):  # pragma: no cover - a pylance that moved the accessor
+        size = -1
+    return {"lance_session_bytes": size, "lance_session_cap_bytes": metadata + index}
