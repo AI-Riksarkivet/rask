@@ -143,3 +143,38 @@ def test_no_row_header_is_SWALLOWED_by_the_line_above_it() -> None:
     ]
 
     assert swallowed == [], "these row headers share a line with other text, so no parser here can see them:\n  " + "\n  ".join(swallowed)
+
+
+def test_every_row_states_how_it_closes_and_what_it_rests_on() -> None:
+    """A row with no `Closes when` is one nobody can ever verify as done.
+
+    FOUND 2026-09-21 AND THIS IS WHY IT IS A GATE. `XC-039` carried none, and the absence was not
+    merely untidy — it actively misled. An `awk '/XC-039/,/Closes when/'` range run against it does not
+    match nothing; a range whose terminator is missing runs to the NEXT occurrence, so it printed
+    `XC-042`'s closing bar as though it were XC-039's. Two rows then read as identical, and the edit
+    built on that reading overwrote the wrong row. The tool answered honestly; the attribution was the
+    error, and nothing in the output said which row the line came from.
+
+    `Evidence` is checked in the same pass for the same reason one level down: a claim with no citation
+    cannot be re-measured, and this register's standing rule is that a verdict is not evidence it is
+    still true. Both fields are what make a row falsifiable by the next reader.
+
+    Bounded by the NEXT ROW OR THE NEXT `## ` HEADING, whichever comes first — the same reading
+    `_walk` and `backlog_close.py` use. Cutting only to the next row would let a section's last item
+    absorb everything after it and pass on a neighbour's fields, which is the very confusion this
+    test exists to catch.
+    """
+    text = BACKLOG.read_text()
+    starts = [(m.group(1), m.start()) for m in re.finditer(r"^\*\*([A-Z]+-\d+) · ", text, re.MULTILINE)]
+    headings = [m.start() for m in re.finditer(r"^## ", text, re.MULTILINE)]
+
+    missing: dict[str, list[str]] = {"Closes when": [], "Evidence": []}
+    for index, (row_id, start) in enumerate(starts):
+        end = starts[index + 1][1] if index + 1 < len(starts) else len(text)
+        body = text[start : min(end, next((h for h in headings if h > start), len(text)))]
+        for field in missing:
+            if f"- *{field}:*" not in body:
+                missing[field].append(row_id)
+
+    assert not missing["Closes when"], f"rows with no closing bar, so nothing can retire them: {missing['Closes when']}"
+    assert not missing["Evidence"], f"rows with no evidence, so nothing can re-measure them: {missing['Evidence']}"
