@@ -493,8 +493,12 @@ have no `uv.lock` and so cannot be built to emit anything.
   | 3 | 218Mi | 14.6 MB |
   | 4 | 223Mi | 14.6 MB |
   | 5 | 243Mi | 14.6 MB |
+  | 6 | 242Mi | 14.6 MB |
+  | 7 | 251Mi | 14.6 MB |
 
-  **The session held at 14.6 MB for three consecutive ticks while RSS added 42Mi**, which is the cleanest separation the data gives: the cache is stable and the process is not. RSS is monotonic across all five (+51Mi, mean +12.75Mi/tick, deltas swinging 5-20), so a working set that plateaus is hard to sustain — a working set would have levelled by tick 5. Something RETAINS across ticks.
+  **The session held at 14.6 MB for FIVE consecutive ticks while RSS added 33Mi**, which is the cleanest separation the data gives: the cache is stable and the process is not. RSS is +59Mi over seven ticks with deltas of +9/+17/+5/+20/-1/+9 — **tick 6 fell by 1Mi and tick 7 resumed the climb**, so the one non-increase is a pause and not a plateau. That distinction is recorded because a series truncated at tick 6 reads as levelling and would retire this row on a single sample. A working set would have settled by now; something RETAINS across ticks.
+
+  *No time-to-OOM is projected.* The deltas span -1 to +20, so the rate is not stable enough to extrapolate, and this register was already wrong once today from reading a trend out of noise.
 
   Two behaviours, not one trend. The session is a STEP (4.4 -> 14.6 MB once, then held across tick 4 while RSS rose a further 5Mi), so the growth and the cache are not the same thing — and at 14.6 MB against a 204.8 MB cap the cache is at **7.1%**, which is why tightening the cap remains the one fix already ruled out. RSS also excursions ~15Mi DURING a pass and settles after, so the OOM is decided by the in-pass peak rather than the between-tick baseline.
 - **The OTel log queue is eliminated by arithmetic:** `service_kit/otel.py:163` constructs `BatchLogRecordProcessor(OTLPLogExporter())` with no bounds and the pod sets no `OTEL_BLRP_*` (verified in the running pod), so it runs on the SDK defaults — `max_queue_size=2048`. The sweep emits 585 records a tick with large `extra=` payloads, but a bounded queue drops rather than grows, capping this at single-digit MB.
