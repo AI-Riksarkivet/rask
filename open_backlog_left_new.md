@@ -142,12 +142,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **103 are blocked on a decision** and **94 can be picked up today**.
+**198 open items**, of which **104 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 3 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 3 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -561,6 +561,18 @@ have no `uv.lock` and so cannot be built to emit anything.
   `lance-rest-catalog` image with maintenance and nine other deployments.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
+
+**LH-184 · A runner-based stage lane's job-side provenance is REFUSED 403 — the write lands, the lineage does not**
+`lineage, medallion` · **HIGH** · OPEN
+- **MEASURED LIVE 2026-09-21, driving the real lane.** `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane` ran the GPU-free dummy lane against the deployed estate. The job executed, wrote **64 rows** to `acme-silver$dummy` and exited SUCCEEDED; its OpenLineage POST was refused. The lineage service's own log names the reason exactly: `ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']` -> `POST /api/v1/lineage 403 Forbidden`, twice (first run and replay). Three of the suite's seven legs fail on it, including `test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service` ("the run emitted nothing readable: absent from 200 events").
+- **THIS IS DONE-CRITERION 1 FAILING IN THE SHAPE THAT IS HARDEST TO SEE.** The bytes are governed and the provenance is not, so the estate holds a dataset whose run is absent from the graph while every component reports success — the job SUCCEEDED, the write committed, and the only record of the loss is one line in the lineage pod. `ClientEmitter` catches transport errors, so from the job's side this is indistinguishable from having emitted.
+- **THE GATE IS BEHAVING CORRECTLY AND THAT IS WHY THIS IS A POLICY QUESTION, NOT A BUG.** `fga_deps.relations_for_operation` keys the required rung on the OPERATION, never the caller (owner ruling 2026-09-08): a data write demands `can_write_data` on the outputs whoever emits it. The stage service subjects hold no such tuple. Granting them one is the same shape as the ruling that deliberately withholds `can_write_data` from the maintenance sweep and gives it `can_maintain` instead — so whether a stage runner's subject may claim the data-write rung is the owner's call, and the alternative (a distinct rung for a lane writing its own declared output) is a model change rather than a tuple.
+- **THE PRODUCTION BLAST RADIUS IS BOUNDED TODAY AND GROWS WITH THE NEXT RUNNER.** `scripts/ray_stage_job.py` — the default stage entrypoint — emits no OpenLineage at all (no `lineage_kit` import, no `build_emitter`); it writes the `lineage` COLUMN from `RASK_LINEAGE_DOCUMENT`, and the stage RUNNER emits the run's events through the durable Dapr outbox. So the deployed cascade does not hit this. A RUNNER-based lane does: `runners/dummy/src/dummy_runner/lineage.py` and `runners/htr/src/runner/lineage.py` both call `build_emitter()`, and a declared transform can point the entrypoint at either. The estate is one declaration away from silently ungoverned provenance.
+- **NOT CAUSED BY [[LH-159]], checked before filing.** The dummy suite hand-builds its own `env_vars` and submits via `ray job submit` on the head (`_submit_on_head`), bypassing `submit_stage_job` entirely, and the refusal is an authorization decision about a tuple rather than about which env key carried the identity. It authenticated fine — a credential mismatch answers 401 here, not 403.
+- **blocked:** an owner ruling — may a stage lane's service subject hold `can_write_data` on the tables its own declared transform writes, or does a lane writing its declared output need its own rung in `model.fga` (the `can_maintain` precedent)? Granting the existing rung is a privilege decision; adding a rung is a model change. Neither is mine to pick.
+- *What is left:* After the ruling: either issue the tuple where a transform declares its output table, or add the rung and teach `relations_for_operation` to accept it for a declared-lane write. Then re-run `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane` — three legs are RED today and go green on the fix, so this needs no new test to prove it. Independently of the ruling, the SILENCE is its own defect and worth closing first: a refused ingest is invisible to everything but the lineage pod's log, and the reconciler does not count it.
+- *Closes when:* The dummy lane's run reads back from the lineage service after writing, and a refused ingest is counted somewhere a person looks rather than only in a log line.
+- *Evidence:* live 2026-09-21 — `ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']`, `POST /api/v1/lineage 403`, x2 · `tests/e2e-py/test_dummy_lane_e2e.py` 3 failed / 4 passed against the deployed release · `services/lineage/src/lineage/api/fga_deps.py:50-73 (_MAINTENANCE_OPERATIONS, _WRITE_RELATIONS, the 2026-09-08 rung ruling)` · `scripts/ray_stage_job.py` (zero `build_emitter`/`lineage_kit` references) vs `runners/dummy/src/dummy_runner/lineage.py:35,148` · `tests/e2e-py/test_dummy_lane_e2e.py:194 (_submit_on_head — this suite does not use the medallion submitter)`
 
 ## PHASE 1 · CROSS-CUTTING
 
