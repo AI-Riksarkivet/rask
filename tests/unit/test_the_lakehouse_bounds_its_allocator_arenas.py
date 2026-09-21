@@ -66,8 +66,40 @@ LAKEHOUSE = frozenset({"catalog", "lineage", "medallion-producer", "maintenance"
 MAX_ARENAS = 4
 
 
+#: The dedicated maintenance workers are OFF by default, so the default render does not contain them.
+#: They run the SAME image and consume the same `maintenance.work.v1` queue as competing consumers —
+#: and unlike the planner they are the half that SCALES (`replicas: 2`), so they carry the arena cost
+#: per replica. Their template duplicates the planner's env block rather than sharing it, which is
+#: exactly how the two drift.
+WORKERS_ON: tuple[str, ...] = (
+    *DEFAULT_ARGS,
+    "--set", "maintenance.dedicatedWorkers.enabled=true",
+    "--set-string", "maintenance.workTopic=maintenance.work.v1",
+)  # fmt: skip
+
+
 def _lakehouse_containers() -> list[tuple[str, str, dict]]:
     return [row for row in containers(render(*DEFAULT_ARGS)) if row[1] in LAKEHOUSE]
+
+
+def test_the_dedicated_workers_carry_the_bound_too() -> None:
+    """The planner and its workers are two templates, so a bound added to one can miss the other.
+
+    FOUND 2026-09-21, immediately after shipping the bound to the planner: `maintenance-worker.yaml`
+    duplicates the planner's env block instead of sharing it, so the fix landed on one of the pair and
+    the default render could not see the gap — the workers are gated off by `dedicatedWorkers.enabled`
+    and simply were not there to check. Its own header claims the two are "rendered from the SAME block
+    ... so the two cannot drift", and they are not; that is the drift this leg exists to catch.
+
+    The worker's container is ALSO named `maintenance`, so the parametrized assertion above already
+    covers it by name once a render contains it. What was missing was the render, not the rule.
+    """
+    rows = [(where, env_of(c)) for where, name, c in containers(render(*WORKERS_ON)) if name in LAKEHOUSE]
+    workers = [(where, env) for where, env in rows if "maintenance-worker" in where]
+
+    assert workers, "the workers-on overlay rendered no maintenance-worker; this leg would check nothing"
+    for where, env in workers:
+        assert env.get("MALLOC_ARENA_MAX", "").isdigit(), f"{where} carries no arena bound, and it is the half that scales"
 
 
 def test_the_render_contains_the_lakehouse_at_all() -> None:
