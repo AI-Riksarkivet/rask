@@ -88,6 +88,12 @@ refuses.* The change is one line — skip the refusal when
 `containment_of(uri, root) == "branch"` — and the EQUALITY refusals are untouched by it, which is the
 half that must keep refusing: an external shallow clone in another dataset is invisible to Lance, so
 only the estate-wide pre-pass can see it.
+**RE-MEASURED LIVE 2026-09-21, so the decision carries a current number rather than a remembered
+one:** one sweep tick over the deployed estate reports `refused=260 datasets=585` with
+`by_gate={'protected_base': 120, 'manifest_flags': 129, 'invalid_ref': 11}`. So **44% of the estate is
+refused**, and `protected_base` — the half this decision would release — is **120 datasets, 21% of
+everything the sweep walks**. The other 129 are `manifest_flags` (shallow clone / multi-base) and stay
+refused whatever is decided here; they are the equality half, not the branch half.
 Safety is measured three ways and pinned by `tests/unit/test_base_refs_guard.py` (15 pass): Lance's
 `cleanup_old_versions` IS branch-aware (3 files -> 4 -> 1 without a branch; 3 -> 4 -> 4 with); a branch
 still opens from a COLD interpreter after its parent is compacted AND reclaimed; and in the PRODUCTION
