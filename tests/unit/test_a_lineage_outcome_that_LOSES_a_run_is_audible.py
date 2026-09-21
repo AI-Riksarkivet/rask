@@ -33,6 +33,10 @@ REPO = Path(__file__).resolve().parents[2]
 _RULES = REPO / "chart/alerting/rules.yml"
 _CONSUMER = REPO / "services/lineage/src/lineage/services/consumer.py"
 _DLQ = REPO / "services/lineage/src/lineage/api/dapr.py"
+#: The HTTP ingest door — the THIRD emission site, and the only one a sidecar-less producer reaches
+#: (the Ray lane, every runner, any external OpenLineage producer). Reading only the two Dapr sites
+#: left this gate blind to whether that door classified its refusals at all; it did not ([[LH-184]]).
+_HTTP_INGEST = REPO / "services/lineage/src/lineage/api/v1/endpoints/ingest.py"
 
 #: Outcomes that are NOT a loss, each with the reason it needs no rule of its own.
 _NOT_A_LOSS: dict[Outcome, str] = {
@@ -57,7 +61,7 @@ def _emitted_outcomes() -> set[str]:
     would miss the else-branch and report a live outcome as dead — a gate wrong in the direction that
     causes work rather than the one that hides a hole, but wrong.
     """
-    source = _CONSUMER.read_text() + _DLQ.read_text()
+    source = _CONSUMER.read_text() + _DLQ.read_text() + _HTTP_INGEST.read_text()
     return {Outcome[name].value for name in re.findall(r"\bOutcome\.([A-Z_]+)\b", source) if name in Outcome.__members__}
 
 
