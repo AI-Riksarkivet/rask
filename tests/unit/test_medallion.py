@@ -711,7 +711,13 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
     # not exist, and a colliding name must not CREATE it either.
     assert "S3_SECRET" not in env, "a lane parameter smuggled a credential-shaped key into the submission"
     assert env["RASK_LINEAGE_DOCUMENT"] == "{}", "a lane parameter overwrote the run's provenance document"
-    assert env["OTEL_SERVICE_NAME"] != "spoofed"
+    # `.get`, for the same reason the S3 assertion above is a membership test ([[XC-066]]): an OTLP name
+    # this pod does not hold is now OMITTED rather than forwarded blank, because on Ray an empty value
+    # OVERRIDES the target pod's own configuration instead of deferring to it. Absent satisfies this
+    # invariant more strongly than present-and-different — the lane's value did not create the key at
+    # all — and the protection is unchanged either way: it is the `RASK_PARAM_` prefix below, applied at
+    # the submit, that makes the platform's own names unreachable by construction.
+    assert env.get("OTEL_SERVICE_NAME") != "spoofed"
     assert env["RASK_PARAM_S3_SECRET"] == "stolen"
 
 

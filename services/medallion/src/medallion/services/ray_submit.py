@@ -24,6 +24,7 @@ import asyncio
 import logging
 import os
 from contextlib import suppress
+from typing import Final
 
 import httpx
 
@@ -114,6 +115,37 @@ def stage_submission_id(stage: str, token: str | None, from_uri: str, to_uri: st
     extraction exists to prevent, reintroduced through the new axis.
     """
     return rk.submission_id(stage, token, work=f"{from_uri}\x00{to_uri}", code=code)
+
+
+#: The OTLP names this lane forwards from its own process into a job's `runtime_env`.
+#: `TRACEPARENT`/`TRACESTATE` are deliberately absent: they are the active span's business and
+#: `rk.trace_env()` owns them.
+_OTLP_NAMES: Final = (
+    "OTEL_EXPORTER_OTLP_ENDPOINT",
+    "OTEL_EXPORTER_OTLP_PROTOCOL",
+    "OTEL_EXPORTER_OTLP_HEADERS",
+    # Spans ride GreptimeDB's trace pipeline — the chart sets a traces-specific header
+    # (x-greptime-pipeline-name) the generic headers above do not carry.
+    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+    "OTEL_SERVICE_NAME",
+    "OTEL_RESOURCE_ATTRIBUTES",
+)
+
+
+def otlp_env() -> dict[str, str]:
+    """This pod's OTLP configuration, with UNSET names omitted rather than blanked.
+
+    AN EMPTY VALUE IS NOT AN ABSENCE HERE, and this file already records why for a different pair of
+    keys: Ray merges `runtime_env` OVER the process env, so a key sent here BEATS the pod's. Forwarding
+    `OTEL_EXPORTER_OTLP_ENDPOINT=""` therefore makes this submitter the OWNER of that key and disables
+    tracing on a Ray cluster that has its own working configuration. Omitting it defers instead.
+
+    The job's span belongs to the same logical service as the stage transform, which is why the service
+    name is forwarded at all rather than left to the Ray pod.
+
+    Read per call, never captured at import: a value snapshotted at module load is as old as the worker.
+    """
+    return {name: value for name in _OTLP_NAMES if (value := os.environ.get(name, ""))}
 
 
 async def submit_stage_job(
@@ -225,15 +257,9 @@ async def submit_stage_job(
         # Forward this pod's OTLP config (the train path below already does) so the job can export the
         # span it parents on the handed-over trace context. The service name is the stage runner's own — the
         # job executes that stage runner's stage transform, so its span belongs to the same logical service.
-        # Empty endpoint (observability off) → the job runs untraced.
-        "OTEL_EXPORTER_OTLP_ENDPOINT": os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-        "OTEL_EXPORTER_OTLP_PROTOCOL": os.environ.get("OTEL_EXPORTER_OTLP_PROTOCOL", ""),
-        "OTEL_EXPORTER_OTLP_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_HEADERS", ""),
-        # Spans ride GreptimeDB's trace pipeline — the chart sets a traces-specific header
-        # (x-greptime-pipeline-name) the generic headers above don't carry.
-        "OTEL_EXPORTER_OTLP_TRACES_HEADERS": os.environ.get("OTEL_EXPORTER_OTLP_TRACES_HEADERS", ""),
-        "OTEL_SERVICE_NAME": os.environ.get("OTEL_SERVICE_NAME", ""),
-        "OTEL_RESOURCE_ATTRIBUTES": os.environ.get("OTEL_RESOURCE_ATTRIBUTES", ""),
+        # Unset names are OMITTED — see `otlp_env`. Empty endpoint (observability off on this lane)
+        # leaves the job to its own pod's configuration rather than forcing it untraced.
+        **otlp_env(),
         # Trace continuity (prod-readiness P3): the stage runner's active span rides the runtime_env as
         # TRACEPARENT, and the job starts its root span as a child of it — the cascade's distributed
         # trace no longer goes dark at `ray job submit`. Empty when no span is active.
