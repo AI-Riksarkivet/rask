@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **103 are blocked on a decision** and **97 can be picked up today**.
+**199 open items**, of which **103 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -793,12 +793,6 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *Closes when:* docs/DECISIONS.md and chart/values.yaml both state the topology.
 - *Evidence:* `grep -n -i greptime docs/DECISIONS.md — none of the 8 hits is a sharing ruling` · `grep -n -i 'per-workload|one shared' chart/values.yaml — no observability match`
 
-
-**XC-054 · Operator-facing reference prose lives inside chart templates, and Helm stores raw template bytes in EVERY revision — the release Secret is 6.8 KB from a ceiling it has already hit once**
-`chart` · **MED**
-- *What is left:* Helm persists the rendered chart's raw template bytes into the release Secret for every revision, so a paragraph of operator guidance inside a template is paid for once per revision and never read from there. The estate has already hit the 1 MiB etcd object ceiling once. Move operator reference prose to `chart/README.md` / `docs/`, keeping only the rationale a template's own reader needs.
-- *Closes when:* The release Secret's size is measured well clear of the ceiling and a gate refuses a template that regrows past a stated budget.
-- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream keeps reference prose out of the packaged chart for exactly this reason · measured: rask's live release Secret 6.8 KB below 1 MiB
 
 **XC-055 · The chart version is inert: every release revision reads `rask-0.3.0`, so no revision can be identified or rolled back by what it deployed**
 `chart, ci` · **MED**
