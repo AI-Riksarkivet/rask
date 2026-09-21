@@ -142,13 +142,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **103 are blocked on a decision** and **98 can be picked up today**.
+**200 open items**, of which **103 are blocked on a decision** and **97 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -875,16 +875,6 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *What is left:* `scripts/e2e_stack.sh:112` and `scripts/ray_e2e_stack.sh:103` both pass `--set observability.enabled=false`, so the Collector, GreptimeDB and every OTLP export are absent from the one place the estate is assembled automatically. The telemetry plane is therefore proven only by hand on the live k3s estate — which is exactly how [[CP-040]]'s permanently-firing `RayMetricsMissing` and [[XC-047]]'s zero OpenFGA series survived. Turn it on for at least one lane and assert a span and a metric land, rather than only that the fleet starts.
 - *Closes when:* An e2e lane runs with observability ON and asserts a trace and a metric series reached the backend.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream proves the telemetry plane in CI rather than in a drill · `scripts/e2e_stack.sh:112` · `scripts/ray_e2e_stack.sh:103`
-
-**XC-066 · The Ray lane forwards EMPTY OTLP values into `runtime_env`, which override the Ray pod's own config**
-`medallion, compute` · **LOW**
-- *What is left:* Omit the key when the source has no value, rather than blanking it. `ray_submit.submit_stage_job` builds the job's `env_vars` with `os.environ.get("OTEL_...", "")` for six OTLP names, so a stage runner with observability OFF sends `OTEL_EXPORTER_OTLP_ENDPOINT=""` and friends into the submission.
-- **THE SAME TWO-OWNERS TRAP THIS FILE ALREADY RECORDS FOR STORAGE.** `ray_submit.py`'s own comment states, measured twice on the live estate, that "Ray merges `runtime_env` OVER the process env, so a key sent here BEATS the pod's" — written about an S3 credential pair that gave every job `SignatureDoesNotMatch`. An empty forwarded value is not neutral: it makes the submitter the OWNER of that key and silently disables tracing the Ray pods were configured for.
-- **LATENT, NOT LIVE, and the distinction is the whole risk.** `observability.enabled` is one global toggle, so today the stage runner and the Ray pods are on or off together and the empty override lands on an already-empty value. It becomes real the moment a Ray cluster is configured independently — which is exactly what bring-your-own-engine invites.
-- **NOTE FOR WHOEVER TAKES [[LH-159]]:** `WorkOrder.to_env` already does the right thing (`env.update({k: v for k, v in optional if v})`), so migrating this hand-rolled block onto the port is a BEHAVIOUR change rather than a refactor, and must not be claimed as equivalent.
-- **FIXED IN THE REPO 2026-09-21, NOT YET DEPLOYED.** The forwarding is now `ray_submit.otlp_env()`, which OMITS a name this pod does not hold instead of blanking it. The change can only ever remove an override: a configured lane forwards the same values as before, an unconfigured one lets the job fall back to its own pod. Pinned by `services/medallion/tests/test_an_empty_override_does_not_beat_the_pod.py`, mutation-checked. One invariant moved with it — `test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name` reads `.get` now, the same shape its `S3_SECRET` sibling already used, because absent satisfies it MORE strongly than present-and-different.
-- *Closes when:* An unset OTLP name produces no key in the submitted `runtime_env`, pinned by a test.
-- *Evidence:* `services/medallion/src/medallion/services/ray_submit.py` (the `env_vars` block, six `os.environ.get(..., "")` OTLP names) · the same file's two-owners comment, measured twice live · `packages/service-kit/src/service_kit/lakehouse/work_order.py:164-166`
 
 **XC-067 · `HttpServerLatencyHigh` CANNOT FIRE — its threshold is above the histogram's top bucket, for every service**
 `observability, chart` · **HIGH**

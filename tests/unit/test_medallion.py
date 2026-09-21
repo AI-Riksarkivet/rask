@@ -721,6 +721,30 @@ def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkey
     assert env["RASK_PARAM_S3_SECRET"] == "stolen"
 
 
+def test_no_blank_value_rides_the_submission(monkeypatch: pytest.MonkeyPatch) -> None:
+    """[[XC-066]] asserted where the row asks for it: the SUBMITTED `runtime_env`, not the helper.
+
+    `ray_submit.otlp_env()` is unit-tested on its own, and that is one level short of the claim. What
+    reaches Ray is `{**order.to_env(), **otlp_env(), **trace_env(), ...}`, and Ray merges that dict OVER
+    the target pod's process env — so a blank from ANY of those spreads makes this submitter the owner
+    of that key and silently overrides the pod's own value. The same shape gave every job
+    `SignatureDoesNotMatch` when an S3 pair had two owners, measured twice on the live estate.
+
+    So the invariant is about the whole body: no key rides it carrying `""`.
+    """
+    api = _FakeJobsAPI()
+    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
+    for name in ("OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_EXPORTER_OTLP_PROTOCOL", "OTEL_EXPORTER_OTLP_HEADERS", "OTEL_SERVICE_NAME", "OTEL_RESOURCE_ATTRIBUTES"):
+        monkeypatch.delenv(name, raising=False)
+    settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True})
+
+    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+
+    env = api.posts[0]["runtime_env"]["env_vars"]
+    blank = sorted(k for k, v in env.items() if v == "")
+    assert not blank, f"these keys ride the submission blank and will override the Ray pod's own values: {blank}"
+
+
 def test_a_DECLARED_lane_overrides_the_charts_entrypoint_and_params(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The declaration governs what runs — otherwise it is a record an admin edits and a stage runner ignores.
 
