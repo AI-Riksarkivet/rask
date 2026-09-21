@@ -601,6 +601,29 @@ async def _drain_outbox(
                 "lineage_outbox_event_unauthorized",
                 extra={"outbox_key": key, "run_id": event.run.run_id, "author": refused_author, "reason": str(exc)},
             )
+            # RECORD, THEN RETIRE — the terminal state a settled refusal needs ([[LH-182]]). Counting and
+            # logging alone leaves the object, so the same event is re-read, re-parsed, re-refused and
+            # re-logged on every tick forever: measured on this estate, `refused=7` unchanged for days.
+            #
+            # THE ORDER IS THE SAFETY PROPERTY, and only this order is safe. A crash after the insert
+            # leaves the object, the next tick re-refuses it, and the upsert on `outbox_key` makes that a
+            # no-op. Delete-first would lose the only durable copy of a committed write's provenance if
+            # the process died in between — turning a governance answer into silent data loss, which is
+            # worse than the loop it replaces.
+            #
+            # MOVING THE OBJECT ASIDE IS NOT AVAILABLE and that is why this shape exists: a
+            # `<outbox>/_refused/` prefix is a PutObject, and the chart grants this service exactly
+            # `s3:DeleteObject` on its own outbox (`DrainItsOwnOutboxAndNothingElse`). Building it anyway
+            # broke the drain here — the AccessDenied is the tick's error boundary, so it aborted the
+            # whole pass and the sweep then reported `refused=0`, a zero meaning "did not look".
+            await repository.record_refusal(
+                outbox_key=key,
+                run_id=event.run.run_id,
+                author=refused_author,
+                reason=str(exc),
+                event_json=event_json,
+            )
+            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
             continue
         except Exception as exc:
             # LEFT STAGED on purpose — see "STRANDED IS NOT POISON" above. Named with both the object key

@@ -34,6 +34,14 @@ class _FakeRepo:
     def __init__(self, *, fail: bool = False) -> None:
         self.ingested: RunEvent | None = None
         self._fail = fail
+        self.refusals: list[dict[str, str | None]] = []
+
+    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
+        that cannot record one no longer stands in for the repository. Captured rather than ignored:
+        several of these tests assert what the refusal path did, and a silent no-op would let a drain
+        that recorded nothing pass as one that did."""
+        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
     async def ingest_event(self, event: RunEvent) -> None:
         if self._fail:

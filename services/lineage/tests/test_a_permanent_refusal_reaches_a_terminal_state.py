@@ -76,3 +76,45 @@ def test_the_key_is_unique_so_a_retick_cannot_duplicate_the_record() -> None:
 
     assert "outbox_key text primary key" in ddl or "unique" in ddl, "the key must be constrained, or a retick appends a second row"
     assert "on conflict (outbox_key) do update" in ddl, "a re-refused event must UPDATE its record; a bare insert raises on the second tick"
+
+
+def test_the_repository_can_record_a_refusal() -> None:
+    """RED before the fix: the SQL existed and NOTHING called it.
+
+    `postgres.RECORD_REFUSAL` was added with the table and left unwired, which is the shape of a
+    control that provably does nothing — the statement is present, reviewable and never executed. The
+    repository is what the reconcile tick can reach, so the capability has to exist there.
+    """
+    from lineage.services.repository import LineageRepository
+
+    # The REPOSITORY, not the module: the reconcile tick holds an instance, so that is where the
+    # capability has to be reachable from.
+    assert hasattr(LineageRepository, "record_refusal"), "nothing can write a refusal, so the only terminal state is losing the evidence"
+
+
+def test_the_drain_records_before_it_drops() -> None:
+    """ORDER IS THE WHOLE SAFETY PROPERTY, so it is asserted on the source rather than trusted.
+
+    Delete-then-record loses the event if the process dies between them, and a refusal is a LOSS
+    RECORD: someone staged provenance they were not authorized to record, and the graph will never
+    hold it. Record-then-delete is safe in the other direction — a crash after the insert leaves the
+    object, the next tick re-refuses it, and the upsert makes that a no-op.
+
+    Checked as "the record call appears before the drop call inside the refusal branch", which is a
+    property a reader can also verify, rather than by mocking a crash between two awaits.
+    """
+    from pathlib import Path
+
+    source = Path("services/lineage/src/lineage/api/reconcile_cron.py").read_text()
+    branch = source[source.index("except PermissionDeniedError") :]
+    branch = (
+        branch[: branch.index("except ") + len("except ") + branch[branch.index("except ") + len("except ") :].index("except ")]
+        if branch.count("except ") > 1
+        else branch
+    )
+
+    assert "record_refusal" in branch, "the refusal branch does not record the verdict, so deleting would be data loss"
+    assert "drop_event" in branch, "the refusal branch never retires the object, so it is re-refused every tick forever"
+    assert branch.index("record_refusal") < branch.index("drop_event"), (
+        "the object is dropped BEFORE the refusal is recorded; a crash between them loses the provenance"
+    )

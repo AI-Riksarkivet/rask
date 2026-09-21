@@ -1047,6 +1047,28 @@ class LineageRepository:
                     await run_cypher(conn, self._graph, delete, {})
         return count
 
+    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+        """Preserve a settled governance refusal, so the staged object can be retired without data loss.
+
+        [[LH-182]] A REFUSAL IS A LOSS RECORD, not an error. Someone staged provenance they were not
+        authorized to record and the graph will never hold it, so deleting the object without keeping
+        the event would turn a governance answer into silent data loss — worse than the re-refusal loop
+        it replaces. This is the "something that can write" the row asks for, and it is the database
+        this service already provisions at boot rather than a new capability.
+
+        `author` IS OPTIONAL BY DESIGN, matching the nullable column. `author_sub_from_payload` answers
+        ``None`` when the staged document names nobody it can verify, and on a loss record naming the
+        wrong person is worse than naming none — so the absence is stored rather than papered over with
+        a placeholder a reader would mistake for a subject.
+
+        UPSERT, because the drain re-reads the outbox every tick: a crash between this insert and the
+        delete leaves the object in place, so the next tick WILL re-refuse an event already recorded.
+        That path has to be an idempotent no-op, which is why the uniqueness lives on the key and the
+        write is `ON CONFLICT DO UPDATE` rather than care at the call site.
+        """
+        async with self._pool.connection() as conn:
+            await conn.execute(pg.RECORD_REFUSAL, (outbox_key, run_id, author, reason, event_json))
+
     async def ensure_events_table(self) -> None:
         """Create the durable events-feed table if absent (idempotent; called once at startup).
 

@@ -140,9 +140,13 @@ def test_a_refusal_is_HANDLED_and_not_a_crash(tmp_path: Any, monkeypatch: pytest
     class _Repo:
         def __init__(self) -> None:
             self.ingested: list[str] = []
+            self.refusals: list[dict[str, str | None]] = []
 
         async def ingest_event(self, ev: Any) -> None:  # pragma: no cover — a refusal must never reach here
             self.ingested.append(ev.run.run_id)
+
+        async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+            self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
     class _Settings:
         outbox_uri = uri
@@ -160,4 +164,11 @@ def test_a_refusal_is_HANDLED_and_not_a_crash(tmp_path: Any, monkeypatch: pytest
     assert outcome.refused == 1, "a refused event must be counted as refused"
     assert outcome.stranded == 0, "`stranded` means a tick that FAILED; a governance refusal is not one"
     assert outcome.drained == 0 and repo.ingested == [], "a refused event must never reach the graph"
-    assert list(outbox.list_events(uri, {})), "a refusal must LEAVE the event staged — dropping it destroys the only durable copy"
+    # [[LH-182]] THE PROPERTY IS THE SAME, THE MECHANISM IS NOT. This asserted "leave it staged",
+    # because staging was the only durable copy. The drain now writes the verdict AND the event into
+    # `lineage_outbox_refusals` first, so retiring the object destroys nothing — and NOT retiring it
+    # meant re-reading, re-parsing and re-refusing the same event on every tick forever (measured
+    # `refused=7`, unchanged for days). Dropping WITHOUT the record is still the failure, which is why
+    # both halves are asserted here and the ordering is pinned in the lineage suite.
+    assert repo.refusals and repo.refusals[0]["event_json"], "the refusal was not recorded with its event — retiring the object would be data loss"
+    assert not list(outbox.list_events(uri, {})), "a settled refusal left the object staged, so it will be re-refused forever"

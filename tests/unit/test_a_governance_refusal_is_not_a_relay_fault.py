@@ -60,6 +60,14 @@ def _staged(uri: str, *, author: str, run: str, token: str) -> None:
 class _Repo:
     def __init__(self) -> None:
         self.ingested: list[str] = []
+        self.refusals: list[dict[str, str | None]] = []
+
+    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
+        that cannot record one no longer stands in for the repository. Captured rather than ignored:
+        several of these tests assert what the refusal path did, and a silent no-op would let a drain
+        that recorded nothing pass as one that did."""
+        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
     async def ingest_event(self, ev: Any) -> None:  # noqa: ANN401 — the drain's own shape
         self.ingested.append(ev.run.run_id)
@@ -82,6 +90,18 @@ def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     return asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), {}))
 
 
+def _drive_capturing(uri: str) -> _Repo:
+    """Drive a drain and hand back the REPOSITORY, so a test can assert what was written to it.
+
+    Separate from `_drive` rather than changing its return: every other test here reads the outcome
+    counters, and widening the shared helper to a tuple would edit them all to assert nothing new.
+    """
+    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
+    repo = _Repo()
+    asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), _settings(uri), {}))
+    return repo
+
+
 def test_a_refused_event_counts_as_REFUSED_not_stranded(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE SPLIT. `stranded` is documented as "a tick failed while it recovered everything else"; a
     governance refusal is neither a failure nor transient, and counting it there is what makes
@@ -101,10 +121,19 @@ def test_a_refused_event_counts_as_REFUSED_not_stranded(tmp_path: Any, monkeypat
     assert outcome.drained == 0
 
 
-def test_the_refused_event_is_still_LEFT_STAGED(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """This changes the REPORTING, not the handling. Destroying the only durable copy of a committed
-    write's provenance is still the wrong answer to "you may not record this", and the grant may yet
-    land — ingest's did, and its event drained on the next tick."""
+def test_the_refused_event_is_RECORDED_BEFORE_IT_IS_RETIRED(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The property is unchanged; the mechanism that keeps it is not ([[LH-182]]).
+
+    THE RULE WAS "never destroy the only durable copy of a committed write's provenance", and leaving
+    the object staged was how that was honoured — at the cost of re-reading, re-parsing, re-refusing
+    and re-logging the same event on every tick forever (measured `refused=7`, unchanged for days).
+    There is now a second durable copy: the drain writes the verdict AND the event into
+    `lineage_outbox_refusals` before removing the object, so retiring it destroys nothing.
+
+    WHAT WOULD STILL BE WRONG is deleting without that record, and the ordering assertion in
+    `services/lineage/tests/test_a_permanent_refusal_reaches_a_terminal_state.py` is what forbids it.
+    This test asserts the pair: the refusal was captured, and only then did the object go.
+    """
 
     async def _refuse(*_args: object, **_kwargs: object) -> None:
         raise PermissionDeniedError("can_write_data required to amend run")
@@ -113,9 +142,11 @@ def test_the_refused_event_is_still_LEFT_STAGED(tmp_path: Any, monkeypatch: pyte
     uri = f"file://{tmp_path}/_lineage_outbox"
     _staged(uri, author="e2e", run="bronze$refused", token="refused-probe")
 
-    _drive(uri)
+    repo = _drive_capturing(uri)
 
-    assert list(outbox.list_events(uri, {})), "the refusal deleted the staged object — that is the poison path, and a refusal is not poison"
+    assert repo.refusals, "the refusal was not recorded, so retiring the object would be data loss"
+    assert repo.refusals[0]["event_json"], "the record kept no event; a refusal with no payload is loss, not a loss RECORD"
+    assert not list(outbox.list_events(uri, {})), "the object survived a settled refusal, so it will be re-refused every tick forever"
 
 
 def test_a_TRANSIENT_failure_still_strands(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
