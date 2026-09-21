@@ -41,18 +41,29 @@ DEFAULT_ARGS: tuple[str, ...] = ("--set", "image.localImages=true", "--set", "mi
 
 
 @functools.cache
+def render_text(*extra: str) -> str:
+    """Helm's RAW stdout for this overlay — the bytes Helm itself stores in the release Secret.
+
+    Separate from `render` because parsing is lossy in the one dimension the size gate cares about:
+    `yaml.safe_load` drops every comment, so a budget computed from re-serialized documents measures a
+    manifest that does not exist and can never fail. Measured 2026-09-21, that mistake made the gate
+    pass with three un-converted templates restored.
+    """
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    if not pathlib.Path(helm).exists():
+        pytest.skip("helm not available")
+    argv = [helm, "template", "rask", str(REPO / "chart"), *OIDC_ARGS, *extra]
+    return subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
+
+
+@functools.cache
 def render(*extra: str) -> tuple[dict, ...]:
     """Every mapping document the chart renders under `OIDC_ARGS` plus `extra`.
 
     Returns a tuple rather than a list because the result is cached and shared: a caller that sorted or
     popped a list in place would corrupt the next gate's render.
     """
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    argv = [helm, "template", "rask", str(REPO / "chart"), *OIDC_ARGS, *extra]
-    out = subprocess.run(argv, capture_output=True, text=True, check=True).stdout  # noqa: S603
-    return tuple(doc for doc in yaml.load_all(out, Loader=FAST_LOADER) if isinstance(doc, dict))
+    return tuple(doc for doc in yaml.load_all(render_text(*extra), Loader=FAST_LOADER) if isinstance(doc, dict))
 
 
 def containers(docs: tuple[dict, ...]) -> list[tuple[str, str, dict]]:
