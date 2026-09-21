@@ -29,7 +29,7 @@ from typing import Any
 
 import pytest
 
-from medallion.services import ray_submit
+from medallion.services import ray_submit, stage_submit
 from medallion.services.trigger_guards import StageTrigger
 
 
@@ -83,9 +83,9 @@ async def test_the_range_REACHES_the_submitted_job_as_the_orders_VERSION_FLOOR(c
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None
 
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
 
-    await ray_submit.submit_stage_job(
+    await stage_submit.submit_stage_job(
         _settings(),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",
@@ -108,9 +108,9 @@ async def test_NO_floor_is_OMITTED_which_the_job_reads_as_everything(captured: d
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None
 
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
 
-    await ray_submit.submit_stage_job(
+    await stage_submit.submit_stage_job(
         _settings(),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",

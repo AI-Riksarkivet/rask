@@ -5,10 +5,10 @@ Measured 2026-09-21, `workflow.py` imported `ray_jobs_api` and `ray_submit` at f
 cascade's workflow reached Ray by import — coupling of exactly the kind that criterion forbids, while
 `engine_registry.executor_for` sat beside it already implemented and already used by `transform.py`.
 
-THIS GATE COVERS THE READ PATHS — status and failure. The SUBMIT path is a second step, because it
-needs the order construction lifted out of `ray_submit` first; until then `submit_stage_job` is still
-imported here and that is stated rather than hidden, so nobody reads this gate as proving more than it
-does.
+THIS GATE COVERS EVERY PATH — status, failure and SUBMIT. The submit path needed the order
+construction lifted out of `ray_submit` first; `submit_stage_job` now lives in the engine-agnostic
+`stage_submit` and posts through `executor_for(RAY_ENGINE)`, so no path reaches Ray by import from
+here and the gate says so for all three rather than for two.
 
 WHY AN IMPORT GATE AND NOT A BEHAVIOUR TEST. Behaviour tests pass equally well against a direct call
 and against the port, because the port DELEGATES to the same functions — `RayJobsApiExecutor` wraps
@@ -67,3 +67,22 @@ def test_the_workflow_resolves_its_engine_by_name() -> None:
     # `test_no_numeric_helm_default_can_swallow_an_explicit_zero` made with `| default`.
     named = [f"{n}: {line.strip()}" for n, line in enumerate(lines, 1) if "import" in line and "RayJobsApiExecutor" in line]
     assert not named, "the workflow imports the Ray adapter directly; resolve it by engine name instead:\n  " + "\n  ".join(named)
+
+
+def test_the_workflow_does_not_import_the_RAY_NAMED_submitter() -> None:
+    """The submit path, held to the same bar as the two read paths above.
+
+    `ray_submit` is the train lane's module: it hand-rolls a Ray Jobs body and owns the pooled Ray
+    client. Importing it here put a module named for one engine on the cascade's only submit path,
+    which is the dependency direction done-criterion 3 forbids however well the function behind it
+    behaves. The stage submitter lives in `stage_submit`, which names no engine but the one the
+    dispatch already chose.
+
+    THE FUNCTION'S NAME IS NOT WHAT IS CHECKED, deliberately — a gate on `submit_stage_job` would pass
+    the moment someone imported something else out of the same module, and the module is the coupling.
+    """
+    offenders = [f"{n}: {line.strip()}" for n, line in enumerate(SOURCE.read_text().splitlines(), 1) if "import" in line and "ray_submit" in line]
+
+    assert not offenders, (
+        "the cascade's workflow imports the Ray-named submitter; the engine-agnostic `stage_submit` is the one to reach for:\n  " + "\n  ".join(offenders)
+    )

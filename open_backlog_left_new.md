@@ -310,6 +310,34 @@ have no `uv.lock` and so cannot be built to emit anything.
   accept the job name moving from `stage_submission_id(...)` to `order.idempotency_key`, and fix two test
   doubles found narrower than the function they stand for (no `on_terminal_failure`, returning None where
   the real `submit_or_reattach` answers `"submitted"`).
+  **THE REWIRE LANDED, DEPLOYED AND WAS OBSERVED DRIVING A REAL CASCADE (2026-09-21).**
+  `submit_stage_job` now hands the order to `executor_for(RAY_ENGINE).submit(order, registration)`; the
+  hand-rolled `env_vars`, `metadata` and `body` are gone because the adapter builds all three, and the
+  second submission-id derivation went with them. Proven inert on the wire with the gap that hid the
+  previous attempt CLOSED — the submitted `runtime_env.env_vars` captured before and after with the
+  lineage lane WIRED, identical in every key and value (14 of them). `on_terminal_failure` needed no
+  decision: the lane relied on the default and the adapter passes `"resubmit"`, which IS that default.
+  **BUILT WITH DAGGER, DEPLOYED, AND DRIVEN.** `lance-rest-catalog:main-c0b3dc9c` rolled to the four
+  medallion deployments by `kubectl set image` — deliberately NOT a chart-wide roll, because that image
+  also serves `rask-maintenance` and would have reset [[LH-183]]'s uninterrupted-pod clock. Then
+  `test_medallion_e2e.py` drove a real hop: **5 passed in 68s**, and the stage runners' own logs show
+  both hops through the new path — `ray_stage_job_submitted submission_id='e2c2bc31…'` (40 hex: the
+  order's key, not `stage_submission_id`'s `ray-silver-t-<12hex>`), then
+  `medallion_stage_job_terminal status='SUCCEEDED' polls=1` and `medallion_stage_ready_published`. The
+  poller found the job under the NEW id on its first poll, which is the one risk the id change carried.
+  **AND THE MOVE IS DONE.** `submit_stage_job`, `otlp_env` and `build_stage_order_observability` now
+  live in `medallion/services/stage_submit.py`, with `trace_env` lifted out of `ray_jobs_api` — neither
+  is Ray's: one is W3C context propagation, the other this pod's OTLP config, and both were parked in
+  engine-named modules. `workflow.py` imports none of `ray_submit`, `ray_jobs_api` or the adapter, and
+  `test_the_workflow_reads_ray_through_the_port.py` now gates all THREE paths rather than the two read
+  ones; the new leg is mutation-checked. `executor_for(RAY_ENGINE)` inside `submit_stage` is the
+  DISPATCH's answer, not a hard-coding — `transform.py:943` asks `engine_choice.engine_for_async` and
+  calls this module on the Ray branch.
+  **FOUR TEST DOUBLES AND ONE PATCH TARGET WERE NARROWER THAN WHAT THEY STOOD FOR**, and every one
+  failed loudly rather than silently: the doubles took no `on_terminal_failure` and returned `None`
+  where `submit_or_reattach` answers `"submitted"`, and a patch aimed at `ray_submit.resolve_transform_async`
+  raised `AttributeError` — only the STAGE lane resolves a declaration, the train lane reads its
+  entrypoint from settings and asks the object store nothing.
 - *Closes when:* `workflow.py` reaches Ray only through `executor_for(RAY_ENGINE)` and a test fails if `ray_submit`/`ray_jobs_api` are imported there again.
 - *Evidence:* `services/medallion/src/medallion/workflow.py:488,528,708,979 (direct ray_submit/ray_jobs_api imports)` · `services/medallion/src/medallion/services/rayjobs_api_executor.py:95-110 (submit posts order.idempotency_key)` · `packages/service-kit/src/service_kit/lakehouse/work_order.py:69,124 (stage, idempotency_key; no token field)` · `rg 'executor_for\(' services packages --glob '!*/tests/*' -> only transform.py:793`
 

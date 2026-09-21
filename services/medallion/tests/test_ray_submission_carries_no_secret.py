@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit
+from medallion.services import ray_submit, stage_submit
 
 
 SECRET = "the-platform-s3-secret"
@@ -61,7 +61,7 @@ def stage_body(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
     monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
     return seen
 
 
@@ -87,7 +87,7 @@ def train_body(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_the_stage_submission_carries_no_secret_material(stage_body: dict[str, Any]) -> None:
-    await ray_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
+    await stage_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
     env = stage_body["body"]["runtime_env"]["env_vars"] if "body" in stage_body else stage_body["runtime_env"]["env_vars"]
     assert "S3_SECRET" not in env, "the S3 secret still rides runtime_env, which the Jobs API echoes to any reader"
     assert "LINEAGE_SERVICE_TOKEN" not in env, "the estate's service credential still rides runtime_env"
@@ -160,7 +160,7 @@ async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage
     `S3_KEY`/`S3_SECRET` from the environment, which is asserted in
     `tests/unit/test_no_credential_rides_the_submission.py` so that removing them here can never
     quietly leave the job with nothing to read."""
-    await ray_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
+    await stage_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
     env = stage_body["body"]["runtime_env"]["env_vars"] if "body" in stage_body else stage_body["runtime_env"]["env_vars"]
     assert env.get("RASK_LINEAGE_SERVICE_IDENTITY"), "the run's reporting subject was stripped — it is per-SUBMITTER and no pod can supply it"
     assert env["RASK_SOURCE_URI"] and env["RASK_DEST_URI"], "the order itself stopped riding the submission"

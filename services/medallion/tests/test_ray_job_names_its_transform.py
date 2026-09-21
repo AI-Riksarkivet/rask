@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from medallion.services import ray_submit
+from medallion.services import ray_submit, stage_submit
 
 
 @pytest.fixture
@@ -80,10 +80,10 @@ async def test_declared_lane_is_stamped_on_the_job(captured: dict[str, Any], mon
     async def _resolve_task(_settings: Any, *, task: str, engine: str) -> TaskRegistration:
         return TaskRegistration(task=task, engine=engine, command="python /home/ray/jobs/ray_stage_job.py")
 
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
-    monkeypatch.setattr(ray_submit, "resolve_task_async", _resolve_task)
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(stage_submit, "resolve_task_async", _resolve_task)
 
-    await ray_submit.submit_stage_job(
+    await stage_submit.submit_stage_job(
         _settings(lane="browserlane"),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",
@@ -106,9 +106,9 @@ async def test_an_undeclared_run_omits_the_key_rather_than_sending_a_blank(captu
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None
 
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
 
-    await ray_submit.submit_stage_job(
+    await stage_submit.submit_stage_job(
         _settings(),
         from_uri="s3://acme/bronze",
         to_uri="s3://acme/silver",

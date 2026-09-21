@@ -486,7 +486,7 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     spec = StageJobSpec.model_validate(spec)
     from medallion.core.config import get_settings
-    from medallion.services.ray_submit import submit_stage_job
+    from medallion.services.stage_submit import submit_stage_job
 
     settings = get_settings()
     # RETURN WHAT THE SUBMITTER POSTED — never re-derive it. The id is deterministic, so a second

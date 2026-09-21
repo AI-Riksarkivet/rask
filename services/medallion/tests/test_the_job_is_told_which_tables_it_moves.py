@@ -27,7 +27,7 @@ from typing import Any, cast
 import pytest
 
 from medallion.core.config import MedallionSettings, get_settings
-from medallion.services import ray_submit, transform
+from medallion.services import ray_submit, stage_submit, transform
 from medallion.services.trigger_guards import StageTrigger
 
 
@@ -46,7 +46,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None
 
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
     return seen
 
 
@@ -59,7 +59,7 @@ def _settings(**over: object) -> MedallionSettings:
 @pytest.mark.asyncio
 async def test_the_submitted_job_is_told_the_catalog_identifiers_it_moves(captured: dict[str, Any]) -> None:
     """The submission is the only place these can enter the job's environment."""
-    await ray_submit.submit_stage_job(
+    await stage_submit.submit_stage_job(
         _settings(),
         from_uri="s3://acme-wh/abc_bronze$events",
         to_uri="s3://acme-wh/def_silver$features",
@@ -92,7 +92,7 @@ async def test_an_unwired_identity_is_OMITTED_rather_than_sent_blank(captured: d
     Sending `""` instead of omitting would pin a value the platform does not know, and the moment a
     runner tests for the key's PRESENCE — the natural way to ask "was I wired?" — a blank answers yes.
     """
-    await ray_submit.submit_stage_job(
+    await stage_submit.submit_stage_job(
         _settings(),
         from_uri="s3://acme-wh/bronze",
         to_uri="s3://acme-wh/silver",

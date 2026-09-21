@@ -75,7 +75,7 @@ def _medallion_settings() -> Any:
 
 @pytest.fixture
 def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    from medallion.services import ray_submit
+    from medallion.services import ray_submit, stage_submit
 
     seen: dict[str, Any] = {}
 
@@ -108,15 +108,20 @@ def medallion_bodies(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
     monkeypatch.setattr(ray_submit, "ray_client", _client)
-    monkeypatch.setattr(ray_submit, "resolve_transform_async", _resolve)
+    # PATCHED ON `stage_submit` ALONE, because only the STAGE lane resolves a declaration: the train
+    # lane reads its entrypoint straight from settings and asks the object store nothing. Patching
+    # `ray_submit` here raises `AttributeError` rather than silently doing nothing, which is the
+    # monkeypatch behaviour worth having — a patch aimed at a name its module does not own is a
+    # pin that covers nothing, and it says so instead of passing.
+    monkeypatch.setattr(stage_submit, "resolve_transform_async", _resolve)
     return seen
 
 
 @pytest.mark.asyncio
 async def test_the_medallion_stage_seam_is_clean(medallion_bodies: dict[str, Any]) -> None:
-    from medallion.services import ray_submit
+    from medallion.services import stage_submit
 
-    await ray_submit.submit_stage_job(_medallion_settings(), from_uri="s3://a/bronze", to_uri="s3://a/silver", stage="silver", token="t1")
+    await stage_submit.submit_stage_job(_medallion_settings(), from_uri="s3://a/bronze", to_uri="s3://a/silver", stage="silver", token="t1")
     assert "stage" in medallion_bodies, "the stage submission was never captured — the seam moved and this pin is checking nothing"
     _assert_clean("medallion.submit_stage_job", medallion_bodies["stage"])
 

@@ -27,7 +27,7 @@ from typing import Any
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_submit
+from medallion.services import ray_submit, stage_submit
 
 
 class _FakeJobsAPI:
@@ -65,7 +65,7 @@ def _submit(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
     monkeypatch.setenv("OTEL_SERVICE_NAME", "bronze-to-silver")
     settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "ray_job_params": {"alpha": "1"}})
-    asyncio.run(ray_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
+    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", lineage_json="{}"))
     return api.posts[0]["runtime_env"]["env_vars"]
 
 
@@ -93,7 +93,7 @@ def test_the_observability_context_rides_the_ORDER(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
     monkeypatch.setenv("OTEL_SERVICE_NAME", "bronze-to-silver")
 
-    order = ray_submit.build_stage_order_observability()
+    order = stage_submit.build_stage_order_observability()
 
     assert order.otlp.get("OTEL_EXPORTER_OTLP_ENDPOINT") == "http://collector:4318", (
         "the order carries no OTLP config, so `to_env()` cannot be the one serialization"

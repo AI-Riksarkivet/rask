@@ -844,7 +844,7 @@ def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
     catalog stores it, and the job runs under the 1:1 default that refuses the very shape declared."""
     import inspect
 
-    from medallion.services import ray_submit
+    from medallion.services import stage_submit
 
     # THE RESOLVED LANE CARDINALITY REACHES THE ORDER. It no longer has a wire name of its own here:
     # the submitter builds a `WorkOrder` and `to_env()` serializes the stamp as `RASK_CARDINALITY`,
@@ -852,7 +852,7 @@ def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
     # `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py`). So the link this test guards
     # is the one step that file cannot see — that the value put on the stamp is the DECLARATION's
     # cardinality rather than the 1:1 default.
-    source = inspect.getsource(ray_submit.submit_stage_job)
+    source = inspect.getsource(stage_submit.submit_stage_job)
     assert "cardinality=cardinality" in source, (
         "submit_stage_job does not put the resolved cardinality on the WorkOrder's stamp, so a declared "
         "fan-out lane runs under the 1:1 default that refuses the very shape it declared"

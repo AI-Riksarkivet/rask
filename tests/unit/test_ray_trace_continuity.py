@@ -32,8 +32,7 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from medallion.core.config import MedallionSettings
-from medallion.services import ray_jobs_api as ray_submit_kit
-from medallion.services import ray_submit
+from medallion.services import ray_submit, stage_submit
 
 
 _SCRIPTS = Path(__file__).parents[2] / "scripts"
@@ -63,7 +62,7 @@ _PARENT = "00-" + "1" * 32 + "-" + "2" * 16 + "-01"
 def test_trace_env_injects_a_valid_traceparent_from_the_active_span() -> None:
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("submitting") as span:
-        env = ray_submit_kit.trace_env()
+        env = stage_submit.trace_env()
     ctx = span.get_span_context()
     assert _TRACEPARENT_RE.match(env["TRACEPARENT"])
     # Exact ids from the active span; the trailing flags byte is the SDK's to choose (sampled et al).
@@ -72,7 +71,7 @@ def test_trace_env_injects_a_valid_traceparent_from_the_active_span() -> None:
 
 def test_trace_env_is_empty_without_an_active_span() -> None:
     # No active span → inject writes nothing → the job runs untraced (never a fabricated context).
-    assert ray_submit_kit.trace_env() == {}
+    assert stage_submit.trace_env() == {}
 
 
 def _capture_submits(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
@@ -112,7 +111,7 @@ def test_stage_submission_carries_the_active_spans_traceparent(monkeypatch: pyte
     )
     tracer = TracerProvider().get_tracer("test")
     with tracer.start_as_current_span("stage runner") as span:
-        asyncio.run(ray_submit.submit_stage_job(settings, from_uri="a", to_uri="b", stage="bronze", token="t"))
+        asyncio.run(stage_submit.submit_stage_job(settings, from_uri="a", to_uri="b", stage="bronze", token="t"))
     env = captured[0]["runtime_env"]["env_vars"]
     ctx = span.get_span_context()
     assert env["TRACEPARENT"].startswith(f"00-{ctx.trace_id:032x}-{ctx.span_id:016x}-")
@@ -282,7 +281,7 @@ def test_a_submitted_job_carries_WHO_it_is_for_in_ray_metadata(monkeypatch: pyte
     """
     captured = _capture_submits(monkeypatch)
 
-    asyncio.run(ray_submit.submit_stage_job(_stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok", originator="alice", project="acme"))
+    asyncio.run(stage_submit.submit_stage_job(_stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok", originator="alice", project="acme"))
 
     metadata = captured[0]["metadata"]
     assert metadata["rask.originator"] == "alice"
@@ -296,6 +295,6 @@ def test_a_submission_with_no_human_behind_it_carries_no_originator(monkeypatch:
     key is omitted so a reader never mistakes '' for someone."""
     captured = _capture_submits(monkeypatch)
 
-    asyncio.run(ray_submit.submit_stage_job(_stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok"))
+    asyncio.run(stage_submit.submit_stage_job(_stage_settings(), from_uri="a", to_uri="b", stage="silver", token="tok"))
 
     assert "rask.originator" not in captured[0].get("metadata", {})

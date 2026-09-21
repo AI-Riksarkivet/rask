@@ -27,7 +27,7 @@ import os
 
 import pytest
 
-from medallion.services import ray_submit
+from medallion.services import stage_submit
 
 
 #: The names the lane forwards from its own process. `TRACEPARENT`/`TRACESTATE` come from `rk.trace_env()`
@@ -56,13 +56,13 @@ def _with_otlp(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_the_forwarder_exists_and_is_addressable() -> None:
     """Without this the assertions below could pass against a helper that no longer exists."""
-    assert hasattr(ray_submit, "otlp_env"), "the OTLP forwarding must be its own function to be testable at all"
+    assert hasattr(stage_submit, "otlp_env"), "the OTLP forwarding must be its own function to be testable at all"
 
 
 @pytest.mark.usefixtures("_no_otlp")
 def test_an_unset_name_is_absent_rather_than_empty() -> None:
     """RED before the fix: every name was present with `""`, and on Ray that OVERRIDES the pod."""
-    forwarded = ray_submit.otlp_env()
+    forwarded = stage_submit.otlp_env()
 
     blanked = sorted(k for k, v in forwarded.items() if v == "")
     assert not blanked, f"these names are forwarded blank and will override the Ray pod's own values: {blanked}"
@@ -71,7 +71,7 @@ def test_an_unset_name_is_absent_rather_than_empty() -> None:
 @pytest.mark.usefixtures("_with_otlp")
 def test_a_value_the_lane_HAS_is_still_forwarded() -> None:
     """The fix must not become "stop forwarding" — a configured lane has to behave exactly as before."""
-    forwarded = ray_submit.otlp_env()
+    forwarded = stage_submit.otlp_env()
 
     assert forwarded["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://collector:4318"
     assert forwarded["OTEL_SERVICE_NAME"] == "bronze-to-silver"
@@ -83,6 +83,6 @@ def test_the_forwarder_reads_the_process_rather_than_a_snapshot() -> None:
     """Captured at import, the value would be as old as the worker and a restart-time change invisible."""
     os.environ["OTEL_SERVICE_NAME"] = "silver-to-gold"
     try:
-        assert ray_submit.otlp_env()["OTEL_SERVICE_NAME"] == "silver-to-gold"
+        assert stage_submit.otlp_env()["OTEL_SERVICE_NAME"] == "silver-to-gold"
     finally:
         os.environ["OTEL_SERVICE_NAME"] = "bronze-to-silver"

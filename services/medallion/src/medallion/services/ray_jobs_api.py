@@ -24,7 +24,6 @@ from collections.abc import Mapping
 from typing import Literal
 
 import httpx
-from opentelemetry import propagate
 
 from medallion.services.ray_job_failure import RayJobFailure
 
@@ -98,20 +97,6 @@ async def job_failure(client: httpx.AsyncClient, sub_id: str) -> RayJobFailure |
     if response.status_code >= 400:
         raise RayJobError(f"failed to read failure detail of ray job {sub_id}: HTTP {response.status_code}")
     return RayJobFailure.model_validate(response.json())
-
-
-def trace_env() -> dict[str, str]:
-    """The current span's W3C trace context, in env-var shape for a job's ``runtime_env``.
-
-    Trace continuity across the Ray boundary: the estate's distributed trace used to go dark at submit
-    because no submission site propagated context, leaving every job-side span an orphan.
-    ``propagate.inject`` writes nothing when no valid span is active, so this degrades to ``{}`` and the
-    job runs untraced — the trace is only ever CONTINUED, never fabricated. Only the W3C keys are lifted;
-    the global propagator also emits baggage, which has no reader on the job side.
-    """
-    carrier: dict[str, str] = {}
-    propagate.inject(carrier)
-    return {k.upper(): v for k, v in carrier.items() if k in ("traceparent", "tracestate")}
 
 
 async def job_status(client: httpx.AsyncClient, sub_id: str) -> str | None:

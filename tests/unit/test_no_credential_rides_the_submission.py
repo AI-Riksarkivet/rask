@@ -24,7 +24,7 @@ import inspect
 import re
 from collections.abc import Callable
 
-from medallion.services import ray_submit
+from medallion.services import ray_submit, stage_submit
 from service_kit.lakehouse.work_order import WorkOrder
 
 
@@ -47,7 +47,7 @@ def _submission_env_literals(func: Callable[..., object]) -> set[str]:
 
 
 def test_the_stage_submission_carries_no_credential() -> None:
-    named = _submission_env_literals(ray_submit.submit_stage_job)
+    named = _submission_env_literals(stage_submit.submit_stage_job)
     assert named, "this gate can no longer see the submission env it is asserting about"
     leaked = sorted(n for n in named if n in _CREDENTIAL_NAMES)
     assert not leaked, f"these ride the submission body and the Jobs API echoes it to any reader: {leaked}"
