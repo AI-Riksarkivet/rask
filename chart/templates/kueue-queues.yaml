@@ -34,6 +34,15 @@ metadata:
     "helm.sh/hook-weight": {{ $weightPre | quote }}
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+  {{- /* [[XC-065]] `rollout restart` PATCHES the Deployment's pod template and `rollout status` reads
+       it plus the ReplicaSets it owns. Granted here, beside the container that uses them, because a
+       control whose permission lives in another file is one nobody notices was never granted. */}}
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["kueue.x-k8s.io"]
     resources: ["resourceflavors", "clusterqueues"]
     verbs: ["get", "create", "update", "patch"]
@@ -130,6 +139,64 @@ spec:
         runAsNonRoot: true
         runAsUser: 65534
         seccompProfile: {type: RuntimeDefault}
+      {{- /* THE CA MUST BE RE-PATCHED BEFORE THE APPLY, and retrying cannot do it ([[XC-065]]).
+           kueue's controller writes its self-signed CA into the CRDs' conversion `caBundle` when it
+           BOOTS; this upgrade re-applies those CRDs from the subchart and overwrites the patch, so the
+           API server then holds a CA that does not match the certificate the webhook serves. Measured
+           live 2026-09-21: the apply below crash-looped nine times over 21 minutes on `x509:
+           certificate signed by unknown authority ... "kueue-ca"` and the release was recorded failed.
+           A restart re-runs the patch — observed to recover in 68 seconds — and doing it as an INIT
+           container is what orders it, so the queues apply against a webhook the API server trusts
+           rather than racing it. */}}
+      initContainers:
+        - name: restart-kueue-controller
+          image: {{ .Values.kueue.queues.kubectlImage | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests: {cpu: "10m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+          args:
+            - rollout
+            - restart
+            - deployment/{{ .Release.Name }}-kueue-controller-manager
+            - -n
+            - {{ .Release.Namespace }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+        - name: await-kueue-controller
+          image: {{ .Values.kueue.queues.kubectlImage | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests: {cpu: "10m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+          {{- /* A restart nobody waits on is a race the apply loses: it would meet the OLD webhook.
+               The timeout is generous because the wait is cheap and a premature give-up reintroduces
+               exactly the failure above; the observed recovery was 68s. */}}
+          args:
+            - rollout
+            - status
+            - deployment/{{ .Release.Name }}-kueue-controller-manager
+            - -n
+            - {{ .Release.Namespace }}
+            - --timeout=180s
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
       containers:
           # The kubectl image is distroless (no shell), so run kubectl directly.
           # If the Kueue admission webhook (failurePolicy=Fail) isn't ready yet the
