@@ -132,13 +132,13 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 
 ## Counted
 
-**189 open items**, of which **98 are blocked on a decision** and **91 can be picked up today**.
+**197 open items**, of which **98 are blocked on a decision** and **99 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
-| **PHASE 1 · CROSS-CUTTING** | 33 | 11 | 5 |
+| **PHASE 1 · CROSS-CUTTING** | 41 | 19 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -719,6 +719,54 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - *Closes when:* docs/DECISIONS.md and chart/values.yaml both state the topology.
 - *Evidence:* `grep -n -i greptime docs/DECISIONS.md — none of the 8 hits is a sharing ruling` · `grep -n -i 'per-workload|one shared' chart/values.yaml — no observability match`
 
+
+**XC-054 · Operator-facing reference prose lives inside chart templates, and Helm stores raw template bytes in EVERY revision — the release Secret is 6.8 KB from a ceiling it has already hit once**
+`chart` · **MED**
+- *What is left:* Helm persists the rendered chart's raw template bytes into the release Secret for every revision, so a paragraph of operator guidance inside a template is paid for once per revision and never read from there. The estate has already hit the 1 MiB etcd object ceiling once. Move operator reference prose to `chart/README.md` / `docs/`, keeping only the rationale a template's own reader needs.
+- *Closes when:* The release Secret's size is measured well clear of the ceiling and a gate refuses a template that regrows past a stated budget.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream keeps reference prose out of the packaged chart for exactly this reason · measured: rask's live release Secret 6.8 KB below 1 MiB
+
+**XC-055 · The chart version is inert: every release revision reads `rask-0.3.0`, so no revision can be identified or rolled back by what it deployed**
+`chart, ci` · **MED**
+- *What is left:* 193 revisions of the release carry one chart version, so `helm history` cannot distinguish them and `helm rollback <rev>` is chosen by ordinal rather than by content. Upstream bumps `version` and `appVersion` automatically on every release. Pair with a `make helm-history` / `make helm-rollback` seam — [[XC-056]] — because the documented recovery path currently says "run bare helm".
+- *Closes when:* Two consecutive releases render distinct chart versions and `helm history rask` names them.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 · measured: 193 revisions, all `rask-0.3.0`
+
+**XC-056 · Helm's recovery verbs have no seam behind them, so the documented recovery is "run bare helm" — which bypasses `scripts/helm.sh`**
+`chart, scripts` · **LOW**
+- *What is left:* `make helm-history` and `make helm-rollback` do not exist, so the recovery instruction routes around the project's own helm seam and its values handling — the same class of mistake that lands a fleet on chart-default images. Add both targets through `scripts/helm.sh`.
+- *Closes when:* Both targets exist, go through the seam, and the runbook names them instead of bare `helm`.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
+
+**XC-057 · Destructive cluster targets guard on "a cluster answered", not on cluster IDENTITY — `make e2e-ci` can helm-upgrade the live k3s release**
+`scripts, ci, chart` · **HIGH**
+- *What is left:* A target that mutates a cluster checks reachability rather than which cluster it reached, so a stale or wrong kubeconfig is indistinguishable from the intended one. The estate already carries two kubeconfigs, one of them a dead kind cluster that still answers. Guard on a cluster-identity assertion (context name plus a marker object the release owns) before any mutating target runs.
+- *Closes when:* A mutating target refuses a cluster whose identity it cannot confirm, proven by a test that points it at the wrong context.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream guards identity before mutation
+
+**XC-058 · The audit tier is keyed on the log MESSAGE, and nothing stops a message being an f-string**
+`service-kit, catalog, lineage` · **HIGH**
+- *What is left:* Audit records are selected downstream by their log message, so one interpolated message silently drops that record out of the audit stream — a compliance record that vanishes without failing anything. Gate the log CALL: a constant message plus structured `extra=`, refused by a test over the audit call sites.
+- *Closes when:* A gate refuses an audit call whose message is not a literal, and the existing call sites pass it.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
+
+**XC-059 · The OTel Collector — the one pod every signal in the estate flows through — has a readiness probe and no liveness probe**
+`chart, observability` · **MED**
+- *What is left:* A wedged Collector stays Ready-false and is never restarted, so every trace, metric and log in the estate stops with nothing restarting the pod. Add a liveness probe alongside the existing readiness probe.
+- *Closes when:* The rendered Collector carries both probes and a test pins that it does.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
+
+**XC-060 · The Python plane has no lockfile-drift gate while the JS plane does, so a dependency edit without a re-lock is green**
+`ci` · **MED**
+- *What is left:* A `pyproject.toml` dependency change that never reached `uv.lock` passes CI, so the lock and the declaration disagree until something fails at build time in an unrelated change. The JS plane already gates this; mirror it with `uv lock --check` over the root and each runner lock.
+- *Closes when:* CI fails on a dependency edit with no corresponding lock change, mutation-checked by making one.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
+
+**XC-061 · Container hardening is restated per template and applied unevenly — 7 first-party containers and 3 Jobs render with none of it, including OpenBao and Dex**
+`chart` · **HIGH**
+- *What is left:* `securityContext` is repeated per template rather than defaulted chart-wide, so coverage drifts silently and the two workloads that most need it — the secret store and the IdP — render without it. Hoist the baseline to one chart-wide default that a template opts OUT of with a stated reason, and gate the render.
+- *Closes when:* Every first-party container and Job renders the baseline, and a test refuses a new one that does not.
+- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream sets the baseline once, chart-wide
 
 ## PHASE 2 · COMPUTE
 
