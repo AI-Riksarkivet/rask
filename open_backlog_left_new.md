@@ -652,7 +652,31 @@ have no `uv.lock` and so cannot be built to emit anything.
   the table governed first — and over adding a fourth rung for declared-lane writes. It follows directly
   from the measurement that reframed this row: the output carries NO tuples at all, so "issue the tuple"
   has no object to attach to until the table exists in the catalog. UNBLOCKED.
-- *What is left:* The create path. A lane creating its declared output registers it through the catalog, which seeds ownership at create — so a tuple exists by the time the job emits provenance. Then re-run `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane`: three legs are RED today and go green on the fix, so this needs no new test to prove it. The SILENCE half is DONE — deployed and observed as `{door="http"}` in GreptimeDB.
+- **RE-MEASURED 2026-09-21 AND THE SEVERITY IS LOWER THAN THIS ROW CLAIMED — the correction is mine.**
+  The row asserted "the estate is one declaration away from silently ungoverned provenance". That
+  overstates it. A lane driven THROUGH THE CASCADE gets a catalog-created destination: `transform.py`
+  creates the next tier through the catalog before dispatching, which is observable in this very
+  estate's logs — `catalog refused to create 'gold$catalog': HTTP 404` came from a RAY-dispatched
+  silver->gold hop — and `tables.py:279,792,802` seed ownership on create. So a cascade-driven lane's
+  output IS governed, and the job's provenance resolves against a real object.
+  **THE DUMMY LANE IS UNGOVERNED BECAUSE ITS SUITE BYPASSES THE PLATFORM, not because the platform has
+  a hole.** `test_dummy_lane_e2e` submits with `ray job submit` straight to the head, choosing
+  `RASK_DEST_URI`/`RASK_DEST_TABLE` itself, so no catalog create ever runs and `acme-silver$dummy`
+  exists as bytes with no record and no tuples. The suite's own failure message says as much and names
+  the fix: "a missing GRANT, not a broken lane ... this lane needs one link the script does not know
+  about: `namespace:<p>-silver -> table:<p>-silver$dummy`" — `scripts/seed_medallion_fga.sh` seeds
+  `$features`, the HTR lane's output, and not this one.
+  **SO THE RULING STILL POINTS THE RIGHT WAY, at a smaller target.** "The create must govern the table"
+  is already true of every create that goes through the catalog; what is left is that a lane can be
+  driven around the catalog entirely and nothing notices. The honest remaining work is therefore a GATE
+  rather than a new create path: a job whose declared output has no catalog record should be refused at
+  submit, where the platform still has the context to say so — not at the lineage door afterwards,
+  where all it can do is drop the provenance of a write that already happened.
+  **WHAT THE SEAL FORBIDS IS ALSO WHY THIS CANNOT LIVE IN THE RUNNER.** `dummy_runner/transform.py`
+  states it: the runner "cannot import the platform's definition — it is sealed, and declares only
+  `storage` and `pylance`", and "the catalog's publish door is the authority". Governing the output is
+  the SUBMITTER's job, which is exactly where the cascade already does it.
+- *What is left:* A SUBMIT-TIME gate: a job whose declared output has no catalog record is refused where the platform still has the context to say so, rather than having its provenance dropped at the lineage door after the write. The cascade path already governs its destination, so this closes the bypass rather than building a create path. Re-running `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane` is the measure — three legs are RED today — and the suite's own message names the interim: `scripts/seed_medallion_fga.sh` does not seed this lane's output table. The SILENCE half is DONE: deployed and observed as `{door="http"}` in GreptimeDB.
 - **THE SILENCE HALF IS FIXED, DEPLOYED AND OBSERVED (2026-09-21) — the blocked half is untouched.**
   The HTTP ingest door recorded `INGESTED` on success and NOTHING on refusal, while the Dapr subscriber
   classified both and both of its outcomes already had alert rules (`chart/alerting/rules.yml:145,170`).
