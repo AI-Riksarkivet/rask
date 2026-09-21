@@ -6,11 +6,14 @@ seven ticks, and the Lance session held 14.6 MB of its 204.8 MB cap for five con
 RSS went 192 -> 403Mi. Reading `/proc/1/maps` out of the pod and parsing it OUTSIDE the container
 named the remainder:
 
-    pod          arenas (60-68MB anon)   stacks (8-9MB)   anon virtual
-    catalog               34                  103            6,835 MB
-    medallion             41                  109            6,996 MB
-    lineage               42                  110            6,782 MB
-    maintenance           59                  117            8,797 MB
+    pod                arenas (60-68MB anon)   stacks (8-9MB)   anon virtual
+    catalog                     34                  103            6,835 MB
+    media-to-silver             40                  101            6,619 MB
+    medallion-producer          41                  109            6,996 MB
+    lineage                     42                  110            6,782 MB
+    bronze-to-silver            44                  109            6,925 MB
+    silver-to-gold              44                  108            6,924 MB
+    maintenance                 59                  117            8,797 MB
 
 Those 60-68 MB reservations are glibc secondary arenas -- `HEAP_MAX_SIZE` is 64 MB on 64-bit. glibc
 sizes its arena cap from `sysconf(_SC_NPROCESSORS_ONLN)`, the HOST's core count, and a cgroup CPU
@@ -50,9 +53,12 @@ import pytest
 from tests.unit.chart_render import DEFAULT_ARGS, containers, env_of, render
 
 
-#: The four services FOCUS names as the lakehouse. Each was measured above; each runs the same image
-#: family on the same 64-core node under a one-CPU quota.
-LAKEHOUSE = frozenset({"catalog", "lineage", "medallion-producer", "maintenance"})
+#: The lakehouse container names FOCUS covers. Each was measured above; each runs the same image family
+#: on the same 64-core node under a one-CPU quota. `stage-runner` is ONE name borne by three
+#: deployments (bronze-to-silver, media-to-silver, silver-to-gold), and the assertion below walks every
+#: container bearing it rather than the first, so a per-deployment regression cannot hide behind a
+#: sibling that still renders the bound.
+LAKEHOUSE = frozenset({"catalog", "lineage", "medallion-producer", "maintenance", "stage-runner"})
 
 #: The ceiling this gate enforces. 2 is what was measured; the bar is `<= 4` so a later tuning pass has
 #: room to trade lock contention against fragmentation without editing this file, while a container
