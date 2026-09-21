@@ -105,9 +105,17 @@ def test_EVERY_write_site_forwards_the_per_base_credentials() -> None:
 
     source = Path(__file__).resolve().parents[1] / "src/catalog/services/dataplane.py"
     tree = ast.parse(source.read_text())
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_write_blob"]
+    # EVERY HOP, not just the innermost. Measured 2026-09-21: an earlier version checked `_write_blob`
+    # alone, which passed while the two `_write_blob_into` calls one layer up forwarded nothing — so the
+    # refs reached `create_table`, stopped there, and every base silently took the estate credential.
+    # Driving it live was the only thing that showed it: a create with a DELIBERATELY BOGUS secret
+    # reference returned 200 where it had to fail closed.
+    wired = ("_write_blob", "_write_blob_into")
+    calls: list[tuple[str, ast.Call]] = [
+        (node.func.id, node) for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in wired
+    ]
 
-    assert len(calls) >= 2, f"found {len(calls)} `_write_blob` call(s); this gate is reading the wrong file or the shape changed"
+    assert len(calls) >= 4, f"found {len(calls)} call(s) across {wired}; this gate is reading the wrong file or the shape changed"
 
-    missing = [call.lineno for call in calls if not any(kw.arg == "base_credential_refs" for kw in call.keywords)]
-    assert not missing, f"these `_write_blob` call sites write their bases on the estate credential: lines {missing}"
+    missing = [f"{name}:{call.lineno}" for name, call in calls if not any(kw.arg == "base_credential_refs" for kw in call.keywords)]
+    assert not missing, f"these call sites write their bases on the estate credential: {missing}"

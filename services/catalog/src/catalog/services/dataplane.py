@@ -391,6 +391,9 @@ def create_table(
             allow_external=allow_external,
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
+            base_credential_refs=base_credential_refs,
+            secret_store=secret_store,
+            secret_field=secret_field,
         )
 
     location = ns.declare_table(DeclareTableRequest(id=segments, properties=properties)).location
@@ -406,6 +409,9 @@ def create_table(
         allow_external=allow_external,
         external_blob_bases=external_blob_bases,
         data_bases=data_bases,
+        base_credential_refs=base_credential_refs,
+        secret_store=secret_store,
+        secret_field=secret_field,
     )
 
 
