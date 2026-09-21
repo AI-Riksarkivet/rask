@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **101 are blocked on a decision** and **99 can be picked up today**.
+**200 open items**, of which **103 are blocked on a decision** and **97 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 19 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -618,14 +618,16 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *Evidence:* `docs/audits/lakehouse-2026-09/sweeps/zero-trust.md:5-27 (§A control table), :29-42 (§B ordered gaps)` · `grep -rhoE '§F[0-9]+-[0-9]+' tests services/*/tests packages/*/tests → §F2-1,2,3,4,8,9,11` · `open_backlog_left.md:164 (R1–R11 STAND)` · `grep -rln 'zero.trust|§F' Makefile scripts → none`
 
 **XC-031 · No ordered prod install runbook exists; the FGA seed / OpenBao unseal / PSA-label ordering is documented only as warnings in values-prod**
-`chart` · **MED**
+`chart` · **LOW**
 - *What is left:* Write docs/runbooks/RUNBOOK-prod-install.md with the ordered sequence: secrets -> scripts/seed_medallion_fga.sh -> OpenBao init and unseal -> flip governance (auth.enabled, medallion.fgaEnabled) -> verify. docs/runbooks/ holds only llm-cluster.md, RUNBOOK-oncall.md and RUNBOOK-restore.md. Decide whether chart/templates/bootstrap-admin.yaml (a post-install/post-upgrade hook that seeds standing tuples) should absorb the stage-runner grants seed_medallion_fga.sh applies, so the prerequisite at values-prod.yaml:18 and the alert text at chart/alerting/rules.yml:294 stop naming a manual script.
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*). EXTENDED to this row on 2026-09-21: it was not in the seven put to the owner as cluster E, but its closing bar is purely prod (`values-prod.yaml` / the prod install), so parking the seven and leaving this one workable was an inconsistency in the application, not a distinction in the rows. Parked at LOW on the same terms — evidence stands, returns at its old priority the day a prod estate exists. The question it waits on, unchanged: see *Closes when* below.
 - *Closes when:* docs/runbooks/RUNBOOK-prod-install.md exists with the ordered steps, and the FGA seed is either a hook or a named runbook step.
 - *Evidence:* `ls docs/runbooks/ -> llm-cluster.md, RUNBOOK-oncall.md, RUNBOOK-restore.md` · `chart/values-prod.yaml:16-24 (seed prerequisite warning, fgaEnabled: true)` · `chart/templates/bootstrap-admin.yaml:2,30-32 (post-install hook seeding standing tuples)` · `chart/alerting/rules.yml:294 (re-seed with scripts/seed_medallion_fga.sh)`
 
 **XC-032 · No first-party image is registry-qualified or digest-pinned in `chart/values-prod.yaml`**
-`chart` · **MED** · PARTIAL
+`chart` · **LOW** · PARTIAL
 - *What is left:* The `imagePullSecrets` half is shipped for the six first-party pod-spec templates and pinned by `tests/unit/test_a_first_party_pod_can_pull_from_a_private_registry.py`. `chart/values-prod.yaml:11-14` has `image:` with only `pullPolicy` and two commented-out per-component tags, and `chart/values.yaml:529-533` defaults `image.repository: ""` / `digest: ""` — set a registry-qualified `image.repository` and per-component `tag` or `digest` values in `values-prod.yaml` so a non-k3s cluster can pull. The airgap/mirror question for the 17 pinned third-party images is separate and only answered if asked.
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*). EXTENDED to this row on 2026-09-21: it was not in the seven put to the owner as cluster E, but its closing bar is purely prod (`values-prod.yaml` / the prod install), so parking the seven and leaving this one workable was an inconsistency in the application, not a distinction in the rows. Parked at LOW on the same terms — evidence stands, returns at its old priority the day a prod estate exists. The question it waits on, unchanged: see *Closes when* below.
 - *Closes when:* `helm template -f chart/values-prod.yaml` renders every first-party image with a registry-qualified repository and a release tag or digest.
 - *Evidence:* `chart/values-prod.yaml:11-14` · `chart/values.yaml:529-533` · `tests/unit/test_a_first_party_pod_can_pull_from_a_private_registry.py (exists)`
 
