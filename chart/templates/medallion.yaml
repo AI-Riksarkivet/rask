@@ -2,12 +2,14 @@
 {{- $root := . }}
 {{- $port := .Values.medallion.port }}
 {{- $img := include "lance.catalogImage" . }}
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
-# medallion-producer — the dummy producer / HEAD of the medallion pipeline (R23: bronze is the FIRST governed
-# tier; raw is the external world). POST /produce emits ONLY the bronze$events OpenLineage event;
-# medallion-producer's OWN /bronze-arrival subscription reacts to that event and publishes the first trigger
-# (medallion.bronze) the bronze→silver stage runner consumes — the event-driven head (B2), not a direct publish.
-# ─────────────────────────────────────────────────────────────────────────────────────────────────
+{{- /*
+   ─────────────────────────────────────────────────────────────────────────────────────────────────
+   medallion-producer — the dummy producer / HEAD of the medallion pipeline (R23: bronze is the FIRST governed
+   tier; raw is the external world). POST /produce emits ONLY the bronze$events OpenLineage event;
+   medallion-producer's OWN /bronze-arrival subscription reacts to that event and publishes the first trigger
+   (medallion.bronze) the bronze→silver stage runner consumes — the event-driven head (B2), not a direct publish.
+   ─────────────────────────────────────────────────────────────────────────────────────────────────
+*/}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -75,94 +77,118 @@ spec:
             - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            # Fail-closed at boot if behind a sidecar but the app-token is unset — /bronze-arrival would
-            # otherwise be an open forged-trigger path (symmetric with the stage runners).
+            {{- /*
+               Fail-closed at boot if behind a sidecar but the app-token is unset — /bronze-arrival would
+               otherwise be an open forged-trigger path (symmetric with the stage runners).
+            */}}
             - { name: MEDALLION_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
             {{- if .Values.dapr.sidecars }}
-            # verify the Dapr-stamped header on /bronze-arrival (forged-trigger guard)
+            {{- /*
+               verify the Dapr-stamped header on /bronze-arrival (forged-trigger guard)
+            */}}
 {{- include "lance.appTokenEnv" (list $root $root.Values.medallion.producer.daprAppId) | nindent 12 }}
             {{- end }}
-            # medallion-producer's OWN subscriber component (queueGroupName=medallion-producer, deliverPolicy=new) — it
-            # subscribes on /bronze-arrival AND publishes through the same handle (same NATS subjects).
+            {{- /*
+               medallion-producer's OWN subscriber component (queueGroupName=medallion-producer, deliverPolicy=new) — it
+               subscribes on /bronze-arrival AND publishes through the same handle (same NATS subjects).
+            */}}
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .Values.medallion.producer.daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
             - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             - { name: MEDALLION_BRONZE_DATASET, value: {{ .Values.medallion.producer.bronzeDataset | quote }} }
-            # The IIIF page lane's bronze dataset name (P7a, re-tiered by R23) — a values knob beside
-            # bronzeDataset; /bronze-arrival fires the cascade for either name.
+            {{- /*
+               The IIIF page lane's bronze dataset name (P7a, re-tiered by R23) — a values knob beside
+               bronzeDataset; /bronze-arrival fires the cascade for either name.
+            */}}
             - { name: MEDALLION_BRONZE_NAMESPACE, value: {{ .Values.medallion.producer.bronzeNamespace | quote }} }
             - { name: MEDALLION_PRODUCER_OPERATION, value: {{ .Values.medallion.producer.operation | quote }} }
             - { name: MEDALLION_PRODUCER_AUTHOR, value: {{ .Values.medallion.producer.author | quote }} }
             - { name: MEDALLION_BRONZE_TOPIC, value: {{ .Values.medallion.producer.bronzeTopic | quote }} }
             {{- if .Values.catalog.controlEmit }}
-            # § D2 B8 — the publication head. Set ONLY when the catalog is actually emitting control
-            # events, because an empty value disables the subscription: a deployment without the
-            # emitter must register no route rather than subscribe to a topic nothing publishes on.
+            {{- /*
+               § D2 B8 — the publication head. Set ONLY when the catalog is actually emitting control
+               events, because an empty value disables the subscription: a deployment without the
+               emitter must register no route rather than subscribe to a topic nothing publishes on.
+            */}}
             - { name: MEDALLION_CONTROL_PUBSUB, value: "{{ required "pubsub.controlName must be set when catalog.controlEmit is on — an empty value silently disables the medallion publication head" .Values.pubsub.controlName }}-{{ .Values.medallion.producer.daprAppId }}" }
             {{- end }}
             {{- $transformsDeclared := false }}
             {{- range .Values.medallion.stageRunners }}{{- if .transform }}{{- $transformsDeclared = true }}{{- end }}{{- end }}
             {{- if or .Values.medallion.projectsEnabled $transformsDeclared }}
-            # #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
-            # /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
-            # project-less requests keep the shared URIs below byte-identically.
-            #
-            # ALSO required whenever ANY stage runner declares a `lane`, which is why `$transformsDeclared` widens the
-            # condition. The cascade HEAD consults declarations to decide whether an unrecognised table is
-            # a lane's entry point (`ingest_trigger.py::_has_declared_lane` -> `list_specs`), and that read
-            # goes through this root. Gated on `projectsEnabled` alone, the head could not see a single
-            # declaration, so a declared lane's table arrived and published nothing — the whole record was
-            # unreachable from the deployed chart.
+            {{- /*
+               #84 per-tenant routing (opt-in): the catalog's warehouse-registry root. A `project`-carrying
+               /produce resolves that project's ACTIVE warehouse and seeds <root>/medallion/bronze there;
+               project-less requests keep the shared URIs below byte-identically.
+
+               ALSO required whenever ANY stage runner declares a `lane`, which is why `$transformsDeclared` widens the
+               condition. The cascade HEAD consults declarations to decide whether an unrecognised table is
+               a lane's entry point (`ingest_trigger.py::_has_declared_lane` -> `list_specs`), and that read
+               goes through this root. Gated on `projectsEnabled` alone, the head could not see a single
+               declaration, so a declared lane's table arrived and published nothing — the whole record was
+               unreachable from the deployed chart.
+            */}}
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ .Values.minio.bucket }}" }
             {{- end }}
-            # Ray TRAIN head (#115): values-wired passthrough (docs/RAY-TRAIN.md; defaults mirror
-            # core/config.py). lineageUrl defaults to the release's own lineage service.
+            {{- /*
+               Ray TRAIN head (#115): values-wired passthrough (docs/RAY-TRAIN.md; defaults mirror
+               core/config.py). lineageUrl defaults to the release's own lineage service.
+            */}}
             - { name: MEDALLION_TRAIN_TOPIC, value: {{ .Values.medallion.train.topic | quote }} }
             - { name: MEDALLION_TRAIN_ENTRYPOINT, value: {{ .Values.medallion.train.entrypoint | quote }} }
             - { name: MEDALLION_TRAINER_IDENTITY, value: {{ .Values.medallion.train.trainerIdentity | quote }} }
             - { name: MEDALLION_MODELS_NAMESPACE, value: {{ .Values.medallion.train.modelsNamespace | quote }} }
             - { name: MEDALLION_TRAIN_LINEAGE_URL, value: {{ .Values.medallion.train.lineageUrl | default (printf "http://%s-lineage:%v" (include "lance.fullname" .) .Values.services.lineage.port) | quote }} }
             {{- if .Values.medallion.ray }}
-            # The producer app ALSO needs the Ray Jobs seam when ray is on: the TRAIN head (#115) gates on
-            # ray_enabled and submits training jobs to the same cluster the stage runners use for stage jobs.
-            # Found live 2026-07-13: this flag was wired only in the stage runners loop below, so /train could
-            # never be configured through the chart (409 "train head not configured" on every POST).
+            {{- /*
+               The producer app ALSO needs the Ray Jobs seam when ray is on: the TRAIN head (#115) gates on
+               ray_enabled and submits training jobs to the same cluster the stage runners use for stage jobs.
+               Found live 2026-07-13: this flag was wired only in the stage runners loop below, so /train could
+               never be configured through the chart (409 "train head not configured" on every POST).
+            */}}
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
             - { name: MEDALLION_RAY_ADDRESS, value: {{ .Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" .)) | quote }} }
             {{- if .Values.medallion.rayTasks }}
-            # WHAT THIS RAY PLANE CAN RUN, registered into `<control_root>/_tasks/` at this app's boot.
-            # Declared HERE because the chart is what deploys the image these commands run in — and read
-            # by the catalog's transform door, which learns no engine's vocabulary doing it (the engine
-            # is stamped by the registering plane, not by this list).
+            {{- /*
+               WHAT THIS RAY PLANE CAN RUN, registered into `<control_root>/_tasks/` at this app's boot.
+               Declared HERE because the chart is what deploys the image these commands run in — and read
+               by the catalog's transform door, which learns no engine's vocabulary doing it (the engine
+               is stamped by the registering plane, not by this list).
+            */}}
             - { name: MEDALLION_RAY_TASKS, value: {{ .Values.medallion.rayTasks | toJson | quote }} }
             {{- end }}
             {{- end }}
             {{- if .Values.medallion.inprocessTasks }}
-            # OUTSIDE the `ray` guard on purpose: this is what the estate runs when it brings no Ray
-            # cluster, so gating it on Ray would leave exactly that estate with an empty registry and a
-            # catalog door refusing every declaration.
+            {{- /*
+               OUTSIDE the `ray` guard on purpose: this is what the estate runs when it brings no Ray
+               cluster, so gating it on Ray would leave exactly that estate with an empty registry and a
+               catalog door refusing every declaration.
+            */}}
             - { name: MEDALLION_INPROCESS_TASKS, value: {{ .Values.medallion.inprocessTasks | toJson | quote }} }
             {{- end }}
             {{- if or .Values.medallion.fgaEnabled .Values.auth.enabled }}
-            # Rendered under fgaEnabled OR auth.enabled: the #64 human door below NEEDS the FGA client
-            # (can_administer) — auth-on without these envs left the client on its unreachable default URL,
-            # 503-fail-closing every human trigger (found by the fresh-redeploy drive 2026-07-24; the
-            # long-lived release had accumulated fgaEnabled=true via --reuse-values, masking it).
-            # SECURITY (found live 2026-07-13): the FGA envs were rendered ONLY inside the stage runners range,
-            # but this app also hosts the TRAINING consumer (#115 D5) — so `handle_train_trigger` got
-            # `fga_client=None` and its can_read_data/can_create_table gate silently no-op'd: a revoked
-            # trainer still trained (deny-test submitted a Ray job on a DENIED grant). The trainer has its
-            # OWN identity + rung (reader on the feature namespaces, writer on models ONLY): the consumer
-            # checks as `settings.trainer_identity` (MEDALLION_TRAINER_IDENTITY, set above), so the stage runners'
-            # SERVICE_IDENTITY/REQUIRED_ACTION pair is deliberately NOT rendered here — it is theirs, and a
-            # copy on this app would only mislead. These two envs are all the gate needs to come alive.
+            {{- /*
+               Rendered under fgaEnabled OR auth.enabled: the #64 human door below NEEDS the FGA client
+               (can_administer) — auth-on without these envs left the client on its unreachable default URL,
+               503-fail-closing every human trigger (found by the fresh-redeploy drive 2026-07-24; the
+               long-lived release had accumulated fgaEnabled=true via --reuse-values, masking it).
+               SECURITY (found live 2026-07-13): the FGA envs were rendered ONLY inside the stage runners range,
+               but this app also hosts the TRAINING consumer (#115 D5) — so `handle_train_trigger` got
+               `fga_client=None` and its can_read_data/can_create_table gate silently no-op'd: a revoked
+               trainer still trained (deny-test submitted a Ray job on a DENIED grant). The trainer has its
+               OWN identity + rung (reader on the feature namespaces, writer on models ONLY): the consumer
+               checks as `settings.trainer_identity` (MEDALLION_TRAINER_IDENTITY, set above), so the stage runners'
+               SERVICE_IDENTITY/REQUIRED_ACTION pair is deliberately NOT rendered here — it is theirs, and a
+               copy on this app would only mislead. These two envs are all the gate needs to come alive.
+            */}}
             - { name: RASK_FGA_ENABLED, value: "true" }
             - { name: RASK_FGA_API_URL, value: {{ .Values.medallion.fgaApiUrl | quote }} }
             {{- with .Values.auth.fgaStoreId }}
-            # Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
-            # Job use (see the catalog twin, services.yaml). Unset = provision-by-name at boot.
+            {{- /*
+               Operator-pinned FGA store id — the same auth.fgaStoreId every consumer + the bootstrap-admin
+               Job use (see the catalog twin, services.yaml). Unset = provision-by-name at boot.
+            */}}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
             {{- with .Values.auth.fgaModelId }}
@@ -173,16 +199,20 @@ spec:
             {{- include "lance.governedAuthAck" . | nindent 12 }}
             {{- end }}
             {{- if .Values.auth.enabled }}
-            # #64 human trigger door: a signed-in project admin (OIDC bearer + can_administer) may fire
-            # /produce or /train WITHOUT the service token. The web BFF forwards the user's bearer here; the
-            # service-to-service app-token path (APP_API_TOKEN, above) is unchanged. Same OIDC construction
-            # shape as catalog/lineage; the admin gate resolves against project:<produceAdminProject>.
+            {{- /*
+               #64 human trigger door: a signed-in project admin (OIDC bearer + can_administer) may fire
+               /produce or /train WITHOUT the service token. The web BFF forwards the user's bearer here; the
+               service-to-service app-token path (APP_API_TOKEN, above) is unchanged. Same OIDC construction
+               shape as catalog/lineage; the admin gate resolves against project:<produceAdminProject>.
+            */}}
             {{- include "lance.governedOidcEnv" . | nindent 12 }}
             - { name: MEDALLION_PRODUCE_ADMIN_PROJECT, value: {{ .Values.medallion.produceAdminProject | quote }} }
             {{- end }}
             {{- if .Values.dapr.resiliency.enabled }}
-            # Dapr-native DLQ (ships with the Resiliency CRD): the producer's bronze-arrival + train
-            # subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
+            {{- /*
+               Dapr-native DLQ (ships with the Resiliency CRD): the producer's bronze-arrival + train
+               subscriptions park exhausted deliveries here, ERROR-logged by /dlq-event.
+            */}}
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.medallion-producer" }
             - { name: MEDALLION_REFUSED_TOPIC, value: "refused.medallion-producer" }
             {{- end }}
@@ -261,9 +291,11 @@ spec:
                    measured with no second edit and a renamed dataset cannot half-move. */}}
             - { name: MEDALLION_LANE_SOURCES, value: {{ toJson $laneSources | quote }} }
             - { name: MEDALLION_LANE_DESTINATION_DATASETS, value: {{ toJson $laneOutputs | quote }} }
-            # ONE STRING with the Component's `metadata.name` and the path the producer serves at its
-            # pod root — Dapr delivers an input binding to `POST /<component name>`, so any two of the
-            # three agreeing while the third does not is a cron firing into a 404 forever.
+            {{- /*
+               ONE STRING with the Component's `metadata.name` and the path the producer serves at its
+               pod root — Dapr delivers an input binding to `POST /<component name>`, so any two of the
+               three agreeing while the third does not is a cron firing into a 404 forever.
+            */}}
             - { name: MEDALLION_CASCADE_LAG_BINDING_NAME, value: {{ $.Values.medallion.cascadeLag.bindingName | quote }} }
             {{- end }}
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" .Values.minio.bucket | quote }} }
@@ -278,34 +310,44 @@ spec:
                  given this on 2026-09-08; the producer was not, and the gap outlived the fix. */}}
             - { name: MEDALLION_FGA_SERVICE_IDENTITY, value: {{ .Values.medallion.producer.serviceIdentity | quote }} }
             {{- if .Values.medallion.qualityReview }}
-            # S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
-            # stage runners hold promotions; only this app-id can raise the decision event into the instance,
-            # and only this app has a gateway row. The flag is what starts the workflow runtime here.
+            {{- /*
+               S3/S4 — this app HOSTS `promotion_review` and serves the door that answers it. The
+               stage runners hold promotions; only this app-id can raise the decision event into the instance,
+               and only this app has a gateway row. The flag is what starts the workflow runtime here.
+            */}}
             - { name: MEDALLION_QUALITY_REVIEW_ENABLED, value: "true" }
             - { name: MEDALLION_QUALITY_REVIEW_HOURS, value: {{ .Values.medallion.qualityReviewHours | quote }} }
             - { name: MEDALLION_QUALITY_REVIEW_APPROVER, value: {{ .Values.medallion.qualityReviewApprover | quote }} }
             - { name: MEDALLION_PROMOTION_TOPIC, value: {{ .Values.medallion.promotionTopic | quote }} }
             {{- end }}
             {{- if .Values.medallion.compute }}
-            # Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
-            # cascade writes actual versioned data in the object store). The URI derives from the bronze namespace,
-            # exactly where the bronze→silver stage runner's FROM_URI points. S3 secret follows the catalog's
-            # two-tier rule (plaintext only when OpenBao is off — compute + OpenBao is not a shipped combo).
+            {{- /*
+               Real fake-Ray compute: the producer seeds the BRONZE Lance dataset directly (R23 — so the
+               cascade writes actual versioned data in the object store). The URI derives from the bronze namespace,
+               exactly where the bronze→silver stage runner's FROM_URI points. S3 secret follows the catalog's
+               two-tier rule (plaintext only when OpenBao is off — compute + OpenBao is not a shipped combo).
+            */}}
             - { name: MEDALLION_COMPUTE_ENABLED, value: "true" }
             - { name: MEDALLION_BRONZE_URI, value: "s3://{{ include "lance.stageBucket" (list . .Values.medallion.producer.bronzeNamespace) }}/medallion/{{ .Values.medallion.producer.bronzeNamespace }}" }
-            # The medallion (project) bucket base — where bronze/silver + the model registry live. The
-            # trainer resolves feature + model URIs from HERE (via silver's zone), so it stays in the project
-            # bucket even when gold (sink) is zoned out. `silver` is unmapped by default →
-            # minio.bucket, so this is s3://<project-bucket>/medallion, unchanged on the single-bucket path.
+            {{- /*
+               The medallion (project) bucket base — where bronze/silver + the model registry live. The
+               trainer resolves feature + model URIs from HERE (via silver's zone), so it stays in the project
+               bucket even when gold (sink) is zoned out. `silver` is unmapped by default →
+               minio.bucket, so this is s3://<project-bucket>/medallion, unchanged on the single-bucket path.
+            */}}
             - { name: MEDALLION_STAGE_BASE_URI, value: "s3://{{ include "lance.stageBucket" (list . "silver") }}/medallion" }
-            # The media ingest head (multimodal §9): /ingest-media seeds/reads the source prefix in the
-            # lake bucket (demo stand-in for an external media store), lands bronze-media blobs at the
-            # namespace-derived URI (MUST match the media stage runner's fromNamespace-derived FROM_URI), and
-            # triggers the media lane. Dataset/namespace/topic/prefix use the code defaults.
+            {{- /*
+               The media ingest head (multimodal §9): /ingest-media seeds/reads the source prefix in the
+               lake bucket (demo stand-in for an external media store), lands bronze-media blobs at the
+               namespace-derived URI (MUST match the media stage runner's fromNamespace-derived FROM_URI), and
+               triggers the media lane. Dataset/namespace/topic/prefix use the code defaults.
+            */}}
             - { name: MEDALLION_MEDIA_SOURCE_BUCKET, value: {{ .Values.minio.bucket | quote }} }
-            # hasKey+ternary (the LANCE_AUDIT_ENABLED convention, services.yaml): a key missing under
-            # --reuse-values (a stored release predating §9) must render the default, not "" (pydantic
-            # bool_parsing boot crash on this producer).
+            {{- /*
+               hasKey+ternary (the LANCE_AUDIT_ENABLED convention, services.yaml): a key missing under
+               --reuse-values (a stored release predating §9) must render the default, not "" (pydantic
+               bool_parsing boot crash on this producer).
+            */}}
             - { name: MEDALLION_MEDIA_SEED_SAMPLES, value: {{ hasKey .Values.medallion "mediaSeedSamples" | ternary .Values.medallion.mediaSeedSamples true | quote }} }
             {{- /* The media bronze namespace comes from values, not a literal. It was written twice
                  here as "bronze-media" — once as the stageBucket key and once as the path segment —
@@ -321,20 +363,24 @@ spec:
                  stage runner compares the DATASET name. */}}
             - { name: MEDALLION_MEDIA_BRONZE_NAMESPACE, value: {{ $mediaBronzeNs | quote }} }
             - { name: MEDALLION_MEDIA_BRONZE_DATASET, value: "{{ $mediaBronzeNs }}$objects" }
-            # The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
-            # events lane's bronze URI (same namespace root, its own dataset directory).
-            # Which IIIF Image API the head harvests from. WIRED, not left to the code default: that
-            # default is RA-INTERNAL and resolves only inside the archives' network, so every deploy
-            # elsewhere needed a `kubectl set env` to ingest a single page (live-proof 2026-07-28,
-            # defect 1). One knob feeds both harvest paths — the in-process httpx client AND the
+            {{- /*
+               The IIIF page head (P7a): /ingest-iiif lands the BRONZE page-image blob dataset beside the
+               events lane's bronze URI (same namespace root, its own dataset directory).
+               Which IIIF Image API the head harvests from. WIRED, not left to the code default: that
+               default is RA-INTERNAL and resolves only inside the archives' network, so every deploy
+               elsewhere needed a `kubectl set env` to ingest a single page (live-proof 2026-07-28,
+               defect 1). One knob feeds both harvest paths — the in-process httpx client AND the
+            */}}
             {{- /* `| default` on both, for the same `--reuse-values` reason the `encoders` block above
                  documents: these are NEW keys, and a stored release whose user values carry
                  `medallion: {compute: true}` leaves `medallion.producer` sub-keys nil. The fallbacks are
                  the code defaults (services/medallion/core/config.py), so an un-migrated release renders
                  exactly what it ran before rather than an empty base URL. */}}
-            # The IIIF Image API derivative path appended per page. Travels with baseUrl: a different
-            # server may not serve `full/max` (some cap at `full/2000,`), and a wrong derivative is a
-            # per-page 404 rather than a boot failure.
+            {{- /*
+               The IIIF Image API derivative path appended per page. Travels with baseUrl: a different
+               server may not serve `full/max` (some cap at `full/2000,`), and a wrong derivative is a
+               per-page 404 rather than a boot failure.
+            */}}
             - { name: MEDALLION_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- /* THE MEDALLION PLANE'S SCOPED IDENTITY (Q17-5). Empty values keep the tenant ROOT
                  credential, which is what every install ran until this landed. `rask-medallion` reaches
@@ -347,15 +393,19 @@ spec:
             {{- if not (include "lance.secretsViaDapr" .) }}
             - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.medallionAccessKey .Values.minio.medallionSecretKey)) .Values.minio.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
-            # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env
-            # (Batch 7 closes the gap: the env was already omitted here but nothing told the service to
-            # consume the store — a store-on deployment left medallion credential-less). Fails closed.
+            {{- /*
+               A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env
+               (Batch 7 closes the gap: the env was already omitted here but nothing told the service to
+               consume the store — a store-on deployment left medallion credential-less). Fails closed.
+            */}}
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
             {{- if $medScoped }}
-            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
-            # tenant ROOT's secret — so a scoped access key left on that default is signed with a
-            # mismatched pair and every operation fails `SignatureDoesNotMatch`. The Ray and maintenance
-            # pairs both paid for this; the field was already configurable, only the chart had to use it.
+            {{- /*
+               THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
+               tenant ROOT's secret — so a scoped access key left on that default is signed with a
+               mismatched pair and every operation fails `SignatureDoesNotMatch`. The Ray and maintenance
+               pairs both paid for this; the field was already configurable, only the chart had to use it.
+            */}}
             - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
             {{- end }}
             {{- end }}
@@ -448,17 +498,23 @@ spec:
             - { name: MEDALLION_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ $root.Values.dapr.apiTimeoutSeconds | quote }} }
-            # Fail-closed at boot if behind a sidecar but the app-token is unset (open forged-trigger path).
+            {{- /*
+               Fail-closed at boot if behind a sidecar but the app-token is unset (open forged-trigger path).
+            */}}
             - { name: MEDALLION_DAPR_ENABLED, value: {{ $root.Values.dapr.sidecars | quote }} }
-            # This stage runner's OWN subscriber component (queueGroupName=<app-id>, deliverPolicy=new) — it
-            # subscribes to its stage trigger AND publishes lineage + the next trigger through it.
+            {{- /*
+               This stage runner's OWN subscriber component (queueGroupName=<app-id>, deliverPolicy=new) — it
+               subscribes to its stage trigger AND publishes lineage + the next trigger through it.
+            */}}
             - { name: MEDALLION_PUBSUB, value: {{ include "lance.subPubsub" (list $root .daprAppId) | quote }} }
             - { name: MEDALLION_LINEAGE_TOPIC, value: {{ $root.Values.pubsub.topic | quote }} }
             {{- if $root.Values.services.lineage.outbox.enabled }}
             - { name: MEDALLION_LINEAGE_OUTBOX_URI, value: "s3://{{ $root.Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- if $root.Values.dapr.sidecars }}
-            # verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
+            {{- /*
+               verify the Dapr-stamped header on /medallion-event (forged-trigger guard)
+            */}}
 {{- include "lance.appTokenEnv" (list $root .daprAppId) | nindent 12 }}
             {{- end }}
             - { name: MEDALLION_FROM_NAMESPACE, value: {{ .fromNamespace | quote }} }
@@ -470,59 +526,71 @@ spec:
             - { name: MEDALLION_SUB_TOPIC, value: {{ .subTopic | quote }} }
             - { name: MEDALLION_PUB_TOPIC, value: {{ .pubTopic | quote }} }
             {{- if .transform }}
-            # WHICH DECLARED LANE this stage runner runs. OPT-IN per row, and deliberately absent by default:
-            # `core/config.py` documents that an estate which has declared nothing must behave
-            # byte-for-byte as before, and that a named-but-UNDECLARED lane is a REFUSAL rather than a
-            # fallback to the env below. Defaulting this to `.name` would therefore break every stage runner
-            # the moment the chart shipped.
-            #
-            # Set it, and `entrypoint`/`params`/`code_version` come from the catalog's admin-gated,
-            # audited record instead of this Deployment — so WHAT a lane runs changes through the door
-            # with no helm upgrade. The binding of a POD to an EDGE stays deploy-time, which is the same
-            # place every orchestrator binds a code location; only the program is runtime-governed.
-            #
-            # Until 2026-08-24 this variable was rendered by NO template, so `settings.transform` was always
-            # "" in-cluster, every stage runner took the env branch, and `/compute/lanes` wrote records that
-            # nothing read. The door was live and its property was not obtained.
+            {{- /*
+               WHICH DECLARED LANE this stage runner runs. OPT-IN per row, and deliberately absent by default:
+               `core/config.py` documents that an estate which has declared nothing must behave
+               byte-for-byte as before, and that a named-but-UNDECLARED lane is a REFUSAL rather than a
+               fallback to the env below. Defaulting this to `.name` would therefore break every stage runner
+               the moment the chart shipped.
+
+               Set it, and `entrypoint`/`params`/`code_version` come from the catalog's admin-gated,
+               audited record instead of this Deployment — so WHAT a lane runs changes through the door
+               with no helm upgrade. The binding of a POD to an EDGE stays deploy-time, which is the same
+               place every orchestrator binds a code location; only the program is runtime-governed.
+
+               Until 2026-08-24 this variable was rendered by NO template, so `settings.transform` was always
+               "" in-cluster, every stage runner took the env branch, and `/compute/lanes` wrote records that
+               nothing read. The door was live and its property was not obtained.
+            */}}
             - { name: MEDALLION_TRANSFORM, value: {{ .transform | quote }} }
             {{- end }}
             {{- if or $root.Values.medallion.projectsEnabled .transform }}
-            # #84 per-tenant routing (opt-in): a `project`-carrying stage trigger resolves this stage's
-            # from/to URIs off the warehouse registry (<project-root>/medallion/<namespace>) instead of
-            # the env URIs below; project-less triggers keep them byte-identically. Without this env a
-            # project trigger is DROPPED fail-closed.
-            #
-            # A lane-bound stage runner needs it for a second reason: `services/lane.py` reads the declaration
-            # straight off this root (never through a catalog client), so without it resolution raises
-            # UndeclaredLaneError naming an empty control root.
+            {{- /*
+               #84 per-tenant routing (opt-in): a `project`-carrying stage trigger resolves this stage's
+               from/to URIs off the warehouse registry (<project-root>/medallion/<namespace>) instead of
+               the env URIs below; project-less triggers keep them byte-identically. Without this env a
+               project trigger is DROPPED fail-closed.
+
+               A lane-bound stage runner needs it for a second reason: `services/lane.py` reads the declaration
+               straight off this root (never through a catalog client), so without it resolution raises
+               UndeclaredLaneError naming an empty control root.
+            */}}
             - { name: MEDALLION_CONTROL_ROOT, value: "s3://{{ $root.Values.minio.bucket }}" }
             {{- if and $root.Values.medallion.goldWarehouse (eq .toNamespace "gold") }}
-            # Gold SERVING warehouse (docs/DECISIONS.md "Medallion tiers"): ONLY the terminal silver→gold
-            # stage runner retargets — its tenant target root becomes the project's serving=="gold" registry
-            # record when one exists; absent → work-warehouse behavior, byte-identical.
+            {{- /*
+               Gold SERVING warehouse (docs/DECISIONS.md "Medallion tiers"): ONLY the terminal silver→gold
+               stage runner retargets — its tenant target root becomes the project's serving=="gold" registry
+               record when one exists; absent → work-warehouse behavior, byte-identical.
+            */}}
             - { name: MEDALLION_GOLD_WAREHOUSE_ENABLED, value: "true" }
             {{- end }}
             {{- end }}
             {{- if $root.Values.dapr.resiliency.enabled }}
-            # Dapr-native DLQ (ships with the Resiliency CRD — see values.yaml dapr.resiliency): retry
-            # exhaustion parks the trigger on this per-app topic, ERROR-logged by /dlq-event.
-            # Keyed by the stage runner's APP-ID, not its subTopic: two stage runners can share one subTopic, and a
-            # per-subTopic name had both declaring AND
-            # subscribing the same DLQ — every dead letter delivered to both, parked and counted twice,
-            # attributed to neither. The producer's dlq.medallion-producer is the precedent.
+            {{- /*
+               Dapr-native DLQ (ships with the Resiliency CRD — see values.yaml dapr.resiliency): retry
+               exhaustion parks the trigger on this per-app topic, ERROR-logged by /dlq-event.
+               Keyed by the stage runner's APP-ID, not its subTopic: two stage runners can share one subTopic, and a
+               per-subTopic name had both declaring AND
+               subscribing the same DLQ — every dead letter delivered to both, parked and counted twice,
+               attributed to neither. The producer's dlq.medallion-producer is the precedent.
+            */}}
             - { name: MEDALLION_DLQ_TOPIC, value: "dlq.{{ .daprAppId }}" }
             - { name: MEDALLION_REFUSED_TOPIC, value: "refused.{{ .daprAppId }}" }
             {{- end }}
             {{- if .requiredColumns }}
-            # Declared consumer dependencies (data-contract gap #1): the quality gate blocks a
-            # promotion whose written schema dropped/renamed any of these (the breaking-change detector).
+            {{- /*
+               Declared consumer dependencies (data-contract gap #1): the quality gate blocks a
+               promotion whose written schema dropped/renamed any of these (the breaking-change detector).
+            */}}
             - { name: MEDALLION_REQUIRED_COLUMNS, value: {{ .requiredColumns | quote }} }
             {{- end }}
             {{- if $root.Values.medallion.compute }}
-            # Real fake-Ray compute: read the upstream stage's Lance dataset, transform, write the downstream
-            # one — so the emitted lineage carries the REAL version + rows/bytes and the cascade produces
-            # actual data. FROM/TO URIs derive from the stage namespaces, so the chain lines up. S3 secret
-            # follows the catalog's two-tier rule (plaintext only when OpenBao is off).
+            {{- /*
+               Real fake-Ray compute: read the upstream stage's Lance dataset, transform, write the downstream
+               one — so the emitted lineage carries the REAL version + rows/bytes and the cascade produces
+               actual data. FROM/TO URIs derive from the stage namespaces, so the chain lines up. S3 secret
+               follows the catalog's two-tier rule (plaintext only when OpenBao is off).
+            */}}
             - { name: MEDALLION_COMPUTE_ENABLED, value: "true" }
             - { name: MEDALLION_FROM_URI, value: "s3://{{ include "lance.stageBucket" (list $root .fromNamespace) }}/medallion/{{ .fromNamespace }}" }
             - { name: MEDALLION_TO_URI, value: "s3://{{ include "lance.stageBucket" (list $root .toNamespace) }}/medallion/{{ .toNamespace }}" }
@@ -538,19 +606,25 @@ spec:
             {{- if not (include "lance.secretsViaDapr" $root) }}
             - { name: MEDALLION_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list $root $root.Values.minio.medallionAccessKey $root.Values.minio.medallionSecretKey)) $root.Values.minio.secretKey (not (not $medScoped)) | quote }} }
             {{- else }}
-            # Store-on → sole source at boot (see the producer block above). Fails closed.
+            {{- /*
+               Store-on → sole source at boot (see the producer block above). Fails closed.
+            */}}
             - { name: MEDALLION_SECRETS_FROM_DAPR, value: "true" }
             {{- if $medScoped }}
-            # The pair's other half — see the producer block. A scoped key on the default field signs
-            # with the root's secret and fails `SignatureDoesNotMatch` on every call.
+            {{- /*
+               The pair's other half — see the producer block. A scoped key on the default field signs
+               with the root's secret and fails `SignatureDoesNotMatch` on every call.
+            */}}
             - { name: MEDALLION_DAPR_SECRET_S3_FIELD, value: "medallion-s3-secret-key" }
             {{- end }}
             {{- end }}
             {{- if $root.Values.medallion.ray }}
-            # Event-driven real-Ray: the stage runner submits its stage transform as a `ray job submit` to the
-            # ray-lance cluster (Ray Jobs REST API, httpx-only) IN RESPONSE TO its Dapr trigger, instead of
-            # the in-process write. Requires medallion.compute (from/to URIs + S3 creds) + a running Ray
-            # cluster (deploy/ray-lance-demo.yaml). Default off — fake-Ray in-process stays the default path.
+            {{- /*
+               Event-driven real-Ray: the stage runner submits its stage transform as a `ray job submit` to the
+               ray-lance cluster (Ray Jobs REST API, httpx-only) IN RESPONSE TO its Dapr trigger, instead of
+               the in-process write. Requires medallion.compute (from/to URIs + S3 creds) + a running Ray
+               cluster (deploy/ray-lance-demo.yaml). Default off — fake-Ray in-process stays the default path.
+            */}}
             - { name: MEDALLION_RAY_ENABLED, value: "true" }
             - { name: MEDALLION_RAY_ADDRESS, value: {{ $root.Values.medallion.rayAddress | default (printf "http://%s-ray-head-svc:8265" (include "rask.fullname" $root)) | quote }} }
             {{- /* WHERE THE STAGE JOB POSTS ITS OWN PROVENANCE. Ray pods carry no daprd, so a job
@@ -561,28 +635,32 @@ spec:
                  while every job reports success. */}}
             - { name: MEDALLION_STAGE_LINEAGE_URL, value: {{ $root.Values.medallion.stageLineageUrl | default (printf "http://%s-lineage:%v" (include "lance.fullname" $root) $root.Values.services.lineage.port) | quote }} }
             {{- if .stageJob }}
-            # P7b seam: this stage runner's stage-job entrypoint (stage runners[].stageJob) — how the HTR lanes select
-            # the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
+            {{- /*
+               P7b seam: this stage runner's stage-job entrypoint (stage runners[].stageJob) — how the HTR lanes select
+               the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
+            */}}
             - { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }
             {{- end }}
             {{- end }}
             {{- end }}
-            # WHERE THIS STAGE RUNNER REGISTERS ITS OUTPUT — on EVERY stage runner, not just the HTR lane.
-            #
-            # These two used to sit behind a per-workload conditional, so only ONE lane could reach
-            # the catalog and every other stage runner wrote bytes the catalog never heard of: no table
-            # record, therefore no FGA object, therefore no grant, retention policy or
-            # deletion-protection could ever name them. Measured on the live estate 2026-08-17,
-            # `describe gold$catalog` answered 403 — not permission denied, but no such object.
-            #
-            # Worse, that conditional was itself unset, so NO stage runner had it — not even the lane the
-            # gate was written for. Governance belongs to the cascade, so the catalog's address does
-            # too: unconditional, on every stage runner.
-            # B3 — WHICH BUILD submits. Re-attach is only correct while the program is the same one:
-            # during a rolling deploy a redelivered trigger landing on the NEW pod re-attached to a job
-            # the OLD pod submitted (old entrypoint, old runtime_env, old transform) and reported
-            # success, so the run carried the new build's provenance over the old build's output.
-            # Sourced from the image this pod actually runs, so it cannot drift from the code.
+            {{- /*
+               WHERE THIS STAGE RUNNER REGISTERS ITS OUTPUT — on EVERY stage runner, not just the HTR lane.
+
+               These two used to sit behind a per-workload conditional, so only ONE lane could reach
+               the catalog and every other stage runner wrote bytes the catalog never heard of: no table
+               record, therefore no FGA object, therefore no grant, retention policy or
+               deletion-protection could ever name them. Measured on the live estate 2026-08-17,
+               `describe gold$catalog` answered 403 — not permission denied, but no such object.
+
+               Worse, that conditional was itself unset, so NO stage runner had it — not even the lane the
+               gate was written for. Governance belongs to the cascade, so the catalog's address does
+               too: unconditional, on every stage runner.
+               B3 — WHICH BUILD submits. Re-attach is only correct while the program is the same one:
+               during a rolling deploy a redelivered trigger landing on the NEW pod re-attached to a job
+               the OLD pod submitted (old entrypoint, old runtime_env, old transform) and reported
+               success, so the run carried the new build's provenance over the old build's output.
+               Sourced from the image this pod actually runs, so it cannot drift from the code.
+            */}}
             - { name: MEDALLION_RAY_CODE_VERSION, value: {{ include "lance.catalogImage" $root | quote }} }
             {{- /* The subject this stage runner claims at the catalog's SERVICE door. A NAME, not a secret,
                    so it is plain env — the credential is APP_API_TOKEN, which daprd injects from a
@@ -594,21 +672,27 @@ spec:
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             - { name: MEDALLION_CATALOG_ROOT, value: {{ printf "s3://%s" $root.Values.minio.bucket | quote }} }
             {{- if $root.Values.medallion.quality }}
-            # Validator gate: after the compute write, assert the stage's data is good enough to promote
-            # (row_count > 0, key column non-null); a failure emits the dataQualityAssertions facet but does
-            # NOT trigger the next stage. Needs medallion.compute on (it opens the just-written dataset).
+            {{- /*
+               Validator gate: after the compute write, assert the stage's data is good enough to promote
+               (row_count > 0, key column non-null); a failure emits the dataQualityAssertions facet but does
+               NOT trigger the next stage. Needs medallion.compute on (it opens the just-written dataset).
+            */}}
             - { name: MEDALLION_QUALITY_ENABLED, value: "true" }
             - { name: MEDALLION_QUALITY_KEY_COLUMN, value: {{ $root.Values.medallion.qualityKeyColumn | quote }} }
             {{- if $root.Values.medallion.qualityReview }}
-            # A hold becomes a QUESTION rather than a verdict. This stage runner publishes what its gate saw
-            # and stops; the producer's `promotion_review` splits corrupt (BLOCK) from unusual (ask).
-            # The approver + deadline ride the published spec, so they are read HERE at dispatch — a
-            # workflow body that read them would replay against whatever the value is now.
+            {{- /*
+               A hold becomes a QUESTION rather than a verdict. This stage runner publishes what its gate saw
+               and stops; the producer's `promotion_review` splits corrupt (BLOCK) from unusual (ask).
+               The approver + deadline ride the published spec, so they are read HERE at dispatch — a
+               workflow body that read them would replay against whatever the value is now.
+            */}}
             - { name: MEDALLION_QUALITY_REVIEW_ENABLED, value: "true" }
             - { name: MEDALLION_QUALITY_REVIEW_HOURS, value: {{ $root.Values.medallion.qualityReviewHours | quote }} }
             - { name: MEDALLION_QUALITY_REVIEW_APPROVER, value: {{ $root.Values.medallion.qualityReviewApprover | quote }} }
-            # The band is read HERE, by the stage runner, for the same reason the approver is: the stage runner
-            # decides at DISPATCH whether this promotion is unusual. The producer never sees it.
+            {{- /*
+               The band is read HERE, by the stage runner, for the same reason the approver is: the stage runner
+               decides at DISPATCH whether this promotion is unusual. The producer never sees it.
+            */}}
             - { name: MEDALLION_PROMOTION_REVIEW_BAND, value: {{ $root.Values.medallion.promotionReviewBand | quote }} }
             - { name: MEDALLION_PROMOTION_TOPIC, value: {{ $root.Values.medallion.promotionTopic | quote }} }
             {{- end }}
@@ -617,7 +701,9 @@ spec:
             - { name: RASK_FGA_ENABLED, value: "true" }
             - { name: RASK_FGA_API_URL, value: {{ $root.Values.medallion.fgaApiUrl | quote }} }
             {{- with $root.Values.auth.fgaStoreId }}
-            # Operator-pinned FGA store id — one auth.fgaStoreId across every consumer (see services.yaml).
+            {{- /*
+               Operator-pinned FGA store id — one auth.fgaStoreId across every consumer (see services.yaml).
+            */}}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
             {{- with $root.Values.auth.fgaModelId }}

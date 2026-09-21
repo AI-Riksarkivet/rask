@@ -5,40 +5,42 @@
 {{- $viewer := .Values.minio.viewerAccessKey }}
 {{- $catalog := .Values.minio.catalogAccessKey }}
 {{- if and .Values.minio.enabled (or $ray $maint $medallion $lineage $viewer) }}
-# SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
-#
-# `rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
-# and user with the mc image the mkbucket Job already uses, then set these." So the estate's one proven
-# scoped-user precedent was a values knob that only a hand-run `mc` session could turn, and a fresh
-# install came up on the tenant root. This is that step, written once for both consumers.
-#
-# WHY A POLICY AND NOT JUST A USER: a MinIO user created with no policy gets whatever the server
-# defaults to, which is not a documented deny. The point of this Job is the DENY — the compaction
-# credential must not reach `_projects/`, `_protection/` or `_policies/`, the records that decide what
-# maintenance is permitted to do. A credential that can rewrite its own governing policy can turn off
-# the shallow-clone guard that stops a compaction destroying another dataset's source.
-#
-# THREE POLICY LESSONS, each of which cost a broken cascade, and none of which is recoverable by
-# reading the docs:
-#
-#   * `s3:ListBucket` is BUCKET-scoped, not object-scoped. An object-scoped rule constrains a LIST not
-#     at all — the first attempt allowed the whole control plane to be listed and looked like the
-#     store ignoring Deny.
-#   * the prefix condition must be `medallion*`, NOT `medallion/*`: Lance lists with `prefix=medallion/`
-#     and `StringLike` does not match a trailing-slash pattern against it.
-#   * a bucket-NAME allow-list cannot govern this estate at all, because the buckets that hold tenant
-#     data are minted at runtime by `POST /v1/warehouses`. See the long note above the policies.
-#
-# IDEMPOTENT — AND RE-VERIFY IT, because the probe behind this predates the store. `mc admin policy
-# create` OVERWRITES an existing policy: a second create with different content returned exit 0 and the
-# readback showed the new document, probed 2026-09-04 against RustFS 1.0.0-beta.8, the store this
-# estate ran BEFORE the LH-133 swap. The `post-upgrade` pass below depends on exactly that overwrite,
-# so it is load-bearing rather than incidental, and it has NOT yet been re-driven against MinIO. So the create carries no `|| true`; the only thing one could
-# swallow is a REAL failure (malformed JSON, admin denied), leaving the credential on its previous
-# policy while the hook reports success. `user add` and `attach` keep theirs. Note what `user add` does
-# on a re-run, because the `|| true` hides it either way: it ROTATES the existing user's secret rather
-# than failing (probed 2026-09-07 — afterwards the old secret gives `SignatureDoesNotMatch` and the new
-# one gives `Access Denied`, i.e. valid but unpolicied). That is what makes a derived secret converge.
+{{- /*
+   SCOPED USERS — the provisioning step `values.yaml` admitted was missing.
+
+   `rayComputeAccessKey` shipped with the note "scripts/ has no provisioning step yet: create the policy
+   and user with the mc image the mkbucket Job already uses, then set these." So the estate's one proven
+   scoped-user precedent was a values knob that only a hand-run `mc` session could turn, and a fresh
+   install came up on the tenant root. This is that step, written once for both consumers.
+
+   WHY A POLICY AND NOT JUST A USER: a MinIO user created with no policy gets whatever the server
+   defaults to, which is not a documented deny. The point of this Job is the DENY — the compaction
+   credential must not reach `_projects/`, `_protection/` or `_policies/`, the records that decide what
+   maintenance is permitted to do. A credential that can rewrite its own governing policy can turn off
+   the shallow-clone guard that stops a compaction destroying another dataset's source.
+
+   THREE POLICY LESSONS, each of which cost a broken cascade, and none of which is recoverable by
+   reading the docs:
+
+   * `s3:ListBucket` is BUCKET-scoped, not object-scoped. An object-scoped rule constrains a LIST not
+   at all — the first attempt allowed the whole control plane to be listed and looked like the
+   store ignoring Deny.
+   * the prefix condition must be `medallion*`, NOT `medallion/*`: Lance lists with `prefix=medallion/`
+   and `StringLike` does not match a trailing-slash pattern against it.
+   * a bucket-NAME allow-list cannot govern this estate at all, because the buckets that hold tenant
+   data are minted at runtime by `POST /v1/warehouses`. See the long note above the policies.
+
+   IDEMPOTENT — AND RE-VERIFY IT, because the probe behind this predates the store. `mc admin policy
+   create` OVERWRITES an existing policy: a second create with different content returned exit 0 and the
+   readback showed the new document, probed 2026-09-04 against RustFS 1.0.0-beta.8, the store this
+   estate ran BEFORE the LH-133 swap. The `post-upgrade` pass below depends on exactly that overwrite,
+   so it is load-bearing rather than incidental, and it has NOT yet been re-driven against MinIO. So the create carries no `|| true`; the only thing one could
+   swallow is a REAL failure (malformed JSON, admin denied), leaving the credential on its previous
+   policy while the hook reports success. `user add` and `attach` keep theirs. Note what `user add` does
+   on a re-run, because the `|| true` hides it either way: it ROTATES the existing user's secret rather
+   than failing (probed 2026-09-07 — afterwards the old secret gives `SignatureDoesNotMatch` and the new
+   one gives `Access Denied`, i.e. valid but unpolicied). That is what makes a derived secret converge.
+*/}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -80,16 +82,20 @@ metadata:
          name alongside the old in release N, move the consumers in N+1 — because one release cannot
          both introduce a key and consume it before it exists. */}}
     "helm.sh/hook": post-install,pre-upgrade,post-upgrade
-    # Ordering WITHIN a phase: after any hook that provisions buckets.
+    {{- /*
+       Ordering WITHIN a phase: after any hook that provisions buckets.
+    */}}
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  # Reap the finished pod, exactly as `openfga-migrate.yaml` does and for the identical reason: this
-  # Job's name carries the bootstrap revision, so the `before-hook-creation` policy above matches the
-  # PREVIOUS revision's name never — each upgrade mints a new name and leaves the old husk holding its
-  # completed pod. Counted live 2026-09-16: 17 of them (r146..r163). The cost is legibility, which is
-  # the thing this estate keeps losing — a `kubectl get pods` full of husks is how four orphaned
-  # durables and a split image stem both stayed invisible.
+  {{- /*
+     Reap the finished pod, exactly as `openfga-migrate.yaml` does and for the identical reason: this
+     Job's name carries the bootstrap revision, so the `before-hook-creation` policy above matches the
+     PREVIOUS revision's name never — each upgrade mints a new name and leaves the old husk holding its
+     completed pod. Counted live 2026-09-16: 17 of them (r146..r163). The cost is legibility, which is
+     the thing this estate keeps losing — a `kubectl get pods` full of husks is how four orphaned
+     durables and a split image stem both stayed invisible.
+  */}}
   ttlSecondsAfterFinished: 3600
   backoffLimit: 3
   template:
@@ -108,9 +114,11 @@ spec:
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
-          # Every secret arrives as an env var read by `mc`, never interpolated into the rendered
-          # command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
-          # discloses a key.
+          {{- /*
+             Every secret arrives as an env var read by `mc`, never interpolated into the rendered
+             command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
+             discloses a key.
+          */}}
           env:
             - name: MINIO_SECRET_KEY
               valueFrom:

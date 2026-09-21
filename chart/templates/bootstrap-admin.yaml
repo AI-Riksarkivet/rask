@@ -1,26 +1,28 @@
 {{- if .Values.auth.enabled }}
-# FGA grant bootstrap (goal cond 4): the chart itself seeds the estate's standing tuples instead of an
-# out-of-band `fga tuple write`. A post-install/post-upgrade hook grants `owner` on the FGA root object
-# (warehouse:lance_catalog — RASK_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
-# what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin, plus
-# one rung per SERVICE principal that needs a standing capability.
-#
-# THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
-# was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first
-# owner rendered no Job at all and every service grant with it. Measured on the live k3s estate
-# 2026-09-10: `auth.bootstrapAdmin: ""`, `kubectl get jobs` listed no bootstrap Job, and the tuples the
-# notifications reconciler, the sweep and ingest's outbox vend each depend on were unreachable — three
-# controls that could not fire, behind a values key that has nothing to do with any of them. Who the
-# first HUMAN owner is, is a deployment's choice; that the sweep may maintain and that ingest may stage
-# are properties of the software.
-# There is no fga CLI image, so the Job reuses the catalog image (ships httpx) and speaks the OpenFGA
-# HTTP API directly: use the PINNED store id when auth.fgaStoreId sets one (rendered as
-# RASK_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
-# the store this Job grants into), else resolve the store id by name (the catalog's startup provision
-# creates/reuses the `lance-catalog` store — services/common/fga.py), CHECK the grant first (the clean
-# idempotence guard), and only then write the tuple, treating a duplicate-write 400/409 as success. On
-# the name-lookup path the store appears only once the catalog has booted with FGA on, so the resolve
-# loop waits for it (weight 5 = after the openfga-migrate hook at -5).
+{{- /*
+   FGA grant bootstrap (goal cond 4): the chart itself seeds the estate's standing tuples instead of an
+   out-of-band `fga tuple write`. A post-install/post-upgrade hook grants `owner` on the FGA root object
+   (warehouse:lance_catalog — RASK_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
+   what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin, plus
+   one rung per SERVICE principal that needs a standing capability.
+
+   THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
+   was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first
+   owner rendered no Job at all and every service grant with it. Measured on the live k3s estate
+   2026-09-10: `auth.bootstrapAdmin: ""`, `kubectl get jobs` listed no bootstrap Job, and the tuples the
+   notifications reconciler, the sweep and ingest's outbox vend each depend on were unreachable — three
+   controls that could not fire, behind a values key that has nothing to do with any of them. Who the
+   first HUMAN owner is, is a deployment's choice; that the sweep may maintain and that ingest may stage
+   are properties of the software.
+   There is no fga CLI image, so the Job reuses the catalog image (ships httpx) and speaks the OpenFGA
+   HTTP API directly: use the PINNED store id when auth.fgaStoreId sets one (rendered as
+   RASK_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
+   the store this Job grants into), else resolve the store id by name (the catalog's startup provision
+   creates/reuses the `lance-catalog` store — services/common/fga.py), CHECK the grant first (the clean
+   idempotence guard), and only then write the tuple, treating a duplicate-write 400/409 as success. On
+   the name-lookup path the store appears only once the catalog has booted with FGA on, so the resolve
+   loop waits for it (weight 5 = after the openfga-migrate hook at -5).
+*/}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -31,17 +33,21 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  # Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
-  # before-hook-creation delete policy never matches the previous one — without a TTL every
-  # `helm upgrade` left another Completed husk behind (14 were sitting in `kubectl get pods`).
+  {{- /*
+     Reap the finished pod. Each revision's job carries a -r<revision> name, so Helm's
+     before-hook-creation delete policy never matches the previous one — without a TTL every
+     `helm upgrade` left another Completed husk behind (14 were sitting in `kubectl get pods`).
+  */}}
   ttlSecondsAfterFinished: 3600
   backoffLimit: 30
   template:
     metadata:
-      # The explicit component label is the P4 landmine: hook pods without one are invisible to any
-      # component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
-      # intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
-      # the openfga ingress gets an exclusive client list like openbao/age/minio.
+      {{- /*
+         The explicit component label is the P4 landmine: hook pods without one are invisible to any
+         component-scoped NetworkPolicy `from` list. Today the openfga pods sit under the general
+         intra-namespace ingress allow, but the label keeps this hook admissible (and greppable) the day
+         the openfga ingress gets an exclusive client list like openbao/age/minio.
+      */}}
       labels:
         {{- include "lance.labels" . | nindent 8 }}
         app.kubernetes.io/component: bootstrap-admin
@@ -64,12 +70,16 @@ spec:
             limits: { cpu: "200m", memory: "256Mi" }
           env:
             - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
-            # Must match the catalog's RASK_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
+            {{- /*
+               Must match the catalog's RASK_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
+            */}}
             - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
             {{- with .Values.auth.fgaStoreId }}
-            # The operator-pinned store (env parity with the catalog's RASK_FGA_STORE_ID): the script
-            # prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
-            # still gets the bootstrap grant in the right place.
+            {{- /*
+               The operator-pinned store (env parity with the catalog's RASK_FGA_STORE_ID): the script
+               prefers this over the name lookup, so a pinned store named anything BUT `lance-catalog`
+               still gets the bootstrap grant in the right place.
+            */}}
             - { name: RASK_FGA_STORE_ID, value: {{ . | quote }} }
             {{- end }}
           command: ["python", "-c"]

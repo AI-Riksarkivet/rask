@@ -1,32 +1,34 @@
 {{- if and .Values.dapr.enabled .Values.dapr.resiliency.enabled }}
-# Dapr Resiliency (opt-in, ships TOGETHER with the deadLetterTopic subscriptions + the crash-recovery
-# broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
-# delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
-# ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
-#
-# THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
-# reads `Duration` under PolicyConstant alone (`b = backoff.NewConstantBackOff(c.Duration)`); under
-# PolicyExponential it is ignored outright and the schedule comes from InitialInterval / Multiplier /
-# RandomizationFactor / MaxInterval. The Resiliency CRD declares only policy, duration, matching,
-# maxInterval and maxRetries (read off the live CRD, 2026-09-14), so under `exponential` the first
-# step is pinned at cenkalti/backoff's 500ms default and NO chart value can move it — 0.5 + 0.75 +
-# 1.125 + 1.6875 ≈ 4s, whatever duration is written beside it. `constant` is also the only
-# DETERMINISTIC shape, for the same reason: `randomizationFactor` is equally unsettable and
-# exponential carries a 0.5 default that swings the total ±50%.
-#
-# The arithmetic, so the next edit can check itself: 4 retries × 120s = 480s = 8 min, no jitter, over
-# 5 total attempts. The margin under the components' 720s crash-recovery ackWait is not slack — while
-# the sidecar retries, the broker still holds the original un-acked, so a schedule outlasting ackWait
-# has JetStream redeliver the same trigger underneath a retry still in flight and the stage runs
-# twice. THE HANDLER'S OWN TIME COUNTS AGAINST THAT MARGIN, which is why the window is spent on FEW
-# LONG steps rather than many short ones: 480s of backoff plus 5 attempts leaves 48s apiece, where the
-# same 480s split into 30s steps would need 16 attempts and overrun ackWait on any handler slower than
-# 15s. Long steps cost little for the failure this exists to survive — a dependency pod is back inside
-# ~90s, so the FIRST retry already lands after recovery.
-#
-# Measured 2026-09-14 by driving a poison delivery to `bronze-to-silver` and timing the park; pinned
-# by tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py, which computes the
-# window from the rendered policy under dapr/kit's semantics and checks BOTH edges.
+{{- /*
+   Dapr Resiliency (opt-in, ships TOGETHER with the deadLetterTopic subscriptions + the crash-recovery
+   broker backOff — see values.yaml dapr.resiliency): the SIDECAR owns pub/sub delivery retries, so a
+   delivery that exhausts this schedule is published to the subscription's dead-letter topic (visible,
+   ERROR-logged parking) instead of silently ceasing to redeliver after the broker's maxDeliver.
+
+   THE POLICY IS `constant` BECAUSE IT IS THE ONLY ONE THAT CAN HOLD A WINDOW. dapr/kit's NewBackOff
+   reads `Duration` under PolicyConstant alone (`b = backoff.NewConstantBackOff(c.Duration)`); under
+   PolicyExponential it is ignored outright and the schedule comes from InitialInterval / Multiplier /
+   RandomizationFactor / MaxInterval. The Resiliency CRD declares only policy, duration, matching,
+   maxInterval and maxRetries (read off the live CRD, 2026-09-14), so under `exponential` the first
+   step is pinned at cenkalti/backoff's 500ms default and NO chart value can move it — 0.5 + 0.75 +
+   1.125 + 1.6875 ≈ 4s, whatever duration is written beside it. `constant` is also the only
+   DETERMINISTIC shape, for the same reason: `randomizationFactor` is equally unsettable and
+   exponential carries a 0.5 default that swings the total ±50%.
+
+   The arithmetic, so the next edit can check itself: 4 retries × 120s = 480s = 8 min, no jitter, over
+   5 total attempts. The margin under the components' 720s crash-recovery ackWait is not slack — while
+   the sidecar retries, the broker still holds the original un-acked, so a schedule outlasting ackWait
+   has JetStream redeliver the same trigger underneath a retry still in flight and the stage runs
+   twice. THE HANDLER'S OWN TIME COUNTS AGAINST THAT MARGIN, which is why the window is spent on FEW
+   LONG steps rather than many short ones: 480s of backoff plus 5 attempts leaves 48s apiece, where the
+   same 480s split into 30s steps would need 16 attempts and overrun ackWait on any handler slower than
+   15s. Long steps cost little for the failure this exists to survive — a dependency pod is back inside
+   ~90s, so the FIRST retry already lands after recovery.
+
+   Measured 2026-09-14 by driving a poison delivery to `bronze-to-silver` and timing the park; pinned
+   by tests/unit/test_the_cascade_retry_window_is_the_one_the_chart_states.py, which computes the
+   window from the rendered policy under dapr/kit's semantics and checks BOTH edges.
+*/}}
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
 metadata:
@@ -36,12 +38,14 @@ spec:
   policies:
     retries:
       pubsubDeliveryRetry:
-        # ONLY the fields the Resiliency CRD actually declares: policy, duration, matching,
-        # maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` are
-        # rejected — `strict decoding error: unknown field` — which `helm upgrade` swallows as a
-        # warning while a GitOps reconciler parks the whole Application OutOfSync on it. `maxInterval`
-        # is omitted deliberately: it is read only under `exponential`, so carrying it here would be a
-        # value that looks like a bound and bounds nothing.
+        {{- /*
+           ONLY the fields the Resiliency CRD actually declares: policy, duration, matching,
+           maxInterval, maxRetries. `initialInterval`, `multiplier` and `randomizationFactor` are
+           rejected — `strict decoding error: unknown field` — which `helm upgrade` swallows as a
+           warning while a GitOps reconciler parks the whole Application OutOfSync on it. `maxInterval`
+           is omitted deliberately: it is read only under `exponential`, so carrying it here would be a
+           value that looks like a bound and bounds nothing.
+        */}}
         policy: constant
         duration: 120s
         maxRetries: 4
@@ -139,15 +143,17 @@ scopes:
   - {{ .appId }}
 {{- end }}
 ---
-# Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.sidecars every /api/* request
-# leaves the gateway through its own daprd (RASK_DAPR_ENABLED → localhost:3500/v1.0/invoke/<app-id>/method),
-# and Dapr applies invocation resiliency on the CALLING sidecar — so this policy is scoped to the gateway
-# and targets every app-id the gateway routes to (services/gateway _routes()). Deliberately modest, no
-# invented aggression: 3 constant-backoff retries (connect-level blips), an end-to-end timeout of 300s
-# matching the gateway's own httpx client (httpx.Timeout(30.0, read=300.0) in services/gateway — a shorter
-# Dapr timeout would cut long reads the gateway itself still waits for), and a circuit breaker that sheds
-# a persistently dead upstream for 30s (the gateway's connect timeout) after 5 consecutive failures
-# instead of stacking doomed retries onto it.
+{{- /*
+   Service-invocation resiliency (the DAPRIFY mesh, 2026-07-27): with dapr.sidecars every /api/* request
+   leaves the gateway through its own daprd (RASK_DAPR_ENABLED → localhost:3500/v1.0/invoke/<app-id>/method),
+   and Dapr applies invocation resiliency on the CALLING sidecar — so this policy is scoped to the gateway
+   and targets every app-id the gateway routes to (services/gateway _routes()). Deliberately modest, no
+   invented aggression: 3 constant-backoff retries (connect-level blips), an end-to-end timeout of 300s
+   matching the gateway's own httpx client (httpx.Timeout(30.0, read=300.0) in services/gateway — a shorter
+   Dapr timeout would cut long reads the gateway itself still waits for), and a circuit breaker that sheds
+   a persistently dead upstream for 30s (the gateway's connect timeout) after 5 consecutive failures
+   instead of stacking doomed retries onto it.
+*/}}
 apiVersion: dapr.io/v1alpha1
 kind: Resiliency
 metadata:
@@ -162,12 +168,14 @@ spec:
         policy: constant
         duration: 2s
         maxRetries: 3
-        # RETRY ONLY WHAT A RETRY CAN FIX. Without this, every 4xx is retried three times, so one
-        # rejected request becomes FOUR failures against `consecutiveFailures >= 5` — two denied
-        # logins open the breaker and the next 30 s of traffic to that app gets 500 for EVERY caller.
-        # Measured on the ingest door: a handful of anonymous 403s took the whole app-id offline,
-        # which turns an authorization check into a self-inflicted denial of service.
-        # Retrying a 403 is also pointless on its own terms: the answer will not change.
+        {{- /*
+           RETRY ONLY WHAT A RETRY CAN FIX. Without this, every 4xx is retried three times, so one
+           rejected request becomes FOUR failures against `consecutiveFailures >= 5` — two denied
+           logins open the breaker and the next 30 s of traffic to that app gets 500 for EVERY caller.
+           Measured on the ingest door: a handful of anonymous 403s took the whole app-id offline,
+           which turns an authorization check into a self-inflicted denial of service.
+           Retrying a 403 is also pointless on its own terms: the answer will not change.
+        */}}
         matching:
           httpStatusCodes: 408,429,500-599
       {{- /* THE CASCADE HEADS GET A NARROWER MATCHER, and the difference is exactly 500.

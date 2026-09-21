@@ -2,10 +2,12 @@
 {{- $root := . }}
 {{- $port := .Values.maintenance.port }}
 {{- if .Values.dapr.enabled }}
-# Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
-# as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
-# Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
-# would fail to apply (the service still renders below; its cron route just never fires).
+{{- /*
+   Dapr cron INPUT binding — the sidecar POSTs to /<bindingName> on `schedule`. The schedule lives here
+   as component config, not in app code (no scheduler thread in the service). Scoped to the maintenance app.
+   Gated on dapr.enabled: without the Dapr control plane the Component CRD doesn't exist and the release
+   would fail to apply (the service still renders below; its cron route just never fires).
+*/}}
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -19,10 +21,12 @@ spec:
 scopes:
   - {{ .Values.maintenance.daprAppId }}
 ---
-# The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
-# two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
-# stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
-# the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.
+{{- /*
+   The RECONCILE cron — its own binding on its own schedule. Separate from the sweep above because the
+   two differ by an order of magnitude in cost: the sweep rewrites data files, this only reads three
+   stores and reports where they disagree. Sharing one binding would force the cheap drift report onto
+   the expensive rewrite's cadence, which is how a drift report becomes too stale to act on.
+*/}}
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
@@ -37,7 +41,9 @@ scopes:
   - {{ .Values.maintenance.daprAppId }}
 ---
 {{- end }}
-# Table maintenance service — runs uvicorn maintenance.service:app (shares the catalog image).
+{{- /*
+   Table maintenance service — runs uvicorn maintenance.service:app (shares the catalog image).
+*/}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -45,15 +51,17 @@ metadata:
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  # RECREATE, NOT ROLLINGUPDATE, and the one replica above is why. `bindings.cron` is stateless and
-  # uncoordinated — each replica runs the schedule independently — and this service holds no lease, so
-  # the pin IS the duplicate-tick guarantee. A rolling update spends it: Kubernetes rounds `maxSurge`
-  # UP, so the default 25% of one replica is one surge pod, and for the length of every rollout there
-  # are TWO maintenance pods each able to fire the sweep. Steady state was correct and the transition
-  # was not, which is why `replicas: 1` alone never proved the invariant.
-  #
-  # The cost is deliberate and small: a gap between the old pod stopping and the new one becoming
-  # ready, on a service whose work is an hourly cron with no request path to interrupt.
+  {{- /*
+     RECREATE, NOT ROLLINGUPDATE, and the one replica above is why. `bindings.cron` is stateless and
+     uncoordinated — each replica runs the schedule independently — and this service holds no lease, so
+     the pin IS the duplicate-tick guarantee. A rolling update spends it: Kubernetes rounds `maxSurge`
+     UP, so the default 25% of one replica is one surge pod, and for the length of every rollout there
+     are TWO maintenance pods each able to fire the sweep. Steady state was correct and the transition
+     was not, which is why `replicas: 1` alone never proved the invariant.
+
+     The cost is deliberate and small: a gap between the old pod stopping and the new one becoming
+     ready, on a service whose work is an hourly cron with no request path to interrupt.
+  */}}
   strategy:
     type: Recreate
   selector:
@@ -77,7 +85,9 @@ spec:
         {{- include "rask.daprAnnotations" (list $root .Values.maintenance.daprAppId $port) | nindent 8 }}
       {{- end }}
     spec:
-      # Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
+      {{- /*
+         Longer grace than the other apps: an in-flight sweep/Lance write must finish, not be SIGKILLed.
+      */}}
       terminationGracePeriodSeconds: {{ .Values.lifecycle.maintenanceTerminationGracePeriodSeconds }}
       {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-maintenance
@@ -110,32 +120,38 @@ spec:
             - { name: MAINTENANCE_DOCS, value: {{ $root.Values.docs.enabled | quote }} }
             {{- include "lance.lineageEmitEnv" (list $root) | nindent 12 }}
             - { name: DAPR_API_TIMEOUT_SECONDS, value: {{ .Values.dapr.apiTimeoutSeconds | quote }} }
-            # Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
-            # symmetric with the lineage service (the audit's consistency fix).
+            {{- /*
+               Fail-closed at boot if behind a Dapr sidecar but the app-token is unset (open forgery path) —
+               symmetric with the lineage service (the audit's consistency fix).
+            */}}
             - { name: MAINTENANCE_DAPR_ENABLED, value: {{ .Values.dapr.sidecars | quote }} }
             {{- if .Values.dapr.sidecars }}
-            # Gated on the sidecar because that is what it VERIFIES — the token exists to check the
-            # `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
-            # to check and the reference dangles: the Secret is not rendered and the pod never starts.
-            # verify the Dapr-stamped header on the cron route (forged-sweep guard)
+            {{- /*
+               Gated on the sidecar because that is what it VERIFIES — the token exists to check the
+               `dapr-api-token` header Dapr stamps on delivery, so without a sidecar there is no header
+               to check and the reference dangles: the Secret is not rendered and the pod never starts.
+               verify the Dapr-stamped header on the cron route (forged-sweep guard)
+            */}}
 {{- include "lance.appTokenEnv" (list $root $root.Values.maintenance.daprAppId) | nindent 12 }}
             {{- end }}
             {{- if $root.Values.maintenance.vendWriteCredentials }}
-            # THE REWRITE IS SIGNED PER TABLE, not by the root key. A compaction is a WRITE, so this
-            # service was performing writes across every bucket in the estate with one long-lived
-            # credential — the posture the vending door exists to end. With this set, each rewrite is
-            # signed by a credential scoped to that one table prefix and expiring in 900s.
-            #
-            # GATED, and off by default, because it needs BOTH halves to be true: the catalog must be
-            # reachable AND the maintenance subject must hold `can_write_data` on the tables it
-            # maintains (seeded by the bootstrap-admin hook — grep `maintenanceSubject`). Where either
-            # is missing the service degrades to the ambient credential and says so per dataset, which
-            # is correct but silent about WHY, so the flag makes the intent explicit rather than
-            # leaving a permanently-degraded deployment looking configured.
-            #
-            # What deliberately STAYS on the root key: discovery and the whole-estate protection
-            # pre-pass, which must open every manifest in every bucket and cannot be expressed by any
-            # per-table credential. Those are reads.
+            {{- /*
+               THE REWRITE IS SIGNED PER TABLE, not by the root key. A compaction is a WRITE, so this
+               service was performing writes across every bucket in the estate with one long-lived
+               credential — the posture the vending door exists to end. With this set, each rewrite is
+               signed by a credential scoped to that one table prefix and expiring in 900s.
+
+               GATED, and off by default, because it needs BOTH halves to be true: the catalog must be
+               reachable AND the maintenance subject must hold `can_write_data` on the tables it
+               maintains (seeded by the bootstrap-admin hook — grep `maintenanceSubject`). Where either
+               is missing the service degrades to the ambient credential and says so per dataset, which
+               is correct but silent about WHY, so the flag makes the intent explicit rather than
+               leaving a permanently-degraded deployment looking configured.
+
+               What deliberately STAYS on the root key: discovery and the whole-estate protection
+               pre-pass, which must open every manifest in every bucket and cannot be expressed by any
+               per-table credential. Those are reads.
+            */}}
             - { name: MAINTENANCE_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" $root) $root.Values.services.catalog.port | quote }} }
             {{- /* #41. The SAME `auth.audit` key every other lakehouse service reads, so the
                  operator's one lever reaches the component that REWRITES BYTES too — it had no
@@ -146,12 +162,14 @@ spec:
             - { name: MAINTENANCE_AUDIT_ENABLED, value: {{ hasKey $root.Values.auth "audit" | ternary $root.Values.auth.audit true | quote }} }
             - { name: MAINTENANCE_CATALOG_SERVICE_IDENTITY, value: {{ $root.Values.maintenance.catalogServiceIdentity | quote }} }
             {{- if $root.Values.maintenance.distributedCompaction }}
-            # THE REWRITE'S BYTES LEAVE THIS POD. `compact_files()` plans, executes and commits in one
-            # call, so this pod's memory ceiling is a function of the largest table anyone owns rather
-            # than of its request rate. With this on, the catalog plans and commits (metadata only,
-            # under its own key) and only the byte rewrite happens here, signed by the table-scoped
-            # credential the block above vends. Gated on the vending flag because the plan and commit
-            # doors are the catalog's — the flag alone would plan against nothing.
+            {{- /*
+               THE REWRITE'S BYTES LEAVE THIS POD. `compact_files()` plans, executes and commits in one
+               call, so this pod's memory ceiling is a function of the largest table anyone owns rather
+               than of its request rate. With this on, the catalog plans and commits (metadata only,
+               under its own key) and only the byte rewrite happens here, signed by the table-scoped
+               credential the block above vends. Gated on the vending flag because the plan and commit
+               doors are the catalog's — the flag alone would plan against nothing.
+            */}}
             - { name: MAINTENANCE_DISTRIBUTED_COMPACTION, value: "true" }
             {{- end }}
             {{- end }}
@@ -160,42 +178,50 @@ spec:
             - { name: MAINTENANCE_WORK_TOPIC, value: {{ .Values.maintenance.workTopic | quote }} }
             - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
             {{- if .Values.maintenance.indexTopic }}
-            # The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a
-            # minutes-long compaction and a vector index over a large table.
+            {{- /*
+               The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a
+               minutes-long compaction and a vector index over a large table.
+            */}}
             - { name: MAINTENANCE_INDEX_TOPIC, value: {{ .Values.maintenance.indexTopic | quote }} }
             - { name: MAINTENANCE_INDEX_PUBSUB, value: {{ .Values.maintenance.indexPubsub | quote }} }
             - { name: MAINTENANCE_INDEX_DLQ_TOPIC, value: {{ .Values.maintenance.indexDlqTopic | quote }} }
             {{- end }}
             {{- if .Values.maintenance.dedicatedWorkers.enabled }}
-            # THE PLANNER PUBLISHES AND DOES NOT CONSUME. It still needs the topic — it enqueues onto
-            # it — which is exactly why `workTopic` cannot express this and a second switch exists.
+            {{- /*
+               THE PLANNER PUBLISHES AND DOES NOT CONSUME. It still needs the topic — it enqueues onto
+               it — which is exactly why `workTopic` cannot express this and a second switch exists.
+            */}}
             - { name: MAINTENANCE_EXECUTE_WORK, value: "false" }
             {{- end }}
             {{- end }}
             {{- if .Values.maintenance.lineageEmit }}
             - { name: MAINTENANCE_LINEAGE_EMIT_ENABLED, value: "true" }
             {{- if .Values.maintenance.workTopic }}
-            # The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
-            # COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
-            # a competing-consumer group — measured 2026-09-03, the arrival route bound to
-            # `pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
-            # publishing too, exactly as the stage runners do (`lance.subPubsub`): the queue group affects
-            # subscription only.
+            {{- /*
+               The PER-SUBSCRIBER component, not the shared broadcast one. `queueGroupName` lives on the
+               COMPONENT, so subscribing through `pubsub.name` gives every replica every event instead of
+               a competing-consumer group — measured 2026-09-03, the arrival route bound to
+               `pubsub=lineage-pubsub` and would have planned the same dataset once per replica. Used for
+               publishing too, exactly as the stage runners do (`lance.subPubsub`): the queue group affects
+               subscription only.
+            */}}
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ include "lance.subPubsub" (list $ .Values.maintenance.daprAppId) | quote }} }
             {{- else }}
             - { name: MAINTENANCE_LINEAGE_PUBSUB, value: {{ .Values.pubsub.name | quote }} }
             {{- end }}
             - { name: MAINTENANCE_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- if .Values.services.lineage.outbox.enabled }}
-            # Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when the
-            # sweep does MATERIAL work (`sweep.py::_did_material_work` gates on fragments or versions
-            # removed), so a dropped publish loses the record of the one tick that actually rewrote
-            # bytes — the graph then shows a dataset whose files changed with nothing saying what
-            # changed them.
-            #
-            # The SAME prefix the catalog, the stage runners and the drain name, because `lineage`'s reconcile
-            # cron is the only thing that reads it. A private prefix here would stage objects nothing
-            # ever collects, which reads as durability and is not.
+            {{- /*
+               Stage the emit so a bus blip does not lose it. A maintenance run is emitted ONLY when the
+               sweep does MATERIAL work (`sweep.py::_did_material_work` gates on fragments or versions
+               removed), so a dropped publish loses the record of the one tick that actually rewrote
+               bytes — the graph then shows a dataset whose files changed with nothing saying what
+               changed them.
+
+               The SAME prefix the catalog, the stage runners and the drain name, because `lineage`'s reconcile
+               cron is the only thing that reads it. A private prefix here would stage objects nothing
+               ever collects, which reads as durability and is not.
+            */}}
             - { name: MAINTENANCE_LINEAGE_OUTBOX_URI, value: "s3://{{ .Values.minio.bucket }}/_lineage_outbox" }
             {{- end }}
             {{- end }}
@@ -288,14 +314,18 @@ spec:
             {{- if not (include "lance.secretsViaDapr" .) }}
             - { name: MAINTENANCE_S3_SECRET_ACCESS_KEY, value: {{ ternary (include "lance.scopedStorageSecret" (list . .Values.minio.maintenanceAccessKey .Values.minio.maintenanceSecretKey)) .Values.minio.secretKey (not (not $scoped)) | quote }} }
             {{- else }}
-            # A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
-            # audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
+            {{- /*
+               A secret store is configured → the S3 secret comes ONLY from it at boot; not in pod env (the
+               audit's fix — maintenance is a real S3 consumer that compacts/GCs the lakehouse). Fails closed.
+            */}}
             - { name: MAINTENANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- if $scoped }}
-            # THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
-            # TENANT ROOT's secret — so a scoped access key left on that default is signed with a
-            # mismatched pair and every operation fails `SignatureDoesNotMatch`. That is the Ray pair's
-            # measured lesson, and the field was already configurable; only the chart had to use it.
+            {{- /*
+               THE OTHER HALF OF THE PAIR. `dapr_secret_s3_field` defaults to `minio-secret-key` — the
+               TENANT ROOT's secret — so a scoped access key left on that default is signed with a
+               mismatched pair and every operation fails `SignatureDoesNotMatch`. That is the Ray pair's
+               measured lesson, and the field was already configurable; only the chart had to use it.
+            */}}
             - { name: MAINTENANCE_DAPR_SECRET_S3_FIELD, value: "maintenance-s3-secret-key" }
             {{- end }}
             {{- end }}

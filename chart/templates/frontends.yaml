@@ -151,17 +151,19 @@ spec:
             {{- toYaml $sc | nindent 12 }}
           {{- include "lance.preStop" $root | nindent 10 }}
           env:
-            # --- the shared zone env (every zone gets these) ---------------------------
-            # The Bun server's request-body ceiling, and it MUST be set: `svelte-adapter-bun`
-            # defaults BODY_SIZE_LIMIT to 512K (see a zone's own build/index.js), which is
-            # smaller than anything this estate actually uploads — a page scan is megabytes.
-            # Over the limit the SERVER answers 413 before the route runs, with a body that is
-            # not our problem+json, so the UI could only report an opaque "HTTP 413". Measured
-            # 2026-08-06: a 2.25 MB scan into studio's /api/infer.
-            #
-            # Deliberately ABOVE the BFF's own 25 MB guard (`@rask/api/serve-proxy`) so the
-            # guard is what speaks: it names the limit and the reason, whereas the adapter's
-            # 413 is anonymous. The zone-level knob is the outer bound, not the policy.
+            {{- /*
+               --- the shared zone env (every zone gets these) ---------------------------
+               The Bun server's request-body ceiling, and it MUST be set: `svelte-adapter-bun`
+               defaults BODY_SIZE_LIMIT to 512K (see a zone's own build/index.js), which is
+               smaller than anything this estate actually uploads — a page scan is megabytes.
+               Over the limit the SERVER answers 413 before the route runs, with a body that is
+               not our problem+json, so the UI could only report an opaque "HTTP 413". Measured
+               2026-08-06: a 2.25 MB scan into studio's /api/infer.
+
+               Deliberately ABOVE the BFF's own 25 MB guard (`@rask/api/serve-proxy`) so the
+               guard is what speaks: it names the limit and the reason, whereas the adapter's
+               413 is anonymous. The zone-level knob is the outer bound, not the policy.
+            */}}
             - name: BODY_SIZE_LIMIT
               value: {{ $root.Values.frontend.bodySizeLimit | default "32M" | quote }}
             {{- /* TELEMETRY. The zones are the FIRST hop of every browser request — a page is served by
@@ -192,59 +194,71 @@ spec:
                    answers), which is what makes deriving it correct rather than merely convenient.
                    `frontend.serveUrl` still wins when Serve genuinely lives somewhere else. */}}
             {{- $serveOrigin := $root.Values.frontend.serveUrl | default $root.Values.ray.dashboardUrl | default (printf "http://%s-ray-serve-svc:8000" (include "rask.fullname" $root)) }}
-            # Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
-            # reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
-            # gateway cannot carry (its `/api/serve` row is GET-only by design, because Ray's dashboard
-            # exposes a deploy API). So the ONE zone that offers inference reaches it directly, and
-            # defaults to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
-            # the ORIGIN, because it appends `?app=` per request.
+            {{- /*
+               Ray Serve's HTTP INGRESS — a different endpoint from the dashboard the compute service
+               reads for `/api/serve` discovery, and nothing routes to it: inference is the one call the
+               gateway cannot carry (its `/api/serve` row is GET-only by design, because Ray's dashboard
+               exposes a deploy API). So the ONE zone that offers inference reaches it directly, and
+               defaults to `http://localhost:8000` in code — which inside a pod is the pod. Studio takes
+               the ORIGIN, because it appends `?app=` per request.
+            */}}
             - name: STUDIO_SERVE_URL
               value: {{ $serveOrigin | quote }}
-            # NO `COMPUTE_SERVE_URL`, and its absence removed a whole class of trap with it.
-            #
-            # It fed the compute zone's inference playground, deleted 2026-08-07 (a single-app,
-            # HTR-only duplicate of studio's flow canvas — see compute/src/lib/nav.ts). With no reader
-            # left, injecting it would be the dead config `test_no_dead_chart_env_vars` exists to catch.
-            #
-            # It also took TWO renderings to express, and they collided: an ungated row here plus a
-            # ray-enabled row further down set the SAME name on the SAME zone, so the env list carried
-            # it twice, and Kubernetes' strategic-merge-patch keys env by `name` — helm refused the
-            # upgrade with `The order in patch list … doesn't match $setElementOrder` AFTER partially
-            # applying, taking ~20 deployments to ImagePullBackOff on 2026-08-06.
-            # `test_no_env_var_is_rendered_TWICE_on_any_workload` (parametrized over `ray.enabled`,
-            # because that toggle is what produced the overlap) still guards the class.
-            # SSR load/remote functions reach the gateway server-side via an absolute base
-            # URL; client code uses the relative /api/* Ingress route. Both names are live:
-            # the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
-            # LANCE_GATEWAY_URL — one Service, two readers, so both must be injected.
+            {{- /*
+               NO `COMPUTE_SERVE_URL`, and its absence removed a whole class of trap with it.
+
+               It fed the compute zone's inference playground, deleted 2026-08-07 (a single-app,
+               HTR-only duplicate of studio's flow canvas — see compute/src/lib/nav.ts). With no reader
+               left, injecting it would be the dead config `test_no_dead_chart_env_vars` exists to catch.
+
+               It also took TWO renderings to express, and they collided: an ungated row here plus a
+               ray-enabled row further down set the SAME name on the SAME zone, so the env list carried
+               it twice, and Kubernetes' strategic-merge-patch keys env by `name` — helm refused the
+               upgrade with `The order in patch list … doesn't match $setElementOrder` AFTER partially
+               applying, taking ~20 deployments to ImagePullBackOff on 2026-08-06.
+               `test_no_env_var_is_rendered_TWICE_on_any_workload` (parametrized over `ray.enabled`,
+               because that toggle is what produced the overlap) still guards the class.
+               SSR load/remote functions reach the gateway server-side via an absolute base
+               URL; client code uses the relative /api/* Ingress route. Both names are live:
+               the api package's gateway client reads RASK_GATEWAY_URL, the BFF reads
+               LANCE_GATEWAY_URL — one Service, two readers, so both must be injected.
+            */}}
             - name: RASK_GATEWAY_URL
               value: {{ printf "http://%s-gateway:%v" (include "rask.fullname" $root) $gwPort | quote }}
             - name: LANCE_GATEWAY_URL
               value: {{ printf "http://%s-gateway:%v" (include "rask.fullname" $root) $gwPort | quote }}
-            # The backend planes the zones' BFF proxies target directly.
+            {{- /*
+               The backend planes the zones' BFF proxies target directly.
+            */}}
             - name: CATALOG_API
               value: {{ printf "http://%s-catalog:%v" (include "rask.fullname" $root) $root.Values.services.catalog.port | quote }}
             - name: LINEAGE_API
               value: {{ printf "http://%s-lineage:%v" (include "rask.fullname" $root) $root.Values.services.lineage.port | quote }}
-            # NO `MEDALLION_API`. Its ONLY frontend reader was the models zone's `/pipeline` trigger
-            # door (`medallion.remote.ts` → POST /produce, /train), deleted 2026-08-07 — so injecting it
-            # now would be exactly the dead config `tests/unit/test_invariants.py::
-            # test_no_dead_chart_env_vars` exists to catch: a plane fully "configured" and read by
-            # nobody. The medallion is still reachable SERVER-side, through the gateway's own
-            # `RASK_MEDALLION_API_URL` row, which is a different variable with a live reader.
+            {{- /*
+               NO `MEDALLION_API`. Its ONLY frontend reader was the models zone's `/pipeline` trigger
+               door (`medallion.remote.ts` → POST /produce, /train), deleted 2026-08-07 — so injecting it
+               now would be exactly the dead config `tests/unit/test_invariants.py::
+               test_no_dead_chart_env_vars` exists to catch: a plane fully "configured" and read by
+               nobody. The medallion is still reachable SERVER-side, through the gateway's own
+               `RASK_MEDALLION_API_URL` row, which is a different variable with a live reader.
+            */}}
             - name: GREPTIME_API
               value: {{ printf "http://%s:%v" (include "lance.greptimeHost" $root) $root.Values.observability.greptimePort | quote }}
-            # The table the governance trail lives in. Rendered from the SAME value the Collector's
-            # `x-greptime-log-table-name` header carries, so the writer and the reader cannot name two
-            # different tables — which is how a viewer ends up reporting an empty audit log while the
-            # rows land elsewhere.
+            {{- /*
+               The table the governance trail lives in. Rendered from the SAME value the Collector's
+               `x-greptime-log-table-name` header carries, so the writer and the reader cannot name two
+               different tables — which is how a viewer ends up reporting an empty audit log while the
+               rows land elsewhere.
+            */}}
             - name: GREPTIME_AUDIT_TABLE
               value: {{ $root.Values.observability.auditTable | quote }}
             {{- if $root.Values.nats.enabled }}
-            # JetStream visibility (admin /streams): the NATS HTTP monitor port —
-            # unauthenticated by design and ClusterIP-only, consumed strictly server-side
-            # behind the zone BFF's admin gate, never by the browser. The HEADLESS Service
-            # is the one carrying :8222 (the plain Service exposes only 4222).
+            {{- /*
+               JetStream visibility (admin /streams): the NATS HTTP monitor port —
+               unauthenticated by design and ClusterIP-only, consumed strictly server-side
+               behind the zone BFF's admin gate, never by the browser. The HEADLESS Service
+               is the one carrying :8222 (the plain Service exposes only 4222).
+            */}}
             - name: NATS_MONITOR_API
               value: {{ printf "http://%s-headless:8222" (include "lance.natsHost" $root) | quote }}
             {{- if and $root.Values.dapr.enabled $root.Values.dapr.sidecars }}
@@ -252,36 +266,44 @@ spec:
               value: {{ join "," $expected | quote }}
             {{- end }}
             {{- end }}
-            # --- the Bun server's own transport knobs ---------------------------------
+            {{- /*
+               --- the Bun server's own transport knobs ---------------------------------
+            */}}
             - name: PORT
               value: {{ $fe.service.port | quote }}
             - name: HOST
               value: "0.0.0.0"
-            # Behind Traefik/nginx: derive the request origin from forwarded headers so
-            # adapter-bun's CSRF/origin check matches however the cluster is reached (node
-            # IP, localhost, VS Code-forwarded port) — no fixed ORIGIN.
+            {{- /*
+               Behind Traefik/nginx: derive the request origin from forwarded headers so
+               adapter-bun's CSRF/origin check matches however the cluster is reached (node
+               IP, localhost, VS Code-forwarded port) — no fixed ORIGIN.
+            */}}
             - name: PROTOCOL_HEADER
               value: "x-forwarded-proto"
             - name: HOST_HEADER
               value: "x-forwarded-host"
-            # IDLE_TIMEOUT is read by svelte-adapter-bun's bootstrap (Bun.serve idleTimeout,
-            # SECONDS) and it is the FIRST thing that severs a live query, well before the
-            # edge: at the default 10 a `query.live` generator that yields only on change
-            # became a ~12s reconnect loop. Bun caps it at 255, and a stream still died at
-            # 256.8s over a 290s hold — for a streaming response it behaves as a maximum
-            # connection LIFETIME that outbound SSE writes do not refresh, so no keepalive
-            # can beat it. 0 (disabled) is the default; the wedged-client objection is
-            # answered by the app-level 20s keepalive, whose write fails on a vanished peer.
-            # `hasKey`, never `| default`: Helm treats 0 as empty, so `| default 255`
-            # rendered 255 for an explicit 0 and the change looked applied while nothing
-            # moved. Pair with ingress.annotations' proxy-read-timeout — both hops must
-            # hold, and the SMALLER one always wins.
+            {{- /*
+               IDLE_TIMEOUT is read by svelte-adapter-bun's bootstrap (Bun.serve idleTimeout,
+               SECONDS) and it is the FIRST thing that severs a live query, well before the
+               edge: at the default 10 a `query.live` generator that yields only on change
+               became a ~12s reconnect loop. Bun caps it at 255, and a stream still died at
+               256.8s over a 290s hold — for a streaming response it behaves as a maximum
+               connection LIFETIME that outbound SSE writes do not refresh, so no keepalive
+               can beat it. 0 (disabled) is the default; the wedged-client objection is
+               answered by the app-level 20s keepalive, whose write fails on a vanished peer.
+               `hasKey`, never `| default`: Helm treats 0 as empty, so `| default 255`
+               rendered 255 for an explicit 0 and the change looked applied while nothing
+               moved. Pair with ingress.annotations' proxy-read-timeout — both hops must
+               hold, and the SMALLER one always wins.
+            */}}
             - name: IDLE_TIMEOUT
               value: {{ (hasKey $fe "idleTimeoutSeconds") | ternary $fe.idleTimeoutSeconds 255 | quote }}
             {{- if $root.Values.auth.enabled }}
-            # Governed READ fallback: with no user session the BFF authenticates to lineage
-            # as a SERVICE (bounded by frontend.serviceIdentity's FGA READER rung), so the
-            # read-only UI works without a per-user browser login.
+            {{- /*
+               Governed READ fallback: with no user session the BFF authenticates to lineage
+               as a SERVICE (bounded by frontend.serviceIdentity's FGA READER rung), so the
+               read-only UI works without a per-user browser login.
+            */}}
             {{- /* THE PATH, NOT THE SECRET ([[XC-001]], [[LH-160]]). A zone has no Dapr sidecar, so its
                  sanctioned delivery is an ESO-managed Secret taken as a MOUNT; what rides in the
                  environment is where to read it. Two things follow that `secretKeyRef` could not give:
@@ -294,10 +316,12 @@ spec:
             - name: LINEAGE_SERVICE_ID
               value: {{ $fe.serviceIdentity | quote }}
             {{- if $fe.oidc.enabled }}
-            # Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads
-            # the sealed session cookie (ISSUER+CLIENT_ID+REDIRECT_URI make authEnabled
-            # true; SESSION_SECRET decodes it); the home zone also presents the confidential
-            # client secret at the token exchange. Secrets ride a Secret via secretKeyRef.
+            {{- /*
+               Per-user OIDC login (opt-in; needs a browser-reachable IdP). Every zone reads
+               the sealed session cookie (ISSUER+CLIENT_ID+REDIRECT_URI make authEnabled
+               true; SESSION_SECRET decodes it); the home zone also presents the confidential
+               client secret at the token exchange. Secrets ride a Secret via secretKeyRef.
+            */}}
             {{- if not $fe.oidc.sessionSecret }}{{ fail "frontend.oidc.enabled requires frontend.oidc.sessionSecret (>=32 chars) to seal the session cookie" }}{{- end }}
             {{- if not $fe.oidc.publicIssuer }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicIssuer (a browser-reachable IdP)" }}{{- end }}
             {{- if not $fe.oidc.publicOrigin }}{{ fail "frontend.oidc.enabled requires frontend.oidc.publicOrigin (the browser-reachable origin)" }}{{- end }}
@@ -317,10 +341,12 @@ spec:
                 secretKeyRef:
                   name: {{ $root.Release.Name }}-frontend-session
                   key: secret
-            # Split-horizon OIDC: the zones' SERVER-side fetches (discovery doc, token POST)
-            # go to the in-cluster Dex Service — the public issuer may only resolve for
-            # browsers. The BROWSER-facing authorize URL and the `iss` expectation keep the
-            # public OIDC_ISSUER; the BFF rewrites the discovered endpoints onto this base.
+            {{- /*
+               Split-horizon OIDC: the zones' SERVER-side fetches (discovery doc, token POST)
+               go to the in-cluster Dex Service — the public issuer may only resolve for
+               browsers. The BROWSER-facing authorize URL and the `iss` expectation keep the
+               public OIDC_ISSUER; the BFF rewrites the discovered endpoints onto this base.
+            */}}
             - name: OIDC_INTERNAL_ISSUER
               value: {{ printf "http://%s:5556/dex" (include "lance.dexHost" $root) | quote }}
             {{- end }}
@@ -336,20 +362,22 @@ spec:
                  inference bypasses the gateway at all (its `/api/serve` row is GET/HEAD-only on
                  purpose, because Ray's dashboard can PUT a deployment) lives with STUDIO_SERVE_URL. */}}
             {{- if and $root.Values.explorer.enabled (or (eq .name "explorer") (eq .name "annotator")) }}
-            # --- the media plane's upstreams for these two zones' BFF proxy routes -------
-            # (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every
-            # zone: one should not hold a service URL it never routes to. explorer searches
-            # and reads the viewer, and reaches the annotator only for the workflow's tag
-            # write + batch-job submit; the annotator reads the viewer for the media it
-            # draws on the canvas.
-            #
-            # SEARCH_API used to sit behind an `eq .name "explorer"` guard, on the claim that
-            # "the annotator never searches". That stopped being true when /annotator/browse
-            # gained "more like this" — a k-NN query over the corpus's declared vector
-            # binding, which is `GET /api/search/similar` on the SEARCH service and cannot be
-            # answered by the viewer. Without this the zone's `findSimilar` remote falls back
-            # to its localhost dev default and every neighbour lookup fails in-cluster, with
-            # nothing in the browser to say the URL was never injected.
+            {{- /*
+               --- the media plane's upstreams for these two zones' BFF proxy routes -------
+               (/<zone>/api/* -> the media Services). Scoped PER ZONE, not handed to every
+               zone: one should not hold a service URL it never routes to. explorer searches
+               and reads the viewer, and reaches the annotator only for the workflow's tag
+               write + batch-job submit; the annotator reads the viewer for the media it
+               draws on the canvas.
+
+               SEARCH_API used to sit behind an `eq .name "explorer"` guard, on the claim that
+               "the annotator never searches". That stopped being true when /annotator/browse
+               gained "more like this" — a k-NN query over the corpus's declared vector
+               binding, which is `GET /api/search/similar` on the SEARCH service and cannot be
+               answered by the viewer. Without this the zone's `findSimilar` remote falls back
+               to its localhost dev default and every neighbour lookup fails in-cluster, with
+               nothing in the browser to say the URL was never injected.
+            */}}
             - name: VIEWER_API
               value: {{ printf "http://%s-viewer:%v" (include "rask.fullname" $root) $root.Values.explorer.services.viewer.port | quote }}
             - name: ANNOTATOR_API
@@ -357,11 +385,13 @@ spec:
             - name: SEARCH_API
               value: {{ printf "http://%s-search:%v" (include "rask.fullname" $root) $root.Values.explorer.services.search.port | quote }}
             {{- if and (eq .name "annotator") $root.Values.runners.enabled }}
-            # Mirror of the annotator SERVICE's runner seams (media.yaml) onto the zone's
-            # web pod: its /api/config endpoint reads these to render the honest
-            # "mocked — needs runner" chip, so the chip's truth tracks the same values
-            # switch as the service env (found live 2026-07-24: runner deployed, service
-            # wired, chip still claiming mock).
+            {{- /*
+               Mirror of the annotator SERVICE's runner seams (media.yaml) onto the zone's
+               web pod: its /api/config endpoint reads these to render the honest
+               "mocked — needs runner" chip, so the chip's truth tracks the same values
+               switch as the service env (found live 2026-07-24: runner deployed, service
+               wired, chip still claiming mock).
+            */}}
             - name: MEDIA_ASSIST_URL
               value: {{ printf "http://%s-assist:%v/v1/assist" (include "rask.fullname" $root) $root.Values.runners.assist.port | quote }}
             {{- if $root.Values.runners.jobsUrl }}
@@ -373,8 +403,10 @@ spec:
           ports:
             - name: http
               containerPort: {{ $fe.service.port }}
-          # TCP probes (not httpGet): a zone has no index route at its base path, so GET "/"
-          # 404s. An open port proves the adapter-bun server is alive.
+          {{- /*
+             TCP probes (not httpGet): a zone has no index route at its base path, so GET "/"
+             404s. An open port proves the adapter-bun server is alive.
+          */}}
           {{- include "lance.tcpProbes" "http" | nindent 10 }}
           resources:
             {{- toYaml $tier | nindent 12 }}
@@ -424,11 +456,13 @@ spec:
 {{- end }}
 {{- if and .Values.auth.enabled .Values.frontend.oidc.enabled }}
 ---
-# The session-cookie sealing key (AES-256-GCM) + the confidential Dex client secret, shared
-# by every zone (they all read the origin-wide cookie; home also exchanges the code). A
-# Secret, not plaintext env, so the prod-render zero-plaintext check holds. Operator-provided
-# + stable (rotating it logs everyone out). Gated on auth.enabled too — the consuming OIDC env
-# only renders under auth.enabled, so there is no orphan Secret.
+{{- /*
+   The session-cookie sealing key (AES-256-GCM) + the confidential Dex client secret, shared
+   by every zone (they all read the origin-wide cookie; home also exchanges the code). A
+   Secret, not plaintext env, so the prod-render zero-plaintext check holds. Operator-provided
+   + stable (rotating it logs everyone out). Gated on auth.enabled too — the consuming OIDC env
+   only renders under auth.enabled, so there is no orphan Secret.
+*/}}
 apiVersion: v1
 kind: Secret
 metadata:

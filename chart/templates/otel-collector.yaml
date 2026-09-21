@@ -33,8 +33,10 @@ metadata:
   name: {{ $sa }}
   labels: {{- include "lance.labels" . | nindent 4 }}
 ---
-# k8sattributes needs pod/namespace/replicaset/node reads for enrichment; the prometheus receiver's k8s SD
-# needs pod discovery. Cluster-scoped (SD + attributes are cluster-wide), read-only.
+{{- /*
+   k8sattributes needs pod/namespace/replicaset/node reads for enrichment; the prometheus receiver's k8s SD
+   needs pod discovery. Cluster-scoped (SD + attributes are cluster-wide), read-only.
+*/}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -326,46 +328,48 @@ data:
                 - source_labels: [__meta_kubernetes_pod_name]
                   target_label: pod
 {{- if $daprState }}
-      # DAPR WORKFLOW HISTORY — measured by QUERY, because there is nothing to scrape.
-      #
-      # Every other metric in this file arrives from a target that already exports it. This one cannot:
-      # enumerated live on 2026-08-26 against the `ingest` sidecar, daprd's ENTIRE metric surface is
-      # dapr_error_code_total, dapr_grpc_io_*, dapr_http_*, dapr_runtime_component_{init_total,loaded}
-      # and go_*. No workflow metric, no actor metric, no state-store metric — and
-      # `dapr_runtime_workflow_*` (already documented as unreliable for this codebase in
-      # chart/alerting/rules.yml) is absent outright. A fourth scrape job would have had no target.
-      #
-      # So the state store is read directly. `spec.workflow.stateRetentionPolicy` in observability.yaml
-      # is the ONLY thing that removes workflow history — there is deliberately no application-side
-      # purge (DaprWorkflowClient has no list-instances API, so a sweep could not name what to purge
-      # after a restart) — and if it stops collecting, the first symptom is a full disk. These two
-      # gauges are what chart/alerting/rules.yml's `dapr-workflow-state` group alerts on, pinned in
-      # both directions by test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares.
-      #
-      # A COLLECTOR RECEIVER RATHER THAN A postgres_exporter SIDECAR: no second image to vendor, scan
-      # and size, no second credential path, and the query lives in the file that already owns "get
-      # this series into GreptimeDB". Cost measured on the live store: 4.7ms over a 7.5MB table.
-      #
-      # THE AGE METRIC READS HISTORY ROWS ONLY, and that filter is load-bearing rather than tidy. A
-      # workflow's `metadata` row keeps its original insertdate across `continue_as_new`, so a
-      # long-running recurring workflow — which this estate has, in the stage runners' watch loops — would
-      # look arbitrarily old forever and the alert would fire on a perfectly healthy store. History
-      # rows are rewritten per turn, so their age is the property the retention policy actually
-      # governs.
-      #
-      # DO NOT "CORRECT" `%||history-%` TO `wf-history-%`, however authoritative the source. Dapr's own
-      # protocol reference (contributing/protocol-reference/workflow-protocol/…-state-and-history) states
-      # the history key format is `wf-history-<instance_id>-<index>`. That is the LOGICAL key; it is not
-      # what the Postgres state store holds. Measured on the live store 2026-08-26:
-      #     key like '%wf-history-%'  ->     0 rows
-      #     key like '%||history-%'   ->  5551 rows
-      # The real shape is `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`. A filter
-      # taken from the doc matches nothing, the gauge is a permanent 0, and DaprWorkflowHistoryNotCollected
-      # can never fire — which is indistinguishable from a healthy estate. Same class of defect as
-      # `outbox_oldest_age`. Pinned by test_the_workflow_history_query_matches_the_REAL_key_shape.
-      #
-      # The password is an ENV REFERENCE, not a literal: the Collector expands ${env:...} at load, and
-      # the value arrives by secretKeyRef on the Deployment below, so no credential is in this ConfigMap.
+      {{- /*
+         DAPR WORKFLOW HISTORY — measured by QUERY, because there is nothing to scrape.
+
+         Every other metric in this file arrives from a target that already exports it. This one cannot:
+         enumerated live on 2026-08-26 against the `ingest` sidecar, daprd's ENTIRE metric surface is
+         dapr_error_code_total, dapr_grpc_io_*, dapr_http_*, dapr_runtime_component_{init_total,loaded}
+         and go_*. No workflow metric, no actor metric, no state-store metric — and
+         `dapr_runtime_workflow_*` (already documented as unreliable for this codebase in
+         chart/alerting/rules.yml) is absent outright. A fourth scrape job would have had no target.
+
+         So the state store is read directly. `spec.workflow.stateRetentionPolicy` in observability.yaml
+         is the ONLY thing that removes workflow history — there is deliberately no application-side
+         purge (DaprWorkflowClient has no list-instances API, so a sweep could not name what to purge
+         after a restart) — and if it stops collecting, the first symptom is a full disk. These two
+         gauges are what chart/alerting/rules.yml's `dapr-workflow-state` group alerts on, pinned in
+         both directions by test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares.
+
+         A COLLECTOR RECEIVER RATHER THAN A postgres_exporter SIDECAR: no second image to vendor, scan
+         and size, no second credential path, and the query lives in the file that already owns "get
+         this series into GreptimeDB". Cost measured on the live store: 4.7ms over a 7.5MB table.
+
+         THE AGE METRIC READS HISTORY ROWS ONLY, and that filter is load-bearing rather than tidy. A
+         workflow's `metadata` row keeps its original insertdate across `continue_as_new`, so a
+         long-running recurring workflow — which this estate has, in the stage runners' watch loops — would
+         look arbitrarily old forever and the alert would fire on a perfectly healthy store. History
+         rows are rewritten per turn, so their age is the property the retention policy actually
+         governs.
+
+         DO NOT "CORRECT" `%||history-%` TO `wf-history-%`, however authoritative the source. Dapr's own
+         protocol reference (contributing/protocol-reference/workflow-protocol/…-state-and-history) states
+         the history key format is `wf-history-<instance_id>-<index>`. That is the LOGICAL key; it is not
+         what the Postgres state store holds. Measured on the live store 2026-08-26:
+         key like '%wf-history-%'  ->     0 rows
+         key like '%||history-%'   ->  5551 rows
+         The real shape is `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`. A filter
+         taken from the doc matches nothing, the gauge is a permanent 0, and DaprWorkflowHistoryNotCollected
+         can never fire — which is indistinguishable from a healthy estate. Same class of defect as
+         `outbox_oldest_age`. Pinned by test_the_workflow_history_query_matches_the_REAL_key_shape.
+
+         The password is an ENV REFERENCE, not a literal: the Collector expands ${env:...} at load, and
+         the value arrives by secretKeyRef on the Deployment below, so no credential is in this ConfigMap.
+      */}}
       sqlquery/daprstate:
         driver: postgres
         datasource: "host={{ include "lance.ageConnectHost" . }} port={{ .Values.age.port }} user={{ .Values.age.user }} password=${env:DAPRSTATE_PASSWORD} dbname={{ .Values.age.stateDb }} sslmode=disable"
@@ -373,15 +377,19 @@ data:
         queries:
           - sql: "select count(*)::bigint as workflow_rows, coalesce(extract(epoch from now() - min(insertdate) filter (where key like '%||history-%')), 0)::bigint as oldest_history_age_seconds from {{ .Values.stateStore.tableName }} where key like '%workflow%'"
             metrics:
-              # Volume. Read by DaprWorkflowStateMetricsMissing and by nothing else — its job is to be
-              # PRESENT, so that the age rule going quiet can be told apart from the age rule going blind.
+              {{- /*
+                 Volume. Read by DaprWorkflowStateMetricsMissing and by nothing else — its job is to be
+                 PRESENT, so that the age rule going quiet can be told apart from the age rule going blind.
+              */}}
               - metric_name: dapr_workflow_state_rows
                 value_column: workflow_rows
                 value_type: int
                 data_type: gauge
-              # The property. NO `unit:` field, and the name carries `_seconds` itself — declaring a unit
-              # would make the OTLP->Prometheus convention APPEND the suffix, which is exactly how
-              # `outbox_oldest_age` shipped as a rule that could never fire (see rules.yml:22-27).
+              {{- /*
+                 The property. NO `unit:` field, and the name carries `_seconds` itself — declaring a unit
+                 would make the OTLP->Prometheus convention APPEND the suffix, which is exactly how
+                 `outbox_oldest_age` shipped as a rule that could never fire (see rules.yml:22-27).
+              */}}
               - metric_name: dapr_workflow_history_oldest_age_seconds
                 value_column: oldest_history_age_seconds
                 value_type: int
@@ -402,20 +410,22 @@ data:
         pod_association:
           - sources: [{ from: resource_attribute, name: k8s.pod.uid }]
           - sources: [{ from: connection }]
-      # The app pods already export OTLP logs (trace-correlated) — drop the file-tailed duplicate. Mirrors
-      # what the retired Vector agent's `lance.dev/logs!=otlp` selector did. error_mode ignore: a pod without the label is kept.
-      #
-      # BOTH CLAUSES ARE LOAD-BEARING, and the second was missing until 2026-08-15. The pod label alone
-      # cannot tell the two copies apart, because it is a property of the POD and both copies come from
-      # the same pod: `k8sattributes` associates filelog records by `k8s.pod.uid` and OTLP records by
-      # `{from: connection}`, stamping `lance.dev/logs=otlp` on both. So the label-only condition dropped
-      # the OTLP ORIGINAL along with its duplicate — the entire application log tier, silently, while
-      # every pipeline reported healthy. Measured live: `opentelemetry_logs` held 60.4M rows and not one
-      # with a `medallion`/`lineage`/`catalog` scope; only unlabelled infra pods survived.
-      #
-      # `log.file.path` is the discriminator: the filelog receiver sets it (`include_file_path: true`
-      # above) and OTLP records never carry it. Keyed on the SOURCE, the filter drops what it was
-      # written to drop and nothing else.
+      {{- /*
+         The app pods already export OTLP logs (trace-correlated) — drop the file-tailed duplicate. Mirrors
+         what the retired Vector agent's `lance.dev/logs!=otlp` selector did. error_mode ignore: a pod without the label is kept.
+
+         BOTH CLAUSES ARE LOAD-BEARING, and the second was missing until 2026-08-15. The pod label alone
+         cannot tell the two copies apart, because it is a property of the POD and both copies come from
+         the same pod: `k8sattributes` associates filelog records by `k8s.pod.uid` and OTLP records by
+         `{from: connection}`, stamping `lance.dev/logs=otlp` on both. So the label-only condition dropped
+         the OTLP ORIGINAL along with its duplicate — the entire application log tier, silently, while
+         every pipeline reported healthy. Measured live: `opentelemetry_logs` held 60.4M rows and not one
+         with a `medallion`/`lineage`/`catalog` scope; only unlabelled infra pods survived.
+
+         `log.file.path` is the discriminator: the filelog receiver sets it (`include_file_path: true`
+         above) and OTLP records never carry it. Keyed on the SOURCE, the filter drops what it was
+         written to drop and nothing else.
+      */}}
       filter/drop_app_file_logs:
         error_mode: ignore
         logs:
@@ -425,15 +435,17 @@ data:
               and attributes["log.file.path"] != nil
               and resource.attributes["k8s.container.name"] != "daprd"
               and IsMatch(body, "^[0-9]{4}-[0-9]{2}-[0-9]{2} ")
-      # THE AUDIT SPLIT. `lance.audit` is the governance trail, not telemetry, and it rode in
-      # `opentelemetry_logs` under the database's 14d TTL — measured 2026-09-18: 8,590,872 audit rows
-      # among 114,938,016. These two filters are COMPLEMENTARY on purpose, so each record lands in
-      # exactly one table: a split that copied rather than routed would double the store and leave the
-      # 14-day copy authoritative. The filter processor DROPS what its conditions match, which is why
-      # the audit pipeline's condition is the negation.
-      #
-      # Keyed on `body`, the same discriminator `audit-core.ts` used to select these rows out of the
-      # shared table, so the routing and the reader cannot disagree about what an audit record is.
+      {{- /*
+         THE AUDIT SPLIT. `lance.audit` is the governance trail, not telemetry, and it rode in
+         `opentelemetry_logs` under the database's 14d TTL — measured 2026-09-18: 8,590,872 audit rows
+         among 114,938,016. These two filters are COMPLEMENTARY on purpose, so each record lands in
+         exactly one table: a split that copied rather than routed would double the store and leave the
+         14-day copy authoritative. The filter processor DROPS what its conditions match, which is why
+         the audit pipeline's condition is the negation.
+
+         Keyed on `body`, the same discriminator `audit-core.ts` used to select these rows out of the
+         shared table, so the routing and the reader cannot disagree about what an audit record is.
+      */}}
       filter/audit_only:
         error_mode: ignore
         logs:
@@ -445,25 +457,29 @@ data:
           log_record:
             - 'body == "audit"'
       batch: {}
-      # The workflow engine's liveness ping to its own sidecar, dropped before it reaches the store.
-      # RE-MEASURED 2026-08-23 rather than inherited (two audits put its share 40 points apart):
-      # 3,828 spans in three hours, ninth-largest span name in the estate, carrying nothing anyone
-      # reads. Scoped to the EXACT name, not a prefix, so a real TaskHubSidecarService call still
-      # traces. `error_mode: ignore` so a span with no name cannot wedge the pipeline.
-      #
-      # Proportion matters here: this is the SMALL half of the trace noise. The kubelet probe spans
-      # fixed in the same change were 31,916 over the same window, and those are excluded at the SDK
-      # (rask.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
-      # here instead would pay to serialize and ship spans only to discard them at the far end.
+      {{- /*
+         The workflow engine's liveness ping to its own sidecar, dropped before it reaches the store.
+         RE-MEASURED 2026-08-23 rather than inherited (two audits put its share 40 points apart):
+         3,828 spans in three hours, ninth-largest span name in the estate, carrying nothing anyone
+         reads. Scoped to the EXACT name, not a prefix, so a real TaskHubSidecarService call still
+         traces. `error_mode: ignore` so a span with no name cannot wedge the pipeline.
+
+         Proportion matters here: this is the SMALL half of the trace noise. The kubelet probe spans
+         fixed in the same change were 31,916 over the same window, and those are excluded at the SDK
+         (rask.otelEnv's OTEL_PYTHON_FASTAPI_EXCLUDED_URLS) because the app owns them — dropping them
+         here instead would pay to serialize and ship spans only to discard them at the far end.
+      */}}
       filter/drop_keepalive:
         error_mode: ignore
         traces:
           span:
             - 'name == "/TaskHubSidecarService/Hello"'
     exporters:
-      # Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so
-      # they get a separate exporter with only the db-name header. Both hit the same /v1/otlp base; the
-      # otlphttp exporter appends /v1/{traces,metrics,logs} per signal (same as the app SDK did).
+      {{- /*
+         Traces carry GreptimeDB's trace-pipeline header (→ opentelemetry_traces); metrics/logs must NOT, so
+         they get a separate exporter with only the db-name header. Both hit the same /v1/otlp base; the
+         otlphttp exporter appends /v1/{traces,metrics,logs} per signal (same as the app SDK did).
+      */}}
       {{- /* DURABILITY. Both exporters queue and retry; `batch` alone is not durability — it holds a
          batch in memory and forgets it if the process dies. That was not theoretical: the store these
          write to OOMKilled 13 times on 2026-08-23 and every one was a hole a queue would have ridden out.
@@ -493,10 +509,12 @@ data:
           initial_interval: 5s
           max_interval: 30s
           max_elapsed_time: 300s
-      # The audit trail's own table. `x-greptime-log-table-name` is what GreptimeDB's OTLP log
-      # ingestion routes on — verified against the running v1.1.1 rather than taken from docs: a
-      # protobuf record carrying the header created the named table. Same endpoint, same durability
-      # settings as the shared exporter; only the destination table differs.
+      {{- /*
+         The audit trail's own table. `x-greptime-log-table-name` is what GreptimeDB's OTLP log
+         ingestion routes on — verified against the running v1.1.1 rather than taken from docs: a
+         protobuf record carrying the header created the named table. Same endpoint, same durability
+         settings as the shared exporter; only the destination table differs.
+      */}}
       otlphttp/greptime_audit:
         endpoint: {{ $greptime | quote }}
         headers:
@@ -547,9 +565,11 @@ data:
           receivers: [otlp, filelog]
           processors: [memory_limiter, k8sattributes, filter/drop_app_file_logs, filter/drop_audit, batch]
           exporters: [otlphttp/greptime]
-        # OTLP ONLY. An audit record is emitted by a service through the SDK; a `body == "audit"` line
-        # arriving from `filelog` is a container log that happens to read that way, and writing it to
-        # the governance table would make the trail forgeable by anything that can print.
+        {{- /*
+           OTLP ONLY. An audit record is emitted by a service through the SDK; a `body == "audit"` line
+           arriving from `filelog` is a container log that happens to read that way, and writing it to
+           the governance table would make the trail forgeable by anything that can print.
+        */}}
         logs/audit:
           receivers: [otlp]
           processors: [memory_limiter, k8sattributes, filter/audit_only, batch]
@@ -579,9 +599,11 @@ spec:
           image: {{ $c.image }}
           args: ["--config=/etc/otelcol/config.yaml"]
 {{- if $daprState }}
-          # The Dapr state store's Postgres password, for the sqlquery/daprstate receiver. By
-          # secretKeyRef so it stays out of the ConfigMap, `helm get manifest` and `kubectl describe`;
-          # the config references it as ${env:DAPRSTATE_PASSWORD}, expanded by the Collector at load.
+          {{- /*
+             The Dapr state store's Postgres password, for the sqlquery/daprstate receiver. By
+             secretKeyRef so it stays out of the ConfigMap, `helm get manifest` and `kubectl describe`;
+             the config references it as ${env:DAPRSTATE_PASSWORD}, expanded by the Collector at load.
+          */}}
           env:
             - name: DAPRSTATE_PASSWORD
               valueFrom:
@@ -594,19 +616,25 @@ spec:
           resources: {{- include "lance.resources" (dict "root" . "comp" "otel-collector") | nindent 12 }}
           volumeMounts:
             - { name: config, mountPath: /etc/otelcol, readOnly: true }
-            # filelog reads the node's container logs (RO). /var/log/pods symlinks into /var/lib/docker or
-            # containerd, so mount both roots (the second is where the real files live on most nodes).
+            {{- /*
+               filelog reads the node's container logs (RO). /var/log/pods symlinks into /var/lib/docker or
+               containerd, so mount both roots (the second is where the real files live on most nodes).
+            */}}
             - { name: varlogpods, mountPath: /var/log/pods, readOnly: true }
             - { name: varlibdockercontainers, mountPath: /var/lib/docker/containers, readOnly: true }
-            # filelog offset checkpoints (file_storage extension) — writable via fsGroup 65534.
+            {{- /*
+               filelog offset checkpoints (file_storage extension) — writable via fsGroup 65534.
+            */}}
             - { name: offsets, mountPath: /var/lib/otelcol/file_storage }
       volumes:
         - name: config
           configMap: { name: {{ $sa }} }
         - { name: varlogpods, hostPath: { path: /var/log/pods } }
         - { name: varlibdockercontainers, hostPath: { path: /var/lib/docker/containers } }
-        # sizeLimit because this dir now backs the exporters' persistent sending_queue as well as
-        # filelog's read offsets — without it a store outage trades dropped telemetry for a full node.
+        {{- /*
+           sizeLimit because this dir now backs the exporters' persistent sending_queue as well as
+           filelog's read offsets — without it a store outage trades dropped telemetry for a full node.
+        */}}
         - { name: offsets, emptyDir: { sizeLimit: 2Gi } }
 ---
 apiVersion: v1

@@ -1628,7 +1628,10 @@ def test_user_state_store_default_matches_the_component_the_catalog_is_scoped_to
 
 def _uncommented(text: str) -> str:
     """Blank out Helm/YAML comments, keeping line numbers, so prose ABOUT a pattern is not a use of it."""
-    text = re.sub(r"\{\{-?/\*.*?\*/-?\}\}", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.DOTALL)
+    # `\s*` after the trim marker because Go REQUIRES whitespace there: `{{- /* … */}}` is the only
+    # spelling of a trimmed comment the template engine accepts, and a pattern demanding `{{-/*` blanks
+    # none of them — so prose inside the idiomatic form was scanned as code.
+    text = re.sub(r"\{\{-?\s*/\*.*?\*/\s*-?\}\}", lambda m: re.sub(r"[^\n]", " ", m.group(0)), text, flags=re.DOTALL)
     return "\n".join("" if line.lstrip().startswith("#") else line for line in text.splitlines())
 
 
