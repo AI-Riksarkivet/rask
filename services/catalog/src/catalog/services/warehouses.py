@@ -121,7 +121,7 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
 #: warehouse today. **No credential field belongs beside it** — material never travels in a record;
 #: the estate resolves its S3 secret from the Dapr secret store, and a second store's key belongs
 #: behind that same door with the record naming a reference.
-_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint"})
+_CALLER_OWNED = frozenset({"id", "bucket", "root_uri", "project", "endpoint", "credential_ref"})
 
 
 class WarehouseProjectConflict(Exception):

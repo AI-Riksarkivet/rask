@@ -766,6 +766,11 @@ class WarehouseResponse(BaseModel):
     # "which store" is the field whose being wrong looks like a missing table rather than like
     # misconfiguration. None on records using the estate endpoint (every one today).
     endpoint: str | None = None
+    # [[LH-067]] The NAME of the secret holding this warehouse's credential, never the credential.
+    # Readable back for the same reason `endpoint` is — an operator who set it must be able to confirm
+    # what the record says — and safe to expose precisely because it is a reference: it identifies a
+    # key in the Dapr secret store, and holding it grants nothing without access to that store.
+    credential_ref: str | None = None
     created_at: str | None = None
 
 
