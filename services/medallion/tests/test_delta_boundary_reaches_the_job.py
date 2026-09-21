@@ -37,9 +37,13 @@ from medallion.services.trigger_guards import StageTrigger
 def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     seen: dict[str, Any] = {}
 
-    async def _capture(_client: Any, submission_id: str, body: dict[str, Any]) -> None:
+    async def _capture(_client: Any, submission_id: str, body: dict[str, Any], **_policy: Any) -> str:
         seen["submission_id"] = submission_id
         seen["body"] = body
+        # MATCHES THE REAL SIGNATURE. `submit_or_reattach` takes an `on_terminal_failure` policy and
+        # ANSWERS what happened ("submitted" | "reattached" | "resubmitted" | "already_failed"); a
+        # double that took neither could not stand in for it at all, and its caller maps the answer.
+        return "submitted"
 
     monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
     return seen

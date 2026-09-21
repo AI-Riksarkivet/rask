@@ -30,9 +30,11 @@ import httpx
 
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.services import ray_jobs_api as rk
+from medallion.services.engine_registry import executor_for
 from medallion.services.task_register import RAY_ENGINE
 from medallion.services.transform_spec import resolve_task_async, resolve_transform_async
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
+from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkObservability, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
 
 
@@ -233,7 +235,6 @@ async def submit_stage_job(
     # second transform silently never ran. The same collapse hid WITH a token whenever one trigger
     # fans out to two tables of the same stage. from→to IS the transform's identity; a redelivered
     # trigger carries the same pair, so redelivery idempotency is unchanged.
-    submission_id = stage_submission_id(stage, token, from_uri, to_uri, code=code_version)
     # THE PLATFORM'S HALF OF THE CONTRACT, SERIALIZED ONCE. `WorkOrder.to_env()` is documented as
     # "the ONE serialization, so no adapter hand-rolls it", and hand-rolling it here is precisely what
     # made `service_kit.lakehouse.executor` unusable against this job: the port's Ray adapter renders
@@ -281,86 +282,12 @@ async def submit_stage_job(
         idempotency_key=derive_idempotency_key(stage=stage, token=token, from_uri=from_uri, to_uri=to_uri, code_version=code_version),
         observability=build_stage_order_observability(),
     )
-    env_vars = {
-        **order.to_env(),
-        # NO S3 NAME RIDES THIS BODY — not the secret, not the key, and since this change not the
-        # ENDPOINT or REGION either. The Jobs API echoes `runtime_env` on `GET /api/jobs/<id>`, an
-        # unauthenticated dashboard published at the edge, so anything here is readable by anyone; the
-        # credential halves moved to the pod for that reason and the address followed them for a
-        # different one.
-        #
-        # TWO OWNERS IS THE FAILURE, and this file already records it happening: Ray merges
-        # `runtime_env` OVER the process env, so a key sent here BEATS the pod's — "the pair had two
-        # owners and repointing the pod alone gave every job `SignatureDoesNotMatch`, measured twice on
-        # the live estate". An address sent here had exactly that shape, and it also made the JOB
-        # unrunnable by any other submitter: `scripts/ray_stage_job.py:86` reads
-        # `os.environ["S3_ENDPOINT"]` with a bracket.
-        #
-        # The pod is the single source now, in both environments: `_ray-cluster-config.tpl` renders the
-        # pair onto the head, and `make ray-up` exports it to the local one. Verified on the deployed
-        # head 2026-09-18 by submitting a job whose `runtime_env` carried NO S3 names at all — it read
-        # `S3_ENDPOINT=http://rask-minio:9000` and `S3_REGION=us-east-1` from its own process env.
-        # Forward this pod's OTLP config (the train path below already does) so the job can export the
-        # span it parents on the handed-over trace context. The service name is the stage runner's own — the
-        # job executes that stage runner's stage transform, so its span belongs to the same logical service.
-        # THE WORKLOAD'S OWN PARAMETERS RIDE THE ORDER ([[LH-159]]). `to_env()` namespaces
-        # `order.params` with `RASK_PARAM_` itself, and `order.params` IS `job_params` — so the map
-        # that used to be spread here rendered the same keys a second time. The prefix is still
-        # applied at serialization rather than trusted from config, so a lane cannot reach
-        # LINEAGE_JSON, the S3 config or an OTEL_* key by choosing a colliding name; it is simply
-        # applied in ONE place now.
-        # THE JOB EMITS ITS OWN OpenLineage (no Dapr sidecar on Ray pods), so its reporting subject
-        # rides the ORDER now (`WorkIdentity.service_identity` -> `RASK_LINEAGE_SERVICE_IDENTITY`),
-        # which is where a platform fact belongs — `metadata` below carries the same name for a
-        # different reader, one that looks the job up from OUTSIDE after it has failed.
-        #
-        # The ENDPOINT is the pod's. Measured live 2026-09-21: the Ray head already carries
-        # `RASK_LINEAGE_ENDPOINT=http://rask-lineage:8000`, `build_emitter` resolves that name first,
-        # and this submitter would send the identical value — so sending it gives one address two
-        # owners, and `runtime_env` WINS over process env, which is how a repointed pod keeps talking
-        # to the old one. The service TOKEN is absent for the stronger reason: it is a credential, and
-        # the Jobs API echoes `runtime_env` to any reader.
-        # WHAT THIS RUN IS, as the graph names it — the other half of the same problem the two above
-        # solve. `FROM_URI`/`TO_URI` say where to read and write; these say which governed TABLES those
-        # locations are, and which run the job's events belong to. The runner documents all three as
-        # required and nothing set them, so every distributed hop emitted provenance under a URI stem:
-        # well-formed, unmatched by any grant, and therefore delivered to nobody.
-        #
-        # OMITTED when empty, like `ORIGINATOR` and `PROJECT`: an unwired lane must reach the runner's
-        # own stem fallback rather than a blank the platform asserted.
-    }
-    # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
-    # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job
-    # AFTER it fails: `metadata` comes back on `GET /api/jobs/<id>` (and in the dashboard), which is
-    # exactly the read a failure path makes, which is why it is kept alongside the env_vars copy.
-    #
-    # Empty values are OMITTED rather than sent blank: a service-triggered cascade has no person behind
-    # it, and `""` is not an identity — a reader must never mistake it for one. Ray's metadata is
-    # `Dict[str, str]`, so every value here is already a string.
-    # `rask.transform` joins the identity keys for the reason the block above already gives: a reader
-    # OUTSIDE the job needs it after the job is gone. The job page shows what a run is DOING, and
-    # without the lane it could name the stage but not the declaration — the task and params
-    # the run is actually executing — so a person watching a job had no path back to the record that
-    # governs it. Omitted when no lane is declared, like every other key here: that run is off the
-    # chart's settings and there is no record to link to, and `""` would render as a lane named
-    # nothing pointing at a dead link.
-    metadata = {
-        key: value
-        for key, value in (
-            ("rask.originator", originator),
-            ("rask.project", project),
-            ("rask.token", token or ""),
-            ("rask.stage", stage),
-            ("rask.transform", spec.name if spec else ""),
-        )
-        if value
-    }
-    body = {
-        "entrypoint": entrypoint,
-        "submission_id": submission_id,
-        "runtime_env": {"env_vars": env_vars},
-        "metadata": metadata,
-    }
+    # NO CREDENTIAL AND NO ENDPOINT RIDES THIS BODY, and it is the ORDER that guarantees it rather
+    # than this call site remembering to. `to_env()` is the ONE serialization and `WorkOrder` carries
+    # `extra="forbid"` with no field a credential could occupy, so the guarantee is a property of the
+    # TYPE. It is load-bearing because the Jobs API echoes `runtime_env` on `GET /api/jobs/<id>` — an
+    # unauthenticated dashboard, proxied by compute at `/api/ray/*` and published at the edge.
+    registration = TaskRegistration(task=order.task, engine=RAY_ENGINE, command=entrypoint, code_version=code_version)
 
     # SUBMIT-AND-ACK (A13, 2026-08-03) — the stage path no longer blocks on completion.
     #
@@ -376,13 +303,23 @@ async def submit_stage_job(
     # expires and the broker redelivers forever. A job that dies commits nothing and rings nothing;
     # the lineage reconciler catches it against storage truth, and the deterministic submission id
     # makes a redelivered trigger re-attach instead of starting a second job.
-    client = await ray_client()
-    await rk.submit_or_reattach(client, submission_id, body)
+    #
+    # SUBMITTED THROUGH THE PORT, resolved BY NAME ([[LH-159]]). Naming `RayJobsApiExecutor` here would
+    # swap one hard-coded engine for another and read like a fix; `executor_for` is what makes the
+    # lakehouse driveable BY Ray rather than dependent ON it. `storage_options` is empty because this
+    # adapter needs none — it posts to the standing cluster the pooled client already addresses, and
+    # the job resolves its own credentials from the pod.
+    #
+    # The Ray job is now named by `order.idempotency_key` rather than `stage_submission_id(...)`. Both
+    # are deterministic in the same four axes and differ only as hashes; the poller cannot drift onto
+    # the other one because this function RETURNS the handle it submitted under, which is the single
+    # derivation site that a later axis cannot re-break.
+    handle, _outcome = await executor_for(RAY_ENGINE, storage_options={}).submit(order, registration)
     log.info(
         "ray_stage_job_submitted",
-        extra={"submission_id": submission_id, "stage": stage, "transform": spec.name if spec else "", "declared": spec is not None},
+        extra={"submission_id": handle.handle, "stage": stage, "transform": spec.name if spec else "", "declared": spec is not None},
     )
-    return submission_id
+    return handle.handle
 
 
 async def submit_train_job(

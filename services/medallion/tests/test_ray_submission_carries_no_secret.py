@@ -52,8 +52,9 @@ def _settings() -> MedallionSettings:
 def stage_body(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     seen: dict[str, Any] = {}
 
-    async def _capture(_client: Any, submission_id: str, body: dict[str, Any]) -> None:
+    async def _capture(_client: Any, submission_id: str, body: dict[str, Any], **_policy: Any) -> str:
         seen.update(body)
+        return "submitted"  # the real `submit_or_reattach` answers what happened; its caller maps it
 
     async def _resolve(_settings: Any, *, project: str = "") -> None:
         return None

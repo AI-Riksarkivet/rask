@@ -36,9 +36,10 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """The submitted Ray job body, without a cluster."""
     seen: dict[str, Any] = {}
 
-    async def _capture(_client: Any, submission_id: str, body: dict[str, Any]) -> None:
+    async def _capture(_client: Any, submission_id: str, body: dict[str, Any], **_policy: Any) -> str:
         seen["submission_id"] = submission_id
         seen["body"] = body
+        return "submitted"  # the real `submit_or_reattach` answers what happened; its caller maps it
 
     monkeypatch.setattr(ray_submit.rk, "submit_or_reattach", _capture)
 
