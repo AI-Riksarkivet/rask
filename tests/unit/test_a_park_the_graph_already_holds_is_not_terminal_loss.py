@@ -79,7 +79,9 @@ def _outcomes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     import lineage.api.dapr as dapr_mod
 
     seen: list[str] = []
-    monkeypatch.setattr(dapr_mod, "record_outcome", lambda outcome: seen.append(str(outcome)))
+    # `door` is keyword-only on `record_outcome`, so a lambda that omits it cannot be CALLED — which is
+    # the point of it having no default: a double must stand for the whole signature.
+    monkeypatch.setattr(dapr_mod, "record_outcome", lambda outcome, *, door: seen.append(str(outcome)))
     return seen
 
 

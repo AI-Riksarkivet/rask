@@ -302,11 +302,18 @@ def test_dlq_route_parks_with_an_error_log_acks_and_counts_the_loss(monkeypatch:
     ERROR-logged, and COUNTED as ``dead_lettered``. The counter is the only dashboardable signal that
     the graph is missing events; without it the loss is a log line that scrolls away."""
     import lineage.api.dapr as dapr_mod
-    from lineage.core.metrics import Outcome
+    from lineage.core.metrics import Door, Outcome
 
     client, _ = _delivery_app(monkeypatch, dlq_topic="dlq.lineage.events")
-    recorded: list[Outcome] = []
-    monkeypatch.setattr(dapr_mod, "record_outcome", recorded.append)
+    recorded: list[tuple[Outcome, Door]] = []
+
+    def _record(outcome: Outcome, *, door: Door) -> None:
+        # The DOOR is asserted alongside the outcome: one counter is written by the subscriber, this
+        # dead-letter handler and the HTTP ingest, all from one pod, so the label is the only thing
+        # that tells an operator which of them lost the run.
+        recorded.append((outcome, door))
+
+    monkeypatch.setattr(dapr_mod, "record_outcome", _record)
 
     with caplog.at_level(logging.ERROR, logger="lineage.api.dapr"):
         response = client.post(
@@ -319,7 +326,7 @@ def test_dlq_route_parks_with_an_error_log_acks_and_counts_the_loss(monkeypatch:
     assert response.json() == {"status": "SUCCESS"}
     parked = [r for r in caplog.records if r.message == "dapr_dead_letter_parked"]
     assert parked and getattr(parked[0], "event_id", None) == "ce-9"  # attributable to the lost delivery
-    assert recorded == [Outcome.DEAD_LETTERED]
+    assert recorded == [(Outcome.DEAD_LETTERED, Door.DEAD_LETTER)]
 
 
 def test_dlq_route_rejects_forged_deliveries(monkeypatch: pytest.MonkeyPatch) -> None:

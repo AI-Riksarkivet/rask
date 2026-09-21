@@ -559,6 +559,27 @@ have no `uv.lock` and so cannot be built to emit anything.
   the medallion deploy that follows this entry rolls only the four medallion deployments (`kubectl set
   image`) precisely so this clock is not reset again, even though they share the
   `lance-rest-catalog` image with maintenance and nine other deployments.
+- **THE CLIMB IS 5.2x SHALLOWER AND IS STILL A CLIMB — AND THAT MAY YET FAIL THIS ROW'S OWN BAR.**
+  Eight points on the uninterrupted pod (`kubectl top`, maintenance container, minutes/MiB): 47/255,
+  63/261, 77/275, 92/289, 97/289, 109/294, 132/312, 148/324. Least-squares slope **0.69 Mi/min** from a
+  221Mi intercept, against a pre-fix **3.60 Mi/min** that reached 403Mi at 60 minutes and died at 87.
+  So the arena bound did what the mechanism predicted — it cut the rate by 5.2x — and it has NOT yet
+  produced the PLATEAU this row's closing bar actually asks for.
+  **THE DISTINCTION IS THE ROW'S OWN, and it cuts against the optimistic reading.** This row already
+  states it: "a bounded working set plateaus and never arrives", while a ratcheting sum "produces a
+  straight run into the ceiling". Eight monotonically rising points fit the second shape with a gentler
+  gradient, not the first. If the trend is linear it crosses 512Mi at **~420 minutes (7.0 h)** — which
+  would mean the fix bought roughly 5x the time and did not bound the set.
+  **SO THE 97-MINUTE RESULT IS EXACTLY WHAT IT SAID AND NO MORE.** It falsified "the bound changes
+  nothing at the age the old failure occurred". It does not establish a plateau, and reading it as
+  though it did is the error this row has already made once.
+  **THE PREDICTION IS RECORDED BEFORE IT RESOLVES, deliberately** — a watcher is armed to report at 420
+  minutes or on restart, whichever comes first, and that is the same 420 minutes the fit projects. Either
+  it plateaus short of the ceiling, or it arrives and the remaining growth needs a second, different
+  cause found rather than the same lever tightened. `kubectl top` reports a working set that includes
+  reclaimable pages, so a single reading is noisy; eight monotone ones are the signal, and the pod's own
+  `/proc/1/status` read 387Mi of VmRSS at 63 minutes against top's 261Mi, so the two measures disagree
+  in LEVEL and must not be mixed when the ceiling is what is being approached.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 

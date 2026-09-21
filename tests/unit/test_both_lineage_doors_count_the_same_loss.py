@@ -30,7 +30,7 @@ from typing import Any
 import pytest
 from lance_namespace import PermissionDeniedError
 
-from lineage.core.metrics import Outcome
+from lineage.core.metrics import Door, Outcome
 from lineage.models import UnauthoredRunError, UngovernedOutputError
 
 
@@ -48,7 +48,13 @@ SUBSCRIBER_CLASSIFICATION = [
 async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error: Exception, expected: Outcome, monkeypatch: pytest.MonkeyPatch) -> None:
     from lineage.api.v1.endpoints import ingest
 
-    recorded: list[Outcome] = []
+    recorded: list[tuple[Outcome, Door]] = []
+
+    def _record(outcome: Outcome, *, door: Door) -> None:
+        # MATCHES `record_outcome`'s real signature, `door` and all. A double narrower than the
+        # function it stands for cannot see a change at that seam — and a bare `list.append` could not
+        # even be CALLED once the door became a keyword argument.
+        recorded.append((outcome, door))
 
     async def _deny(*_args: Any, **_kw: Any) -> None:
         raise error
@@ -59,12 +65,14 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
 
     monkeypatch.setattr(ingest, "enforce_author", _author)
     monkeypatch.setattr(ingest, "enforce_output_authz", _deny)
-    monkeypatch.setattr(ingest, "record_outcome", recorded.append)
+    monkeypatch.setattr(ingest, "record_outcome", _record)
 
     with pytest.raises(type(error)):
         await ingest.ingest_event(event=object(), request=object(), repository=object(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
 
-    assert recorded == [expected], f"the HTTP door recorded {recorded or 'nothing'} for {type(error).__name__}; the subscriber records {expected.value}"
+    assert recorded == [(expected, Door.HTTP)], (
+        f"the HTTP door recorded {recorded or 'nothing'} for {type(error).__name__}; the subscriber records {expected.value}"
+    )
 
 
 @pytest.mark.asyncio
@@ -72,7 +80,10 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     """The guard against paying for the above with a double count on the path that works."""
     from lineage.api.v1.endpoints import ingest
 
-    recorded: list[Outcome] = []
+    recorded: list[tuple[Outcome, Door]] = []
+
+    def _record(outcome: Outcome, *, door: Door) -> None:
+        recorded.append((outcome, door))
 
     class _Run:
         run_id = "run-1"
@@ -90,9 +101,9 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
         return None
 
     monkeypatch.setattr(ingest, "enforce_output_authz", _allow)
-    monkeypatch.setattr(ingest, "record_outcome", recorded.append)
+    monkeypatch.setattr(ingest, "record_outcome", _record)
 
     answer = await ingest.ingest_event(event=_Event(), request=object(), repository=_Repo(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
 
-    assert recorded == [Outcome.INGESTED]
+    assert recorded == [(Outcome.INGESTED, Door.HTTP)]
     assert answer["status"] == "ingested"

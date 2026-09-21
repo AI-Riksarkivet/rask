@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Request
 
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
-from lineage.core.metrics import Outcome, record_outcome
+from lineage.core.metrics import Door, Outcome, record_outcome
 from lineage.models import RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -117,7 +117,7 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     # Without this counter the retries all counted RETRIED and the parking vanished from the metrics
     # (audit 2026-07-15). The split is what makes the number readable: a non-zero `DEAD_LETTERED` means
     # the graph is missing that run, which is the claim an alert on it is making.
-    record_outcome(Outcome.DEAD_LETTERED if not already_recorded else Outcome.PARKED_ALREADY_RECORDED)
+    record_outcome(Outcome.DEAD_LETTERED if not already_recorded else Outcome.PARKED_ALREADY_RECORDED, door=Door.DEAD_LETTER)
     return {"status": "SUCCESS"}
 
 

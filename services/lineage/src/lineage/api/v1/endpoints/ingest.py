@@ -28,7 +28,7 @@ from lance_namespace import PermissionDeniedError
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
-from lineage.core.metrics import Outcome, record_ingest_duration, record_outcome
+from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
 from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError
 
 
@@ -70,10 +70,10 @@ async def ingest_event(event: RunEvent, request: Request, repository: Repository
         enforce_author(event, token)
         await enforce_output_authz(event, request, settings, token)
     except (UnauthoredRunError, UngovernedOutputError):
-        record_outcome(Outcome.UNREPAIRABLE)
+        record_outcome(Outcome.UNREPAIRABLE, door=Door.HTTP)
         raise
     except PermissionDeniedError:
-        record_outcome(Outcome.REFUSED)
+        record_outcome(Outcome.REFUSED, door=Door.HTTP)
         raise
     started = time.perf_counter()
     # ONE transaction: the AGE graph and the durable /events row. A feed write that fails takes the
@@ -84,5 +84,5 @@ async def ingest_event(event: RunEvent, request: Request, repository: Repository
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the
     # graph should have held. An authorization refusal does, and is counted above.
     record_ingest_duration(time.perf_counter() - started)
-    record_outcome(Outcome.INGESTED)
+    record_outcome(Outcome.INGESTED, door=Door.HTTP)
     return {"status": "ingested", "run": event.run.run_id}

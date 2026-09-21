@@ -6,8 +6,8 @@ ingest takes. They go out via the OTel SDK (activated by ``opentelemetry-instrum
 GreptimeDB** (no Collector — mirrors rask), queryable in PromQL / Perses.
 
 Cardinality is bounded on purpose (the otel skill's #1 cost driver): the only attribute is the bounded,
-namespaced ``lance.lineage.outcome`` — per-run / per-table identifiers belong on spans and logs, never on
-metric attributes. (Custom attributes use the project's dot-namespaced `lance.*` convention —
+namespaced ``lance.lineage.outcome`` and the equally bounded ``lance.lineage.door`` — per-run /
+per-table identifiers belong on spans and logs, never on metric attributes. (Custom attributes use the project's dot-namespaced `lance.*` convention —
 deliberately NOT the otel skill's reverse-DNS letter, pinned in todo_fable; in PromQL the dots become
 underscores → ``lance_lineage_outcome``.)
 ``metrics.get_meter`` returns a proxy that binds lazily, so creating the instruments at import time
@@ -115,9 +115,32 @@ class Outcome(StrEnum):
     UNREPAIRABLE = "unrepairable"
 
 
-def record_outcome(outcome: Outcome) -> None:
-    """Increment the processed-events counter for ``outcome``."""
-    _events_processed.add(1, {"lance.lineage.outcome": outcome.value})
+class Door(StrEnum):
+    """WHICH ingress an event arrived through — the counter's second and last attribute.
+
+    All three write one counter from ONE pod, so no resource or instance attribute separates them, and
+    each fails for a different reason and is repaired in a different place. Without this an operator
+    woken by a `refused` rate learned that provenance was lost and nothing about where to look.
+    """
+
+    #: The Dapr subscription off `lineage.events.v1` — an in-cluster producer with a sidecar.
+    SUBSCRIBER = "subscriber"
+    #: `POST /api/v1/lineage`, the OpenLineage HTTP transport. The ONLY door for a producer with no
+    #: sidecar: the whole Ray lane, every runner, and any external OpenLineage producer.
+    HTTP = "http"
+    #: The dead-letter handler — not an arrival but a giving-up, and an operator reads it as neither of
+    #: the above.
+    DEAD_LETTER = "dead_letter"
+
+
+def record_outcome(outcome: Outcome, *, door: Door) -> None:
+    """Increment the processed-events counter for ``outcome`` at ``door``.
+
+    ``door`` is keyword-only WITH NO DEFAULT on purpose: a default would let a new call site silently
+    inherit another door's label, which is the exact confusion this attribute exists to remove, and a
+    wrong label is worse than a missing one because it reads as an answer.
+    """
+    _events_processed.add(1, {"lance.lineage.outcome": outcome.value, "lance.lineage.door": door.value})
 
 
 def record_ingest_duration(seconds: float) -> None:
