@@ -613,6 +613,17 @@ spec:
             - { name: otlp-grpc, containerPort: 4317 }
             - { name: otlp-http, containerPort: 4318 }
           readinessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 5, periodSeconds: 10 }
+          {{- /* [[XC-059]] READINESS GATES TRAFFIC; ONLY LIVENESS RESTARTS. Kubernetes answers a
+               persistent Ready-false by routing around the pod, and there is nothing to route around a
+               singleton every signal in the estate flows through — a wedged Collector would simply stay
+               Ready-false forever while every trace, metric and log stopped. Same `health_check`
+               endpoint, so this costs no new surface, only a second probe that acts on the answer.
+               DELIBERATELY SLACKER THAN READINESS: restarting is the heavier action, so it must be the
+               later one. 30s before the first check and 3 failures at 30s apart means a genuinely
+               wedged Collector is restarted inside ~2 minutes, while a slow start or a single blip is
+               not — a liveness probe that fires before readiness turns a slow start into a crash loop,
+               which is how these end up net-negative. */}}
+          livenessProbe: { httpGet: { path: /, port: 13133 }, initialDelaySeconds: 30, periodSeconds: 30, failureThreshold: 3 }
           resources: {{- include "lance.resources" (dict "root" . "comp" "otel-collector") | nindent 12 }}
           volumeMounts:
             - { name: config, mountPath: /etc/otelcol, readOnly: true }
