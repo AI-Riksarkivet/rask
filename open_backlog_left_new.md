@@ -136,12 +136,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **98 are blocked on a decision** and **103 can be picked up today**.
+**201 open items**, of which **99 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 40 | 6 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 22 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -440,8 +440,9 @@ have no `uv.lock` and so cannot be built to emit anything.
 **LH-048 · Two measured upstream pylance defects are unfiled, and they are not the two this row named**
 `catalog` · **LOW**
 - **THE INVENTORY IS CORRECTED (2026-09-20), both halves measured.** The `header.`/`headers.` prefix workaround this row's second entry pointed at **does not exist** — no site in `services/` or `packages/`, so there is nothing to file and nothing to track. In its place, today's LH-022 measurement produced a real one.
+- **blocked:** filing on `lancedb/lance` is an OUTWARD-FACING action on a third party's repository, so it needs the owner's go rather than being picked up as workable. The measurement is done and recorded here; only the posting is held.
 - *What is left:* file two issues against `lancedb/lance` and record each URL beside its workaround:
-  1. the bundled REST client sends **GET** for `count_rows` and `tags/list` where the spec says POST at every tag v0.9.0-v0.12.0, forcing the dual mount at `data.py:613-622` and `tags.py:28`;
+  1. the bundled REST client sends **GET** for `count_rows` and `tags/list` where the spec says POST at every tag v0.9.0-v0.12.0, forcing the dual mount at `data.py:676-677` and `tags.py:40-41` (re-measured 2026-09-21 against pylance **11.0.0**, inside the affected range; the line numbers this row carried had drifted, and both mounts still pair the spec-correct POST with a `_compat_get` twin);
   2. the Rust `merge_insert_into_table` rejects a **list** for `on` — `TypeError: 'list' object is not an instance of 'str'` — while the Dataset API accepts one and lance-namespace types it `list[str]` from 0.12, which is what pins rask at `<0.12` ([[LH-022]]).
   Filing is an outward-facing action on someone else's tracker and has not been done.
 - *Closes when:* both issues are filed and their URLs sit beside the workarounds.
