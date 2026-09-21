@@ -12,7 +12,7 @@ import logging
 import os
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from fastapi import FastAPI
 
@@ -72,6 +72,26 @@ def server_request_hook(span: Span | None, scope: Mapping[str, Any]) -> None:
             span.set_attribute(attribute, raw_value.decode("latin-1"))
 
 
+#: Explicit bucket boundaries (milliseconds) for the HTTP duration histograms.
+#:
+#: [[XC-067]] THE DEFAULT LAYOUT MADE AN ALERT UNFIREABLE. OTel's default explicit boundaries stop at
+#: 10,000 ms. Measured on the deployed estate 2026-09-21, `maintenance` had a mean request duration of
+#: 39,504 ms and its histogram held 4 observations at `le=10000` against 37 at `le=+Inf` — 89% overflow.
+#: `histogram_quantile` returns at most the highest FINITE bucket's upper bound, so every quantile
+#: answered exactly 10000 and `HttpServerLatencyHigh` (`p95 > 15000`) returned zero series while the
+#: service it exists to catch ran at 39.5 seconds.
+#:
+#: CHOSEN FROM MEASURED DURATIONS, not doubled arbitrarily. The same store at the same moment:
+#: notifications ~30 ms, catalog ~34 ms, lineage ~370 ms, medallion-producer ~1,070 ms, maintenance
+#: ~39,500 ms. So the sub-100 ms resolution four services depend on is kept exactly as it was, and the
+#: tail is extended past a sweep with room for one that degrades. Reaching further must not blind the
+#: estate to its fast services, which is the obvious wrong fix.
+HTTP_DURATION_BUCKETS_MS: Final[tuple[float, ...]] = (
+    5, 10, 25, 50, 75, 100, 250, 500, 750, 1_000, 2_500, 5_000, 7_500, 10_000,
+    15_000, 30_000, 60_000, 120_000, 300_000,
+)  # fmt: skip
+
+
 def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None) -> bool:
     """Wire traces/metrics/logs OTLP export + FastAPI instrumentation.
 
@@ -119,8 +139,9 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
     from opentelemetry.sdk._logs import LoggerProvider
     from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-    from opentelemetry.sdk.metrics import MeterProvider
+    from opentelemetry.sdk.metrics import Histogram, MeterProvider
     from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+    from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -141,7 +162,18 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     # generic OTEL_EXPORTER_OTLP_HEADERS (db-name only); GreptimeDB ingests OTLP
     # metrics at /v1/otlp/v1/metrics with no pipeline.
     metric_reader = PeriodicExportingMetricReader(OTLPMetricExporter())
-    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    # THE VIEW IS WHAT MAKES THE ALERT REACHABLE ([[XC-067]]). Registered for the server and client
+    # duration instruments by name rather than by a wildcard, so a future instrument does not silently
+    # inherit a tail sized for a sweep.
+    views = [
+        View(
+            instrument_type=Histogram,
+            instrument_name=name,
+            aggregation=ExplicitBucketHistogramAggregation(HTTP_DURATION_BUCKETS_MS),
+        )
+        for name in ("http.server.duration", "http.client.duration")
+    ]
+    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader], views=views)
     metrics.set_meter_provider(meter_provider)
 
     # Logs: THE THIRD SIGNAL, and the one this seam silently threw away. `LoggingInstrumentor` does
