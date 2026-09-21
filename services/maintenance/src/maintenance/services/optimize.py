@@ -611,6 +611,11 @@ def compact_one(
     protected: BaseRefs | None = None,
     index_columns: list[str] | None = None,
     rewrite: Rewriter | None = None,
+    #: The identifier the CALLER already resolved — and, critically, the one it vended this rewrite's
+    #: credential under. Threaded rather than re-derived so the id the plan is addressed to and the id
+    #: the bytes are signed for cannot disagree. ``None`` from a caller that has no answer, which then
+    #: falls back to the producer's stamp exactly as before.
+    table_id: str | None = None,
 ) -> DatasetResult:
     """One ORDERED maintenance pass over one dataset. Never raises — a per-dataset failure is captured
     in ``error`` so one bad dataset can't abort the whole pass.
@@ -778,12 +783,19 @@ def compact_one(
             repack_mode=repack_mode,
             compact_threads=compact_threads,
             rewrite=rewrite,
-            # The id the PRODUCER stamped on the dataset, already resolved above. Deriving a second
-            # one from the path here would be a second answer to the same question, and the two
-            # disagree for most of the estate — `credentials.write_options_for` measures it: of eleven
-            # top-level roots, path derivation answers for six, and the five it misses include the
-            # cascade. Passing `None` correctly leaves this dataset on the in-pod rewrite.
-            table_id=result.declared_table_id,
+            # THE CALLER'S RESOLVED ID FIRST, the producer's stamp only where the caller has none —
+            # the same precedence `sweep.maintain_one_item` applies when it vends this rewrite's
+            # credential, and deliberately not a second derivation of its own. One resolution feeding
+            # both doors is what keeps the identifier the plan is addressed to and the identifier the
+            # bytes are signed for from disagreeing.
+            #
+            # The stamp ALONE is too narrow to gate on, measured on the live estate 2026-09-21: of the
+            # 151 distinct unstamped datasets one tick rewrote in-pod, `table_id_from_location` answers
+            # for 123 (81%) — they sit in the catalog's `<uuid8>_<ns>$<table>` layout and the same tick
+            # vended them table-scoped credentials by that id. Gating on the stamp sent every one of
+            # them through `compact_files()` in-process, which is what a 512Mi worker is OOMKilled by.
+            # A dataset neither answer names still belongs on the in-pod path, and still takes it.
+            table_id=table_id or result.declared_table_id,
         )
         _optimize_indices(ds, result, uri=uri, enabled=optimize_indices_enabled, index_columns=index_columns)
         _reclaim_versions(

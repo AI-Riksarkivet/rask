@@ -370,7 +370,12 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     # wrong stamps — so the stamp must never displace an answer the layout could give. It fills the gap
     # the parser cannot read (every composed `medallion/<tier>` path), and the vend then checks it
     # against the catalog's own location for that id rather than trusting it.
-    table_id = item.table_id or probe.declared_table_id
+    # DERIVATION IS THE THIRD ANSWER, not an absent one. `write_options_for` already falls back to
+    # `table_id_from_location` internally, so leaving it out here made the CREDENTIAL door see an id
+    # the rewrite door never did — measured 2026-09-21, that gap put 123 of 151 unstamped datasets on
+    # the in-pod rewrite while their bytes were signed by a table-scoped credential vended under the
+    # very id the gate was told did not exist. Resolving once, here, is what makes the two agree.
+    table_id = item.table_id or probe.declared_table_id or table_id_from_uri(item.uri)
     try:
         write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=table_id)
     except compaction_executor.MaintenanceDenied as exc:
@@ -380,7 +385,7 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
         # errored: nothing is broken, a grant is missing, and the two must not read alike.
         log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
         return DatasetResult(uri=item.uri, refused=str(exc))
-    return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected)
+    return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected, table_id=table_id)
 
 
 def _resolve_plan(
@@ -612,6 +617,10 @@ def _maintain_one(
     settings: MaintenanceSettings,
     options: dict[str, str],
     protected: base_refs.BaseRefs,
+    #: The id `options` was vended under, where one was resolved. Carried so `compact_one` addresses
+    #: the catalog's plan/commit doors by the same identifier — a rewrite planned for one table and
+    #: signed for another is the disagreement this parameter exists to make impossible.
+    table_id: str | None = None,
 ) -> DatasetResult:
     """One dataset's compact + index-optimize + GC pass, inside its own span.
 
@@ -655,6 +664,7 @@ def _maintain_one(
             protected=protected,
             auto_cleanup_interval_commits=plan.auto_cleanup_interval_commits,
             index_columns=plan.index_columns,
+            table_id=table_id,
         )
         result.duration_seconds = round(perf_counter() - started, 3)
         span.set_attribute("lance.maintenance.duration_seconds", result.duration_seconds)
