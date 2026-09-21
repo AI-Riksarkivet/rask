@@ -815,6 +815,24 @@ have no `uv.lock` and so cannot be built to emit anything.
   minutes has falsified the old ceiling, and one that plateaus below 512Mi has closed the row.
   A host-side sampler (`/proc/<pid>/status` every 5 min: threads, VmRSS, RssAnon, RssFile, VmData) is
   the instrument; it never enters the cgroup, which is the mistake that corrupted an earlier series.
+- **THE EXPERIMENT IS RUNNING, WITH A PAIRED CONTROL (2026-09-21 20:26Z).** The fix is deployed to the
+  live worker (`ARROW_DEFAULT_MEMORY_POOL=system` beside the existing `MALLOC_ARENA_MAX=2`, both read
+  back off the running pod) and two host-side series are being collected five minutes apart, neither
+  entering the cgroup under study:
+  * **CONTROL (mimalloc), 4 samples over 15 min:** RssAnon 213,892 -> 232,096 kB — **+1.21 MB/min**,
+    RssFile flat at ~138 MB, threads constant at 98. The growth is entirely ANONYMOUS, which is what
+    distinguishes allocator retention from page cache and is the shape this change targets.
+  * **TREATMENT (system), from 20:26Z.** First reading already differs where the mechanism predicts:
+    `VmData` **2.86 GB against the control's 4.03 GB** — about 1.2 GB less virtual data reserved, which
+    is mimalloc's large arena reservations not being made. That is a plausibility signal, not a result;
+    the slope decides.
+  **THE WIRING IS PROVEN, not assumed** — `ARROW_DEFAULT_MEMORY_POOL=system` flips
+  `pa.default_memory_pool().backend_name` from `mimalloc` to `system` on this exact wheel, checked
+  outside the cluster so the measurement was not perturbed to prove it.
+  **WHAT WOULD FALSIFY IT, stated before the answer arrives:** a pod that dies OOMKilled near 442
+  minutes again, or an anonymous slope that stays near 1.21 MB/min. What would close the row is a slope
+  that flattens and a pod that clears a full day. Either outcome is decided by the same two series, and
+  the previous prediction from this fit landed within 5%, so the model is trusted enough to read early.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
