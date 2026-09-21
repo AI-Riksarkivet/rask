@@ -76,3 +76,52 @@ def test_the_fast_services_keep_their_resolution() -> None:
     under_100 = [b for b in HTTP_DURATION_BUCKETS_MS if b <= 100]
 
     assert len(under_100) >= 4, f"only {len(under_100)} boundaries at or below 100ms; the sub-100ms services lose all resolution"
+
+
+def test_the_view_actually_reaches_the_exported_histogram() -> None:
+    """The boundaries must REACH the metric, not merely exist as a constant.
+
+    A View whose `instrument_name` matches nothing is a control that provably does nothing — the
+    failure [[LH-172]] removed a `LANCE_CPU_THREADS` knob for, and the one this whole row is an
+    instance of. The instrumentation also ships its OWN advisory boundaries
+    (`HTTP_DURATION_HISTOGRAM_BUCKETS_NEW`, topping out at 10), so "the SDK will pick mine" is an
+    assumption worth failing a test over rather than believing.
+
+    Asserted against a real `MeterProvider` with an in-memory reader, recording a duration that the
+    DEFAULT layout cannot represent (50,000 ms) and reading the boundaries back off the exported point.
+    """
+    from opentelemetry.sdk.metrics import Histogram, MeterProvider
+    from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader
+    from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
+
+    reader = InMemoryMetricReader()
+    provider = MeterProvider(
+        metric_readers=[reader],
+        views=[
+            View(
+                instrument_type=Histogram,
+                instrument_name="http.server.duration",
+                aggregation=ExplicitBucketHistogramAggregation(HTTP_DURATION_BUCKETS_MS),
+            )
+        ],
+    )
+    provider.get_meter("t").create_histogram("http.server.duration", unit="ms").record(50_000)
+
+    data = reader.get_metrics_data()
+    assert data is not None, "the reader returned no metrics data at all"
+    points = [
+        point
+        for rm in data.resource_metrics
+        for sm in rm.scope_metrics
+        for metric in sm.metrics
+        for point in metric.data.data_points
+        # Narrowed on the POINT TYPE rather than cast: a histogram View that silently produced a sum
+        # would otherwise be read through an attribute that does not exist, and the failure would name
+        # the attribute instead of the aggregation.
+        if isinstance(point, HistogramDataPoint)
+    ]
+    assert points, "the histogram exported no HistogramDataPoint; the View produced a different aggregation"
+
+    boundaries = tuple(points[0].explicit_bounds)
+    assert boundaries == tuple(HTTP_DURATION_BUCKETS_MS), f"the View did not reach the instrument; exported boundaries were {boundaries}"
+    assert max(boundaries) >= 50_000, "a 50,000ms observation must not land in the overflow bucket"
