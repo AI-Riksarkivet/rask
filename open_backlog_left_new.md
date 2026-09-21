@@ -623,6 +623,20 @@ have no `uv.lock` and so cannot be built to emit anything.
   reclaimable pages, so a single reading is noisy; eight monotone ones are the signal, and the pod's own
   `/proc/1/status` read 387Mi of VmRSS at 63 minutes against top's 261Mi, so the two measures disagree
   in LEVEL and must not be mixed when the ceiling is what is being approached.
+- **I CONFOUNDED THIS MEASUREMENT MYSELF, AND IT MUST NOT BE READ AS A PLATEAU (2026-09-21).** Between
+  minute 250 and 281 the estate lost **fifteen datasets**: twelve chart-path medallion prefixes
+  ([[LH-164]]) and three unregistered ones ([[LH-176]]). The sweep and the reconciler both enumerate
+  datasets, so the WORKLOAD shrank at the same time the series was being read — and the reading right
+  after it (281m, 429Mi) is the first that is not higher than its predecessor (250m 410, 270m 425,
+  274m 427, 281m 429... then 429 again).
+  **SO A FLATTENING FROM HERE PROVES NOTHING ABOUT THE ARENA BOUND.** Less work per tick is a sufficient
+  explanation on its own, and this row has already been fooled once by a series that looked flat. The
+  pre-281-minute points remain valid — they were taken against the unchanged workload and give the
+  0.69 Mi/min fit — but the fit must not be extended across the change and then read as confirmation.
+  **WHAT IS STILL DECISIVE IS THE RESTART, NOT THE SLOPE.** The armed watcher reports on restart or at
+  420 minutes, and a restart at any age past 86m52s remains the falsifiable outcome. If the pod instead
+  survives, the honest next step is to re-establish a clean series on a pod whose workload has not moved
+  under it, rather than to claim the bound from a series whose denominator changed halfway.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
