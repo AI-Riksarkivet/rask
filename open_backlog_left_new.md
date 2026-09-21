@@ -142,12 +142,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **102 are blocked on a decision** and **95 can be picked up today**.
+**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 4 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 8 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -637,72 +637,6 @@ have no `uv.lock` and so cannot be built to emit anything.
   in LEVEL and must not be mixed when the ceiling is what is being approached.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
-
-**LH-184 · A runner-based stage lane's job-side provenance is REFUSED 403 — the write lands, the lineage does not**
-`lineage, medallion` · **HIGH** · OPEN
-- **MEASURED LIVE 2026-09-21, driving the real lane.** `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane` ran the GPU-free dummy lane against the deployed estate. The job executed, wrote **64 rows** to `acme-silver$dummy` and exited SUCCEEDED; its OpenLineage POST was refused. The lineage service's own log names the reason exactly: `ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']` -> `POST /api/v1/lineage 403 Forbidden`, twice (first run and replay). Three of the suite's seven legs fail on it, including `test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service` ("the run emitted nothing readable: absent from 200 events").
-- **THIS IS DONE-CRITERION 1 FAILING IN THE SHAPE THAT IS HARDEST TO SEE.** The bytes are governed and the provenance is not, so the estate holds a dataset whose run is absent from the graph while every component reports success — the job SUCCEEDED, the write committed, and the only record of the loss is one line in the lineage pod. `ClientEmitter` catches transport errors, so from the job's side this is indistinguishable from having emitted.
-- **THE GATE IS BEHAVING CORRECTLY, AND THE RULING BELOW LEAVES IT UNTOUCHED.** `fga_deps.relations_for_operation` keys the required rung on the OPERATION, never the caller (owner ruling 2026-09-08): a data write demands `can_write_data` on the outputs whoever emits it. Nothing in the fix weakens that — the rung stays where it is and the sweep keeps `can_maintain` rather than `can_write_data`. What changes is upstream of the check: the output table becomes governed at CREATE, so the check has an object to resolve against.
-- **THE PRODUCTION BLAST RADIUS IS BOUNDED TODAY AND GROWS WITH THE NEXT RUNNER.** `scripts/ray_stage_job.py` — the default stage entrypoint — emits no OpenLineage at all (no `lineage_kit` import, no `build_emitter`); it writes the `lineage` COLUMN from `RASK_LINEAGE_DOCUMENT`, and the stage RUNNER emits the run's events through the durable Dapr outbox. So the deployed cascade does not hit this. A RUNNER-based lane does: `runners/dummy/src/dummy_runner/lineage.py` and `runners/htr/src/runner/lineage.py` both call `build_emitter()`, and a declared transform can point the entrypoint at either. The estate is one declaration away from silently ungoverned provenance.
-- **NOT CAUSED BY [[LH-159]], checked before filing.** The dummy suite hand-builds its own `env_vars` and submits via `ray job submit` on the head (`_submit_on_head`), bypassing `submit_stage_job` entirely, and the refusal is an authorization decision about a tuple rather than about which env key carried the identity. It authenticated fine — a credential mismatch answers 401 here, not 403.
-- **RULED 2026-09-21 (owner): THE CREATE MUST GOVERN THE TABLE.** A lane creating an output goes through
-  the catalog, which seeds ownership at create, so there is a tuple to check by the time provenance is
-  emitted. Chosen over granting the lane subject `can_write_data` — the rung the 2026-09-08 ruling
-  deliberately withholds from the sweep, which would widen a privilege narrowed on purpose AND still need
-  the table governed first — and over adding a fourth rung for declared-lane writes. It follows directly
-  from the measurement that reframed this row: the output carries NO tuples at all, so "issue the tuple"
-  has no object to attach to until the table exists in the catalog. UNBLOCKED.
-- **RE-MEASURED 2026-09-21 AND THE SEVERITY IS LOWER THAN THIS ROW CLAIMED — the correction is mine.**
-  The row asserted "the estate is one declaration away from silently ungoverned provenance". That
-  overstates it. A lane driven THROUGH THE CASCADE gets a catalog-created destination: `transform.py`
-  creates the next tier through the catalog before dispatching, which is observable in this very
-  estate's logs — `catalog refused to create 'gold$catalog': HTTP 404` came from a RAY-dispatched
-  silver->gold hop — and `tables.py:279,792,802` seed ownership on create. So a cascade-driven lane's
-  output IS governed, and the job's provenance resolves against a real object.
-  **THE DUMMY LANE IS UNGOVERNED BECAUSE ITS SUITE BYPASSES THE PLATFORM, not because the platform has
-  a hole.** `test_dummy_lane_e2e` submits with `ray job submit` straight to the head, choosing
-  `RASK_DEST_URI`/`RASK_DEST_TABLE` itself, so no catalog create ever runs and `acme-silver$dummy`
-  exists as bytes with no record and no tuples. The suite's own failure message says as much and names
-  the fix: "a missing GRANT, not a broken lane ... this lane needs one link the script does not know
-  about: `namespace:<p>-silver -> table:<p>-silver$dummy`" — `scripts/seed_medallion_fga.sh` seeds
-  `$features`, the HTR lane's output, and not this one.
-  **SO THE RULING STILL POINTS THE RIGHT WAY, at a smaller target.** "The create must govern the table"
-  is already true of every create that goes through the catalog; what is left is that a lane can be
-  driven around the catalog entirely and nothing notices. The honest remaining work is therefore a GATE
-  rather than a new create path: a job whose declared output has no catalog record should be refused at
-  submit, where the platform still has the context to say so — not at the lineage door afterwards,
-  where all it can do is drop the provenance of a write that already happened.
-  **WHAT THE SEAL FORBIDS IS ALSO WHY THIS CANNOT LIVE IN THE RUNNER.** `dummy_runner/transform.py`
-  states it: the runner "cannot import the platform's definition — it is sealed, and declares only
-  `storage` and `pylance`", and "the catalog's publish door is the authority". Governing the output is
-  the SUBMITTER's job, which is exactly where the cascade already does it.
-- *What is left:* A SUBMIT-TIME gate: a job whose declared output has no catalog record is refused where the platform still has the context to say so, rather than having its provenance dropped at the lineage door after the write. The cascade path already governs its destination, so this closes the bypass rather than building a create path. Re-running `bash scripts/e2e_live.sh tests/e2e-py -m dummy_lane` is the measure — three legs are RED today — and the suite's own message names the interim: `scripts/seed_medallion_fga.sh` does not seed this lane's output table. The SILENCE half is DONE: deployed and observed as `{door="http"}` in GreptimeDB.
-- **THE SILENCE HALF IS FIXED, DEPLOYED AND OBSERVED (2026-09-21) — the blocked half is untouched.**
-  The HTTP ingest door recorded `INGESTED` on success and NOTHING on refusal, while the Dapr subscriber
-  classified both and both of its outcomes already had alert rules (`chart/alerting/rules.yml:145,170`).
-  The alerts existed; that door was not feeding them. Its old rationale — that a 403 is a
-  "transport-level failure" the generic RED metrics cover — does not survive: this service answers 403
-  for ordinary reads too (a `can_get_metadata` denial on a GET, in the same log), so a status-code count
-  cannot separate a reader being told no from a producer's provenance being dropped.
-  **THE FIRST DEPLOY OF IT COULD NOT BE OBSERVED, AND THAT WAS THE MORE USEFUL FINDING.** Three doors —
-  subscriber, dead-letter, HTTP — write ONE counter from ONE pod, so no resource or instance attribute
-  separates them. A correctly-recorded refusal was arithmetically invisible: `unrepairable` stood at
-  15,398 and rose by **3,656 in 47 seconds** from the subscriber re-presenting one unauthored run. Proven
-  in a unit test and unobservable in the cluster is the wrong way round, and it is an operator's problem
-  too — a `refused` alert said provenance was lost and nothing about where to look, while the three doors
-  are repaired in three different places.
-  **SO THE COUNTER NAMES ITS DOOR, and the fix is now visible where it runs.** `Door` is a closed
-  StrEnum of three, cardinality bounded as `core/metrics.py` requires. Measured after deploying
-  `main-94628e6e` and re-driving the lane: `{door="http", outcome="unrepairable"} = 2` — the two
-  refusals that lane just produced, as their own series, beside `{door="subscriber", outcome="ingested"}
-  = 861`. The unlabelled series (7,702) are the pre-deploy pod's and age out.
-  **AND IT SETTLES WHICH REFUSAL THIS IS.** The dummy lane's output is UNGOVERNED rather than merely
-  denied — `_none_are_governed` is true for `acme-silver$dummy`, so the door raises
-  `UngovernedOutputError` and records `UNREPAIRABLE`, not `REFUSED`. That matters for the blocked
-  ruling below: the subject is not being refused a rung it might be granted, it is writing a table that
-  carries no tuples at all, so "issue the tuple" has no object to attach to until the table is governed.
-- *Closes when:* The dummy lane's run reads back from the lineage service after writing, and a refused ingest is counted somewhere a person looks rather than only in a log line.
-- *Evidence:* live 2026-09-21 — `ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']`, `POST /api/v1/lineage 403`, x2 · `tests/e2e-py/test_dummy_lane_e2e.py` 3 failed / 4 passed against the deployed release · `services/lineage/src/lineage/api/fga_deps.py:50-73 (_MAINTENANCE_OPERATIONS, _WRITE_RELATIONS, the 2026-09-08 rung ruling)` · `scripts/ray_stage_job.py` (zero `build_emitter`/`lineage_kit` references) vs `runners/dummy/src/dummy_runner/lineage.py:35,148` · `tests/e2e-py/test_dummy_lane_e2e.py:194 (_submit_on_head — this suite does not use the medallion submitter)`
 
 ## PHASE 1 · CROSS-CUTTING
 
