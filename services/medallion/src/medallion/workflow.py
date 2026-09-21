@@ -61,6 +61,7 @@ from medallion.core.config import outbound_app_token
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 from medallion.schemas.promotion import PromotionSpec
 from service_kit.activity_loop import run_activity
+from service_kit.lakehouse.executor import RunState
 
 
 if TYPE_CHECKING:
@@ -518,6 +519,58 @@ def submit_stage(ctx: WorkflowActivityContext, spec: StageJobSpec) -> str:
     )
 
 
+#: The port's states rendered back into the dialect this activity's RECORDED history already speaks.
+#:
+#: [[LH-159]] THE IMPORT COUPLING IS WHAT THIS ROW REMOVES, and the vocabulary is a second, larger
+#: question deliberately not answered here. `poll_stage`'s return is written into Dapr workflow history
+#: on every tick, and ~50 assertions across 12 test files encode these literals, so switching the
+#: dialect is its own change with its own blast radius — not a rider on this one.
+#:
+#: `CANCELLED -> "STOPPED"` is the adapter's mapping read backwards: Ray's STOPPED is a cancelled run
+#: rather than a failure, and the platform prices the two differently.
+#: `UNKNOWN -> None` is load-bearing: `job_status` answered ``None`` for an id the head has never seen
+#: or has forgotten across a restart, and the resubmit machinery keys on that absence. Rendering it as
+#: a state would make a vanished job look reported, and the run would be abandoned instead of resumed.
+_RAY_STATE_WIRE: Final = {
+    RunState.SUCCEEDED: "SUCCEEDED",
+    RunState.FAILED: "FAILED",
+    RunState.CANCELLED: "STOPPED",
+    RunState.RUNNING: "RUNNING",
+    RunState.PENDING: "PENDING",
+    RunState.UNKNOWN: None,
+}
+
+
+def _ray_executor() -> Any:
+    """The Ray engine, resolved BY NAME through the registry ([[LH-159]]).
+
+    Done-criterion 3 says the lakehouse must not be coupled to Ray. `engine_registry.executor_for` is
+    what turns a chosen engine into the thing that runs it, and naming `RayJobsApiExecutor` here would
+    swap one hard-coded engine for another while looking like a fix.
+
+    `storage_options={}` because this adapter needs none — it addresses one dashboard host and carries
+    no credential, since the Ray pods hold their own. The registry's own docstring records that, which
+    is why the argument is empty rather than threaded from settings.
+    """
+    from medallion.services.engine_names import RAY_ENGINE
+    from medallion.services.engine_registry import executor_for
+
+    return executor_for(RAY_ENGINE, storage_options={})
+
+
+def _ray_handle(submission_id: str) -> Any:
+    """The port's handle for a Ray submission id.
+
+    The id is the one the SUBMITTER posted and is never re-derived here — `submit_stage_job` returns it
+    for exactly that reason, and a second derivation is how a poller ends up watching a job that was
+    never submitted.
+    """
+    from medallion.services.engine_names import RAY_ENGINE
+    from service_kit.lakehouse.executor import RunHandle
+
+    return RunHandle(engine=RAY_ENGINE, handle=submission_id)
+
+
 def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     """ONE status read. The workflow owns the waiting; this owns only the question."""
     # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
@@ -525,17 +578,19 @@ def poll_stage(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     payload = PollInput.model_validate(payload)
-    from medallion.services.ray_jobs_api import job_status
-    from medallion.services.ray_submit import ray_client
-
     submission_id = payload.submission_id
 
     async def _read() -> str | None:
-        # THE POOLED CLIENT (DUP-21), not a fresh one per tick. This activity runs on every polling
-        # tick of every running stage, so an `async with httpx.AsyncClient(...)` here paid a TCP
-        # connect, a TLS handshake and a pool teardown per tick — beside a client for the same host
-        # that `ray_submit` already opens once per worker and the stage runner's lifespan closes.
-        return await job_status(await ray_client(), submission_id)
+        # THROUGH THE PORT ([[LH-159]]). The executor wraps `job_status` rather than reimplementing it,
+        # and owns the pooled client the old direct call reached for by hand — this activity runs on
+        # every polling tick of every running stage, so a client per tick paid a TCP connect, a TLS
+        # handshake and a pool teardown each time.
+        #
+        # THE RETURN IS THE PORT'S VOCABULARY, and it is a `StrEnum`, so what crosses the durable
+        # boundary is still a plain string. An id the cluster has no record of answers UNKNOWN, never
+        # FAILED: the distinction is the resubmit decision, and reporting a forgotten record as a
+        # failure fabricates an outcome.
+        return _RAY_STATE_WIRE[await _ray_executor().status(_ray_handle(submission_id))]
 
     return _run_async(_read())
 
@@ -705,12 +760,13 @@ def _read_stage_failure(submission_id: str) -> Any:
     workflow history on every tick, so changing its shape breaks replay for in-flight instances, and
     no poll needs a traceback. This costs one extra read, only when a job has actually failed.
     """
-    from medallion.services.ray_jobs_api import job_failure
-    from medallion.services.ray_submit import ray_client
 
     async def _read() -> Any:
-        # The pooled client, for the reason `poll_stage` records (DUP-21).
-        return await job_failure(await ray_client(), submission_id)
+        # THROUGH THE PORT ([[LH-159]]), which also CLASSIFIES rather than handing back a log line:
+        # `RunFailure.kind` is "driver_error" | "oom" | "infra" | "unknown" and `exit_code` carries
+        # POSIX 137 for a SIGKILL under any engine. The platform can branch on those; it could not
+        # branch on the free-form text this call used to return.
+        return await _ray_executor().failure(_ray_handle(submission_id))
 
     # Best-effort by design — a Ray outage must not stop the failure being reported — but the reason a
     # FAIL carries no detail is worth knowing, so the swallow is no longer silent.
@@ -976,14 +1032,11 @@ def poll_train(ctx: WorkflowActivityContext, payload: PollInput) -> str | None:
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     payload = PollInput.model_validate(payload)
-    from medallion.services.ray_jobs_api import job_status
-    from medallion.services.ray_submit import ray_client
-
     submission_id = payload.submission_id
 
     async def _read() -> str | None:
-        # The pooled client, for the reason `poll_stage` records (DUP-21).
-        return await job_status(await ray_client(), submission_id)
+        # Through the port, for the reason `poll_stage` records ([[LH-159]]).
+        return _RAY_STATE_WIRE[await _ray_executor().status(_ray_handle(submission_id))]
 
     return _run_async(_read())
 

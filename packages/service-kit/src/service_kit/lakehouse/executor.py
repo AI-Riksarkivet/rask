@@ -72,6 +72,34 @@ class RunFailure(BaseModel):
     #: POSIX. 137 is SIGKILL under any engine — a portable fact, unlike a message string.
     exit_code: int | None = None
 
+    def summary(self, message_limit: int) -> str:
+        """A one-line cause, with the free text bounded by the CALLER's limit.
+
+        THE LIMIT IS AN ARGUMENT, not a constant, because the ceiling belongs to whatever this string
+        is being put INTO — a lineage event published through a claim-check funnel has a different
+        budget from a log line — and the port has no business knowing which.
+
+        ORDERED CLASSIFICATION-FIRST so truncation can only ever eat the free-text tail: `kind` and
+        `exit_code` are what classify a failure, and a cap that swallowed them would leave the caller
+        with a long string saying less than the short one it replaced. Empty when the engine reported
+        nothing, so a caller can tell "no cause available" from "the cause is blank".
+
+        It lives on the PORT rather than on an adapter's own post-mortem type because the three facts
+        it renders are already engine-free; duplicating the formatting per adapter is how two engines
+        end up describing the same failure differently.
+        """
+        parts: list[str] = []
+        if self.kind:
+            parts.append(self.kind)
+        if self.message:
+            flat = " ".join(self.message.split())
+            parts.append(flat if len(flat) <= message_limit else f"{flat[:message_limit]}… (truncated)")
+        rendered = ": ".join(parts)
+        if self.exit_code is not None:
+            suffix = f"driver exit {self.exit_code}"
+            rendered = f"{rendered} ({suffix})" if rendered else suffix
+        return rendered
+
 
 class SubmitOutcome(StrEnum):
     """What a submit actually did, so a caller can price it."""
