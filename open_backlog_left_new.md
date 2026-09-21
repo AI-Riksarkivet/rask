@@ -257,6 +257,27 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **THE DOOR THE CREDENTIAL HALF MUST USE ALREADY EXISTS, located 2026-09-21 so the remaining work is an implementation rather than a search.** `service_kit.governed.secrets.fetch_required_secrets(store, key, require=field)` is how the catalog resolves its OWN S3 secret, and it returns the WHOLE bundle precisely so a caller needing a second field reads it off one fetch (lineage's AGE password already does this). So a warehouse record naming a reference resolves through that same door, under its own key, with no new mechanism and no material in the record.
   **ONE SHAPE DIFFERENCE DECIDES THE WORK, and it is why this is not a two-line edit:** the existing call runs ONCE in the lifespan, single-threaded, before the first request, and splices the result into the cached `Settings` in place — `apply_*_secrets` documents at length that this is sound only because no reader exists yet, and that it must never be called from a request handler. Per-warehouse credentials are the opposite case: warehouses are created at run time, so resolution happens per connection, on the request path, and needs its own cached holder rather than the boot splice. That is the "credential object the storage seam reads" the same docstring already names as the genuinely better shape and prices as "a change across four services and every `storage_options()` caller".
   **NOT STARTED, and not half-started either.** Adding the record field alone would be a field no resolver reads — decoration, and the same failure this row already calls out in its own endpoint half ("a field the record honours and no door can set is hardening an operator cannot apply"). It wants the reference, the request-path resolver and the cache together, with a live warehouse on a second store to verify against.
+- **THE REFERENCE MECHANISM SHIPPED 2026-09-21 — the design question this row called open is answered by
+  the estate's own rule, not by preference.** For a pod WITH a Dapr sidecar the sanctioned path is the
+  Dapr secret store, and the catalog already resolves its own S3 secret through that door
+  (`dapr_secret_store`/`dapr_secret_key`/`dapr_secret_s3_field`). So a warehouse record names a
+  `credential_ref` and `catalog.services.warehouse_credentials.resolve` fetches the material there.
+  ESO and STS remain the answers for the pods that have no sidecar and for STORAGE vending; neither is
+  this path.
+  **REQUEST-PATH, NEVER THE BOOT SPLICE, and that is why it is a new holder rather than a reuse.**
+  `apply_dapr_secrets` mutates the shared `@lru_cache`d `Settings` once inside the lifespan and its own
+  docstring forbids calling it from a request handler. A warehouse credential is per-RECORD and is
+  discovered when a request names that warehouse, so it is cached on `(store, ref, field)` and never
+  written back onto settings.
+  **FAILS CLOSED BY INHERITANCE:** `fetch_required_secrets` raises on a missing field and nothing
+  catches it. An unset reference resolves to `None` — "this record names no second store" — rather than
+  to the estate key, because returning that would make a misconfigured record indistinguishable from a
+  resolved one and start writing somewhere nobody intended. Five cases, RED first, both legs
+  mutation-checked.
+  **WHAT REMAINS IS NARROWER THAN THE CLAUSE READS:** the composition itself — `base_store_params` /
+  `base_<id>.<key>` on the write door (`dataplane.py:224-228`) and `base_store_params` on the read path
+  — plus an in-cluster drive of a table in a base needing different credentials. The mechanism the
+  clause demanded ("arrived by secret reference") is in place and pinned.
 - *Closes when:* A write door names its target base with per-base credentials that arrived by secret reference, and a table in a base needing different creds reads back through the catalog — the endpoint half is done and observed.
 - *Evidence:* `services/catalog/src/catalog/services/warehouses.py:117 (_CALLER_OWNED has no endpoint/credential field)` · `services/catalog/src/catalog/core/namespace.py:28-35 (swaps only root)` · `services/catalog/src/catalog/services/dataplane.py:218-237 (same so for every base; initial_bases/target_bases already passed)` · `open_backlog_left.md:164 (R1–R11 STAND); grep aws_provider_scheme services/catalog → none`
 
