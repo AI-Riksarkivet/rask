@@ -308,9 +308,21 @@ have no `uv.lock` and so cannot be built to emit anything.
   **Deployed and driven:** a full bronze->gold cascade passed against the image (5 legs, 50s), which is
   the non-regression proof the write door needs — with no references configured the composed map is
   exactly today's.
-  **STILL OPEN:** wiring an operator-facing ref map through `table_create` to `_write_blob`, and an
-  in-cluster drive of a base that genuinely needs different credentials — which needs a second store to
-  point at.
+  **THE OPERATOR MAP SHIPPED AND IS DEPLOYED (`main-7c526f8f`, 2026-09-21).**
+  `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS` takes `base-uri=secret-ref` pairs, parsed beside the allowlist
+  it completes. Both malformed shapes RAISE rather than dropping the entry — a missing separator and a
+  base given two references — because a reference that silently vanishes leaves its base on the estate
+  credential and looks correct, which is this row's own failure shape. Wired `table_create` ->
+  `create_table` -> `_write_blob`, empty by default, deployed and driven with a full cascade.
+  **A GATE FOR THE MISTAKE ACTUALLY MADE:** `create_table` reaches `_write_blob` at TWO sites — fresh
+  create and overwrite-existing — and only one was wired at first. Every test stayed green, because no
+  case drives that branch with a configured reference, so the un-wired path would have written its
+  bases on the estate credential silently. The gate now reads the call sites as an AST and fails if any
+  omits the argument.
+  **ALL THAT IS LEFT IS THE PROOF, and it needs a SECOND STORE to point at:** a MinIO user with its own
+  key, that key in the Dapr secret store, a base allowlisted and referenced to it, then a create and a
+  read-back through the catalog. Every mechanism the closing bar names is in place and deployed; what is
+  missing is an estate that has two stores in it.
   **WHAT REMAINS IS NARROWER THAN THE CLAUSE READS:** the composition itself — `base_store_params` /
   `base_<id>.<key>` on the write door (`dataplane.py:224-228`) and `base_store_params` on the read path
   — plus an in-cluster drive of a table in a base needing different credentials. The mechanism the
