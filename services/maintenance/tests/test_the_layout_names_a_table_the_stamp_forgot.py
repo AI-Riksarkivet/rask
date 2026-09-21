@@ -1,24 +1,31 @@
 """A dataset the catalog CAN name must be planned off-pod, even when no producer stamped it.
 
-THE DEFECT, measured on the live estate 2026-09-21. `rask-maintenance` is OOMKilled — 6 restarts,
-exit 137, against a 512Mi limit — and the sweep's own per-dataset line says why: of 4,276 compaction
-outcomes in the killed container, **2,207 ran `mode='in_pod'`**, which opens the whole dataset inside
-the pod. The chart states the consequence at `maintenance-worker.yaml:104`: "this pod's memory ceiling
-is a function of the largest table anyone owns rather than of its request rate."
+THE DEFECT IS AN IDENTITY DISAGREEMENT, and it is worth stating first what it is NOT. This gate was
+found while chasing an OOMKill of `rask-maintenance` (6 restarts, exit 137, 512Mi limit) on the
+strength of 2,207 `mode='in_pod'` outcomes in the killed container. **That reading was wrong and the
+OOM is not this row's**: `compaction_mode` defaults to `in_pod` and is only overwritten when the
+distributed path SUCCEEDS, so a refusal and a nothing-to-do both report it having opened nothing
+heavy. Measured the same day, 372 `in_pod` outcomes removed **zero** fragments between them, so the
+in-pod rewrite was not what consumed the memory. The gate below is still wrong on its own terms, which
+is why this file exists — but a reader must not take it for the OOM's cause.
 
-WHY THEY LANDED THERE IS AN IDENTITY DISAGREEMENT, not a governance one. Two doors resolve the same
-dataset's id and they do not resolve it the same way:
+Two doors resolve the same dataset's id and they do not resolve it the same way:
 
 * `sweep.maintain_one_item` takes the PATH first and the stamp only where the path is silent, and
   vends the write credential under that answer;
 * `optimize.compact_one` passed `result.declared_table_id` — the in-schema stamp — and nothing else,
   so a dataset with no stamp was treated as unplannable and fell to the in-pod rewrite.
 
-The second premise is false for most of the population. Of the 151 distinct unstamped datasets the
-killed container rewrote in-pod, `table_id_from_location` answers for **123 (81%)** — they sit in the
+The second premise is false for most of the population. Of the 151 distinct unstamped datasets one
+tick reported on the in-pod path, `table_id_from_location` answers for **123 (81%)** — they sit in the
 catalog's own `<uuid8>_<namespace>$<table>` layout. They are not anonymous: the same tick vended them
-table-scoped credentials by that id ("write credential SCOPED for advstats7ns$tA", a catalog 200), and
-then rewrote their bytes in-process anyway.
+table-scoped credentials by that id ("write credential SCOPED for advstats7ns$tA", a catalog 200), so
+the catalog could have planned every one and was never asked.
+
+OBSERVED after the fix, on the deployed estate: **523** outcomes reached the distributed path against
+**3** the gate should have taken and did not. The remaining in-pod outcomes are accounted for and
+correct — 150 refused before the gate (shallow clone / protected base, which must skip both paths) and
+219 named by neither the layout nor a stamp.
 
 WHAT THIS DOES NOT CHANGE, and the distinction is the whole fix: a dataset the catalog genuinely
 cannot name still belongs on the in-pod path.

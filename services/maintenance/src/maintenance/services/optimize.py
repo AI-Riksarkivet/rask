@@ -790,10 +790,19 @@ def compact_one(
             # bytes are signed for from disagreeing.
             #
             # The stamp ALONE is too narrow to gate on, measured on the live estate 2026-09-21: of the
-            # 151 distinct unstamped datasets one tick rewrote in-pod, `table_id_from_location` answers
-            # for 123 (81%) — they sit in the catalog's `<uuid8>_<ns>$<table>` layout and the same tick
-            # vended them table-scoped credentials by that id. Gating on the stamp sent every one of
-            # them through `compact_files()` in-process, which is what a 512Mi worker is OOMKilled by.
+            # 151 distinct unstamped datasets one tick reported, `table_id_from_location` answers for
+            # 123 (81%) — they sit in the catalog's `<uuid8>_<ns>$<table>` layout and the same tick
+            # vended them table-scoped credentials by that id, so the catalog can plan for every one.
+            # Gating on the stamp made them unplannable while their bytes were signed for a table the
+            # catalog knows. Observed after this change: 523 outcomes reached the distributed path
+            # against 3 the gate should have taken and did not.
+            #
+            # `compaction_mode` IS NOT A MEASURE OF WHERE BYTES MOVED, and reading it as one is how the
+            # estate's own OOM was misattributed to this gate. It defaults to `in_pod` and is only
+            # overwritten when the distributed path SUCCEEDS, so a refusal and a nothing-to-do both
+            # report `in_pod` having opened nothing heavy — measured the same day, 372 `in_pod`
+            # outcomes removed zero fragments between them.
+            #
             # A dataset neither answer names still belongs on the in-pod path, and still takes it.
             table_id=table_id or result.declared_table_id,
         )

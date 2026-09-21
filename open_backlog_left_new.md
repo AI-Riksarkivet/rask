@@ -81,8 +81,10 @@ named as a path, but the rule's subject is "never secret through envs".
 line plus that test are rewritten in the same commit. *If YES:* XC-002 closes and LH-160's baseline
 excludes ESO-written refs explicitly, so the number keeps meaning something.
 
-**2 · May the maintenance sweep reclaim a BRANCH?** *Unblocks [[LH-094]]'s residue and 6 of
-[[LH-019]]'s 15 branch doors.* The change is one line — skip the refusal when
+**2 · May the maintenance sweep reclaim a BRANCH?** *Both rows this was framed as unblocking —
+[[LH-094]] and [[LH-019]] — have since CLOSED, so the decision no longer buys what it says. What
+argues for it now is live pressure, measured below: it is roughly half of everything the sweep
+refuses.* The change is one line — skip the refusal when
 `containment_of(uri, root) == "branch"` — and the EQUALITY refusals are untouched by it, which is the
 half that must keep refusing: an external shallow clone in another dataset is invisible to Lance, so
 only the estate-wide pre-pass can see it.
@@ -126,18 +128,20 @@ it is the only component that knows the VERIFIED PRINCIPAL on a write, so moving
 loses authorship provenance and breaks condition 1 outright. The remaining coupling is to the CONTROL
 BUS, not to the lakehouse, and it is deliberate.
 
-*What this ruling does NOT settle* is the opposite direction, which is now [[LIN-001]]: the compute plane
-is the one the industry says owns lineage, and it is the plane rask has not wired.
+*What this ruling does NOT settle* is the opposite direction — the compute plane is the one the industry
+says owns lineage, and it is the plane rask has not wired. That was [[LIN-001]], which CLOSED 2026-09-20
+with every clause of its own done; its remainder sits in [[CP-032]], where six of the nine runners still
+have no `uv.lock` and so cannot be built to emit anything.
 
 
 ## Counted
 
-**200 open items**, of which **98 are blocked on a decision** and **102 can be picked up today**.
+**201 open items**, of which **98 are blocked on a decision** and **103 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 40 | 6 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 22 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -476,6 +480,15 @@ is the one the industry says owns lineage, and it is the plane rask has not wire
 - **THE POLICY IS THE POINT, not the implementation.** The chart grants lineage exactly `s3:DeleteObject` on `*/_lineage_outbox/*` (statement `DrainItsOwnOutboxAndNothingElse`), and `test_the_lineage_plane_writes_nothing_it_does_not_own.py` pins that it gets NO `PutObject` — `test_the_outbox_drain_needs_no_write_permission.py` exists because a delete that re-created a directory marker already broke this once. So the relay cannot write anywhere, and any terminal state that COPIES is unavailable to it. What remains: delete (it may) with the copy preserved beforehand by something that can write, accept-with-a-marker, or a separate reaper holding its own vended credential.
 - *Closes when:* A permanently-refused staged event reaches a terminal state rather than being re-refused every tick, and `test_reconcile_sweep_drains_a_staged_outbox_event` passes against the deployed release.
 - *Evidence:* live 2026-09-20 — `s3://lance-catalog/_lineage_outbox` holds 6 `@COMPLETE.json` objects; `lineage_outbox_event_unauthorized` per key per sweep; `fga query check user:<alice> can_write_data table:bronze$e2e_outbox_ds` → true · `services/lineage/src/lineage/api/reconcile_cron.py:575-605` · `services/lineage/src/lineage/api/fga_deps.py:72-89,277-308`
+
+**LH-183 · The maintenance worker is OOMKilled again — the Lance session's cache caps are cgroup-derived but SOFT, and nothing stops the overshoot**
+`maintenance` · **HIGH**
+- *What is left:* **This is a RECURRENCE, not a new defect, and the existing mitigation is soft by construction.** `rask-maintenance` was OOMKilled for this once before (2026-09-10) and the answer was `affordable_cache_bytes`, which derives the Lance session's cache caps from the cgroup instead of a literal. `config.py::shared_lance_session` states the limit of that answer in its own comment: *"the caps are LRU SOFT bounds — the size the cache grows toward, not a ceiling it stops at."* Measured inside the running pod 2026-09-21: cgroup **512 MB**, configured caps **128 + 256 = 384 MB**, clamped to **68 + 136 = 204 MB**. So the clamp IS working and the pod was still killed six times (exit 137), which means the remaining growth is either the soft bounds' overshoot or something the caps do not cover — and those two want different fixes.
+- *Where to look first:* the workload `shared_lance_session`'s own comment names as the one that fills the session — *"the scan opens every dataset across 93 buckets"* — is the RECONCILE pass, on its own `maintenance-reconcile-cron` at `@every 300s` (read from the live Component 2026-09-21), not the sweep. The sweep's per-tick shape is large but bounded: `maintenance_sweep datasets=585 skipped=0 refused=271` every 120 s (`maintenance-cron` is `@every 120s`), with 271 of 585 (46%) refused after being opened. Note that the opens are already at least DOUBLED per dataset — `base_refs`' estate-wide pre-pass "opens every dataset in the estate in a loop" before `_probe_before_vending` opens each one again — so a fix that moves an open rather than removing it buys nothing. The session is shared across both, which is what makes the caps the load-bearing bound rather than the call count.
+
+- **NOT THE COMPACTION PATH, and this is the trap the first diagnosis fell into.** `compaction_mode` defaults to `in_pod` and is overwritten only when the distributed path SUCCEEDS, so refusals and no-ops both report `in_pod` having opened nothing heavy — measured the same day, 372 `in_pod` outcomes removed **zero** fragments between them. See `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*. The identity-gate fix shipped in `771b6258` is not this row either: that gate was a real defect on its own terms (523 outcomes reached the distributed path after it, against 3 it should have taken and did not) and it did not cause this one.
+- *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and the bound that holds it there is a HARD one — measured, not a cap it grows toward.
+- *Evidence:* live 2026-09-21 — `kubectl describe pod rask-maintenance` `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · `maintenance_sweep datasets=585 refused=271` · `config.py::shared_lance_session` (caps measured in-pod: 68 + 136 MB against a 512 MB cgroup) · `sweep.py::_probe_before_vending` · `chart/templates/maintenance-worker.yaml:104`
 
 ## PHASE 1 · CROSS-CUTTING
 
