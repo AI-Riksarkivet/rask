@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
+from lance_namespace import InvalidInputError
 
 from catalog.core.vending import build_session_policy
 
@@ -89,15 +90,28 @@ def test_a_branch_name_with_a_SLASH_forms_its_subdirectory() -> None:
     assert _statement(policy, "BranchObjects")["Resource"] == f"arn:aws:s3:::{BUCKET}/{PREFIX}/tree/bugfix/issue-123/*"
 
 
-def test_a_branch_name_that_CLIMBS_OUT_is_refused() -> None:
-    """The one thing a session policy must never let a caller do: leave the table's own scope."""
-    with pytest.raises(ValueError, match="may not traverse"):
+def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:
+    """The one thing a session policy must never let a caller do: leave the table's own scope.
+
+    TYPED, NOT A BARE ValueError, because the branch is CALLER input and the estate has one rule for
+    that: raise a `lance_namespace` typed error and let `ns_errors.install_problem_handlers` translate
+    it (`InvalidInput` -> 400, RFC 9457). Measured live 2026-09-21 before this: a climbing name was
+    correctly refused and surfaced as **500 InternalError**, which tells the caller the catalog is
+    broken when the catalog is fine — the same defect `open_dataset`'s ValueError conversion fixed one
+    module over. `dataplane.py:109` is the estate's own precedent for raising the typed error from a
+    service module rather than at the route.
+    """
+    with pytest.raises(InvalidInputError, match="may not traverse"):
         build_session_policy(BUCKET, PREFIX, "write", branch="../../other-table")
 
 
-def test_a_branch_name_carrying_an_IAM_METACHAR_is_refused() -> None:
-    """Same rule the prefix and the bases already carry — a `*` in a resource widens the grant."""
-    with pytest.raises(ValueError):
+def test_a_branch_name_carrying_an_IAM_METACHAR_is_refused_AS_A_CLIENT_ERROR() -> None:
+    """Same rule the prefix and the bases already carry — a `*` in a resource widens the grant.
+
+    Also caller input, so also typed: the prefix and base rejections stay `ValueError` because those
+    are OPERATOR configuration, and an operator misconfiguration is not a client's 400.
+    """
+    with pytest.raises(InvalidInputError):
         build_session_policy(BUCKET, PREFIX, "write", branch="feat*")
 
 

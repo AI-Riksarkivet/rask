@@ -27,9 +27,10 @@ import json
 import logging
 import time
 from collections.abc import Callable, Sequence
-from typing import Any, Literal, Protocol, assert_never, cast, runtime_checkable
+from typing import Any, Final, Literal, Protocol, assert_never, cast, runtime_checkable
 from urllib.parse import urlsplit
 
+from lance_namespace import InvalidInputError
 from pydantic import BaseModel
 
 from catalog.core.config import shared_lance_session
@@ -121,6 +122,13 @@ _WRITE_ACTIONS = (
 _DEFAULT_VEND_ROLE_ARN = "arn:aws:iam::000000000000:role/lance-vend"
 
 
+#: The characters that are WILDCARDS inside a Resource ARN and an `s3:prefix` condition, with no
+#: escape. Named once because two guards now consult it — the operator-supplied prefix/base check
+#: below and the caller-supplied branch check in `build_session_policy` — and a second literal tuple
+#: is a second thing that can fall out of step with what IAM actually treats as a wildcard.
+_IAM_METACHARACTERS: Final = ("*", "?")
+
+
 def _reject_iam_metacharacters(what: str, value: str) -> None:
     """``*`` and ``?`` are wildcards inside a Resource ARN and an ``s3:prefix`` condition, with no escape.
 
@@ -128,7 +136,7 @@ def _reject_iam_metacharacters(what: str, value: str) -> None:
     through here. The base path needs it MORE: a prefix comes off the create doors, which already ran
     ``identifiers.require_safe_segments``, while a base path comes off a MANIFEST.
     """
-    if any(c in value for c in ("*", "?")):
+    if any(c in value for c in _IAM_METACHARACTERS):
         raise ValueError(f"{what} {value!r} contains an IAM wildcard metacharacter ('*'/'?'); it would widen the vended policy to sibling objects")
 
 
@@ -345,11 +353,20 @@ def build_session_policy(
     # `..` IS the attack, and it is the one thing a session policy must never permit: the whole point of
     # scoping to `<prefix>/*` is that the credential cannot leave the table, and a climbing name would
     # rewrite the resource ARN to somewhere else in the bucket.
+    #
+    # TYPED AS A CLIENT ERROR, unlike the prefix and base rejections beside it, and the difference is
+    # who supplied the value. A branch is CALLER input, so the estate's one rule applies: raise a
+    # `lance_namespace` typed error and let `ns_errors.install_problem_handlers` translate it
+    # (`InvalidInput` -> 400, RFC 9457 problem+json, the code clients dispatch on). A bare `ValueError`
+    # reached the door as 500 `InternalError` — measured live 2026-09-21 — which says the catalog is
+    # broken when the caller simply sent a bad name. The prefix and bases stay `ValueError` because they
+    # are OPERATOR configuration, and a misconfiguration is not a client's 400.
     branch = branch.strip("/")
     if branch:
-        _reject_iam_metacharacters("branch", branch)
+        if any(ch in branch for ch in _IAM_METACHARACTERS):
+            raise InvalidInputError(f"branch {branch!r} may not contain an IAM wildcard metacharacter")
         if ".." in branch.split("/"):
-            raise ValueError(f"branch {branch!r} may not traverse out of the table's prefix")
+            raise InvalidInputError(f"branch {branch!r} may not traverse out of the table's prefix")
     # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — `lancemultibasebranchingblobv2.md` § "Building
     # block 3" names this as the governance isolation the `tree/` layout exists to give. Main stays
     # READABLE because a branch manifest references its parent's fragments through a base pointing at

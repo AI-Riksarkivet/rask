@@ -771,6 +771,26 @@ have no `uv.lock` and so cannot be built to emit anything.
   accumulating per-dataset slack. That points away from "the bound is insufficient" and towards a
   second, workload-independent source — which is the hypothesis to test if it does reach the ceiling,
   rather than tightening `MALLOC_ARENA_MAX` again.
+- **THE ANSWER IS IN, AND IT IS NO: OOMKilled AGAIN AT 7h22m (2026-09-21).** The uninterrupted pod ran
+  `12:32:11Z -> 19:54:46Z` and died `OOMKilled, exit 137, restartCount 1` — **442m35s** against the
+  pre-fix **86m52s**. So the arena bound bought **5.1x** the uptime and did NOT bound the working set.
+  The row's closing bar is a full day; this is a fifth of one.
+  **THE PREDICTION LANDED, WHICH IS WHAT MAKES THE MODEL USABLE.** The fit recorded hours earlier put
+  512Mi at ~420 minutes from a 0.69-0.77 Mi/min slope; the kill came at 442. A linear model that
+  forecasts the ceiling to within 5% is not noise being over-read — the growth really is a straight
+  line, and it really does arrive.
+  **SO THE NEXT MOVE IS NOT TO TIGHTEN `MALLOC_ARENA_MAX`.** Two measurements rule that out together:
+  the arenas were already driven to 0 by the bound (60 -> 0 on maintenance, 34 -> 0 on catalog), and the
+  slope was IDENTICAL either side of removing fifteen datasets (0.76 vs 0.77 Mi/min). Growth that is
+  indifferent both to arena count and to how many datasets are swept is neither arena fragmentation nor
+  per-dataset sweep slack. It is a third thing, workload-independent, and it is what the next
+  investigation has to name — with the clock now known to be ~7h20m, which is a long enough window to
+  instrument and a short enough one to reproduce twice in a day.
+  **WHAT IS ALREADY EXCLUDED, so the next pass does not re-walk it:** the Python heap (measured flat),
+  the Lance session cache (measured flat, pinned at 14.6 MB across seven consecutive ticks), arena
+  count (0), and dataset count (slope unchanged across a 15-dataset drop). What has NOT been measured
+  is native allocation OUTSIDE glibc's arenas — mmap'd regions above the 128 KB threshold, which bypass
+  arenas entirely and would be invisible to every check this row has run.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
