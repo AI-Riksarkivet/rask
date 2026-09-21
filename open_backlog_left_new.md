@@ -142,12 +142,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
+**195 open items**, of which **102 are blocked on a decision** and **93 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 8 |
+| **PHASE 1 · LAKEHOUSE** | 36 | 2 | 8 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -163,33 +163,6 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *What is left:* Measured 2026-09-19: the vended `endpoint` is `http://rask-minio:9000`. The k3s service network IS routable from the host (`10.43.44.177` answers) and `rask-minio` does NOT resolve there, so resolution and the vend both succeed and only the byte read fails — the barrier is DNS, and it belongs to where the process runs rather than to the clients. If vending should serve external clients, the endpoint has to be configurable per deployment and someone must decide what an endpoint may disclose about internal topology. If it should not, the door should SAY so in its answer rather than handing out a credential that cannot be used: a 900 s credential for an unreachable host is indistinguishable from a broken object store until the read fails.
 - *Closes when:* The answer is recorded in `docs/DECISIONS.md` and the vending door matches it — either an externally-resolvable endpoint, or an explicit refusal/annotation for a caller it cannot serve.
 - *Evidence:* `make e2e-spec-conformance` from the host: the lancedb and lance-ray cases skip with "the vended endpoint 'http://rask-minio:9000' is in-cluster and unreachable from here" · the same suite in-cluster: **17 passed, 0 skipped** (`make e2e-spec-conformance-incluster`) · `getent hosts rask-minio` on the host: no answer; `kubectl get svc rask-minio`: ClusterIP 10.43.44.177, routable
-
-**LH-176 · A 300-row dataset sits in `lance-catalog` with no catalog record and no project, and the only category that counts it is `orphan_files`**
-`maintenance, catalog` · **MED**
-- **THE REPORTING CLAUSE IS DONE AND VERIFIED IN THE DEPLOYED IMAGE (2026-09-21):** `reconcile._unregistered_datasets` exists in the running maintenance pod and `ReconcileReport` carries the `unregistered_datasets` field, so the reconciler now names this class of dataset as its own category rather than leaving it to read as 13 `orphan_files`. **What is left is ONLY the disposition**, which is the same question as [[LH-164]] and [[LH-016]] — so that one owner answer now retires FIVE rows, not four.
-- **THE MARKER GATED THE WHOLE ROW AND ONLY EVER GATED HALF OF IT.** This row's *Closes when* has two clauses: a REPORTING one ("the reconciler reports unregistered dataset prefixes as their own category") and a DISPOSITION one ("this dataset is either registered or gone"). The first needs no ruling at all and was never blocked — it is the reason the estate could not see the dataset in the first place. **It is DONE** (`reconcile.py::_unregistered_datasets`, `UnregisteredDataset`, refused by name in `repair.py`, mutation-checked). The second is answered: the dataset is `m2-proof-<unix ts>`, a proof artefact, and the standing ruling is that the deployed estate's data is test and demo — so it is destroyed, not adopted.
-- *What remains is the destroy itself*, which needs a bearer: the dataset is in no project, so no subject holds a relation on it and `can_delete` resolves for nobody — the same shape [[LH-144]] records for ungoverned tables. Reaching it needs a path that acts as the service identity rather than as a subject.
-- *What is left:* Measured 2026-09-19 on the deployed estate: `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` holds 300 rows across one live version, `GET /v1/table/m2proof_silver$m2-proof-1788537252` answers **404**, and `m2proof` is absent from the 93 registered projects. Nothing in the reconciler names this: `ungoverned_tables` compares REGISTERED tables against FGA tuples, so a dataset in neither set is invisible to it, and `orphan_buckets` looks at buckets rather than prefixes inside one. It surfaces only as 13 `orphan_files`, which reads as residue inside a governed table and is not — and that misreading is in this register's own history, where [[LH-094]] and [[LH-102]] both asserted the dataset was live and governed. The sweep cannot touch it either: maintenance is refused a write credential for it (403), correctly, because the catalog cannot authorize a table it has no record of. Add the reconciler category FIRST — a dataset prefix under a maintained root with no catalog record — so the estate can see how many others there are before anyone rules on this one.
-- **THEY ARE NOT IN CONFLICT — I CALLED THIS A CONTRADICTION AND THAT WAS WRONG (corrected 2026-09-21).** `repair.py:119` sits in `_REFUSED`, documented as *"Why each non-revocable category is refused"*: it is a policy for the AUTOMATED repair pass, saying a sweep must not delete this category because "deleting it would destroy live rows to close a bookkeeping gap". This row's "destroyed, not adopted" is a human disposition for ONE identified instance, a proof artefact named `m2-proof-<unix ts>`. A rule forbidding a bot from auto-deleting a class does not forbid an operator from removing a known piece of junk, and reading the two as opposite conflated an automation guard with an estate ruling.
-  **THE ROW IS STILL BLOCKED, for the honest reason rather than the invented one:** removing it destroys 300 rows irreversibly, on data nobody has a relation to, so it is an owner's call — the `reap` / `register` decision — not a contradiction anyone has to resolve first.
-  **THE CATEGORY NOW GIVES THE DECISION ITS SCALE, which is what this row said to establish first:** the deployed reconciler reports `unregistered_datasets: 8`, not 1. So the ruling disposes of EIGHT datasets, and `m2proof_silver$m2-proof-1788537252` (300 rows) is one instance rather than the subject.
-- **RE-MEASURED LIVE 2026-09-21 AND THE SCALE HAS CHANGED: THREE, NOT EIGHT.** The deployed reconciler
-  now reports `unregistered_datasets: 3` and `orphan_files: 0` (this row recorded 8 and 13). The drop is
-  accounted for: twelve chart-path medallion prefixes were reaped today under [[LH-164]]'s two rulings,
-  and they were the bulk of both categories. The category is doing exactly what this row asked it to —
-  giving the disposition its scale before anyone rules on it — and the scale moved.
-  **THE THREE, NAMED AND SIZED** (`mc du`, live): `s3://vaud1-wh/blobtab4_vaud1ns$vblob4` (2.2KiB, 3
-  objects), `s3://vaud1-wh/blobtab_vaud1ns$vblob2` (1.7KiB, 3) and
-  `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` (2.6KiB, 5) — the last being this row's named
-  instance, which it records as holding 300 rows.
-  **TWO OF THE THREE ARE NOT THE DATASET THIS ROW IS ABOUT**, and that matters for the ruling: the
-  `vaud1ns$vblob*` pair are blob-table artefacts in a `vaud1-wh` test warehouse, a different provenance
-  from the `m2-proof-<unix ts>` artefact. All three are tiny, so the decision is about what they ARE
-  rather than about what would be lost.
-  **`unbound_namespaces` STANDS AT 3 AND IS A SEPARATE QUESTION** — `bronze`, `e2e-ns`,
-  `transcripts_v2` — recorded here only so the next reader does not read it as part of this count.
-- *Closes when:* The reconciler reports unregistered dataset prefixes as their own category, and this dataset is either registered or gone.
-- *Evidence:* live 2026-09-19: `/v1/table/m2proof_silver$m2-proof-1788537252` 404, `/v1/projects` 93 entries without `m2proof`, `reconcile_drift counts.ungoverned_tables=0` while `orphan_files=13` · `services/maintenance/src/maintenance/services/reconcile.py (ungoverned_tables, orphan_buckets)` · sweep refusal: "the catalog REFUSED a write credential for m2proof_silver$m2-proof-1788537252 (403)"
 
 **LIN-002 · The estate emits 8 of ~30 standard OpenLineage facets, and told a standard consumer nothing about what a write DID**
 `catalog, lineage, medallion, service-kit` · **MED**
