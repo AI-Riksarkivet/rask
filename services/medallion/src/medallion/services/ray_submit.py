@@ -262,7 +262,17 @@ async def submit_stage_job(
             token=token or "",
             transform=spec.name if spec else "",
         ),
-        identity=WorkIdentity(run_id=run_id, project=project, originator=originator, code_version=code_version),
+        identity=WorkIdentity(
+            run_id=run_id,
+            project=project,
+            originator=originator,
+            code_version=code_version,
+            # WHO THE JOB REPORTS AS at the lineage ingest, and the only lineage fact that can not come
+            # from the pod: one head serves all three stage lanes, and this selects which
+            # `RASK_LINEAGE_TOKEN_<IDENTITY>` the job's emitter presents. Gated on the lane being
+            # wired, so an unconfigured lane asserts no subject rather than a blank one.
+            service_identity=settings.fga_service_identity if settings.stage_lineage_url else "",
+        ),
         params=job_params,
         # THE ORDER'S identity, not the JOB's. `submission_id` above stays the Ray job name — the poller
         # re-derives it to watch a running job, so its shape cannot change without orphaning jobs in
@@ -299,9 +309,17 @@ async def submit_stage_job(
         # applied at serialization rather than trusted from config, so a lane cannot reach
         # LINEAGE_JSON, the S3 config or an OTEL_* key by choosing a colliding name; it is simply
         # applied in ONE place now.
-        # The job emits its OWN OpenLineage (no Dapr sidecar on Ray pods), so it needs the identity
-        # here as well as in `metadata` below — that one is read from outside after a failure, this
-        # one is what the job stamps on its own events. Carrying only one loses the other lane.
+        # THE JOB EMITS ITS OWN OpenLineage (no Dapr sidecar on Ray pods), so its reporting subject
+        # rides the ORDER now (`WorkIdentity.service_identity` -> `RASK_LINEAGE_SERVICE_IDENTITY`),
+        # which is where a platform fact belongs — `metadata` below carries the same name for a
+        # different reader, one that looks the job up from OUTSIDE after it has failed.
+        #
+        # The ENDPOINT is the pod's. Measured live 2026-09-21: the Ray head already carries
+        # `RASK_LINEAGE_ENDPOINT=http://rask-lineage:8000`, `build_emitter` resolves that name first,
+        # and this submitter would send the identical value — so sending it gives one address two
+        # owners, and `runtime_env` WINS over process env, which is how a repointed pod keeps talking
+        # to the old one. The service TOKEN is absent for the stronger reason: it is a credential, and
+        # the Jobs API echoes `runtime_env` to any reader.
         # WHAT THIS RUN IS, as the graph names it — the other half of the same problem the two above
         # solve. `FROM_URI`/`TO_URI` say where to read and write; these say which governed TABLES those
         # locations are, and which run the job's events belong to. The runner documents all three as
@@ -310,18 +328,6 @@ async def submit_stage_job(
         #
         # OMITTED when empty, like `ORIGINATOR` and `PROJECT`: an unwired lane must reach the runner's
         # own stem fallback rather than a blank the platform asserted.
-        # Unset URL => `emit()` returns early. The service TOKEN is deliberately absent from this
-        # dict — it is the estate's shared credential and rode the echoed runtime_env (the same P0 as
-        # S3_SECRET above); the Ray pods hold LINEAGE_SERVICE_TOKEN themselves and the job reads it
-        # with .get(), so an auth-off profile (no token on the pod) still omits the header correctly.
-        **(
-            {
-                "LINEAGE_URL": settings.stage_lineage_url,
-                "LINEAGE_SERVICE_ID": settings.fga_service_identity,
-            }
-            if settings.stage_lineage_url
-            else {}
-        ),
     }
     # WHO THIS JOB IS FOR, in Ray's own `metadata` — not in `runtime_env.env_vars`, and the distinction
     # decides whether the feature works at all. The identity has to be readable from OUTSIDE the job

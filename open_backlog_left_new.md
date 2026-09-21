@@ -280,6 +280,36 @@ have no `uv.lock` and so cannot be built to emit anything.
   So the honest size is ~207 lines moved, ~80 deleted, a rewired tail, eight import updates, and one behaviour change — not a `git mv`.
   **A SECOND ATTEMPT ROUTED IT IN PLACE AND FOUND THE REAL BLOCKER — two keys the order cannot carry.** `RayJobsApiExecutor.submit` builds `runtime_env.env_vars` from `order.to_env()` EXCLUSIVELY, and the lane's deleted block also carried `LINEAGE_URL` (`settings.stage_lineage_url`) and `LINEAGE_SERVICE_ID` (`settings.fga_service_identity`). Both are per-SUBMITTER deployment config — the test that caught it says so: "it is per-SUBMITTER and no pod can supply it" — so routing through the port silently drops them and the job cannot report its own lineage. **This is the port-shape question resurfacing concretely:** the order needs somewhere for reporting config, analogous to `observability.otlp`, before the submit path can go through the executor at all.
   **AND THE EQUIVALENCE PROOF THAT MISSED IT IS WORTH RECORDING.** The submitted body was captured before and after and diffed — byte-identical but for the submission id — and that was necessary and NOT sufficient: the capture fixture never set `LINEAGE_URL`, and a key a fixture does not exercise cannot appear as a difference. The suite caught what the diff could not. Reverted to a clean tree rather than shipping a subtly lossy submission.
+  **THE BLOCKER WAS TWO KEYS AND IS ONE — MEASURED 2026-09-21, and the other was never needed.**
+  `LINEAGE_URL` does not have to ride: the Ray head's OWN process env already carries
+  `RASK_LINEAGE_ENDPOINT=http://rask-lineage:8000` (rendered unconditionally by `lance.lineageEmitEnv`,
+  `_ray-cluster-config.tpl:259`; confirmed both on the live pod and in a chart render), that name is
+  `build_emitter`'s FIRST `AliasChoices` entry, and the submitting stage runner carries the identical
+  value in `MEDALLION_STAGE_LINEAGE_URL`. It is one deployment fact with one owner — the `S3_ENDPOINT`
+  ruling exactly, one lane over — and because Ray merges `runtime_env` OVER process env, sending it
+  would let a submission silently outvote a repointed pod.
+  **The SUBJECT is the real per-submitter fact and now rides the order.** `WorkIdentity` gained
+  `service_identity`, serialized by `to_env()` as `RASK_LINEAGE_SERVICE_IDENTITY`; one head serves all
+  three stage lanes and the subject also selects which `RASK_LINEAGE_TOKEN_<IDENTITY>` the job presents,
+  so no pod can hold it. The hand-rolled block beside `to_env()` is gone, and the wire diff is exactly
+  three keys: `LINEAGE_URL` and `LINEAGE_SERVICE_ID` out, `RASK_LINEAGE_SERVICE_IDENTITY` in.
+  **A HYPOTHESIS THAT THE MEASUREMENT KILLED, recorded because it was nearly shipped.** `ray_stage_job.py`
+  emits no OpenLineage at all — no `lineage_kit` import, no `build_emitter` — which reads like both keys
+  being dead decoration on an echoed body. They are not: `runners/dummy`'s `lineage.py` DOES call
+  `build_emitter()`, and a declared lane can point the entrypoint at it, so the subject is live for any
+  runner-based stage lane.
+  **PINNED, BOTH HALVES.** `tests/unit/test_the_order_carries_its_lineage_identity.py` drives
+  `lineage-kit`'s own parser from `to_env()`'s output — the producer and the consumer checked against
+  each other rather than a key-name assertion that passes while the two speak different names — and
+  gates the rendered Ray head for the endpoint the submission stopped sending, since that loss would be
+  silent by construction (`build_emitter` returns `NoopEmitter` and drops events at DEBUG). Both
+  mutation-checked. `test_no_credential_rides_the_submission` now scrapes `WorkOrder.to_env` alongside
+  the submitter: with the literals gone its `assert named` self-check fired, which is the gate correctly
+  reporting its own blindness rather than passing on an empty set.
+  **WHAT IS LEFT IS THE REWIRE ITSELF** — route `submit_stage` through `executor_for(RAY_ENGINE).submit()`,
+  accept the job name moving from `stage_submission_id(...)` to `order.idempotency_key`, and fix two test
+  doubles found narrower than the function they stand for (no `on_terminal_failure`, returning None where
+  the real `submit_or_reattach` answers `"submitted"`).
 - *Closes when:* `workflow.py` reaches Ray only through `executor_for(RAY_ENGINE)` and a test fails if `ray_submit`/`ray_jobs_api` are imported there again.
 - *Evidence:* `services/medallion/src/medallion/workflow.py:488,528,708,979 (direct ray_submit/ray_jobs_api imports)` · `services/medallion/src/medallion/services/rayjobs_api_executor.py:95-110 (submit posts order.idempotency_key)` · `packages/service-kit/src/service_kit/lakehouse/work_order.py:69,124 (stage, idempotency_key; no token field)` · `rg 'executor_for\(' services packages --glob '!*/tests/*' -> only transform.py:793`
 

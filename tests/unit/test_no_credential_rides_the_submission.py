@@ -25,6 +25,7 @@ import re
 from collections.abc import Callable
 
 from medallion.services import ray_submit
+from service_kit.lakehouse.work_order import WorkOrder
 
 
 #: Env names that must never appear in a submitted `runtime_env`. Endpoint, region and bucket are
@@ -33,8 +34,16 @@ _CREDENTIAL_NAMES = ("S3_KEY", "S3_SECRET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACC
 
 
 def _submission_env_literals(func: Callable[..., object]) -> set[str]:
-    """The env-var NAMES this submit path writes into its runtime_env dict."""
-    return set(re.findall(r'"([A-Z][A-Z0-9_]{2,})":', inspect.getsource(func)))
+    """The env-var NAMES this submit path writes into its runtime_env dict.
+
+    `WorkOrder.to_env` is read ALONGSIDE the submitter because the names now live there: the stage
+    lane spreads the order's serialization rather than spelling keys itself, so scraping the submitter
+    alone would see an empty set and the gate would pass by measuring nothing. The `assert named`
+    self-check below is what caught exactly that — it is the gate reporting its own blindness, which
+    is the only honest thing a source scraper can do when its subject moves.
+    """
+    sources = inspect.getsource(func) + inspect.getsource(WorkOrder.to_env)
+    return set(re.findall(r'"([A-Z][A-Z0-9_]{2,})"', sources))
 
 
 def test_the_stage_submission_carries_no_credential() -> None:

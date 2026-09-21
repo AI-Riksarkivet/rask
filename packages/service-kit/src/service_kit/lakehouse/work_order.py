@@ -84,7 +84,7 @@ class WorkStamp(BaseModel):
 
 
 class WorkIdentity(BaseModel):
-    """Who this run is for, and which build declared it."""
+    """Who this run is for, who it REPORTS AS, and which build declared it."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -94,6 +94,23 @@ class WorkIdentity(BaseModel):
     #: records that both are worse than silence, because they look delivered.
     originator: str = ""
     code_version: str = ""
+    #: THE SERVICE SUBJECT THIS RUN CLAIMS AT THE LINEAGE INGEST — the field above's opposite, and they
+    #: must not be confused: `originator` is the PERSON the work is for and is never a service name;
+    #: this is the SERVICE the work reports as and is never a person.
+    #:
+    #: It is on the order because no pod can hold it. One Ray head runs the train lane and all three
+    #: stage lanes, each authenticating as its SUBMITTING stage runner's own subject, so a process env
+    #: can be right for exactly one of them. It also selects the credential — `lineage-kit` prefers
+    #: `RASK_LINEAGE_TOKEN_<IDENTITY>` over the shared token for precisely that reason — and the door
+    #: refuses a privileged subject presenting another's key with no fallback, while the job writes its
+    #: data and exits SUCCEEDED. That is the 2026-07-13 trainer incident's shape: provenance lost, with
+    #: nothing but a log line to say so.
+    #:
+    #: The ENDPOINT is deliberately absent and belongs to the pod. Measured live 2026-09-21, the Ray
+    #: head carries `RASK_LINEAGE_ENDPOINT` already and the submitter would send the identical value;
+    #: Ray merges `runtime_env.env_vars` OVER process env, so sending it would give one address two
+    #: owners and let a submission silently outvote a repointed pod. Same ruling as `S3_ENDPOINT`.
+    service_identity: str = ""
 
 
 class WorkObservability(BaseModel):
@@ -165,6 +182,11 @@ class WorkOrder(BaseModel):
             ("RASK_PROJECT", self.identity.project),
             ("RASK_ORIGINATOR", self.identity.originator),
             ("RASK_CODE_VERSION", self.identity.code_version),
+            # `lineage-kit`'s CANONICAL name, not the `LINEAGE_SERVICE_ID` alias it also accepts. The
+            # platform's serialization speaks the platform's names, and the canonical spelling is the
+            # one `AliasChoices` resolves FIRST — so a pod that also sets the legacy name cannot
+            # outrank the order about who this run is.
+            ("RASK_LINEAGE_SERVICE_IDENTITY", self.identity.service_identity),
             ("RASK_CREDENTIAL_REF", self.credential_ref),
             ("TRACEPARENT", self.observability.traceparent),
             ("TRACESTATE", self.observability.tracestate),

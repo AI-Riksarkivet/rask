@@ -122,10 +122,20 @@ async def test_the_train_submission_carries_no_secret_material(train_body: dict[
 async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage_body: dict[str, Any]) -> None:
     """The failure mode that would hide the fix: stripping everything also passes above.
 
-    `LINEAGE_SERVICE_ID` is an identity NAME rather than a credential, and it is PER SUBMITTER — the
+    THE REPORTING SUBJECT IS AN IDENTITY NAME RATHER THAN A CREDENTIAL, and it is PER SUBMITTER — the
     three stage runners authenticate as `service-bronze-to-silver`, `service-silver-to-gold` and
     `service-media-to-silver` against ONE shared head — so it cannot come from the pod and has to ride
-    the submission.
+    the submission. It travels on the ORDER (`WorkIdentity.service_identity`), which serializes it as
+    `lineage-kit`'s canonical `RASK_LINEAGE_SERVICE_IDENTITY`; the cross-package pin that the consumer
+    actually resolves what the producer emits is `tests/unit/test_the_order_carries_its_lineage_identity.py`,
+    because a key-name assertion here would pass while the two sides spoke different names.
+
+    `LINEAGE_URL` IS IN THE POD-OWNED LIST BELOW, on exactly the endpoint reasoning above it. Measured
+    live 2026-09-21: the Ray head's own env already carries
+    `RASK_LINEAGE_ENDPOINT=http://rask-lineage:8000` (rendered by `lance.lineageEmitEnv`), that name is
+    `build_emitter`'s FIRST alias choice, and the submitting stage runner carries the identical value
+    in `MEDALLION_STAGE_LINEAGE_URL`. One deployment fact, one owner — and since `runtime_env` beats
+    process env, a submitted copy would outvote a repointed pod while looking like agreement.
 
     `S3_ENDPOINT` AND `S3_REGION` LEFT THIS LIST, and the reason they were in it does not survive
     measurement: they were defended as varying per submission, "by warehouse". They do not. Measured
@@ -151,8 +161,7 @@ async def test_the_NON_secret_platform_contract_still_rides_the_submission(stage
     quietly leave the job with nothing to read."""
     await ray_submit.submit_stage_job(_settings(), from_uri="s3://acme/bronze", to_uri="s3://acme/silver", stage="silver", token="tok-1")
     env = stage_body["body"]["runtime_env"]["env_vars"] if "body" in stage_body else stage_body["runtime_env"]["env_vars"]
-    for key in ("LINEAGE_URL", "LINEAGE_SERVICE_ID"):
-        assert key in env, f"`{key}` was stripped with the secrets — it is per-SUBMITTER and no pod can supply it"
+    assert env.get("RASK_LINEAGE_SERVICE_IDENTITY"), "the run's reporting subject was stripped — it is per-SUBMITTER and no pod can supply it"
     assert env["RASK_SOURCE_URI"] and env["RASK_DEST_URI"], "the order itself stopped riding the submission"
-    for pod_owned in ("S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_REGION"):
+    for pod_owned in ("S3_KEY", "S3_SECRET", "S3_ENDPOINT", "S3_REGION", "LINEAGE_URL"):
         assert pod_owned not in env, f"`{pod_owned}` must come from the pod alone, or runtime_env overrides it and the pair has two owners"
