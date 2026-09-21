@@ -142,13 +142,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **103 are blocked on a decision** and **97 can be picked up today**.
+**199 open items**, of which **103 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -843,12 +843,6 @@ have no `uv.lock` and so cannot be built to emit anything.
 `service-kit, catalog, lineage` · **HIGH**
 - *What is left:* Audit records are selected downstream by their log message, so one interpolated message silently drops that record out of the audit stream — a compliance record that vanishes without failing anything. Gate the log CALL: a constant message plus structured `extra=`, refused by a test over the audit call sites.
 - *Closes when:* A gate refuses an audit call whose message is not a literal, and the existing call sites pass it.
-- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
-
-**XC-059 · The OTel Collector — the one pod every signal in the estate flows through — has a readiness probe and no liveness probe**
-`chart, observability` · **MED**
-- *What is left:* A wedged Collector stays Ready-false and is never restarted, so every trace, metric and log in the estate stops with nothing restarting the pod. Add a liveness probe alongside the existing readiness probe.
-- *Closes when:* The rendered Collector carries both probes and a test pins that it does.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
 
 **XC-060 · The Python plane has no lockfile-drift gate while the JS plane does, so a dependency edit without a re-lock is green**
