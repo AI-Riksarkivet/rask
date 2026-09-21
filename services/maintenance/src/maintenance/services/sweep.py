@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import sys
 import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
@@ -1191,7 +1192,36 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # to 68+136 MB — a denominator no values file carries, because `affordable_cache_bytes`
         # derives it from the cgroup at runtime.
         **_session_occupancy(),
+        # Beside the Lance bytes, because the two together are the measurement: if this tracks RSS the
+        # growth is Python, and if it is flat while RSS climbs it is native and no heap reading will see it.
+        "python_blocks": _python_heap_blocks(),
     }
+
+
+def _python_heap_blocks() -> int:
+    """Blocks held by CPython's allocator — the reading that separates retention from native allocation.
+
+    [[LH-183]] measured eight ticks on the deployed estate: the Lance session held at 14.6 MB for six of
+    them while RSS went 192 -> 260Mi, so something retains and it is not the cache. Exactly two things
+    it can be, wanting different fixes: Python objects held between passes (the per-tick `DatasetResult`
+    set and the four side maps below), or native buffers Lance and pyarrow never charge to the session.
+    Comparing THIS series against RSS is what tells them apart — tracking RSS means Python, flat while
+    RSS climbs means native.
+
+    `sys.getallocatedblocks()` AND NOT `len(gc.get_objects())`, which was the first choice and is blind
+    to the objects this hunts: measured on the CPython 3.13.12 in this image, `gc.is_tracked({"n": 1})`
+    is **False** — a dict whose keys and values are all atomic is untracked — so holding 50,000 of them
+    moved `gc.get_objects()` by **-188** while `getallocatedblocks()` moved by **+149,728** and returned
+    to baseline on release. The gc reading would have said "flat", which reads as "native", which is the
+    wrong answer arrived at confidently.
+
+    It is also the cheaper call: O(1) against a full heap walk, and `tracemalloc` would cost a hook on
+    every allocation in a service that opens 585 datasets every 120 s.
+
+    A COUNT of blocks, not bytes — bytes are what RSS already reports. The measurement is the two series
+    moving together or not.
+    """
+    return sys.getallocatedblocks()
 
 
 def _session_occupancy() -> dict[str, int]:
