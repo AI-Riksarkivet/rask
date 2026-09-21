@@ -250,6 +250,13 @@ have no `uv.lock` and so cannot be built to emit anything.
   mentions GDPR twice and neither passage rules on erasing a branch: one argues branches beat scattered
   clones ("no GDPR compliance break from a forgotten clone"), the other is about external blob refs
   breaking row lifecycle. So that row is a genuine owner call, not one the spec could have answered.
+- **THE BRANCH-VENDING HALF IS DEPLOYED AND OBSERVED (2026-09-21).** Driven against the live catalog:
+  a main write vend and a branch write vend both answer **200 with DISTINCT credentials** (different
+  access key ids, so the branch really did produce its own scoped session), and a climbing branch name
+  now answers **400 `invalidinputerror` code 13** — "branch '../escape' may not traverse out of the
+  table's prefix" — where before the fix it was a bare **500 InternalError** telling the caller nothing.
+  Driving it live is what found that: the guard was correct and its answer was not, which no unit test
+  was ever going to show.
 - *Closes when:* model.fga declares branch, column and estate types and a project role split, every new rung has a .fga.yaml case, and fga_root_object names the estate object.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types: no branch/column/estate)` · `packages/service-kit/src/service_kit/governed/auth/model.fga:55-88 (project: team/admin/member only)` · `services/catalog/src/catalog/api/fga_deps.py:158,237 ('protection': 'can_drop')` · `services/catalog/src/catalog/core/config.py:320 (fga_root_object)`
 
