@@ -166,7 +166,24 @@ async def publication_extra(
     if originator:
         extra["originator"] = originator
     project = await lineage.project_for(segments[0]) if segments else None
-    if project:
+    # STAMPED ONLY WHEN THE ID ACTUALLY CARRIES THAT TENANT ([[LH-137]], owner ruling 2026-09-21).
+    # `project_for_namespace` walks binding -> warehouse -> project and does no prefix check, by
+    # design — it is a registry read. So a TENANT-LESS lane namespace like `silver`, bound to a
+    # warehouse that belongs to a project, resolves to that project. Stamping it there is not a
+    # cosmetic error: the medallion's publication head reads this field verbatim and composes the next
+    # tier as `project_namespace(project, dataset)`, so the hop targets `<project>-gold$catalog` — a
+    # table the runner never wrote — and silver->gold refuses every tabular-lane publication.
+    #
+    # A CHECK, NOT A PARSE, which is why this is sound where a string rule is not. This module's
+    # docstring records that `acme-bronze` cannot be DECOMPOSED into a project, because
+    # `PROJECT_PATTERN` permits `-` inside a project id. It can still be verified against a project the
+    # registry already answered: `project_namespace` joins with `-` and nothing else, so a qualified
+    # namespace always starts with `f"{project}-"`. Nothing here has to choose between `acme` and
+    # `acme-eu` — the registry chose, and this only confirms the id agrees.
+    #
+    # THE LOOKUP ABOVE IS DELIBERATELY UNGATED: `resolve_effective_gate` resolves through the same
+    # request-scoped cache, so gating the call rather than the emit would weaken a warehouse's own gate.
+    if project and segments[0].startswith(f"{project}-"):
         extra["project"] = project
     return extra
 

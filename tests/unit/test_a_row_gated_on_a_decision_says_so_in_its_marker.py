@@ -34,10 +34,16 @@ _DECISION = re.compile(r"owner call|owner ruling|owner decides|owner decision|ne
 #: Rows that match the phrase set and are CORRECTLY unmarked, each with the reason. A row leaves this
 #: set by gaining a marker or by losing the phrase — never by being deleted to quiet the gate.
 _MATCHES_BUT_NOT_GATED: dict[str, str] = {
-    # EMPTY, and that is the ratchet having been spent rather than the rule being relaxed. The four rows
-    # recorded here — LH-034, LH-096, LH-159, LH-164 — each left the set the only way a row may: two
-    # gained a `**blocked:**` marker naming their question, and two lost the incidental phrase when the
-    # register was rewritten against HEAD. A row is added back only with a sentence a reader can check.
+    # A row is added here only with a sentence a reader can check. Four earlier entries — LH-034,
+    # LH-096, LH-159, LH-164 — each left the set the only way a row may: two gained a `**blocked:**`
+    # marker naming their question, and two lost the incidental phrase when the register was rewritten
+    # against HEAD.
+    "LH-184": (
+        "Its two occurrences of the phrase are both PAST rulings cited as provenance, not a pending "
+        "question: the 2026-09-08 ruling that keys the required rung on the operation rather than the "
+        "caller, and its own 2026-09-21 ruling that the create must govern the table. Its remaining "
+        "work is the create path, which is code."
+    ),
 }
 
 
