@@ -99,3 +99,29 @@ def test_the_observability_context_rides_the_ORDER(monkeypatch: pytest.MonkeyPat
         "the order carries no OTLP config, so `to_env()` cannot be the one serialization"
     )
     assert order.service_name == "bronze-to-silver", "the order carries no service name"
+
+
+def test_the_order_carries_every_fact_the_submission_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The order must hold all five metadata facts, or the port can never render them.
+
+    [[LH-159]] The Ray submission stamps `rask.originator`, `rask.project`, `rask.stage`, `rask.token`
+    and `rask.transform` as job metadata, and they are READ BACK: `rask.originator` survives the
+    process so a job that died can still be attributed to the person it was for, and `rask.transform`
+    is pinned by `test_ray_job_names_its_transform`. Three were already on the order
+    (`identity.originator`, `identity.project`, `stamp.stage`); `token` and `transform` were not.
+
+    WHY THEY BELONG ON THE ORDER RATHER THAN ON `Executor.submit`, which is the shape question this
+    settles: both are PLATFORM facts, not Ray facts — a trigger token and a declaration's name — and
+    `WorkOrder` is documented as "one unit of work, complete and engine-free". Handing them to a
+    submit call instead would let each adapter render the same facts its own way, which is precisely
+    the divergence `to_env()` being "the ONE serialization" exists to prevent, and which this estate
+    has already paid for once (2026-09-07, the adapter and this submitter shared ZERO keys).
+
+    Asserted on the ORDER rather than on the submitted body so it stays true for any engine.
+    """
+    from service_kit.lakehouse.work_order import WorkOrder
+
+    fields = set(WorkOrder.model_fields) | set(WorkOrder.model_fields["stamp"].annotation.model_fields)
+
+    assert "token" in fields, "the order cannot express the trigger token, so no adapter can stamp `rask.token`"
+    assert "transform" in fields, "the order cannot express the declaration's name, so no adapter can stamp `rask.transform`"

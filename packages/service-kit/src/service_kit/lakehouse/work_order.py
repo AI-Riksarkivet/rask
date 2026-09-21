@@ -72,6 +72,15 @@ class WorkStamp(BaseModel):
     #: R26 consume-layer provenance JSON. `""` means DROP any inherited document rather than carry one
     #: forward — silence and inheritance are different claims.
     lineage_document: str = ""
+    #: The trigger's work token, or `""`. PLATFORM fact, not an engine's: it is one of the four axes
+    #: `derive_idempotency_key` hashes, and it was previously an argument that reached the submitter and
+    #: never the order — so an adapter could not stamp it even though the Ray lane does ([[LH-159]]).
+    token: str = ""
+    #: The declaration's NAME, distinct from `WorkOrder.task` which is the registered task key. Two
+    #: facts, not one: a declaration names what an operator wrote, the task names what the registry
+    #: resolves it to, and the Ray lane stamps both. `""` when the lane is chart-configured rather than
+    #: declared.
+    transform: str = ""
 
 
 class WorkIdentity(BaseModel):

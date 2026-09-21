@@ -249,7 +249,19 @@ async def submit_stage_job(
         task=spec.task if spec else stage,
         source=WorkSource(uri=from_uri, table_id=from_id, version_floor=from_version),
         destination=WorkDestination(uri=to_uri, table_id=to_id),
-        stamp=WorkStamp(stage=stage, cardinality=cardinality, lineage_document=lineage_json),
+        # TOKEN AND TRANSFORM RIDE THE STAMP ([[LH-159]]). Both are stamped as Ray job metadata and
+        # read back — `rask.originator` recovers who a dead job was for, `rask.transform` is pinned by
+        # its own test — and neither could be rendered by an adapter while they existed only as
+        # arguments to this function. On the ORDER rather than on `Executor.submit` because both are
+        # platform facts, and metadata handed to a submit call is rendered per adapter, which is the
+        # divergence `to_env()` being the one serialization exists to prevent.
+        stamp=WorkStamp(
+            stage=stage,
+            cardinality=cardinality,
+            lineage_document=lineage_json,
+            token=token or "",
+            transform=spec.name if spec else "",
+        ),
         identity=WorkIdentity(run_id=run_id, project=project, originator=originator, code_version=code_version),
         params=job_params,
         # THE ORDER'S identity, not the JOB's. `submission_id` above stays the Ray job name — the poller
