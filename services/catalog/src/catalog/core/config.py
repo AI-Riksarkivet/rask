@@ -454,6 +454,41 @@ class Settings(
         """The approved multi-base data-distribution base URIs (parsed from the comma-separated allowlist)."""
         return [b.strip() for b in self.multibase_data_bases.split(",") if b.strip()]
 
+    # [[LH-067]] Which SECRET each data base's credential comes from: `base-uri=secret-ref` pairs, comma
+    # separated. A NAME, never material — the reference identifies a key in the Dapr secret store, which
+    # is what lets this live in configuration at all under the estate's secrets rule.
+    #
+    # This is what retires the obligation the allowlist comment above used to carry. A base with a
+    # reference here is opened with its own credential at both doors (`dataplane._write_blob` composes
+    # it, `core.namespace.open_dataset` forwards it), so it no longer has to share the estate's.
+    # Empty (default) = every base keeps the estate's options and every write is byte-identical.
+    multibase_base_credential_refs: str = Field(default="", alias="LANCE_MULTIBASE_BASE_CREDENTIAL_REFS")
+
+    @property
+    def multibase_base_credential_ref_map(self) -> dict[str, str]:
+        """`{base_uri: secret_ref}`, parsed HERE so nothing else splits this string.
+
+        A second parser is a second thing that can disagree about the separator, about whitespace, or
+        about what an empty entry means — the reason `multibase_data_base_list` is a property too.
+
+        BOTH MALFORMED SHAPES RAISE rather than dropping the entry, because a reference that silently
+        vanishes leaves its base on the estate credential and looks correct — which is exactly the
+        failure this whole axis exists to prevent. A repeated base raises for the same reason one step
+        on: answering "which of these two secrets" by ordering is not an answer an estate should give.
+        """
+        parsed: dict[str, str] = {}
+        for entry in (e.strip() for e in self.multibase_base_credential_refs.split(",")):
+            if not entry:
+                continue
+            if "=" not in entry:
+                raise ValueError(f"{entry!r} is not a base=secret-ref pair; LANCE_MULTIBASE_BASE_CREDENTIAL_REFS holds comma-separated `base=secret-ref`")
+            base, _, ref = entry.partition("=")
+            base, ref = base.strip(), ref.strip()
+            if base in parsed:
+                raise ValueError(f"base {base!r} is given a credential reference more than once; one base has one secret")
+            parsed[base] = ref
+        return parsed
+
     # #3-A per-warehouse physical multi-tenancy (admin control plane). When enabled, an admin API
     # (POST /v1/warehouses) provisions a physically separate S3 bucket per warehouse and binds top-level
     # namespaces to it, so a table under a bound namespace lands in that warehouse's bucket (not the shared

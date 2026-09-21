@@ -326,6 +326,9 @@ def create_table(
     allow_external_blobs: bool = False,
     external_blob_bases: list[str] | None = None,
     data_bases: list[str] | None = None,
+    base_credential_refs: dict[str, str] | None = None,
+    secret_store: str = "",
+    secret_field: str = "",
 ) -> CreateTableResponse:
     """Create a table at file format 2.2 with stable row ids — the ONLY create path (audit 2026-07-14).
 
@@ -367,6 +370,9 @@ def create_table(
                 external_blob_bases=external_blob_bases,
                 data_bases=data_bases,
                 properties=properties,
+                base_credential_refs=base_credential_refs,
+                secret_store=secret_store,
+                secret_field=secret_field,
             )
             return CreateTableResponse(location=existing, version=dataset.version, properties=properties)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
@@ -414,6 +420,9 @@ def _write_blob_into(
     allow_external: bool,
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
+    base_credential_refs: dict[str, str] | None = None,
+    secret_store: str = "",
+    secret_field: str = "",
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
@@ -428,6 +437,9 @@ def _write_blob_into(
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
             properties=properties,
+            base_credential_refs=base_credential_refs,
+            secret_store=secret_store,
+            secret_field=secret_field,
         )
     except Exception:
         with suppress(Exception):  # best-effort rollback; re-raise the real write error

@@ -213,6 +213,13 @@ async def create_governed_table(
         allow_external_blobs=settings.allow_external_blobs,
         external_blob_bases=settings.external_blob_base_list,
         data_bases=data_base or None,
+        # [[LH-067]] WHICH secret each base's credential comes from. The map holds NAMES; the material
+        # is fetched at composition through the Dapr store the catalog already uses for its own S3
+        # secret, so nothing secret passes through here. Empty by default, which renders exactly
+        # today's map.
+        base_credential_refs=settings.multibase_base_credential_ref_map,
+        secret_store=settings.dapr_secret_store,
+        secret_field=settings.dapr_secret_s3_field,
     )
     # An Overwrite that replaced an EXISTING table (owner-authorized above) resets its ACL: revoke the prior
     # incarnation's grants (any reader/writer/validator that must not survive onto the reused id) before

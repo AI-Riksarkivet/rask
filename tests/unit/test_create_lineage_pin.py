@@ -34,6 +34,12 @@ class _Settings:
     multibase_data_base_list: list[str] = []
     allow_external_blobs = False
     external_blob_base_list: list[str] = []
+    # [[LH-067]] The create path reads these to compose per-base credentials. Empty/blank renders
+    # exactly the map this pin already asserts — a double missing them cannot stand in for `Settings`
+    # at all, which is how it failed rather than silently drifting.
+    multibase_base_credential_ref_map: dict[str, str] = {}
+    dapr_secret_store = ""
+    dapr_secret_s3_field = ""
 
 
 class _Token:

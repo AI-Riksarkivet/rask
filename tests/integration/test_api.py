@@ -185,6 +185,9 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         allow_external_blobs=False,
         external_blob_bases=None,
         data_bases=None,
+        base_credential_refs=None,
+        secret_store="",
+        secret_field="",
     ) -> CreateTableResponse:
         seen["segments"] = segments
         seen["mode"] = mode

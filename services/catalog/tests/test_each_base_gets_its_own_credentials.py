@@ -85,3 +85,29 @@ def test_a_reference_naming_a_base_that_is_not_REGISTERED_is_refused() -> None:
     """
     with pytest.raises(ValueError, match="not a registered data base"):
         compose_base_store_params(bases=[PLAIN], storage_options=ESTATE, refs={"s3://typo/data": "x"}, resolve=_resolver, store="s", field="f")
+
+
+def test_EVERY_write_site_forwards_the_per_base_credentials() -> None:
+    """A create path that skips the map writes its bases on the estate credential, silently.
+
+    `create_table` reaches `_write_blob` at MORE THAN ONE site — the fresh create and the
+    overwrite-an-existing branch — and wiring one of them is the failure this row is about wearing a
+    different hat: the un-wired path succeeds against the wrong identity and looks correct. Measured
+    2026-09-21: forwarding the first site alone left the second untouched and every test still green,
+    because no case drives that branch with a configured reference.
+
+    READ AS AN AST, not as a regex: an argument list wraps across lines and a text search either
+    misses a call or matches the wrong one's neighbourhood. The self-check below is what stops this
+    passing by finding no calls at all.
+    """
+    import ast
+    from pathlib import Path
+
+    source = Path(__file__).resolve().parents[1] / "src/catalog/services/dataplane.py"
+    tree = ast.parse(source.read_text())
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_write_blob"]
+
+    assert len(calls) >= 2, f"found {len(calls)} `_write_blob` call(s); this gate is reading the wrong file or the shape changed"
+
+    missing = [call.lineno for call in calls if not any(kw.arg == "base_credential_refs" for kw in call.keywords)]
+    assert not missing, f"these `_write_blob` call sites write their bases on the estate credential: lines {missing}"
