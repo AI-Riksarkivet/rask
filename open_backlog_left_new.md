@@ -791,6 +791,30 @@ have no `uv.lock` and so cannot be built to emit anything.
   count (0), and dataset count (slope unchanged across a 15-dataset drop). What has NOT been measured
   is native allocation OUTSIDE glibc's arenas — mmap'd regions above the 128 KB threshold, which bypass
   arenas entirely and would be invisible to every check this row has run.
+- **THE CAUSE IS NAMED: `MALLOC_ARENA_MAX` BOUNDS AN ALLOCATOR THIS SERVICE BARELY USES (2026-09-21).**
+  Measured on the live process from the HOST (`/proc/<pid>/status` and `task/*/comm`; nothing entered
+  the cgroup under study). Two allocators besides glibc are resident:
+  * **mimalloc**, via pyarrow — `pa.default_memory_pool().backend_name` is **`mimalloc`** on
+    pyarrow 25.0.0, and `arrow::mimalloc_memory_pool` is a symbol in the shipped `libarrow.so.2500`;
+  * **jemalloc**, via duckdb — 76 jemalloc references in `_duckdb.cpython-313-x86_64-linux-gnu.so`,
+    and a live **`jemalloc_bg_thd`** thread in the running process.
+  `MALLOC_ARENA_MAX` is a **glibc** tunable. It cannot govern a byte allocated through either, which is
+  precisely why the arena count went to 0 and the trend did not move. The bound was not too loose; it
+  was bounding the wrong allocator. That reconciles every measurement this row holds: arenas 60 -> 0,
+  RSS still linear, slope indifferent to dataset count, death at 442m.
+- **A HYPOTHESIS RAISED AND REJECTED IN THE SAME HOUR, recorded so it is not re-raised.** The thread
+  count read 98 then 111 three minutes later, which looked like unbounded thread growth — a clean
+  workload-independent driver. Sampling it properly showed **oscillation, not growth**: 98 -> 107 -> 98
+  across ninety seconds, with `lance_backgroun` going 12 -> 1 as a work cycle ended. Thread count is a
+  work signal here, not a leak.
+- *What is left:* **ONE ENV VAR, AND A 7h20m CLOCK TO FALSIFY IT.** `ARROW_DEFAULT_MEMORY_POOL` is read
+  by the shipped `libarrow.so.2500` (verified with `strings`, not assumed) and `system` routes Arrow's
+  allocations through plain `malloc` — which the EXISTING `MALLOC_ARENA_MAX=2` then does govern. So the
+  next experiment does not add a lever, it makes the lever already in the chart reach the allocator
+  doing the work. The clock is known and short enough to run twice in a day: a pod that passes ~442
+  minutes has falsified the old ceiling, and one that plateaus below 512Mi has closed the row.
+  A host-side sampler (`/proc/<pid>/status` every 5 min: threads, VmRSS, RssAnon, RssFile, VmData) is
+  the instrument; it never enters the cgroup, which is the mistake that corrupted an earlier series.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
