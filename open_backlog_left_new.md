@@ -173,6 +173,21 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **THEY ARE NOT IN CONFLICT — I CALLED THIS A CONTRADICTION AND THAT WAS WRONG (corrected 2026-09-21).** `repair.py:119` sits in `_REFUSED`, documented as *"Why each non-revocable category is refused"*: it is a policy for the AUTOMATED repair pass, saying a sweep must not delete this category because "deleting it would destroy live rows to close a bookkeeping gap". This row's "destroyed, not adopted" is a human disposition for ONE identified instance, a proof artefact named `m2-proof-<unix ts>`. A rule forbidding a bot from auto-deleting a class does not forbid an operator from removing a known piece of junk, and reading the two as opposite conflated an automation guard with an estate ruling.
   **THE ROW IS STILL BLOCKED, for the honest reason rather than the invented one:** removing it destroys 300 rows irreversibly, on data nobody has a relation to, so it is an owner's call — the `reap` / `register` decision — not a contradiction anyone has to resolve first.
   **THE CATEGORY NOW GIVES THE DECISION ITS SCALE, which is what this row said to establish first:** the deployed reconciler reports `unregistered_datasets: 8`, not 1. So the ruling disposes of EIGHT datasets, and `m2proof_silver$m2-proof-1788537252` (300 rows) is one instance rather than the subject.
+- **RE-MEASURED LIVE 2026-09-21 AND THE SCALE HAS CHANGED: THREE, NOT EIGHT.** The deployed reconciler
+  now reports `unregistered_datasets: 3` and `orphan_files: 0` (this row recorded 8 and 13). The drop is
+  accounted for: twelve chart-path medallion prefixes were reaped today under [[LH-164]]'s two rulings,
+  and they were the bulk of both categories. The category is doing exactly what this row asked it to —
+  giving the disposition its scale before anyone rules on it — and the scale moved.
+  **THE THREE, NAMED AND SIZED** (`mc du`, live): `s3://vaud1-wh/blobtab4_vaud1ns$vblob4` (2.2KiB, 3
+  objects), `s3://vaud1-wh/blobtab_vaud1ns$vblob2` (1.7KiB, 3) and
+  `s3://lance-catalog/m2proof_silver$m2-proof-1788537252` (2.6KiB, 5) — the last being this row's named
+  instance, which it records as holding 300 rows.
+  **TWO OF THE THREE ARE NOT THE DATASET THIS ROW IS ABOUT**, and that matters for the ruling: the
+  `vaud1ns$vblob*` pair are blob-table artefacts in a `vaud1-wh` test warehouse, a different provenance
+  from the `m2-proof-<unix ts>` artefact. All three are tiny, so the decision is about what they ARE
+  rather than about what would be lost.
+  **`unbound_namespaces` STANDS AT 3 AND IS A SEPARATE QUESTION** — `bronze`, `e2e-ns`,
+  `transcripts_v2` — recorded here only so the next reader does not read it as part of this count.
 - *Closes when:* The reconciler reports unregistered dataset prefixes as their own category, and this dataset is either registered or gone.
 - *Evidence:* live 2026-09-19: `/v1/table/m2proof_silver$m2-proof-1788537252` 404, `/v1/projects` 93 entries without `m2proof`, `reconcile_drift counts.ungoverned_tables=0` while `orphan_files=13` · `services/maintenance/src/maintenance/services/reconcile.py (ungoverned_tables, orphan_buckets)` · sweep refusal: "the catalog REFUSED a write credential for m2proof_silver$m2-proof-1788537252 (403)"
 
