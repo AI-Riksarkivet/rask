@@ -48,7 +48,9 @@ class _Vendor:
     def __init__(self, *, credentials: VendedCredentials | None) -> None:
         self._credentials = credentials
 
-    def vend(self, *, table_location: str, tier: str, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: str, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         return self._credentials
 
 

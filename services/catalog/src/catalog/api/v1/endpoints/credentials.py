@@ -57,6 +57,16 @@ async def vend_credentials(
     vendor: VendorDep,
     web_identity_token: RawBearerToken,
     tier: Annotated[Tier, Query()] = "read",
+    # [[LH-055]] WHICH branch this credential is for. Naming one narrows the grant rather than widening
+    # it — write lands on `<table>/tree/<branch>/*` and main drops to read — which is the isolation
+    # `lancemultibasebranchingblobv2.md` says the `tree/` layout exists to give: "storage ACLs can be
+    # read-only on main and write-only on the branch". Absent = main, exactly as before.
+    branch: Annotated[
+        str,
+        Query(
+            description="The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main."
+        ),
+    ] = "",
 ) -> CredentialResponse:
     """Vend scoped ``storage_options`` for direct object-store access to this table at ``tier``.
 
@@ -114,7 +124,9 @@ async def vend_credentials(
     # exchange is most often the caller's token (web_identity: expired / untrusted issuer) → 401; otherwise
     # the STS backend is unavailable/misconfigured → 503. Either way a meaningful 4xx/5xx, never a bare 500.
     try:
-        creds = await run_in_threadpool(vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=declared_bases)
+        creds = await run_in_threadpool(
+            vendor.vend, table_location=described.location, tier=tier, web_identity_token=web_identity_token, bases=declared_bases, branch=branch
+        )
     except ClientError as exc:
         # A REJECTED exchange (the STS backend refused the request). Only web_identity re-presents the
         # caller's token, so only there is a rejection an AUTH problem (401); a rejection in any other mode

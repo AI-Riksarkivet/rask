@@ -36,7 +36,9 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
     captured: dict[str, object] = {}
 
     class _FakeVendor:
-        def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials:
+        def vend(
+            self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
+        ) -> VendedCredentials:
             captured.update(table_location=table_location, tier=tier)
             return VendedCredentials(
                 storage_options={"access_key_id": "AK", "secret_access_key": "SK", "session_token": "ST"},

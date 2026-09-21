@@ -83,7 +83,9 @@ class EncryptionAtRest(BaseModel):
 class CredentialVendor(Protocol):
     """Vend scoped storage credentials for one table prefix at one tier."""
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         """Return creds for ``table_location`` at ``tier``.
 
         ``web_identity_token`` is the caller's OIDC JWT — used ONLY by :class:`WebIdentityVendor` (the store
@@ -288,7 +290,15 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
     return int(ds.version), tuple(bases)
 
 
-def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[str] = (), *, sanctioned_bases: Sequence[str] = ()) -> dict[str, object]:
+def build_session_policy(
+    bucket: str,
+    prefix: str,
+    tier: Tier,
+    bases: Sequence[str] = (),
+    *,
+    sanctioned_bases: Sequence[str] = (),
+    branch: str = "",
+) -> dict[str, object]:
     """Build an STS inline session policy scoping access to one table prefix + tier.
 
     Two statements: ``s3:ListBucket`` on the bucket gated by an ``s3:prefix``
@@ -327,7 +337,28 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
     """
     _reject_iam_metacharacters("prefix", prefix)
     prefix = prefix.rstrip("/")
-    obj_actions = list(_WRITE_ACTIONS if tier == "write" else _READ_ACTIONS)
+    # A BRANCH IS A PREFIX, and the format says which one ([[LH-055]]). `file_format.md` puts a branch's
+    # files at `{dataset_root}/tree/{branch_name}/` and states the name is used "as is to form the path,
+    # which means `/` would create a logical subdirectory (e.g. `bugfix/issue-123`)" — so the branch name
+    # is joined verbatim and a `/` inside it is intended, not an attack.
+    #
+    # `..` IS the attack, and it is the one thing a session policy must never permit: the whole point of
+    # scoping to `<prefix>/*` is that the credential cannot leave the table, and a climbing name would
+    # rewrite the resource ARN to somewhere else in the bucket.
+    branch = branch.strip("/")
+    if branch:
+        _reject_iam_metacharacters("branch", branch)
+        if ".." in branch.split("/"):
+            raise ValueError(f"branch {branch!r} may not traverse out of the table's prefix")
+    # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — `lancemultibasebranchingblobv2.md` § "Building
+    # block 3" names this as the governance isolation the `tree/` layout exists to give. Main stays
+    # READABLE because a branch manifest references its parent's fragments through a base pointing at
+    # the dataset root; a credential that could not read them would be scoped to less than the branch is.
+    #
+    # A READ tier needs no split: it is already read-everywhere-in-scope, and a second statement
+    # granting nothing new is one more thing to get wrong.
+    branch_write = bool(branch) and tier == "write"
+    obj_actions = list(_READ_ACTIONS if branch_write else (_WRITE_ACTIONS if tier == "write" else _READ_ACTIONS))
     list_prefixes = [f"{prefix}/*"] if prefix else ["*"]
     obj_resource = f"arn:aws:s3:::{bucket}/{prefix}/*" if prefix else f"arn:aws:s3:::{bucket}/*"
     statements: list[dict[str, object]] = [
@@ -345,6 +376,15 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
             "Resource": obj_resource,
         },
     ]
+    if branch_write:
+        statements.append(
+            {
+                "Sid": "BranchObjects",
+                "Effect": "Allow",
+                "Action": list(_WRITE_ACTIONS),
+                "Resource": f"arn:aws:s3:::{bucket}/{prefix}/tree/{branch}/*" if prefix else f"arn:aws:s3:::{bucket}/tree/{branch}/*",
+            }
+        )
     n = 0
     for base in bases:
         _reject_iam_metacharacters("base path", base)
@@ -393,7 +433,9 @@ def build_session_policy(bucket: str, prefix: str, tier: Tier, bases: Sequence[s
 class ModeBVendor:
     """No vending: data flows through the catalog's server-mediated endpoints."""
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         return None
 
 
@@ -469,9 +511,11 @@ class StsVendor:
             self._client = sts_client(region=self._region, endpoint=self._endpoint, access_key=self._access_key, secret_key=self._secret_key)
         return cast(dict[str, object], self._client.assume_role(**kwargs))
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         bucket, prefix = split_s3_location(table_location)
-        policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases)
+        policy = build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, branch=branch)
         resp = self._assume_role(
             RoleArn=self._role_arn,
             RoleSessionName="lance-catalog-vend",
@@ -547,7 +591,9 @@ class WebIdentityVendor:
             self._client = sts_client(region=self._region, endpoint=self._endpoint, unsigned=True)
         return cast(dict[str, object], self._client.assume_role_with_web_identity(**kwargs))
 
-    def vend(self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = ()) -> VendedCredentials | None:
+    def vend(
+        self, *, table_location: str, tier: Tier, web_identity_token: str | None = None, bases: Sequence[str] = (), branch: str = ""
+    ) -> VendedCredentials | None:
         if not web_identity_token:  # no caller token to exchange → fall back to server-mediated
             return None
         bucket, prefix = split_s3_location(table_location)
@@ -555,7 +601,7 @@ class WebIdentityVendor:
             RoleArn=self._role_arn,
             RoleSessionName="lance-catalog-vend",
             WebIdentityToken=web_identity_token,
-            Policy=json.dumps(build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases)),
+            Policy=json.dumps(build_session_policy(bucket, prefix, tier, bases, sanctioned_bases=self._sanctioned_bases, branch=branch)),
             DurationSeconds=self._ttl,
         )
         creds = cast(dict[str, object], resp["Credentials"])
