@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **99 are blocked on a decision** and **102 can be picked up today**.
+**200 open items**, of which **99 are blocked on a decision** and **101 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 22 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 21 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -636,11 +636,6 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *Closes when:* A scheduled job runs `scripts/e2e_live.sh` against the deployed release on a cadence and its latest run is green including all 11 `test_lineage_e2e.py` cases.
 - *Evidence:* `Makefile:885-886; scripts/e2e_live.sh:1-20` · `rg -n 'e2e_live|e2e-live' .github/workflows/ → no hits; ci.yml:417-420 runs dagger call test-lineage` · `gh run list --workflow=ci.yml --limit 3 → all failure; jobs of 35301962075: ms-test failure, e2e-lineage skipped` · `rg -c '^(async )?def test_' over the 30 e2e-marked files → 133`
 
-**XC-047 · OpenFGA exports no traces or metrics: no OTLP endpoint is configured on the subchart and the estate scrapes no Prometheus endpoint**
-`openfga, chart, catalog` · **MED**
-- **THE METRICS HALF SHIPPED AND IS OBSERVED (2026-09-20).** OpenFGA exposes **653 Prometheus series** on a port already named `metrics`, and the estate collected none of them — every governed read and write blocks on a Check, so a slow or datastore-thrashing authz store was the first thing an operator needed and the one thing no series existed for. It was unreachable BY CONSTRUCTION, the same shape the Ray job was in: `dapr-sidecars` and `dapr-control-plane` both `keep` on a `dapr.io/*` pod annotation at their first relabel step and an OpenFGA pod carries neither, so it was dropped before any later rule ran. A fourth Collector job is the only way in, which keeps the Collector the single seam. **CARDINALITY WAS BOUNDED BEFORE IT LANDED, because the ray-pods job is what broke this store once** (4,099 series in one step against a prior estate of 3,250): measured 653, of which 561 are `openfga_*`, and the distinction that matters is UNBOUNDED rather than merely large — `ray_data_*` grows per dataset and per operator, while `openfga_request_duration_ms` is gRPC-method × bucket, fixed by the API surface. So only the Go runtime is dropped (`go_*`/`process_*`, 44 of the 653, which every Go service would otherwise duplicate). **A MIS-PLACED INSERT BROKE THE RAY GUARD AND THE GATE CAUGHT IT:** the first edit landed inside `ray-pods`' `metric_relabel_configs`, leaving that job with none and handing its `ray_data_*` drops to the new one — `test_the_ray_scrape_does_not_ship_the_per_operator_ray_data_firehose` went red, which is exactly the incident it was written after. Re-inserted at a job boundary; both jobs verified in the render (ray 2 rules, openfga 1). Pinned by `tests/unit/test_openfga_is_a_scrape_target.py`, whose legs include that the job must NOT select on a Dapr annotation (a job that did would match nothing and still look green) and that the drop must not swallow `openfga_*` itself. **OBSERVED on the deployed estate:** `up{job="openfga"}` scraping `10.42.0.152:2112`, **46 `openfga_*` families in GreptimeDB where there were zero**, `openfga_iter_query_duration_ms_{bucket,count,sum}` among them — the row's own closing metric — and `count({job="openfga", __name__=~"go_.*|process_.*"})` returning EMPTY, so the drop holds. A Perses panel plots request p95, datastore-iter p95 and datastore queries/s together, because a Check that is slow from Postgres looks identical to one slow from a deep model until those are on one chart.
-- *What is left:* **The TRACES half only.** Point the subchart's `telemetry.trace.otlp.endpoint` at the Collector with the `x-greptime-pipeline-name=greptime_trace_v1` header so `opentelemetry_traces` holds an OpenFGA span. The subchart is 0.3.9 with image v1.18.3 (`Chart.yaml:74-78`); a version bump needs `helm` on PATH to refresh `Chart.lock`.
-- *Closes when:* `opentelemetry_traces` holds an OpenFGA span (the metrics scrape and the panel are done and observed).
 **LH-161 · The GreptimeDB subchart pulls the whole `rask-observability-s3` Secret into its environment via `envFrom`**
 `chart` · **MED**
 - **blocked:** Whether a third-party subchart's own env handling (greptimedb-standalone's `envFrom: secretRef`) is out of scope for the envFrom ban — an owner ruling that must be written next to the exemption, not assumed.
