@@ -608,6 +608,20 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **THE MEASUREMENT HAS NOT CLEARED 87 MINUTES YET, AND THE REASON IS MINE.** Every deploy restarts the worker and resets the clock, and 2026-09-21 saw three rolls through this stem for other rows. The post-fix pods reached **~68, ~53 and 8 minutes, all with 0 restarts and none OOMKilled** — but the pre-fix baseline is a death at **86m52s**, so none of them has yet outlived it. Encouraging is not the same as proven, and this row has already been fooled once by a series that looked flat.
   **SO THE NEXT STEP IS TO STOP DEPLOYING, not to measure harder.** The fix is in the chart and applies to every new pod; what it needs is an uninterrupted pod. Batch any further stem changes rather than rolling per row, and read the worker again after it has passed 87 minutes and then a day.
   Supporting evidence that does NOT depend on the clock, and is why the expectation is reasonable: arenas 60 -> 0 and 34 -> 0 on two independent services, anonymous virtual address space +610 MB/68min -> -80 MB/17min, RSS at the same age 403Mi -> 262Mi, no latency regression against a control service, and coverage unchanged at 585 datasets with both the sweep and the reconcile lane firing on schedule.
+- **THE BASELINE IS CLEARED — MEASURED 2026-09-21, and this is the discriminating result.** The
+  uninterrupted pod (`rask-maintenance-5dffdb754d-zkc6s`) reached **97 minutes at 289Mi with 0
+  restarts**, outliving the **86m52s** at which its pre-fix predecessor was OOMKilled. That is the
+  falsification point this row was waiting on: the earlier ~68/~53/8-minute runs were consistent with
+  the fix and also consistent with luck, and none of them could distinguish the two. A pod past the
+  age its predecessor died at can.
+  **WHAT IT DOES AND DOES NOT ESTABLISH.** It establishes that the bound changes the outcome at the
+  age the old failure occurred, which together with the clock-independent evidence above (arenas 60 ->
+  0 and 34 -> 0, address space +610 MB/68min -> -80 MB/17min, RSS 403Mi -> 262Mi at equal age) is the
+  case for the mechanism. It does NOT yet establish the FULL-DAY closing bar, which is a different and
+  slower claim about a plateau rather than a threshold. The pod is still running and still accruing it;
+  the medallion deploy that follows this entry rolls only the four medallion deployments (`kubectl set
+  image`) precisely so this clock is not reset again, even though they share the
+  `lance-rest-catalog` image with maintenance and nine other deployments.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
