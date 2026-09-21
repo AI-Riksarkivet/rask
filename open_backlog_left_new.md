@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **99 are blocked on a decision** and **101 can be picked up today**.
+**200 open items**, of which **100 are blocked on a decision** and **100 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 21 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 20 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -598,6 +598,8 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 **XC-011 · Estate bootstrap writes no `_control/bootstrap.json` record; `provision()` is already content-gated**
 `chart, service-kit, catalog` · **MED** · PARTIAL
+- **blocked:** the *Closes when* is an either/or and both branches are now measured, so what remains is the CHOICE, not the work. Owner picks: build the `_control/bootstrap.json` record (a durable estate-provenance artefact nothing currently writes), or close this row on the content gate that already shipped.
+- **BOTH BRANCHES RE-MEASURED 2026-09-21.** `_control/bootstrap.json` is genuinely ABSENT — `lance-catalog/_control` raises `FileNotFoundError` over S3 while the bucket itself lists normally, so this is a real negative and not a wrong-path artefact (a first attempt via the MinIO pod's filesystem was inconclusive: that container has no `mount`, `grep`, and `/data/*` listed nothing). The content gate IS shipped and sits at exactly the lines this row cites: `_canonical_model` at `service_kit/governed/fga.py:401`, the comparison and `openfga_model_unchanged` log at `:574-575`.
 - *What is left:* `provision()` no longer rewrites every boot: it compares `_canonical_model(current) == _canonical_model(model)` and logs `openfga_model_unchanged` instead of writing (fga.py:574-575), which is the content-hash answer to C-Q2, with `RASK_FGA_MODEL_ID` as the production pin. The `_control/bootstrap.json {subject, store_id, model_id, at}` record via `records.create_json` is not written: `bootstrap-admin.yaml` remains check-then-write and treats a duplicate 400/409 "already exists" as success (:21, :251). Its original purpose (gating provision) is now served, so either write the record for its audit value alone or close the row on the content gate.
 - *Closes when:* Either `_control/bootstrap.json` exists after a fresh install with 409-on-exists treated as success, or the row is closed on the shipped content gate.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/fga.py:508, :574-575` · `chart/templates/bootstrap-admin.yaml:21, :251` · ``grep -n 'bootstrap.json|create_json' chart/templates/bootstrap-admin.yaml` → none`
