@@ -136,13 +136,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**199 open items**, of which **103 are blocked on a decision** and **96 can be picked up today**.
+**201 open items**, of which **103 are blocked on a decision** and **98 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 40 | 5 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 8 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -853,6 +853,23 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *What is left:* `scripts/e2e_stack.sh:112` and `scripts/ray_e2e_stack.sh:103` both pass `--set observability.enabled=false`, so the Collector, GreptimeDB and every OTLP export are absent from the one place the estate is assembled automatically. The telemetry plane is therefore proven only by hand on the live k3s estate — which is exactly how [[CP-040]]'s permanently-firing `RayMetricsMissing` and [[XC-047]]'s zero OpenFGA series survived. Turn it on for at least one lane and assert a span and a metric land, rather than only that the fleet starts.
 - *Closes when:* An e2e lane runs with observability ON and asserts a trace and a metric series reached the backend.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream proves the telemetry plane in CI rather than in a drill · `scripts/e2e_stack.sh:112` · `scripts/ray_e2e_stack.sh:103`
+
+**XC-065 · A helm upgrade resets kueue's conversion-webhook CA, and the controller only re-patches it at startup**
+`chart, compute` · **MED**
+- *What is left:* Make an upgrade leave kueue's conversion webhook usable without a human noticing. The controller writes its self-signed CA into the CRDs' `spec.conversion.webhook.clientConfig.caBundle` when it BOOTS; `helm upgrade` re-applies those CRDs from the subchart and overwrites the patch. Nothing re-runs, so the API server then holds a caBundle that does not match the certificate the webhook serves, and every conversion fails until somebody restarts the controller. The candidate fixes are a pre-upgrade hook that restarts `kueue-controller-manager`, or a post-upgrade hook ordered BEFORE `kueue-setup` that does, or cert-manager owning the CA instead of the controller.
+- **MEASURED LIVE 2026-09-21, and it took the estate down with it.** `make k3s-up` reached its post-upgrade hooks and `rask-kueue-setup` crash-looped 9 times over 21 minutes on `conversion webhook for kueue.x-k8s.io/v1beta2, Kind=ClusterQueue failed: ... x509: certificate signed by unknown authority ... "kueue-ca"`. The upgrade then FAILED as a whole (`post-upgrade hooks failed`, release left at `failed`), even though every resource had already applied. `rollout restart deploy/rask-kueue-controller-manager` fixed it in 68 seconds and `kubectl get clusterqueues` answered again.
+- **IT LOOKS LIKE A ONE-OFF AND IS NOT.** The controller had been up 24 hours with zero restarts, so it had long since patched the caBundle and had no reason to re-patch. Any upgrade reproduces this; it stayed invisible only because the release Secret ceiling ([[XC-054]]) had been refusing upgrades before they reached the hooks. Clearing that blocker is what exposed this one.
+- *Closes when:* An upgrade against a long-running kueue controller completes its post-upgrade hooks with no human intervention, proven by running one.
+- *Evidence:* `rask-kueue-setup-27kr7` logs, 2026-09-21 · `helm history rask` rev 194 `failed: post-upgrade hooks failed` · controller pod age 24h / restarts 0 at the time of failure · recovery by `rollout restart` observed
+
+**XC-066 · The Ray lane forwards EMPTY OTLP values into `runtime_env`, which override the Ray pod's own config**
+`medallion, compute` · **LOW**
+- *What is left:* Omit the key when the source has no value, rather than blanking it. `ray_submit.submit_stage_job` builds the job's `env_vars` with `os.environ.get("OTEL_...", "")` for six OTLP names, so a stage runner with observability OFF sends `OTEL_EXPORTER_OTLP_ENDPOINT=""` and friends into the submission.
+- **THE SAME TWO-OWNERS TRAP THIS FILE ALREADY RECORDS FOR STORAGE.** `ray_submit.py`'s own comment states, measured twice on the live estate, that "Ray merges `runtime_env` OVER the process env, so a key sent here BEATS the pod's" — written about an S3 credential pair that gave every job `SignatureDoesNotMatch`. An empty forwarded value is not neutral: it makes the submitter the OWNER of that key and silently disables tracing the Ray pods were configured for.
+- **LATENT, NOT LIVE, and the distinction is the whole risk.** `observability.enabled` is one global toggle, so today the stage runner and the Ray pods are on or off together and the empty override lands on an already-empty value. It becomes real the moment a Ray cluster is configured independently — which is exactly what bring-your-own-engine invites.
+- **NOTE FOR WHOEVER TAKES [[LH-159]]:** `WorkOrder.to_env` already does the right thing (`env.update({k: v for k, v in optional if v})`), so migrating this hand-rolled block onto the port is a BEHAVIOUR change rather than a refactor, and must not be claimed as equivalent.
+- *Closes when:* An unset OTLP name produces no key in the submitted `runtime_env`, pinned by a test.
+- *Evidence:* `services/medallion/src/medallion/services/ray_submit.py` (the `env_vars` block, six `os.environ.get(..., "")` OTLP names) · the same file's two-owners comment, measured twice live · `packages/service-kit/src/service_kit/lakehouse/work_order.py:164-166`
 
 ## PHASE 2 · COMPUTE
 
