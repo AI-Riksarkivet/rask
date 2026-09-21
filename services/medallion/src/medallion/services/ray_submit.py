@@ -33,7 +33,7 @@ from medallion.services import ray_jobs_api as rk
 from medallion.services.task_register import RAY_ENGINE
 from medallion.services.transform_spec import resolve_task_async, resolve_transform_async
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
-from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkObservability, WorkOrder, WorkSource, WorkStamp, derive_idempotency_key
 
 
 log = logging.getLogger(__name__)
@@ -148,6 +148,29 @@ def otlp_env() -> dict[str, str]:
     return {name: value for name in _OTLP_NAMES if (value := os.environ.get(name, ""))}
 
 
+def build_stage_order_observability() -> WorkObservability:
+    """This pod's trace context and OTLP config, as the ORDER carries them ([[LH-159]]).
+
+    `WorkOrder.to_env` is documented as "The ONE serialization, so no adapter hand-rolls it", and the
+    only reason this lane hand-rolled three spreads beside the order was that nothing ever populated
+    `observability`. The values were always available; they were assembled in the wrong place.
+
+    `otlp_env()` already OMITS a name this pod does not hold ([[XC-066]]) — which is what makes this a
+    refactor rather than a behaviour change, since `to_env()` omits empty optionals too and the old
+    block blanked them.
+    """
+    trace = rk.trace_env()
+    otlp = dict(otlp_env())
+    return WorkObservability(
+        traceparent=trace.get("TRACEPARENT", ""),
+        tracestate=trace.get("TRACESTATE", ""),
+        # POPPED, not copied: `to_env` emits the service name from its own field, and leaving it in the
+        # map too would render one fact from two places — the divergence this whole change removes.
+        service_name=otlp.pop("OTEL_SERVICE_NAME", ""),
+        otlp=otlp,
+    )
+
+
 async def submit_stage_job(
     settings: MedallionSettings,
     *,
@@ -234,6 +257,7 @@ async def submit_stage_job(
         # flight. The order's key is the shared derivation so both lanes agree on what "the same work"
         # is; they honour the same four axes and differ only in which handle they are.
         idempotency_key=derive_idempotency_key(stage=stage, token=token, from_uri=from_uri, to_uri=to_uri, code_version=code_version),
+        observability=build_stage_order_observability(),
     )
     env_vars = {
         **order.to_env(),
@@ -257,23 +281,12 @@ async def submit_stage_job(
         # Forward this pod's OTLP config (the train path below already does) so the job can export the
         # span it parents on the handed-over trace context. The service name is the stage runner's own — the
         # job executes that stage runner's stage transform, so its span belongs to the same logical service.
-        # Unset names are OMITTED — see `otlp_env`. Empty endpoint (observability off on this lane)
-        # leaves the job to its own pod's configuration rather than forcing it untraced.
-        **otlp_env(),
-        # Trace continuity (prod-readiness P3): the stage runner's active span rides the runtime_env as
-        # TRACEPARENT, and the job starts its root span as a child of it — the cascade's distributed
-        # trace no longer goes dark at `ray job submit`. Empty when no span is active.
-        **rk.trace_env(),
-        # THE WORKLOAD'S OWN PARAMETERS, namespaced. Everything above is the PLATFORM's half of the
-        # contract — where to read, where to write, who to trace as, what provenance to stamp. This is
-        # the other half, and it is the reason a stage runner row can name a `stageJob` at all: without it the
-        # env dict was fixed, so a second workload either reused the first one's variables or forced a
-        # platform edit.
-        #
-        # The `RASK_PARAM_` prefix is applied HERE rather than trusted from config, so a lane cannot
-        # reach LINEAGE_JSON, the S3_* config or an OTEL_* key by choosing a colliding name. The platform
-        # never reads these values; their meaning belongs to the workload.
-        **{f"RASK_PARAM_{key}": value for key, value in job_params.items()},
+        # THE WORKLOAD'S OWN PARAMETERS RIDE THE ORDER ([[LH-159]]). `to_env()` namespaces
+        # `order.params` with `RASK_PARAM_` itself, and `order.params` IS `job_params` — so the map
+        # that used to be spread here rendered the same keys a second time. The prefix is still
+        # applied at serialization rather than trusted from config, so a lane cannot reach
+        # LINEAGE_JSON, the S3 config or an OTEL_* key by choosing a colliding name; it is simply
+        # applied in ONE place now.
         # The job emits its OWN OpenLineage (no Dapr sidecar on Ray pods), so it needs the identity
         # here as well as in `metadata` below — that one is read from outside after a failure, this
         # one is what the job stamps on its own events. Carrying only one loses the other lane.
