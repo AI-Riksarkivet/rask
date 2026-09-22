@@ -2383,3 +2383,34 @@ a caller that names a value still gets exactly that value.
 `compact_files()` call site in the four lakehouse services actually carries — following one hop of
 indirection, so a locally-built dict, a constant-updated one and a parameter handed in by a caller in
 the same module all resolve — and requires all three bounds at each.
+
+## A duration is not evidence of the mechanism that produced it (2026-09-22)
+
+[[LH-190]] was filed HIGH on a measured 324s gap in the maintenance work lane after a worker restart,
+and attributed it to the consumer's `ackWait: 720s`. The number was real. The attribution was not:
+nothing in the original trace separated "the lane is refusing to deliver" from "the pods are not
+there", and 720s was simply the nearest configured number of the right order.
+
+Re-measured on the live lane with 5s sampling from the NATS monitoring port, both restart shapes:
+
+* **one replica of two** — delivery frozen for a single sample, `num_redelivered` 26 at +13s, full
+  throughput by +39s;
+* **both replicas** — `delivered` frozen for exactly the 113s the pods were absent, then redelivery
+  and full throughput **5 seconds after readiness**.
+
+Neither waited the ack timer. NATS observes the subscriber's connection drop and redelivers; the 720s
+timer is the fallback for a subscriber that is still connected and silent, which a dead pod is not.
+
+**The remedy the row proposed would have fixed the case that already worked.** A graceful SIGTERM
+drain only exists for a voluntary shutdown — and `retry_when_draining` already answers RETRY there,
+while a PDB (`minAvailable: 1`) and a rollout that floors to 0 unavailable make a both-replica
+voluntary loss unreachable. The case that costs time is the one where no process survives to drain.
+
+**The rule.** A row that names a mechanism must carry a measurement that could have distinguished it
+from its neighbours, not only one consistent with it. Here the distinguishing instrument was
+`num_redelivered` — zero while stalled means the timer never fired — and it cost one extra column in
+the same sample.
+
+What the re-measurement found instead is filed as [[LH-193]]: `num_ack_pending` pinned at exactly
+`max_ack_pending` and an `ack_floor` that advances only when a worker is killed. The lane's real
+stall is standing, not transient, and no restart-shaped question would have asked about it.

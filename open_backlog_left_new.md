@@ -1874,190 +1874,41 @@ Register bookkeeping, not engineering.
   167Mi; worth a bound before a tier with real rewrite work arrives.
 
 
-**LH-190 · A worker restart orphans every in-flight unit, and the lane delivers nothing for a full `ackWait`**
-`maintenance` · **HIGH** · OPEN
-- **MEASURED END TO END ON THE LIVE LANE (2026-09-22), AND THE ROW'S MAGNITUDE IS WRONG WHILE ITS
-  EXISTENCE CLAIM IS RIGHT — for one configuration only.** Two restarts, threshold pre-registered
-  before either ran (`Last Ack` age > 300 s confirms the row, < 120 s falsifies it):
-  - **ONE replica of two (what a rollout, an eviction or a single crash does): NO STALL.** Across a
-    full delete/terminate/replace cycle `Last Ack` never exceeded **1.16 s** — 24 samples over 6
-    minutes, max 1.16 s — while Unprocessed cycled normally with the 120 s ticks. The surviving
-    replica absorbs the work. Control held: the pod really churned (`8shb6` gone, `gdlrl` created, the
-    old pod's readiness probe refusing mid-termination).
-  - **BOTH replicas at once: a REAL stall of ~320 s.** `Last Ack` climbed 13.88 s -> **5 m 17 s** and
-    recovered at t=+334 s; Unprocessed went **140 -> 1,847**, a 13x backlog. By the pre-registered rule
-    (>300 s) the row is CONFIRMED on the stall existing — but **it is not "a full `ackWait`"**: 320 s
-    against `ackWait: 720s`, well under half. (An earlier version of this bullet added "and
-    `Redelivered Messages` stayed 0 throughout"; that was not measured — the sampling grep captured
-    only `Last Ack` and `Unprocessed`, so the 0 readings come from before and after the stall, never
-    during it.)
-- **THE MECHANISM, AND IT IS ONE LINE OF CONSUMER STATE.** `nats consumer info` reports
-  **`Outstanding Acks: 72 out of maximum 72`** — stable across repeated samples, in ORDINARY operation.
-  The consumer permanently sits at its `Max Ack Pending` ceiling; that ceiling IS the lane's flow
-  control. So when every replica dies, exactly those 72 in-flight units are stranded un-acked, and the
-  broker may deliver nothing further until they ack-time-out — at `ackWait` measured **from their
-  delivery**, not from the kill. That is why the stall is 324 s rather than 720 s, why it is variable,
-  and why 720 s is its upper bound rather than its value.
-- **WHICH RULES OUT THE GRACEFUL-DRAIN REMEDY ON ARITHMETIC, not on taste.** Draining would mean the
-  dying pods finishing their outstanding units: 72 units across 2 replicas at
-  `secondsPerUnit: 14` is ~36 x 14 = **~500 s per pod**, against a
-  `sidecarBlockShutdownSeconds` of **20**. The window is off by a factor of twenty-five. The levers
-  that can actually shorten the stall are therefore `ackWait` (shorter timeout) or `Max Ack Pending`
-  (fewer units stranded) — both chart values, both measurable against the 324 s baseline — and NOT
-  `block-shutdown-duration`, which only buys time for work the app cannot finish anyway.
-- **OF THOSE TWO LEVERS, ONE IS ALREADY UNAVAILABLE AND THE OTHER NEEDS ONE MEASUREMENT NOBODY CAN
-  TAKE TODAY.**
-  - **`Max Ack Pending` cannot come down.** It IS the concurrency, and the lane's surplus over the
-    sweep is ~7%: measured 2026-09-22 over 120 s on a settled lane, drained **5.1 units/sec** against
-    **4.75/sec** injected (570 datasets / 120 s), with `Outstanding Acks: 72/72` throughout. That
-    independently reproduces `chart/values.yaml`'s own declared ~9%. Cutting concurrency to strand
-    fewer units pushes the drain BELOW the injection and the lane never catches up — so this lever is
-    owned by [[LH-191]]'s cadence question, not by this row.
-  - **AND THE MARGIN IS NOT A SIZING PROBLEM, which closes off the remedy anyone would reach for
-    first.** Measured on the deployed workers 2026-09-22, three samples over 60 s: CPU **678-769 m
-    against a limit of 2000 m (~37%)** and memory **225-230 Mi against 4 Gi (~5.6%)**, while the lane
-    only just keeps up. Each replica runs 36 concurrent units (`maxConcurrentUnits` 40 minus
-    `indexConcurrentUnits` 4) and spends them waiting on object storage, so the lane is I/O-bound, not
-    compute-bound. Giving the workers more CPU or memory buys nothing; the margin is set by how many
-    datasets get re-planned per tick, which is [[LH-191]]'s question and not a resource one.
-  - **`ackWait` has large headroom on the typical unit and an unmeasured tail.** The chart records the
-    handler at **0.21 s** (median 0.12, p90 0.60) with the 14 s `secondsPerUnit` being dispatch, ack
-    round-trip and QUEUEING rather than work. So `720 s` is ~51x the lane cost per unit and ~1,200x
-    the p90 handler, and lowering it would cap this row's stall directly. What is not known is the
-    slowest single unit — a large compaction — and too short an `ackWait` redelivers a unit still
-    running, i.e. duplicate compaction. That is the whole remaining question.
-- **THE INSTRUMENT IS NOW BUILT AND DEPLOYED (`main-581ac9de`), AND ITS FIRST SAMPLE IS NOT THE ANSWER
-  — it is the cost of the lane's NO-OPS.** `maintenance_unit_done` carries `elapsed_seconds` beside
-  uri, table_id, status and error_type, timed from the ROUTE so it covers the whole delivery-to-ack
-  window (the protection listing included, since the ack clock is already running for it). First live
-  sample, 290 units over 10 minutes on the deployed workers: min 0.035 s, **p50 0.166 s, p90 1.199 s,
-  p99 1.385 s, max 1.470 s**, all SUCCESS, zero errors. Against `ackWait: 720s` that is 490x the
-  slowest unit seen.
-- **BUT 215 OF THOSE 290 LOGGED `compaction_distributed_nothing_to_do`, SO THE MAX MEASURES A CHECK AND
-  NOT A COMPACTION.** The steady-state sweep re-plans every dataset each tick ([[LH-191]]) and almost
-  all of them have nothing to do, so this distribution is dominated by the cost of ASKING. The number
-  `ackWait` must exceed is the slowest REAL rewrite, and the estate's steady state contains none — so
-  1.470 s is a FLOOR on the answer, not the answer. What has changed is that the question is now
-  self-answering: the field captures the next genuine compaction whenever one runs, without the trace
-  store, and `grep maintenance_unit_done | sort -t= -k3` reads the tail on any estate.
-- **AND THE MEASUREMENT COULD NOT BE TAKEN ANY OTHER WAY.** The per-unit duration is not
-  in the worker's logs (outcome only, no elapsed field), and the trace store refuses the query:
-  GreptimeDB answers `Exceeded memory limit: 1018.5MiB used globally (99%), hard limit: 1.0GiB` to
-  both a `count(*)` and a `max(duration_nano)` over `opentelemetry_traces`. So the tail is unknown for
-  an observability reason rather than a lakehouse one, and closing this row needs either that limit
-  raised or an elapsed field on the unit outcome.
-- **THE INSTRUMENT THE OBVIOUS READING WOULD HAVE USED IS THE WRONG ONE, and it would have inverted the
-  first result.** `Acknowledgment Floor` is the LOWEST UNACKED sequence, not a throughput counter: with
-  `Max Ack Pending: 72` and out-of-order acks it sat frozen at 149,068 for **five minutes** while the
-  lane ran flat out at ~4.8 units/sec (`Last Ack: 138ms`, Unprocessed falling 432 -> 374). Reading the
-  floor would have reported a total stall during normal operation. The instrument is `Last Ack` age.
-- **AND THE CONFIGURATION THAT STALLS IS THE ONE THE ESTATE ALREADY PREVENTS.** `pdb/rask-maintenance-worker`
-  is `MIN AVAILABLE 1, ALLOWED DISRUPTIONS 1` — so no *voluntary* disruption (drain, rollout, eviction)
-  can take both replicas. My test used `kubectl delete pod -l`, which goes through the DELETE path and
-  is NOT gated by a PodDisruptionBudget, so it reproduced a scenario the PDB exists to stop. What
-  remains genuinely exposed is the involuntary case: a node loss taking both pods.
-- **AND THAT EXPOSURE IS NOT "UNLIKELY" HERE — I WROTE THAT AN HOUR AGO AND IT IS FALSE FOR THIS
-  ESTATE.** The sentence rested on `topologySpreadConstraints`. Measured: `kubectl get nodes` returns
-  **ONE** node (`dmlpai01`, control-plane), both workers are scheduled on it, and the constraint is
-  `topologyKey: kubernetes.io/hostname` with **`whenUnsatisfiable: ScheduleAnyway`**. A single hostname
-  domain means there is nothing to spread ACROSS, and `ScheduleAnyway` means the constraint never
-  refuses a placement even when there is — so it is a preference that cannot bind, and the two replicas
-  are co-located by construction. On this estate a node event takes both pods and the ~320 s stall is
-  therefore CERTAIN rather than unlikely. On a multi-node production cluster it would spread them, but
-  still only as a preference.
-- **SO THE TWO MITIGATIONS COVER DIFFERENT HALVES AND ONLY ONE OF THEM BINDS HERE.** Voluntary
-  disruption (drain, rollout, eviction) is held by the PDB — one replica at a time, no stall, measured
-  at 1.16 s. Involuntary loss (node down, both pods killed) ignores PDBs entirely and is not mitigated
-  at all on a single-node estate. That is the case worth building a remedy for, and it is narrower than
-  the row's original "a worker restart".
-- **MEASURED LIVE 2026-09-22, and it is the true cause of every "stall" read today.** Two minutes
-  after a rolling restart the consumer reports:
-  `Last delivery: 1m57s ago` · `Outstanding Acks: 152 out of maximum 152` · `Ack Wait: 12m0s` ·
-  `Redelivered: 0` · `Unprocessed Messages: 4,420` · worker pods aged 2m10s and 2m20s.
-  Every outstanding unit was delivered to pods that no longer exist. JetStream will not deliver
-  another until `ackWait` expires on them, so **a deploy costs this lane ~12 minutes of total stall.**
-- **THE STALL IS TOTAL, NOT PARTIAL, AND IT IS MEASURED TO THE UNIT.** Across the outage the
-  consumer's `num_pending` reads `5,560 -> 6,130 -> 6,700 -> 7,270` on successive samples: **+570
-  each time, exactly one tick's injection, with ZERO units leaving.** `num_ack_pending` sat frozen at
-  82 against a bound of 72 for over four minutes while `redelivered` stayed 0. So this is not a lane
-  running slowly — it is a lane delivering nothing at all, and the arithmetic says so without needing
-  a rate.
-- **THE UNITS ARE NOT SLOW — 0.21s, measured from each unit's own trace span** (19 traces, median
-  0.12s, p90 0.60s, max 1.17s). A no-op unit is two HTTP calls plus a base-ref pre-pass of ~16 reads
-  at ~8ms. The lane's steady-state capacity is therefore enormous next to the 4.73 units/sec the
-  sweep injects; throughput was never the constraint.
-- **IT POISONS EVERY RATE-BASED MEASUREMENT TAKEN NEAR A DEPLOY, which is how it stayed invisible.**
-  Drain rates read inside the window gave "5.2s per unit" and then "22s per unit" for a quantity whose
-  real value is 0.21s, and each of those drove a configuration change. A rate measured after a restart
-  measures the orphan block.
-- **RAISING `maxAckPending` MAKES IT WORSE, which is the counter-intuitive part:** the bound is exactly
-  how many units a restart can orphan. The lane that was unbounded (NATS's 1,000) could orphan a
-  thousand.
-- **THE WHOLE CYCLE WAS WATCHED END TO END, so the mechanism is observed rather than inferred.**
-  Last delivery `09:55:57`; the consumer then sat frozen for twelve minutes while `num_pending` grew
-  by exactly one tick's injection each sample. Recovery, to the second:
-  `10:07:26 ack_pending=80/72 outcomes=0` · `10:07:51 ack_pending=72/72 redelivered=0 -> 18,
-  pending 7,270 -> 7,220` · `10:07:57 outcomes_last_60s=51`.
-  **Delivery resumed 11m54s after it stopped — `ackWait` is 12m0s.** `redelivered` moving off zero is
-  the expiry releasing them; nothing else changed, no pod restarted, no configuration was touched. So
-  the recovery time IS `ackWait`, exactly, and that is the number any remedy has to beat.
-- **THE DRAIN MACHINERY ALREADY EXISTS AND DOES NOT COVER THIS, which narrows the remedy.** The app
-  arms a drain on SIGTERM (`service_kit.draining.arm_drain_on_sigterm`) and `work.py:87-98` answers a
-  NEW delivery with `retry_when_draining` — "ask for redelivery rather than start work". The pod has
-  `terminationGracePeriodSeconds: 120`, a `preStop` of `sleep 5`, and the sidecar carries
-  `dapr.io/block-shutdown-duration: 20s`. At 0.21s a unit, everything actually dispatched finishes in
-  about a second, well inside all three windows.
-  **SO THE STUCK UNITS WERE NEVER DISPATCHED. `Redelivered: 0` is the proof:** had the app seen them
-  while draining it would have asked for redelivery and the counter would move. They were delivered by
-  JetStream to the SIDECAR, held in its buffer awaiting dispatch, and died with it — unacked and
-  un-NAK'd, so only `ackWait` can release them.
-- **THAT PUTS THE SIZE OF THE PROBLEM EXACTLY AT `maxAckPending`,** which is the tension with
-  [[LH-188]] and has to be decided together: the bound that keeps the lane fed is also the buffer a
-  restart can strand. Observed here: `Outstanding Acks: 152 out of maximum 72` — MORE outstanding than
-  the current bound allows, because the 152 were stranded under the previous, larger one, and
-  JetStream will deliver nothing until enough of them expire to fall below 72.
-- **EVIDENCE AGAINST THE CHEAPEST REMEDY, and it is an INFERENCE rather than a measurement.** The
-  sidecar already carries `dapr.io/block-shutdown-duration: 20s`, so the obvious first move is to
-  raise it. But `Redelivered: 0` says the app never saw those units — had it, the drain would have
-  asked for redelivery and that counter would have moved — so the sidecar did not dispatch its buffer
-  during the 20s it already blocks for. At 0.21s a unit, 20s is ample time to dispatch 152 of them,
-  which is what makes the reading suggestive. **NOT TESTED DIRECTLY:** confirming it means watching
-  `daprd` logs through a termination, which costs another full outage, so it is recorded as the
-  inference it is rather than as a result.
-- **IT COSTS TIMELINESS, NOT DURABILITY, and that bounds how urgent the remedy is.** The stream is
-  `Retention: WorkQueue`, `Maximum Age: 7d`, messages and bytes unlimited, holding **7,350 units in
-  6.8 MiB** at the peak of the outage — ~1 KB each, which is the claim-check POINTER shape working as
-  designed. Nothing is dropped and nothing is lost: a stalled lane means maintenance runs LATE, and
-  the next tick re-plans whatever is still owed anyway. So this is a resilience defect about
-  RECOVERY TIME, not about work disappearing, and it should be weighed as one.
-- **THE RECOVERY TAIL IS MOSTLY REDUNDANT WORK, and the mechanism to collapse it already exists and
-  is INERT.** Every tick publishes ALL datasets (`planned=568 published=568`, every tick) and a
-  work-queue unit is removed only on ACK — so a backlog of 7,300 over 568 datasets IS ~13 queued
-  copies of each. That is a logical consequence of two measured facts, not an estimate, and it is why
-  the tail is hours: the fleet is re-doing the same estate a dozen times.
-  **THE STREAM CARRIES `Duplicate Window: 2m0s` — exactly the sweep interval — AND THE PUBLISHER
-  DEFEATS IT:** `Nats-Msg-Id` is a fresh UUID per publish (read off a live message:
-  `Nats-Msg-Id: ba6719fc-c471-4853-9cf2-fc2c5783a7ae`), so JetStream's de-duplication can never match
-  anything. An id STABLE per dataset would make the broker drop a republish while the previous unit
-  is still queued.
-  **IT IS NOT A FREE WIN, which is why it belongs in the ruling rather than in a commit.** The window
-  is TIME-based, not pending-based: a dataset maintained and ACKED at t=0 whose next unit publishes
-  at t=120s sits exactly on the 2m boundary, so a stable id risks silently SKIPPING a legitimate
-  re-plan rather than collapsing a redundant one. Making the planner skip datasets with a unit
-  already pending is the semantically correct version and needs the planner to see the queue, which
-  it currently cannot.
-- *What is left:* Decide how a shutting-down worker releases what it holds. The candidates are a
-  graceful drain on SIGTERM (finish or NAK the outstanding units, so they redeliver at once rather
-  than after 720s), a shorter `ackWait` (bounded below by the longest single compaction, so it cannot
-  go far), or accepting the window and not measuring inside it. The first is the only one that removes
-  the stall rather than shortening it.
-- *Closes when:* A rolling restart of `rask-maintenance-worker` is followed by delivery resuming in
-  seconds rather than in `ackWait`, observed on the live consumer, and a gate covers whichever
-  mechanism is chosen.
-- *Evidence:* live `consumer info` 2026-09-22 (above) · unit trace spans (19 traces, p90 0.60s) ·
-  `chart/templates/dapr-component.yaml` (`ackWait: 720s` on the work component) · [[LH-188]] for the
-  bound this interacts with
-
+**LH-193 · The work lane is permanently flow-controlled and its ack floor never advances — a unit at the floor is held, not acked, and nothing reports it**
+`maintenance` · **HIGH**
+- **FOUND WHILE FALSIFYING [[LH-190]] (2026-09-22), and it is that row's shape inverted.** LH-190
+  claimed a restart stalls the lane; measured, a restart costs pod-restart-time + ~5s. What the same
+  two traces show instead is a stall that never ends and that no restart-shaped question would have
+  asked about.
+- *The measurement, 5s samples off the NATS monitoring port, outside the cluster:* across **every**
+  sample of both traces `num_ack_pending` reads **exactly 72**, which is the consumer's own
+  `max_ack_pending`. Not 71, not 70 — pinned at the ceiling for the full window while `delivered`
+  climbed ~4.5/s. A lane whose in-flight count never leaves its bound is flow-controlled at all times:
+  JetStream will not deliver a 73rd unit until one of the 72 is acked.
+- *And the floor does not move:* `ack_floor` sat at **182,215** through the first trace and at
+  **183,599** through the second, advancing only at the two moments a worker died (-> 183,599, then
+  -> 184,877). `num_redelivered` was **0** at steady state, so nothing was hitting the 720s timer
+  either. A message at the floor is being held by a live worker, indefinitely, and released only when
+  that worker is killed.
+- *Why this matters more than the backlog does:* `num_pending` oscillates 3.6k-4.8k and the planner
+  injects 570 per 120s tick, so the lane is behind — and the reason it cannot catch up may be that
+  some fraction of its 72 slots are occupied by units that never complete. Effective concurrency is
+  then not 72 but 72 minus however many are stuck, and no metric in the estate reports that number.
+  It is invisible precisely because `ack_pending` looks healthy at its bound.
+- *What to measure first, before any fix:* which message sits at `ack_floor + 1` and what its unit
+  names — the stream is `workqueue` retention so the message is still there — and whether the same
+  dataset appears at the floor across successive freezes. A single pathological dataset that hangs
+  inside `execute_unit` produces exactly this signature, and so does a unit that returns without the
+  route ever answering.
+- *The interaction to keep in view:* [[LH-191]] asks whether re-planning all 570 datasets every 120s
+  is deliberate. If it is not, the backlog half of this row dissolves and only the held-unit half
+  remains. Do not size anything here before that ruling.
+- *Closes when:* The ack floor advances during normal operation, or a held unit is reported by name
+  when it exceeds a bound — and a gate covers whichever it is.
+- *Evidence:* `scratchpad/restart-baseline.txt` and `scratchpad/allreplica.txt` (100 and 120 samples,
+  2026-09-22) · `maintenance-work-durable` config `max_ack_pending: 72`, `ack_wait: 720s`,
+  `deliver_policy: all` on stream `MAINTENANCE_WORK` (`workqueue`, `max_age` 7d) ·
+  `services/maintenance/src/maintenance/api/work.py` (`handle_unit`)
 
 **LH-191 · The sweep re-plans the WHOLE estate every 120s because no policy sets a cadence**
 `maintenance` · **MEDIUM** · OPEN
