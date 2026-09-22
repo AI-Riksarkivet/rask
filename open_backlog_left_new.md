@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **102 are blocked on a decision** and **95 can be picked up today**.
+**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 36 | 2 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1115,133 +1115,6 @@ have no `uv.lock` and so cannot be built to emit anything.
   sized for *a* compaction, not for however many land at once; the real ceiling today is FastAPI's
   threadpool, which is an accident rather than a decision. Harmless while every unit is a no-op at
   167Mi; worth a bound before a tier with real rewrite work arrives.
-
-
-**LH-188 · The maintenance worker bounds pod SIZE but not units in flight, and the real ceiling is two library defaults**
-`maintenance` · **MEDIUM** · OPEN
-- [[LH-183]] moved heavy work onto a pod sized for it. That is necessary and not sufficient: 4Gi is
-  sized for *a* compaction, and nothing in the estate says how many arrive at once.
-- **MEASURED ON THE LIVE LANE 2026-09-22, every number read rather than derived:**
-  * `nats consumer info MAINTENANCE_WORK maintenance-work-durable` -> **`Max Ack Pending: 1,000`**,
-    `Flow Control: false`, `Ack Wait: 12m0s`. The 1,000 is NATS's DEFAULT — the work component sets no
-    `maxAckPending`, so nobody chose it.
-  * `anyio.to_thread.current_default_thread_limiter().total_tokens` -> **40**. `execute_unit` runs
-    through `run_in_threadpool`, so at most 40 units EXECUTE concurrently per pod; the rest are
-    delivered and wait.
-  * Observed in flight during a normal tick: **181** across 2 replicas.
-- **SO THE WORST CASE IS 40 CONCURRENT COMPACTIONS PER 4Gi POD (80 across the fleet), with up to 1,000
-  delivered and waiting.** The waiting ones are cheap — units are claim-check POINTERS, not payloads —
-  so the exposure is the 40, which is ~100 MB each before the limit. A compaction bounded at
-  `batch_size=64, num_threads=2` over a blob tier can exceed that, which is the [[LH-183]] shape
-  arriving by a different route.
-- **A SECOND EFFECT, and it is the one that bites first:** `Ack Wait` runs from DELIVERY, not from the
-  start of execution. A unit queued behind 40 others is burning its 12m window while idle, so a
-  backlog does not merely slow down — it redelivers, and a redelivered compaction runs twice.
-  `Redelivered 0` today because every table is at target and each unit is a no-op.
-- **THE PREDICTED EFFECT WAS THEN OBSERVED, and I caused it.** A manual sweep fired at the planner
-  (`POST /maintenance-cron`, port-forwarded, `dapr-api-token`) answered
-  `status=enqueued planned=567 published=567 not_queued=0 skipped=5` — every planned unit published,
-  no publish failures. The consumer immediately after: **`Ack Pending` 181 -> 721** (72% of the
-  1,000 ceiling) and **`Redelivered` 0 -> 1**. One unit burned its 12m window queued behind the
-  others and was redelivered, which is the mechanism this row describes, reproduced on demand.
-  Causation is not proven — the counter is cumulative and one tick is one sample — but the sequence
-  is: 0 before, 567 published, 1 after.
-- **THE LANE DRAINS, AND ONE SAMPLE SAID OTHERWISE.** Six samples 20s apart, after the manual sweep:
-  `ack_pending` 786 -> 682 -> 565 -> 422 -> 307, then 772 when the next cron tick landed, with
-  `ack_floor` climbing 47,752 -> 48,323 throughout. That is a SAWTOOTH that returns toward zero:
-  ~115-140 units acked per 20s (~6.5/sec, ~780 per 120s cycle) against ~567 injected per tick, so
-  drain capacity exceeds injection and the spike this row's manual trigger created cleared in about
-  two minutes. `Redelivered` was 0 in every one of the six samples.
-- **A SINGLE `Ack Pending` READING CARRIES NO DIRECTION**, and reading one as saturation was this
-  row's first mistake: 919 of 1,000 looked like a lane at its ceiling, measured moments after an
-  out-of-band sweep had been injected on top of a normal tick. The trend is the measurement; the
-  gauge is not. (`Redelivered` is likewise CURRENT-STATE, not cumulative — the 1 observed earlier was
-  a unit briefly in that state, not a running total.)
-- **SO THIS ROW IS LATENT, NOT URGENT.** The bound still belongs in the component — nobody chose
-  1,000 and nothing stops a slower unit from changing the arithmetic — but the lane is not saturating
-  today and the headroom is real.
-- **Memory stayed flat through it** (planner 161Mi; workers 176Mi and 178Mi of 4Gi, CPU 790m/744m),
-  because every unit is still a no-op against tables already at target. So the ACK-WINDOW half of
-  this row is now demonstrated and the MEMORY half remains untested — the two fail independently and
-  only one has been seen.
-- **MANUAL TRIGGERING IS THE LEVER FOR THE REST OF IT.** The planner has no operator door; its two
-  cron-binding routes are the whole surface, guarded by `require_dapr_token`, which ALSO refuses any
-  request carrying `dapr-caller-app-id` — so it must be loopback-shaped (port-forward), never service
-  invocation. That is how the measurement above was taken and how a per-unit memory figure can be
-  taken deliberately rather than waited for.
-- **THE ACK-WINDOW HALF SHIPPED AND IS PROVEN LIVE (2026-09-22). The MEMORY half is untouched.**
-  The bound is now DERIVED rather than picked: deliver no more than the fleet can RUN, so a unit's
-  `ackWait` cannot start on a unit that has nothing to run it.
-  `maxConcurrentUnits` (40) is the per-pod execution capacity, APPLIED — the worker sets anyio's
-  thread limiter from it, because a delivery bound computed from a library default is a bound nobody
-  chose and an upstream change would move it underneath the arithmetic.
-- **THE TWO LANES SHARE ONE LIMITER, and the first version of this fix did not account for it.**
-  `api/work.py` and `api/index_work.py` both reach `run_in_threadpool`, which is process-GLOBAL, and
-  the index component set no `maxAckPending` at all. Giving the work queue the whole capacity while
-  the index lane ran on NATS's 1,000 admitted far more than could run — the same defect, reintroduced
-  by counting one pool twice. The bounds now SPLIT it: `work = (40-4) x 2 = 72`, `index = 4 x 2 = 8`,
-  summing to 80. The index share is small deliberately and is a RESERVATION, not a measurement: a
-  build holds its token for up to `indexAckWait` (3600s) against the work queue's 720s, so index
-  units taking the pool would starve a lane that runs every 120s — and an hour-long window burning on
-  a unit that cannot start redelivers a whole index build.
-- **DAPR SETS `maxAckPending` AT CONSUMER CREATION AND NEVER AGAIN — measured, and it made the first
-  deploy a no-op.** The chart said 80, the rendered Component said 80, the gate was green, and the
-  live durable (created 2026-09-03) still read `Max Ack Pending: 1,000`. Deleting it and letting Dapr
-  rebuild it gave 80, so the key IS honoured and the gap is CONVERGENCE. The stream Job now converges
-  both durables beside the `assert_retention` it mirrors — a stream's retention cannot change in place
-  and that helper refuses, while a consumer's config can, so this one repairs and says what it changed.
-  `nats consumer edit --max-pending=N --force` was driven against the live broker BEFORE being written
-  into the chart, because the last thing added to that Job died on "cannot ask for confirmation
-  without a terminal" while the Job still reported Complete ([[LH-151]]).
-- **PROVEN BY CONFIGURING IT TO A VALUE THAT MUST FAIL.** The consumer was left at 79 deliberately;
-  the deploy's Job reported `consumer MAINTENANCE_WORK/maintenance-work-durable has
-  max_ack_pending=79, the chart intends 80 — converging` / `max_ack_pending now 80`, and the broker
-  then read `Max Ack Pending: 80` with `Outstanding Acks: 80 out of maximum 80` — the lane sitting at
-  its bound instead of the old 1,000.
-- **BOTH LANES OBSERVED CONVERGED ON THE LIVE BROKER, with the Job's own before/after record:**
-  `consumer MAINTENANCE_WORK/maintenance-work-durable has max_ack_pending=80, the chart intends 72 — converging` /
-  `now 72`, and `consumer MAINTENANCE_INDEX/maintenance-index-durable has max_ack_pending=1000, the chart intends 8 — converging` /
-  `now 8`. Read back independently: work 72, index 8, summing to the 40 x 2 the fleet can run. The
-  index lane had been on NATS's default for as long as it has existed.
-- **AN INDEX SHARE THAT SWALLOWS THE POOL FAILS THE RENDER.** The share is carved OUT of the total, so
-  `indexConcurrentUnits >= maxConcurrentUnits` leaves the compaction lane at zero or negative — which
-  reaches the broker as a lane that delivers nothing, or an invalid consumer config, neither naming
-  the values file. The gate walks the boundary (4 and 39 render, 40 and 41 refuse, and the failure
-  must name the cause) rather than testing one bad value; 39 is deliberately legal because leaving the
-  compaction lane 2 units is unwise, not incoherent, and a chart refuses what cannot work.
-- **THE DEPLOY PATH LIED ABOUT ALL OF THIS UNTIL TODAY, which is why the first attempt looked done.**
-  `k3s-converge` ended its recipe with `; rm -f "$LIVE"`, so make read the `rm`'s status and a failed
-  upgrade printed `EXIT=0` and ">> every stem converged". Fixed and gated, and then PROVEN by a real
-  failure rather than a simulation: overlapping two converges produced
-  `Error: UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress` followed by
-  `!! helm upgrade FAILED (exit 1) — the release was NOT converged` and a non-zero make exit.
-- **THE MEMORY HALF IS NOW MEASURED, AND IT SAYS 40 WAS WRONG BY AN ORDER OF MAGNITUDE (2026-09-22).**
-  The figure this row called impossible to produce — "no tier has yet run a compaction that rewrites
-  fragments" — was produced by BUILDING one: a 240 MiB table in 60 fragments (4 rows x 1 MiB each)
-  written through the catalog's own door and left for the sweep. Sampling `/proc/1/status` inside the
-  worker every 2s across the compaction:
-  `baseline 294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> **729** -> 380 -> 316 -> 431 -> 317Mi` and
-  then flat for 60s. **ONE unit peaked at +434 MiB over its own baseline and released cleanly**
-  (+22Mi retained); the peaks line up with the three commit passes the log records
-  (`fragments_removed` 5, 14, 9), and the second worker showed the same shape at +128Mi.
-  **So the ceiling follows from the pod limit rather than from a preference:**
-  `(4Gi - ~320Mi baseline) / 434 MiB` is ~8 units, and the chart's own sizing note puts bronze rows at
-  ~1.8 MB against the 1 MiB used here, so `maxConcurrentUnits` is now **4** (index share 1), keeping a
-  factor of two in hand. At 40 the lane admitted ~17 GB of concurrent rewrite into a 4Gi pod.
-  **WHAT THE FIGURE DOES NOT CARRY:** the sample interval is 2s, so a sharper peak between samples is
-  possible and 434 MiB is a LOWER BOUND. Throughput is unaffected in practice — a tick plans ~568
-  units of which all but a handful are ~100ms no-ops, which 4 at a time still drains in seconds.
-  **THE FIRST ATTEMPT MEASURED NOTHING AND LOOKED LIKE A RESULT:** the sampler was started 19s AFTER
-  the compaction had already committed (09:28:14Z against 09:27:55Z — the host is UTC+2 and the pod
-  logs are UTC), and reported a 3Mi swing on an idle worker. A 240 MiB compaction costing 3 MiB is
-  plausible enough to publish. The window is established against the event before the number is read.
-- *What is left:* **Nothing on the ack-window or the memory axis.** Both bounds are now measured
-  rather than picked.
-- *Closes when:* The number of units a worker may hold is a value someone chose, with the measurement
-  behind it recorded, and a gate refuses a work component that sets none.
-- *Evidence:* live `consumer info` 2026-09-22 (`Max Ack Pending: 1,000`, `Flow Control: false`,
-  `Ack Wait: 12m0s`) · anyio default limiter 40 · `chart/templates/dapr-component.yaml` (the work
-  component sets ackWait/maxDeliver/backOff and no maxAckPending) · [[LH-183]] for the sizing half
 
 
 ## PHASE 1 · CROSS-CUTTING
