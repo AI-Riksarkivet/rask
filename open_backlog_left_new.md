@@ -203,6 +203,35 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## PHASE 1 · LAKEHOUSE
 
+**THE BLOCKERS WERE AUDITED AND THEY ARE REAL — measured 2026-09-22, and it CORRECTS an earlier claim
+of mine in this same session.**
+`OBSERVATION, not a row`
+- The hypothesis was that the register's blocker lines had gone stale against their own row bodies,
+  and that a fan-out audit of all 102 would dissolve many of them. Tested mechanically first: scan
+  every blocked row for done-markers (`SHIPPED`, `LANDED`, `RULED`, `DEPLOYED AND OBSERVED`,
+  `ALREADY DONE`) in the BODY while a `blocked:` line still stands. That flags **14 rows, 11 of them
+  in this section** — which looks like confirmation.
+- **It is not. Nine were read clause by clause and EIGHT are valid**: the done-marker belongs to a
+  DIFFERENT clause of the same row. `LH-099` shipped the metric half and still asks whether a
+  compaction should TELL anyone; `LH-074` shipped accounting and still asks which usage source a
+  refusal reads; `LH-056`, `LH-178` and `LH-041` each inherited [[LH-055]]'s branch ruling while their
+  own question — who a control event targets, what a GDPR erasure does to a branch, tag-MOVE semantics
+  — is untouched by it; `LIN-002` shipped three facets and still asks the nominal-time convention;
+  `LH-148` finished the fixture match and still asks the disposition of the parked population.
+  `LH-144`'s blocker line has ALREADY been corrected by an earlier pass and says so in its own text.
+- **ONE was genuinely stale, and it was the biggest: [[LH-055]].** Its blocker asked for the
+  branch-scoped grant and the project role split — both answered, shipped and gated, and both recorded
+  in that row's own body. Corrected the same day.
+- **SO THE RATE IS 1 IN 9, NOT ENDEMIC, and the conclusion flips.** A 102-row fan-out would mostly
+  re-confirm blockers that are honestly blocked. The 2026-09-09 precedent (8 of 17 rows already fixed)
+  measured something else and more expensive: whether a row's WORK was done, not whether its blocker
+  is valid. **The register is in better shape than the count suggests, and the count means what it
+  says: the lakehouse is blocked on decisions, not on engineering.**
+- **WHAT IS WORTH AUTOMATING is the cheap half, not the fan-out:** the done-marker scan above is nine
+  lines of Python and found the one real case. Run it before proposing an audit, never instead of
+  reading the rows it flags.
+
+
 **LH-177 · The catalog vends its own in-cluster address, so an off-cluster client gets a valid credential for a host it cannot resolve**
 `catalog` · **MED**
 - **blocked:** Owner call on what VENDING MEANS OFF-CLUSTER — does an external client receive an externally-resolvable endpoint, or is vending in-cluster-only by design? Split from the closed [[LH-020]] on the 2026-09-19 ruling, which closed that row's test-coverage half and left this as the product question it always was.
