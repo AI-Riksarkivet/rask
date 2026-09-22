@@ -514,6 +514,23 @@ of mine in this same session.**
   red for the wrong reason: "the route stopped naming the root" and "the root moved" were the same
   failure. Each now reads `Settings.model_fields["fga_root_object"].default` (or the viewer's /
   catalog's own settings class), which is the only spelling that cannot fall behind.
+- **THE WHOLE CHAIN IS PROVEN ON THE RUNNING ESTATE (2026-09-22, `main-752e2811`), including two
+  MUST-FAILS.** The store holds model `01M34V4YA4YDR9QTM4TQDWE0GA` with the three rungs on `estate`
+  and **absent from `warehouse`**, and the pod reads `fga_root_object = estate:rask`. Driven with two
+  real Dex identities against the catalog's own port: alice (estate owner) gets **200** on `/v1/events`
+  and `/v1/projects`, bob gets **403**. That alone proves nothing — alice owns the warehouse too — so
+  each half was configured to a value that MUST fail and then reverted:
+  **(a)** `RASK_FGA_ROOT_OBJECT=estate:nonexistent` → alice **403** on both doors, and back to 200 on
+  revert, which is what proves the door reads the estate rather than the warehouse she also owns;
+  **(b)** `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT=warehouse:some-other-bucket` on maintenance →
+  `ghost_warehouses: 1 ['lance_catalog']`, the exact permanent false finding the split prevents, back
+  to **0** on revert. The reconcile report is otherwise unchanged (`ghost_tables 7`,
+  `unbound_namespaces 3`, `orphan_buckets 1`).
+- **AND THE FOURTH-COPY GATE NEEDED THE SAME SHARPENING, found by this change rather than by a drill.**
+  `make fga-store-check` compared TYPE NAMES, which cannot see a rung MOVING between two types that
+  both already exist — eleven types before this change and eleven after. It now compares per relation
+  and named exactly the three `warehouse#can_*` entries as present in the store and absent from the
+  repo, before the deploy. One flattener (`scripts/_fga_model_rungs.py`) serves both sides.
 - *Closes when:* model.fga declares a column relation and an estate type, carries a machine identity
   and a `can_set_protection` rung, every new rung has a .fga.yaml case, and `fga_root_object` names the
   estate object. **NOT a `branch` type** — this row established that one would invent a resource
