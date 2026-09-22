@@ -993,6 +993,25 @@ still the owner's. Note the row's own analysis make
 
 **LH-152 · Three live e2e legs cannot pass against a governed estate: two stage provenance as an unregistered table, and one asserts zero errors against unreadable registry entries**
 `lineage, medallion, maintenance, catalog` · **MED** · PARTIAL
+- **THE FGA LEG'S REVOKE SAT OUTSIDE ITS OWN `try`, AND THE ASSERT BETWEEN THEM WAS THE ONE THAT COULD
+  STRIP THE LIVE ESTATE (fixed 2026-09-22).** Both deny sub-phases read
+  `_tuples(deletes=…)` / `assert not _check(…)` / `try: … finally: _tuples(writes=…)`. The subjects are
+  the DEPLOYED cascade's — `user:service-bronze-to-silver` and `user:service-silver-to-gold` — and the
+  objects include `owner` on the SHARED warehouse, so any exit between the delete and the restore
+  leaves the estate unable to run its own medallion. The precondition assert, which exists precisely to
+  catch a revoke that did not take, was such an exit: when it fired it returned with the tuples deleted
+  and no `finally` in scope. The revoke and the assert now sit INSIDE the `try`; restoring a tuple that
+  was never deleted is a no-op and `_tuples` tolerates delete-of-absent, so the wrap costs nothing.
+- **GATED STATICALLY, because the behavioural gate cannot run here:** the suite is `-m e2e`, needs a
+  deployed stack and is deselected from `make test`, so what a commit can get wrong is the file's
+  SHAPE. `tests/unit/test_an_e2e_revoke_is_always_inside_its_restore.py` walks the AST and requires
+  every `_tuples(deletes=…)` to sit inside a `try` whose `finally` writes tuples back. It exempts a
+  fixture's teardown of its OWN grant — recognised structurally (a function that both writes and
+  yields) rather than by name — because that shape removes something the suite ADDED, where a miss
+  widens access instead of stripping it. Mutation-checked against the exact shape it replaced.
+- **IT DOES NOT CLOSE THE CRASH WINDOW, and says so:** a SIGKILL between delete and restore still
+  strips the estate and no in-process construct prevents that. What is closed is every ORDINARY exit —
+  assertion, exception, early return — which is the population that actually occurs.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: Rework the FGA leg so its revoke does not delete the warehouse-level `owner` tuple the live
 stage runners share (unblocked, startable today). The maintenance leg's `errors == {}` assertion still waits

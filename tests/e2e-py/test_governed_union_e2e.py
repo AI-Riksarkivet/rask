@@ -592,14 +592,21 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
     # ever proven.
     silver_owner = _owner_tuples("user:service-bronze-to-silver", _ds("silver"), _ds("silver$features"))
-    _tuples(fga_store, deletes=[*SILVER_WRITER_RUNGS, *silver_owner])
-    # THE REVOKE IS A PRECONDITION, so it is verified rather than assumed. An unverified one is how
-    # this leg reported "gate NOT enforcing" about a revoke that never happened — see `_tuples`.
-    assert not _check(fga_store, "user:service-bronze-to-silver", "can_create_table", f"namespace:{_ds('silver')}"), (
-        "the writer revoke did not take: service-bronze-to-silver still holds can_create_table on "
-        f"namespace:{_ds('silver')}, so anything below would be measuring an ungated cascade"
-    )
+    # THE REVOKE IS INSIDE THE `try`, AND THAT PLACEMENT IS THE WHOLE SAFETY OF THIS LEG ([[LH-152]]).
+    # These tuples are the LIVE cascade's — `user:service-bronze-to-silver` holds `owner` on the shared
+    # WAREHOUSE — so anything that exits between the delete and the restore leaves the deployed estate
+    # unable to run its own medallion. With the delete above the `try`, the precondition assert that
+    # follows it was exactly such an exit: the one check written to catch a revoke that did not take
+    # would, when it fired, strip the estate permanently. Restoring a tuple that was never deleted is a
+    # no-op and `_tuples` tolerates delete-of-absent, so wrapping from the delete costs nothing.
     try:
+        _tuples(fga_store, deletes=[*SILVER_WRITER_RUNGS, *silver_owner])
+        # THE REVOKE IS A PRECONDITION, so it is verified rather than assumed. An unverified one is how
+        # this leg reported "gate NOT enforcing" about a revoke that never happened — see `_tuples`.
+        assert not _check(fga_store, "user:service-bronze-to-silver", "can_create_table", f"namespace:{_ds('silver')}"), (
+            "the writer revoke did not take: service-bronze-to-silver still holds can_create_table on "
+            f"namespace:{_ds('silver')}, so anything below would be measuring an ungated cascade"
+        )
         w_token = _produce(lance_ray)
         bronze_rid = _run_id_for("lance_ray_ingest", w_token)
         denied_silver_rid = _run_id_for("embed_features", w_token)
@@ -621,15 +628,16 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
         denied_state = _run_states(lineage, alice).get(denied_silver_rid)
         assert denied_state != "COMPLETE", f"silver run {denied_silver_rid} COMPLETED despite the revoked writer tuple — gate NOT enforcing"
     finally:
-        _tuples(fga_store, writes=[*SILVER_WRITER_RUNGS, *silver_owner])  # restore even if the assert above fails
+        _tuples(fga_store, writes=[*SILVER_WRITER_RUNGS, *silver_owner])  # restore on EVERY exit, including the precondition assert
 
     # -- sub-phase B: VALIDATOR deny — revoke the gold validator, the cascade stops at silver.
     gold_owner = _owner_tuples("user:service-silver-to-gold", _ds("gold"), _ds("gold$catalog"))
-    _tuples(fga_store, deletes=[*GOLD_VALIDATOR_RUNGS, *gold_owner])
-    assert not _check(fga_store, "user:service-silver-to-gold", "can_promote", f"namespace:{_ds('gold')}"), (
-        f"the validator revoke did not take: service-silver-to-gold still holds can_promote on namespace:{_ds('gold')}"
-    )
+    # Inside the `try` for the reason sub-phase A states: these are the live cascade's own tuples.
     try:
+        _tuples(fga_store, deletes=[*GOLD_VALIDATOR_RUNGS, *gold_owner])
+        assert not _check(fga_store, "user:service-silver-to-gold", "can_promote", f"namespace:{_ds('gold')}"), (
+            f"the validator revoke did not take: service-silver-to-gold still holds can_promote on namespace:{_ds('gold')}"
+        )
         gold_before = _quiesced_gold(lineage, alice)
         token = _produce(lance_ray)
         silver_rid = _run_id_for("embed_features", token)
@@ -648,7 +656,7 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
             f"a new gold run appeared despite the revoked validator tuple — gate NOT enforcing (new: {_gold_runs(lineage, alice) - gold_before})"
         )
     finally:
-        _tuples(fga_store, writes=[*GOLD_VALIDATOR_RUNGS, *gold_owner])  # restore even if the assert above fails
+        _tuples(fga_store, writes=[*GOLD_VALIDATOR_RUNGS, *gold_owner])  # restore on EVERY exit, including the precondition assert
 
     # Positive control: with both tuples back, the next drive cascades to gold — the tuple was the only
     # delta each time.
