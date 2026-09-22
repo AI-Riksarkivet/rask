@@ -1279,6 +1279,12 @@ have no `uv.lock` and so cannot be built to emit anything.
   policies (`policies=27` on the planner) and the live planner carries
   `MAINTENANCE_POLICY_ROOT = None` against a chart default of `policyRoot: ""`. Whatever those 27
   cover, the zero interval-skips say none of them sets one.
+- **THE EMPTY `MAINTENANCE_POLICY_ROOT` IS NOT THE CAUSE — checked, so nobody chases it.** An empty
+  env var defeating a code default is a real shape in this estate, but not here:
+  `resolved_policy_root` is `self.policy_root or f"s3://{self.s3_bucket}"`, so blank correctly falls
+  back to the estate bucket, and the planner does load 27 policies from it. What the logs cannot
+  distinguish is whether those 27 MATCH datasets and set no interval, or match nothing at all — both
+  produce the same observable, which is why this row claims only what the skip count proves.
 - **IT IS THE VOLUME BEHIND TWO OTHER ROWS.** The work lane keeps up by only ~9% ([[LH-188]]'s
   bounds are sized against 4.73 units/sec) and an outage's backlog drains at ~1,600 units an hour, so
   [[LH-190]]'s stalls take hours to clear. Both numbers are consequences of planning 570 datasets
