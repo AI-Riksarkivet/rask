@@ -26,6 +26,7 @@ from lance_namespace import InvalidTableStateError, NamespaceNotEmptyError, Tabl
 from catalog.api import fga_deps
 from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
+from service_kit.governed import fga
 from service_kit.lakehouse import protection
 
 
@@ -273,9 +274,24 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
 
 
 def test_the_protection_suffix_is_owner_gated_not_writer(tmp_path: Any) -> None:
-    """The authz map is where a forgotten entry silently falls to WRITER tier — pin both kinds."""
-    assert fga_deps._OWNER_SUFFIX_RELATION["table"]["protection"] == "can_drop"  # noqa: SLF001
-    assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["protection"] == "can_delete"  # noqa: SLF001
+    """The authz map is where a forgotten entry silently falls to WRITER tier — pin both kinds.
+
+    THE TIER IS THE ASSERTION, not the relation's NAME. This asserted `== "can_drop"` / `== "can_delete"`,
+    which reads as the same thing and is not: it pins the spelling and says nothing about the rung, so it
+    would pass over a `can_drop` re-tiered to `writer` and fail over a correctly owner-tier rung that
+    happens to be called something else. `can_set_protection` is exactly that second case ([[LH-055]]) —
+    its own ACTION over the drop's TIER, so `#41`'s audit trail can tell arming a safety from destroying
+    the object. Resolved against the compiled model, which is where the rung actually lives.
+    """
+    model = {t["type"]: (t.get("relations") or {}) for t in fga.load_model()["type_definitions"]}
+    for fga_type in ("table", "namespace"):
+        relation = fga_deps._OWNER_SUFFIX_RELATION[fga_type]["protection"]  # noqa: SLF001
+        definition = model[fga_type].get(relation)
+        assert definition is not None, f"the {fga_type} protection door checks {relation!r}, which the model does not define"
+        assert definition == {"computedUserset": {"relation": "owner"}}, (
+            f"{fga_type}#{relation} is {definition!r}, not the OWNER tier — a protection door below owner "
+            f"lets a writer disarm a safety guarding a destruction they could never perform."
+        )
 
 
 # ---------------------------------------------------------------- #75 trash / undrop

@@ -305,6 +305,30 @@ tests:
       - user: user:alice
         object: warehouse:acme_bucket
         assertions: {}
+  - name: arming deletion protection is its own ACTION at the drop's tier, on both types
+    # [[LH-055]]. The reference model's `_effective` shape: a privilege is a tier, and several distinct
+    # ACTIONS resolve to it. `can_set_protection` shares `can_drop`'s tier deliberately — a writer must
+    # not be able to disarm a safety on something they could never destroy — and having its own NAME is
+    # what lets `#41`'s audit trail tell "dropped this table" from "armed the safety on it". The route
+    # suffix is not in that record, so before this the two wrote identical lines.
+    check:
+      # THE IDENTITY IS THE ASSERTION, on both types: whoever may destroy may arm, and nobody else. If a
+      # future edit re-tiers one of the pair, exactly one of these four lines flips.
+      # alice owns acme_gold_catalog transitively (project admin -> warehouse -> namespace -> table),
+      # which is the reach that makes the identity worth asserting on a leaf rather than a container.
+      - user: user:alice
+        object: table:acme_gold_catalog
+        assertions: { owner: true, can_drop: true, can_set_protection: true }
+      - user: user:peter
+        object: table:acme_gold_catalog
+        assertions: { can_write_data: true, can_drop: false, can_set_protection: false }
+      - user: user:alice
+        object: namespace:acme_bronze
+        assertions: { can_delete: true, can_set_protection: true }
+      # carol reads acme_bronze through her warehouse grant and must not arm anything on it.
+      - user: user:carol
+        object: namespace:acme_bronze
+        assertions: { reader: true, can_delete: false, can_set_protection: false }
   - name: an owner-only action must be REFUSED to the rung directly below it (mutation-detecting)
     check:
       # Each subject here HOLDS a live relation on the object, which is what the negatives above lack:

@@ -531,9 +531,27 @@ of mine in this same session.**
   both already exist — eleven types before this change and eleven after. It now compares per relation
   and named exactly the three `warehouse#can_*` entries as present in the store and absent from the
   repo, before the deploy. One flattener (`scripts/_fga_model_rungs.py`) serves both sides.
+- **`can_set_protection` IS IN, AND THE ROW'S STATED RISK DID NOT APPLY TO IT (2026-09-22).** The row
+  left it alone because "splitting it decides who may disarm, which if granted to nobody makes every
+  protected object permanently stuck" — true of splitting the TIER, and not of naming the ACTION.
+  `can_drop: owner` and `can_delete: owner` are COMPUTED usersets, so a sibling `can_set_protection:
+  owner` is reached by every existing owner the moment it exists and no grant had to change. That is
+  also what separates it from the recorded `branches/delete` precedent, which refuses to mint
+  `can_delete_branch` because "every existing owner grant would then lack" it — true of a grantable
+  relation, false of a computed one.
+- **WHAT NAMING IT BUYS IS THE AUDIT TRAIL, and the cost was measurable rather than aesthetic.** `#41`
+  audits every authorization decision and `fga_deps._require` passes the RELATION as the audit ACTION
+  (`audit(relation, ALLOW|DENY, subject=…, resource=…)`) — the route suffix is not in the record. So
+  while `"protection"` mapped to `can_drop`, arming a safety on a table and destroying it wrote
+  IDENTICAL audit lines. Five other suffixes still share `can_drop` (`erasure`, `undrop`,
+  `maintenance/run|compact|reindex`), each for its own recorded reason; that is the same
+  indistinguishability and is NOT closed by this row.
 - *Closes when:* model.fga declares a column relation and an estate type, carries a machine identity
   and a `can_set_protection` rung, every new rung has a .fga.yaml case, and `fga_root_object` names the
-  estate object. **NOT a `branch` type** — this row established that one would invent a resource
+  estate object. **Three of the four are now in** — the estate type, the machine identity (`operator`),
+  and `can_set_protection`, each with its .fga.yaml case and `fga_root_object` repointed. What remains
+  is the classification vocabulary, which [[LH-058]] owns and the ruling answers as a TAG type with
+  per-tag `apply` delegation rather than a `column` type. **NOT a `branch` type** — this row established that one would invent a resource
   lance-ns does not have; the branch boundary is the storage prefix and it is already vended.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types: no branch/column/estate)` · `packages/service-kit/src/service_kit/governed/auth/model.fga:55-88 (project: team/admin/member only)` · `services/catalog/src/catalog/api/fga_deps.py:158,237 ('protection': 'can_drop')` · `services/catalog/src/catalog/core/config.py:320 (fga_root_object)`
 

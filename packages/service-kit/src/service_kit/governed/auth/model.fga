@@ -459,6 +459,10 @@ type namespace
     define can_update_properties: writer
     define can_promote: validator
     define can_delete: owner
+    # Arming or disarming deletion protection on a namespace — the table rung's twin, one level up, and
+    # at the same tier as the `can_delete` it guards. See `type table`'s `can_set_protection` for why a
+    # distinct action at an identical tier costs nobody a permission and buys back the audit trail.
+    define can_set_protection: owner
     # ---- grant actions ---- (same shape as `warehouse`; see there for the reasoning)
     define can_grant_owner: manage_grants
     define can_grant_writer: manage_grants or (writer and pass_grants)
@@ -519,6 +523,24 @@ type table
     define can_maintain: maintainer
     define can_promote: validator
     define can_drop: owner
+    # ARMING OR DISARMING deletion protection ([[LH-055]]). A DISTINCT ACTION over the SAME effective
+    # tier as the destruction it guards — the reference model's shape, and the reason it is a non-problem
+    # there that protection and drop share a tier: they are two actions, not one collapsed permission.
+    #
+    # `owner`, identical to the rung above, so NOBODY gains or loses anything by its arrival. That is
+    # what makes naming it free, and it is the opposite of splitting the TIER: a protection rung granted
+    # to a set that turns out to be empty leaves every protected object permanently stuck.
+    #
+    # THE COST OF NOT NAMING IT IS THE AUDIT TRAIL. `#41` audits every authorization decision by the
+    # RELATION checked, so while the protection door checked `can_drop` an auditor could not tell
+    # "dropped this table" from "armed the safety on it" — two opposite intentions writing the same
+    # record. The route suffix is not in that record.
+    #
+    # DIFFERENT FROM the `branches/delete` case below, which deliberately reuses `can_drop` rather than
+    # minting `can_delete_branch`: that argument is about a relation "every existing owner grant would
+    # then lack", which is true of a GRANTABLE relation and false of a computed userset over `owner`.
+    # This one is computed, so every owner already holds it the moment it exists.
+    define can_set_protection: owner
     define can_deregister: owner
     # Ref-plane / history ops. A plain data WRITER appends/overwrites within the current line; FORKING
     # history (branch) or REWINDING it (restore) is privileged and stays at the OWNER tier —

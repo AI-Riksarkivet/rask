@@ -240,7 +240,12 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
         # able to disarm protection they could never act on. (An unmapped suffix would fall through
         # to writer-tier — never leave it unset.)
-        "protection": "can_drop",
+        #
+        # ITS OWN RELATION at that same tier ([[LH-055]]), not `can_drop`: `#41` audits every decision by
+        # the RELATION, and the route suffix is not in the record, so sharing the name made "dropped this
+        # table" and "armed the safety on it" write identical audit lines. `can_set_protection: owner` is
+        # a computed userset, so every owner already holds it and no grant had to change.
+        "protection": "can_set_protection",
         # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
         "undrop": "can_drop",
         # Publication ADVANCES the `published` tag, so it clears the same bar as `tags/update` — the
@@ -255,7 +260,9 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # #96 undrop RESTORES the subtree into the estate — the same authority as removing it (the
         # table door's #75 rule at the namespace rung; unmapped it would fall to writer tier).
         "undrop": "can_delete",
-        "protection": "can_delete",
+        # The namespace twin of the table door's rung — same tier as the `can_delete` it guards, its own
+        # name for the same audit reason.
+        "protection": "can_set_protection",
         "policy/set": "can_delete",
         "policy/delete": "can_delete",
         "access/list": "can_delete",
