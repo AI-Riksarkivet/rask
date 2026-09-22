@@ -1532,8 +1532,8 @@ maintenance:
   # different files and nothing compared them until a lane stalled.
   #
   # END-TO-END SECONDS PER UNIT, and it is deliberately NOT the handler's duration. Measured
-  # 2026-09-22 from `ack_floor` deltas on a settled lane — 6 samples of 30s, 158 +/- 18 units acked
-  # each, 5.25 units/sec at 72 in flight: **13.7s per unit end to end**, declared as 14.
+  # 2026-09-22 from `ack_floor` deltas on a settled lane — 11 samples over 300s, 1,551 units acked,
+  # **5.17 units/sec at 72 in flight = 13.9s per unit end to end**, declared as 14.
   #
   # THE HANDLER IS 0.21s (19 trace spans, median 0.12s, p90 0.60s). Both figures are right and they
   # answer different questions: the span measures the work, this measures what the LANE costs per
@@ -1546,8 +1546,13 @@ maintenance:
   # entirely; those windows produced "5.2s" and then "22s" for this same quantity.
   #
   # MARGIN IS THIN AND THAT IS THE POINT OF DECLARING IT: `datasets / schedule * secondsPerUnit` is
-  # 600/120 x 14 = 70 against the 72 the lanes admit. The estate measured 5.25/sec against 4.75
-  # injected, so it keeps up by ~11% — and this gate turns red as soon as it stops.
+  # 600/120 x 14 = 70 against the 72 the lanes admit. The estate measured 5.17/sec against 4.73
+  # injected, so it keeps up by ~9% — and this gate turns red as soon as it stops.
+  #
+  # WHAT A 9% MARGIN MEANS FOR RECOVERY: the surplus is ~0.44 units/sec, so a backlog left by an
+  # outage drains at roughly 1,600 units an hour. The 7,200 accumulated by [[LH-190]]'s stalls needs
+  # about four and a half hours to clear — safely inside the stream's 7-day retention, but it is why
+  # a restart is felt long after delivery resumes.
   expectedDatasets: 600
   secondsPerUnit: 14
   # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
