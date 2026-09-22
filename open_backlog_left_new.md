@@ -1000,6 +1000,21 @@ have no `uv.lock` and so cannot be built to emit anything.
   length leaks how many hidden rows exist. So the memory cost is the price of a correctness property
   somebody already reasoned about and wrote down. Whoever revisits this needs a different design (a
   governed count query, or FGA-aware filtering in the query itself), not a `LIMIT`.
+- **THE TENTH FINDING HAD NO VERDICT AND NOW DOES — `reconcile_cron.py` `_on_cron` (2026-09-22).**
+  The scorecard above accounts for nine of the ten and silently skipped this one, which is the same
+  failure the register's own counts test exists to catch: an item that is neither closed nor refused
+  nor triaged reads as handled. It belongs with the lineage pair — the cost scales with dataset COUNT,
+  not data size — and it carries a safety property neither of them has. **Single-flight:** the cron
+  fires on every replica and the sweep runs under a cluster-wide advisory lock, so a tick that finds
+  one in progress SKIPS and the next retries. An overrun therefore degrades to a less frequent
+  reconcile, never to a pile-up. The drain that runs beside it is separately bounded by
+  `outbox_drain_limit`.
+  **MEASURED LIVE, and it corrects this row's own prose.** The text above says the sweep is
+  "completing every ~5 min against a 300s cron", which reads as a sweep taking its whole interval.
+  Eleven consecutive ticks over 54 minutes complete **exactly 300s apart** (08:05:52 → 08:35:53,
+  sub-second drift) with **zero `lineage_reconcile_skipped_locked` lines** — so the CRON is the pacer
+  and no tick has ever found the lock held. `rask-lineage` sits at 191Mi of 512Mi. This is the least
+  urgent of the three lineage findings, not an unreviewed one.
 - **THE MEASUREMENT STILL STANDS, and it is why this is not urgent — live 2026-09-22.**
   `rask-lineage` sits at **184Mi of a 512Mi limit, 15h uptime, 0 restarts**, with its own reconcile
   tick reporting `checked=483` and completing every ~5 min against a 300s cron. `/graph` and
