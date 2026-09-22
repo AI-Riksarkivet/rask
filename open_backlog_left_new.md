@@ -1297,6 +1297,14 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **THE EMPTY `MAINTENANCE_POLICY_ROOT` IS NOT THE CAUSE EITHER — also checked.**
   `resolved_policy_root` is `self.policy_root or f"s3://{self.s3_bucket}"`, so blank falls back to the
   estate bucket, which is where those 27 were found.
+- **THE REDUNDANCY CLAIM WAS TESTED BY PURGING THE QUEUE, 2026-09-22.** If a backlog is genuinely
+  ~13 re-plans of each dataset, deleting it costs nothing — the next tick republishes the estate.
+  Done on the live lane: `stream purge MAINTENANCE_WORK` took **7,194 messages (6.6 MiB) to 0**. The
+  very next tick logged `planned=570 published=570`, both workers and the planner stayed Running with
+  zero restarts, and the stream settled at **518 messages** — one tick's worth — instead of 7,194.
+  **Nothing was lost, because there was nothing there that the next two minutes would not produce
+  again.** That is the row's claim demonstrated rather than argued, and it doubles as the operational
+  recipe: a lane buried by an outage can be purged rather than waited out.
 - **IT IS THE VOLUME BEHIND TWO OTHER ROWS.** The work lane keeps up by only ~9% ([[LH-188]]'s
   bounds are sized against 4.73 units/sec) and an outage's backlog drains at ~1,600 units an hour, so
   [[LH-190]]'s stalls take hours to clear. Both numbers are consequences of planning 570 datasets
