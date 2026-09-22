@@ -188,14 +188,14 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
+**197 open items**, of which **102 are blocked on a decision** and **95 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 37 | 3 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
-| **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
+| **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 25 | 20 | 0 |
@@ -1878,6 +1878,47 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *What is left:* Both env vars render only in `chart/templates/_ray-cluster-config.tpl:107-110`, consumed by `rayservice.yaml`, whose gate is `and ray.enabled singleTenant.enabled` while `singleTenant.enabled` defaults false (values.yaml:66) — so no rendered cluster carries them. Get `RAY_LOGGING_CONFIG_ENCODING=JSON` and `RAY_SERVE_LOG_ENCODING=JSON` onto the external cluster's head container env and every worker-group container (must precede `import ray`, which a container env satisfies). Then confirm a Serve replica exception appears in `opentelemetry_logs` with a populated `severity_text` and queryable deployment/replica fields. Do not use `RAY_LOG_TO_STDERR=1` (it stops Ray writing log files and breaks the driver-log reader behind `/api/ray/jobs/{id}/logs`); `RAY_BACKEND_LOG_JSON=1` converts only the Job Supervisor.
 - *Closes when:* A Serve replica exception row is queryable in `opentelemetry_logs` with `severity_text` and deployment/replica fields populated.
 - *Evidence:* `chart/templates/_ray-cluster-config.tpl:107-110` · `chart/templates/rayservice.yaml:1 (`if and .Values.ray.enabled .Values.singleTenant.enabled`)` · `chart/values.yaml:65-66 (`singleTenant.enabled: false`), :2185-2190`
+
+
+**LH-189 · A failed kueue hook outlives its ServiceAccount, and every later `helm upgrade` fails on a 401 nobody can read**
+`deploy, kueue` · **MEDIUM** · OPEN
+- **MEASURED LIVE 2026-09-22**, found while diagnosing why a converge reported `UPGRADE FAILED:
+  post-upgrade hooks failed: timed out waiting for the condition`. `rask-kueue-setup` had been
+  `Error` with **11 restarts over 32 minutes**, failing on:
+  `error validating "/manifests/queues.yaml": failed to download openapi: the server has asked for
+  the client to provide credentials`.
+- **IT IS A 401, NOT A 403, and that distinction is the whole diagnosis.** RBAC was not the problem:
+  the pod HAD its projected token volume (`kube-api-access-r56h5` at the standard path) and the
+  ClusterRole/Binding the chart grants. The ServiceAccount it names — `rask-kueue-setup` — **did not
+  exist**. A projected token is minted for a SA UID, so deleting the SA invalidates every token
+  already handed out and the API server rejects the holder as UNAUTHENTICATED. An error that reads
+  like a credentials bug is a lifecycle bug.
+- **THE LIFECYCLE THAT PRODUCES IT.** All four hook resources carry
+  `hook-delete-policy: before-hook-creation,hook-succeeded`, with SA/ClusterRole/Binding at weight
+  `-5` and the Job at `0`. A hook run that FAILS leaves its Job behind — `hook-failed` is not in the
+  policy — and that Job keeps retrying on `backoffLimit: 20`. The next run deletes the SA at weight
+  -5 and, on success, deletes it again; the stale Job is still holding a token for the SA that is
+  gone. It then crash-loops against a 401 until `before-hook-creation` reaps it.
+- **IT SELF-HEALS, WHICH IS WHY IT HAS SURVIVED.** The following converge recreated the SA with a
+  fresh Job, the hook succeeded, and both were removed by `hook-succeeded` + `ttlSecondsAfterFinished`.
+  So the evidence disappears with the failure, and what is left is a deploy that took the 20m hook
+  timeout for no reason anyone can reconstruct afterwards.
+- **IT WAS INVISIBLE UNTIL THIS SESSION** because `k3s-converge` reported the failed upgrade as
+  success — a shell's exit status is its LAST command's, and the recipe ended `; rm -f "$LIVE"`.
+  That is fixed and gated (`tests/unit/test_a_deploy_cannot_report_success_when_helm_failed.py`), so
+  the NEXT occurrence will fail a deploy loudly instead of being swallowed. That makes this row more
+  urgent than its severity suggests: the swallow was also what stopped it blocking anyone.
+- *What is left:* Decide whether the Job should carry `hook-failed` in its delete policy so a failed
+  run does not leave a retrying Job behind, or whether the SA should outlive the hook (drop
+  `hook-succeeded` from the SA/RBAC trio so the token stays valid for any Job still running). The
+  second is smaller and fixes the 401 directly; the first stops the stale Job existing at all. They
+  are not exclusive.
+- *Closes when:* A hook run that fails leaves nothing behind that can crash-loop on an invalidated
+  token, and a deploy following a failed hook run does not pay the 20m timeout.
+- *Evidence:* `chart/templates/kueue-queues.yaml:17-25,128` (the four hook resources, weights -5/0,
+  and `backoffLimit: 20`) · live 2026-09-22: `rask-kueue-setup-j7gmn 0/1 Error 11 (6m12s ago) 32m`,
+  `kubectl get sa rask-kueue-setup` -> NotFound, pod volume `kube-api-access-r56h5` present ·
+  converge log `UPGRADE FAILED: post-upgrade hooks failed`
 
 
 ## PHASE 3 · CONTROLPLANE
