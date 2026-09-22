@@ -1051,6 +1051,18 @@ catalog:
   # off (single-location creates, byte-identical to before). Populate with pre-provisioned data buckets.
   multibase:
     dataBases: []
+    # [[LH-067]] WHICH SECRET each data base's credential comes from: `{base-uri: secret-ref}`. A NAME,
+    # never material — the reference identifies a key in the Dapr secret store, which is what lets this
+    # live in configuration at all under the estate's secrets rule. Empty (default) = every base keeps
+    # the estate's options and every write is byte-identical.
+    #
+    # A REF WITHOUT AN ALLOWLIST ENTRY IS REFUSED AT RENDER, and that cross-check exists because the
+    # two values are independent and the live estate had exactly that split: a base with a credential
+    # reference and no allowlist entry, so `?data_base=` was refused before the per-base credential
+    # path was reached, and the bucket provisioned for that proof sat unused (measured 2026-09-22).
+    # The runtime symptom is indistinguishable from a caller naming a bucket they invented, which is
+    # why it has to fail here instead.
+    baseCredentialRefs: {}
   # Control-plane change-events: every governance/metadata mutation (grants/warehouses/policies/tables)
   # publishes a CatalogControlEvent onto a DEDICATED broadcast Dapr topic (catalog.control.v1, no
   # queueGroupName) that EVERY catalog replica buffers, so the admin console live-refreshes via

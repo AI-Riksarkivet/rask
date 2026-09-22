@@ -435,6 +435,39 @@ have no `uv.lock` and so cannot be built to emit anything.
   `base_<id>.<key>` on the write door (`dataplane.py:224-228`) and `base_store_params` on the read path
   — plus an in-cluster drive of a table in a base needing different credentials. The mechanism the
   clause demanded ("arrived by secret reference") is in place and pinned.
+- **WHY THE PROOF HAS NOT HAPPENED — measured on the live estate 2026-09-22, and it is a one-value
+  config gap, not missing code.** The composition IS shipped (`base_credentials.compose_base_store_params`;
+  `core/namespace.py:176` forwards `base_store_params` on the READ path). The live catalog carries
+  `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS = s3://lh067-second-store/data=lh067-second-store` — the
+  second store's credential reference is wired. But `LANCE_MULTIBASE_DATA_BASES` is rendered with **no
+  value at all**, because `chart/values.yaml:1053` is `multibase.dataBases: []` and nothing overrides
+  it. The chart's own comment states the consequence: "Empty = feature off."
+- **SO THE TWO HALVES DISAGREE: a base has a credential reference and is not on the allowlist.** A
+  `?data_base=s3://lh067-second-store/data` request is refused before the per-base credential path is
+  ever reached, which is why the fixture store, its `lh067user` and its OpenBao entry have sat unused.
+  The allowlist is validated per request against `multibase_data_base_list`, which parses the empty
+  string to `[]`.
+- **TWO OF THE THREE GAPS ARE CLOSED (2026-09-22).** `catalog.multibase.baseCredentialRefs` is now a
+  CHART VALUE declared beside the allowlist it depends on, and a ref naming a base the allowlist does
+  not carry **fails the render** with the reason — the runtime symptom is indistinguishable from a
+  caller inventing a bucket, so it has to fail where someone can read it. The `lh067-second-store`
+  pair moved out of cluster drift and into `values-local.yaml`. Five gates, mutation-checked, incl. a
+  default-off leg so `values.yaml` keeps the feature off.
+- **THE THIRD GAP REMAINS AND IT IS THE SAME SHAPE: nothing PROVISIONS the secret the ref names.**
+  `rask-openbao-seed` seeds `secret/lance` and `secret/viewer-s3` and nothing else; `lh067` appears
+  nowhere in `chart/` or `scripts/` beyond the values added today. So the OpenBao entry the ref points
+  at is hand-made, exactly as the env var was. Under the estate's rule that is HALF right — a record
+  NAMES a secret and never carries one — but something must still put it there, and today nothing
+  does. The catalog has attempted no resolve (the lane was unreachable), so whether the key exists
+  right now is unknown; step 3 below answers it, because a missing entry surfaces as a resolve failure
+  at the write door rather than silently.
+- **THE MECHANISM FOR CLOSING IT ALREADY EXISTS AND THIS FIXTURE DOES NOT USE IT.**
+  `chart/templates/openbao.yaml:283` seeds `secret/viewer-s3` from chart values with exactly this
+  shape — a dev credential PAIR put into OpenBao by the seed job, so the store registry can point at a
+  credential without every reader of the shared bundle gaining it. A third entry would follow it. The
+  reason not to write one speculatively: the bucket and its `lh067user` would need provisioning too,
+  and the fixture may already be present from the session that made it. Run step 3 first; build the
+  provisioning only if the resolve fails, and then for the whole fixture rather than the secret alone.
 - *Closes when:* A write door names its target base with per-base credentials that arrived by secret reference, and a table in a base needing different creds reads back through the catalog — the endpoint half is done and observed.
 - *Evidence:* `services/catalog/src/catalog/services/warehouses.py:117 (_CALLER_OWNED has no endpoint/credential field)` · `services/catalog/src/catalog/core/namespace.py:28-35 (swaps only root)` · `services/catalog/src/catalog/services/dataplane.py:218-237 (same so for every base; initial_bases/target_bases already passed)` · `open_backlog_left.md:164 (R1–R11 STAND); grep aws_provider_scheme services/catalog → none`
 

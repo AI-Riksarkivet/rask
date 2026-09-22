@@ -193,3 +193,24 @@ backups:
   controlRoot:
     enabled: true
     keep: 3
+
+# [[LH-067]] THE SECOND STORE'S BASE, ON THE ALLOWLIST — without it the feature is off and the
+# per-base credential path is unreachable. `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS` already names this
+# base's OpenBao entry, but a `?data_base=` request is validated against THIS list first, so a base
+# with a credential reference and no allowlist entry is refused before the credential is ever used.
+# Measured 2026-09-22: refs set, allowlist empty ("Empty = feature off" per the chart's own comment),
+# which is why the `lh067-second-store` fixture and its `lh067user` had never been exercised.
+#
+# LOCAL ONLY. `chart/values.yaml` keeps `dataBases: []` so the feature stays off by default; an estate
+# opts a bucket in deliberately, and the allowlist is what makes "a caller can never point a base at an
+# arbitrary bucket" true.
+catalog:
+  multibase:
+    dataBases:
+      - s3://lh067-second-store/data
+    # The other half, and it belongs in the chart rather than on the live Deployment. Measured
+    # 2026-09-22: this pair existed ONLY as drift — the env var rendered from nothing, so it survived
+    # upgrades by helm's three-way merge and was absent from any fresh install. A value that lives in
+    # one cluster is invisible to review and gone the next time the release is rebuilt.
+    baseCredentialRefs:
+      s3://lh067-second-store/data: lh067-second-store

@@ -115,6 +115,23 @@ spec:
                fragments across (?data_base=... per request, validated against this list). Empty = feature off.
             */}}
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
+            {{- /*
+               [[LH-067]] A base's credential REFERENCE, rendered as the `base-uri=secret-ref` pairs the
+               setting parses. REFUSED HERE when the base is not also on the allowlist above: the two
+               values are independent, and the live estate carried a ref for a base the allowlist did
+               not name — so the request was refused before the per-base credential was ever reached
+               and nothing said why (measured 2026-09-22). A render-time failure names the mistake; the
+               runtime one is indistinguishable from a caller inventing a bucket.
+            */}}
+            {{- $allow := .Values.catalog.multibase.dataBases | default (list) }}
+            {{- $pairs := list }}
+            {{- range $base, $ref := .Values.catalog.multibase.baseCredentialRefs | default dict }}
+              {{- if not (has $base $allow) }}
+                {{- fail (printf "catalog.multibase.baseCredentialRefs names %q, which is not on the catalog.multibase.dataBases allowlist — a base with a credential reference and no allowlist entry can never be reached" $base) }}
+              {{- end }}
+              {{- $pairs = append $pairs (printf "%s=%s" $base $ref) }}
+            {{- end }}
+            - { name: LANCE_MULTIBASE_BASE_CREDENTIAL_REFS, value: {{ $pairs | join "," | quote }} }
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- $catalogScoped := .Values.minio.catalogAccessKey }}
             - { name: LANCE_S3_ACCESS_KEY_ID, value: {{ ternary .Values.minio.catalogAccessKey .Values.minio.accessKey (not (not $catalogScoped)) | quote }} }
