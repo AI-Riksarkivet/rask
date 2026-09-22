@@ -39,7 +39,7 @@ from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.repair import repair_drift
-from maintenance.services.sweep import emit_sweep_lineage, memory_readings, plan_sweep, run_sweep, summarize
+from maintenance.services.sweep import emit_sweep_lineage, memory_readings, plan_sweep, run_sweep, skip_attribution, summarize
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -116,6 +116,10 @@ async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprC
                 "published": published,
                 "not_queued": len(not_queued),
                 "skipped": len(decided),
+                # WHICH KIND, beside the total. [[LH-191]] closes on a non-zero CADENCE skip, and one
+                # integer counting trash exclusions, opt-outs and cadence together cannot report it —
+                # an interval taking effect would read exactly like one more dataset reaching the trash.
+                "skipped_by": skip_attribution(decided),
                 **memory_readings(),
             }
             # THE COMPLETION HALF OF THE PAIR `plan_sweep` OPENED. `record_run_started` fires inside

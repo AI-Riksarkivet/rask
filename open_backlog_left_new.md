@@ -1017,6 +1017,19 @@ have no `uv.lock` and so cannot be built to emit anything.
   **WHAT THIS DOES NOT ESTABLISH:** three points, one shape of table, one row size. And the second
   worker's own baseline moved ~13Mi between the two windows for reasons not attributed here, so it is
   NOT a clean control and is not claimed as one.
+- **THE INSTRUMENT IS DEPLOYED AND ANSWERED ON ITS FIRST PASS (live, 2026-09-22, `main-b301e0ef`).**
+  A committed rewrite now carries `rewrite_passes` and `rss_bytes`, so `passes x ~12 MiB` against the
+  reported RSS is a prediction the estate checks continuously instead of a figure established once
+  over fixtures. First line off the cluster:
+  `compaction_distributed_committed ... fragments_removed=70 rewrite_passes=1 rss_bytes=648585216`
+  — 618.5 MiB resident at commit, on a 280 MiB / 70-fragment table bounded at 256 MiB, which is the
+  ~1.7x peak this row measured. **The peak released:** the worker was 212Mi before and is 236Mi after,
+  so the ceiling came back down and the floor moved **+24 MiB for ONE pass**. That is the same order as
+  the ~10-14 MiB/pass measured over the retention rounds and about twice it, on a table 2-3x larger —
+  a data point that says the per-pass cost is not independent of table size, which the three-point
+  fixture series could not have shown. Not a contradiction of the row's answer; a reason the closing
+  bar is a soak rather than another three tables.
+
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
@@ -1193,10 +1206,50 @@ have no `uv.lock` and so cannot be built to emit anything.
   what `test_the_worker_can_hold_every_unit_it_admits.py` multiplies against the declared pod limit, so
   raising the byte bound without lowering concurrency now fails the RENDER rather than the pod. The 2s
   interval makes 434 MiB a LOWER bound; the gate's 0.75 usable fraction carries that.
+- **THE GATE THE `Closes when` ASKED FOR NOW EXISTS, and writing it found a fourth unbounded door
+  (2026-09-22).** `tests/unit/test_a_compaction_door_is_bounded.py` resolves the keywords every
+  `compact_files()` call site in the four lakehouse services actually carries — following ONE hop of
+  indirection, so a `**`-unpacked dict built locally, updated from a module constant, or handed in as
+  a PARAMETER by a caller in the same module all resolve (the last shape is `optimize._rewrite`, whose
+  bound is the most carefully built one in the estate and which a naive walk would fail). All four
+  doors must pass `max_source_bytes`, `batch_size` AND `num_threads`. Three mutations, three distinct
+  legs red: strip erasure's bound → catalog fails; drop maintenance's byte bound → maintenance fails;
+  blind the walk → the leg that counts the doors fails, which is the gate this estate has shipped
+  before that could not fail.
+- **THE FOURTH DOOR IS `compact_one`'s OWN DEFAULTS, and the asymmetry is the tell.** Its three bound
+  parameters defaulted to `None`, and `None` meant the keyword was never added to `size_kw` at all —
+  so a caller that simply does not mention them gets Lance's 8192-ROW batch, the HOST's core count and
+  no byte ceiling. `rewrite_slots` on the SAME function already defaulted the safe way, with the
+  rationale written beside it: "a caller that does not care is bounded rather than unbounded". The
+  three knobs that bound the bytes defaulted the other way. **The parameter default alone does not
+  close it**, and that is the second half: `DatasetWorkItem`'s bound fields are `int | None = None`
+  because the wire model must express "the policy said nothing", and the sweep hands
+  `plan.scan_batch_size` straight through — so the value crossing the queue for an UNPOLICIED dataset
+  is a literal `None`. The floor is now applied where `size_kw` is built, so omitted and explicit-None
+  both mean the floor. Numbers named once in `core.config` and read by both the `Settings` defaults
+  and the parameter defaults: two spellings of 64 is how a bound gets raised in one place and kept in
+  the other.
+- **THE CATALOG'S BOUND DID NOT BOUND THE CATALOG, measured 2026-09-22.** `COMPACTION_BOUND` pinned
+  `batch_size=64, num_threads=2` and no byte ceiling — a ceiling in a unit nobody can size in advance,
+  because on a blob tier one row IS the blob. It is weakest exactly on the tables the erasure door
+  runs over, which is the door it was added for. Sized for THIS pod rather than copied from the
+  sweep's: the catalog runs at **248Mi of a 512Mi limit** (live), and a pass bounded at B peaks near
+  1.7xB resident, so the sweep's 256 MiB would peak ~435 MiB against ~264 MiB of headroom. 64 MiB
+  peaks ~109 MiB. A slower one-shot compaction is recoverable; an OOMKilled catalog is an outage for
+  every caller of the lakehouse.
 - *What is left:* Triage the remaining rows against the fix [[LH-183]] shipped — for each, either a
   queue + a worker sized for the work, or an explicit bound (`batch_size`/`num_threads`) where the work
   must stay in-process. The pattern, not the instances, is the deliverable: a door whose cost is a
   property of the DATA does not belong in a pod sized for a request.
+  **PHASE 1 IS DONE ON THIS ROW and the residue is out of phase, which is why it stays open rather
+  than closing:** every phase-1 instance is fixed (index door, change feed, erasure, the compaction
+  defaults) or accepted with its rationale recorded (the lineage pair, `reconcile_cron`), and three
+  gates now cover the three sub-classes — `test_pagination_bounds_are_declared.py`,
+  `test_every_lineage_walk_can_be_bounded.py` and the compaction gate above. What keeps it open is
+  the FIVE out-of-phase candidates enumerated in this row: two phase-2 (the medallion stage runner's
+  in-process lane, the external-blob carry fallback) and three phase-3 (`inbox_actor`,
+  `reconciler`, `control_events`). This row is their only record — it closes when they land as rows
+  in their own phases, not before, because deleting it would lose the candidate set.
 - *Closes when:* No lakehouse handler performs data-scaled work in-process without either a worker lane
   or a declared bound, and a gate refuses a new one.
 - *Evidence:* workflow `wf_46997777-6d5`, 16 agents, 12 findings / 10 confirmed · `services/catalog/src/catalog/api/v1/endpoints/indices.py:85-87,264-266` · `chart/values.yaml indexTopic: ""` · `services/maintenance/src/maintenance/services/maintenance.py:327-328 (the bound the index doors lack)` · [[LH-183]] for the measured instance
@@ -1401,8 +1454,22 @@ have no `uv.lock` and so cannot be built to emit anything.
   continuous ingest is not a gold table written once a day. The mechanism is per-POLICY for exactly
   that reason. Picking one global number would be the same mistake as the thread-limiter bound: one
   knob answering two questions.
+- **THE CLOSING CONDITION WAS UNOBSERVABLE, AND NOW IS NOT (2026-09-22).** This row closes on "a tick
+  reports a non-zero cadence skip count" — and the tick could not have reported one. The queue lane's
+  summary carried `skipped` as a single integer over everything `plan_sweep` decided without work, so
+  a trash exclusion, a `compact_enabled: false` opt-out and a `policy_interval` skip were the same
+  number. The moment somebody sets an interval, the only evidence it took effect would be `skipped`
+  moving 7 -> 8, which one more dataset reaching the trash does identically. `skipped_by` now carries
+  the breakdown beside the unchanged total (an alert reads the total), attributing the reason literal
+  each `DatasetResult` already holds rather than classifying anything anew, with an `unattributed`
+  bucket so the parts always sum to the whole. **The serial lane already split these** — `summarize`
+  has separate `skipped` and `trashed` keys — so the same key meant different things on the two lanes,
+  and the lane every deployment runs was the coarse one. Pinned by
+  `test_a_skip_says_which_kind_it_was.py`, whose third leg reproduces today's estate exactly:
+  `{"trashed": 7}` and no cadence key at all.
 - *What is left:* Decide whether the estate declares cadences per policy and what they are, or whether
-  planning everything every tick is intended. If intended, the two rows above are sized correctly and
+  planning everything every tick is intended. **The ruling is now a value, not a value plus an
+  instrument** — set an interval on a policy and the very next tick says whether it took. If intended, the two rows above are sized correctly and
   nothing further is needed; if not, this is the cheapest lever on both.
 - *What the ruling has to cover:* not just "what interval", but WHICH DATASETS — 27 policy records
   exist against ~570 datasets, so a per-policy interval alone moves 5% of the volume.

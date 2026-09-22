@@ -15,6 +15,7 @@ import logging
 import random
 import sys
 import time
+from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -1201,6 +1202,33 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # to — and `summarize` is the SERIAL lane, while every deployment runs the queue one.
         **memory_readings(),
     }
+
+
+def skip_attribution(decided: Iterable[DatasetResult]) -> dict[str, int]:
+    """How many datasets this tick skipped, BY WHICH MECHANISM — three stories behind one integer.
+
+    The queue lane's ``skipped`` counts everything ``plan_sweep`` decided without work, and the three
+    kinds mean opposite things: a trash exclusion is permanent and correct, ``policy_disabled`` is a
+    deliberate opt-out, and ``policy_interval`` is the CADENCE working — the one [[LH-191]] closes on
+    and the one the estate has never reported, because all 27 registered policies carry
+    ``compact_interval_hours: null``.
+
+    The serial lane's :func:`summarize` already splits ``skipped`` from ``trashed``, so the same key
+    means different things on the two lanes; this reports the reason literal each result already
+    carries rather than inventing a second classification.
+
+    ``unattributed`` is not padding: it keeps the breakdown summing to the total, so a result kind
+    nobody anticipated shows up as a number to chase instead of making the two disagree in production.
+    """
+    counts: Counter[str] = Counter()
+    for result in decided:
+        if result.trashed:
+            counts["trashed"] += 1
+        elif result.skipped:
+            counts[result.skipped] += 1
+        else:
+            counts["unattributed"] += 1
+    return dict(counts)
 
 
 def memory_readings() -> dict[str, int]:
