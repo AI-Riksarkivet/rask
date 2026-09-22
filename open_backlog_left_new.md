@@ -682,6 +682,21 @@ have no `uv.lock` and so cannot be built to emit anything.
   `294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> 729 -> 380 -> 316 -> 431 -> 317Mi`, then flat for 60s.
   **Peak +434 MiB over baseline, settling at +22Mi.** The second worker showed the same shape at
   +128Mi. So the bulk IS released; what the row is really about is that +22Mi.
+- **ROUND 1 OF THE TWO-COMPACTION EXPERIMENT LANDED CLEANLY (2026-09-22, fourth attempt).** A 240 MiB
+  table in 60 fragments, built through the catalog onto a purged lane so its unit was reached in one
+  tick. `/proc/1/status` inside the executing worker, every 2s:
+
+  | window | reading |
+  | --- | --- |
+  | 10:27:10 - 10:27:46 | 303-307Mi, flat (B0 ~ 304Mi) |
+  | **10:27:48** | **644Mi** — the rewrite, +340Mi |
+  | 10:27:49 | `compaction_distributed_committed`, `fragments_removed=60` |
+  | 10:27:50 - 10:28:28 | 315-317Mi, flat 40s+ (B1 ~ 316Mi) |
+
+  **Peak +340 MiB, settled +12 MiB.** The sample landed one second before the commit and the settle
+  is unambiguous — forty seconds of flat after it. This is the same shape as the earlier ad-hoc
+  reading (+434 peak, +22 settled) on a different worker generation, so the magnitudes are stable
+  across runs.
 - **WHETHER THAT +22Mi IS WARM-UP OR RETENTION IS THE ROW'S REMAINING QUESTION, and one compaction
   cannot answer it.** The planner's own series settles the analogous question for the discovery pass —
   two independent pods stepped to *exactly* 303.9Mi at tick 3 and then oscillated in a 2.1Mi band, so
