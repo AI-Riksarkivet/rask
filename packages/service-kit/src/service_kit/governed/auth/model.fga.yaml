@@ -1478,3 +1478,80 @@ tests:
           # Computed rather than stored: no tuple grants team:eng#member anything here.
           can_administer:
             users: ["team:eng#member"]
+
+  # ── THE ESTATE ROOT ────────────────────────────────────────────────────────────────────────────
+  # [[LH-055]], owner ruling `docs/DECISIONS.md:2240` — "the FGA model shape is a PORT, not a
+  # decision". The reference calls it `type server`; this estate calls it what it is.
+  #
+  # ADDITIVE AND UNREACHED SO FAR, which is exactly why these cases exist. `fga_root_object` still
+  # names `warehouse:lance_catalog`, so the live estate resolves as before and the whole suite passes
+  # identically with or without the new type — a result that proves it breaks nothing and proves
+  # nothing about whether it WORKS. These assertions are the difference.
+  #
+  # THE TIERS ARE THE POINT, not the `can_*` rungs. Three services gate their WHOLE routers on a bare
+  # tier on the root object — `compute/security.py:39` and `controlplane/security.py:42` check
+  # `reader`, `flows/security.py:18` checks `writer` — so a root type that carried only the ruling's
+  # admin/operator/project plus verbs would refuse all three on the day of the repoint. That is the
+  # failure these cases are written to make impossible to ship.
+  - name: the estate root carries the tiers three services gate on, and a machine identity that is a relation
+    tuples:
+      - user: user:root_admin
+        relation: admin
+        object: estate:rask
+      - user: user:provisioner
+        relation: operator
+        object: estate:rask
+      - user: user:looker
+        relation: reader
+        object: estate:rask
+      - user: user:stager
+        relation: event_stager
+        object: estate:rask
+    check:
+      # The machine identity: it may create projects, and it reaches that through `operator` rather
+      # than by being a principal type of its own.
+      - user: user:provisioner
+        object: estate:rask
+        assertions:
+          can_create_project: true
+          # An operator provisions; it does not thereby get to read the estate's events or storage.
+          can_observe_events: false
+          can_browse_storage: false
+      # `admin` reaches every rung, so nobody loses one when this type arrives.
+      - user: user:root_admin
+        object: estate:rask
+        assertions:
+          can_create_project: true
+          can_observe_events: true
+          can_browse_storage: true
+          can_stage_events: true
+          reader: true
+          writer: true
+      # THE TIER CASE. A bare `reader` is what compute and controlplane ask for, and it must NOT
+      # carry the owner-tier rungs — the whole point of the tier being one rung below.
+      - user: user:looker
+        object: estate:rask
+        assertions:
+          reader: true
+          writer: false
+          can_observe_events: false
+          can_browse_storage: false
+          can_create_project: false
+      # `can_stage_events` is `event_stager or owner`, not a computed userset over owner — so a
+      # stager holds it while holding no tier at all.
+      - user: user:stager
+        object: estate:rask
+        assertions:
+          can_stage_events: true
+          reader: false
+          can_observe_events: false
+      # A subject with no tuple on the root holds nothing there. Fail-closed, stated.
+      - user: user:nobody
+        object: estate:rask
+        assertions:
+          reader: false
+          writer: false
+          can_create_project: false
+          can_observe_events: false
+          can_browse_storage: false
+          can_stage_events: false

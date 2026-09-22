@@ -406,6 +406,25 @@ of mine in this same session.**
   `owner` (`can_observe_events: owner`, `can_browse_storage: owner`), `event_stager` (because
   `can_stage_events: event_stager or owner` is NOT a pure computed userset and does not migrate like
   its two neighbours), plus the ruling's `admin` / `operator` / `project` and the four rungs.
+- **THE TYPE IS SHIPPED, ADDITIVE AND PROVEN (2026-09-22).** `model.fga` declares `type estate` with
+  the full relation set above, `model.fga.yaml` gains the cases that exercise it, and `model.json` is
+  regenerated so the three-copy drift check agrees. **`make fga-test`: 53/53 tests, 399/399 checks**
+  (from 52/376). Nothing is repointed: `fga_root_object` still names `warehouse:lance_catalog`, so
+  every live check resolves exactly as before — which is why the suite passes IDENTICALLY with and
+  without the type, and why that result proves only the absence of harm. The new cases are what prove
+  it works.
+- **BOTH FAILURE MODES THE VERIFIERS FOUND ARE NOW UNSHIPPABLE, mutation-checked:** deleting `reader`
+  — the naive port's exact defect — is a HARD error (`relation 'estate#reader' not found`), and
+  collapsing `can_stage_events` to a pure userset over `owner` reds exactly one check, the stager who
+  holds the rung while holding no tier.
+- **A HOP NOBODY GATES, found while trying to prove the new type live (2026-09-22):** `make fga-test`'s
+  drift check diffs `model.fga` against `model.json` — two files in the repo — and **nothing compares
+  either against the model actually loaded in the running OpenFGA store**. `write_model.py` PUTs it at
+  deploy (`/stores/{id}/authorization-models`), so a store whose newest model predates a commit answers
+  every check against the old shape while both repo copies agree with each other and the gate stays
+  green. That is the same shape as the three-copy lie the drift check was written to kill, one layer
+  out. Not filed as its own row because the fix belongs with the repoint: whatever proves the estate
+  type live has to read the store's model id back, and that read is the missing gate.
 - **AND THE REPOINT IS A TUPLE MIGRATION, NOT A CHECK MIGRATION — the part most likely to be missed.**
   `fga.parent_object()` returns `fga_root_object` as the PARENT of every top-level namespace, and
   `namespace#parent` is typed, so changing the root changes what every `namespace` tuple points AT.
@@ -1678,8 +1697,22 @@ of mine in this same session.**
   and `ms-test` gates four e2e lanes. Stubbing a test so a gate can run is harness work, not annotator
   feature work — but somebody should say so out loud rather than slipping annotator changes in under
   a CI banner.
-- *What is left:* **Stub the six at `typed_proxy`/`inbox_for`, as thirty of the estate's thirty-one
-  Dapr-touching files already do.** And kill or disown the 56-day-old `fake_sidecar.py`: while it runs,
+- **THE NOTIFICATIONS HALF IS DONE, AND THE ROW'S OWN PRESCRIPTION WAS WRONG (2026-09-22).** This row
+  said "stub at `typed_proxy`/`inbox_for`, as thirty of thirty-one files do". Those two tests never
+  call either: they drive the REAL module app through `TestClient(module.app)`, and `lifespan.py:138`
+  warms the actor-proxy factory on the way up. The honest stub is therefore the WARM-UP, and it is
+  justified rather than convenient — both tests assert what the lifespan puts on `app.state` for the
+  FEED (`lineage_feed`, `lineage_cursor`, their base URL and identity), so the actor plane is not
+  that file's subject. It leaves `test_a_tick_without_an_actor_plane_refuses_instead_of_hanging`
+  untouched, because that one builds its own app through `_app(actors=False)` and never reaches this
+  lifespan. **Re-probed after: notifications drops from three offenders to ONE**, and that one is
+  `test_opening_an_inbox_blocks_the_whole_event_loop_while_it_looks_for_a_sidecar`, which exists to
+  construct a real factory and sets its own 0.25 s budget. Estate-wide: **7 offenders -> 3**.
+- *What is left:* **Stub the three remaining, all in `services/annotator/tests/
+  test_task_history_is_bounded.py`** — a service the FOCUS block fences, which is why they are named
+  here rather than fixed. Their shape is likely the same as the two just done (a real lifespan or a
+  real `_report_state`), not the `typed_proxy` stub this row originally predicted; check before
+  assuming, since that prediction was already wrong once. And kill or disown the 56-day-old `fake_sidecar.py`: while it runs,
   no local run can reproduce what CI sees. The
   bound makes the suite survive it; it does not make the test correct. A per-file guard exists for the
   last offender (`test_annotation_task_actor.py::test_a_transition_builds_NO_real_dapr_proxy...`) and

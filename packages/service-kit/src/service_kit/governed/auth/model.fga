@@ -99,6 +99,44 @@ type project
 
 # A warehouse = exactly one S3 bucket, owned by one project. The catalog root object is a `warehouse:`.
 # Concentric rungs inherit from the project (admins own; members read).
+type estate
+    relations
+        # THE ESTATE ROOT ([[LH-055]], owner ruling docs/DECISIONS.md:2240 — "the FGA model shape is a
+        # PORT"). The reference model calls it `type server` with `define project: [project]` beneath
+        # it; the name here says what it IS in this estate rather than what it is in a web service.
+        #
+        # ADDITIVE ONLY SO FAR: nothing points at this type yet. `fga_root_object` still names
+        # `warehouse:lance_catalog`, so every live check resolves exactly as before. The repoint is a
+        # TUPLE migration (`fga.parent_object` returns the root as the PARENT of every top-level
+        # namespace, and `namespace#parent` is typed), and it lands separately.
+        #
+        # NO DOWNWARD `project: [project]`, though the reference model declares one under its `server`.
+        # Nothing here would traverse it — `can_create_project` is `admin or operator`, not
+        # `... from project` — so it would be a relation carried because the precedent has it. It is
+        # also not free: a project object in the USER position is invisible to `revoke_object_tuples`,
+        # which reads BY OBJECT, so deleting a project would strand `estate:X#project@project:Y` with
+        # no lifecycle answering for it. `test_no_new_object_as_user_shape_slips_past_revoke` refuses
+        # exactly that, and it refused this. Add the edge when a rule needs to traverse it, with the
+        # cleanup decided in the same change.
+        define admin: [user, role#assignee]
+        # A machine identity is a RELATION on the top type, never a principal type — the ruling is
+        # explicit, and `type user` carries no relations for the same reason.
+        define operator: [user, role#assignee] or admin
+        # THE TIERS THREE SERVICES ALREADY GATE WHOLE ROUTERS ON. `compute/security.py:39` and
+        # `controlplane/security.py:42` check `reader` on the root object; `flows/security.py:18`
+        # checks `writer` there, "not a can_* verb", and relies on `writer: ... or owner` to pass the
+        # bootstrap owner. A root type without these refuses all three the day it is repointed.
+        define owner: [user, role#assignee] or admin
+        define writer: [user, role#assignee] or owner
+        define reader: [user, role#assignee] or writer
+        # `can_stage_events` is NOT a pure computed userset over `owner` the way its two neighbours
+        # are, so it carries its own grantable relation and does not migrate like them.
+        define event_stager: [user, role#assignee]
+        define can_create_project: admin or operator
+        define can_observe_events: owner
+        define can_browse_storage: owner
+        define can_stage_events: event_stager or owner
+
 type warehouse
   relations
     define project: [project]

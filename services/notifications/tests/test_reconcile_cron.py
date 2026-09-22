@@ -238,12 +238,38 @@ class TestIngressSettings:
         assert settings.feed_timeout_seconds <= settings.reconcile_budget_seconds
 
 
-def test_the_lifespan_builds_the_clients_the_route_depends_on() -> None:
+def _lifespan_without_the_actor_warmup(patch: pytest.MonkeyPatch) -> None:
+    """Stop the REAL lifespan paying Dapr's blocking sidecar handshake ([[XC-071]]).
+
+    `lifespan.py` calls `warm_actor_proxy_factory()`, which builds the SDK's process-global
+    `ActorProxyFactory`; that constructor runs `DaprHealth.wait_for_sidecar()`, a `urllib` +
+    `time.sleep` loop. Where no sidecar answers — CI — nothing is cached when it raises, so every
+    later call pays the timeout again. Measured on CI run 35726435185: `ms-test` spent 8m17s there
+    and died.
+
+    THE ACTOR PLANE IS NOT THIS FILE'S SUBJECT. These two tests assert what the lifespan puts on
+    `app.state` for the FEED — `lineage_feed`, `lineage_cursor`, their base URL and identity. They
+    drive the real module app precisely so a lifespan that builds those under other names fails here,
+    and the warm-up is incidental to that.
+    It does NOT weaken `test_a_tick_without_an_actor_plane_refuses_instead_of_hanging` below, which
+    builds its own app through `_app(actors=False)` and never reaches this lifespan.
+    """
+    from service_kit.governed import actor_warmup
+
+    async def _skip(**_: object) -> bool:
+        return False
+
+    patch.setattr(actor_warmup, "warm_actor_proxy_factory", _skip)
+    patch.setattr("notifications.lifespan.warm_actor_proxy_factory", _skip, raising=False)
+
+
+def test_the_lifespan_builds_the_clients_the_route_depends_on(monkeypatch: pytest.MonkeyPatch) -> None:
     """The other half of the wiring: `app.state` must actually carry what `get_feed_client` reads.
 
     Driven through the real module-level app's lifespan, so a lifespan that builds them under other
     names — or not at all — fails here rather than at the first tick in a cluster.
     """
+    _lifespan_without_the_actor_warmup(monkeypatch)
     get_ingress_settings.cache_clear()
     module = importlib.reload(importlib.import_module("notifications"))
     with TestClient(module.app) as client:
@@ -408,6 +434,7 @@ def test_the_lifespan_wires_the_feed_client_from_settings_not_from_defaults(monk
     Both have code defaults that are silently wrong in a cluster: `127.0.0.1:8000` is the pod itself,
     and an identity lineage's allowlist never learned 403s every tick.
     """
+    _lifespan_without_the_actor_warmup(monkeypatch)
     monkeypatch.setenv("RASK_NOTIFICATIONS_LINEAGE_URL", "http://lineage.test:8000")
     monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "notifications-under-test")
     get_ingress_settings.cache_clear()

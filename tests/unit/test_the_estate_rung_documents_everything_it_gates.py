@@ -31,10 +31,27 @@ RELATION = "can_observe_events"
 _SOURCE_ROOTS = ("services", "packages")
 
 
+def _root_type() -> str:
+    """The type `fga_root_object` names, because THAT is where the rung is held.
+
+    More than one type may declare this relation once the estate root exists ([[LH-055]]), and the
+    comment that governs a grant decision is the one on the type actually serving as root — not
+    whichever definition appears first in the file. Reading it by position made this gate a function
+    of declaration order: adding `type estate` above `type warehouse` silently repointed it at an
+    undocumented definition and it failed for a reason that had nothing to do with documentation.
+    """
+    settings = (REPO / "packages" / "service-kit" / "src" / "service_kit" / "governed" / "settings.py").read_text()
+    match = re.search(r'fga_root_object:\s*str\s*=\s*Field\(default="([a-z_]+):', settings)
+    assert match, "could not read fga_root_object's default type from service_kit/governed/settings.py"
+    return match.group(1)
+
+
 def _comment_above_the_definition() -> str:
-    """The contiguous comment block directly above `define can_observe_events`."""
+    """The contiguous comment block directly above the ROOT type's `define can_observe_events`."""
     text = MODEL.read_text()
-    idx = text.index(f"define {RELATION}:")
+    root = _root_type()
+    start = text.index(f"type {root}\n")
+    idx = text.index(f"define {RELATION}:", start)
     # `text[:idx]` ends mid-line on the definition's own INDENT, and a whitespace fragment fails the
     # `#` test — so walking back from it without dropping that fragment reads an empty comment and the
     # gate passes vacuously. Found by this test failing against a comment that plainly satisfied it.
