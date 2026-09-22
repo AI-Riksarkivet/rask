@@ -34,7 +34,7 @@ import re
 
 import pytest
 
-from tests.unit.chart_render import DEFAULT_ARGS, render
+from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, render
 
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
@@ -166,3 +166,30 @@ def test_the_JOB_and_the_COMPONENT_agree_on_the_number() -> None:
     found = re.search(r"converge_max_ack_pending MAINTENANCE_WORK \S+ (\d+)", script)
     assert found, "the converge call carries no number"
     assert int(found.group(1)) == component, f"the Job converges to {found.group(1)} while the component sets {component}"
+
+
+@pytest.mark.parametrize(("index_share", "should_render"), [(4, True), (39, True), (40, False), (41, False)])
+def test_an_index_share_that_swallows_the_pool_FAILS_THE_RENDER(index_share: int, should_render: bool) -> None:
+    """A share at or above the total leaves the compaction lane with zero or negative capacity.
+
+    Refused where an operator is reading rather than where a consumer is failing: the runtime symptom
+    is a lane that delivers nothing, or an invalid consumer config, and neither names the values file.
+    Same reasoning as the multibase allowlist cross-check.
+    """
+    import shutil
+    import subprocess
+
+    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
+    if not pathlib.Path(helm).exists():
+        pytest.skip("helm not available")
+    argv = [
+        helm, "template", "rask", str(REPO / "chart"),
+        *OIDC_ARGS, *DEFAULT_ARGS,
+        "--set", f"maintenance.dedicatedWorkers.indexConcurrentUnits={index_share}",
+    ]  # fmt: skip
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
+    if should_render:
+        assert done.returncode == 0, f"a legal index share of {index_share} failed to render: {done.stderr[-500:]}"
+    else:
+        assert done.returncode != 0, f"an index share of {index_share} rendered, leaving the compaction lane with no capacity"
+        assert "must be LESS than maxConcurrentUnits" in done.stderr, f"the render failed without naming the cause: {done.stderr[-500:]}"

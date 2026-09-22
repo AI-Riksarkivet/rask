@@ -486,6 +486,14 @@ the executor's single-flight lock exists to prevent. Delivering no more than the
 stops a window opening on a unit that cannot start. [[LH-188]].
 */}}
 {{- define "lance.maintenanceMaxAckPending" -}}
+{{- /* REFUSED AT RENDER, because the runtime symptom is unreadable. An index share at or above the
+     total leaves the compaction lane with a zero or NEGATIVE maxAckPending, which the broker reports
+     as a lane that delivers nothing or as an invalid consumer config — neither of which names the
+     values file that caused it. The same reasoning as the multibase allowlist cross-check: a
+     configuration error belongs where an operator is reading, not where a consumer is failing. */}}
+{{- if ge (int .Values.maintenance.dedicatedWorkers.indexConcurrentUnits) (int .Values.maintenance.dedicatedWorkers.maxConcurrentUnits) -}}
+{{- fail (printf "maintenance.dedicatedWorkers.indexConcurrentUnits (%v) must be LESS than maxConcurrentUnits (%v): the two lanes share one thread limiter, and the index share is carved OUT of the total, so this leaves the compaction lane with no capacity at all" .Values.maintenance.dedicatedWorkers.indexConcurrentUnits .Values.maintenance.dedicatedWorkers.maxConcurrentUnits) -}}
+{{- end -}}
 {{- mul (sub .Values.maintenance.dedicatedWorkers.maxConcurrentUnits .Values.maintenance.dedicatedWorkers.indexConcurrentUnits) (int .Values.maintenance.dedicatedWorkers.replicas) -}}
 {{- end -}}
 
