@@ -993,6 +993,22 @@ have no `uv.lock` and so cannot be built to emit anything.
   `main.py:333` applies `BodySizeLimitMiddleware` (64 MiB, `RASK_MAX_BODY_BYTES`) and a
   `WriteConcurrencyLimitMiddleware` beside it. So the asymmetry was real but one-sided — writes were
   capped and reads were not — and closing the read side is what the two rows above did.
+- **THE MEDALLION INGEST FINDING IS FALSE — re-measured 2026-09-22.** It claimed `POST /ingest-media`
+  "harvests the external source prefix inline" with "the two ceilings both checked AFTER the unbounded
+  work has already happened". The code does the opposite (`services/ingest.py:160-200`):
+  `iter(source.iter_objects())` is an ITERATOR, `batches()` is a GENERATOR consumed by
+  `lance.write_dataset(batches(), ...)` so the write is incremental, and BOTH ceilings are checked
+  INSIDE the per-object loop and raise immediately — `if len(source_uris) > max_objects: raise` and
+  `if total_bytes > max_total_bytes: raise`. Nothing unbounded is accumulated: `source_uris` is capped
+  by the same ceiling that raises, and `chunk` holds at most `chunk_objects`/`chunk_bytes`. This door
+  is already the shape the other rows were fixed INTO.
+- **SCORECARD FOR THE SWEEP THAT PRODUCED THESE TEN**, now that each has met the code. Two were real
+  and are fixed (change feed, erasure). One was MISLOCATED but led to a real defect one hop out (the
+  index door was already queued; `indexTopic: ""` was the bug). One is FALSE (this one). Two are
+  phase-2 COMPUTE by the FOCUS block's own split, three are phase-3, and the remaining lineage pair is
+  real but measured not-urgent at 483 datasets. So a 16-agent sweep with adversarial verification
+  still yielded findings that did not survive contact with the code — the verification stage refutes a
+  CLAIM, and cannot tell that the claim is about the wrong layer or was fixed last week.
 - **TWO OF THE REMAINING SEVEN ARE PHASE 2, NOT PHASE 1 — triaged 2026-09-22, do not work them here.**
   The medallion stage-runner finding (`compute.py:520`) is real and the code already states it:
   "Full-materialises payloads into memory, which is fine for this in-process fake-Ray stand-in over
