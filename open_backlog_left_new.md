@@ -1079,34 +1079,36 @@ have no `uv.lock` and so cannot be built to emit anything.
   own fields precisely so they do not drown these two.
 
 
-**LH-187 · Undrop re-registers a table with a RELATIVE location, and lineage can then never verify its storage**
-`catalog, lineage` · **MEDIUM** · OPEN
-- **THE MECHANISM IS PROVEN** (`namespaces.py:831`): the namespace-undrop path rebuilds each child
-  table with `location=location.rstrip("/").rsplit("/", 1)[-1]`, which reduces the absolute URI the
-  trash record carries to a bare directory name. Its comment gives the reason — "the dir backend
-  refuses the absolute URI the record carries for the operator's sake" (#75) — and applies it
-  UNCONDITIONALLY, on every backend, including the S3 one that never needed it.
-- **WHAT IT COSTS is on the other side of the estate.** `reconcile.read_storage_version` refuses a
-  relative uri outright (`reconcile.py:85`, "names no storage location — a relative path cannot say
-  whether the data is there") rather than guessing, which is correct and was itself written to close a
-  false-alarm measured 2026-08-26. So an undropped table lands in the graph as permanently
-  `unreadable`: not reported lost, but never again verifiable — the sweep cannot tell whether its
-  bytes are there. That is criterion 1 wearing a benign counter.
-- **MEASURED LIVE 2026-09-22:** `unreadable=23` on a `checked=483` tick, every one with this exact
-  reason, e.g. `acme-bronze$objects -> '4750a5b9_acme-bronze$events'`, `media$chunks ->
-  'transcripts_v2.lance/chunks.lance'`.
-- **ATTRIBUTION IS NOT PROVEN, and the distinction matters.** Most of the 23 carry test-fixture
-  namespaces (`advmode7ns$r1`, `auditzzns$r1`, `csx1ns$r2`, `acme-bronze$*`), so they are most likely
-  e2e residue rather than operator undrops — this row is filed on the MECHANISM, which is
-  unconditional in the source, not on the claim that these 23 rows came through it. Whoever works it
-  should confirm the path before sizing the impact ([[my-own-residue-looks-like-a-defect]]).
-- *What is left:* Decide whether the relative form is required per BACKEND rather than always — the
-  `dir` backend's constraint should not cost an S3 estate its verifiable provenance. Either branch on
-  the backend, or record the absolute URI in the graph independently of what `register_table` accepts.
-- *Closes when:* An undropped table is readable by the reconcile sweep on the backends where an
-  absolute URI is legal, and a test drives undrop -> sweep and asserts it is not `unreadable`.
-- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/namespaces.py:829-831` ·
-  `services/lineage/src/lineage/core/reconcile.py:60-85` · live sweep 2026-09-22 `unreadable=23`
+**LH-187 · FALSIFIED — undrop does NOT leave a relative location behind**
+`catalog, lineage` · **FALSIFIED 2026-09-22** · the real source of the relative URIs is still unidentified
+- **THE CLAIM WAS WRONG AND IT WAS MINE.** Filed on the reasoning that undrop registers a table with
+  `location.rstrip("/").rsplit("/", 1)[-1]` (`namespaces.py:831`, `tables.py:911`) and therefore
+  leaves a relative location the lineage sweep can never resolve. The first half is true; the second
+  does not follow, and was never checked before the row was written.
+- **MEASURED against the real `dir` backend 2026-09-22** — create, deregister, re-register with the
+  relative form exactly as undrop does, describing at each step:
+  `after create -> /tmp/.../t1.lance` · `re-registered with -> t1.lance` ·
+  `after re-register -> /tmp/.../t1.lance`. The backend takes a relative location IN and reports the
+  ABSOLUTE one OUT, because it joins the connection root. Undrop leaves nothing relative behind.
+- **THE RELATIVE FORM IS THE BACKEND'S RULE, not a workaround to remove.** `register_table` refuses an
+  absolute URI outright ("Location must be a relative path within the root directory"), found by
+  driving the deployed catalog where undrop 400'd on the very location `describe_table` had just
+  reported. So the strip is required, and "branch on the backend" — what this row originally asked for
+  — would have changed correct code.
+- *What is actually open:* where the live `unreadable=23` URIs come from is STILL UNIDENTIFIED. Two of
+  them do not fit the undrop story at all and should have been the tell: `acme-bronze$objects` points
+  at `4750a5b9_acme-bronze$events` — a DIFFERENT table's directory — and `media$chunks` points at
+  `transcripts_v2.lance/chunks.lance`, a nested path the `dir` backend's flat `<uuid>_<table>` layout
+  never produces. Both read as rows written into the graph directly by a fixture rather than through a
+  catalog door. Whoever picks this up should find the WRITER of a graph dataset URI that is not
+  absolute, and confirm whether any production path can reach it, before proposing a fix.
+- *Closes when:* The writer of a non-absolute graph dataset URI is named, and either a production path
+  to it is found and fixed, or it is shown to be reachable only from test fixtures and the residual
+  graph rows are reaped — with the sweep reporting `unreadable=0` either way.
+- *Evidence:* live sweep 2026-09-22 `unreadable=23`, every entry "names no storage location" ·
+  `services/lineage/src/lineage/core/reconcile.py:60-85` (the refusal, correct and deliberate) ·
+  the round-trip measurement above · [[my-own-residue-looks-like-a-defect]],
+  [[a-verdict-is-not-evidence-it-is-still-true]]
 
 
 ## PHASE 1 · CROSS-CUTTING
