@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **101 are blocked on a decision** and **99 can be picked up today**.
+**200 open items**, of which **100 are blocked on a decision** and **100 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 5 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 38 | 6 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -416,7 +416,24 @@ of mine in this same session.**
 **LH-058 · No column-level classification exists: `model.fga` has ten types and no `column` relation, and credential vending bypasses any query-door masking**
 `catalog, lineage, openfga` · **HIGH** · **REWRITTEN — the original ask would be wrong**
 - **BOUNDED BY THE LAKEKEEPER PRECEDENT (see [[LH-055]], read 2026-09-20):** the closest comparable on the same authz stack models NO `column` type at all — column governance is tags keyed on FIELD-ID under `/management/v1/.../column-tags`, gated at table level, and columns do not inherit. So "how does a `column` relation join the model" may be the wrong question.
-- **blocked:** The FGA model-shape decision (whether a `column` relation joins the model and how classified tables constrain credential vending)
+- **NOT BLOCKED — the model-shape decision was RULED 2026-09-21 and it answers this row directly**
+  (`docs/DECISIONS.md:2240`, *"A · The FGA model shape is a PORT, not a decision"*). The ruling's own
+  table: **"no `column` type exists. The governance vocabulary is a TAG type with per-tag `apply`
+  delegation, *'Independent of `modify` (separation of duties: classify without holding data/DDL
+  rights)'*"**. So the question this row carried — "whether a `column` relation joins the model" — is
+  answered NO, and the shape that replaces it is named.
+- **AND THE FORMAT AGREES, re-measured independently 2026-09-22.** Parsing `lance_docs/ns_catalog/
+  spec.yaml` yields **exactly two path-template variables in 6,742 lines** — `{id}` x51 and
+  `{index_name}` x2. There is no column address anywhere, so a `column` FGA type would invent a
+  resource lance-ns does not have. The owner's brief points the same way for the ENFORCEMENT half:
+  `lancemultibasebranchingblobv2.md:806-808` says compute engines apply "credentials vending and
+  column-level policies exactly as for any other table/column" — vending is where a classification
+  bites, not a new object in the authorization graph.
+- **WHAT IS ACTUALLY LEFT IS THEREFORE SMALLER AND DIFFERENT from what this row asks:** a `tag` type
+  with `apply` delegated separately from `modify`, plus the vend consulting a table's tags when it
+  scopes a credential. The lakekeeper precedent keys its tags on **FIELD-ID rather than name** —
+  stable across a rename, where a name is not — which is the detail worth porting and the one a
+  from-scratch design would miss.
 - *What is left:* The gap stands: `model.fga` declares user/team/role/project/warehouse/namespace/table/materialized_view/transaction/annotation_project and nothing column-shaped, and no classification field exists. `columns.py` IS gated at table level via the router-wide `authorize` (`api/v1/router.py:47`, writer tier), so the title's 'no FGA check' is only true per column. Do not implement 'masking on query' as written: `credentials` is a data-read action (`fga_deps.py:88`) that vends a whole-prefix S3 session, so a reader gets raw bytes without passing any query door. Once the model shape is ruled, put classification on column metadata, add the relation, and enforce at the credential-vending door (refuse or narrow the session for tables carrying classified columns) rather than at `query`.
 - **THE BRANCH HALF IS RULED (2026-09-21) — see [[LH-055]].** lance-ns defines no branch resource (three
   table-scoped ops in `spec.yaml`), and the format brief puts branch isolation at the STORAGE PREFIX:
