@@ -140,6 +140,29 @@ def test_the_lane_is_OFF_unless_a_topic_is_configured() -> None:
     assert index_work.register_index_route(FastAPI(), _settings(index_topic="maintenance.index.v1")) is not None
 
 
+def test_the_PLANNER_does_not_build_indices_even_though_it_is_told_the_topic() -> None:
+    """A topic name is not a licence to execute, and the index lane must read the same flag the work
+    queue does.
+
+    Both maintenance Deployments render ``MAINTENANCE_INDEX_TOPIC`` — the planner needs it to know the
+    lane exists, and the chart has one env block per topic rather than one per role. So the topic
+    alone cannot decide who builds: the planner is sized 512Mi against the worker's 4Gi, and a vector
+    index over a large table is precisely the work that sizing exists to keep out of it. That is the
+    same defect [[LH-183]] found in the compaction lane, one lane over.
+
+    ``execute_work`` is the flag that separates them, and this pins the index lane to it. Without this
+    leg the topic gate above passes while the planner subscribes, which looks identical in the
+    rendered chart and differs only under load.
+    """
+    from fastapi import FastAPI
+
+    planner = _settings(index_topic="maintenance.index.v1", execute_work=False)
+    worker = _settings(index_topic="maintenance.index.v1", execute_work=True)
+
+    assert index_work.register_index_route(FastAPI(), planner) is None, "the 512Mi planner subscribed to the index lane"
+    assert index_work.register_index_route(FastAPI(), worker) is not None, "the worker did NOT subscribe to the index lane"
+
+
 def test_a_COLUMN_THAT_IS_NOT_IN_THE_SCHEMA_is_acked_not_retried(tmp_path: Path) -> None:
     """A unit naming a column the table does not have is a producer defect, and redelivery cannot
     repair one.

@@ -89,17 +89,23 @@ def test_a_durable_whose_backoff_is_sized_by_its_own_WORK_is_deliberately_NOT_wa
     obvious "fix" for the test above is to add every stream to the list, which is a worse defect than the
     one it closes.
     """
-    rendered = _helm_template("dapr.enabled=true", f"dapr.resiliency.enabled={str(resiliency).lower()}", "maintenance.workTopic=maintenance.work.unit")
+    rendered = _helm_template(
+        "dapr.enabled=true",
+        f"dapr.resiliency.enabled={str(resiliency).lower()}",
+        "maintenance.workTopic=maintenance.work.unit",
+        "maintenance.indexTopic=maintenance.index.unit",
+    )
     streams = _job_stream_list(rendered)
     durables = _durables(rendered)
 
-    work = durables.get("maintenance-work-durable")
-    assert work is not None, "maintenance-work-durable did not render — the fixture no longer sets up its subject"
-    if work != _FLEET[resiliency]:
-        assert "MAINTENANCE_WORK" not in streams, (
-            f"maintenance-work-durable renders {work}, which the loop's EXP {_FLEET[resiliency]} would call drift — "
-            "walking MAINTENANCE_WORK would delete it every run, taking in-flight maintenance units with it"
-        )
+    for name, stream in (("maintenance-work-durable", "MAINTENANCE_WORK"), ("maintenance-index-durable", "MAINTENANCE_INDEX")):
+        cfg = durables.get(name)
+        assert cfg is not None, f"{name} did not render — the fixture no longer sets up its subject"
+        if cfg != _FLEET[resiliency]:
+            assert stream not in streams, (
+                f"{name} renders {cfg}, which the loop's EXP {_FLEET[resiliency]} would call drift — "
+                f"walking {stream} would delete it every run, taking in-flight maintenance units with it"
+            )
     assert "INGEST" not in streams, "the ingest work queue is a raw nats-py pull consumer; its config can never match EXP"
 
 

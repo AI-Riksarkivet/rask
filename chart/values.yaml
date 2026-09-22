@@ -1608,18 +1608,26 @@ maintenance:
   catalogServiceIdentity: service-maintenance
   workDlqTopic: dlq.maintenance.work
   workPubsub: maintenance-work-pubsub
-  # THE INDEX-BUILD LANE, on its own topic beside the work queue. Set, the catalog's create_index /
-  # create_scalar_index doors publish one unit and answer with its id instead of building inside the
-  # request handler — which is what the Lance Namespace spec already documents for CreateTableIndex
-  # ("index creation is handled asynchronously"; progress via ListTableIndices /
-  # DescribeTableIndexStats). Empty, the build runs in the catalog as it always has, because nothing
-  # would ever execute a unit nobody consumes.
+  # THE INDEX-BUILD LANE, on its own topic beside the work queue, and ON because the spec asks for it:
+  # `lance_docs/ns_catalog/spec.yaml:1705` states "Index creation is handled asynchronously" and
+  # `CreateTableIndexResponse` carries an optional `transaction_id` and nothing else, so the door's
+  # whole contract is the unit id and progress is read through ListTableIndices /
+  # DescribeTableIndexStats. Set, the catalog's create_index / create_scalar_index doors publish one
+  # unit and answer with its id; the build happens on the maintenance WORKER, which is sized 4Gi
+  # against the catalog pod's request sizing. An IVF_PQ trains over the table's whole vector column
+  # and an FTS build tokenises every row — cost that is a property of the DATA, which is exactly what
+  # [[LH-183]] measured going wrong one lane over.
+  #
+  # EMPTYING IT puts the build back inside the catalog's request handler, because nothing would then
+  # execute a unit nobody consumes. That fallback is the honest answer for a deployment with no
+  # broker, not a tuning knob: an unbounded index build in a pod sized for a request is the defect,
+  # not the default.
   #
   # SEPARATE from workTopic because of the ACK, not for tidiness: a compaction unit is minutes and a
   # vector index over a large table is not, and one ackWait cannot serve both — sized for the index a
   # stuck compaction stays invisible that long, sized for compaction every large build redelivers
   # mid-flight. Separate topics also let the two scale as independent consumer groups.
-  indexTopic: ""
+  indexTopic: "maintenance.index.v1"
   indexDlqTopic: dlq.maintenance.index
   indexPubsub: maintenance-index-pubsub
   # The ack window for ONE index build, and the number this lane exists to be able to set. The work

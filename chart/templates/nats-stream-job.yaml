@@ -213,6 +213,22 @@ spec:
               add_workqueue_if_missing MAINTENANCE_WORK "maintenance.work.>"
               assert_retention MAINTENANCE_WORK workqueue
               {{- end }}
+              {{- if .Values.maintenance.indexTopic }}
+              # The index-build lane, a SECOND work queue beside the one above. Same retention and the
+              # same reason — a unit is removed once acked, so `messages` answers how many builds are
+              # still owed — but its own stream because the ACK WINDOW differs by an order of
+              # magnitude: `maintenance.indexAckWait` (3600s) against the work queue's 720s, and
+              # `ackWait` is per-COMPONENT in Dapr's JetStream pubsub, so one stream serving both would
+              # hand the index lane the compaction lane's window and redeliver every large build
+              # mid-flight into a second worker building the same index.
+              #
+              # It NEEDS the stream for the reason the work queue does: Dapr creates none, so the
+              # catalog's create_index door would answer 200 with a transaction id for a unit that
+              # landed nowhere and no worker will ever run — the failure this gate ([[LH-151]]) exists
+              # to make impossible.
+              add_workqueue_if_missing MAINTENANCE_INDEX "maintenance.index.>"
+              assert_retention MAINTENANCE_INDEX workqueue
+              {{- end }}
               # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
               # can only BIND an existing durable whose config matches its request — after a values
               # change that alters consumer config (e.g. the resiliency flip's maxDeliver/backOff),

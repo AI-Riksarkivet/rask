@@ -50,5 +50,13 @@ its component carries rather than a convenient approximation.
 {{- if and .Values.dapr.enabled .Values.maintenance.enabled .Values.maintenance.workTopic -}}
   {{- $names = append $names (printf "%s-work-durable" .Values.maintenance.daprAppId) -}}
 {{- end -}}
+{{- /* The index lane's durable, on the same conditional shape as the work queue's and for the same
+    reason [[LH-127]] gives: it renders only while `indexTopic` is set, so emptying that value takes it
+    out of this set and the orphan pass reclaims the consumer rather than leaving one bound to a
+    subject nobody publishes. Listed separately from the work durable because the two components carry
+    different ackWaits and either lane can be enabled without the other. */ -}}
+{{- if and .Values.dapr.enabled .Values.maintenance.enabled .Values.maintenance.indexTopic -}}
+  {{- $names = append $names (printf "%s-index-durable" .Values.maintenance.daprAppId) -}}
+{{- end -}}
 {{- join " " (uniq $names) -}}
 {{- end -}}
