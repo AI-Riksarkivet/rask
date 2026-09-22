@@ -106,6 +106,7 @@ CATEGORIES: tuple[str, ...] = (
     "orphaned_annotation_tasks",
     "ungoverned_tables",
     "unregistered_datasets",
+    "absent_datasets",
     "orphan_files",
 )
 
@@ -137,14 +138,43 @@ CATEGORIES: tuple[str, ...] = (
 #:     and the purge cannot touch them differently for it), and no endpoint clears it directly. Gating
 #:     on it would make the gate unsatisfiable again, which this comment already argues is not a safety
 #:     property.
+#:   * `absent_datasets` — a catalog record whose location holds no bytes ([[LH-192]]). Same answer as
+#:     its mirror `unregistered_datasets`: a registration fact, and the purge deletes expired TRASH
+#:     bytes, which are not the bytes a live record fails to find.
 NON_GATING_CATEGORIES: frozenset[str] = frozenset(
-    {"orphaned_annotation_tasks", "unbound_namespaces", "ungoverned_tables", "orphaned_trash", "ghost_tables", "unregistered_datasets"}
+    {
+        "orphaned_annotation_tasks",
+        "unbound_namespaces",
+        "ungoverned_tables",
+        "orphaned_trash",
+        "ghost_tables",
+        "unregistered_datasets",
+        "absent_datasets",
+    }
 )
 
 
 # --------------------------------------------------------------------------- #
 # The report
 # --------------------------------------------------------------------------- #
+
+
+class AbsentDataset(BaseModel):
+    """A catalog record whose registered location holds no bytes — the mirror of `UnregisteredDataset`.
+
+    The report compares the catalog against AUTHZ in both directions and against STORAGE in one: bytes
+    with no record were found, a record with no bytes was not. Measured on the live estate 2026-09-22,
+    that blind spot covered the cascade HEAD — `describe bronze$events` answered 200 with
+    `location = s3://lance-catalog/medallion/bronze` and the path did not exist, so a policy set on it
+    policed no bytes and an FGA grant keyed off a table whose data was elsewhere.
+
+    `location` is reported RESOLVED rather than as the manifest spells it, because the field's job is to
+    send someone to look.
+    """
+
+    table: str
+    root: str
+    location: str
 
 
 class GhostObject(BaseModel):
@@ -322,6 +352,9 @@ class ReconcileReport(BaseModel):
     orphaned_annotation_tasks: list[OrphanedAnnotationTask] = Field(default_factory=list)
     #: Files under a dataset prefix that no LIVE version references (the reclamation gap).
     unregistered_datasets: list[UnregisteredDataset] = Field(default_factory=list)
+    #: The INVERSE of `unregistered_datasets`: a catalog record whose location holds no bytes
+    #: ([[LH-192]]). Reported, never gating.
+    absent_datasets: list[AbsentDataset] = Field(default_factory=list)
     orphan_files: list[OrphanFile] = Field(default_factory=list)
     #: How many of `orphan_files` the purge GATES on — those Lance can never reclaim, plus any whose
     #: class could not be decided. Its own field because it is not `len(orphan_files)`: an orphan below
@@ -458,8 +491,9 @@ def _top_level_namespaces(root: str, storage_options: StorageOptions, *, delimit
     )
 
 
-def _tables(root: str, storage_options: StorageOptions) -> list[str]:
-    """Every TABLE id recorded on ``root``, sorted — the same manifest the namespace scan reads.
+def _tables(root: str, storage_options: StorageOptions) -> list[tuple[str, str | None]]:
+    """Every ``(table id, location)`` recorded on ``root``, sorted — the same manifest the namespace scan
+    reads. `location` per `lance_docs/namespace.md:968-976`: nullable, relative to the root, tables only.
 
     The FULL object id is kept, not just a leading segment: a table is recorded as
     ``<namespace><delimiter><table>`` (and nests further), and that whole string is the catalog id an
@@ -473,30 +507,41 @@ def _tables(root: str, storage_options: StorageOptions) -> list[str]:
         return []
     manifest_uri = f"s3://{base}/{MANIFEST_DIR}" if root.startswith("s3://") else f"{base}/{MANIFEST_DIR}"
     dataset = lance.dataset(manifest_uri, storage_options=storage_options, session=shared_lance_session())
-    table = dataset.to_table(columns=["object_id", "object_type"])
+    # `location` is TOLERATED ABSENT, not required: the spec's "Schema Extensibility" clause guarantees
+    # no column on a manifest an older writer produced. Missing it yields no locations and [[LH-192]]
+    # reports nothing — the fail-quiet direction for a detector.
+    wanted = ["object_id", "object_type"] + (["location"] if "location" in dataset.schema.names else [])
+    table = dataset.to_table(columns=wanted)
+    locations = table.column("location").to_pylist() if "location" in wanted else [None] * table.num_rows
     return sorted(
         {
-            str(object_id)
-            for object_id, object_type in zip(table.column("object_id").to_pylist(), table.column("object_type").to_pylist(), strict=True)
+            (str(object_id), str(location) if location else None)
+            for object_id, object_type, location in zip(table.column("object_id").to_pylist(), table.column("object_type").to_pylist(), locations, strict=True)
             if object_type == _MANIFEST_TABLE_TYPE and object_id
         }
     )
 
 
-def _tables_across(roots: list[str], storage_options: StorageOptions) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
-    """``(table, root)`` pairs across EVERY root, plus the roots that could not be read.
+def _tables_across(roots: list[str], storage_options: StorageOptions) -> tuple[list[tuple[str, str]], list[tuple[str, str]], dict[str, tuple[str, str | None]]]:
+    """``(table, root)`` pairs across EVERY root, the roots that could not be read, and each table's
+    ``(root, location)``.
 
     Per-root tolerance for the same reason `_top_level_namespaces_across` has it: one unreachable
     tenant bucket must not blind the scan for the whole estate.
     """
     found: set[tuple[str, str]] = set()
     unreadable: list[tuple[str, str]] = []
+    locations: dict[str, tuple[str, str | None]] = {}
     for root in roots:
         try:
-            found |= {(name, root) for name in _tables(root, storage_options)}
+            rows = _tables(root, storage_options)
         except Exception as exc:  # noqa: BLE001 — one unreachable bucket must not blind the whole scan
             unreadable.append((root, f"{type(exc).__name__}: {exc}"))
-    return sorted(found), unreadable
+            continue
+        found |= {(name, root) for name, _location in rows}
+        for name, location in rows:
+            locations[name] = (root, location)
+    return sorted(found), unreadable, locations
 
 
 def _top_level_namespaces_across(roots: list[str], storage_options: StorageOptions, *, delimiter: str) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -652,6 +697,41 @@ def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], t
     return [seen[key] for key in sorted(seen)]
 
 
+def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovered: set[str], trashed: set[str]) -> list[AbsentDataset]:
+    """Catalog records whose registered location is not among the datasets storage actually holds.
+
+    THE MISSING HALF OF THE CATALOG<->STORAGE PAIR ([[LH-192]]). `_unregistered_datasets` answers
+    "storage holds a dataset and the catalog does not"; this answers the reverse, which nothing did.
+
+    IT COSTS NO NEW I/O, which is why it rides `_orphan_category`'s walk. `discovered` is the URI set
+    that pass already built for its own comparison, and the location comes from a column of `__manifest`
+    the reconciler was simply not selecting (`lance_docs/namespace.md:968-976`).
+
+    A NULL LOCATION IS NOT A FINDING, and the schema is what says so: the spec makes `location`
+    nullable and present "only for tables", and a declared-only table is "reserved, no storage yet".
+    Such a record has nothing to resolve, so treating its absence as drift would report every
+    reservation in the estate as a defect — the loudest possible way to say nothing.
+
+    BOTH SPELLINGS RESOLVE. The spec calls `location` a "relative path to the table directory within
+    the root", while a table registered through `register_written_dataset` carries an ABSOLUTE `s3://`
+    uri — the cascade head is one. Understanding only one form would either miss every explicitly
+    registered table or mis-resolve every ordinary one.
+
+    ``trashed`` is excluded for the reason its mirror excludes it: a dropped table's record and bytes
+    part company BY DESIGN while the purge window runs, so neither direction of the pair is a defect.
+    """
+    findings: list[AbsentDataset] = []
+    for table, (root, location) in registered.items():
+        if not location:
+            continue
+        resolved = location if "://" in location else f"{root.rstrip('/')}/{location.lstrip('/')}"
+        resolved = resolved.rstrip("/")
+        if resolved in discovered or resolved in trashed:
+            continue
+        findings.append(AbsentDataset(table=table, root=root, location=resolved))
+    return sorted(findings, key=lambda finding: (finding.table, finding.location))
+
+
 def _ungoverned_tables(tables: Iterable[tuple[str, str]], governed: dict[str, int]) -> list[UngovernedTable]:
     """Catalog tables carrying NO authorization tuples at all.
 
@@ -738,6 +818,9 @@ class Sources(BaseModel):
     namespaces: list[tuple[str, str]] | None = None
     namespaces_error: str | None = None
     tables: list[tuple[str, str]] | None = None
+    #: Each table's ``(root, location)``, from the same manifest read that produced `tables`. Beside the
+    #: pairs rather than widening them: three call sites unpack `(table, root)`.
+    table_locations: dict[str, tuple[str, str | None]] | None = None
     tables_error: str | None = None
     buckets: list[str] | None = None
     buckets_error: str | None = None
@@ -893,7 +976,7 @@ async def load_sources(
     # that one trims every id to its leading segment.
     scanned_tables, sources.tables_error = await _read_blocking("catalog:tables", _tables_across, namespace_roots, storage_options)
     if scanned_tables is not None:
-        sources.tables, unreadable_table_roots = scanned_tables
+        sources.tables, unreadable_table_roots, sources.table_locations = scanned_tables
         sources.incomplete.extend(IncompleteScan(source=f"catalog:tables:{root}", reason=reason) for root, reason in unreadable_table_roots)
     return sources
 
@@ -1099,6 +1182,59 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
     return buckets
 
 
+def _registration_drift(report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]]) -> None:
+    """Both directions of catalog-vs-storage disagreement, from the walk's findings and the manifest.
+
+    [[LH-176]] finds bytes no catalog record names; [[LH-192]] a record whose location holds no bytes.
+    One function because they are the same comparison from opposite ends and must not be able to
+    disagree about which datasets were discovered.
+
+    GUARDED ON THE TABLE LISTING: both findings are an ABSENCE from one of the two sets, so a catalog
+    read failure would otherwise report every dataset in the estate as unregistered.
+
+    Measured 2026-09-19: `orphan_files` counted an unknown dataset's files while no category said the
+    dataset was unknown. Measured 2026-09-22: `bronze$events` answered `describe` 200 at a location
+    holding nothing, over a clean report.
+    """
+    if sources.tables_error is not None:
+        report.unavailable.append(
+            CategoryUnavailable(category="unregistered_datasets", reason=f"the catalog table listing could not be read: {sources.tables_error}")
+        )
+        # The same listing read from the other side: unreadable makes both answers unknown, not one.
+        report.unavailable.append(
+            CategoryUnavailable(category="absent_datasets", reason=f"the catalog table listing could not be read: {sources.tables_error}")
+        )
+    else:
+        trashed = {str(record["location"]).rstrip("/") for record in (sources.trash or []) if record.get("location")}
+        report.unregistered_datasets = _unregistered_datasets(
+            discovered=[uri for uri, _key in datasets],
+            registered={table for table, _root in sources.tables or []},
+            # A dropped table's bytes are still on disk under the record that names them.
+            trashed=trashed,
+        )
+        report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
+        # FILTERED TO THE BUCKETS ACTUALLY WALKED. A table in a bucket `_scannable_buckets` excluded
+        # resolves to a URI nothing discovered, and would be reported absent though its bytes are fine.
+        walked = {f"s3://{bucket}" for bucket in {uri.removeprefix("s3://").split("/", 1)[0] for uri, _key in datasets}}
+        candidates = _absent_datasets(
+            registered=sources.table_locations or {},
+            discovered={uri.rstrip("/") for uri, _key in datasets},
+            trashed=trashed,
+        )
+        report.absent_datasets = [f for f in candidates if any(f.location.startswith(f"{prefix}/") for prefix in walked)]
+        report.counts["absent_datasets"] = len(report.absent_datasets)
+        # Outside every walked bucket is UNKNOWN, not clean; dropping it is how a detector reports zero
+        # for an estate it only partly saw.
+        for finding in candidates:
+            if finding not in report.absent_datasets:
+                report.incomplete.append(
+                    IncompleteScan(
+                        source="catalog:tables",
+                        reason=f"{finding.table} is registered at {finding.location}, outside every scanned bucket — its bytes were not looked for",
+                    )
+                )
+
+
 def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sources: Sources) -> None:
     """Attach the unreferenced-file findings, or say honestly why they are absent.
 
@@ -1121,6 +1257,9 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         # amount of not-looking-for-one can change. Same reasoning that keeps this category out of
         # `report.total`: it is a registration fact, not a storage one the purge can act differently on.
         report.skipped.append(CategorySkipped(category="unregistered_datasets", reason=_ORPHAN_SCAN_OFF, coverage_gap=False))
+        # [[LH-192]] rides the same walk, so it is unrun whenever they are — not a `coverage_gap`, for
+        # the reason its mirror above gives.
+        report.skipped.append(CategorySkipped(category="absent_datasets", reason=_ORPHAN_SCAN_OFF, coverage_gap=False))
         return
     # GUARDED, like every other source in this module. The three storage calls on this path — the
     # filesystem construction here, `discover_datasets` per bucket, and `scan_datasets` below — used to
@@ -1148,27 +1287,9 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         # gate the #79 purge waits on — must not certify an estate whose file layer we only partly saw.
         for prefix in found.truncated:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
-    # [[LH-176]] — the DISCOVERY half, taken before the expensive per-dataset scan below and
-    # deliberately not gated on it: knowing a dataset exists that no catalog record names is a
-    # different question from knowing which files inside it are unreferenced, and the second one is
-    # meaningless when the first is unanswered. Measured 2026-09-19, `orphan_files` counted this
-    # dataset's FILES while no category said the dataset itself was unknown.
-    #
-    # GUARDED ON THE TABLE LISTING, because the finding is an ABSENCE from it — the same caution
-    # `repair.py` carries. Without it a catalog read failure would report every dataset in the estate
-    # as unregistered, which is the loudest possible way to say nothing.
-    if sources.tables_error is not None:
-        report.unavailable.append(
-            CategoryUnavailable(category="unregistered_datasets", reason=f"the catalog table listing could not be read: {sources.tables_error}")
-        )
-    else:
-        report.unregistered_datasets = _unregistered_datasets(
-            discovered=[uri for uri, _key in datasets],
-            registered={table for table, _root in sources.tables or []},
-            # A dropped table's bytes are still on disk under the record that names them.
-            trashed={str(record["location"]).rstrip("/") for record in (sources.trash or []) if record.get("location")},
-        )
-        report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
+    # Before the per-dataset scan and not gated on it: whether the catalog and storage agree a dataset
+    # EXISTS is a different question from which files inside it are unreferenced.
+    _registration_drift(report, sources, datasets)
 
     try:
         scan = scan_datasets(fs, datasets, settings.storage_options())

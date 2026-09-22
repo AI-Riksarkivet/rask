@@ -215,7 +215,7 @@ def test_a_fully_consistent_estate_reports_no_drift(tmp_path: Path, monkeypatch:
     accounted = set(report.counts) | {u.category for u in report.unavailable} | {s.category for s in report.skipped}
     assert accounted == set(mod.CATEGORIES), f"unaccounted categories: {set(mod.CATEGORIES) - accounted}"
     assert report.unavailable == []
-    assert sorted(s.category for s in report.skipped) == ["orphan_files", "unregistered_datasets"]
+    assert sorted(s.category for s in report.skipped) == ["absent_datasets", "orphan_files", "unregistered_datasets"]
     assert report.incomplete == []
 
 
@@ -316,7 +316,7 @@ def test_unbound_namespaces_is_skipped_not_zero_when_warehouses_are_off(tmp_path
     _Estate.namespace_dir(tmp_path, "legacy_ns")
     report = estate.run(monkeypatch, warehouses_enabled=False)
     assert report.unbound_namespaces == []
-    assert {s.category for s in report.skipped} == {"unbound_namespaces", "orphan_files", "unregistered_datasets"}
+    assert {s.category for s in report.skipped} == {"unbound_namespaces", "orphan_files", "unregistered_datasets", "absent_datasets"}
     assert "unbound_namespaces" not in report.counts
     assert report.total == 0
 
@@ -388,7 +388,7 @@ def test_a_dead_bucket_listing_degrades_only_orphan_buckets(tmp_path: Path, monk
     assert [u.category for u in report.unavailable] == ["orphan_buckets"]
     assert "PermissionError" in report.unavailable[0].reason
     assert "orphan_buckets" not in report.counts
-    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets", "orphan_files", "unregistered_datasets"}
+    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_buckets", "orphan_files", "unregistered_datasets", "absent_datasets"}
 
 
 def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -406,7 +406,7 @@ def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
     assert "registry:projects" in reasons and "unreadable" in reasons["registry:projects"]
     # ...and the run is still a full report, not a failure: every category was reached.
-    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_files", "unregistered_datasets"}
+    assert set(report.counts) == set(mod.CATEGORIES) - {"orphan_files", "unregistered_datasets", "absent_datasets"}
 
 
 def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
