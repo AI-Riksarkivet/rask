@@ -449,7 +449,14 @@ def describe_table(
         # "does any fragment live in a base", which was the pre-union premise, and then vended with NO
         # `bases=` at all — so every multi-base table that passed the guard got a credential scoped to
         # less than the table is, which is § H12's shortfall on the door nobody re-checked.
-        _, declared_bases = dataset_facts(response.location, so)
+        _, declared_bases, classified = dataset_facts(response.location, so)
+        # [[LH-058]] THE SECOND VENDING HOP, and it has to ask the same question. This door vends too, so
+        # gating only `POST /credentials` would leave a classified table's raw bytes reachable through
+        # `describe` — the same shortfall this block's own comment describes for the bases, one door over.
+        # See `credentials.py` for why a classified column makes a table unvendable rather than narrowly
+        # vendable: the field-to-file mapping is write-order dependent, so no policy can exclude a column.
+        if classified:
+            return response  # a classified column cannot be excluded from an object-store grant — server-mediated only
         if unsanctioned_bases(response.location, declared_bases, settings.vend_sanctioned_bases):
             return response  # a base the session policy cannot grant — only the catalog's root creds reach it
         creds = vendor.vend(table_location=response.location, tier="read", bases=declared_bases)

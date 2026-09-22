@@ -109,7 +109,29 @@ async def vend_credentials(
         return CredentialResponse(mode="server_mediated")
     # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
     # A tiny ROOT-cred manifest read to learn the version — not the byte-proxy (no data bytes move).
-    read_version, declared_bases = await run_in_threadpool(dataset_facts, described.location, settings.storage_options())
+    read_version, declared_bases, classified = await run_in_threadpool(dataset_facts, described.location, settings.storage_options())
+    # [[LH-058]] A CLASSIFIED COLUMN MAKES A TABLE UNVENDABLE RAW, and it is a property of the TABLE
+    # rather than of the caller — the same shape as the unsanctioned base below, for a reason that was
+    # measured rather than chosen.
+    #
+    # A vended credential's unit is an OBJECT; Lance's field-to-file mapping is write-order dependent.
+    # Measured on pylance 2026-09-22: two columns written together share ONE data file (`field ids:
+    # [0, 1]`), while a column added later gets its own. So whether a classified column's bytes are
+    # separable at all is an accident of the table's write history, and NO session policy can express
+    # "this prefix except that column". The row's open choice was "refuse or narrow"; narrowing is not
+    # expressible, which settles it.
+    #
+    # `server_mediated`, never a 403: the Arrow-IPC data endpoints CAN project, so this routes the
+    # caller to the one path where a column-level rule can ever be applied instead of denying a read
+    # they may well be entitled to. That is the door's existing answer for "a direct credential would
+    # be wrong here", and reusing it keeps one behaviour rather than two.
+    #
+    # WHAT THIS DOES NOT YET DO, stated so it is not mistaken for more: the server-mediated path does
+    # not mask either. This stops the raw bytes leaving under a 900 s credential the caller holds,
+    # which is the precondition for masking rather than masking itself.
+    if classified:
+        log.info("vend_server_mediated_classified_columns", extra={"location": described.location, "columns": list(classified)})
+        return CredentialResponse(mode="server_mediated")
     # #3-B ⊥ #2, NARROWED to the bases the policy would actually miss ([[LH-057]]). A multi-base table
     # whose every declared base is sanctioned IS direct-vendable: `build_session_policy` grants each one
     # a `ListBase<n>`/`BaseObjects<n>` pair, so the client reaches its own bytes. Only a base

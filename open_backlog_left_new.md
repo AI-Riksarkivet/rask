@@ -594,8 +594,39 @@ of mine in this same session.**
   "storage ACLs can be read-only on main and write-only on the branch". So no `branch` FGA type; the
   work is a branch-aware vended prefix (`<table>/tree/<b>/*`), which the credentials door cannot express
   today because it takes no branch parameter.
-- *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test.
-- *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530 (ten types, no column)` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
+- **THE CLASSIFICATION STORE ALREADY EXISTS, AND IT IS THE LANCE FORMAT'S (measured 2026-09-22).** The
+  row lists "put classification on column metadata" as work; pylance already does it.
+  `dataset.update_field_metadata({"ssn": {"rask.classification": "restricted"}})` round-trips through a
+  reopen, and the catalog already exposes the door (`POST /{id}/update_field_metadata`). **Both the
+  value and the field's id survive a RENAME** — `secret` -> `ssn` kept `LanceField.id() == 1` and kept
+  the metadata. Keying column governance on a FIELD-ID rather than a name is the detail the reference
+  model builds deliberately, and here it is a property of the format, so no `column` object and no
+  side table are needed to get it.
+- **"REFUSE OR NARROW" IS SETTLED BY MEASUREMENT, NOT BY A RULING.** A session policy's unit is an
+  OBJECT and Lance's field-to-file mapping is write-order dependent: measured on the same pylance, two
+  columns written together share **ONE** data file (`field ids: [0, 1]`) while a column added later
+  gets its own (`[2]`). So whether a classified column's bytes are separable at all is an accident of
+  the table's write history, and **no policy can express "this prefix except that column"**. Narrowing
+  is not expressible; refusing is the only sound answer.
+- **SHIPPED: A CLASSIFIED COLUMN MAKES ITS TABLE UNVENDABLE RAW, at BOTH vending doors.** The
+  classification rides `dataset_facts` — the vend's ONE root-cred manifest read, the same handle the
+  bases come off, so it costs no second open. `POST /{id}/credentials` and the `describe`-with-vending
+  path in `tables.py:452` both fall back to `server_mediated`, which is this door's EXISTING answer for
+  "a direct credential would be wrong here" (the unsanctioned-base branch beside it) and the one path
+  where a column rule can ever apply, because the Arrow-IPC endpoints project. Gating only the first
+  door would have left the raw bytes reachable through `describe`.
+- **WHAT IT DOES NOT CLAIM, so it is not mistaken for masking:** the server-mediated path does not
+  project by classification either. This stops raw bytes leaving under a 900 s credential the caller
+  holds — the precondition for masking, not masking. And a table's OWNER is refused too: the refusal is
+  a property of the TABLE rather than of the caller, because the measurement says the bytes cannot be
+  narrowed for anybody.
+- **STILL OPEN AND NOW SEPARABLE: WHO MAY CLASSIFY.** `update_field_metadata` is gated at the router's
+  writer tier, so any table writer may both SET and REMOVE `rask.classification` — a writer can make
+  their own table vendable again by deleting the classification. That is exactly the separation of
+  duties the ruling's `tag` type with `apply` "independent of `modify`" exists for, and it is the whole
+  of what remains here.
+- *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test. **The raw half is closed** — `test_the_vend_door_refuses_a_classified_table.py` drives the REAL `vend_credentials` (nothing in the repo called it from a test before) and asserts the VENDOR IS NEVER ASKED, not merely that the mode says server-mediated; a door that mints a credential and discards it has still issued one. Mutation-checked by deleting the refusal.
+- *Evidence:* `services/catalog/src/catalog/core/vending.py (CLASSIFICATION_KEY, classified_columns, dataset_facts)` · `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py` · `services/catalog/tests/test_the_vend_door_refuses_a_classified_table.py` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
@@ -897,6 +928,14 @@ of mine in this same session.**
 - *What is left:* `_transforms/` holds 10 records in three shapes — one current, one with `name`+`entrypoint`, eight with `lane`+`entrypoint` — and `TransformSpec` (`extra="forbid"`, requires `name`, `task`) rejects nine of them; `_parse` at `transform_specs.py:182-193` logs `transform_spec_malformed` and skips. `cardinality` already defaults to `ONE_TO_ONE` in the model, so only the two mappings above need ruling. Once ruled: migrate or delete the nine (10 records total, 9 sharing one shape), then make an unparseable control record louder than a WARN or gate the set empty — no test asserts on `transform_spec_malformed` today. The live count is not re-measured this session.
 - *Closes when:* Every record under `<control_root>/_transforms/` validates against `TransformSpec`, and a record that does not is surfaced by more than a listing-path WARN.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84 (fields, extra=forbid, cardinality default), :182-193 (_parse warns and skips)` · `grep -rn transform_spec_malformed tests services/*/tests packages/*/tests → none` · `grep -rln 'migrate.*transform' scripts → none`
+
+**A THIRD MEASURED PYLANCE MISMATCH (2026-09-22, for [[LH-048]]):** `LanceDataset.alter_columns` is
+declared `*alterations: Iterable[AlterColumn]` and its implementation does
+`self._ds.alter_columns(list(alterations))`, where the Rust side requires each element to be a DICT.
+So the form the annotation demands — `alter_columns([{...}])` — raises
+`TypeError: 'list' object is not an instance of 'dict'`, and the form that works is the one the
+annotation rejects. `LanceSchema.field` is likewise absent from the stubs and present at runtime.
+Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, never an ignore comment.
 
 **LH-048 · Two measured upstream pylance defects are unfiled, and they are not the two this row named**
 `catalog` · **LOW**

@@ -148,7 +148,7 @@ def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(
 
     single = str(tmp_path / "single")
     lance.write_dataset(_table(), single, data_storage_version="2.2")
-    version, bases = dataset_facts(single, {})
+    version, bases, _classified = dataset_facts(single, {})
     assert version >= 1 and bases == (), f"a single-location table declared bases: {bases}"
     assert unsanctioned_bases(single, bases) == ()
 
@@ -161,7 +161,7 @@ def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(
         target_bases=["b1"],
         data_storage_version="2.2",
     )
-    _, mb_bases = dataset_facts(mb, {})
+    _, mb_bases, _ = dataset_facts(mb, {})
     assert mb_bases, "the registered base is absent from the manifest read, so the policy would be scoped to less than the table"
 
     # Nobody sanctioned it → the door must proxy, exactly as it always did for this shape.

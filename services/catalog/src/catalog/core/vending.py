@@ -258,8 +258,44 @@ def _covered(table_location: str, base: str, sanctioned_bases: Sequence[str]) ->
         return False
 
 
-def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, tuple[str, ...]]:
-    """``(current version, declared base paths)`` from ONE root-cred manifest read.
+#: The field-metadata key a classification is written under.
+#:
+#: LANCE FIELD METADATA IS THE CLASSIFICATION STORE, and no new one is needed ([[LH-058]]). Measured on
+#: pylance 2026-09-22: `update_field_metadata({"secret": {...}})` round-trips through a reopen, and both
+#: the metadata AND the field's id (`LanceField.id()`) survive a RENAME — `secret` -> `ssn` kept id 1 and
+#: kept the value. That stability across a rename is precisely what the reference model keys its column
+#: tags on FIELD-ID to obtain, and here it is a property of the format rather than something to build.
+#:
+#: NAMESPACED so it cannot collide with a user's own field metadata: this key decides whether bytes are
+#: vendable, and a table author who happens to use the word `classification` must not be able to change
+#: that by accident.
+CLASSIFICATION_KEY: Final = "rask.classification"
+
+
+def classified_columns(dataset: Any) -> tuple[str, ...]:
+    """The names of this dataset's fields carrying :data:`CLASSIFICATION_KEY`, sorted.
+
+    NAMES for the human-readable refusal, resolved from the schema at read time; the CLASSIFICATION
+    itself lives on the field and travels with it through a rename, so nothing here is keyed on a name.
+    """
+    try:
+        schema = dataset.lance_schema
+        names = [str(name) for name in dataset.schema.names]
+    except (AttributeError, OSError):  # a dataset whose schema cannot be read is not vendable on its columns
+        return ()
+    found: list[str] = []
+    for name in names:
+        try:
+            metadata = schema.field(name).metadata or {}
+        except (KeyError, ValueError):  # a nested path the flat name list cannot address
+            continue
+        if CLASSIFICATION_KEY in metadata:
+            found.append(name)
+    return tuple(sorted(found))
+
+
+def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, tuple[str, ...], tuple[str, ...]]:
+    """``(current version, declared base paths, classified column names)`` from ONE root-cred manifest read.
 
     The version is the client's optimistic-append base; 0 for a declared-only/new table with no
     readable dataset yet. The bases are what the vended policy must also be able to READ — a table
@@ -276,6 +312,10 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
 
     Base spellings are normalised through :func:`same_store_uri` because a manifest states a base in
     the manifest's own spelling, which may be schemeless — the policy needs a bucket and a key.
+
+    The CLASSIFIED COLUMNS ride the same handle for the same reason the bases do ([[LH-058]]): the vend
+    already opens this dataset once, and a second open to read field metadata would double the manifest
+    reads on every single vend.
     """
     import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
 
@@ -285,7 +325,7 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
     try:
         ds = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
     except (ValueError, OSError):
-        return 0, ()
+        return 0, (), ()
     bases: list[str] = []
     try:
         for ref in manifest_base_path_refs(ds):
@@ -295,7 +335,7 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
         # today's behaviour — the narrower credential — rather than a wrong grant.
         log.warning("vend_base_paths_unreadable", extra={"location": location}, exc_info=True)
         bases = []
-    return int(ds.version), tuple(bases)
+    return int(ds.version), tuple(bases), classified_columns(ds)
 
 
 def build_session_policy(
