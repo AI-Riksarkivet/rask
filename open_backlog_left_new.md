@@ -1827,7 +1827,24 @@ Register bookkeeping, not engineering.
   - **BOTH replicas at once: a REAL stall of ~320 s.** `Last Ack` climbed 13.88 s -> **5 m 17 s** and
     recovered at t=+334 s; Unprocessed went **140 -> 1,847**, a 13x backlog. By the pre-registered rule
     (>300 s) the row is CONFIRMED on the stall existing — but **it is not "a full `ackWait`"**: 320 s
-    against `ackWait: 720s`, well under half, and `Redelivered Messages` stayed **0** throughout.
+    against `ackWait: 720s`, well under half. (An earlier version of this bullet added "and
+    `Redelivered Messages` stayed 0 throughout"; that was not measured — the sampling grep captured
+    only `Last Ack` and `Unprocessed`, so the 0 readings come from before and after the stall, never
+    during it.)
+- **THE MECHANISM, AND IT IS ONE LINE OF CONSUMER STATE.** `nats consumer info` reports
+  **`Outstanding Acks: 72 out of maximum 72`** — stable across repeated samples, in ORDINARY operation.
+  The consumer permanently sits at its `Max Ack Pending` ceiling; that ceiling IS the lane's flow
+  control. So when every replica dies, exactly those 72 in-flight units are stranded un-acked, and the
+  broker may deliver nothing further until they ack-time-out — at `ackWait` measured **from their
+  delivery**, not from the kill. That is why the stall is 324 s rather than 720 s, why it is variable,
+  and why 720 s is its upper bound rather than its value.
+- **WHICH RULES OUT THE GRACEFUL-DRAIN REMEDY ON ARITHMETIC, not on taste.** Draining would mean the
+  dying pods finishing their outstanding units: 72 units across 2 replicas at
+  `secondsPerUnit: 14` is ~36 x 14 = **~500 s per pod**, against a
+  `sidecarBlockShutdownSeconds` of **20**. The window is off by a factor of twenty-five. The levers
+  that can actually shorten the stall are therefore `ackWait` (shorter timeout) or `Max Ack Pending`
+  (fewer units stranded) — both chart values, both measurable against the 324 s baseline — and NOT
+  `block-shutdown-duration`, which only buys time for work the app cannot finish anyway.
 - **THE INSTRUMENT THE OBVIOUS READING WOULD HAVE USED IS THE WRONG ONE, and it would have inverted the
   first result.** `Acknowledgment Floor` is the LOWEST UNACKED sequence, not a throughput counter: with
   `Max Ack Pending: 72` and out-of-order acks it sat frozen at 149,068 for **five minutes** while the
