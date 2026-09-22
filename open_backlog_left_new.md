@@ -654,6 +654,33 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
+- **THE DIAGNOSTIC WAS NOT RUNNING ON THE LANE THAT RUNS — found and fixed 2026-09-22, deployed and
+  observed.** The two readings this row rests on rode `summarize`, which only `run_sweep` calls: the
+  SERIAL lane. Every deployment runs the QUEUE lane, whose handler builds its own dict, and the live
+  line carried five counters and no memory at all. So for as long as the split has been deployed, the
+  instrument for this row has been dark on the only pod it describes — present in the code, present in
+  the tests, absent from every tick the estate emits.
+  **THE PLANNER STILL DOES THE ACCUSED WORK, which is why this mattered rather than being tidy-up.**
+  Splitting execution onto 4Gi workers moved the COMPACTION, not the discovery pass: `plan_sweep`'s own
+  docstring says "Every phase here is a metadata read — registries, a bucket listing, one manifest open
+  per dataset", and the live tick plans **568 of them every 120s in a 512Mi pod** — the same
+  per-dataset open this row narrowed to.
+  **`memory_readings()` is now the one seam both lanes call**, pinned as a SET rather than per key, and
+  **RSS joined it on the tick line**: the comparison needs both series at the same instant, and taking
+  RSS from `kubectl top` means joining two clocks by timestamp against the ~10Mi of sampling spread
+  this row already measured. `VmRSS` and NOT `ru_maxrss`, which is a high-water mark and so cannot tell
+  a tick that grew and released from one that retained. **OBSERVED on the deployed planner
+  (`main-7b996388`):**
+  `maintenance_tick_enqueued ... planned=568 published=568 lance_session_bytes=4384301 lance_session_cap_bytes=214748364 python_blocks=891502 rss_bytes=269156352`.
+  **`rss_bytes` IS NOT `kubectl top` AND THE TWO MUST NOT BE MIXED:** VmRSS read 256.7 MiB on the same
+  pod `kubectl top` reported at 217Mi, because the metrics API reports a container's WORKING SET.
+  Within a series each is consistent; across series the difference is the measure, not the memory.
+- **THE OOM DOES NOT REPRODUCE TODAY — 14 samples over 13 minutes, 2026-09-22.** The planner held
+  **214 -> 217Mi of 512Mi**, max-minus-min **4Mi**, against this row's pre-split baseline of 319Mi
+  climbing to OOMKill. Flat inside the +/-10Mi spread the row documents, so a slight upward drift
+  cannot be told from cache warm-up at that resolution — which is the argument for the per-tick
+  readings above rather than a verdict that the row is closed. The NATIVE question this row is about
+  stays open; what changed is that it can now be measured where it happens.
 - **THE CAUSE IS NARROWED TO NATIVE ALLOCATION, and every Python-side fix is eliminated by measurement.** Two readings now ride the tick summary (`lance_session_bytes`, `python_blocks`), and on the deployed estate they answer the question the row was opened on:
 
   | tick | RSS | python_blocks | session |
