@@ -1526,10 +1526,15 @@ maintenance:
   # single-flight guard, a poison dataset fails its own message instead of stopping everything
   # discovered after it, and work outlives a pod restart because JetStream holds it.
   #
-  # OFF by default. Turning it on changes where maintenance runs, and the deployment is still pinned to
-  # one replica (`replicas: 1` is hardcoded in maintenance.yaml), so the queue's scaling payoff is not
-  # available until that pin and the in-process sweep lock are retired together.
-  workTopic: ""
+  # ON, because the serial lane is what OOMKilled the planner ([[LH-183]]). Measured on the live estate
+  # 2026-09-22: with this empty the tick emitted 2,227 `compaction_*` log lines in 30 minutes inside a
+  # 512Mi pod, and died `OOMKilled exit 137` at 86m52s, then 442m35s and 460m50s under two successive
+  # allocator bounds — neither of which could stop a 512Mi pod doing 4Gi work.
+  #
+  # The `replicas: 1` pin and the in-process sweep lock still stand, and they bound the QUEUE'S SCALING
+  # PAYOFF rather than this fix: one planner enqueueing is all the split needs, because what moves off
+  # the pod is the EXECUTION, not the planning.
+  workTopic: "maintenance.work.v1"
   # DEDICATED MAINTENANCE WORKERS (docs/DECISIONS.md "Maintenance leaves the planner pod").
   #
   # One deployment does the planning AND the compaction today, at `replicas: 1` and 512Mi — so the
@@ -1543,10 +1548,12 @@ maintenance:
   # pin belongs to the PLANNER alone (its sweep lock, because `bindings.cron` fires on every replica
   # with no lease); the executor has never needed it, because the broker single-flights a unit.
   #
-  # OFF BY DEFAULT — a split arriving by upgrade would move compaction onto a pod nobody sized.
-  # Requires `workTopic`: with no queue there is nothing for a worker to consume.
+  # ON, and it is the SECOND of a pair that only works together. `workTopic` alone makes the planner
+  # enqueue and then consume its own messages in the same 512Mi pod — the identical defect with an
+  # extra hop. This switch is what sets `MAINTENANCE_EXECUTE_WORK=false` on the planner, so it
+  # publishes and does not consume. Pinned by `tests/unit/test_the_planner_does_not_execute_the_work.py`.
   dedicatedWorkers:
-    enabled: false
+    enabled: true
     replicas: 2
     resources:
       requests: { cpu: 250m, memory: 1Gi }

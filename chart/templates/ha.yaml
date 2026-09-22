@@ -124,3 +124,25 @@ spec:
       stabilizationWindowSeconds: {{ $.Values.autoscaling.scaleDownStabilizationSeconds }}
 {{- end }}
 {{- end }}
+{{- /* THE MAINTENANCE WORKER, which renders from its own template and is outside `.Values.services` —
+     the same way `controlplane` above "stayed invisible to chart-wide fixes". It runs
+     `dedicatedWorkers.replicas` (2) and executes every compaction in the estate, so a drain taking
+     both at once stops maintenance entirely. The PLANNER deliberately gets none: it is one replica,
+     and `minAvailable: 1` over one replica blocks every voluntary drain — the inverse hazard this
+     file's header records and `test_no_single_replica_deployment_carries_a_disruption_budget` gates. */}}
+{{- if and .Values.maintenance.enabled .Values.maintenance.dedicatedWorkers.enabled .Values.maintenance.workTopic }}
+{{- if gt (int .Values.maintenance.dedicatedWorkers.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lance.fullname" $ }}-maintenance-worker
+  labels: {{- include "lance.labels" $ | nindent 4 }}
+spec:
+  minAvailable: {{ $.Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: maintenance-worker
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+{{- end }}
+{{- end }}

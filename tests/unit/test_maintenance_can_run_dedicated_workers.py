@@ -35,9 +35,17 @@ def _env(dep: dict) -> dict[str, str]:
     return {e["name"]: e.get("value", "") for c in dep["spec"]["template"]["spec"]["containers"] for e in (c.get("env") or [])}
 
 
-def test_OFF_by_default_renders_exactly_one_maintenance_deployment() -> None:
+def test_ON_by_default_renders_BOTH_a_planner_and_an_executor() -> None:
+    """The split is the DEFAULT, because the un-split lane is what OOMKilled the pod ([[LH-183]]).
+
+    With no queue the tick falls through to `run_sweep(settings)` and compacts the whole estate inside
+    its own request. Measured on the live estate 2026-09-22: the planner emitted 2,227 `compaction_*`
+    log lines in 30 minutes in a 512Mi pod and died `OOMKilled exit 137` — at 86m52s, then 442m35s and
+    460m50s under two successive allocator bounds, none of which could stop a 512Mi pod doing 4Gi work.
+    Shipping the split off meant shipping that.
+    """
     names = [n for n in _deployments("maintenance.enabled=true") if "maintenance" in n]
-    assert len(names) == 1, f"the split must be opt-in; got {names}"
+    assert len(names) == 2, f"the planner must ship with an executor beside it; got {names}"
 
 
 def test_ON_renders_a_separate_executor() -> None:
@@ -81,5 +89,7 @@ def test_the_EXECUTOR_may_scale_and_is_sized_for_the_work() -> None:
 def test_the_split_requires_a_queue() -> None:
     """Dedicated workers with no work topic would be pods subscribed to nothing — a silently idle
     deployment that looks like capacity. The chart renders no worker at all."""
-    deps = _deployments("maintenance.enabled=true", "maintenance.dedicatedWorkers.enabled=true")
+    # The queue is EXPLICITLY emptied here: it now ships set, so inheriting the default would test the
+    # happy path under a name that promises the opposite.
+    deps = _deployments("maintenance.enabled=true", "maintenance.dedicatedWorkers.enabled=true", "maintenance.workTopic=")
     assert [n for n in deps if n.endswith("-maintenance-worker")] == []

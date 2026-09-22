@@ -70,12 +70,15 @@ backward compat. Comments carry rationale and provenance, never history.**
 2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing. My own
 verdicts are the least audited: several blockers and two severities dissolved on re-reading in one day.
 
-**RAY / COMPUTE, measured — do not re-derive:** `MALLOC_ARENA_MAX` is glibc-only and this estate's
-services allocate through **mimalloc** (pyarrow's default) and **jemalloc** (duckdb), so it governs
-almost nothing — the worker still OOMKilled at 442m against a pre-fix 87m. `ARROW_DEFAULT_MEMORY_POOL`
-is the lever that makes the existing bound reach Arrow. The stage job emits no OpenLineage of its own;
-the stage RUNNER emits durably through the outbox, and a lane driven around the platform is correctly
-refused rather than under-served.
+**MEASURED — DO NOT RE-DERIVE.** An OOM in a lakehouse service is a SIZING/DESIGN question before it
+is an allocator one: `maintenance` OOMKilled because the PLANNER runs the sweep INLINE when
+`workTopic` is unset (`api/routes.py`), doing 4Gi-sized compaction in a 512Mi pod. Two allocator
+fixes moved it 87m -> 442m -> 460m and neither stopped it. **BYO WORKERS is the shape** — heavy work
+belongs on a pod sized for it, reached through a queue, not in the planner's memory.
+`MALLOC_ARENA_MAX` is glibc-only while pyarrow allocates through **mimalloc** and duckdb bundles
+**jemalloc**, so it governs little; `ARROW_DEFAULT_MEMORY_POOL=system` was tried and FALSIFIED.
+The stage job emits no OpenLineage of its own; the stage RUNNER emits durably through the outbox, and
+a lane driven around the platform is correctly refused rather than under-served.
 
 ### Verification, per commit
 
@@ -167,12 +170,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **102 are blocked on a decision** and **93 can be picked up today**.
+**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 36 | 2 | 8 |
+| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -910,6 +913,48 @@ have no `uv.lock` and so cannot be built to emit anything.
   should go flat because it stops holding fragments, and the workers absorb the work on a pod sized for it.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
+
+
+**LH-185 · Heavy, unbounded work runs INLINE in pods sized for coordination — the maintenance OOM is one instance of a pattern across all four lakehouse services**
+`catalog, lineage, medallion, maintenance` · **HIGH** · OPEN
+- **FOUND BY SWEEPING FOR THE SHAPE [[LH-183]] TURNED OUT TO BE (2026-09-22).** The maintenance planner
+  OOMKilled because it executed the sweep in its own 512Mi request rather than enqueueing it. A
+  16-agent sweep of the other three lakehouse services for the SAME defect class — a handler doing work
+  that scales with DATA size or dataset COUNT, in-process, in a pod sized for coordination — returned
+  **12 candidates, of which 10 survived adversarial verification** (each verifier instructed to default
+  to refuted and to read the code rather than the claim).
+- **THE SHARPEST IS THE CATALOG'S INDEX DOOR, and it is the maintenance defect exactly:**
+  `indices.py:85-87` calls `_queue_build(...)` and falls straight through to an in-process
+  `native.call(ns, "create_table_index", body)` when `settings.maintenance_index_topic` is empty — and
+  **empty is the shipped default** (`chart/values.yaml` `indexTopic: ""`, and `services.yaml` gates the
+  whole `LANCE_MAINTENANCE_INDEX_TOPIC` env block on it, so the queued lane is unreachable as shipped).
+  An IVF_PQ build trains over the table's whole vector column and an FTS build tokenises every row;
+  **nothing bounds it** — no batch size, no thread cap — unlike the sibling compact door, which pins
+  `batch_size=64, num_threads=2` and whose own comment names the hazard: "rows are not a unit of
+  memory, and the default batch size on a blob tier read ~15 GB/thread — the OOM measured on the
+  maintenance pod is just as available to the catalog pod through this button". The chart concedes the
+  magnitude too: "a compaction unit is minutes and a vector index over a large table is not".
+- **THE FULL CANDIDATE SET, recorded so the next pass does not re-derive it:**
+  * **catalog** — `indices.py:87` (high): The index-build doors run the build INLINE in the catalog process on the shipped configuration. `create_index` (indices.py:87) and `create_scalar_index` (indices.py:120) call `_queue_build` first, but…
+  * **catalog** — `dataplane.py:1547` (high): The change-feed door materialises an unbounded scan three times over in the request handler. `POST /management/v1/table/{id}/changes` (api/v1/endpoints/data.py:644, calling into dataplane at data.py:6…
+  * **catalog** — `erasure.py:168` (medium): The erasure door compacts the whole table AND full-scans every retained version, inline, with no queue path at all. `POST /management/v1/table/{id}/erasure` (api/v1/endpoints/erasure.py:42) hands the …
+  * **lineage** — `discovery.py:122` (high): GET /graph materialises the ENTIRE lineage estate — every Dataset node, every DERIVED_FROM edge and every WROTE edge in the graph — into the lineage process before its `limit` is applied, so the endpo…
+  * **lineage** — `discovery.py:87` (medium): GET /search pulls the whole dataset list AND the estate's entire column inventory into the process on EVERY request and substring-scans them in Python; `limit` (≤100) is applied only after the full sc…
+  * **lineage** — `reconcile_cron.py:457` (medium): The Dapr cron handler `_on_cron` reconciles the WHOLE estate inline, in-process, under a cluster-wide lock: an uncapped per-dataset loop that pays up to three AGE round-trips plus five object-store re…
+  * **medallion stage runners (bronze-to-silver / silver-to-gold / media-to-silver)** — `compute.py:520` (high): The stage runner's Dapr subscription handler POST /medallion-event runs the whole stage transform IN ITS OWN PROCESS on the in-process lane, full-materialising the entire upstream Lance table AND ever…
+  * **medallion-producer** — `media_produce.py:201` (medium): POST /ingest-media harvests the external source prefix inline in the producer's own process, and the two ceilings that exist to bound it are both checked AFTER the unbounded work has already happened:…
+  * **medallion stage runners (media lane, external-base tiers)** — `compute.py:641` (medium): The external-blob carry path — written specifically so a stage does NOT materialise the corpus — falls back to reading EVERY blob payload in the tier into a Python list whenever the first 64 rows happ…
+  * **notifications** — `inbox_actor.py:340` (medium): Every notification delivery does a whole-partition read-modify-write of the recipient's ENTIRE inbox, in the notifications pod's own process, and the row cap that is supposed to bound that partition (…
+  * **notifications** — `reconciler.py:254` (low): The reconcile cron's per-page bound is on ROW COUNT, not on bytes: each page asks lineage for up to 500 events with `summary=false` (the full OpenLineage payload), and the response is buffered whole, …
+  * **notifications** — `control_events.py:206` (low): The control-event lane expands a userset grant to its members and then delivers to them in a SEQUENTIAL, uncapped, unbudgeted loop inside the bus handler — one actor round-trip per member, with no pag…
+- *What is left:* Triage the ten confirmed against the fix [[LH-183]] just shipped — for each, either a
+  queue + a worker sized for the work (the catalog index lane already HAS one, switched off), or an
+  explicit bound (`batch_size`/`num_threads`) where the work must stay in-process. The pattern, not the
+  instances, is the deliverable: a door whose cost is a property of the DATA does not belong in a pod
+  sized for a request.
+- *Closes when:* No lakehouse handler performs data-scaled work in-process without either a worker lane
+  or a declared bound, and a gate refuses a new one.
+- *Evidence:* workflow `wf_46997777-6d5`, 16 agents, 12 findings / 10 confirmed · `services/catalog/src/catalog/api/v1/endpoints/indices.py:85-87,264-266` · `chart/values.yaml indexTopic: ""` · `services/maintenance/src/maintenance/services/maintenance.py:327-328 (the bound the index doors lack)` · [[LH-183]] for the measured instance
 
 ## PHASE 1 · CROSS-CUTTING
 

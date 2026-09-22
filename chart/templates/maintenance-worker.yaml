@@ -19,12 +19,18 @@ metadata:
 spec:
   replicas: {{ .Values.maintenance.dedicatedWorkers.replicas }}
   selector:
-    matchLabels: { app.kubernetes.io/component: maintenance, app.kubernetes.io/instance: {{ .Release.Name }} }
+    {{- /* ITS OWN COMPONENT, not the planner's ([[LH-183]]). Sharing `component: maintenance` put these
+       pods behind the PLANNER'S SERVICE (maintenance.yaml `selector: { app.kubernetes.io/component:
+       maintenance }`), which would route health, metrics and invocation onto pods that do not serve
+       that role — and it made the two indistinguishable to every selector the chart has, including
+       the PodDisruptionBudget this deployment needs at `replicas: 2` and the planner must NOT have at
+       one (`tests/unit/test_prod_ha_posture.py` gates both directions). */}}
+    matchLabels: { app.kubernetes.io/component: maintenance-worker, app.kubernetes.io/instance: {{ .Release.Name }} }
   template:
     metadata:
       labels:
         {{- include "lance.labels" . | nindent 8 }}
-        app.kubernetes.io/component: maintenance
+        app.kubernetes.io/component: maintenance-worker
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
       {{- if .Values.dapr.sidecars }}
@@ -307,9 +313,17 @@ spec:
             {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
-          resources: {{- include "lance.resources" (dict "root" . "comp" "maintenance") | nindent 12 }}
+          {{- /* SIZED FOR THE WORK, not for the planner ([[LH-183]]). `lance.resources` keyed on
+             "maintenance" hands back the PLANNER's tier — 512Mi — which is the exact sizing that
+             OOMKilled the pod this split exists to unload, so reading it here would move the OOM onto
+             a new pod name rather than remove it. `dedicatedWorkers.resources` is the tier the values
+             file already declares for this container ("Sized for the WORK, unlike the planner's
+             512Mi"), and until now nothing read it. Pinned by
+             `tests/unit/test_the_planner_does_not_execute_the_work.py`. */}}
+          resources: {{- toYaml $root.Values.maintenance.dedicatedWorkers.resources | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
+      {{- include "lance.spreadConstraints" "maintenance-worker" | nindent 6 }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
 {{- end }}

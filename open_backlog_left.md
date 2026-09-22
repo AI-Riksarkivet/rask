@@ -71,12 +71,15 @@ backward compat. Comments carry rationale and provenance, never history.**
 2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing. My own
 verdicts are the least audited: several blockers and two severities dissolved on re-reading in one day.
 
-**RAY / COMPUTE, measured — do not re-derive:** `MALLOC_ARENA_MAX` is glibc-only and this estate's
-services allocate through **mimalloc** (pyarrow's default) and **jemalloc** (duckdb), so it governs
-almost nothing — the worker still OOMKilled at 442m against a pre-fix 87m. `ARROW_DEFAULT_MEMORY_POOL`
-is the lever that makes the existing bound reach Arrow. The stage job emits no OpenLineage of its own;
-the stage RUNNER emits durably through the outbox, and a lane driven around the platform is correctly
-refused rather than under-served.
+**MEASURED — DO NOT RE-DERIVE.** An OOM in a lakehouse service is a SIZING/DESIGN question before it
+is an allocator one: `maintenance` OOMKilled because the PLANNER runs the sweep INLINE when
+`workTopic` is unset (`api/routes.py`), doing 4Gi-sized compaction in a 512Mi pod. Two allocator
+fixes moved it 87m -> 442m -> 460m and neither stopped it. **BYO WORKERS is the shape** — heavy work
+belongs on a pod sized for it, reached through a queue, not in the planner's memory.
+`MALLOC_ARENA_MAX` is glibc-only while pyarrow allocates through **mimalloc** and duckdb bundles
+**jemalloc**, so it governs little; `ARROW_DEFAULT_MEMORY_POOL=system` was tried and FALSIFIED.
+The stage job emits no OpenLineage of its own; the stage RUNNER emits durably through the outbox, and
+a lane driven around the platform is correctly refused rather than under-served.
 
 ### Verification, per commit
 
