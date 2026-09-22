@@ -508,6 +508,19 @@ spec:
     - { name: maxDeliver, value: "5" }
     - { name: backOff, value: "{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }},{{ .Values.maintenance.indexAckWait }}" }
     {{- end }}
+    {{- /*
+       THE INDEX LANE'S SHARE OF ONE POOL, not a second full allowance. `api/index_work.py` and
+       `api/work.py` both reach `run_in_threadpool`, whose limiter is process-GLOBAL, so the two
+       components' `maxAckPending` values sum to `maxConcurrentUnits x replicas` rather than each
+       taking it — bounding both to the full capacity would admit twice what can run, which is the
+       defect the bound exists to remove.
+
+       The share is small ON PURPOSE. A build holds its token for up to `indexAckWait` (3600s) against
+       the work queue's 720s, so index units taking the pool would starve a lane that runs every 120s.
+       And the delivery bound matters MORE here than on the work lane: an hour-long window burning on
+       a unit that cannot start redelivers a whole index build. [[LH-188]].
+    */}}
+    - { name: maxAckPending, value: "{{ include "lance.maintenanceIndexMaxAckPending" . }}" }
 scopes:
   - {{ .Values.maintenance.daprAppId }}
   {{- /*

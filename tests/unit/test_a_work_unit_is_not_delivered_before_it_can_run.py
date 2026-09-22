@@ -77,19 +77,46 @@ def test_the_work_queue_DECLARES_a_bound() -> None:
     )
 
 
-def test_the_bound_EQUALS_what_the_workers_can_run() -> None:
-    """The equality IS the design: deliver no more than can run, so no window opens on an idle unit."""
+def _index_component(docs: tuple[dict, ...]) -> dict:
+    found = [c for name, c in _components(docs).items() if "maintenance-index" in name or _meta(c).get("name") == "lance-dapr-maintenance-index"]
+    assert found, f"no maintenance index pubsub component rendered; components were {sorted(_components(docs))}"
+    return found[0]
+
+
+def test_the_INDEX_lane_declares_one_too() -> None:
+    """It is the lane where an unbounded delivery costs most.
+
+    A build holds its token for up to `indexAckWait` (3600s) against the work queue's 720s, so a unit
+    delivered with nothing to run it burns an HOUR before redelivering — and a redelivered build
+    rebuilds the whole index.
+    """
+    meta = _meta(_index_component(render(*DEFAULT_ARGS)))
+    assert "maxAckPending" in meta, "the maintenance INDEX component sets no maxAckPending, so that lane runs on NATS's default of 1,000"
+
+
+def test_THE_TWO_LANES_SHARE_ONE_POOL_AND_THEIR_BOUNDS_SUM_TO_IT() -> None:
+    """The equality that matters, and it is a SUM rather than a per-lane match.
+
+    `api/work.py` and `api/index_work.py` both reach `run_in_threadpool`, whose limiter is
+    process-GLOBAL. So bounding each lane to `maxConcurrentUnits x replicas` would admit TWICE what
+    the fleet can run — the defect these bounds exist to remove, reintroduced by counting the same
+    capacity twice. Asserted as a sum so a future third lane cannot quietly over-subscribe it either.
+    """
     docs = render(*DEFAULT_ARGS)
-    meta = _meta(_work_component(docs))
+    work = int(_meta(_work_component(docs))["maxAckPending"])
+    index = int(_meta(_index_component(docs))["maxAckPending"])
     workers = [d for d in docs if d.get("kind") == "Deployment" and "maintenance-worker" in d["metadata"]["name"]]
     assert workers, "no maintenance-worker Deployment rendered"
     replicas = int(workers[0]["spec"]["replicas"])
     env = {e["name"]: str(e.get("value", "")) for c in workers[0]["spec"]["template"]["spec"]["containers"] for e in c.get("env", [])}
     assert WORKER_ENV in env, f"the worker carries no {WORKER_ENV}, so its execution ceiling is anyio's default rather than a decision"
-    assert int(meta["maxAckPending"]) == int(env[WORKER_ENV]) * replicas, (
-        f"maxAckPending={meta['maxAckPending']} but the fleet can run {env[WORKER_ENV]} x {replicas} units. "
-        "Delivering more than can run is what lets a unit burn its ack window queued behind others."
+    capacity = int(env[WORKER_ENV]) * replicas
+    assert work + index == capacity, (
+        f"the lanes may deliver {work} + {index} = {work + index} units while the fleet can run "
+        f"{env[WORKER_ENV]} x {replicas} = {capacity}. They share ONE thread limiter, so the bounds must "
+        "split that capacity, not each claim it."
     )
+    assert index > 0 and work > 0, f"one lane was given the whole pool (work={work}, index={index}); both must be able to make progress"
 
 
 def test_the_WORKER_actually_enforces_the_number_it_is_given() -> None:
@@ -122,6 +149,7 @@ def test_an_EXISTING_consumer_is_converged_too() -> None:
     job = [d for d in render(*DEFAULT_ARGS) if d.get("kind") == "Job" and "nats-stream" in d["metadata"]["name"]]
     assert job, "no nats-stream Job rendered"
     script = _script(job[0])
+    assert "converge_max_ack_pending MAINTENANCE_INDEX" in script, "the stream Job never converges the INDEX durable's max_ack_pending"
     assert "converge_max_ack_pending MAINTENANCE_WORK" in script, (
         "the stream Job never converges the work durable's max_ack_pending, so an estate whose consumer "
         "predates the setting keeps the old bound silently and forever — the chart says 80 and the "

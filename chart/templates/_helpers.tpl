@@ -486,7 +486,16 @@ the executor's single-flight lock exists to prevent. Delivering no more than the
 stops a window opening on a unit that cannot start. [[LH-188]].
 */}}
 {{- define "lance.maintenanceMaxAckPending" -}}
-{{- mul .Values.maintenance.dedicatedWorkers.maxConcurrentUnits (int .Values.maintenance.dedicatedWorkers.replicas) -}}
+{{- mul (sub .Values.maintenance.dedicatedWorkers.maxConcurrentUnits .Values.maintenance.dedicatedWorkers.indexConcurrentUnits) (int .Values.maintenance.dedicatedWorkers.replicas) -}}
+{{- end -}}
+
+{{/*
+The INDEX lane's share of the same pool. The two defines SUM to `maxConcurrentUnits x replicas`
+because both handlers reach the one process-global thread limiter — bounding each lane to the full
+capacity would admit twice what can run.
+*/}}
+{{- define "lance.maintenanceIndexMaxAckPending" -}}
+{{- mul .Values.maintenance.dedicatedWorkers.indexConcurrentUnits (int .Values.maintenance.dedicatedWorkers.replicas) -}}
 {{- end -}}
 {{- define "lance.fullname" -}}{{ .Release.Name }}{{- end -}}
 

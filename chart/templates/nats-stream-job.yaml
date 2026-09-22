@@ -265,6 +265,7 @@ spec:
               # to make impossible.
               add_workqueue_if_missing MAINTENANCE_INDEX "maintenance.index.>"
               assert_retention MAINTENANCE_INDEX workqueue
+              converge_max_ack_pending MAINTENANCE_INDEX "{{ .Values.maintenance.daprAppId }}-index-durable" {{ include "lance.maintenanceIndexMaxAckPending" . }}
               {{- end }}
               # Reconcile app-durable config drift (the UPGRADE path): a Dapr jetstream subscription
               # can only BIND an existing durable whose config matches its request — after a values

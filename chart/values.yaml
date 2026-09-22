@@ -1567,10 +1567,14 @@ maintenance:
   dedicatedWorkers:
     enabled: true
     replicas: 2
-    # How many units ONE worker may execute at once, and the number the work queue's `maxAckPending`
-    # is derived from (`maxConcurrentUnits x replicas`). It exists so the ceiling is a DECISION: without
-    # it the real limit is anyio's default thread limiter — 40 — which nobody chose and an upstream
-    # change could move underneath the delivery bound.
+    # How many units ONE worker may execute at once, ACROSS BOTH LANES. It exists so the ceiling is a
+    # DECISION: without it the real limit is anyio's default thread limiter — 40 — which nobody chose
+    # and an upstream change could move underneath the delivery bounds derived from it.
+    #
+    # BOTH LANES SHARE IT, which is why the two `maxAckPending` values SPLIT this number rather than
+    # each taking it: `api/work.py` and `api/index_work.py` both reach `run_in_threadpool`, and that
+    # limiter is process-global. Bounding each lane to the full capacity would admit twice as many
+    # units as can run, which is the defect these bounds exist to remove.
     #
     # DELIVER NO MORE THAN CAN RUN. `ackWait` runs from DELIVERY, not from the start of execution, so a
     # unit sitting behind others burns its 720s window while idle and is redelivered — and a redelivered
@@ -1583,6 +1587,12 @@ maintenance:
     # the limit, and no tier in this estate has yet run a compaction that rewrites fragments, so there is
     # no per-unit figure to size against. Lower it when there is one.
     maxConcurrentUnits: 40
+    # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
+    # A reservation, not a measurement — an index build holds its token far longer than a compaction
+    # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool
+    # would starve the lane that runs every 120s, and letting compaction take it would leave a build
+    # delivered with nothing to run it while its hour-long window burns.
+    indexConcurrentUnits: 4
     resources:
       requests: { cpu: 250m, memory: 1Gi }
       # Sized for the WORK, unlike the planner's 512Mi. Compaction reads whole fragments: on bronze,
