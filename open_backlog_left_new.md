@@ -1137,6 +1137,14 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **MEASURED MEMORY, which is the whole point of the row:** planner **159Mi of 512Mi** against the
   pre-fix baseline of 319Mi climbing to OOMKill; workers 167Mi and 166Mi of 4Gi. The heavy half is on
   the pods sized for it and the planner is flat.
+- **THE INDEX LANE IS LIVE TOO, and proving it took a second deploy** ([[LH-151]]). The first
+  converge left `MAINTENANCE_INDEX` declared and absent: the stream job reported `Complete 1/1` while
+  `nats stream add` had died on "cannot ask for confirmation without a terminal", and the worker's
+  sidecar retried forever against `nats: no stream matches subject`. After the `--defaults` fix and a
+  redeploy (job r200): the stream exists, **0 subscribe failures in 90s** where there had been a
+  continuous stream of them, and `maintenance-index-durable` is bound with **ackWait 1h0m0s** — the
+  window that justified giving this lane its own component, an order of magnitude past the work
+  queue's 720s.
 - **THE LANE IS HEALTHY UNDER ITS CURRENT LOAD**, read off the consumer rather than inferred:
   `maintenance-work-durable` reports `Unprocessed 0`, `Redelivered 0`, `Ack Floor 44,682` — nothing
   queued undelivered, and no unit has ever exceeded the 720s ack window and been redelivered.
