@@ -1050,6 +1050,39 @@ have no `uv.lock` and so cannot be built to emit anything.
   512Mi limit and was OOMKilled repeatedly: there the work was sized by the DATA (4Gi compaction),
   here it is sized by the dataset COUNT. Fix them when the count grows or when the fix is cheap,
   not ahead of a row with a measured outage.
+- **THE PATTERN NOW HAS A MECHANISM AND TWO GATES (2026-09-22), and the first attempt at it STALLED
+  THE LANE — which is the part worth keeping.** Bounding memory looked like one number and is two.
+  `maxConcurrentUnits` sizes anyio's thread limiter, which serves BOTH the ~568 no-op units a tick
+  (two HTTP calls each, I/O-bound) and the rare real rewrite (memory-bound). Setting it to the
+  memory-safe figure throttled everything: measured within minutes on the live estate,
+  `Unprocessed Messages` went 2,128 -> 4,285 with 346 outcomes in five minutes — **1.15 units/sec
+  against the 4.7 the sweep injects** — and the delivery bound shrank with it, because [[LH-188]]'s
+  derivation tied the two together.
+  **SO THE BOUND MOVED TO THE ONLY STEP THAT HOLDS BYTES.** `services/rewrite_slot.py` is a
+  process-wide `BoundedSemaphore` acquired around the rewrite itself — `_execute_one` on the
+  distributed path, `compact_files` in-pod — and a no-op unit never acquires it because it never
+  reaches one. `maxConcurrentUnits: 40` is THROUGHPUT; `maxConcurrentCompactions: 4` is MEMORY.
+  **BOTH HOPS GATED, as an AST walk over the call sites**, because this estate has shipped the
+  half-wiring before (`create_table` reached `_write_blob` at two sites, one wired, every test green).
+  `rewrite_slots` is REQUIRED rather than defaulted: a defaulted parameter makes an un-wired chain
+  look clean. A leg asserts it is not the throughput setting — the mistake named where it would be
+  made again.
+- **THE EXISTING GATE COULD NOT HAVE CAUGHT IT, and that is a lesson about gates rather than about
+  this bug.** [[LH-188]]'s gate ties the lanes' delivery bounds to the fleet's execution capacity, so
+  it kept them CONSISTENT while both shrank — `6 + 2 == 4 x 2` held perfectly. **Consistency is not
+  adequacy.** The new gate compares the sweep's own cadence with the lane's capacity, two numbers that
+  live in different files: `expectedDatasets / scheduleSeconds x secondsPerUnit` units must be
+  admissible. `secondsPerUnit` is measured (6 in flight -> 1.15 units/sec -> ~5.2s), and the gate is a
+  FLOOR rather than an equality because the units are claim-check POINTERS — over-provisioning
+  delivery costs a pointer per queued unit, under-provisioning grows a backlog without bound.
+  Mutation-checked against the exact configuration that stalled it.
+- **THE PER-UNIT MEMORY FIGURE, which this row and [[LH-183]] both wanted:** a 240 MiB table in 60
+  fragments was built through the catalog and left for the sweep; `/proc/1/status` inside the worker
+  every 2s went `294Mi -> ... -> 729Mi -> ... -> 317Mi`. One rewrite bounded at `maxSourceBytes`
+  (256 MiB) peaked at **+434 MiB resident, ~1.7x the byte bound**, and released cleanly. That ratio is
+  what `test_the_worker_can_hold_every_unit_it_admits.py` multiplies against the declared pod limit, so
+  raising the byte bound without lowering concurrency now fails the RENDER rather than the pod. The 2s
+  interval makes 434 MiB a LOWER bound; the gate's 0.75 usable fraction carries that.
 - *What is left:* Triage the remaining rows against the fix [[LH-183]] shipped — for each, either a
   queue + a worker sized for the work, or an explicit bound (`batch_size`/`num_threads`) where the work
   must stay in-process. The pattern, not the instances, is the deliverable: a door whose cost is a
