@@ -43,6 +43,14 @@ _NOT_A_LOSS: dict[Outcome, str] = {
     Outcome.INGESTED: "the success path — throughput, and its absence is covered by the staged/relay rules",
     Outcome.RETRIED: "transient, and the sidecar redelivers; a retry that never succeeds ends as dead_lettered",
     Outcome.PARKED_ALREADY_RECORDED: "visibility, not loss — the graph already holds the run (LH-148)",
+    # The REPAIR path, and the one outcome here that is the inverse of a loss: the parking route
+    # re-presented the delivery and the graph now holds the run, confirmed by a second read rather than
+    # by an ack status (LH-148). It needs no rule of its own because the failure it could mask already
+    # has one: a park that does NOT recover stays `dead_lettered`, which `LineageDeadLettering` reads.
+    # A rising `recovered` rate means the BUS path is failing and the parking lane is catching it — a
+    # real signal, but a health one rather than a loss one, and the bus's own failure surfaces on
+    # `refused`/`retried` before it reaches here.
+    Outcome.RECOVERED: "the repair path — the graph holds the run; an unrecovered park is still dead_lettered (LH-148)",
 }
 
 

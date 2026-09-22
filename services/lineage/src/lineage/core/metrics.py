@@ -113,6 +113,16 @@ class Outcome(StrEnum):
     # argument for acking rather than a statistic. A producer regression shows up here as a rising line
     # and nowhere else.
     UNREPAIRABLE = "unrepairable"
+    # RECOVERED FROM THE DEAD-LETTER STREAM ([[LH-148]]): a parked delivery the graph did NOT hold, which
+    # the parking route re-presented to the ingest path and the graph then did. Its own value because it
+    # is the exact inverse of `DEAD_LETTERED` — the same population, measured after a second attempt
+    # rather than before one — and reading them as one number would hide the only thing an operator wants
+    # to know, which is whether the parking lane is losing provenance or repairing it.
+    #
+    # MEASURED, NEVER INFERRED FROM AN ACK. `handle_cloud_event` answers SUCCESS both for a committed
+    # write and for an unrepairable discard, so the route asks the graph a second time instead: a run it
+    # lacked and now holds was recovered. Anything else stays `DEAD_LETTERED`.
+    RECOVERED = "recovered"
 
 
 class Door(StrEnum):

@@ -948,7 +948,26 @@ still the owner's. Note the row's own analysis make
 - **THE PARKED EVENTS ARE WELL-FORMED AND INCLUDE CATALOG WRITES, which is what makes the deadline worth a decision rather than a shrug.** Sampled across the stream: every one an OpenLineage `COMPLETE` with job and outputs intact, spanning `lance-catalog`, `lance-medallion`, `external` and `maintenance` job namespaces — not the undeserializable junk [[LH-151]] found. Meanwhile `lineage_reconcile_provenance_missing` reads **`unknown_to_graph=126`** on the live estate, tables whose first write never reached the graph and which the estate's own alert says cannot be auto-repaired "because with no dataSource URI recorded, a node invented for it would assert a write nobody observed". **NOT ESTABLISHED, and it is the question:** whether re-ingesting these 2,495 would repair any of those 126. A sample of four is not a census, the one oldest-shaped event read was a maintenance COMPACTION (which would repair nothing), and confirming it means matching parked outputs against the unknown set. What IS established is that after the deadline the option is gone.
 - **blocked:** Disposition of the ~86% role-literal parked population (`author.sub` = data_eng/ray/analyst, unauthorizable by construction): drain the subject and record the loss, or grant a historical-replay identity. Also whether the graph should record provenance for a dropped table (a `service-maintenance` compaction of a dropped probe table parks permanently).
 - *What is left:* The metric half is shipped: `on_dead_letter` asks `repository.run_status` and records `PARKED_ALREADY_RECORDED` for a run the graph holds, `DEAD_LETTERED` otherwise (dapr.py:120), pinned by `tests/unit/test_a_park_the_graph_already_holds_is_not_terminal_loss.py`; its docstring states the retention bound (dapr.py:85-88); eight production sites pass `author_subject=settings.fga_service_identity`. The admin `/dlq/{run_id}/replay` door reads the OUTBOX object store only. Build a replay that re-presents a parked `dlq.<appId>` delivery to the ingest handler idempotent on `run_id` WITHOUT re-publishing — never via `reconcile_cron._drain_outbox`, which re-publishes by design. It serves only the authorizable remainder (~14% of samples); the mechanism (lineage's ingest consumer is ephemeral + `deliverPolicy: all`, so every restart re-parks) still holds in the chart. A real Dex subject that still parks (seq 12002/11975) is undiagnosed.
-- *Closes when:* A parked delivery on `dlq.lineage.events` can be re-ingested into the graph without landing back on `lineage.events.v1`, and the role-literal residue has a recorded disposition.
+- **CLAUSE 1 IS SHIPPED (2026-09-22) — a parked delivery now gets one more presentation to the ingest
+  path.** `on_dead_letter` asked the graph and then wrote the run off; it now calls the SAME
+  `handle_cloud_event` the live subscription uses, so the replay carries the same authorization
+  (`enforce_bus_authz`) and the same idempotence (`ingest_event` MERGEs on a deterministic run id), and
+  it writes to the repository directly — **nothing is published, so a recovered event never lands back
+  on `lineage.events.v1`**, which is exactly why the reconcile relay could not be used for this.
+  A new `Outcome.RECOVERED` separates repair from loss; the two were one number before.
+- **THE OUTCOME IS MEASURED, NOT INFERRED FROM THE ACK, and that turned out to be load-bearing.**
+  `handle_cloud_event` answers SUCCESS both for a committed write and for an unrepairable discard, so
+  the route asks the graph a second time: a run it lacked and now holds was recovered. Mutation-checked
+  — replacing that second read with `return True` reds the role-literal case and the failed-replay case,
+  i.e. it would have reported loss as repair for precisely the population whose disposition is open.
+- **THE OWNER'S RULING IS NOT PRE-EMPTED.** The ~86% role-literal population fails `enforce_bus_authz`
+  by construction, so it parks and counts exactly as before; only the authorizable remainder changes.
+  The residue disposition (clause 2) is still yours.
+- **AND THE LOSS WAS UNDER WAY WHILE THIS WAS BEING AUDITED.** `nats stream info DLQ`, twice, minutes
+  apart on 2026-09-22: Messages **1,659 -> 1,585**, First Sequence **10,640 -> 10,714**. 74 parked
+  deliveries aged out of the 7-day window during the audit that found the gap. Subjects:
+  `dlq.lineage.events` 1,554, `dlq.bronze-to-silver` 12, `dlq.silver-to-gold` 3.
+- *Closes when:* A parked delivery on `dlq.lineage.events` can be re-ingested into the graph without landing back on `lineage.events.v1`, and the role-literal residue has a recorded disposition. **Clause 1 is closed**; clause 2 is the owner's.
 - *Evidence:* `services/lineage/src/lineage/api/dapr.py:85-88, :120` · `services/lineage/src/lineage/api/v1/endpoints/dlq.py:87-137 (outbox-only replay)` · `chart/templates/dapr-component.yaml:172 (lineage subscriber deliverPolicy "all")` · ``grep -rn 'author_subject=settings.fga_service_identity' services/` → 8 sites`
 
 **LH-150 · Nothing refuses a boot whose `LANCE_NS_DELIMITER` disagrees with the OpenFGA object ids already stored, so changing it silently denies every check**

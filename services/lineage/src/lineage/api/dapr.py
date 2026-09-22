@@ -78,6 +78,41 @@ async def _graph_already_holds(request: Request, run_id: str | None) -> bool:
         return False
 
 
+async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_id: str | None) -> bool:
+    """Give a parked delivery ONE more presentation to the ingest path. True when the graph then holds it.
+
+    THE GAP THIS CLOSES was named in this module's own prose: "a dead letter older than the stream's
+    retention has no path back, because nothing re-ingests the DLQ stream itself". The DLQ stream is
+    `Max Age 7d` / `Discard Old`, so an unrecovered park is lost on a timer — measured on the live estate
+    2026-09-22, 74 parked deliveries aged out of the window inside the minutes it took to measure it
+    twice (Messages 1,659 -> 1,585).
+
+    THE SAME FUNCTION THE LIVE SUBSCRIPTION USES, deliberately: `handle_cloud_event` carries the same
+    authorization (`enforce_bus_authz` — may the stamped subject record THIS) and the same idempotence
+    (`ingest_event` MERGEs on a deterministic run id). So this is a re-PRESENTATION, not a second ingest
+    path with its own policy, and a role-literal author is refused here exactly as it was on the bus —
+    which is why this does not pre-empt the open ruling on that population.
+
+    IT PUBLISHES NOTHING. The write goes to the repository directly, so a recovered event never lands
+    back on `lineage.events.v1`. That is what separates this from the reconcile relay's drain, which
+    re-publishes by design and therefore cannot be used here.
+
+    FAIL-QUIET, because the caller is a parking route that must ACK. Any failure leaves the outcome
+    exactly as it was before this existed — parked and counted — so the worst case is today's behaviour.
+    """
+    repository = getattr(request.app.state, "repository", None)
+    if repository is None or not run_id:
+        return False
+    try:
+        await handle_cloud_event(repository, event, lambda parsed: enforce_bus_authz(parsed, request, get_settings()))
+    except Exception as exc:  # noqa: BLE001 — a replay must never turn a park into a 500 or a retry loop
+        log.info("dapr_dead_letter_replay_failed", extra={"run_id": run_id, "error": str(exc)})
+        return False
+    # ASK THE GRAPH, never the ack status: `handle_cloud_event` answers SUCCESS for a committed write AND
+    # for an unrepairable discard, so only a second read can tell recovery from a shrug.
+    return await _graph_already_holds(request, run_id)
+
+
 async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[None, Depends(require_dapr_token)]) -> dict[str, str]:
     """Park one dead-lettered ingest delivery: log + ack (Dapr-native DLQ, RESILIENCE gap #2).
 
@@ -97,6 +132,7 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     payload = event.get("data") if isinstance(event, dict) else None
     run_id = run_id_from_payload(payload)
     already_recorded = await _graph_already_holds(request, run_id)
+    recovered = False if already_recorded else await _reingest_from_the_park(event, request, run_id)
     log.log(
         logging.WARNING if already_recorded else logging.ERROR,
         "dapr_dead_letter_parked",
@@ -117,7 +153,10 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     # Without this counter the retries all counted RETRIED and the parking vanished from the metrics
     # (audit 2026-07-15). The split is what makes the number readable: a non-zero `DEAD_LETTERED` means
     # the graph is missing that run, which is the claim an alert on it is making.
-    record_outcome(Outcome.DEAD_LETTERED if not already_recorded else Outcome.PARKED_ALREADY_RECORDED, door=Door.DEAD_LETTER)
+    if recovered:
+        record_outcome(Outcome.RECOVERED, door=Door.DEAD_LETTER)
+    else:
+        record_outcome(Outcome.DEAD_LETTERED if not already_recorded else Outcome.PARKED_ALREADY_RECORDED, door=Door.DEAD_LETTER)
     return {"status": "SUCCESS"}
 
 
