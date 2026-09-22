@@ -1221,15 +1221,27 @@ measured (~10-14 MiB per commit pas
   fraction for shape uncertainty; applying it gives a ceiling of `((4Gi x 0.75) - 320Mi) / 14 MiB` =
   **~196**, so 200 overruns by 48 MiB. `test_the_worker_can_hold_every_unit_it_admits.py` now carries
   both arithmetics and refuses 200 by name.
-- **NOT YET OBSERVED FIRING, and that is a real gap rather than a formality.** Both wiring hops are
-  mutation-checked (retiring unconditionally fails the below-the-mark leg; moving the check before the
-  ack fails the ordering leg) and the setting is read back off the live Deployment as
-  `MAINTENANCE_RECYCLE_AFTER_PASSES=150`. What has not happened is a retirement on the cluster,
-  because **every table on this estate is at target**: measured 2026-09-23, the worker logged
-  **97 `nothing_to_do` and ZERO committed rewrites in three hours**. Forcing one needs a #50 policy
-  record with a small `target_rows_per_fragment` through the authenticated catalog door — that is the
-  must-fire probe this row still owes, and it is the same fixture the retention rounds used.
-- *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
+- **OBSERVED FIRING ON THE LIVE POD 2026-09-23, end to end.** Every table on this estate is at
+  target (97 `nothing_to_do`, zero committed rewrites in three hours), so a retirement cannot occur by
+  waiting — it had to be provoked. A 40-fragment table was written through the live catalog at 100
+  rows per fragment against the **bronze target of 512** (`tiers.py:49`; the first attempt used 4096
+  and planned nothing, because Lance merges fragments SMALLER than target and those were four times
+  too big), the worker was set to `MAINTENANCE_RECYCLE_AFTER_PASSES=1` — a value that MUST fire — and
+  one unit was driven at the same `/maintenance-work` door the sidecar delivers to:
+
+  ```
+  22:52:14,820  compact_dataset  fragments_removed=40 fragments_added=12   a real committed rewrite
+  22:52:14,878  maintenance_unit_done  status='SUCCESS'                    the unit is acked FIRST
+  22:52:14,879  maintenance_worker_retiring  passes=1 rss_bytes=332845056  1 ms later, in order
+                Waiting for application shutdown. / Application shutdown complete.
+                exit reason=Completed  exitCode=0
+  ```
+
+  `restarts=1` on that pod and `restarts=0` on its sibling, which is the PDB working: a recycle takes
+  one replica. **The ordering the unit test asserts is confirmed where it runs** — ack at ...878,
+  retirement at ...879 — and the exit is `Completed`/0 through uvicorn's graceful shutdown rather than
+  a kill. The worker was returned to the shipped 150 and both probe tables dropped.
+- *Closes when:* **ONLY THE SOAK REMAINS — a day of clock, not a decision and not an unknown.** Both halves of the original bar are met: what bounds the worker is named and measured (inline execution in a coordination-sized pod; ~1.7x `maxSourceBytes` transient, ~12 MiB retained per pass), and the remedy is proven where it runs. What has not happened is a full day of sweep AND reconcile ticks inside the limit, and it cannot be compressed. The pods restarted today for this very probe, so the clock starts from 2026-09-23.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
 
