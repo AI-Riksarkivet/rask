@@ -689,9 +689,17 @@ have no `uv.lock` and so cannot be built to emit anything.
   successive compactions on ONE worker, comparing the SETTLED baseline between them. `B2 - B1 ~= B1 -
   B0` means it retains per rewrite and this row holds for that path; `B2 ~= B1` means the first was
   warm-up.
-  **THE EXPERIMENT IS WRITTEN AND HAS NOT RUN CLEANLY**: both attempts were spoiled by the work lane
-  being stalled ([[LH-190]]), so no second compaction ever executed. It needs a lane that delivers,
-  which is that row's business, not this one's.
+  **THE EXPERIMENT IS WRITTEN AND HAS FAILED THREE TIMES, each for a different reason, and the
+  reasons are the useful part:** (1) the sampler started 19s AFTER the compaction had committed —
+  local clock read as UTC; (2) the work lane was stalled by [[LH-190]], so no second compaction ever
+  ran; (3) the catalog PORT-FORWARD had died with a pod restart, so the driver created no tables at
+  all — and the runner's own `grep -E "^TABLE=|rows:"` filter swallowed the error, so it reported
+  nothing wrong for ten minutes.
+  **WHAT A FOURTH ATTEMPT NEEDS, stated so it is not rediscovered:** a driver connection VERIFIED at
+  the start rather than assumed; sampler windows compared against the event in UTC; a lane that is
+  delivering; and — the one nobody would predict — a work BACKLOG small enough that the new table's
+  unit is actually reached. At 7,224 queued and 5.25 units/sec the estate needs ~23 minutes to drain
+  before a freshly-created table is even looked at, so each round is ~25 minutes, not 5.
 - **THE OOM DOES NOT REPRODUCE TODAY — 14 samples over 13 minutes, 2026-09-22.** The planner held
   **214 -> 217Mi of 512Mi**, max-minus-min **4Mi**, against this row's pre-split baseline of 319Mi
   climbing to OOMKill. Flat inside the +/-10Mi spread the row documents, so a slight upward drift
