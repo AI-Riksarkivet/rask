@@ -697,6 +697,15 @@ have no `uv.lock` and so cannot be built to emit anything.
   is unambiguous — forty seconds of flat after it. This is the same shape as the earlier ad-hoc
   reading (+434 peak, +22 settled) on a different worker generation, so the magnitudes are stable
   across runs.
+- **THE DECISION RULE IS FIXED BEFORE ROUND 2'S DATA ARRIVES, so it cannot be rationalised after.**
+  Measured from round 1's own samples: **B0 = 302.3Mi**, **B1 = 316.6Mi (71 samples, sd 0.9Mi)** — a
+  retained step of **+14.3Mi at ~15 standard deviations**, so the baseline is tight enough to decide
+  on. But B1 also drifts upward at ~0.85Mi/min (315.9 -> 317.6 over two minutes), which across round
+  2's five-minute window is ~4Mi of drift that is NOT retention. Therefore:
+  * `B2 - B1` **>= ~10Mi** -> a rewrite RETAINS per unit; this row's claim holds for the worker path.
+  * `B2 - B1` **<= ~5Mi** -> consistent with drift alone; round 1's step was warm-up, the same verdict
+    the planner's series produced for the discovery pass.
+  * between the two -> the experiment does not decide it, and says so rather than picking.
 - **WHETHER THAT +22Mi IS WARM-UP OR RETENTION IS THE ROW'S REMAINING QUESTION, and one compaction
   cannot answer it.** The planner's own series settles the analogous question for the discovery pass —
   two independent pods stepped to *exactly* 303.9Mi at tick 3 and then oscillated in a 2.1Mi band, so
