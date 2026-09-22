@@ -1169,6 +1169,21 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **RAISING `maxAckPending` MAKES IT WORSE, which is the counter-intuitive part:** the bound is exactly
   how many units a restart can orphan. The lane that was unbounded (NATS's 1,000) could orphan a
   thousand.
+- **THE DRAIN MACHINERY ALREADY EXISTS AND DOES NOT COVER THIS, which narrows the remedy.** The app
+  arms a drain on SIGTERM (`service_kit.draining.arm_drain_on_sigterm`) and `work.py:87-98` answers a
+  NEW delivery with `retry_when_draining` — "ask for redelivery rather than start work". The pod has
+  `terminationGracePeriodSeconds: 120`, a `preStop` of `sleep 5`, and the sidecar carries
+  `dapr.io/block-shutdown-duration: 20s`. At 0.21s a unit, everything actually dispatched finishes in
+  about a second, well inside all three windows.
+  **SO THE STUCK UNITS WERE NEVER DISPATCHED. `Redelivered: 0` is the proof:** had the app seen them
+  while draining it would have asked for redelivery and the counter would move. They were delivered by
+  JetStream to the SIDECAR, held in its buffer awaiting dispatch, and died with it — unacked and
+  un-NAK'd, so only `ackWait` can release them.
+- **THAT PUTS THE SIZE OF THE PROBLEM EXACTLY AT `maxAckPending`,** which is the tension with
+  [[LH-188]] and has to be decided together: the bound that keeps the lane fed is also the buffer a
+  restart can strand. Observed here: `Outstanding Acks: 152 out of maximum 72` — MORE outstanding than
+  the current bound allows, because the 152 were stranded under the previous, larger one, and
+  JetStream will deliver nothing until enough of them expire to fall below 72.
 - *What is left:* Decide how a shutting-down worker releases what it holds. The candidates are a
   graceful drain on SIGTERM (finish or NAK the outstanding units, so they redeliver at once rather
   than after 720s), a shorter `ackWait` (bounded below by the longest single compaction, so it cannot
