@@ -1636,12 +1636,35 @@ of mine in this same session.**
   test_health_probes.py` — ten tests that start the app — runs in **2.47 s with the bound at 1 s and
   2.49 s with it at 60 s**. Identical. That path does not pay the handshake at all, so the offender is
   elsewhere and the warm-up is exonerated.
-- **AND THE HANG DOES NOT REPRODUCE LOCALLY, which bounds what this fix may be said to prove.** Every
-  local run of the offline suite this session has passed; the 8m17s stall is CI-only so far. The bound
-  is therefore justified on its own merits — a 60 s default inside a test suite is wrong whatever is
-  triggering it — and **is NOT yet demonstrated to be the cure**. The proof is `ms-test` going green.
-- *What is left:* **Find the file that still reaches the real factory and stub it at
-  `typed_proxy`/`inbox_for`, as thirty of the estate's thirty-one Dapr-touching files already do.** The
+- **THE HANG DID NOT REPRODUCE LOCALLY BECAUSE A FAKE SIDECAR HAS BEEN MASKING IT FOR 56 DAYS.**
+  `127.0.0.1:3500` is held by `python3 fake_sidecar.py`, **elapsed 56d15h**, cwd a DELETED scratchpad
+  from an unrelated session — so every local run on this box gets a 204 in milliseconds where CI gets
+  a refused connection. That single stray is the whole local/CI divergence, and it invalidated two
+  measurements before it was found: timing a file with the bound on and off showed no difference
+  because nothing was ever waiting.
+- **MEASURED PROPERLY AGAINST A REFUSED PORT (CI's condition), with the 1 s bound in place:**
+  `services/annotator/tests/test_task_history_is_bounded.py` — 4 tests — runs **92.65 s**, of which
+  two tests exceed a 45 s per-test cap and fail. A single test from that file passes in **1.56 s**.
+  So the offenders pay the handshake once PER LOOP ITERATION, not once per test: nothing caches when
+  the constructor raises, and these are claim/release loops.
+- **WHICH SIZES THE FIX HONESTLY: a 60x improvement that is not yet sufficient.** At the SDK default
+  those two tests cost `iterations x 60 s`, which is the 8m17s CI stall; at the 1 s bound they cost
+  `iterations x 1 s`, which survives but is still tens of seconds. **The bound is a floor, not the
+  cure** — the cure is stubbing, and it is now located to two named tests rather than "somewhere in
+  the suite".
+- **THE OFFENDERS ARE NAMED — seven tests, found with a `pytest_runtest_call` probe that spies on
+  `ActorProxyFactory.__init__`:** four in `services/annotator/tests/test_task_history_is_bounded.py`,
+  two in `services/notifications/tests/test_reconcile_cron.py`, and one in
+  `test_adversarial_inbox.py` which is LEGITIMATE — it exists to prove the handshake blocks the loop
+  and sets its own 0.25 s. Six to stub, one to leave alone.
+- **NOTE THE PHASE, because it is awkward rather than convenient:** four of the six are in the
+  ANNOTATOR, which the FOCUS block lists as do-not-work. They are nonetheless what reds `ms-test`,
+  and `ms-test` gates four e2e lanes. Stubbing a test so a gate can run is harness work, not annotator
+  feature work — but somebody should say so out loud rather than slipping annotator changes in under
+  a CI banner.
+- *What is left:* **Stub the six at `typed_proxy`/`inbox_for`, as thirty of the estate's thirty-one
+  Dapr-touching files already do.** And kill or disown the 56-day-old `fake_sidecar.py`: while it runs,
+  no local run can reproduce what CI sees. The
   bound makes the suite survive it; it does not make the test correct. A per-file guard exists for the
   last offender (`test_annotation_task_actor.py::test_a_transition_builds_NO_real_dapr_proxy...`) and
   did not travel — the hang returned through a different file — so the replacement wants to be a check
