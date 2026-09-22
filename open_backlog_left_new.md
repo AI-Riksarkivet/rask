@@ -1166,13 +1166,23 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   bytes, a protection record guards nothing, and an FGA grant keys off a table whose data is not there.
   The reconcile report ran clean over it: `ghost_tables 7` is an FGA-side category and does not mean
   this.
-- *Why it is not a one-line addition, and this is the part to know before starting:* the missing check
-  cannot reuse `_unregistered_datasets`'s machinery. That detector RECOVERS a table id from a location
-  in the catalog's own `<root>/<uuid8>_<ns>$<name>` layout, and `bronze$events` was registered with an
-  EXPLICIT location by `register_written_dataset`, so it is outside that layout and a storage-side scan
-  never produces its id. Answering "does this record's location exist" means a storage probe per table
-  across 97 warehouses — the order of work `reconcile`'s own comment reserves for the orphan pass ("it
-  opens every dataset rather than comparing three stores"), not for the cheap three-store compare.
+- *Why it cannot reuse the existing machinery:* `_unregistered_datasets` RECOVERS a table id from a
+  location in the catalog's own `<root>/<uuid8>_<ns>$<name>` layout, and `bronze$events` was registered
+  with an EXPLICIT location by `register_written_dataset` — outside that layout, so a storage-side scan
+  never produces its id and the detector skips it by design ("a location `table_id_from_location`
+  cannot answer for is skipped, never reported").
+- *AND THE COST IS NOT WHERE THIS ROW FIRST PUT IT — corrected on reading the pass.* It said "a storage
+  probe per table across 97 warehouses". **The storage side is already paid for:** `_orphan_category`
+  runs `discover_datasets` over every scannable bucket and holds the resulting URIs in memory as
+  `datasets`, which is what it then hands to `_unregistered_datasets`. Membership of a registered
+  location in that set is a dict lookup. The real cost is the CATALOG side — the reconciler's manifest
+  read takes `columns=["object_id", "object_type"]` and no location, and the spec's `ListTablesResponse`
+  carries ids rather than locations, so a location per table means a `describe` per table. That is a
+  different and smaller bill than the one this row first named.
+- *The false positive to design against, and the catalog already models it:* a DECLARED-ONLY table has
+  a record and no storage legitimately — `GET /v1/table`'s own `include_declared=false` exists to drop
+  "declared-only tables (reserved, no storage yet)". A detector that does not exclude them would report
+  every reservation in the estate as a defect, which is the loudest possible way to say nothing.
 - *Closes when:* A catalog record whose registered location holds no bytes is reported by the drift
   report, gated by a test, with `bronze$events` (or its successor) as the fixture — and the probe sits
   in the separately-gated expensive pass rather than on the 300 s tick.
