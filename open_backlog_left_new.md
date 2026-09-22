@@ -2495,6 +2495,19 @@ of mine in this same session.**
   climbing, and the absent 500 series afterwards was a counter RESET on a new pod rather than a fix.
   A per-stem deploy is not proven by a converge that succeeded; it is proven by reading the image the
   pod is running and then the behaviour that changed.
+- **AND IT RESUMED RATHER THAN PRIMED, WHICH IS THE PART THAT COULD HAVE GONE BADLY.** `_prime()`
+  exists for a first tick and its docstring is explicit — "adopt the newest row as the mark and tell
+  nobody about the history behind it", recording a floor so the overlap "must never reach back into"
+  the skipped backlog. On a lane that had NEVER run, priming at head would have silently abandoned
+  every event the bus missed, and nobody would have chosen that. **It did not happen:** zero
+  `lineage_feed_cursor_primed` lines since the deploy, and the FIRST walk after the fix reports
+  `scanned=82` before settling to `scanned=1` per tick. A cursor was already durable in the sidecar's
+  plain state API — which `LineageCursorStore` chose on purpose, "the cursor belongs to the SERVICE" —
+  so the walk picked up where the mark stood instead of adopting the head.
+- **WHAT THAT DOES AND DOES NOT PROVE.** It proves the lane resumed from a stored mark and is now
+  caught up at `cursor=378053`. It does NOT prove 82 is the whole gap: how much of the dead period is
+  recoverable is bounded by lineage's own `/events` retention against how long the mark had been
+  stale, and neither was measured here. The durable-cursor choice is what made any of it recoverable.
 - **WHAT THIS DOES NOT DECIDE:** the ruling stands exactly as written. The shared-token path now
   WORKS; whether this hop should instead move to direct HTTP and present a dedicated credential is
   still open, and the fix here is what the row's second branch actually requires in order to be a
