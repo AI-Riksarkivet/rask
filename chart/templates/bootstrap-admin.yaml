@@ -5,9 +5,16 @@
    auth.bootstrapAdmin two things, on TWO objects, because they are two different authorities:
    `owner` on the default warehouse (warehouse:lance_catalog — RASK_FGA_DEFAULT_WAREHOUSE_OBJECT's
    default), which cascades down into every namespace and table that warehouse parents; and `admin` on
-   the estate root (estate:rask — RASK_FGA_ROOT_OBJECT's), which is what can_observe_events,
+   the estate root (estate:rask — RASK_FGA_ROOT_OBJECT's default), which is what can_observe_events,
    can_browse_storage and the admin console gate on. Plus one rung per SERVICE principal that needs a
    standing capability, each on whichever of the two its capability belongs to.
+
+   THE ESTATE GRANTS ARE SEEDED A RELEASE AHEAD OF THE SETTING THAT READS THEM. This hook runs
+   post-install/post-upgrade, so the fleet's pods are already rolling when it fires: a release that both
+   repoints RASK_FGA_ROOT_OBJECT and first writes these tuples hands every estate door a 403 for as long
+   as the hook takes. While the setting still names a warehouse the estate grants are inert-but-present,
+   which is exactly what is wanted. `test_the_estate_root_is_seeded_before_anything_checks_it` holds the
+   two in that order, and `make fga-estate-migrate` carries the holders this hook does not know about.
 
    THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
    was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first

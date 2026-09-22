@@ -80,7 +80,7 @@ class FgaSettings:
     #: on `reader` there, flows on `writer`, and the viewer gates its object browser on it. Three
     #: copies of the same default in three configs is exactly how one of them ends up naming a
     #: different object and quietly authorizing against something nobody grants.
-    fga_root_object: str = Field(default="warehouse:lance_catalog", alias="RASK_FGA_ROOT_OBJECT")
+    fga_root_object: str = Field(default="estate:rask", alias="RASK_FGA_ROOT_OBJECT")
     #: The estate's default WAREHOUSE — a structural coordinate, and deliberately NOT the one above.
     #:
     #: [[LH-055]]'s port moves the estate privileges onto `type estate`, and the single setting was

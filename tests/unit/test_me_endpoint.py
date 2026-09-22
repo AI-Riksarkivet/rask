@@ -180,6 +180,12 @@ def test_model_defines_the_relations_this_endpoint_checks() -> None:
 
     model = fga_module.load_model()
     defined = {(t["type"], rel) for t in model["type_definitions"] for rel in (t.get("relations") or {})}
-    assert ("warehouse", "can_observe_events") in defined  # the root object is a warehouse:
+    from catalog.core.config import Settings
+
+    # DERIVED from the setting this endpoint's own service reads, never typed: `/v1/me` checks
+    # `can_observe_events` on whatever `fga_root_object` names, so a literal type here would keep
+    # passing against a model that no longer defines the relation where the endpoint looks for it.
+    estate_type = str(Settings.model_fields["fga_root_object"].default).split(":", 1)[0]
+    assert (estate_type, "can_observe_events") in defined
     assert ("project", "can_administer") in defined
     assert ("project", "member") in defined

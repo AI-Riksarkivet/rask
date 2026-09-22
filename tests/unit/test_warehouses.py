@@ -191,7 +191,7 @@ def test_model_actually_defines_the_warehouse_relations() -> None:
     assert ("warehouse", "can_get_metadata") in defined
     assert ("warehouse", "can_create_namespace") in defined
     # The first-warehouse bootstrap door + the tenant-admin grant it seeds.
-    assert ("warehouse", "can_observe_events") in defined
+    assert (_ROOT_OBJECT.split(":", 1)[0], "can_observe_events") in defined
     assert ("project", "admin") in defined
 
 
@@ -260,9 +260,12 @@ def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPat
 # warehouse-create keeps a single door (the project's own rung, no bootstrap exception).
 # --------------------------------------------------------------------------- #
 
-#: The fixed FGA root object every estate-admin gate (/v1/events, /v1/access) checks against — the same
-#: default `Settings.fga_root_object` carries and `chart/templates/bootstrap-admin.yaml` grants `owner` on.
-_ROOT_OBJECT = "warehouse:lance_catalog"
+#: The ESTATE ROOT every estate-admin gate (/v1/events, /v1/access, project creation) checks against.
+#: READ FROM THE SETTING rather than spelled out: the fake store below seeds `owner` here and the
+#: endpoints check here, so a literal that falls behind `fga_root_object` turns every one of those
+#: cases into a 403 whose message names an object the fixture never heard of. The default WAREHOUSE is
+#: a different object of a different type (`fga_default_warehouse_object`) and is not this.
+_ROOT_OBJECT = str(Settings.model_fields["fga_root_object"].default)
 
 
 class _FakeStore:

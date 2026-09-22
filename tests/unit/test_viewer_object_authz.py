@@ -33,7 +33,9 @@ from viewer.core.config import ViewerSettings, get_viewer_settings
 
 
 STORE = "lance-catalog"
-ROOT = "warehouse:lance_catalog"
+#: The estate root the route must name, READ FROM THE SETTING the route itself reads. A literal would
+#: turn "the viewer stopped naming the root" and "the root moved" into the same failure.
+ROOT = str(ViewerSettings.model_fields["fga_root_object"].default)
 
 
 class _Body:

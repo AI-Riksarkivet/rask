@@ -204,6 +204,9 @@ class _Token:
     sub = "alice"
 
 
+#: The type `fga_root_object` names — the object every estate-wide privilege is checked against.
+_ESTATE_TYPE = str(Settings.model_fields["fga_root_object"].default).split(":", 1)[0]
+
 # Checks made OUTSIDE catalog/api/fga_deps.py. Static strings in app code (grep `relation=`), so
 # they are listed here with their source — the model cross-check below is what matters.
 _OTHER_SERVICE_PAIRS: dict[tuple[str, str], str] = {
@@ -216,7 +219,10 @@ _OTHER_SERVICE_PAIRS: dict[tuple[str, str], str] = {
     ("table", "can_promote"): "catalog require_can_promote (#17 model promotion endpoint)",
     ("project", "can_create_warehouse"): "catalog fga_deps.require_can_create_warehouse (#3-A)",
     ("project", "can_administer"): "catalog/api/v1/endpoints/policies.py (#84 project policy routes)",
-    ("warehouse", "can_browse_storage"): "viewer/api/v1/endpoints/objects.py (#90 raw object browser, root object only)",
+    # The ESTATE rungs, and the type is DERIVED from `fga_root_object` rather than typed: the root's
+    # type is a setting, so a literal here goes phantom the day it is repointed and the failure reads
+    # as "the viewer checks a relation that does not exist" rather than "the table is stale".
+    (_ESTATE_TYPE, "can_browse_storage"): "viewer/api/v1/endpoints/objects.py (#90 raw object browser, root object only)",
 }
 
 

@@ -105,10 +105,17 @@ type estate
         # PORT"). The reference model calls it `type server` with `define project: [project]` beneath
         # it; the name here says what it IS in this estate rather than what it is in a web service.
         #
-        # ADDITIVE ONLY SO FAR: nothing points at this type yet. `fga_root_object` still names
-        # `warehouse:lance_catalog`, so every live check resolves exactly as before. The repoint is a
-        # TUPLE migration (`fga.parent_object` returns the root as the PARENT of every top-level
-        # namespace, and `namespace#parent` is typed), and it lands separately.
+        # `fga_root_object` NAMES THIS TYPE, and only this one. The structural root a top-level
+        # namespace hangs off is a SEPARATE setting (`fga_default_warehouse_object`,
+        # `warehouse:lance_catalog`) because `namespace#parent` is typed `[warehouse, namespace]` and
+        # inherits eight rungs `… from parent` that this type does not define — pointing a namespace
+        # here is a model error and a lost cascade. The two are held apart by
+        # `tests/unit/test_the_two_fga_roots_answer_two_different_questions.py`.
+        #
+        # WHAT A SEPARATE TYPE BUYS over a second warehouse: `can_browse_storage` on `warehouse`
+        # resolves on ANY warehouse its owner owns, so the privilege was estate-scoped only because
+        # every call site remembered to name the root. A tenant cannot own an `estate:` object, so the
+        # scope is the model's now. Pinned in `model.fga.yaml` as alice holding nothing here.
         #
         # NO DOWNWARD `project: [project]`, though the reference model declares one under its `server`.
         # Nothing here would traverse it — `can_create_project` is `admin or operator`, not
@@ -133,8 +140,58 @@ type estate
         # are, so it carries its own grantable relation and does not migrate like them.
         define event_stager: [user, role#assignee]
         define can_create_project: admin or operator
+        # THE ESTATE-ADMIN RUNG. Checked ONLY on the root object (`fga_root_object`), never on a
+        # caller-supplied one, so there is nothing to inject. Owner-tier: authz scope == data scope, and
+        # a per-project admin must not reach an estate-wide surface.
+        #
+        # **THE NAME UNDERSTATES IT, AND THAT IS THE THING TO KNOW BEFORE GRANTING IT** — "grant this
+        # and someone can watch a feed" is what it reads like, and it is not what it does. Measured
+        # across the estate 2026-09-15, holding it also grants:
+        #   * `GET /v1/events` — every project's governance changes (`endpoints/events.py:59`)
+        #   * `POST /v1/projects` + the project list/get — i.e. CREATING TENANTS (`endpoints/projects.py:184,246`)
+        #   * the raw-tuple admin route — reading and MUTATING the authorization graph itself
+        #     (`endpoints/access_admin.py:199`)
+        #   * `POST /v1/stores` and its attach/detach siblings — naming a host the estate will talk to
+        #     (`endpoints/stores.py:105,135,197`)
+        #   * lineage's whole-estate projection (`api/fga_deps.py:144` in services/lineage)
+        #   * the `estate_admin` flag `/v1/me` reports (`endpoints/me.py:62`) — a display lookup rather
+        #     than a door, listed because it is a consumer and the gate below derives its list from code
+        # The viewer and controlplane gate their own estate reads on their own relations and merely CITE
+        # this one for contrast, so they are deliberately absent.
+        # So this is not an observer rung wearing an admin's name — it IS the admin rung, and "observe"
+        # is the weakest thing it permits. Renaming it is [[LH-076]]'s other half and needs an owner
+        # call, because the string appears in seeded tuples; correcting what it CLAIMS needs nobody's.
+        #
+        # Pinned by `tests/unit/test_the_estate_rung_documents_everything_it_gates.py`, which derives
+        # the consumer list from the code rather than trusting this comment — the drift it closes is
+        # exactly the one that produced the understated text.
         define can_observe_events: owner
+        # Raw OBJECT-STORE browsing (#90) — the viewer's `/api/objects`, `/api/object`,
+        # `/api/object/download`: an S3 list, a HEAD, and a full byte download over any bucket in the
+        # store registry. Like can_observe_events this is an ESTATE-WIDE privilege checked only on the
+        # root object, and owner-tier for the same reason: the registry's buckets include the external
+        # RAW tier and the observability bucket, which sit outside the medallion entirely (R23), so a
+        # per-tenant admin must not reach them. Registering a store is already an estate-admin door
+        # (`POST /v1/stores` gates on can_observe_events), and this makes browsing one consistent with
+        # that rather than strictly weaker.
+        #
+        # DELIBERATELY NOT a `store` type with per-store grants, and the reason is not simplicity. A
+        # `store` type needs an `estate`/parent tuple per store to be reachable at all, and the four
+        # SHIPPED default stores are never registered through the API — they come from `DEFAULT_STORES`
+        # in code. Nothing would write their tuples, so the model would be correct and the gate would
+        # deny every caller including the estate owner. A gate that denies everyone is an outage, not a
+        # gate. Per-store granularity lands the day store registration owns its own tuples.
         define can_browse_storage: owner
+        # Vending a WRITE credential for the estate's lineage outbox (`_lineage_outbox`), checked ONLY on
+        # the root object like the two estate privileges around it. Owner-tier would be wrong here and the
+        # difference is the point: the holders are SERVICES — the medallion, maintenance and ingest — and a
+        # service must never be an estate owner. So this names its own role instead of widening `owner`,
+        # the same shape `can_maintain` and `can_update_tag`'s `publisher` were minted for.
+        #
+        # The STS session policy the door builds scopes the credential to that one prefix and write tier
+        # (`vending.build_session_policy(bucket, "_lineage_outbox", "write")`), so this rung buys exactly
+        # "may append to the recovery log" and nothing else — not the control root around it, and not any
+        # tenant's data.
         define can_stage_events: event_stager or owner
 
 type warehouse
@@ -175,6 +232,17 @@ type warehouse
     # so nothing fails until the crash this seam exists for. See `_CONDITIONAL_GRANT_RUNGS`'s rule:
     # decide what the expiry leaves behind, and here it leaves a backstop that looks armed.
     define event_stager: [user, role#assignee]
+    # THE THREE ESTATE PRIVILEGES ARE NOT HERE, and their absence is the governance.
+    #
+    # `can_observe_events`, `can_browse_storage` and `can_stage_events` live on `type estate`, which is
+    # what `fga_root_object` names ([[LH-055]]). Defining them here too would make them resolve on ANY
+    # warehouse their owner owns, so a tenant admin would hold the estate-admin rung on their own
+    # bucket and the privilege would be estate-scoped only for as long as every call site remembered to
+    # name the root object. One caller checking a tenant warehouse would widen it silently. A tenant
+    # cannot own an `estate:` object, so keeping them off this type is what makes the scope structural.
+    #
+    # `event_stager` STAYS, and is not the same thing: it is a grantable role with live tuples, whereas
+    # the three above are computed usersets nothing grants. It confers nothing while no rung reads it.
     # ---- the GRANT axis (separate from the USE rungs above) ----
     # Who may hand out access here, as its own privilege rather than a side-effect of `owner`. Until
     # this existed the two were welded together — the grant routes gate on the owner bar — so
@@ -293,34 +361,7 @@ type warehouse
     # Pinned by `tests/unit/test_the_estate_rung_documents_everything_it_gates.py`, which derives the
     # consumer list from the code rather than trusting this comment — the drift it closes is exactly
     # the one that produced the old text.
-    define can_observe_events: owner
-    # Vending a WRITE credential for the estate's lineage outbox (`_lineage_outbox`), checked ONLY on
-    # the root object like the two estate privileges around it. Owner-tier would be wrong here and the
-    # difference is the point: the holders are SERVICES — the medallion, maintenance and ingest — and a
-    # service must never be an estate owner. So this names its own role instead of widening `owner`,
-    # the same shape `can_maintain` and `can_update_tag`'s `publisher` were minted for.
-    #
-    # The STS session policy the door builds scopes the credential to that one prefix and write tier
-    # (`vending.build_session_policy(bucket, "_lineage_outbox", "write")`), so this rung buys exactly
-    # "may append to the recovery log" and nothing else — not the control root around it, and not any
-    # tenant's data.
-    define can_stage_events: event_stager or owner
-    # Raw OBJECT-STORE browsing (#90) — the viewer's `/api/objects`, `/api/object`,
-    # `/api/object/download`: an S3 list, a HEAD, and a full byte download over any bucket in the
-    # store registry. Like can_observe_events this is an ESTATE-WIDE privilege checked only on the
-    # root object, and owner-tier for the same reason: the registry's buckets include the external
-    # RAW tier and the observability bucket, which sit outside the medallion entirely (R23), so a
-    # per-tenant admin must not reach them. Registering a store is already an estate-admin door
-    # (`POST /v1/stores` gates on can_observe_events), and this makes browsing one consistent with
-    # that rather than strictly weaker.
-    #
-    # DELIBERATELY NOT a `store` type with per-store grants, and the reason is not simplicity. A
-    # `store` type needs an `estate`/parent tuple per store to be reachable at all, and the four
-    # SHIPPED default stores are never registered through the API — they come from `DEFAULT_STORES`
-    # in code. Nothing would write their tuples, so the model would be correct and the gate would
-    # deny every caller including the estate owner. A gate that denies everyone is an outage, not a
-    # gate. Per-store granularity lands the day store registration owns its own tuples.
-    define can_browse_storage: owner
+
     # ---- grant actions, one per assignable rung ----
     # `manage_grants` grants anything here; a `pass_grants` holder may hand on ONLY what they already
     # hold. This is SQL's WITH GRANT OPTION, and the second clause is what makes the split useful

@@ -1505,7 +1505,8 @@ def cascade_tuples(settings: Settings, *, warehouse_id: str, project: str) -> li
     THE SWEEP'S `maintainer` GRANT IS WRITTEN HERE TOO, and it is the reason this docstring changed.
     It named that grant as precedent while no code in the estate wrote one: the create door emitted
     these rungs, this backfill emitted these rungs, and the only committed writer of a `maintainer`
-    tuple was the Helm hook, on the single fixed object `warehouse:lance_catalog`. Measured 2026-09-15
+    tuple was the Helm hook, on the single fixed object `warehouse:lance_catalog` (the default
+    warehouse — `maintainer` is a warehouse rung, and `type estate` does not define it). Measured 2026-09-15
     — 93 of 97 warehouses carried the tuple because 92 were written BY HAND into the live store on
     2026-09-08, and the 4 created since had none, so a tenant onboarded today was unmaintainable and
     nothing said so. It belongs in this function rather than beside it because create and backfill

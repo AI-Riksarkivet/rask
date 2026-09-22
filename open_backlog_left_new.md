@@ -488,6 +488,32 @@ of mine in this same session.**
   it against `fga_root_object`." A tenant cannot own an `estate:` object, so the scope stops depending
   on every call site remembering which object to name. Pinned as `user:alice` holding nothing on
   `estate:rask`; 53/53 tests, 405/405 checks, mutation-checked.
+- **THE REPOINT IS DONE, AND THE RUNGS ARE OFF `warehouse` (2026-09-22).** `fga_root_object` defaults to
+  `estate:rask`; `can_observe_events`, `can_browse_storage` and `can_stage_events` are defined on
+  `type estate` and on no other type. Removing them from `warehouse` is the half that makes the scope
+  STRUCTURAL rather than a habit: while the warehouse defined them they resolved on ANY warehouse their
+  owner owned — `model.fga.yaml` had already recorded alice holding `can_browse_storage` on
+  `acme_bucket` as the "surprising half" — so the privilege was estate-scoped only for as long as every
+  call site remembered to name the root. A tenant cannot own an `estate:` object, and the model now
+  refuses the question outright rather than answering it `true`. 53/53 tests, 402/402 checks.
+  Safe to remove because all three are COMPUTED usersets that nothing grants; `event_stager` stays on
+  `warehouse` because it is a grantable role with live tuples.
+- **SEEDED, MIGRATED AND OBSERVED IN ORDER (2026-09-22).** The bootstrap hook wrote
+  `estate:rask#event_stager@user:service-ingest` on the `main-a561a463` converge — read back off the
+  store, one tuple, which is the chart half proven. `make fga-estate-migrate` then carried the two
+  human owners the chart does not know about (`auth.bootstrapAdmin` is empty on this estate), and
+  answered `already held` for the stager, so the script is idempotent against the hook. Live checks
+  after the migration: `can_observe_events`, `can_browse_storage`, `reader` and `writer` all TRUE for
+  the Dex subject, `can_stage_events` TRUE for ingest, and FALSE for ingest observing, notifications
+  observing, and the owner creating a project (`can_create_project: admin or operator`, and the
+  migration deliberately does not promote `owner` to `admin`).
+- **FIVE GATES HAD THE ROOT'S TYPE SPELLED OUT, and each is now DERIVED from the setting the code
+  under test reads.** `test_fga_model_contract`, `test_me_endpoint`, `test_viewer_object_authz` and
+  `test_warehouses` each carried `warehouse:lance_catalog` or `("warehouse", "can_observe_events")` as
+  a literal, so the repoint turned four of them red and one of them — the viewer's — would have gone
+  red for the wrong reason: "the route stopped naming the root" and "the root moved" were the same
+  failure. Each now reads `Settings.model_fields["fga_root_object"].default` (or the viewer's /
+  catalog's own settings class), which is the only spelling that cannot fall behind.
 - *Closes when:* model.fga declares a column relation and an estate type, carries a machine identity
   and a `can_set_protection` rung, every new rung has a .fga.yaml case, and `fga_root_object` names the
   estate object. **NOT a `branch` type** — this row established that one would invent a resource

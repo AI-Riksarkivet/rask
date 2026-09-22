@@ -10,9 +10,10 @@ FGA-governed path — so a lost/duplicated/late event only costs a redundant (or
 **Estate-admin gated.** The feed is **estate-wide** — the buffer holds every replica's view of *every*
 project's governance changes (broadcast subscription, no per-tenant partition). Observing it is therefore a
 **platform** privilege, not a per-project one: the endpoint checks ``can_observe_events`` on the fixed root
-object (``settings.fga_root_object`` = ``warehouse:lance_catalog``), an owner-tier action, so **authorization
+object (``settings.fga_root_object`` = ``estate:rask``), an owner-tier action, so **authorization
 scope == data scope** — a mere project admin gets a 403 (the #12 fix; the earlier per-project param let any
-project admin read the whole estate). ``/v1/events`` matches no resource prefix in ``fga_deps.authorize`` so
+project admin read the whole estate). The root being its OWN TYPE is what makes that structural rather than
+a convention: no tenant can own an ``estate:`` object, so the privilege cannot be reached sideways. ``/v1/events`` matches no resource prefix in ``fga_deps.authorize`` so
 the router-wide gate only sets the 401/503 floor; the ``can_observe_events`` decision is made here explicitly
 (mirroring ``models.py``). A *meaningful* poll (events delivered or a reset) is audited
 (``event_stream_opened``) — never an empty tick, so a 5s-polling console doesn't flood the audit trail.

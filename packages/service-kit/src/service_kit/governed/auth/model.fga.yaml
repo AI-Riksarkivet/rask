@@ -132,12 +132,15 @@ tuples:
   # root_admin: owner of the ROOT warehouse (fga_root_object). ONLY this estate/platform tier reads the
   # estate-wide control-plane event feed (can_observe_events, GET /v1/events) — a per-project admin cannot.
   - { user: user:root_admin, relation: owner, object: warehouse:lance_catalog }
-  # The services that STAGE lineage events to the estate's recovery outbox. On the ROOT object, like
-  # every other estate-wide privilege, and as their own role rather than as `owner` — a service must
-  # never be an estate owner.
-  - { user: user:service-medallion-producer, relation: event_stager, object: warehouse:lance_catalog }
-  - { user: user:service-maintenance, relation: event_stager, object: warehouse:lance_catalog }
-  - { user: user:service-ingest, relation: event_stager, object: warehouse:lance_catalog }
+  # The services that STAGE lineage events to the estate's recovery outbox. On the ESTATE ROOT — the
+  # object `fga_root_object` names — and as their own role rather than as `owner`, because a service
+  # must never be an estate owner. `warehouse` does not define `can_stage_events` at all, which is what
+  # stops a tenant's warehouse owner from reaching the platform's recovery log.
+  - { user: user:service-medallion-producer, relation: event_stager, object: estate:rask }
+  - { user: user:service-maintenance, relation: event_stager, object: estate:rask }
+  - { user: user:service-ingest, relation: event_stager, object: estate:rask }
+  # The estate's first owner, concentric with every rung on that type.
+  - { user: user:root_admin, relation: owner, object: estate:rask }
 
 
   # ---- annotation projects (B3/S2) -------------------------------------------------------------
@@ -266,42 +269,42 @@ tests:
         assertions:
           can_promote: true
 
-  - name: only a ROOT-warehouse (estate) admin can observe the estate-wide control-plane event feed
+  - name: only an ESTATE admin can observe the estate-wide control-plane event feed
     check:
       - user: user:root_admin
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_observe_events: true }
-      # alice is a full project admin (owns acme_bucket via her team) but is NOT the root owner → denied the
-      # estate feed. This is the #12 fix: authz scope == data scope (per-project admin ≠ estate observer).
+      # alice is a full project admin (owns acme_bucket via her team) but holds nothing on the estate →
+      # denied the feed. This is the #12 fix: authz scope == data scope (per-project admin ≠ estate
+      # observer), and the estate being its own TYPE is what makes it structural rather than a habit.
       - user: user:alice
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_observe_events: false }
       - user: user:dave
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_observe_events: false }
-  - name: only a ROOT-warehouse (estate) admin can browse the raw object stores
+  - name: only an ESTATE admin can browse the raw object stores, and no warehouse confers it
     check:
       # #90. The store registry's buckets include the external RAW tier and the observability bucket
       # — outside the medallion entirely — so this is deliberately the same estate tier as the event
       # feed, not a per-tenant one. alice owning acme_bucket must NOT reach the raw scans.
       - user: user:root_admin
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_browse_storage: true }
       - user: user:alice
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_browse_storage: false }
       - user: user:dave
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_browse_storage: false }
-      # Recorded because it is the surprising half: the relation resolves on ANY warehouse its owner
-      # owns — alice owns acme_bucket, so it is true THERE. What makes the privilege estate-scoped is
-      # not the model, it is that the app only ever checks it against `fga_root_object`. Exactly the
-      # arrangement `can_observe_events` already has. If a future caller checks it against a tenant
-      # warehouse, the model will happily say yes and the scope silently widens — so the app-side
-      # invariant is pinned separately, in test_viewer_object_authz.py.
+      # THE HALF THAT USED TO BE SURPRISING, and is now simply impossible. While `warehouse` defined
+      # this rung it resolved on ANY warehouse its owner owned — alice owns acme_bucket, so it was true
+      # THERE — and the privilege was estate-scoped only because the app never checked it anywhere but
+      # `fga_root_object`. One caller naming a tenant warehouse would have widened it silently. The
+      # rung is defined on `type estate` alone, so the model refuses the question outright.
       - user: user:alice
         object: warehouse:acme_bucket
-        assertions: { can_browse_storage: true }
+        assertions: {}
   - name: an owner-only action must be REFUSED to the rung directly below it (mutation-detecting)
     check:
       # Each subject here HOLDS a live relation on the object, which is what the negatives above lack:
@@ -313,8 +316,10 @@ tests:
         assertions:
           reader: true              # the tuple is live
           can_get_metadata: true    # what a reader IS entitled to
-          can_observe_events: false # owner-only: slips to true if the rung drops to reader
-          can_browse_storage: false # owner-only: same
+          # The two estate rungs are NOT asserted here, and their absence is not a gap: `warehouse`
+          # defines neither, so a check would error rather than deny. The same mutation detection lives
+          # on the type that owns them — `user:looker`, a bare estate `reader`, is denied
+          # `can_observe_events` and `can_browse_storage` in the estate-root case below.
       - user: user:peter
         object: table:acme_gold_catalog
         assertions:
@@ -1371,31 +1376,31 @@ tests:
     check:
       # The three stagers reach it, and only through the role — none of them is an estate owner.
       - user: user:service-medallion-producer
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_stage_events: true, owner: false, can_observe_events: false }
       - user: user:service-maintenance
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_stage_events: true, owner: false }
       - user: user:service-ingest
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_stage_events: true, owner: false }
       # The estate owner keeps it concentrically, as with every other rung here.
       - user: user:root_admin
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_stage_events: true }
       # THE REFUSALS ARE THE POINT — this is why it is not `privileged_subjects`. The trainer presents
       # a dedicated credential and is privileged at both doors, and it does not stage events; the web
       # BFF is the ANONYMOUS read identity. Neither may append to the estate's recovery log.
       - user: user:service-trainer
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_stage_events: false }
       - user: user:service-web
-        object: warehouse:lance_catalog
+        object: estate:rask
         assertions: { can_stage_events: false }
-      # And it is ESTATE-scoped, not per tenant: holding it at the root grants nothing on a tenant's
-      # own warehouse, so a stager cannot use it to reach acme's data.
-      - user: user:service-ingest
-        object: warehouse:acme_bucket
+      # And it is ESTATE-scoped BY TYPE, not by convention: a tenant's warehouse owner cannot reach
+      # this rung, because `warehouse` no longer defines it anywhere. alice owns acme_bucket outright.
+      - user: user:alice
+        object: estate:rask
         assertions: { can_stage_events: false }
 
   - name: a USERSET is a subject too — `role:validators#assignee` and `team:eng#member` asked directly
@@ -1484,10 +1489,10 @@ tests:
   # [[LH-055]], owner ruling `docs/DECISIONS.md:2240` — "the FGA model shape is a PORT, not a
   # decision". The reference calls it `type server`; this estate calls it what it is.
   #
-  # ADDITIVE AND UNREACHED SO FAR, which is exactly why these cases exist. `fga_root_object` still
-  # names `warehouse:lance_catalog`, so the live estate resolves as before and the whole suite passes
-  # identically with or without the new type — a result that proves it breaks nothing and proves
-  # nothing about whether it WORKS. These assertions are the difference.
+  # THE OBJECT `fga_root_object` NAMES, so these assertions are what every estate door resolves through.
+  # They were written while the setting still pointed at a warehouse, when the suite passed identically
+  # with or without the new type — a result that proves a type breaks nothing and proves nothing about
+  # whether it WORKS. That is the gap these cases close.
   #
   # THE TIERS ARE THE POINT, not the `can_*` rungs. Three services gate their WHOLE routers on a bare
   # tier on the root object — `compute/security.py:39` and `controlplane/security.py:42` check
