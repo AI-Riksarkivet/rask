@@ -796,6 +796,33 @@ k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yam
 	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f chart/values-live-pins.yaml)"
 	@echo ">> NOT bare 'helm upgrade' — the release lives in Postgres; see scripts/helm.sh"
 
+k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution k3s-stem-check names). STEM=lance-rest-catalog TAG=main-<sha>
+	@# THE DOCUMENTED FIX FOR A SPLIT STEM, made runnable. `k3s-stem-check` refuses `k3s-up` while one
+	@# stem runs several tags and tells the operator to "rebuild one image from a commit carrying every
+	@# change, roll the whole stem, re-run" — but the rolling half had no command, so it was done by
+	@# hand with `kubectl set image` per deployment. That is the SECOND WRITER the chart's own comments
+	@# warn about: a partial roll leaves the release pinning the other half, and the next `helm upgrade`
+	@# silently reverts it.
+	@#
+	@# One helm upgrade instead, which converges every workload on the stem in a single transaction and
+	@# leaves the release agreeing with the cluster. It deliberately does NOT depend on k3s-stem-check:
+	@# this target is what RESOLVES the split the check refuses to proceed through.
+	@#
+	@# Image settings come from the LIVE release, exactly as k3s-up derives them, so a stem this call
+	@# does not name keeps the tag it is running rather than falling back to the chart default.
+	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
+	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN}; 	rm -f "$$LIVE"
+	@# EVIDENCE, NOT A GATE — and the difference decides the exit code. The upgrade above already
+	@# happened; `--check-only` reads EVERY stem, so an unrelated one being split would fail this
+	@# target after a deploy that succeeded, which reads as "the deploy failed". It reports instead,
+	@# and says what is still true so the operator's next move is obvious.
+	@if KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only; then \
+	  echo ">> every stem converged — `make k3s-up` will now pass its own check"; \
+	else \
+	  echo ">> this deploy SUCCEEDED, but another stem is still split (named above)."; \
+	  echo ">> `make k3s-up` will keep refusing until that one is converged too — same fix, different TAG/STEM."; \
+	fi
+
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)
 	@KUBECONFIG=$(KUBECONFIG) $(LOCALBIN)/k9s
 

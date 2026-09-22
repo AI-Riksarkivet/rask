@@ -170,12 +170,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
+**198 open items**, of which **102 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -947,14 +947,167 @@ have no `uv.lock` and so cannot be built to emit anything.
   * **notifications** — `inbox_actor.py:340` (medium): Every notification delivery does a whole-partition read-modify-write of the recipient's ENTIRE inbox, in the notifications pod's own process, and the row cap that is supposed to bound that partition (…
   * **notifications** — `reconciler.py:254` (low): The reconcile cron's per-page bound is on ROW COUNT, not on bytes: each page asks lineage for up to 500 events with `summary=false` (the full OpenLineage payload), and the response is buffered whole, …
   * **notifications** — `control_events.py:206` (low): The control-event lane expands a userset grant to its members and then delivers to them in a SEQUENTIAL, uncapped, unbudgeted loop inside the bus handler — one actor round-trip per member, with no pag…
-- *What is left:* Triage the ten confirmed against the fix [[LH-183]] just shipped — for each, either a
-  queue + a worker sized for the work (the catalog index lane already HAS one, switched off), or an
-  explicit bound (`batch_size`/`num_threads`) where the work must stay in-process. The pattern, not the
-  instances, is the deliverable: a door whose cost is a property of the DATA does not belong in a pod
-  sized for a request.
+- **ONE OF THE TEN IS CLOSED (2026-09-22): the catalog index door.** `indexTopic` now ships
+  `maintenance.index.v1`, so `_queue_build` publishes and the door answers with the unit id instead of
+  training an IVF_PQ in the catalog's request handler. Spec-correct rather than merely convenient —
+  `lance_docs/ns_catalog/spec.yaml:1705` states "Index creation is handled asynchronously" and
+  `CreateTableIndexResponse` carries an optional `transaction_id` and nothing else, so the queued id is
+  the whole contract. **Turning the value on exposed three chart holes that the value being empty had
+  been hiding, and all three are fixed here:** no JetStream stream captured `maintenance.index.>`, so
+  every publish would have landed nowhere (caught RED by the [[LH-151]] gate, both halves — publisher
+  and subscriber); `maintenance-index-durable` was missing from `lance.chartDurables`, so the orphan
+  pass would have DELETED the index subscription every run — the 2026-07-13 dead-subscription failure
+  produced by the loop built to prevent it; and nothing pinned the index lane OUT of the drift loop,
+  whose EXP config its 3600s ackWait can never match. Every hop is now gated and each gate was
+  mutation-checked: the planner does not subscribe (`execute_work=False`, pinned in
+  `test_an_index_build_leaves_the_request_handler.py`), the component is scoped to `catalog`, and a
+  failed publish raises rather than answering 200 with a phantom transaction id.
+- **TWO OF THE TEN ARE CLOSED (2026-09-22): the second is the change feed.** `read_changes` and its
+  `read_deleted_row_ids` sibling now YIELD an Arrow FILE a batch at a time instead of building the
+  whole answer three times over (`to_table()`, then the IPC encoding beside it, then `to_pybytes()`
+  onto the Python heap). The endpoint answers with `StreamingResponse`, matching the blob door in the
+  same file. **Measured, same projection both sides** (200k rows x 256B, 58.4 MB of Arrow over the
+  feed's five columns): peak RSS **147.6 MB -> 60.1 MB**, 2.53x payload -> 1.03x, with the wire output
+  **byte-identical** (58,410,370 both), same schema, same rows — so it is a pure memory change and no
+  consumer can tell. Two things worth keeping: `tracemalloc` reports **0 MB** for the scan and the
+  encode because Arrow allocates off the Python heap, so RSS is the only instrument that sees this;
+  and the first batch is pulled INSIDE `_user_sql`, because `to_batches()` is lazy and a generator
+  body runs after the response has started — a malformed predicate would otherwise become a truncated
+  200 instead of a 400. No bound was added because none exists to add: the version window is the only
+  cursor a consumer has, and one version can carry the whole table.
+- **THREE OF THE TEN ARE CLOSED (2026-09-22): the third is the erasure door.** It reached
+  `dataset.optimize.compact_files()` with NO bound, while `services/maintenance.py`'s `compact_now`
+  pins `batch_size=64, num_threads=2` and its own comment names this exact hazard — "the OOM measured
+  on the maintenance pod is just as available to the catalog pod through this button". Erasure was a
+  second such button on the same pod that nobody had counted, and it runs over exactly the tables most
+  likely to carry a blob column. The bound is now `COMPACTION_BOUND`, named once and imported, so a
+  third door cannot quietly differ. **Also found while writing the gate: TWO residual checks**
+  (`_versions_still_matching` and `_answers`) did `to_table(filter=...).num_rows` — materialising every
+  matching row to read a count, once per retained version, worst exactly when the subject has the most
+  rows. Both are `count_rows` now. The probe that proves this wraps a REAL dataset and records how it
+  was asked; `ty` refused it against the `_Dataset` protocol because `__getattr__` is statically
+  invisible, so it is `cast` with the reason stated rather than a second copy of the protocol.
+- **THE REQUEST SIDE IS ALREADY BOUNDED — checked 2026-09-22, do not re-derive it.** The catalog's
+  write doors take `data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)]`, so FastAPI
+  buffers the whole upload, which reads exactly like the response defect above. It is not one:
+  `main.py:333` applies `BodySizeLimitMiddleware` (64 MiB, `RASK_MAX_BODY_BYTES`) and a
+  `WriteConcurrencyLimitMiddleware` beside it. So the asymmetry was real but one-sided — writes were
+  capped and reads were not — and closing the read side is what the two rows above did.
+- **TWO OF THE REMAINING SEVEN ARE PHASE 2, NOT PHASE 1 — triaged 2026-09-22, do not work them here.**
+  The medallion stage-runner finding (`compute.py:520`) is real and the code already states it:
+  "Full-materialises payloads into memory, which is fine for this in-process fake-Ray stand-in over
+  the cascade's small overwrite-written datasets; a distributed job streams instead." That is the
+  in-process lane standing in for the distributed one, which is the same class as maintenance's Ray
+  half — the FOCUS block puts both in phase 2 COMPUTE, where BYO lives. Fixing the stand-in's memory
+  profile would harden a lane whose replacement is already scheduled. The lineage `/graph` and
+  `/search` findings are phase 1 but a DIFFERENT fix shape from the three closed above: both apply
+  `limit` AFTER governance filtering in Python, so pushing the bound into AGE changes what `total`
+  can honestly report — that needs a count query beside the bounded fetch, not a streaming rewrite.
+- **THE LINEAGE MEMORY ROWS ARE REAL BUT NOT URGENT — measured live 2026-09-22, not reasoned.**
+  `rask-lineage` sits at **184Mi of a 512Mi limit, 15h uptime, 0 restarts**, with its own reconcile
+  tick reporting `checked=483` and completing every ~5 min against a 300s cron. `/graph` and
+  `/search` really do materialise the whole estate before applying `limit`, but at 483 datasets that
+  costs nothing an operator would notice. This is the DIFFERENCE from [[LH-183]], which had the same
+  512Mi limit and was OOMKilled repeatedly: there the work was sized by the DATA (4Gi compaction),
+  here it is sized by the dataset COUNT. Fix them when the count grows or when the fix is cheap,
+  not ahead of a row with a measured outage.
+- *What is left:* Triage the remaining rows against the fix [[LH-183]] shipped — for each, either a
+  queue + a worker sized for the work, or an explicit bound (`batch_size`/`num_threads`) where the work
+  must stay in-process. The pattern, not the instances, is the deliverable: a door whose cost is a
+  property of the DATA does not belong in a pod sized for a request.
 - *Closes when:* No lakehouse handler performs data-scaled work in-process without either a worker lane
   or a declared bound, and a gate refuses a new one.
 - *Evidence:* workflow `wf_46997777-6d5`, 16 agents, 12 findings / 10 confirmed · `services/catalog/src/catalog/api/v1/endpoints/indices.py:85-87,264-266` · `chart/values.yaml indexTopic: ""` · `services/maintenance/src/maintenance/services/maintenance.py:327-328 (the bound the index doors lack)` · [[LH-183]] for the measured instance
+
+**LH-186 · Every binary door in the catalog publishes `application/json` in its own OpenAPI, so the generated client describes Arrow as JSON**
+`catalog` · **MEDIUM** · FIXED 2026-09-22
+- **MEASURED 2026-09-22** by generating the app's OpenAPI and reading the declared 200 content type
+  per route. Three doors serve bytes and advertise JSON:
+  * `POST /v1/table/{id}/query` -> serves `application/vnd.apache.arrow.file`, declares `application/json`
+  * `POST /management/v1/table/{id}/changes` -> same
+  * `GET /management/v1/table/{id}/blobs` -> serves `application/octet-stream`, declares `application/json`
+  (`count_rows` is correct — it really does answer JSON.)
+- **IT IS THE PUBLISHED CONTRACT, not cosmetics.** `frontend/packages/api/src/generated/catalog.ts`
+  is generated FROM this document and carries the `/changes` path at :661, so a client generated from
+  the catalog's own spec is told to parse Arrow as JSON. FastAPI defaults the 200 content type to
+  `application/json` whenever a route does not declare `responses=`, and none of these three do —
+  the media type they actually answer with is set on the `Response` object, which the schema
+  generator never sees.
+- **Not caused by the streaming change**: the declaration was already wrong when these doors returned
+  a buffered `Response`, and it is byte-identical after. Found while verifying that the change feed's
+  contract survived streaming, which is the only reason anyone looked.
+- **FIXED, and `responses=` ALONE WAS NOT THE FIX.** Declaring it produced the right media type
+  *alongside* `application/json`, because FastAPI merges the declaration with the default it derives
+  from `response_class` — which is `JSONResponse` unless a door says otherwise. The working form is a
+  `Response` subclass carrying `media_type` (`ArrowFileResponse`, `OctetStreamResponse`) passed as
+  `response_class=`, with `responses=` kept only to refine the schema to `{"type": "string", "format":
+  "binary"}`. Both generated artefacts were refreshed in the same change: `docs/catalog-openapi.json`
+  (the drift-gated contract) and `frontend/packages/api/src/generated/catalog.ts`, whose entries went
+  from `"application/json": unknown` to the real media types; `@rask/api` type-checks clean after.
+- **The gate reads BOTH SIDES rather than listing the doors it knows about**
+  (`test_a_binary_door_says_so_in_its_own_contract.py`): the ACTUAL media type comes from an AST walk
+  of `data.py` (the `media_type=` on whatever Response a handler returns), the DECLARED one from the
+  generated OpenAPI. A binary door added later is covered without anyone remembering to register it.
+  It carries a leg asserting the walk finds something at all, because an empty walk would pass
+  everything — and it was mutation-checked by stripping one decorator.
+- *Closes when:* The catalog's OpenAPI names the media type each door actually answers with, the
+  generated client agrees, and a gate refuses a new door that disagrees.
+- *Evidence:* generated OpenAPI 2026-09-22 — `query`/`changes`/`blobs` all `application/json` ·
+  `services/catalog/src/catalog/api/v1/endpoints/data.py` (`ARROW_FILE` set on the Response, absent
+  from `responses=`) · `frontend/packages/api/src/generated/catalog.ts:661`
+
+
+**CRITERION 1 (provenance survives a write) — MEASURED ON THE LIVE ESTATE 2026-09-22, and it reads clean**
+`lineage` · OBSERVATION, not a row
+- One full `lineage_reconcile_sweep` tick, read off the running pod rather than reasoned about:
+  `checked=483 backfilled=0 storage_loss=1 ungoverned=63 graph_ahead=36 unreadable=23
+  dangling_blobs=0 stale=366 contract_violations=0 provenance_holes=0 unknown_to_graph=0
+  outbox_drained=0 outbox_stranded=0 outbox_refused=0`.
+- **The two sharpest axes are ZERO.** `provenance_holes=0` and `unknown_to_graph=0` — and the second
+  is the one that matters most, because `None` there would mean the question went unasked while `0`
+  means it was asked and every governed table has a graph node. `SweepReport`'s own docstring records
+  **127 governed tables with no node on 2026-09-19**; that gap is closed. `contract_violations=0` and
+  `dangling_blobs=0` alongside, and the outbox loop is quiet (`stranded=0`, `refused=0`).
+- **THE 1,297 -> 483 DROP IS REAL, NOT A BLIND SWEEP.** The same docstring measured 1,297 graph
+  datasets on 2026-09-19 against 483 checked now. `unknown_to_graph=0` is what rules out the
+  frightening reading: a sweep that had lost its sight would report `None`, not `0`. The estate
+  genuinely shrank this week (bucket reaps, one of them mine and accidental) and the graph tracked it.
+- *What is actually left on this axis:* `storage_loss=1` (the graph holds a dataset whose storage is
+  gone) and `unreadable=23` (datasets the sweep cannot open — cause unrecorded per dataset in the log
+  line, though `unreadable` is a `dict[str, str | None]` carrying the reason in the response body).
+  `ungoverned=63` and `graph_ahead=36` are documented as mostly-benign by design and split into their
+  own fields precisely so they do not drown these two.
+
+
+**LH-187 · Undrop re-registers a table with a RELATIVE location, and lineage can then never verify its storage**
+`catalog, lineage` · **MEDIUM** · OPEN
+- **THE MECHANISM IS PROVEN** (`namespaces.py:831`): the namespace-undrop path rebuilds each child
+  table with `location=location.rstrip("/").rsplit("/", 1)[-1]`, which reduces the absolute URI the
+  trash record carries to a bare directory name. Its comment gives the reason — "the dir backend
+  refuses the absolute URI the record carries for the operator's sake" (#75) — and applies it
+  UNCONDITIONALLY, on every backend, including the S3 one that never needed it.
+- **WHAT IT COSTS is on the other side of the estate.** `reconcile.read_storage_version` refuses a
+  relative uri outright (`reconcile.py:85`, "names no storage location — a relative path cannot say
+  whether the data is there") rather than guessing, which is correct and was itself written to close a
+  false-alarm measured 2026-08-26. So an undropped table lands in the graph as permanently
+  `unreadable`: not reported lost, but never again verifiable — the sweep cannot tell whether its
+  bytes are there. That is criterion 1 wearing a benign counter.
+- **MEASURED LIVE 2026-09-22:** `unreadable=23` on a `checked=483` tick, every one with this exact
+  reason, e.g. `acme-bronze$objects -> '4750a5b9_acme-bronze$events'`, `media$chunks ->
+  'transcripts_v2.lance/chunks.lance'`.
+- **ATTRIBUTION IS NOT PROVEN, and the distinction matters.** Most of the 23 carry test-fixture
+  namespaces (`advmode7ns$r1`, `auditzzns$r1`, `csx1ns$r2`, `acme-bronze$*`), so they are most likely
+  e2e residue rather than operator undrops — this row is filed on the MECHANISM, which is
+  unconditional in the source, not on the claim that these 23 rows came through it. Whoever works it
+  should confirm the path before sizing the impact ([[my-own-residue-looks-like-a-defect]]).
+- *What is left:* Decide whether the relative form is required per BACKEND rather than always — the
+  `dir` backend's constraint should not cost an S3 estate its verifiable provenance. Either branch on
+  the backend, or record the absolute URI in the graph independently of what `register_table` accepts.
+- *Closes when:* An undropped table is readable by the reconcile sweep on the backends where an
+  absolute URI is legal, and a test drives undrop -> sweep and asserts it is not `unreadable`.
+- *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/namespaces.py:829-831` ·
+  `services/lineage/src/lineage/core/reconcile.py:60-85` · live sweep 2026-09-22 `unreadable=23`
+
 
 ## PHASE 1 · CROSS-CUTTING
 

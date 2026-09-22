@@ -131,3 +131,75 @@ def test_a_converged_estate_passes_and_says_so() -> None:
 
     assert done.returncode == 0, f"a converged estate was refused: stderr={done.stderr!r}"
     assert "converged" in done.stderr, f"a silent pass reads exactly like a check that did not run: {done.stderr!r}"
+
+
+#: Targets that run `helm upgrade` WITHOUT `k3s-stem-check` as a prerequisite, each with the reason.
+#: An allowlist rather than a blanket rule because there is exactly one honest exception and it should
+#: have to be written down: the target that RESOLVES a split cannot be blocked by the check that
+#: refuses to proceed through one.
+_UPGRADE_WITHOUT_THE_CHECK = {
+    "k3s-converge": "it is the resolution the check names — one transaction rolls the whole stem, and the recipe runs the check afterwards to prove it converged",
+    "kind-deploy": "it upgrades a DIFFERENT cluster (`--kube-context kind-$(KIND_CLUSTER)`) while the check reads the k3s estate through KUBECONFIG, so the prerequisite would gate this deploy on a split somewhere else entirely",
+}
+
+
+def _targets_running_helm_upgrade() -> dict[str, str]:
+    """``{target: recipe}`` for every Makefile target whose recipe RUNS a helm upgrade.
+
+    ECHOED TEXT IS NOT AN UPGRADE, and skipping it is not tidiness. `k3s-pins` prints two lines of
+    advice naming `helm upgrade`, one of them the warning "NOT bare 'helm upgrade'" — so a walk that
+    matched any occurrence reported the target that TELLS you to use the gated path as an ungated one.
+    Measured when this gate was written: two targets flagged, one of them this false positive.
+    """
+    text = MAKEFILE.read_text(encoding="utf-8")
+    found: dict[str, str] = {}
+    for match in re.finditer(r"^([\w.-]+):[^\n]*\n((?:(?:\t|@|#)[^\n]*\n|\n(?=\t))*)", text, re.MULTILINE):
+        target, recipe = match.group(1), match.group(2)
+        executed = "\n".join(line for line in recipe.splitlines() if not re.match(r"^\s*@?(echo|#)", line.lstrip("\t")))
+        if re.search(r"\$\(HELM\)\s+upgrade|helm\.sh\s+upgrade", executed):
+            found[target] = executed
+    return found
+
+
+def test_the_walk_finds_the_upgrade_targets() -> None:
+    """A regex that matched nothing would make every assertion below vacuous."""
+    assert "k3s-up" in _targets_running_helm_upgrade(), "the Makefile walk did not find `k3s-up`, which is known to run a helm upgrade"
+
+
+def test_EVERY_helm_upgrade_target_is_gated_or_declared() -> None:
+    """The gate above guards `k3s-up` BY NAME, so a second target running `helm upgrade` inherits none
+    of it — and the whole premise of [[LH-169]] is that the destructive operation is the upgrade, not
+    the target that happens to be called first today.
+
+    A new ungated upgrade path is exactly how the rule gets lost: nothing about adding one looks like
+    removing a safety check.
+    """
+    ungated = {
+        target for target in _targets_running_helm_upgrade() if "k3s-stem-check" not in _prerequisites(target) and target not in _UPGRADE_WITHOUT_THE_CHECK
+    }
+
+    assert not ungated, (
+        f"these targets run `helm upgrade` with no `k3s-stem-check` prerequisite and no declared reason: {sorted(ungated)}. "
+        "An upgrade from a split estate reverts whichever half of the stem was rolled forward. Add the prerequisite, "
+        f"or record the exception in _UPGRADE_WITHOUT_THE_CHECK with why it is safe."
+    )
+
+
+def test_a_declared_EXCEPTION_still_has_to_exist() -> None:
+    """An allowlist naming a target nobody kept is a rule that quietly stopped applying to anything."""
+    targets = _targets_running_helm_upgrade()
+
+    for target in _UPGRADE_WITHOUT_THE_CHECK:
+        assert target in targets, f"`{target}` is excused from the stem check but no longer runs a helm upgrade — drop the entry"
+
+
+def test_the_KIND_exception_really_does_target_another_cluster() -> None:
+    """The allowlist earns its entry from a fact about the recipe, not from the sentence next to it.
+
+    If `kind-deploy` ever loses `--kube-context`, it upgrades whatever the ambient KUBECONFIG names —
+    which is the k3s estate this whole gate exists to protect — and the excuse recorded above stops
+    being true without anything else changing.
+    """
+    recipe = _targets_running_helm_upgrade()["kind-deploy"]
+
+    assert "--kube-context" in recipe, "`kind-deploy` no longer pins a context, so it may upgrade the k3s estate the stem check guards"
