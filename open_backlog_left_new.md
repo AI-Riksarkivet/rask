@@ -1845,6 +1845,26 @@ Register bookkeeping, not engineering.
   that can actually shorten the stall are therefore `ackWait` (shorter timeout) or `Max Ack Pending`
   (fewer units stranded) — both chart values, both measurable against the 324 s baseline — and NOT
   `block-shutdown-duration`, which only buys time for work the app cannot finish anyway.
+- **OF THOSE TWO LEVERS, ONE IS ALREADY UNAVAILABLE AND THE OTHER NEEDS ONE MEASUREMENT NOBODY CAN
+  TAKE TODAY.**
+  - **`Max Ack Pending` cannot come down.** It IS the concurrency, and the lane's surplus over the
+    sweep is ~7%: measured 2026-09-22 over 120 s on a settled lane, drained **5.1 units/sec** against
+    **4.75/sec** injected (570 datasets / 120 s), with `Outstanding Acks: 72/72` throughout. That
+    independently reproduces `chart/values.yaml`'s own declared ~9%. Cutting concurrency to strand
+    fewer units pushes the drain BELOW the injection and the lane never catches up — so this lever is
+    owned by [[LH-191]]'s cadence question, not by this row.
+  - **`ackWait` has large headroom on the typical unit and an unmeasured tail.** The chart records the
+    handler at **0.21 s** (median 0.12, p90 0.60) with the 14 s `secondsPerUnit` being dispatch, ack
+    round-trip and QUEUEING rather than work. So `720 s` is ~51x the lane cost per unit and ~1,200x
+    the p90 handler, and lowering it would cap this row's stall directly. What is not known is the
+    slowest single unit — a large compaction — and too short an `ackWait` redelivers a unit still
+    running, i.e. duplicate compaction. That is the whole remaining question.
+- **AND THE MEASUREMENT THAT WOULD SETTLE IT CANNOT BE TAKEN RIGHT NOW.** The per-unit duration is not
+  in the worker's logs (outcome only, no elapsed field), and the trace store refuses the query:
+  GreptimeDB answers `Exceeded memory limit: 1018.5MiB used globally (99%), hard limit: 1.0GiB` to
+  both a `count(*)` and a `max(duration_nano)` over `opentelemetry_traces`. So the tail is unknown for
+  an observability reason rather than a lakehouse one, and closing this row needs either that limit
+  raised or an elapsed field on the unit outcome.
 - **THE INSTRUMENT THE OBVIOUS READING WOULD HAVE USED IS THE WRONG ONE, and it would have inverted the
   first result.** `Acknowledgment Floor` is the LOWEST UNACKED sequence, not a throughput counter: with
   `Max Ack Pending: 72` and out-of-order acks it sat frozen at 149,068 for **five minutes** while the
