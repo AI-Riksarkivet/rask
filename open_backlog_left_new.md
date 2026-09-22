@@ -1006,9 +1006,11 @@ have no `uv.lock` and so cannot be built to emit anything.
   and are fixed (change feed, erasure). One was MISLOCATED but led to a real defect one hop out (the
   index door was already queued; `indexTopic: ""` was the bug). One is FALSE (this one). Two are
   phase-2 COMPUTE by the FOCUS block's own split, three are phase-3, and the remaining lineage pair is
-  real but measured not-urgent at 483 datasets. So a 16-agent sweep with adversarial verification
-  still yielded findings that did not survive contact with the code — the verification stage refutes a
-  CLAIM, and cannot tell that the claim is about the wrong layer or was fixed last week.
+  a DOCUMENTED TRADE-OFF whose "fix" would break governance paging. So a 16-agent sweep with
+  adversarial verification still yielded findings that did not survive contact with the code — the
+  verification stage refutes a CLAIM, and cannot tell that the claim is about the wrong layer, was
+  fixed last week, or describes a decision somebody made on purpose and recorded in the docstring
+  three lines above the flagged call.
 - **TWO OF THE REMAINING SEVEN ARE PHASE 2, NOT PHASE 1 — triaged 2026-09-22, do not work them here.**
   The medallion stage-runner finding (`compute.py:520`) is real and the code already states it:
   "Full-materialises payloads into memory, which is fine for this in-process fake-Ray stand-in over
@@ -1019,7 +1021,17 @@ have no `uv.lock` and so cannot be built to emit anything.
   `/search` findings are phase 1 but a DIFFERENT fix shape from the three closed above: both apply
   `limit` AFTER governance filtering in Python, so pushing the bound into AGE changes what `total`
   can honestly report — that needs a count query beside the bounded fetch, not a streaming rewrite.
-- **THE LINEAGE MEMORY ROWS ARE REAL BUT NOT URGENT — measured live 2026-09-22, not reasoned.**
+- **THE LINEAGE ROWS ARE A DOCUMENTED TRADE-OFF, NOT AN OVERSIGHT — and "fixing" them would break
+  governance paging.** `repository.list_datasets` says it outright: "Fetch-all + filter/sort in
+  Python... Governance and pagination are applied by the endpoint over this full list, so a page is
+  taken from the VISIBLE set rather than truncating before the visibility filter has run." `/graph`
+  has the same shape — fetch all, `governed(...)`, then cap — and its `total` REPORTS the visible
+  count, which cannot be known without enumerating it.
+  Pushing `limit` into AGE would page over rows the caller may not see: short or empty pages whose
+  length leaks how many hidden rows exist. So the memory cost is the price of a correctness property
+  somebody already reasoned about and wrote down. Whoever revisits this needs a different design (a
+  governed count query, or FGA-aware filtering in the query itself), not a `LIMIT`.
+- **THE MEASUREMENT STILL STANDS, and it is why this is not urgent — live 2026-09-22.**
   `rask-lineage` sits at **184Mi of a 512Mi limit, 15h uptime, 0 restarts**, with its own reconcile
   tick reporting `checked=483` and completing every ~5 min against a 300s cron. `/graph` and
   `/search` really do materialise the whole estate before applying `limit`, but at 483 datasets that
