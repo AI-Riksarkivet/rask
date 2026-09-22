@@ -1171,22 +1171,33 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   with an EXPLICIT location by `register_written_dataset` — outside that layout, so a storage-side scan
   never produces its id and the detector skips it by design ("a location `table_id_from_location`
   cannot answer for is skipped, never reported").
-- *AND THE COST IS NOT WHERE THIS ROW FIRST PUT IT — corrected on reading the pass.* It said "a storage
-  probe per table across 97 warehouses". **The storage side is already paid for:** `_orphan_category`
-  runs `discover_datasets` over every scannable bucket and holds the resulting URIs in memory as
-  `datasets`, which is what it then hands to `_unregistered_datasets`. Membership of a registered
-  location in that set is a dict lookup. The real cost is the CATALOG side — the reconciler's manifest
-  read takes `columns=["object_id", "object_type"]` and no location, and the spec's `ListTablesResponse`
-  carries ids rather than locations, so a location per table means a `describe` per table. That is a
-  different and smaller bill than the one this row first named.
+- *AND THE COST IS NOT WHERE THIS ROW FIRST PUT IT — corrected TWICE, and it ends up small.* It first
+  said "a storage probe per table across 97 warehouses", then "a `describe` per table". Both are wrong,
+  and `lance_docs` settles it. **The storage side is already paid for:** `_orphan_category` runs
+  `discover_datasets` over every scannable bucket and holds the URIs in memory as `datasets`, which is
+  what it hands to `_unregistered_datasets` — membership is a dict lookup. **And the catalog side is
+  already on disk:** `lance_docs/namespace.md:968-976` gives the `__manifest` schema as `object_id`,
+  `object_type`, **`location` — "String (nullable) … Relative path to the table directory within the
+  root (only for tables)"** — plus `metadata` and `base_objects`. The reconciler's `_tables()` reads
+  `columns=["object_id", "object_type"]` and simply does not select it.
+- *SO THE WORK IS: select one more column, and compare.* Add `location` to the manifest read, thread it
+  through `Sources.tables`, and report a table whose resolved location is absent from the URIs
+  `discover_datasets` already found. No new storage call and no new catalog call.
+- *The spec also hands over the false-positive discriminator.* `location` is **nullable** and present
+  "only for tables", so a declared-only table — "reserved, no storage yet", the class
+  `include_declared=false` exists to drop — carries no location to check. The detector is therefore
+  exactly: `object_type == "table"` AND a non-null `location` that resolves to nothing. That is
+  self-discriminating rather than needing an exclusion list.
 - *The false positive to design against, and the catalog already models it:* a DECLARED-ONLY table has
   a record and no storage legitimately — `GET /v1/table`'s own `include_declared=false` exists to drop
   "declared-only tables (reserved, no storage yet)". A detector that does not exclude them would report
   every reservation in the estate as a defect, which is the loudest possible way to say nothing.
 - *Closes when:* A catalog record whose registered location holds no bytes is reported by the drift
-  report, gated by a test, with `bronze$events` (or its successor) as the fixture — and the probe sits
-  in the separately-gated expensive pass rather than on the 300 s tick.
-- *Evidence:* `services/maintenance/src/maintenance/services/reconcile.py:627 (_unregistered_datasets, "THE INVERSE")` · `:655 (_ungoverned_tables)` · `:150 (GhostObject — "An FGA object carrying tuples that no registry record names")` · live describe + `ls` on 2026-09-22
+  report, gated by a test with `bronze$events` (or its successor) as the fixture, and declared-only
+  tables are excluded by their null location rather than by an allowlist. It rides
+  `_orphan_category`'s existing walk — that pass already holds both sides — so it inherits that
+  category's gating and adds no call of its own.
+- *Evidence:* `services/maintenance/src/maintenance/services/reconcile.py:627 (_unregistered_datasets, "THE INVERSE")` · `:655 (_ungoverned_tables)` · `:150 (GhostObject — "An FGA object carrying tuples that no registry record names")` · `lance_docs/namespace.md:968-976` (the `__manifest` schema, incl. the unselected `location` column) · `services/maintenance/.../reconcile.py:476 (_tables reads only object_id+object_type)` · live describe + `ls` on 2026-09-22
 
 **LH-171 · Nine governed transform records fail `TransformSpec` validation and the estate only WARNs**
 `medallion, service-kit` · **MED**
