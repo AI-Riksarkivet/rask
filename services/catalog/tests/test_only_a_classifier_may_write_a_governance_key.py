@@ -82,6 +82,36 @@ def test_a_writer_without_the_rung_cannot_set_or_clear_a_governance_key(value: s
     assert ("can_classify", "table:bronze$pages") in seen, f"the door never asked for the rung: {seen}"
 
 
+#: The THREE spellings of "this column is no longer classified". A gate that reads only the request's
+#: metadata KEYS sees the first two and is blind to the third.
+_CLEARS: list[tuple[str, list[dict[str, object]]]] = [
+    ("null-value", [{"path": "payload", "metadata": {"rask.classification": None}}]),
+    ("replace-empty", [{"path": "payload", "metadata": {}, "replace": True}]),
+    ("replace-other-key", [{"path": "payload", "metadata": {"note": "x"}, "replace": True}]),
+]
+
+
+@pytest.mark.parametrize("_patched", [False], indirect=True)
+@pytest.mark.usefixtures("_patched")
+@pytest.mark.parametrize(("label", "updates"), _CLEARS, ids=[c[0] for c in _CLEARS])
+def test_every_spelling_of_un_labelling_takes_the_rung(label: str, updates: list[dict[str, object]], seen: list[tuple[str, str]]) -> None:
+    """`replace` drops every key the body does NOT name, so it un-labels without ever spelling `rask.`.
+
+    `UpdateFieldMetadataEntry` carries a third field beside `path` and `metadata`, and
+    `dataplane.update_field_metadata` honours it verbatim: `replace = any(bool(u.get("replace")) …)` ->
+    `dataset.update_field_metadata(field_updates, replace=replace)`, whose pylance docstring reads
+    "completely replace all metadata for the specified fields". Measured against a real dataset: after
+    `update_field_metadata({"payload": {}}, replace=True)` the classification is GONE and the rows are
+    untouched — so a `can_write_data` holder launders the label and keeps the data, which is the whole
+    escape this rung exists to close.
+
+    A replace is therefore a governance-key write BY CONSTRUCTION, whether or not the body spells one.
+    """
+    with pytest.raises(PermissionDeniedError):
+        _call(updates)
+    assert ("can_classify", "table:bronze$pages") in seen, f"{label}: the door never asked for the rung: {seen}"
+
+
 @pytest.mark.parametrize("_patched", [True], indirect=True)
 @pytest.mark.usefixtures("_patched")
 def test_a_classifier_may_write_it(seen: list[tuple[str, str]]) -> None:

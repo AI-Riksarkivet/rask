@@ -649,6 +649,23 @@ of mine in this same session.**
   clearing the key (version 17) returns BOTH `tier=read` and `tier=write` to `direct`. The write tier
   matters — a classification that stuck would take the cascade's own direct writes down with it, which
   is why the revert is part of the proof rather than tidying after it.
+- **THE CLASSIFIER GATE SHIPPED WITH A BYPASS, FOUND BY THE 2026-09-22 RE-AUDIT'S ADVERSARIAL PASS —
+  and it is the same class of miss the gate's own commit congratulated itself for catching, one FIELD
+  over.** `UpdateFieldMetadataEntry` carries `replace` beside `path` and `metadata`, and
+  `dataplane.update_field_metadata` honours it verbatim. The gate computed "does this body touch a
+  `rask.` key" from the metadata KEYS alone, so
+  `{"path": "payload", "metadata": {}, "replace": true}` names no governance key, passes ungated on
+  `can_write_data`, and **drops the classification while leaving every row intact** — reproduced
+  against a real dataset: `classified_columns` went `('payload',)` -> `()` with `count_rows()`
+  unchanged, i.e. the table became raw-vendable again. The original mutation check exercised the
+  `None`-value clear only, so it could not have caught this. Fixed: a `replace` is a governance-key
+  write BY CONSTRUCTION, because its semantic is "drop every key I did not name". Three spellings of
+  un-labelling are now parametrised and mutation-checked, and an ordinary merge write stays ungated.
+- **A SECOND, WEAKER LAUNDERING PATH IS RECORDED AND NOT FIXED:** `lance.write_dataset(..., mode="overwrite")`
+  drops field metadata wholesale, and `data.py` accepts `mode` on both `/create` and `/insert`. It is a
+  far smaller hole than the `replace` one because it destroys the DATA as it launders the label — a
+  writer who does this has nothing left to vend — but it is the same shape and should be closed with
+  the same rule when that door is next touched.
 - *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test. **The raw half is closed** — `test_the_vend_door_refuses_a_classified_table.py` drives the REAL `vend_credentials` (nothing in the repo called it from a test before) and asserts the VENDOR IS NEVER ASKED, not merely that the mode says server-mediated; a door that mints a credential and discards it has still issued one. Mutation-checked by deleting the refusal.
 - *Evidence:* `services/catalog/src/catalog/core/vending.py (CLASSIFICATION_KEY, classified_columns, dataset_facts)` · `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py` · `services/catalog/tests/test_the_vend_door_refuses_a_classified_table.py` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
 

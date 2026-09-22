@@ -79,12 +79,25 @@ async def _require_classifier_for_governance_keys(
     router-wide guard has already cleared `can_write_data` by the time this runs, and the rung this
     needs depends on WHAT the body touches rather than on which route it is.
 
-    A DELETE COUNTS. `update_field_metadata` signals key removal with a `None` value, so gating only
-    non-null writes would leave the door that matters — clearing a classification to make the table
-    vendable again — wide open to every writer.
+    A DELETE COUNTS, AND IT HAS THREE SPELLINGS. `update_field_metadata` signals key removal with a
+    `None` value — but `UpdateFieldMetadataEntry` carries a third field beside `path` and `metadata`,
+    and `dataplane.update_field_metadata` honours it verbatim (`replace = any(bool(u.get("replace")) …)`
+    -> `dataset.update_field_metadata(field_updates, replace=replace)`), whose pylance docstring reads
+    "completely replace all metadata for the specified fields".
+
+    So `{"path": "payload", "metadata": {}, "replace": true}` names no governance key, drops the
+    classification, and leaves the rows untouched — measured: `classified_columns` goes from
+    `('payload',)` to `()` with `count_rows()` unchanged. A caller holding only `can_write_data`
+    launders the label and keeps the data, which is the entire escape this rung exists to close.
+
+    A REPLACE IS THEREFORE A GOVERNANCE-KEY WRITE BY CONSTRUCTION. Its semantic is "drop every key I did
+    not name", and the governance namespace is among them whether or not the body spells it. Gating on
+    the body's keys alone reads the one spelling that announces itself and misses the two that do not —
+    the same class of miss as reading only non-null values, one field over.
     """
+    replaces = any(update.get("replace") for update in updates)
     touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(GOVERNANCE_FIELD_PREFIX)})
-    if not touched:
+    if not touched and not replaces:
         return
     await fga_deps.require_relation(
         client, settings, token, relation="can_classify", obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
