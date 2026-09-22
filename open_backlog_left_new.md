@@ -1169,6 +1169,41 @@ have no `uv.lock` and so cannot be built to emit anything.
   request carrying `dapr-caller-app-id` — so it must be loopback-shaped (port-forward), never service
   invocation. That is how the measurement above was taken and how a per-unit memory figure can be
   taken deliberately rather than waited for.
+- **THE ACK-WINDOW HALF SHIPPED AND IS PROVEN LIVE (2026-09-22). The MEMORY half is untouched.**
+  The bound is now DERIVED rather than picked: deliver no more than the fleet can RUN, so a unit's
+  `ackWait` cannot start on a unit that has nothing to run it.
+  `maxConcurrentUnits` (40) is the per-pod execution capacity, APPLIED — the worker sets anyio's
+  thread limiter from it, because a delivery bound computed from a library default is a bound nobody
+  chose and an upstream change would move it underneath the arithmetic.
+- **THE TWO LANES SHARE ONE LIMITER, and the first version of this fix did not account for it.**
+  `api/work.py` and `api/index_work.py` both reach `run_in_threadpool`, which is process-GLOBAL, and
+  the index component set no `maxAckPending` at all. Giving the work queue the whole capacity while
+  the index lane ran on NATS's 1,000 admitted far more than could run — the same defect, reintroduced
+  by counting one pool twice. The bounds now SPLIT it: `work = (40-4) x 2 = 72`, `index = 4 x 2 = 8`,
+  summing to 80. The index share is small deliberately and is a RESERVATION, not a measurement: a
+  build holds its token for up to `indexAckWait` (3600s) against the work queue's 720s, so index
+  units taking the pool would starve a lane that runs every 120s — and an hour-long window burning on
+  a unit that cannot start redelivers a whole index build.
+- **DAPR SETS `maxAckPending` AT CONSUMER CREATION AND NEVER AGAIN — measured, and it made the first
+  deploy a no-op.** The chart said 80, the rendered Component said 80, the gate was green, and the
+  live durable (created 2026-09-03) still read `Max Ack Pending: 1,000`. Deleting it and letting Dapr
+  rebuild it gave 80, so the key IS honoured and the gap is CONVERGENCE. The stream Job now converges
+  both durables beside the `assert_retention` it mirrors — a stream's retention cannot change in place
+  and that helper refuses, while a consumer's config can, so this one repairs and says what it changed.
+  `nats consumer edit --max-pending=N --force` was driven against the live broker BEFORE being written
+  into the chart, because the last thing added to that Job died on "cannot ask for confirmation
+  without a terminal" while the Job still reported Complete ([[LH-151]]).
+- **PROVEN BY CONFIGURING IT TO A VALUE THAT MUST FAIL.** The consumer was left at 79 deliberately;
+  the deploy's Job reported `consumer MAINTENANCE_WORK/maintenance-work-durable has
+  max_ack_pending=79, the chart intends 80 — converging` / `max_ack_pending now 80`, and the broker
+  then read `Max Ack Pending: 80` with `Outstanding Acks: 80 out of maximum 80` — the lane sitting at
+  its bound instead of the old 1,000.
+- *What is left:* **The MEMORY half only.** `maxConcurrentUnits: 40` is PROVISIONAL and both the chart
+  and the setting say so — it is today's effective ceiling, chosen so declaring it changed no
+  throughput, and it is NOT sized for memory: 40 concurrent compactions in a 4Gi pod is ~100MB each
+  before the limit. Sizing it needs a per-unit figure this estate still cannot produce, because no
+  tier has yet run a compaction that rewrites fragments. Capture one when such a tier lands and lower
+  the number; the delivery bounds follow from it automatically.
 - *What is left:* Decide the bound. `maxAckPending` on the work pubsub component is the direct lever;
   the threadpool limiter is the other. THE NUMBER SHOULD BE MEASURED, NOT PICKED — nothing in this
   estate has yet run a compaction that rewrites fragments, so there is no per-unit memory figure to
