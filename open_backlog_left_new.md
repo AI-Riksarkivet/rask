@@ -1859,7 +1859,21 @@ Register bookkeeping, not engineering.
     the p90 handler, and lowering it would cap this row's stall directly. What is not known is the
     slowest single unit — a large compaction — and too short an `ackWait` redelivers a unit still
     running, i.e. duplicate compaction. That is the whole remaining question.
-- **AND THE MEASUREMENT THAT WOULD SETTLE IT CANNOT BE TAKEN RIGHT NOW.** The per-unit duration is not
+- **THE INSTRUMENT IS NOW BUILT AND DEPLOYED (`main-581ac9de`), AND ITS FIRST SAMPLE IS NOT THE ANSWER
+  — it is the cost of the lane's NO-OPS.** `maintenance_unit_done` carries `elapsed_seconds` beside
+  uri, table_id, status and error_type, timed from the ROUTE so it covers the whole delivery-to-ack
+  window (the protection listing included, since the ack clock is already running for it). First live
+  sample, 290 units over 10 minutes on the deployed workers: min 0.035 s, **p50 0.166 s, p90 1.199 s,
+  p99 1.385 s, max 1.470 s**, all SUCCESS, zero errors. Against `ackWait: 720s` that is 490x the
+  slowest unit seen.
+- **BUT 215 OF THOSE 290 LOGGED `compaction_distributed_nothing_to_do`, SO THE MAX MEASURES A CHECK AND
+  NOT A COMPACTION.** The steady-state sweep re-plans every dataset each tick ([[LH-191]]) and almost
+  all of them have nothing to do, so this distribution is dominated by the cost of ASKING. The number
+  `ackWait` must exceed is the slowest REAL rewrite, and the estate's steady state contains none — so
+  1.470 s is a FLOOR on the answer, not the answer. What has changed is that the question is now
+  self-answering: the field captures the next genuine compaction whenever one runs, without the trace
+  store, and `grep maintenance_unit_done | sort -t= -k3` reads the tail on any estate.
+- **AND THE MEASUREMENT COULD NOT BE TAKEN ANY OTHER WAY.** The per-unit duration is not
   in the worker's logs (outcome only, no elapsed field), and the trace store refuses the query:
   GreptimeDB answers `Exceeded memory limit: 1018.5MiB used globally (99%), hard limit: 1.0GiB` to
   both a `count(*)` and a `max(duration_nano)` over `opentelemetry_traces`. So the tail is unknown for
