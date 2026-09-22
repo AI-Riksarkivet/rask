@@ -1175,6 +1175,12 @@ have no `uv.lock` and so cannot be built to emit anything.
   `Redelivered: 0` · `Unprocessed Messages: 4,420` · worker pods aged 2m10s and 2m20s.
   Every outstanding unit was delivered to pods that no longer exist. JetStream will not deliver
   another until `ackWait` expires on them, so **a deploy costs this lane ~12 minutes of total stall.**
+- **THE STALL IS TOTAL, NOT PARTIAL, AND IT IS MEASURED TO THE UNIT.** Across the outage the
+  consumer's `num_pending` reads `5,560 -> 6,130 -> 6,700 -> 7,270` on successive samples: **+570
+  each time, exactly one tick's injection, with ZERO units leaving.** `num_ack_pending` sat frozen at
+  82 against a bound of 72 for over four minutes while `redelivered` stayed 0. So this is not a lane
+  running slowly — it is a lane delivering nothing at all, and the arithmetic says so without needing
+  a rate.
 - **THE UNITS ARE NOT SLOW — 0.21s, measured from each unit's own trace span** (19 traces, median
   0.12s, p90 0.60s, max 1.17s). A no-op unit is two HTTP calls plus a base-ref pre-pass of ~16 reads
   at ~8ms. The lane's steady-state capacity is therefore enormous next to the 4.73 units/sec the
