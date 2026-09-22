@@ -2418,6 +2418,16 @@ have no `uv.lock` and so cannot be built to emit anything.
   `tests/unit/test_an_outbound_credential_follows_the_token_to_the_store.py` refuses any production
   function that reads `app_api_token` without reaching `expected_app_token`, plus a leg that fails if
   the walk finds nothing. Both mutation-checked.
+- **DEPLOYED AND OBSERVED WORKING 2026-09-22 (`notifications:main-fc1b8bfd`).** `POST
+  /notifications-reconcile-cron` answers **200 OK** on every 30s tick, and the walk it was refused
+  from now runs: `lineage_feed_reconciled scanned=1 retried=0 cursor=378053 primed=False
+  truncated=False`. Before the deploy the same door had answered 500 **3,165 times** with zero walks.
+  **THE DEPLOY ITSELF CAUGHT A SECOND MISTAKE WORTH RECORDING:** `rask-notifications` runs its OWN
+  image stem (`notifications`), not `lance-rest-catalog`. The first converge rolled 25 images and none
+  of them was the one that had changed — the pod stayed on `main-467904ae` while the counter kept
+  climbing, and the absent 500 series afterwards was a counter RESET on a new pod rather than a fix.
+  A per-stem deploy is not proven by a converge that succeeded; it is proven by reading the image the
+  pod is running and then the behaviour that changed.
 - **WHAT THIS DOES NOT DECIDE:** the ruling stands exactly as written. The shared-token path now
   WORKS; whether this hop should instead move to direct HTTP and present a dedicated credential is
   still open, and the fix here is what the row's second branch actually requires in order to be a
