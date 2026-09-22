@@ -1527,6 +1527,19 @@ maintenance:
   # a whole-estate walk plus one manifest open per dataset (87 of them) and reported
   # `fragments_removed: 0, versions_removed: 0` on every pass since 2026-08-16.
   schedule: "@every 120s"
+  # THE ESTATE THIS LANE IS SIZED FOR, and the per-unit cost that turns it into a required drain rate.
+  # Declared so the sweep's cadence and the queue's capacity can be compared — they are set in
+  # different files and nothing compared them until a lane stalled.
+  #
+  # MEASURED 2026-09-22 on a throttled lane, which is the cleanest place to read it: 6 units in flight
+  # produced 346 outcomes in 5 minutes — 1.15 units/sec, so ~5.2s per unit. Most units are no-ops of
+  # two HTTP calls; the seconds are round-trips and governance checks, not work.
+  #
+  # `datasets / (schedule seconds) * secondsPerUnit` is how many units must be in flight to keep up.
+  # At 600 datasets, 120s and 5.2s that is ~26, against the 80 the fleet now admits.
+  # tests/unit/test_the_lane_can_keep_up_with_its_own_sweep.py fails the render if it cannot.
+  expectedDatasets: 600
+  secondsPerUnit: 6
   # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
   # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
   # files, which is why it gets its own schedule instead of inheriting that one.
