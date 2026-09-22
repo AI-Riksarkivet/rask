@@ -97,9 +97,15 @@ def test_the_lane_can_keep_up_with_its_own_sweep() -> None:
     )
 
 
-@pytest.mark.parametrize(("in_flight", "sufficient"), [(6, False), (72, True)])
+@pytest.mark.parametrize(("in_flight", "sufficient"), [(6, False), (72, False), (152, True)])
 def test_the_gate_REFUSES_the_bound_that_stalled_the_lane(in_flight: int, sufficient: bool) -> None:
-    """A gate that cannot fail is not a gate — so the number that actually stalled it must be refused."""
+    """A gate that cannot fail is not a gate — so both bounds that failed in production are refused.
+
+    72 is here because this leg originally asserted it was SUFFICIENT, on a `secondsPerUnit` of 6 taken
+    from a throttled lane. The estate disproved it: at 72 in flight the drain was 3.28 units/sec
+    against 4.73 injected and the backlog grew. The measurement moved and this expectation moves with
+    it — a gate calibrated on a convenient sample is a gate that certifies the defect.
+    """
     chart_values = yaml.safe_load((REPO / "chart/values.yaml").read_text())
     interval = _schedule_seconds(render(*DEFAULT_ARGS))
     needed = math.ceil(int(chart_values["maintenance"]["expectedDatasets"]) / interval * float(chart_values["maintenance"]["secondsPerUnit"]))
