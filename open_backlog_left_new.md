@@ -1198,6 +1198,23 @@ have no `uv.lock` and so cannot be built to emit anything.
   max_ack_pending=79, the chart intends 80 — converging` / `max_ack_pending now 80`, and the broker
   then read `Max Ack Pending: 80` with `Outstanding Acks: 80 out of maximum 80` — the lane sitting at
   its bound instead of the old 1,000.
+- **BOTH LANES OBSERVED CONVERGED ON THE LIVE BROKER, with the Job's own before/after record:**
+  `consumer MAINTENANCE_WORK/maintenance-work-durable has max_ack_pending=80, the chart intends 72 — converging` /
+  `now 72`, and `consumer MAINTENANCE_INDEX/maintenance-index-durable has max_ack_pending=1000, the chart intends 8 — converging` /
+  `now 8`. Read back independently: work 72, index 8, summing to the 40 x 2 the fleet can run. The
+  index lane had been on NATS's default for as long as it has existed.
+- **AN INDEX SHARE THAT SWALLOWS THE POOL FAILS THE RENDER.** The share is carved OUT of the total, so
+  `indexConcurrentUnits >= maxConcurrentUnits` leaves the compaction lane at zero or negative — which
+  reaches the broker as a lane that delivers nothing, or an invalid consumer config, neither naming
+  the values file. The gate walks the boundary (4 and 39 render, 40 and 41 refuse, and the failure
+  must name the cause) rather than testing one bad value; 39 is deliberately legal because leaving the
+  compaction lane 2 units is unwise, not incoherent, and a chart refuses what cannot work.
+- **THE DEPLOY PATH LIED ABOUT ALL OF THIS UNTIL TODAY, which is why the first attempt looked done.**
+  `k3s-converge` ended its recipe with `; rm -f "$LIVE"`, so make read the `rm`'s status and a failed
+  upgrade printed `EXIT=0` and ">> every stem converged". Fixed and gated, and then PROVEN by a real
+  failure rather than a simulation: overlapping two converges produced
+  `Error: UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress` followed by
+  `!! helm upgrade FAILED (exit 1) — the release was NOT converged` and a non-zero make exit.
 - *What is left:* **The MEMORY half only.** `maxConcurrentUnits: 40` is PROVISIONAL and both the chart
   and the setting say so — it is today's effective ceiling, chosen so declaring it changed no
   throughput, and it is NOT sized for memory: 40 concurrent compactions in a 4Gi pod is ~100MB each
