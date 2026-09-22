@@ -1237,6 +1237,22 @@ have no `uv.lock` and so cannot be built to emit anything.
   designed. Nothing is dropped and nothing is lost: a stalled lane means maintenance runs LATE, and
   the next tick re-plans whatever is still owed anyway. So this is a resilience defect about
   RECOVERY TIME, not about work disappearing, and it should be weighed as one.
+- **THE RECOVERY TAIL IS MOSTLY REDUNDANT WORK, and the mechanism to collapse it already exists and
+  is INERT.** Every tick publishes ALL datasets (`planned=568 published=568`, every tick) and a
+  work-queue unit is removed only on ACK — so a backlog of 7,300 over 568 datasets IS ~13 queued
+  copies of each. That is a logical consequence of two measured facts, not an estimate, and it is why
+  the tail is hours: the fleet is re-doing the same estate a dozen times.
+  **THE STREAM CARRIES `Duplicate Window: 2m0s` — exactly the sweep interval — AND THE PUBLISHER
+  DEFEATS IT:** `Nats-Msg-Id` is a fresh UUID per publish (read off a live message:
+  `Nats-Msg-Id: ba6719fc-c471-4853-9cf2-fc2c5783a7ae`), so JetStream's de-duplication can never match
+  anything. An id STABLE per dataset would make the broker drop a republish while the previous unit
+  is still queued.
+  **IT IS NOT A FREE WIN, which is why it belongs in the ruling rather than in a commit.** The window
+  is TIME-based, not pending-based: a dataset maintained and ACKED at t=0 whose next unit publishes
+  at t=120s sits exactly on the 2m boundary, so a stable id risks silently SKIPPING a legitimate
+  re-plan rather than collapsing a redundant one. Making the planner skip datasets with a unit
+  already pending is the semantically correct version and needs the planner to see the queue, which
+  it currently cannot.
 - *What is left:* Decide how a shutting-down worker releases what it holds. The candidates are a
   graceful drain on SIGTERM (finish or NAK the outstanding units, so they redeliver at once rather
   than after 720s), a shorter `ackWait` (bounded below by the longest single compaction, so it cannot
