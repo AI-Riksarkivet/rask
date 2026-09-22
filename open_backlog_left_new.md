@@ -625,6 +625,14 @@ of mine in this same session.**
   their own table vendable again by deleting the classification. That is exactly the separation of
   duties the ruling's `tag` type with `apply` "independent of `modify`" exists for, and it is the whole
   of what remains here.
+- **PROVEN ON A REAL GOVERNED TABLE (2026-09-22, `main-bb76a166`), the whole cycle.** Driven as the Dex
+  subject against the deployed catalog on `bronze$pages`: **before**, `tier=read` vends `direct` with a
+  real credential; classifying `payload` through the catalog's OWN door
+  (`POST /v1/table/{id}/update_field_metadata` -> version 16) flips it to **`server_mediated` with
+  `credentials: None`**, and the `describe`-with-vending path carries no `storage_options` either;
+  clearing the key (version 17) returns BOTH `tier=read` and `tier=write` to `direct`. The write tier
+  matters — a classification that stuck would take the cascade's own direct writes down with it, which
+  is why the revert is part of the proof rather than tidying after it.
 - *Closes when:* A classified column cannot be read raw through `credentials` by a subject lacking the column rung, pinned by a test. **The raw half is closed** — `test_the_vend_door_refuses_a_classified_table.py` drives the REAL `vend_credentials` (nothing in the repo called it from a test before) and asserts the VENDOR IS NEVER ASKED, not merely that the mode says server-mediated; a door that mints a credential and discards it has still issued one. Mutation-checked by deleting the refusal.
 - *Evidence:* `services/catalog/src/catalog/core/vending.py (CLASSIFICATION_KEY, classified_columns, dataset_facts)` · `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py` · `services/catalog/tests/test_the_vend_door_refuses_a_classified_table.py` · `services/catalog/src/catalog/api/v1/router.py:47 (router-wide authorize)` · `services/catalog/src/catalog/api/fga_deps.py:88 (credentials in _DATA_READ_ACTIONS)`
 
