@@ -2411,6 +2411,14 @@ from its neighbours, not only one consistent with it. Here the distinguishing in
 `num_redelivered` — zero while stalled means the timer never fired — and it cost one extra column in
 the same sample.
 
-What the re-measurement found instead is filed as [[LH-193]]: `num_ack_pending` pinned at exactly
-`max_ack_pending` and an `ack_floor` that advances only when a worker is killed. The lane's real
-stall is standing, not transient, and no restart-shaped question would have asked about it.
+**The rule caught its own author within the hour.** The same traces were read a second time as a
+standing stall — `num_ack_pending` pinned at exactly `max_ack_pending`, `ack_floor` advancing only
+when a worker was killed — and filed HIGH. It was wrong for precisely the reason above. `ack_floor`
+carries two fields: `consumer_seq` counts DELIVERIES and moves in jumps, `stream_seq` names a
+position. The stream floor (261,394) tracked the stream's own `first_seq` (261,395) exactly, so every
+acked unit had already been removed and nothing was held; and a backlogged queue sitting at its
+flow-control bound is what health looks like, not what a stall looks like. The distinguishing
+instrument was one field over, in the object already being read.
+
+What survives is a number rather than a defect, and it belongs to [[LH-191]]: the lane drains ~4.5
+units/s against the 4.75/s the planner injects, so it needs ~127s to clear a tick and gets 120.

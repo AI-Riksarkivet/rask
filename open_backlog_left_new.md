@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **100 are blocked on a decision** and **100 can be picked up today**.
+**199 open items**, of which **100 are blocked on a decision** and **99 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 6 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 37 | 5 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1874,42 +1874,6 @@ Register bookkeeping, not engineering.
   167Mi; worth a bound before a tier with real rewrite work arrives.
 
 
-**LH-193 · The work lane is permanently flow-controlled and its ack floor never advances — a unit at the floor is held, not acked, and nothing reports it**
-`maintenance` · **HIGH**
-- **FOUND WHILE FALSIFYING [[LH-190]] (2026-09-22), and it is that row's shape inverted.** LH-190
-  claimed a restart stalls the lane; measured, a restart costs pod-restart-time + ~5s. What the same
-  two traces show instead is a stall that never ends and that no restart-shaped question would have
-  asked about.
-- *The measurement, 5s samples off the NATS monitoring port, outside the cluster:* across **every**
-  sample of both traces `num_ack_pending` reads **exactly 72**, which is the consumer's own
-  `max_ack_pending`. Not 71, not 70 — pinned at the ceiling for the full window while `delivered`
-  climbed ~4.5/s. A lane whose in-flight count never leaves its bound is flow-controlled at all times:
-  JetStream will not deliver a 73rd unit until one of the 72 is acked.
-- *And the floor does not move:* `ack_floor` sat at **182,215** through the first trace and at
-  **183,599** through the second, advancing only at the two moments a worker died (-> 183,599, then
-  -> 184,877). `num_redelivered` was **0** at steady state, so nothing was hitting the 720s timer
-  either. A message at the floor is being held by a live worker, indefinitely, and released only when
-  that worker is killed.
-- *Why this matters more than the backlog does:* `num_pending` oscillates 3.6k-4.8k and the planner
-  injects 570 per 120s tick, so the lane is behind — and the reason it cannot catch up may be that
-  some fraction of its 72 slots are occupied by units that never complete. Effective concurrency is
-  then not 72 but 72 minus however many are stuck, and no metric in the estate reports that number.
-  It is invisible precisely because `ack_pending` looks healthy at its bound.
-- *What to measure first, before any fix:* which message sits at `ack_floor + 1` and what its unit
-  names — the stream is `workqueue` retention so the message is still there — and whether the same
-  dataset appears at the floor across successive freezes. A single pathological dataset that hangs
-  inside `execute_unit` produces exactly this signature, and so does a unit that returns without the
-  route ever answering.
-- *The interaction to keep in view:* [[LH-191]] asks whether re-planning all 570 datasets every 120s
-  is deliberate. If it is not, the backlog half of this row dissolves and only the held-unit half
-  remains. Do not size anything here before that ruling.
-- *Closes when:* The ack floor advances during normal operation, or a held unit is reported by name
-  when it exceeds a bound — and a gate covers whichever it is.
-- *Evidence:* `scratchpad/restart-baseline.txt` and `scratchpad/allreplica.txt` (100 and 120 samples,
-  2026-09-22) · `maintenance-work-durable` config `max_ack_pending: 72`, `ack_wait: 720s`,
-  `deliver_policy: all` on stream `MAINTENANCE_WORK` (`workqueue`, `max_age` 7d) ·
-  `services/maintenance/src/maintenance/api/work.py` (`handle_unit`)
-
 **LH-191 · The sweep re-plans the WHOLE estate every 120s because no policy sets a cadence**
 `maintenance` · **MEDIUM** · OPEN
 - **MEASURED LIVE 2026-09-22.** Every tick reports `planned=570 skipped=7`, and those 7 are the trash
@@ -1979,6 +1943,23 @@ Register bookkeeping, not engineering.
   nothing further is needed; if not, this is the cheapest lever on both.
 - *What the ruling has to cover:* not just "what interval", but WHICH DATASETS — 27 policy records
   exist against ~570 datasets, so a per-policy interval alone moves 5% of the volume.
+- **MEASURED ON THE LIVE LANE 2026-09-22, and it sizes the ruling.** Two traces of
+  `maintenance-work-durable` at 5s (100 and 120 samples): the lane drains at **~4.5 units/s** while the
+  planner injects **570 per 120s tick = 4.75/s**. It is under water by design, not by accident —
+  `num_pending` ran 3.6k-4.8k throughout and rose at each tick boundary (a visible +570 step at
+  23:07:11 and 23:13:11) without ever being worked off in between.
+- *And the saturation is not a defect, which is worth saying because it looks like one:* `num_ack_pending`
+  sits at exactly **72**, the consumer's `max_ack_pending`, in every sample. A backlogged queue at its
+  flow-control bound is what health looks like — `ack_floor.stream_seq` (261,394) tracks the stream's
+  own `first_seq` (261,395) exactly, so every acked unit has been removed and nothing is held.
+  `num_redelivered` is 0 at steady state. **Read `ack_floor.consumer_seq` instead and the same lane
+  looks frozen**, because that field counts deliveries rather than positions; it moves in jumps and
+  sat still for eight minutes while the stream floor advanced continuously. The two fields disagree by
+  construction and only one of them answers "is anything stuck".
+- *So the ruling has a number attached:* at 570 datasets a tick the lane needs ~127s to clear one
+  tick's injection and gets 120. Either the cadence lengthens, the planner stops re-planning datasets
+  already at target, or `max_ack_pending` rises — and the third is the one that trades memory for
+  throughput, so it cannot be chosen without [[LH-183]]'s per-unit figure.
 - *Closes when:* A tick reports a non-zero cadence skip count, or this row records the ruling that
   re-planning the whole estate every 120s is deliberate.
 - *Evidence:* live planner 2026-09-22 `planned=570 skipped=7` on every tick · `policies=27` ·
