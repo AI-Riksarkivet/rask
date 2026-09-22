@@ -959,8 +959,11 @@ async def set_table_protection(
     control: ControlEmitterDep,
 ) -> ProtectionResponse:
     """Set or clear deletion protection on the table at ``id`` (#73 — the warehouse contract on the
-    rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:
-    whoever may destroy the table decides whether destroying it needs a second thought). The flag is
+    rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to
+    ``can_set_protection``, a computed userset over ``owner``: whoever may destroy the table decides
+    whether destroying it needs a second thought). Its OWN relation at the drop's tier rather than
+    ``can_drop`` itself, because `#41` audits by the relation and the route suffix is not in the
+    record — sharing the name made arming the safety and destroying the table one audit line. The flag is
     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
     control event and never creates a table version, readable even when the dataset is corrupted,
     and unreachable from the future properties write door (#78)."""
