@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 from lance_namespace import UnsupportedOperationError
 
@@ -39,6 +39,14 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+
+#: The read bound EVERY compaction this pod runs carries, named once because the pod has more than one
+#: button that reaches `compact_files` and an unbounded one is indistinguishable from a bounded one
+#: until it OOMs. #93's floor: rows are not a unit of memory, and the default batch size on a blob tier
+#: read ~15 GB/thread — the OOM measured on the maintenance pod is just as available to the catalog pod
+#: through any of these doors. `num_threads` is pinned for the sibling reason: Lance defaults it to the
+#: HOST's parallelism, which a container's limit does not bound.
+COMPACTION_BOUND: Final[dict[str, int]] = {"batch_size": 64, "num_threads": 2}
 
 
 # --------------------------------------------------------------------------- #
@@ -321,11 +329,7 @@ def compact_now(
     uses — see :func:`require_compactable` for why it cannot be defaulted."""
     require_compactable(ds, storage_options, protected)
     size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
-    # #93's floor, applied to this door too: rows are not a unit of memory, and the default batch
-    # size on a blob tier read ~15 GB/thread — the OOM measured on the maintenance pod is just as
-    # available to the catalog pod through this button.
-    size_kw["batch_size"] = 64
-    size_kw["num_threads"] = 2
+    size_kw.update(COMPACTION_BOUND)
     metrics: Any = ds.optimize.compact_files(**size_kw)
     # Index work is best-effort — a no-index dataset or an unindexed column must not cost this door the
     # compaction that already succeeded. `BaseException`, deliberately, and NOT `suppress(Exception)`:

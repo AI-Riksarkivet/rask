@@ -186,8 +186,48 @@ def test_a_deleted_row_COMES_BACK_from_the_transaction_range(tmp_path, monkeypat
 
     from lance_namespace import LanceNamespace
 
-    payload = dataplane.read_deleted_row_ids(cast("LanceNamespace", None), {}, ["t"], begin_version=begin, end_version=None)
+    payload = b"".join(dataplane.read_deleted_row_ids(cast("LanceNamespace", None), {}, ["t"], begin_version=begin, end_version=None))
     deleted = pyarrow.ipc.open_file(pa.py_buffer(payload)).read_all().column("_rowid").to_pylist()
 
     assert deleted == [rowid_of["b"]], f"the feed did not name the deleted row: {deleted} (b was {rowid_of['b']})"
     assert rowid_of["a"] not in deleted and rowid_of["c"] not in deleted, "a surviving row was reported as deleted"
+
+
+def test_the_feed_HANDS_OUT_its_answer_in_pieces_rather_than_holding_all_of_it(tmp_path, monkeypatch) -> None:
+    """A change feed's answer is sized by the DATA, so the door must not hold a whole copy of it — let
+    alone three.
+
+    MEASURED 2026-09-22 (200k rows x 256B, 58.4 MB of Arrow over the feed's five projected columns):
+    the materialising form peaked at **147.6 MB of RSS for one call, 2.53x the payload**, because
+    `to_table()` builds the whole result, the IPC writer encodes a second copy beside it, and
+    `to_pybytes()` copies that onto the Python heap a third time before the response is even
+    constructed. Yielding peaks at **60.1 MB, 1.03x**, with byte-identical output. `tracemalloc`
+    reports 0 MB for the first two steps — it sees only the Python heap while Arrow allocates
+    elsewhere, the same blind spot [[LH-183]] hit — so the numbers above are RSS.
+
+    This asserts the SHAPE rather than a byte count, because a threshold measured on this machine is
+    not a threshold on another: the door yields its answer progressively and never returns one object
+    holding all of it. The sibling assertion is that streaming did not cost correctness — the pieces
+    concatenate into exactly the Arrow FILE the one-shot form produced, footer and all.
+    """
+    from typing import cast
+
+    import lance
+    import pyarrow as pa
+    import pyarrow.ipc
+    from lance_namespace import LanceNamespace
+
+    from catalog.services import dataplane
+
+    rows = 100_000
+    uri = str(tmp_path / "t")
+    lance.write_dataset(pa.table({"id": pa.array(range(rows), pa.int64())}), uri, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    monkeypatch.setattr(dataplane, "open_dataset", lambda *_a, **_kw: lance.dataset(uri))
+
+    feed = dataplane.read_changes(cast("LanceNamespace", None), {}, ["t"], predicate="_row_created_at_version >= 1")
+
+    assert not isinstance(feed, bytes | bytearray), "the door returned its whole answer as one object — nothing bounds what it holds"
+    chunks = list(feed)
+    assert len(chunks) > 1, f"the answer arrived in {len(chunks)} piece(s), so the scan was materialised before any of it was sent"
+    table = pyarrow.ipc.open_file(pa.py_buffer(b"".join(chunks))).read_all()
+    assert table.num_rows == rows, f"streaming lost rows: {table.num_rows} of {rows}"

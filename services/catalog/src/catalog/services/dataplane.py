@@ -16,6 +16,8 @@ which changes for RFC 9110 reasons rather than pylance ones. Nothing here shapes
 
 from __future__ import annotations
 
+import io
+import itertools
 import json
 import logging
 import re
@@ -1514,6 +1516,71 @@ def drop_columns(ns: LanceNamespace, so: StorageOptions, req: AlterTableDropColu
     return AlterTableDropColumnsResponse(version=dataset.version)
 
 
+class _ChunkSink(io.RawIOBase):
+    """A write target that holds only what the IPC writer has emitted since the last drain.
+
+    ON THE DOCUMENTED PATH, not a workaround: Arrow's IPC guide states the record-batch writers
+    "can write to a writeable ``NativeFile`` object **or a writeable Python object**", and
+    `pa.output_stream`'s own signature takes ``source : str, Path, buffer, file-like object``. A
+    Python sink is first-class API, so `pa.ipc.new_file` takes this directly with no wrapper.
+
+    It exists because the obvious sink cannot stream. `pa.BufferOutputStream` accumulates every byte
+    until `getvalue()` — which is the one-shot shape, and the shape every FastAPI+Arrow example
+    reaches for (`BytesIO` + `RecordBatchFileWriter` + `Response`). That is correct for a small
+    answer and is precisely what costs 2.5x the payload on a large one. Draining after each batch
+    hands the bytes out and forgets them, so what is held is one batch rather than the whole table.
+
+    `io.RawIOBase` rather than a bare class with `write`: it supplies `writable()`, `closed` and the
+    context-manager protocol that pyarrow's `PythonFile` probes for, without restating them.
+    """
+
+    def __init__(self) -> None:
+        self._parts: list[bytes] = []
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, b: Any) -> int:  # noqa: ANN401 — pyarrow writes bytes, memoryview or bytearray
+        payload = bytes(b)
+        self._parts.append(payload)
+        return len(payload)
+
+    def drain(self) -> bytes:
+        """Everything written since the last call, and nothing after it."""
+        out = b"".join(self._parts)
+        self._parts.clear()
+        return out
+
+
+def _arrow_file_chunks(schema: pa.Schema, first: pa.RecordBatch | None, rest: Iterator[pa.RecordBatch]) -> Iterator[bytes]:
+    """One Arrow FILE, yielded a batch at a time — byte-identical to the one-shot form.
+
+    Byte-identical is verified, not assumed (2026-09-22, 58,410,370 bytes from both paths over the
+    same projection, matching schema and rows). It matters because it is what makes this a pure
+    memory change: no consumer can tell the two apart, so nothing downstream has to be migrated.
+
+    FILE framing rather than STREAM is not a detail to trade away for streamability: `/query` answers
+    `application/vnd.apache.arrow.file` and a consumer handed the other framing fails at the first
+    batch. The footer that makes it a FILE is written by `new_file.__exit__`, so it arrives as the
+    last drain — which is exactly why the close happens inside this generator rather than before it.
+
+    ``first`` is passed in already pulled: its caller needs the pull to happen under its own error
+    guard, and re-deriving it here would either lose that batch or scan twice.
+    """
+    sink = _ChunkSink()
+    # `first is None` means the scan was empty, so `rest` is exhausted too and chaining it in would
+    # hand `write_batch` a None. The file is still written: an empty FILE is a schema and a footer,
+    # which is what a consumer asking a window nothing changed in must receive.
+    batches = rest if first is None else itertools.chain((first,), rest)
+    with pa.ipc.new_file(sink, schema) as writer:
+        for batch in batches:
+            writer.write_batch(batch)
+            if chunk := sink.drain():
+                yield chunk
+    if chunk := sink.drain():
+        yield chunk
+
+
 def read_changes(
     ns: LanceNamespace,
     so: StorageOptions,
@@ -1522,8 +1589,8 @@ def read_changes(
     predicate: str,
     columns: list[str] | None = None,
     branch: str | None = None,
-) -> bytes:
-    """Rows matching a change-feed predicate, Arrow FILE-framed (§ J4).
+) -> Iterator[bytes]:
+    """Rows matching a change-feed predicate, Arrow FILE-framed (§ J4), handed out in pieces.
 
     Its own scan rather than the query door's, because `QueryTableRequest` is a VECTOR model — `k` and
     `vector` are required — so reusing it would mean inventing a vector to ask a question that has
@@ -1540,15 +1607,32 @@ def read_changes(
     THE PROJECTION IS PART OF THE ANSWER, not a default: Lance returns only data columns unless the
     version pseudo-columns are named, so a feed that passed the caller's `columns` through verbatim
     handed back changed rows with no version on them and no way to ask for the next window.
+
+    IT YIELDS rather than returns, because the answer is sized by the DATA and this door has no bound
+    to put on it — no `limit`, no page token, and none available: the version window is the only
+    cursor a consumer has, and one version can carry the whole table.
+
+    MEASURED 2026-09-22 (200k rows x 256B, 58.4 MB of Arrow over the feed's five projected columns),
+    same projection on both sides: the materialising form peaked at **147.6 MB of RSS for one call,
+    2.53x the payload**, because it held three copies at once — the scan's table, the IPC encoding
+    beside it, and `to_pybytes()` copying that onto the Python heap. Yielding peaks at **60.1 MB,
+    1.03x**, and the wire output is byte-identical (58,410,370 both), same schema, same rows.
+
+    RSS is the measurement because nothing cheaper can see this: `tracemalloc` reports 0 MB for the
+    scan and the encode, watching the Python heap while Arrow allocates elsewhere — the blind spot
+    [[LH-183]] paid for twice.
     """
     dataset = open_dataset(ns, so, table_id, branch=branch)
     projection = changes.feed_projection(columns, data_columns=dataset.schema.names)
     with _user_sql("invalid change-feed predicate"):
-        table = dataset.scanner(filter=predicate, columns=projection).to_table()
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_file(sink, table.schema) as writer:
-        writer.write_table(table)
-    return cast("bytes", sink.getvalue().to_pybytes())
+        scanner = dataset.scanner(filter=predicate, columns=projection)
+        # THE FIRST BATCH IS PULLED INSIDE THE GUARD, and that placement is the whole reason this is
+        # not one line. `to_batches()` is lazy, so a malformed predicate does not raise until the
+        # first pull — and a generator's body does not run until the response is already streaming,
+        # where a raise becomes a truncated 200 instead of the 400 `_user_sql` exists to produce.
+        batches = scanner.to_batches()
+        first = next(batches, None)
+    return _arrow_file_chunks(scanner.projected_schema, first, batches)
 
 
 def read_deleted_row_ids(
@@ -1559,7 +1643,7 @@ def read_deleted_row_ids(
     begin_version: int,
     end_version: int | None = None,
     branch: str | None = None,
-) -> bytes:
+) -> Iterator[bytes]:
     """The `_rowid`s deleted in ``(begin_version, end_version]``, Arrow FILE-framed (§ J4, LH-008).
 
     ITS OWN DOOR BECAUSE IT IS ITS OWN QUESTION. `read_changes` scans the table with a predicate over
@@ -1593,11 +1677,13 @@ def read_deleted_row_ids(
     dataset = open_dataset(ns, so, table_id, branch=branch)
     with _user_sql("invalid deleted-row window"):
         reader = dataset.delta(begin_version=begin_version, end_version=end_version if end_version is not None else dataset.version).get_deleted_row_ids()
-        table = reader.read_all()
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_file(sink, table.schema) as writer:
-        writer.write_table(table)
-    return cast("bytes", sink.getvalue().to_pybytes())
+        # Streamed for the same reason `read_changes` is, and the count is no smaller for being one
+        # column: a bulk delete names every row it removed, so `read_all()` sized this answer by the
+        # DELETION and then copied it twice more on the way out.
+        schema = reader.schema
+        batches = iter(reader)
+        first = next(batches, None)
+    return _arrow_file_chunks(schema, first, batches)
 
 
 #: Schema-metadata keys the catalog writes for itself. They are the coordinates that make the Lance file

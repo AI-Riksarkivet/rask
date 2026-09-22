@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
@@ -265,3 +265,90 @@ def test_erase_compaction_leaves_a_branch_readable(table: str) -> None:
     _erase(table)
 
     assert _pii(lance.dataset(table).checkout_version(("work", None))) == ["bob", "carol", "dan"]
+
+
+class _Optimize:
+    """Records the bound the erasure hands pylance, then does the real compaction."""
+
+    def __init__(self, inner: Any, log: list[tuple[str, Any]]) -> None:
+        self._inner, self._log = inner, log
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    def compact_files(self, **kwargs: Any) -> Any:
+        self._log.append(("compact_files", dict(kwargs)))
+        return self._inner.compact_files(**kwargs)
+
+
+class _Probe:
+    """A REAL dataset that also records HOW it was asked.
+
+    Wrapping rather than faking, for the reason this whole file gives: the claims here are about
+    Lance's behaviour, and a stand-in that answers from a dict would restate the belief under test.
+    `checkout_version` re-wraps so the per-version residual check is visible too — a probe that
+    stopped at the first handle would see none of the calls this exists to count.
+    """
+
+    def __init__(self, inner: Any, log: list[tuple[str, Any]]) -> None:
+        self._inner, self._log = inner, log
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._inner, name)
+
+    @property
+    def optimize(self) -> _Optimize:
+        return _Optimize(self._inner.optimize, self._log)
+
+    def checkout_version(self, version: Any) -> _Probe:
+        return _Probe(self._inner.checkout_version(version), self._log)
+
+    def count_rows(self, *args: Any, **kwargs: Any) -> Any:
+        self._log.append(("count_rows", kwargs.get("filter", args[0] if args else None)))
+        return self._inner.count_rows(*args, **kwargs)
+
+    def to_table(self, *args: Any, **kwargs: Any) -> Any:
+        self._log.append(("to_table", kwargs.get("filter")))
+        return self._inner.to_table(*args, **kwargs)
+
+
+def _erase_watching(uri: str) -> list[tuple[str, Any]]:
+    log: list[tuple[str, Any]] = []
+    # CAST, not a suppression: `_Probe.__getattr__` forwards every member of the protocol to a real
+    # dataset, which no static check can see. Declaring each forwarded member instead would be a
+    # second copy of `_Dataset` that drifts from it silently — the opposite of what the probe is for.
+    erase(cast("Any", _Probe(lance.dataset(uri), log)), table="acme-bronze$subjects", predicate=_PREDICATE, retention=_NOW)
+    return log
+
+
+def test_the_erasure_COMPACTION_carries_the_bound_the_compact_door_already_applies(table: str) -> None:
+    """`compact_now` in `services/maintenance.py` pins `batch_size=64, num_threads=2` and says why:
+    "rows are not a unit of memory, and the default batch size on a blob tier read ~15 GB/thread — the
+    OOM measured on the maintenance pod is just as available to the catalog pod through this button".
+
+    Erasure is a second such button on the same pod, and it reached pylance unbounded. An erasure runs
+    over exactly the tables most likely to carry a blob column, so the unbounded default is not the
+    cheaper path here — it is the same hazard through a door nobody had counted.
+    """
+    log = _erase_watching(table)
+
+    compactions = [kwargs for name, kwargs in log if name == "compact_files"]
+    assert compactions, "the erasure did not compact at all — the subject's bytes stay in a live data file"
+    for kwargs in compactions:
+        assert kwargs.get("batch_size") == 64, f"unbounded read: {kwargs}"
+        assert kwargs.get("num_threads") == 2, f"unbounded parallelism: {kwargs}"
+
+
+def test_the_RESIDUAL_CHECK_counts_rather_than_materialising_every_matching_row(table: str) -> None:
+    """The verify step asks one question per retained version — "does this version still hold the
+    subject" — and the answer is a number.
+
+    Materialising the matching rows to read `.num_rows` sizes that check by the ERASURE: a subject
+    with many rows is exactly the case where the proof costs the most, and it is paid once per
+    version. `count_rows` answers the same question without building the rows.
+    """
+    log = _erase_watching(table)
+
+    materialised = [f for name, f in log if name == "to_table" and f == _PREDICATE]
+    assert not materialised, f"the residual check built {len(materialised)} row set(s) to ask for a count"
+    assert any(name == "count_rows" and f == _PREDICATE for name, f in log), "no version was probed for residual rows at all"

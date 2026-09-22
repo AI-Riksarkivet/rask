@@ -64,6 +64,27 @@ log = logging.getLogger(__name__)
 
 
 ARROW_FILE = "application/vnd.apache.arrow.file"
+_OCTET_STREAM = "application/octet-stream"
+
+
+class ArrowFileResponse(Response):
+    """Declares Arrow FILE framing to the SCHEMA generator; the handler still builds its own response.
+
+    FastAPI takes a door's documented 200 content type from `response_class`, and defaults it to
+    `JSONResponse` — so without this, `docs/catalog-openapi.json` advertises `application/json` for a
+    door that has never answered JSON, and `frontend/packages/api/src/generated/catalog.ts` is
+    generated from that document ([[LH-186]]). Passing `responses=` alone does NOT fix it: FastAPI
+    merges the two and the JSON default stays alongside the truth.
+    """
+
+    media_type = ARROW_FILE
+
+
+class OctetStreamResponse(Response):
+    """The same declaration for the blob door, whose payload is arbitrary bytes."""
+
+    media_type = _OCTET_STREAM
+
 
 router = APIRouter(prefix="/v1/table", tags=["data"])
 
@@ -489,7 +510,6 @@ async def delete_from_table(
 # other units deliberately don't match — RFC 9110 §14.1.1 lets a server ignore a Range it doesn't
 # support, so those fall through to the full 200 rather than a guessy 416.
 _RANGE_RE = re.compile(r"^bytes=(\d*)-(\d*)$")
-_OCTET_STREAM = "application/octet-stream"
 
 
 def _parse_range(header: str | None) -> tuple[int | None, int | None] | None:
@@ -516,7 +536,22 @@ def _parse_range(header: str | None) -> tuple[int | None, int | None] | None:
     return None if hi < lo else (lo, hi)
 
 
-@management_router.get("/{id}/blobs")
+def _serves(media_type: str) -> dict[int | str, dict[str, object]]:
+    """The `responses=` a door answering BYTES needs, so its published contract matches what it sends.
+
+    FastAPI reads the 200 content type from here and nowhere else. The `media_type` handed to the
+    `Response` object is chosen at request time, long after the schema is generated — so without this
+    a door answers Arrow for its whole life while `docs/catalog-openapi.json` says `application/json`,
+    and `frontend/packages/api/src/generated/catalog.ts` is generated from that ([[LH-186]]).
+
+    `{"type": "string", "format": "binary"}` is OpenAPI's way of saying "opaque bytes"; there is no
+    schema for an Arrow FILE beyond its media type, and inventing one would describe the payload
+    wrongly rather than leave it undescribed.
+    """
+    return {200: {"content": {media_type: {"schema": {"type": "string", "format": "binary"}}}}}
+
+
+@management_router.get("/{id}/blobs", responses=_serves(_OCTET_STREAM), response_class=OctetStreamResponse)
 async def read_table_blob(
     id: str,
     ns: NamespaceDep,
@@ -611,7 +646,7 @@ def _reader(token: object) -> str:
     return str(sub) if sub else "system:catalog"
 
 
-@router.post("/{id}/query")
+@router.post("/{id}/query", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
 def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken = None) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
@@ -640,7 +675,7 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
 # method it happened to register last — so the generated OpenAPI flipped between `_get` and
 # `_post` between runs, which is invalid (operationIds must be unique) and made the contract gate
 # flip-flop. Explicit ids keep the spec's POST canonical and name the GET for what it is.
-@management_router.post("/{id}/changes")
+@management_router.post("/{id}/changes", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
 def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
@@ -670,7 +705,19 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
         predicate = changes.change_filter(begin_version=body.begin_version, end_version=body.end_version, kind=body.kind)
         data = dataplane.read_changes(ns, so, segments, predicate=predicate, columns=body.columns, branch=body.branch)
     audit_read(subject=_reader(token), resource=id, version=body.end_version, columns=body.columns, change_kind=body.kind)
-    return Response(content=data, media_type=ARROW_FILE)
+    # STREAMED, like the blob door above and for the same reason: a feed's size is a property of the
+    # DATA and this door has no bound to offer — the version window is the only cursor, and one
+    # version can carry the whole table. The audit is emitted BEFORE the first byte on purpose: the
+    # disclosure is the request, and a consumer that hangs up mid-stream has still made it.
+    #
+    # RETURNED rather than declared as `response_class=` + `yield from`, which is the form the fastapi
+    # skill prefers — and that preference is wrong for a producer that VALIDATES. Measured 2026-09-22
+    # on this FastAPI: with `yield from`, the endpoint IS the generator, so a raise from the producer
+    # lands after the response has begun and the caller receives **200 with an empty body**; returning
+    # the response calls the producer in the endpoint body, where the same raise is a 500 that
+    # `install_problem_handlers` turns into the 400 the caller can act on. `read_changes` pulls its
+    # first batch eagerly for exactly that reason, and this line is the other half of it.
+    return StreamingResponse(data, media_type=ARROW_FILE)
 
 
 @router.post("/{id}/count_rows", operation_id="count_table_rows")

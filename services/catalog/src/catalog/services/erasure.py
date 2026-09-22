@@ -40,6 +40,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from catalog.services.maintenance import COMPACTION_BOUND
+
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +93,7 @@ class _Dataset(Protocol):
     def checkout_version(self, version: Any, /) -> Any: ...
     def versions(self) -> Any: ...
     def to_table(self, *args: Any, **kwargs: Any) -> Any: ...
+    def count_rows(self, *args: Any, **kwargs: Any) -> Any: ...
     @property
     def optimize(self) -> Any: ...
     def cleanup_old_versions(
@@ -165,7 +168,10 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
     #    deleted and its history reclaimed, and the report says the bytes may remain rather than
     #    implying they are gone.
     try:
-        dataset.optimize.compact_files()
+        # THE SAME BOUND THE COMPACT DOOR CARRIES, imported rather than restated: this pod has more
+        # than one button that reaches `compact_files`, and an erasure runs over exactly the tables
+        # most likely to hold a blob column — so the unbounded default is not the cheaper path here.
+        dataset.optimize.compact_files(**COMPACTION_BOUND)
         report.surfaces.append(SurfaceResult(surface="compact", outcome="rewritten"))
     except Exception as exc:  # noqa: BLE001
         failed = True
@@ -236,7 +242,10 @@ def _versions_still_matching(dataset: _Dataset, predicate: str) -> list[int]:
         return [-1]
     for version in versions:
         try:
-            if dataset.checkout_version(version).to_table(filter=predicate).num_rows:
+            # COUNTED, not materialised. The question is "does this version still hold the subject",
+            # and building the matching rows to read `.num_rows` sizes the PROOF by the erasure —
+            # paid once per retained version, and worst exactly when the subject has the most rows.
+            if dataset.checkout_version(version).count_rows(filter=predicate):
                 still.append(version)
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_verify_failed", extra={"version": version, "error": str(exc)})
@@ -300,7 +309,7 @@ def _answers(dataset: _Dataset, version: int, predicate: str) -> bool | None:
     clean" from "could not tell", and only the first is a reason to keep it.
     """
     try:
-        return bool(dataset.checkout_version(version).to_table(filter=predicate).num_rows)
+        return bool(dataset.checkout_version(version).count_rows(filter=predicate))
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_tag_probe_failed", extra={"version": version, "error": str(exc)})
         return None

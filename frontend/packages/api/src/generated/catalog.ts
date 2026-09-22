@@ -645,6 +645,13 @@ export interface paths {
          *     read-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the
          *     served version (pin ``version`` for a stable address across overwrites).
          *
+         *     ONE ROW PER REQUEST, and a client wanting the same byte range from MANY rows should not loop here
+         *     ([[LH-035]]). pylance's ``LanceDataset.read_blob_ranges(blob_column, requests, selector=…)`` takes a
+         *     sequence of ``(row, offset, length)`` tuples and plans them as ONE call — verified against the
+         *     installed pylance 11.0.0 — so N loops over this endpoint become N round trips and N independent
+         *     plans where the batched API makes one. This door is deliberately the credential-less SINGLE-blob
+         *     path; it is not the shape to build a scan on, and nothing here would tell a caller that.
+         *
          *     Authz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``
          *     (same rung as ``/query``) — this endpoint serves DATA, so credential-vending tiers apply
          *     unchanged; it just removes the need for the credentials themselves.
@@ -1006,7 +1013,14 @@ export interface paths {
          * @description Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated
          *     (``can_drop``) — the same bar as scheduling it via the retention policy.
          *
-         *     ``branch`` is DECLARED only so it can be REFUSED — see the module header.
+         *     ``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's — see the
+         *     module header for the measurement. The pre-pass below runs on both paths and is the same listing
+         *     either way, because a branch handle's ``uri`` is the dataset root.
+         *
+         *     Reclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is
+         *     irreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED — the
+         *     parent's data files, counted before and after — rather than that the branch reached
+         *     ``open_dataset``.
          */
         post: operations["run_maintenance_management_v1_table__id__maintenance_run_post"];
         delete?: never;
@@ -5795,6 +5809,8 @@ export interface components {
         CreateWarehouseRequest: {
             /** Bucket */
             bucket?: string | null;
+            /** Endpoint */
+            endpoint?: string | null;
             /** Id */
             id: string;
             /**
@@ -9248,6 +9264,10 @@ export interface components {
             bucket: string;
             /** Created At */
             created_at?: string | null;
+            /** Credential Ref */
+            credential_ref?: string | null;
+            /** Endpoint */
+            endpoint?: string | null;
             /** Id */
             id: string;
             /** Primary */
@@ -10519,7 +10539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/octet-stream": string;
                 };
             };
             /** @description Validation Error */
@@ -10561,7 +10581,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/vnd.apache.arrow.file": string;
                 };
             };
             /** @description Validation Error */
@@ -10713,6 +10733,8 @@ export interface operations {
         parameters: {
             query?: {
                 tier?: "read" | "write";
+                /** @description The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main. */
+                branch?: string;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };
@@ -10991,7 +11013,7 @@ export interface operations {
     run_maintenance_management_v1_table__id__maintenance_run_post: {
         parameters: {
             query?: {
-                /** @description REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs. */
+                /** @description The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files. */
                 branch?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
@@ -14376,7 +14398,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/vnd.apache.arrow.file": string;
                 };
             };
             /** @description Validation Error */

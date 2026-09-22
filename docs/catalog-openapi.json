@@ -4499,6 +4499,17 @@
             ],
             "title": "Bucket"
           },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -12174,6 +12185,28 @@
             ],
             "title": "Created At"
           },
+          "credential_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Credential Ref"
+          },
+          "endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Endpoint"
+          },
           "id": {
             "title": "Id",
             "type": "string"
@@ -15640,7 +15673,7 @@
     },
     "/management/v1/table/{id}/blobs": {
       "get": {
-        "description": "Serve one blob payload over plain HTTP \u2014 the credential-less consumer path (\u00a79 P1).\n\nA browser/notebook/service with NO storage credentials fetches blob bytes straight from the\ncatalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=\u2026`` is\nhonoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes */size``,\nand every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``\n(``\"<version>-<column>-<row>\"``) so clients can resume safely: an ``If-Range`` that no longer\nmatches (the table was overwritten mid-download) downgrades the range to a full 200 instead of\nsilently splicing bytes from two incarnations. The body is STREAMED in bounded windows (each a\nlazy ``BlobFile.read_range``), so a multi-GB payload never buffers in the catalog \u2014 the\nread-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the\nserved version (pin ``version`` for a stable address across overwrites).\n\nAuthz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``\n(same rung as ``/query``) \u2014 this endpoint serves DATA, so credential-vending tiers apply\nunchanged; it just removes the need for the credentials themselves.",
+        "description": "Serve one blob payload over plain HTTP \u2014 the credential-less consumer path (\u00a79 P1).\n\nA browser/notebook/service with NO storage credentials fetches blob bytes straight from the\ncatalog: ``GET /v1/table/{id}/blobs?column=payload&row=3[&version=N]``. ``Range: bytes=\u2026`` is\nhonoured (206 + ``Content-Range``), an unsatisfiable range gets the RFC 416 + ``bytes */size``,\nand every response carries ``Accept-Ranges: bytes`` plus a strong ``ETag``\n(``\"<version>-<column>-<row>\"``) so clients can resume safely: an ``If-Range`` that no longer\nmatches (the table was overwritten mid-download) downgrades the range to a full 200 instead of\nsilently splicing bytes from two incarnations. The body is STREAMED in bounded windows (each a\nlazy ``BlobFile.read_range``), so a multi-GB payload never buffers in the catalog \u2014 the\nread-side mirror of the write-side body-limit OOM guard. ``row`` is the POSITIONAL index at the\nserved version (pin ``version`` for a stable address across overwrites).\n\nONE ROW PER REQUEST, and a client wanting the same byte range from MANY rows should not loop here\n([[LH-035]]). pylance's ``LanceDataset.read_blob_ranges(blob_column, requests, selector=\u2026)`` takes a\nsequence of ``(row, offset, length)`` tuples and plans them as ONE call \u2014 verified against the\ninstalled pylance 11.0.0 \u2014 so N loops over this endpoint become N round trips and N independent\nplans where the batched API makes one. This door is deliberately the credential-less SINGLE-blob\npath; it is not the shape to build a scan on, and nothing here would tell a caller that.\n\nAuthz: the router-level ``authorize`` maps the ``blobs`` suffix to reader-tier ``can_read_data``\n(same rung as ``/query``) \u2014 this endpoint serves DATA, so credential-vending tiers apply\nunchanged; it just removes the need for the credentials themselves.",
         "operationId": "read_table_blob_management_v1_table__id__blobs_get",
         "parameters": [
           {
@@ -15791,8 +15824,11 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
             "description": "Successful Response"
@@ -15913,8 +15949,11 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/vnd.apache.arrow.file": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
             "description": "Successful Response"
@@ -16445,6 +16484,18 @@
                 "write"
               ],
               "title": "Tier",
+              "type": "string"
+            }
+          },
+          {
+            "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main.",
+            "in": "query",
+            "name": "branch",
+            "required": false,
+            "schema": {
+              "default": "",
+              "description": "The branch this credential is for. Naming one NARROWS the grant: write lands on `<table>/tree/<branch>/*` and main drops to read-only. Omit for main.",
+              "title": "Branch",
               "type": "string"
             }
           },
@@ -17362,7 +17413,7 @@
     },
     "/management/v1/table/{id}/maintenance/run": {
       "post": {
-        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` is DECLARED only so it can be REFUSED \u2014 see the module header.",
+        "description": "Reclaim old versions on demand (DESTRUCTIVE; tag-pinned versions are exempt). Owner-gated\n(``can_drop``) \u2014 the same bar as scheduling it via the retention policy.\n\n``branch`` IS HONOURED, and the containment is the LAYOUT's rather than this door's \u2014 see the\nmodule header for the measurement. The pre-pass below runs on both paths and is the same listing\neither way, because a branch handle's ``uri`` is the dataset root.\n\nReclaiming MAIN's history and reporting it as the branch's is the failure this replaces, and it is\nirreversible, so ``test_the_gc_run_reclaims_the_ref_the_request_names`` asserts what SURVIVED \u2014 the\nparent's data files, counted before and after \u2014 rather than that the branch reached\n``open_dataset``.",
         "operationId": "run_maintenance_management_v1_table__id__maintenance_run_post",
         "parameters": [
           {
@@ -17375,7 +17426,7 @@
             }
           },
           {
-            "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
+            "description": "The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.",
             "in": "query",
             "name": "branch",
             "required": false,
@@ -17388,7 +17439,7 @@
                   "type": "null"
                 }
               ],
-              "description": "REFUSED here: a reclaim needs the estate-wide pre-pass only the scheduled sweep runs.",
+              "description": "The ref to reclaim. Omit for main; a reclaim through a branch handle is scoped to that branch's own files.",
               "title": "Branch"
             }
           },
@@ -28471,8 +28522,11 @@
         "responses": {
           "200": {
             "content": {
-              "application/json": {
-                "schema": {}
+              "application/vnd.apache.arrow.file": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
               }
             },
             "description": "Successful Response"
