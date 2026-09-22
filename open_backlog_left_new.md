@@ -1279,12 +1279,24 @@ have no `uv.lock` and so cannot be built to emit anything.
   policies (`policies=27` on the planner) and the live planner carries
   `MAINTENANCE_POLICY_ROOT = None` against a chart default of `policyRoot: ""`. Whatever those 27
   cover, the zero interval-skips say none of them sets one.
-- **THE EMPTY `MAINTENANCE_POLICY_ROOT` IS NOT THE CAUSE — checked, so nobody chases it.** An empty
-  env var defeating a code default is a real shape in this estate, but not here:
-  `resolved_policy_root` is `self.policy_root or f"s3://{self.s3_bucket}"`, so blank correctly falls
-  back to the estate bucket, and the planner does load 27 policies from it. What the logs cannot
-  distinguish is whether those 27 MATCH datasets and set no interval, or match nothing at all — both
-  produce the same observable, which is why this row claims only what the skip count proves.
+- **THE REGISTRY WAS READ, so this is no longer an inference from a skip count.** Under
+  `s3://lance-catalog/_policies/`: **27 `table-*.json` policies — every one of them
+  `compact_interval_hours: null` and `compact_enabled: true`** — beside 181 `dataset-*` stamps
+  carrying `{"last_planned_version": N}`. The field is PRESENT on every policy record and SET on
+  none.
+- **AND THE 27 COVER 27 TABLES, not the estate.** Their ids are all of one family
+  (`media$annotations_m1_*`), so even with intervals set they would skip 27 of ~570 datasets. The
+  lever therefore needs two things, not one: intervals declared, AND coverage for the rest — either
+  more policy records or a global default the sweep falls back to.
+- **THE MECHANISM IS COHERENT AND WOULD WORK — checked, so it is not blamed for this.** The interval
+  check reads `last_maintained_at` from `_policies/state/` via `_state_key(record, uri)`, a key the
+  code documents as existing "only for datasets carrying a policy with an interval"; the
+  `dataset-*` objects in that prefix are the EVENT lane's, keyed by uri alone, and are a separate
+  mechanism. With an interval set, the first tick finds no stamp, maintains (the documented
+  fail-safe), writes one, and later ticks skip. Nothing here is broken.
+- **THE EMPTY `MAINTENANCE_POLICY_ROOT` IS NOT THE CAUSE EITHER — also checked.**
+  `resolved_policy_root` is `self.policy_root or f"s3://{self.s3_bucket}"`, so blank falls back to the
+  estate bucket, which is where those 27 were found.
 - **IT IS THE VOLUME BEHIND TWO OTHER ROWS.** The work lane keeps up by only ~9% ([[LH-188]]'s
   bounds are sized against 4.73 units/sec) and an outage's backlog drains at ~1,600 units an hour, so
   [[LH-190]]'s stalls take hours to clear. Both numbers are consequences of planning 570 datasets
@@ -1299,6 +1311,8 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *What is left:* Decide whether the estate declares cadences per policy and what they are, or whether
   planning everything every tick is intended. If intended, the two rows above are sized correctly and
   nothing further is needed; if not, this is the cheapest lever on both.
+- *What the ruling has to cover:* not just "what interval", but WHICH DATASETS — 27 policy records
+  exist against ~570 datasets, so a per-policy interval alone moves 5% of the volume.
 - *Closes when:* A tick reports a non-zero cadence skip count, or this row records the ruling that
   re-planning the whole estate every 120s is deliberate.
 - *Evidence:* live planner 2026-09-22 `planned=570 skipped=7` on every tick · `policies=27` ·
