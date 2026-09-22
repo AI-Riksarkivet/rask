@@ -28,7 +28,7 @@ registered table or mis-resolve every ordinary one.
 
 from __future__ import annotations
 
-from maintenance.services.reconcile import _absent_datasets
+from maintenance.services.reconcile import ReconcileReport, Sources, _absent_datasets, _registration_drift
 
 
 ROOT = "s3://lance-catalog"
@@ -79,3 +79,34 @@ def test_a_DROPPED_table_whose_bytes_await_the_purge_is_not_drift() -> None:
         )
         == []
     )
+
+
+# --------------------------------------------------------------------------- #
+# The WALKED-BUCKET boundary: what was looked at, vs what happened to be found
+# --------------------------------------------------------------------------- #
+
+
+def _drift(registered: dict[str, tuple[str, str | None]], datasets: list[str], walked: list[str]) -> ReconcileReport:
+    report = ReconcileReport(checked_at="now")
+    sources = Sources(tables=[], table_locations=registered, trash=[])
+    _registration_drift(report, sources, [(uri, uri.removeprefix("s3://")) for uri in datasets], walked_buckets=walked)
+    return report
+
+
+def test_an_EMPTY_bucket_that_was_walked_still_reports_its_absent_records() -> None:
+    """The live run's own finding. Deriving "walked" from the discovered URIs makes the answer depend on
+    whether a bucket happened to hold anything: the same missing record is a FINDING in a bucket with one
+    dataset and merely UNKNOWN in an empty one. Emptiness is the strongest possible evidence of absence,
+    so that is exactly backwards."""
+    report = _drift({"ns$t": ("s3://wh", "s3://wh/dead")}, datasets=[], walked=["wh"])
+    assert [f.table for f in report.absent_datasets] == ["ns$t"]
+    assert report.counts["absent_datasets"] == 1
+    assert report.incomplete == []
+
+
+def test_a_bucket_NOBODY_walked_is_unknown_rather_than_clean() -> None:
+    """The other side of the same boundary, and the reason the filter exists at all."""
+    report = _drift({"ns$t": ("s3://elsewhere", "s3://elsewhere/dead")}, datasets=[], walked=["wh"])
+    assert report.absent_datasets == []
+    assert report.counts["absent_datasets"] == 0
+    assert [i.reason for i in report.incomplete] == ["ns$t is registered at s3://elsewhere/dead, outside every scanned bucket — its bytes were not looked for"]

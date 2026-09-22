@@ -1182,7 +1182,7 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
     return buckets
 
 
-def _registration_drift(report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]]) -> None:
+def _registration_drift(report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]], *, walked_buckets: list[str]) -> None:
     """Both directions of catalog-vs-storage disagreement, from the walk's findings and the manifest.
 
     [[LH-176]] finds bytes no catalog record names; [[LH-192]] a record whose location holds no bytes.
@@ -1213,9 +1213,11 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
             trashed=trashed,
         )
         report.counts["unregistered_datasets"] = len(report.unregistered_datasets)
-        # FILTERED TO THE BUCKETS ACTUALLY WALKED. A table in a bucket `_scannable_buckets` excluded
-        # resolves to a URI nothing discovered, and would be reported absent though its bytes are fine.
-        walked = {f"s3://{bucket}" for bucket in {uri.removeprefix("s3://").split("/", 1)[0] for uri, _key in datasets}}
+        # FILTERED TO THE BUCKETS ACTUALLY WALKED — which is what `discover_datasets` was POINTED at,
+        # never what it happened to find. Derived from the findings, an EMPTY bucket would drop its own
+        # absences to "unknown", making the same missing record a finding next to one live dataset and
+        # not a finding alone: emptiness is the strongest evidence of absence there is.
+        walked = {f"s3://{bucket}" for bucket in walked_buckets}
         candidates = _absent_datasets(
             registered=sources.table_locations or {},
             discovered={uri.rstrip("/") for uri, _key in datasets},
@@ -1275,12 +1277,16 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
         report.incomplete.append(IncompleteScan(source="storage:datasets", reason=f"the unreferenced-file scan could not open object storage: {exc}"))
         return
     datasets: list[tuple[str, str]] = []
+    #: The buckets discovery REACHED, as opposed to the ones it was asked for — a bucket whose listing
+    #: raised is not evidence about anything registered into it.
+    walked_buckets: list[str] = []
     for bucket in _scannable_buckets(report, settings, sources):
         try:
             found = discover_datasets(fs, bucket, max_depth=settings.discovery_max_depth)
         except Exception as exc:
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"dataset discovery failed: {exc}"))
             continue
+        walked_buckets.append(bucket)
         datasets.extend((uri, uri.removeprefix("s3://")) for uri in found.uris)
         # The depth bound is a REAL gap in coverage, so it becomes a real incomplete-scan note: a
         # dataset nested deeper than the walk reaches was never opened, and `report_is_clean` — the
@@ -1289,7 +1295,7 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
     # Before the per-dataset scan and not gated on it: whether the catalog and storage agree a dataset
     # EXISTS is a different question from which files inside it are unreferenced.
-    _registration_drift(report, sources, datasets)
+    _registration_drift(report, sources, datasets, walked_buckets=walked_buckets)
 
     try:
         scan = scan_datasets(fs, datasets, settings.storage_options())
