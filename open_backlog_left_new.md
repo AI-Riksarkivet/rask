@@ -188,13 +188,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**198 open items**, of which **102 are blocked on a decision** and **96 can be picked up today**.
+**199 open items**, of which **102 are blocked on a decision** and **97 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 38 | 4 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -1561,6 +1561,47 @@ of mine in this same session.**
 
 
 ## PHASE 1 · CROSS-CUTTING
+
+**XC-070 · The estate cannot be brought up on arm64: one chart image is amd64-only and the chart-lint container curls amd64 tooling**
+`deploy, chart, dagger` · **MED** · OPEN
+- **MEASURED 2026-09-22, prompted by the owner asking whether the estate can move to a DGX Spark
+  (GB10, arm64).** The answer is mostly yes, and the exceptions are specific rather than systemic.
+- **THE HARD BLOCKER IS `apache/age`.** `apache/age:release_PG16_1.5.0` is **`linux/amd64` only** —
+  read from the image's CONFIG BLOB, not from the manifest, because a v2 manifest carries no
+  top-level `architecture` and an index-shaped probe reports `?` for it either way. That image is the
+  `rask-age` StatefulSet, which serves BOTH the lineage graph and OpenFGA, so on arm64 nothing
+  governed comes up at all. The options are an arm64 AGE build, a different AGE distribution, or the
+  CNPG-with-AGE-extension path the chart already has a dockerfile for
+  (`.docker/cnpg-age-ext.dockerfile`, today gated off behind `age.cnpgCluster.enabled: false`).
+- **THE SECOND IS TOOLING, NOT RUNTIME.** `.dagger/charts.go:37,66` curl
+  `helm-v<ver>-linux-amd64.tar.gz` and `prometheus-<ver>.linux-amd64.tar.gz` into the chart-lint
+  container. Two hardcoded strings; the gate targets they serve would fail on an arm64 host.
+- **WHAT IS ALREADY FINE, measured rather than assumed, so the port is not re-scoped from scratch:**
+  * `make bootstrap` is ARCH-AWARE (`Makefile:864` maps `x86_64 -> amd64`, `aarch64 -> arm64`, and
+    `:874` refuses an unrecognised CPU loudly).
+  * **Every first-party base image pins a MULTI-ARCH INDEX that includes arm64** — checked by digest
+    against the registry: `python:3.13-slim-bookworm` (index: 386, amd64, arm, arm64, ppc64le, s390x),
+    `oven/bun:1-debian` (index: amd64, arm64), `nvidia/cuda` (list: amd64, arm64). A digest pin sounds
+    like an arch pin and is not one when the digest names an index; BuildKit resolves the platform.
+  * **`pylance` ships a manylinux aarch64 wheel** (12.0.0), which is the dependency that would have
+    been fatal and silent.
+  * `openbao:2.2.0` and `otel/opentelemetry-collector-contrib:0.157.0` are both multi-arch.
+- **NOT YET CHECKED, and named so the next pass does not mistake this for a complete survey:** nats,
+  openfga, greptimedb, rustfs, kueue, kuberay, cnpg, dex, `daprio/dashboard`, and the Ray images.
+- **THE CONFIG-TRAVELS-WITH-THE-CODE RISK WAS CHECKED AND IS CLEAN.** An earlier write-up claimed
+  `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS` "renders ZERO times from the chart" and existed "only as
+  cluster drift", which would have meant a fresh install silently loses it. False at HEAD: it renders
+  from `chart/values-local.yaml` and `chart/templates/services.yaml`, and the live pod carries it
+  alongside `LANCE_MULTIBASE_DATA_BASES`. A machine move does not lose it.
+- *What is left:* Resolve the AGE image for arm64 (build, substitute, or move to the CNPG extension
+  path), parametrise the two `linux-amd64` curls in `.dagger/charts.go` off the build platform, and
+  finish the third-party image survey above.
+- *Closes when:* `make k3s-install` -> `make k3s-up` brings the estate to Ready on an arm64 host, and
+  `make check` passes there.
+- *Evidence:* `apache/age:release_PG16_1.5.0` config blob -> `linux/amd64` · `.dagger/charts.go:37,66`
+  · `Makefile:864,874` (arch detection already present) · registry digest probes for python/bun/cuda
+  · PyPI `pylance` 12.0.0 manylinux aarch64 wheel
+
 
 **XC-001 · Helm-written Secrets carry no content checksum and ESO-written Secrets have no watcher, so a rotation never reaches running pods**
 `chart, frontend-zones, lineage` · **HIGH**
