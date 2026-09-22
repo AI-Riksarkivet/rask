@@ -316,6 +316,20 @@ have no `uv.lock` and so cannot be built to emit anything.
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
 - **blocked:** Owner ruling: may the catalog re-assert a dataset's location/id through a lineage event no run produced (a synthetic assertion restamping via the existing `SET_DATASET_SRC` path), or must lineage instead gain a catalog client and accept a catalog↔lineage cycle? LH-146 closed by exempting last-writer datasets from retention and never ruled on synthetic assertions.
+- **RE-MEASURED 2026-09-22 on demand, because this row said its own counts were not** (lineage
+  reconcile triggered directly: `POST /lineage-reconcile-cron`, port-forwarded, `dapr-api-token`):
+  `checked=483 unreadable=23 storage_loss=1 provenance_holes=0 unknown_to_graph=0
+  contract_violations=0`. **All 23 unreadable are the relative-`source_uri` kind** — every entry
+  carries "names no storage location". Against this row's stated 60 relative nodes and 24 reaching the
+  sweep as MISSING_ON_STORAGE, the population is **60 -> 23** and the storage-loss tail is **24 -> 1**.
+- **AND THE SOURCE IS CLOSED, which changes what the blocked ruling is FOR** ([[LH-187]]). The door
+  that emitted a relative `source_uri` was `register_table` — the one door taking a CALLER-supplied
+  location — and it already resolves before emitting (`tables.py:805`, `absolute_table_location`).
+  `declare_table`, `rename_table` and `create_table` pass a catalog-MINTED location and were never
+  exposed. Attribution confirms it: the producer of a live offender is
+  `catalog/core/lineage_emit.py` at `event_time 2026-09-06`, i.e. before the fix. So the 23 are a
+  CLOSED, SHRINKING population of historical rows, not a leak — the ruling decides how to repair 23
+  known nodes, not how to stop an ongoing one.
 - *What is left:* The guard is shipped and pinned (9 tests pass in `tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py` + `services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py`). Only the repair remains. (a) Rewrite the relative `source_uri` on the 60 Dataset nodes: 58 are governed and resolvable through the catalog, 2 hold no tuple and are removals, 24 reach the sweep every tick as MISSING_ON_STORAGE. (b) Restamp the composed `medallion/<tier>` datasets the guard now refuses by name (`s3://bind86-wh/medallion/silver`→`bronze$events`, `s3://lance-catalog/medallion/gold`→`bronze$events`, `s3://lance-catalog/medallion/silver`→`silver$features`, and the flat `s3://acme-bucket/4750a5b9_acme-bronze$events`); `ensure_declared_dataset_id` runs only from compute.py write paths (251, 368, 392) and `table_id_from_location` and lineage's durable feed cannot supply the value. Implement option 1 or 3 per the ruling; lineage holds no catalog client today. Pin that a corrected dataset keeps its `_rowid`s (`update_schema_metadata` is metadata-only) and diagnose the 94-count `lakehouse-bronze$events` (names no catalog table) under LH-164, not here. Live counts are from the row, not re-measured this session.
 - *Closes when:* No Dataset node carries a relative `source_uri` except the two ungoverned removals, and the sweep's location-mismatch refusal fires zero times across a full tick.
 - *Evidence:* `uv run pytest tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py -q → 9 passed` · `services/medallion/src/medallion/services/compute.py:251,368,392` · `services/lineage/src/lineage/services/cypher.py:212 + repository.py:410` · `rg -n 'describe_table|catalog_url' services/lineage/src → no hits`
