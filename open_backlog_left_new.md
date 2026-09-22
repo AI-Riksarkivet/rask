@@ -1179,6 +1179,23 @@ have no `uv.lock` and so cannot be built to emit anything.
   start of execution. A unit queued behind 40 others is burning its 12m window while idle, so a
   backlog does not merely slow down — it redelivers, and a redelivered compaction runs twice.
   `Redelivered 0` today because every table is at target and each unit is a no-op.
+- **THE PREDICTED EFFECT WAS THEN OBSERVED, and I caused it.** A manual sweep fired at the planner
+  (`POST /maintenance-cron`, port-forwarded, `dapr-api-token`) answered
+  `status=enqueued planned=567 published=567 not_queued=0 skipped=5` — every planned unit published,
+  no publish failures. The consumer immediately after: **`Ack Pending` 181 -> 721** (72% of the
+  1,000 ceiling) and **`Redelivered` 0 -> 1**. One unit burned its 12m window queued behind the
+  others and was redelivered, which is the mechanism this row describes, reproduced on demand.
+  Causation is not proven — the counter is cumulative and one tick is one sample — but the sequence
+  is: 0 before, 567 published, 1 after.
+- **Memory stayed flat through it** (planner 161Mi; workers 176Mi and 178Mi of 4Gi, CPU 790m/744m),
+  because every unit is still a no-op against tables already at target. So the ACK-WINDOW half of
+  this row is now demonstrated and the MEMORY half remains untested — the two fail independently and
+  only one has been seen.
+- **MANUAL TRIGGERING IS THE LEVER FOR THE REST OF IT.** The planner has no operator door; its two
+  cron-binding routes are the whole surface, guarded by `require_dapr_token`, which ALSO refuses any
+  request carrying `dapr-caller-app-id` — so it must be loopback-shaped (port-forward), never service
+  invocation. That is how the measurement above was taken and how a per-unit memory figure can be
+  taken deliberately rather than waited for.
 - *What is left:* Decide the bound. `maxAckPending` on the work pubsub component is the direct lever;
   the threadpool limiter is the other. THE NUMBER SHOULD BE MEASURED, NOT PICKED — nothing in this
   estate has yet run a compaction that rewrites fragments, so there is no per-unit memory figure to
