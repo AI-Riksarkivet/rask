@@ -967,7 +967,21 @@ still the owner's. Note the row's own analysis make
   apart on 2026-09-22: Messages **1,659 -> 1,585**, First Sequence **10,640 -> 10,714**. 74 parked
   deliveries aged out of the 7-day window during the audit that found the gap. Subjects:
   `dlq.lineage.events` 1,554, `dlq.bronze-to-silver` 12, `dlq.silver-to-gold` 3.
-- *Closes when:* A parked delivery on `dlq.lineage.events` can be re-ingested into the graph without landing back on `lineage.events.v1`, and the role-literal residue has a recorded disposition. **Clause 1 is closed**; clause 2 is the owner's.
+- **WHAT THE SHIPPED MECHANISM DOES *NOT* DO, measured on the live consumer after deploying it — and
+  this corrects the plainer reading of the two bullets above.** `nats consumer info DLQ
+  lineage-dlq-durable`: **Deliver Policy `New`**, Ack Policy Explicit, **Last Delivered = stream
+  sequence 12,298** (the stream's own last sequence), **Unprocessed 0**. The parking consumer is
+  DURABLE and has already consumed and acked the entire retained stream. So the **1,476 messages
+  sitting on `dlq.lineage.events` right now will never reach the new route** — they were delivered once,
+  when they parked, and the cursor is past them. The fix buys a second chance for **future** parks and
+  nothing for the standing backlog, which continues to age out at ~120/hour.
+- **RECOVERING THE STANDING BACKLOG IS A CURSOR RESET, AND IT IS TIED TO CLAUSE 2 RATHER THAN
+  SEPARATE FROM IT.** Re-pointing `lineage-dlq-durable` back over the retained window would re-present
+  all 1,476 to the route, which is now safe (idempotent MERGE, authz-gated, acks either way) — but the
+  ~86% role-literal share would be refused and **re-parked**, adding roughly 1,270 new messages to the
+  same stream. So the reset inflates the DLQ unless the role-literal disposition is settled first. It is
+  deliberately NOT done here: it would pre-empt the ruling it depends on.
+- *Closes when:* A parked delivery on `dlq.lineage.events` can be re-ingested into the graph without landing back on `lineage.events.v1`, and the role-literal residue has a recorded disposition. **Clause 1's MECHANISM is closed and deployed** (future parks); clause 2 is the owner's, and it now also governs whether the standing 1,476 are replayed.
 - *Evidence:* `services/lineage/src/lineage/api/dapr.py:85-88, :120` · `services/lineage/src/lineage/api/v1/endpoints/dlq.py:87-137 (outbox-only replay)` · `chart/templates/dapr-component.yaml:172 (lineage subscriber deliverPolicy "all")` · ``grep -rn 'author_subject=settings.fga_service_identity' services/` → 8 sites`
 
 **LH-150 · Nothing refuses a boot whose `LANCE_NS_DELIMITER` disagrees with the OpenFGA object ids already stored, so changing it silently denies every check**
