@@ -210,6 +210,23 @@ type warehouse
     # A warehouse-level maintainer maintains EVERY stage below it — one tuple per warehouse is how the
     # sweep is granted, which keeps the grant enumerable rather than estate-wide.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
+    # CLASSIFYING A COLUMN IS NOT WRITING TO IT ([[LH-058]]). Attaching a classification to a field says
+    # what the data IS; it neither reads nor changes a row. The reference model makes exactly this point
+    # about its own vocabulary — "independent of `modify` (separation of duties: classify without holding
+    # data/DDL rights)" — and the hole it closes here was measured: `update_field_metadata` resolves to
+    # `can_write_data`, so any plain WRITER could clear a classification and make their own table
+    # vendable as raw object bytes again.
+    #
+    # NOT A `tag` TYPE, which is what the reference calls this, and the deviation is Lance's rather than
+    # a preference: `tag` already means a VERSION REF in this estate (`can_create_tag`, `can_update_tag`,
+    # `_refs/tags/`) because the Lance format defines it that way, and `lance_docs` outranks the
+    # precedent wherever Lance has an opinion. Borrowing the word would put two unrelated things under
+    # one name in the model a grant decision is read from.
+    #
+    # `maintainer`'s shape exactly — grantable, conditional, cascading from the parent — because it is
+    # the same kind of privilege: a standing, narrow capability held by someone who is not the data's
+    # owner, and one tuple per tenant should reach every tier beneath it.
+    define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner
     # PUBLICATION is not ownership, and the model has to say so or the cascade needs `owner` on every
     # tenant. Advancing the `published` ref says which version is BLESSED; it destroys nothing, forks
     # nothing and grants nothing. `can_maintain`'s precedent, applied to the other unattended plane:
@@ -417,6 +434,9 @@ type namespace
     # says. Granting the sweep `writer` estate-wide would have made one compromised maintenance pod
     # equivalent to compromising every table (owner ruling 2026-09-08: zero trust).
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
+    # The classifier rung, cascading like `maintainer` — one grant per tenant reaches every table
+    # beneath it. See `type warehouse` for why this is not the reference's `tag` type.
+    define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or classifier from parent
     # Publication, inherited — see the `warehouse` rung. A publisher here may bless a version of any
     # table in this stage without being able to destroy one.
     define publisher: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or publisher from parent
@@ -496,6 +516,9 @@ type table
     define validator: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or validator from parent
     # See the namespace rung for why this is separate from `writer` in both directions.
     define maintainer: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or maintainer from parent
+    # The classifier rung, cascading like `maintainer` — one grant per tenant reaches every table
+    # beneath it. See `type warehouse` for why this is not the reference's `tag` type.
+    define classifier: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or owner or classifier from parent
     # See the `warehouse` rung. Separate from `writer` in both directions for the same reason
     # `maintainer` is: writing a version and BLESSING one are different authorities, and the cascade
     # needs the second without the destructive half of the first's container.
@@ -521,6 +544,10 @@ type table
     # Compaction, index optimisation and version reclamation rewrite HOW a dataset is stored; they never
     # change WHAT it says. `can_maintain` therefore neither implies nor is implied by `can_write_data`.
     define can_maintain: maintainer
+    # Writing a governance key on a FIELD (`rask.*` field metadata — today the classification that makes
+    # a table unvendable as raw bytes). `classifier`, never `writer`: the whole point is that someone may
+    # label data they may not read, and that someone who may WRITE rows may not un-label it.
+    define can_classify: classifier
     define can_promote: validator
     define can_drop: owner
     # ARMING OR DISARMING deletion protection ([[LH-055]]). A DISTINCT ACTION over the SAME effective
@@ -564,6 +591,16 @@ type table
     define can_grant_writer: manage_grants or (writer and pass_grants)
     define can_grant_reader: manage_grants or (reader and pass_grants)
     define can_grant_validator: manage_grants or (validator and pass_grants)
+    # GRANTABLE THROUGH THE API, unlike `maintainer` and `publisher` — and the difference is WHO holds it.
+    # Those two are service rungs the chart's bootstrap hook seeds; `classifier` is meant for a PERSON (a
+    # data-protection officer labelling data they may not read), and a person's grant belongs on the grant
+    # door rather than in a deploy. `_grant_actions` reads this set off the model, so without this line
+    # the rung would be declared and reachable by owners alone — a separation of duties nobody could
+    # actually delegate, which is the "configured but inert" shape the estate keeps catching.
+    #
+    # Delegation admitted (`… or (classifier and pass_grants)`) exactly as `can_grant_validator` does;
+    # taking it back stays `manage_grants` alone, because revocation is administration, never delegation.
+    define can_grant_classifier: manage_grants or (classifier and pass_grants)
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants
     # REVOKING is `manage_grants` alone, and is NOT the mirror of `can_grant_<rung>`.

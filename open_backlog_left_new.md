@@ -620,11 +620,27 @@ of mine in this same session.**
   holds — the precondition for masking, not masking. And a table's OWNER is refused too: the refusal is
   a property of the TABLE rather than of the caller, because the measurement says the bytes cannot be
   narrowed for anybody.
-- **STILL OPEN AND NOW SEPARABLE: WHO MAY CLASSIFY.** `update_field_metadata` is gated at the router's
-  writer tier, so any table writer may both SET and REMOVE `rask.classification` — a writer can make
-  their own table vendable again by deleting the classification. That is exactly the separation of
-  duties the ruling's `tag` type with `apply` "independent of `modify`" exists for, and it is the whole
-  of what remains here.
+- **WHO MAY CLASSIFY IS NOW ANSWERED TOO (2026-09-22).** `update_field_metadata` resolved to
+  `can_write_data` — measured — so any table writer could SET and, far worse, REMOVE
+  `rask.classification` and make their own table directly vendable again: the control the estate had
+  just gained could be switched off by the population it governs. Closed with `can_classify: classifier`,
+  where `classifier` is shaped exactly like `maintainer` (grantable, conditional, cascading from the
+  parent), and a body-authorized check on the one door that writes field metadata. **The CLEAR path is
+  the case that matters** — removal is signalled by a `None` value, so a gate reading only non-null
+  writes would leave the escape open; mutation-checked on exactly that.
+- **NOT A `tag` TYPE, and the deviation is Lance's rather than a preference.** The ruling names a TAG
+  type with per-tag `apply`. In this estate `tag` already means a VERSION REF — `can_create_tag`,
+  `can_update_tag`, `_refs/tags/` — because the Lance format defines it that way, and `lance_docs`
+  outranks the precedent wherever Lance has an opinion. Borrowing the word would put two unrelated
+  things under one name in the model a grant decision is read from. The PRINCIPLE is adopted verbatim
+  ("classify without holding data/DDL rights"), pinned in `model.fga.yaml` in both directions: a
+  warehouse-level `classifier` holds `can_classify` on a table while holding neither `can_read_data` nor
+  `can_write_data`, and a live writer holds `can_write_data` and not `can_classify`.
+- **AND IT IS GRANTABLE, which is what keeps it from being inert.** `_grant_actions` reads the grant
+  surface off the model, and without `can_grant_classifier` the rung would have been declared and
+  reachable by owners alone — a separation of duties nobody could delegate. It differs from
+  `maintainer`/`publisher` (which have no grant action) for a stated reason: those are SERVICE rungs the
+  chart seeds, and this one is meant for a person.
 - **PROVEN ON A REAL GOVERNED TABLE (2026-09-22, `main-bb76a166`), the whole cycle.** Driven as the Dex
   subject against the deployed catalog on `bronze$pages`: **before**, `tier=read` vends `direct` with a
   real credential; classifying `payload` through the catalog's OWN door

@@ -14,7 +14,7 @@ branch write is never reported — or recorded — against main (#100).
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, Header
 from fastapi.concurrency import run_in_threadpool
@@ -33,10 +33,12 @@ from lance_namespace import (
     UpdateTableSchemaMetadataRequest,
     UpdateTableSchemaMetadataResponse,
 )
+from openfga_sdk import OpenFgaClient
 
-from catalog.api import lineage_deps
-from catalog.api.dependencies import LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api import fga_deps, lineage_deps
+from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
     ADD_COLUMNS,
@@ -46,6 +48,47 @@ from catalog.core.lineage_emit import (
     UPDATE_SCHEMA_METADATA,
 )
 from catalog.services import dataplane, native
+from service_kit.governed import fga
+from service_kit.governed.oidc import IDToken
+
+
+#: The GOVERNANCE namespace in field metadata: keys the estate acts on, not user properties.
+#:
+#: [[LH-058]]. `rask.classification` decides whether a table's bytes may be vended raw, so whoever can
+#: write it can decide that — and this door resolves to `can_write_data` (measured via
+#: `_action_relation("table", "update_field_metadata")`). A plain WRITER could therefore clear a
+#: classification and make their own table directly vendable again, which is the separation-of-duties
+#: hole the reference model's "classify without holding data/DDL rights" names.
+#:
+#: A PREFIX rather than one key, matching `_INTERNAL_METADATA_PREFIX`'s shape on the table-level twin:
+#: the next governance key must not have to remember to add itself to a gate.
+GOVERNANCE_FIELD_PREFIX: Final = "rask."
+
+
+async def _require_classifier_for_governance_keys(
+    client: OpenFgaClient | None,
+    settings: Settings,
+    token: IDToken | None,
+    *,
+    segments: list[str],
+    updates: list[dict[str, Any]],
+) -> None:
+    """Refuse a governance-key write unless the caller holds ``can_classify`` on the table.
+
+    BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `_authorize_grant`: the
+    router-wide guard has already cleared `can_write_data` by the time this runs, and the rung this
+    needs depends on WHAT the body touches rather than on which route it is.
+
+    A DELETE COUNTS. `update_field_metadata` signals key removal with a `None` value, so gating only
+    non-null writes would leave the door that matters — clearing a classification to make the table
+    vendable again — wide open to every writer.
+    """
+    touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(GOVERNANCE_FIELD_PREFIX)})
+    if not touched:
+        return
+    await fga_deps.require_relation(
+        client, settings, token, relation="can_classify", obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
+    )
 
 
 router = APIRouter(prefix="/v1/table", tags=["columns"])
@@ -167,6 +210,7 @@ async def update_field_metadata(
     settings: SettingsDep,
     so: StorageOptionsDep,
     token: CurrentToken,
+    client: FgaClientDep,
     emitter: LineageEmitterDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> UpdateFieldMetadataResponse:
@@ -176,6 +220,7 @@ async def update_field_metadata(
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
+    await _require_classifier_for_governance_keys(client, settings, token, segments=segments, updates=updates)
     response = await run_in_threadpool(dataplane.update_field_metadata, ns, so, segments, updates, body.branch)
     await lineage_deps.emit_measured_write(
         emitter,

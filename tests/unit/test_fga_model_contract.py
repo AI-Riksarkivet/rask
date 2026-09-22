@@ -509,6 +509,16 @@ def test_no_new_object_as_user_shape_slips_past_revoke() -> None:
 #: only loss is the ability to bless the NEXT version, which is the fail-safe direction and is
 #: repairable by an owner moving the tag or by re-granting. It wants an expiry for the same reason
 #: `maintainer` does — a promotion campaign scoped to one migration should lapse on its own.
+#:
+#: `classifier` qualifies, and it is the CLEAREST case of the rule yet ([[LH-058]], 2026-09-22). What an
+#: expiry leaves behind is a table whose classification STANDS: the label lives in Lance field metadata
+#: and does not lapse with the grant, so the table stays refused for raw credential vending exactly as
+#: before. The only thing that lapses is the ability to change a label — including the ability to REMOVE
+#: one, which is the direction that would weaken the estate. So an expired classifier leaves data more
+#: protected rather than less, strands nothing, and makes nothing unrevocable: an owner still holds
+#: `can_classify` concentrically and can relabel or re-grant. It also wants an expiry more than most —
+#: a data-protection review is exactly the kind of engagement that should lapse on its own rather than
+#: leave a standing capability over data its holder may not read.
 _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
     {
         ("warehouse", "reader"),
@@ -528,6 +538,9 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
         ("warehouse", "publisher"),
         ("namespace", "publisher"),
         ("table", "publisher"),
+        ("warehouse", "classifier"),
+        ("namespace", "classifier"),
+        ("table", "classifier"),
     }
 )
 

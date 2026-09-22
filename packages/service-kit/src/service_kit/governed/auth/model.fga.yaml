@@ -329,6 +329,48 @@ tests:
       - user: user:carol
         object: namespace:acme_bronze
         assertions: { reader: true, can_delete: false, can_set_protection: false }
+  - name: classifying is INDEPENDENT of writing, in both directions
+    # [[LH-058]]. The reference model's principle — "independent of `modify` (separation of duties:
+    # classify without holding data/DDL rights)" — as behaviour rather than as a comment. The hole it
+    # closes was measured: `update_field_metadata` resolves to `can_write_data`, so a plain writer could
+    # CLEAR the classification that makes their own table unvendable as raw object bytes.
+    tuples:
+      # A data-protection officer over the whole warehouse: may label, may not read or write a row.
+      - user: user:dpo
+        relation: classifier
+        object: warehouse:acme_bucket
+    check:
+      # BOTH DIRECTIONS, and each is half the separation. A classifier who could also write would make
+      # the rung decorative; a writer who could classify is the hole itself.
+      - user: user:dpo
+        object: table:acme_gold_catalog
+        assertions:
+          can_classify: true      # cascades warehouse -> namespace -> table, like `maintainer`
+          can_write_data: false   # labelling is not writing
+          can_read_data: false    # nor reading: a classifier need not see the data it governs
+          can_drop: false
+      - user: user:peter
+        object: table:acme_gold_catalog
+        assertions:
+          can_write_data: true    # the tuple is live — this negative can never go vacuous
+          can_classify: false     # THE HOLE: a writer must not be able to un-label their own table
+      # The owner reaches it concentrically, as with every other rung on this type.
+      - user: user:alice
+        object: table:acme_gold_catalog
+        assertions: { can_classify: true }
+      # And it is scoped: acme's officer holds nothing in beta's warehouse.
+      - user: user:dpo
+        object: table:beta_locked_records
+        assertions: { can_classify: false }
+      # GRANTABLE, which is what keeps the separation from being a rung nobody can hand out. alice reaches
+      # `manage_grants` concentrically (project admin -> warehouse -> namespace -> table); peter, a writer
+      # without `pass_grants`, does not — the delegation half of the same rule.
+      - user: user:alice
+        object: table:acme_gold_catalog
+        assertions: { manage_grants: true, can_grant_classifier: true }
+      - user: user:peter
+        object: table:acme_gold_catalog
+        assertions: { can_grant_classifier: false }
   - name: an owner-only action must be REFUSED to the rung directly below it (mutation-detecting)
     check:
       # Each subject here HOLDS a live relation on the object, which is what the negatives above lack:
