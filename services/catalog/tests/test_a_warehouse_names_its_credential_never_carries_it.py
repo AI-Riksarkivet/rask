@@ -51,14 +51,16 @@ def test_the_reference_resolves_through_the_dapr_store_door(monkeypatch: pytest.
 
     def _fetch(store: str, key: str, *, require: str) -> dict[str, str]:
         calls.append((store, key, require))
-        return {require: "the-second-stores-secret"}
+        # The WHOLE bundle: a credential is a pair, and a bundle carrying only the secret leaves the
+        # estate's key id signing with it — SignatureDoesNotMatch, measured live 2026-09-21.
+        return {require: "the-second-stores-secret", "aws_access_key_id": "second-store-key-id"}
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
     warehouse_credentials.resolve.cache_clear()
 
-    secret = warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")
+    pair = warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")
 
-    assert secret == "the-second-stores-secret"
+    assert pair == {"aws_secret_access_key": "the-second-stores-secret", "aws_access_key_id": "second-store-key-id"}
     assert calls == [("lance-secrets", "wh-eu", "minio-secret-key")], f"the resolver did not go through the store door: {calls}"
 
 
@@ -89,7 +91,7 @@ def test_the_resolution_is_CACHED_so_a_hot_path_does_not_refetch(monkeypatch: py
 
     def _fetch(_store: str, key: str, *, require: str) -> dict[str, str]:
         fetches.append(key)
-        return {require: "s"}
+        return {require: "s", "aws_access_key_id": "k"}
 
     monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
     warehouse_credentials.resolve.cache_clear()
@@ -115,3 +117,20 @@ def test_an_UNSET_reference_resolves_to_nothing_rather_than_to_the_estate_key() 
 
 def _unused(_: Any) -> None:  # pragma: no cover - keeps the import surface honest
     return None
+
+
+def test_a_bundle_carrying_only_the_SECRET_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Half a credential signs nothing, and defaulting the other half is the failure itself.
+
+    Leaving the estate's `aws_access_key_id` in force beside a foreign secret is exactly what produced
+    `SignatureDoesNotMatch` on every write to a referenced base (measured live 2026-09-21), and it is
+    the same shape the Ray lane already paid for. So a bundle that names the secret and not the id is
+    refused rather than half-applied.
+    """
+    from catalog.services import warehouse_credentials
+
+    monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", lambda _s, _k, *, require: {require: "only-the-secret"})
+    warehouse_credentials.resolve.cache_clear()
+
+    with pytest.raises(RuntimeError, match="half a credential signs nothing"):
+        warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")

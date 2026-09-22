@@ -33,8 +33,9 @@ OTHER = "s3://other-store/data"
 PLAIN = "s3://estate-bucket/data"
 
 
-def _resolver(**_kw: str) -> str | None:
-    return "the-other-stores-secret"
+def _resolver(**_kw: str) -> dict[str, str] | None:
+    """Answers the whole PAIR, as the real resolver must — one secret bundle holds both halves."""
+    return {"aws_access_key_id": "other-store-key-id", "aws_secret_access_key": "the-other-stores-secret"}
 
 
 def test_a_base_with_no_reference_gets_the_ESTATE_options() -> None:
@@ -52,11 +53,24 @@ def test_a_base_WITH_a_reference_carries_its_own_credential() -> None:
     assert params[PLAIN]["aws_secret_access_key"] == ESTATE["aws_secret_access_key"], "the unreferenced base lost the estate credential"
 
 
-def test_the_ESTATE_secret_never_leaks_into_a_referenced_base() -> None:
-    """The failure that would make this look like it works: a merge that keeps the estate key."""
+def test_a_referenced_base_gets_BOTH_HALVES_of_its_credential() -> None:
+    """A CREDENTIAL IS A PAIR, and taking half of one is worse than taking none.
+
+    Measured live 2026-09-21: swapping only `aws_secret_access_key` and leaving the estate's
+    `aws_access_key_id` produced `SignatureDoesNotMatch` on every write to the referenced base — the
+    estate's key id signed with another store's secret. This estate has paid for it before, in the Ray
+    lane: "repointing the Ray pod at a scoped RustFS user produced SignatureDoesNotMatch on every job
+    (its new secret paired with the submission's old key)".
+
+    The earlier version asserted only that the SECRET differed, which is exactly why the defect
+    shipped: half a swap satisfies that.
+    """
     params = compose_base_store_params(bases=[OTHER], storage_options=ESTATE, refs={OTHER: "other-secret"}, resolve=_resolver, store="s", field="f")
 
-    assert params[OTHER]["aws_secret_access_key"] != ESTATE["aws_secret_access_key"], "the referenced base kept the estate credential"
+    assert params[OTHER]["aws_secret_access_key"] != ESTATE["aws_secret_access_key"], "the referenced base kept the estate secret"
+    assert params[OTHER]["aws_access_key_id"] != ESTATE["aws_access_key_id"], (
+        "the referenced base kept the estate's KEY ID — that id signed with another store's secret is SignatureDoesNotMatch on every write"
+    )
 
 
 def test_a_base_keeps_the_estate_ENDPOINT_unless_told_otherwise() -> None:
@@ -69,7 +83,7 @@ def test_a_base_keeps_the_estate_ENDPOINT_unless_told_otherwise() -> None:
 def test_a_reference_that_does_not_resolve_RAISES_rather_than_using_the_estate_key() -> None:
     """Fail closed. Falling back would write the caller's bytes to a store with the wrong identity."""
 
-    def _missing(**_kw: str) -> str | None:
+    def _missing(**_kw: str) -> dict[str, str] | None:
         raise RuntimeError("secret unavailable — failing closed")
 
     with pytest.raises(RuntimeError, match="failing closed"):

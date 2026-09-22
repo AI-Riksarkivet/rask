@@ -30,7 +30,7 @@ def compose_base_store_params(
     bases: Iterable[str],
     storage_options: Mapping[str, str],
     refs: Mapping[str, str],
-    resolve: Callable[..., str | None],
+    resolve: Callable[..., Mapping[str, str] | None],
     store: str,
     field: str,
 ) -> dict[str, dict[str, str]]:
@@ -53,10 +53,12 @@ def compose_base_store_params(
         if not ref:
             params[uri] = dict(storage_options)
             continue
-        secret = resolve(store=store, ref=ref, field=field)
-        if secret is None:
+        pair = resolve(store=store, ref=ref, field=field)
+        if not pair:
             raise ValueError(f"per-base credential reference {ref!r} for {uri!r} resolved to nothing")
-        # The credential REPLACES the estate's; the endpoint and the rest do not move, because a
-        # credential is not an address and swapping the key must not silently relocate the base.
-        params[uri] = {**dict(storage_options), "aws_secret_access_key": secret}
+        # BOTH HALVES OR NEITHER. A credential is a PAIR, and replacing only the secret leaves the
+        # estate's key id signing with another store's secret — `SignatureDoesNotMatch` on every write,
+        # measured live 2026-09-21 and already paid for once in the Ray lane. The endpoint and the rest
+        # do NOT move: a credential is not an address, and swapping the key must not relocate the base.
+        params[uri] = {**dict(storage_options), **dict(pair)}
     return params

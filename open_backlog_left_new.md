@@ -40,27 +40,52 @@ frontend-only campaign.
 
 ### Standing constraints
 
-**Secrets reach a workload by exactly three paths and no others** (owner, verbatim): *"Never secret
-through envs. Either from ESO, secret store dapr and STS for zero trust."* — Dapr secret store
-(OpenBao) for a pod with a sidecar; ESO for a pod without one (Ray lane, web zones, runners); STS for
-STORAGE (`vending.build_session_policy`, bucket+prefix, 900 s). **Never through env** — not process
-env, not a k8s Secret via `envFrom`, not a chart value, never a fallback chain. A scoped static key is
-not a fix. Read the running pod, and never one spelling of a mount.
+**ZERO TRUST, and it is an OUTCOME not a mechanism.** Secrets reach a workload by exactly three paths
+(owner, verbatim): *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
+trust."* — Dapr secret store (OpenBao) for a pod with a sidecar; ESO for a pod without one (Ray lane,
+web zones, runners); STS for STORAGE (`vending.build_session_policy`, bucket+prefix, 900 s). **Never
+through env** — not process env, not a k8s Secret via `envFrom`, not a chart value, no fallback chain.
+A scoped static key is not a fix. A record NAMES a secret; it never carries one. **A credential is a
+PAIR** — half a swap signs nothing (`SignatureDoesNotMatch`, measured twice: the Ray lane, and the
+per-base vend 2026-09-21). Read the running pod, and never one spelling of a mount.
 
-**Never Docker — Dagger builds every image. Never mypy, never `# type: ignore` — narrow or cast.
-Idiomatic to lance-ns, never Iceberg; read `lance_docs/` and cite it. No backward compat. Read skill
-REFERENCES, not the index. Verify external claims against the source. Comments carry rationale and
-provenance, never history.**
+**IDIOMATIC TO lance-ns AND THE LANCE FORMAT, and to CLOUD-NATIVE — never Iceberg.** `lance_docs/` is
+the authority: `ns_catalog/spec.yaml` over any prose (the prose contradicts its own bundle), plus
+`file_format.md`, `namespace.md`, `guide.md` and the branching/blob brief. **Read it and cite it.**
+Worked 2026-09-21: the spec defines three TABLE-scoped branch ops and no branch resource, so a
+`branch` FGA type would invent one — while the format puts branch isolation in the STORAGE PREFIX
+(`tree/<b>/`, "read-only on main and write-only on the branch"). Raise `lance_namespace` typed errors
+and let `install_problem_handlers` translate; never a hand-picked status.
+
+**READ THE SKILL REFERENCES, not the index — and they are on disk even when the Skill tool cannot
+list them:** `~/.claude/plugins/marketplaces/ra-skills/skills/<name>/references/*.md` (fastapi,
+writing-python, dagger, testing-python, …) plus this repo's `.claude/skills/rask-*`. Not optional:
+reading `fastapi/exception-handlers.md` + `writing-python/error-handling.md` turned a live 500 into
+the correct 400 the same day.
+
+**Never Docker — Dagger builds every image. Never mypy, never `# type: ignore` — narrow or cast. No
+backward compat. Comments carry rationale and provenance, never history.**
 
 **A VERDICT IS NOT EVIDENCE IT IS STILL TRUE — re-measure before working a row.** Of 17 rows settled
-on 2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing.
+2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing. My own
+verdicts are the least audited: several blockers and two severities dissolved on re-reading in one day.
+
+**RAY / COMPUTE, measured — do not re-derive:** `MALLOC_ARENA_MAX` is glibc-only and this estate's
+services allocate through **mimalloc** (pyarrow's default) and **jemalloc** (duckdb), so it governs
+almost nothing — the worker still OOMKilled at 442m against a pre-fix 87m. `ARROW_DEFAULT_MEMORY_POOL`
+is the lever that makes the existing bound reach Arrow. The stage job emits no OpenLineage of its own;
+the stage RUNNER emits durably through the outbox, and a lane driven around the platform is correctly
+refused rather than under-served.
 
 ### Verification, per commit
 
 `uvx ty check`, `uv run ruff check`, the TESTPATHS the change touches — **and always the invariant +
-integration layers**, where a one-service change breaks another. Full suite ~8m30s, backgrounded, once
-per batch. Anything deployable is **BUILT with Dagger, DEPLOYED to k3s and OBSERVED working** — never
-claim it works first. **Push every commit.**
+integration layers**. **BATCH them:** one layer run and one image build per BATCH of rows, not per row
+— measured, that was the session's real waste. Anything deployable is **BUILT with Dagger, DEPLOYED to
+k3s and OBSERVED working**. **A green test is not evidence the code runs in production:** gate EVERY
+hop of a wiring, and prove a feature live by configuring it to a value that MUST fail. **Push every
+commit.** Background watchers report themselves — do not narrate them each turn.
+
 <!-- FOCUS:END -->
 
 ## RIPE DECISIONS — evidence complete, work starts the moment each is answered (2026-09-17)
@@ -855,6 +880,34 @@ have no `uv.lock` and so cannot be built to emit anything.
   minutes again, or an anonymous slope that stays near 1.21 MB/min. What would close the row is a slope
   that flattens and a pod that clears a full day. Either outcome is decided by the same two series, and
   the previous prediction from this fit landed within 5%, so the model is trusted enough to read early.
+- **THE CAUSE IS THE DESIGN, NOT THE ALLOCATOR — AND THE OWNER NAMED IT (2026-09-22).** "It should not
+  even run stuff in memory, it should BYO workers for doing stuff since operations can be heavy and take
+  time." Measured immediately after, and it is exactly right:
+  * `api/routes.py:97-125` has TWO LANES. `if settings.work_topic and dapr is not None:` the planner
+    PLANS and enqueues units to Dapr/JetStream and returns; **otherwise it falls through to
+    `run_sweep(settings)` and executes the whole sweep INLINE.**
+  * The live planner's `MAINTENANCE_WORK_TOPIC` is **EMPTY**, so it is on the serial lane. It emitted
+    **2,227 `compaction_*` log lines in 30 minutes** — it is doing the compaction itself.
+  * Its limit is **512Mi**. The chart's own `dedicatedWorkers` block sizes the WORK at requests 1Gi /
+    limits **4Gi** and says why in its own comment: "Compaction reads whole fragments: on bronze, whose
+    rows are ~1.8MB page images, `scanBatchSize: 64` is ~115MB in flight before Lance's own overhead."
+  So a pod sized for PLANNING is executing work sized for a 4Gi pod. It does not leak; it is doing a job
+  it was never sized for, and the only question was how long that takes.
+- **BOTH ALLOCATOR FIXES WERE SYMPTOM-CHASING, and the numbers say so.** `MALLOC_ARENA_MAX=2` moved the
+  death 87m -> 442m; `ARROW_DEFAULT_MEMORY_POOL=system` moved it 442m -> **460m50s** (OOMKilled, exit
+  137, 93 samples, steady-state anon slope 0.63 MiB/min). **The second hypothesis is FALSIFIED on the
+  criterion set before the run** ("a pod that dies OOMKilled near 442 minutes again"). Both reduced
+  allocator overhead around the work; neither could stop a 512Mi pod doing 4Gi work.
+- **AND MY "WORKLOAD-INDEPENDENT" CLAIM WAS UNSOUND — the test was 2.5%.** I argued the slope was
+  identical either side of reaping fifteen datasets and concluded growth ignores dataset count. Fifteen
+  of **585** is 2.5%; no slope change was detectable at that size, so the reap excluded nothing. The
+  dataset-count hypothesis was never actually tested, and the inline-execution finding above is what it
+  should have pointed at.
+- *What is left:* **BYO WORKERS — enable the plane the chart already ships.** `maintenance.dedicatedWorkers.enabled`
+  plus `workTopic` (the chart requires both: "with no queue there is nothing for a worker to consume"),
+  which flips `routes.py` to the queue lane — plan, enqueue, and let subscriptions execute and ack for
+  themselves on pods sized 1Gi/4Gi. Then the closing bar is measurable as intended: the PLANNER's memory
+  should go flat because it stops holding fragments, and the workers absorb the work on a pod sized for it.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 

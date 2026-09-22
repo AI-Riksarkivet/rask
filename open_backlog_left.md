@@ -41,25 +41,50 @@ frontend-only campaign.
 
 ### Standing constraints
 
-**Secrets reach a workload by exactly three paths and no others** (owner, verbatim): *"Never secret
-through envs. Either from ESO, secret store dapr and STS for zero trust."* — Dapr secret store
-(OpenBao) for a pod with a sidecar; ESO for a pod without one (Ray lane, web zones, runners); STS for
-STORAGE (`vending.build_session_policy`, bucket+prefix, 900 s). **Never through env** — not process
-env, not a k8s Secret via `envFrom`, not a chart value, never a fallback chain. A scoped static key is
-not a fix. Read the running pod, and never one spelling of a mount.
+**ZERO TRUST, and it is an OUTCOME not a mechanism.** Secrets reach a workload by exactly three paths
+(owner, verbatim): *"Never secret through envs. Either from ESO, secret store dapr and STS for zero
+trust."* — Dapr secret store (OpenBao) for a pod with a sidecar; ESO for a pod without one (Ray lane,
+web zones, runners); STS for STORAGE (`vending.build_session_policy`, bucket+prefix, 900 s). **Never
+through env** — not process env, not a k8s Secret via `envFrom`, not a chart value, no fallback chain.
+A scoped static key is not a fix. A record NAMES a secret; it never carries one. **A credential is a
+PAIR** — half a swap signs nothing (`SignatureDoesNotMatch`, measured twice: the Ray lane, and the
+per-base vend 2026-09-21). Read the running pod, and never one spelling of a mount.
 
-**Never Docker — Dagger builds every image. Never mypy, never `# type: ignore` — narrow or cast.
-Idiomatic to lance-ns, never Iceberg; read `lance_docs/` and cite it. No backward compat. Read skill
-REFERENCES, not the index. Verify external claims against the source. Comments carry rationale and
-provenance, never history.**
+**IDIOMATIC TO lance-ns AND THE LANCE FORMAT, and to CLOUD-NATIVE — never Iceberg.** `lance_docs/` is
+the authority: `ns_catalog/spec.yaml` over any prose (the prose contradicts its own bundle), plus
+`file_format.md`, `namespace.md`, `guide.md` and the branching/blob brief. **Read it and cite it.**
+Worked 2026-09-21: the spec defines three TABLE-scoped branch ops and no branch resource, so a
+`branch` FGA type would invent one — while the format puts branch isolation in the STORAGE PREFIX
+(`tree/<b>/`, "read-only on main and write-only on the branch"). Raise `lance_namespace` typed errors
+and let `install_problem_handlers` translate; never a hand-picked status.
+
+**READ THE SKILL REFERENCES, not the index — and they are on disk even when the Skill tool cannot
+list them:** `~/.claude/plugins/marketplaces/ra-skills/skills/<name>/references/*.md` (fastapi,
+writing-python, dagger, testing-python, …) plus this repo's `.claude/skills/rask-*`. Not optional:
+reading `fastapi/exception-handlers.md` + `writing-python/error-handling.md` turned a live 500 into
+the correct 400 the same day.
+
+**Never Docker — Dagger builds every image. Never mypy, never `# type: ignore` — narrow or cast. No
+backward compat. Comments carry rationale and provenance, never history.**
 
 **A VERDICT IS NOT EVIDENCE IT IS STILL TRUE — re-measure before working a row.** Of 17 rows settled
-on 2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing.
+2026-09-09, 8 were already fixed, 2 asked for less than they said, 1 described the wrong thing. My own
+verdicts are the least audited: several blockers and two severities dissolved on re-reading in one day.
+
+**RAY / COMPUTE, measured — do not re-derive:** `MALLOC_ARENA_MAX` is glibc-only and this estate's
+services allocate through **mimalloc** (pyarrow's default) and **jemalloc** (duckdb), so it governs
+almost nothing — the worker still OOMKilled at 442m against a pre-fix 87m. `ARROW_DEFAULT_MEMORY_POOL`
+is the lever that makes the existing bound reach Arrow. The stage job emits no OpenLineage of its own;
+the stage RUNNER emits durably through the outbox, and a lane driven around the platform is correctly
+refused rather than under-served.
 
 ### Verification, per commit
 
 `uvx ty check`, `uv run ruff check`, the TESTPATHS the change touches — **and always the invariant +
-integration layers**, where a one-service change breaks another. Full suite ~8m30s, backgrounded, once
-per batch. Anything deployable is **BUILT with Dagger, DEPLOYED to k3s and OBSERVED working** — never
-claim it works first. **Push every commit.**
+integration layers**. **BATCH them:** one layer run and one image build per BATCH of rows, not per row
+— measured, that was the session's real waste. Anything deployable is **BUILT with Dagger, DEPLOYED to
+k3s and OBSERVED working**. **A green test is not evidence the code runs in production:** gate EVERY
+hop of a wiring, and prove a feature live by configuring it to a value that MUST fail. **Push every
+commit.** Background watchers report themselves — do not narrate them each turn.
+
 <!-- FOCUS:END -->
