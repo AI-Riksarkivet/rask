@@ -39,6 +39,7 @@ harness leaked into the run" and "this test is exercising the enabled path".
 
 import os
 from collections.abc import Iterator
+from typing import Final
 
 import pytest
 import respx
@@ -125,6 +126,38 @@ def _no_harness_telemetry() -> None:
     is still writing its report.
     """
     _strip_harness_otlp()
+
+
+#: How long any test may let Dapr's sidecar handshake run. The SDK's own default is 60 s, and where
+#: there is no sidecar NOTHING is cached, so every unstubbed `ActorProxy.create` pays it again — the
+#: arithmetic `_no_dapr_proxy_factory_carryover` names below and the reason CI run 35726435185 spent
+#: 8m17s in `wait_for_sidecar` before `--timeout=300` took the offline suite and four e2e lanes with it.
+DAPR_HANDSHAKE_BUDGET_SECONDS: Final = 1.0
+
+
+@pytest.fixture(autouse=True)
+def _bounded_dapr_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Bound the sidecar handshake for every test, WITHOUT stubbing the handshake itself.
+
+    The distinction is the whole point, and it is the same one `_no_dapr_proxy_factory_carryover`
+    makes below: patching `DaprHealth.wait_for_sidecar` would delete the estate's only evidence of a
+    live production defect, because `test_adversarial_inbox.py` exists to prove that handshake blocks
+    the event loop. Lowering the BUDGET leaves the mechanism exactly as it is — it still polls, still
+    sleeps, still raises — and only stops it costing a minute per call.
+
+    Thirty of the estate's thirty-one Dapr-touching files mock at `typed_proxy`/`inbox_for` and never
+    reach the SDK. This is for the thirty-first, whichever it turns out to be next: a per-file guard
+    was added for the one that caused the last hang and the hang returned through a different file.
+
+    A test that needs a specific duration sets its own inside a `MonkeyPatch.context`, as the
+    adversarial inbox test does — function-scoped monkeypatch here loses to a narrower patch and is
+    restored after.
+    """
+    try:
+        from dapr.conf import settings as dapr_settings
+    except ImportError:  # dapr is absent from a scoped sync (`dagger call test-package`)
+        return
+    monkeypatch.setattr(dapr_settings, "DAPR_HEALTH_TIMEOUT", DAPR_HANDSHAKE_BUDGET_SECONDS, raising=False)
 
 
 @pytest.fixture(autouse=True)

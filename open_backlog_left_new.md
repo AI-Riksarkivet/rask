@@ -188,13 +188,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**199 open items**, of which **102 are blocked on a decision** and **97 can be picked up today**.
+**200 open items**, of which **101 are blocked on a decision** and **99 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 4 | 10 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 38 | 5 | 10 |
+| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -298,15 +298,23 @@ of mine in this same session.**
 - **THE PROJECT ROLE SPLIT IS IN (2026-09-20), and it is ADDITIVE by construction.** `type project` now declares `security_admin` (grants and ownership without the power to read or change the data it governs), `data_admin` (warehouse work without the power to hand out access) and `role_creator` (minting a role is not the authority to decide who is IN one, so it sits under security_admin). Each is `[user, role#assignee] or admin`, so `admin` reaches every rung and NOBODY loses one by their arrival — which is what made it safe to land without the rest of the model decision. 51/51 model tests, 361/361 checks, `model.fga`/`.fga.yaml`/`model.json` in sync. The test asserts BOTH halves and the second is the one worth having: `admin` reaches all three, and a security_admin-only subject does NOT reach `data_admin` — mutation-checked by making it imply, which reds 50/51. **OBSERVED on the deployed catalog (`lance-rest-catalog:lh055-split`).**
 - *Still owner calls, and each now has a stated reason rather than a blank:* the **branch type** (Lakekeeper has none and cannot be borrowed from — `lance_docs/file_format.md` `branch_tag.md` defines a branch as a shallow clone, so what a branch-scoped grant MEANS follows Lance); the **column vocabulary** ([[LH-058]], reframed — the precedent models no column TYPE, so the question is which classification values exist); the **estate root** (moving `can_observe_events`/`can_browse_storage` off warehouse is a tuple MIGRATION, not an additive edit, and `fga_root_object` must be repointed with it); and **`can_set_protection`** — left alone deliberately: the current collapse onto `can_drop` is a RECORDED design (`fga_deps.py:239-243`, a writer must not disarm what they cannot act on), and splitting it decides who may disarm, which if granted to nobody makes every protected object permanently stuck.
 - **THE CLOSEST COMPARABLE HAS ALREADY SOLVED THIS, AND IT RUNS ON OPENFGA TOO — read 2026-09-20 from `lakekeeper/lakekeeper` `authz/openfga/v3.4/components/`.** Every piece this row asks the owner to invent exists there as shipped model: **an estate root** (`type server` with `define can_create_project: admin or operator`, the root this row wants `can_observe_events`/`can_browse_storage` moved onto); **a human/machine split** (`admin` "designed for human users" beside `operator` "designed to be used by machines that provision resources", reaching into a tenant via `project_admin: [user, role#assignee] or operator from server`); **the project role split verbatim** — `project_admin` (with stated lock-out protection, "checked to never be empty"), `security_admin` ("manage all security aspects (grants, ownership) but not modify, create or access objects"), `data_admin` ("manage all warehouse aspects but not grant privileges"), `role_creator` ("can create new roles — cannot add assignees to existing roles"); **the role→project edge [[LH-062]] proposes** (`type role` declares `define project: [project]`); and **NO column type at all** — there is no `column.fga`, because column governance is DATA there: tags keyed on FIELD-ID (stable across a rename, where a name is not), served from `/management/v1/warehouse/{id}/table/{id}/column-tags`, gated by table-level metadata access, and explicitly "columns do not inherit". **LANCE_DOCS OUTRANKS THIS, ALWAYS (owner, 2026-09-20).** Lakekeeper is Iceberg-world and is a reference only where Lance has NO opinion — checked before using it: `role`, `grant` and `tenant` appear ZERO times in `lance_docs/namespace.md` and `lance_docs/file_format.md`, so the grant/tenant model is rask's own and nothing upstream competes. What lance-ns DOES own is the error vocabulary a refusal must speak (13 InvalidInput, 15 PermissionDenied, `namespace.md:1678`), and **anything Lance itself defines — branches, tags, field ids, multi-base — follows `lance_docs` and not this precedent**. That bounds the borrowing: the project role split and the estate/machine identity are pure authz and may be adopted; a BRANCH type may not be, because Lakekeeper has no branches and Lance's own `branch_tag.md` defines what one IS (a shallow clone). Each deviation should name what it buys; each ADOPTION should name that Lance was silent on it.
-- **blocked:** Owner decision on THREE clauses, re-measured against `model.fga` at HEAD 2026-09-22 —
-  the list below used to carry five, and two of them had already been answered IN THIS ROW'S OWN BODY
-  while the blocker line still asked for them. What genuinely remains: the **column classification
-  vocabulary** ([[LH-058]]); an **`estate` type versus documenting warehouse-as-root** (`can_observe_events`
-  is on `warehouse`, `model.fga:258` — moving it is a tuple MIGRATION, not an additive edit); a
-  **machine identity** (no `operator`-shaped principal exists — grepped, zero hits); and whether
-  **`can_set_protection` splits from `can_drop`** (the relation does not exist in `model.fga` at all,
-  so the collapse recorded at `fga_deps.py` still stands, and splitting it decides who may disarm —
-  granted to nobody, every protected object is permanently stuck).
+- **NOT BLOCKED. THE OWNER RULED IT ON 2026-09-21 AND THE RULING IS IN `docs/DECISIONS.md:2240` —
+  found 2026-09-22 by a research workflow, not by re-reading this row.** *"A · The FGA model shape is
+  a PORT, not a decision."* The ruling quotes the owner — *"is [it] not that easy to look how they do
+  it and try to do similar?"* — and carries a table answering **every** clause this row was still
+  asking about, from `lakekeeper/authz/openfga/v4.12/components/` read 2026-09-21:
+  * **estate vs warehouse-as-root** → `type server`, with `define project: [project]` beneath it.
+  * **machine identity** → `define operator: [user, role#assignee]` on the top type — *"a RELATION on
+    the top type, not a principal type"*. `type user` carries no relations at all, and rask's already
+    does not.
+  * **security_admin / data_admin / role_creator** → all three on `project`. Landed 2026-09-20.
+  * **`can_set_protection` split from `can_drop`?** → **NO. It collapses there too** — both resolve to
+    `modify_effective`. rask's current collapse is the right answer, not a gap.
+  * **column classification ([[LH-058]])** → **no `column` type exists.** The vocabulary is a TAG type
+    with per-tag `apply` delegation, *"separation of duties: classify without holding data/DDL rights"*.
+  **SO THIS ROW IS WORKABLE, AND HAS BEEN SINCE 2026-09-21.** It sat marked blocked for a day while the
+  answer was in the decisions log. That is the THIRD time in this session an answer was already
+  recorded and the row still asked for it — see the branch clause and the project split above.
 - **WHAT CAME OFF THE BLOCKER, with the evidence that took it off (2026-09-22).**
   * **The branch-scoped grant — RULED, SHIPPED, GATED.** The ruling is recorded above; the code is
     live. `vending.build_session_policy(..., branch=)` (`vending.py:377-403`) drops main to READ and
@@ -367,6 +375,26 @@ of mine in this same session.**
   table's prefix" — where before the fix it was a bare **500 InternalError** telling the caller nothing.
   Driving it live is what found that: the guard was correct and its answer was not, which no unit test
   was ever going to show.
+- **A 14-AGENT RESEARCH PASS PRODUCED A SHAPE AND ITS OWN VERIFIERS KILLED THE RISKY HALF (2026-09-22).**
+  Four adversarial lenses — format, Iceberg-contamination, rows, implementation — each instructed to
+  refute. **All four returned `survives=false`**, with **5 fatal refutations**, every one against the
+  single `estate` ADD:
+  * **The proposed `estate` type declares no `reader` and no `writer`**, and four other services gate
+    their whole routers on exactly those relations on `fga_root_object` — `compute/security.py:39,49-50`
+    among them. Repointing the root would refuse them all.
+  * **`fga_root_object` is not a check coordinate, it is the STRUCTURAL PARENT.** `fga.parent_object()`
+    returns it for every top-level namespace, and `namespace#parent` is typed — so a repoint breaks the
+    tuple WRITE, not merely a check. The proposal reasoned about `_CHILD_EDGE_PARENT_TYPES`, which is
+    the other half of the mechanism.
+  * **`can_stage_events` is not a pure computed userset** (`event_stager or owner`), so moving it is
+    not the same kind of migration as `can_observe_events`/`can_browse_storage`, which are.
+  * **The spec DOES address the root namespace** — `components/parameters/id` defines a sentinel
+    encoding for it — so the proposal's premise that the protocol cannot name the root is false.
+  **WHAT SURVIVED IS THE PART THAT MATCHES THE RULING AND THE FORMAT:** branch, column and base are all
+  REJECT. A `branch` type would be a third, weaker enforcement point for something already enforced
+  where the format puts it — table verbs plus the vend's `tree/<branch>/` prefix. Re-measured
+  independently in that pass: parsing `spec.yaml` yields **exactly two path variables in 6,742 lines**,
+  `{id}` x51 and `{index_name}` x2. There is no branch, column or base address anywhere.
 - *Closes when:* model.fga declares a column relation and an estate type, carries a machine identity
   and a `can_set_protection` rung, every new rung has a .fga.yaml case, and `fga_root_object` names the
   estate object. **NOT a `branch` type** — this row established that one would invent a resource
@@ -1561,6 +1589,53 @@ of mine in this same session.**
 
 
 ## PHASE 1 · CROSS-CUTTING
+
+**XC-071 · An unstubbed Dapr actor call costs the offline suite a MINUTE, and it took CI down with four e2e lanes**
+`service-kit, notifications, annotator` · **MED** · OPEN
+- **MEASURED ON CI RUN 35726435185 (2026-09-22):** `ms-test` — the offline pytest gate,
+  `-m "not e2e and not slow"` — spent **8m17s** inside `DaprHealth.wait_for_sidecar()` and died on
+  `Process completed with exit code 1`. The traceback is unambiguous: `ActorProxy.create` ->
+  `_get_default_factory_instance` -> `ActorProxyFactory()` -> `DaprActorHttpClient` ->
+  `DaprHttpClient.__init__` -> `DaprHealth.wait_for_sidecar()`. The SDK does a **blocking** health
+  poll IN A CONSTRUCTOR, bounded by `DAPR_HEALTH_TIMEOUT`, whose default is **60 s**.
+- **AND NOTHING CACHES ON FAILURE, which is what turns one slow call into an outage.**
+  `_get_default_factory_instance` assigns `cls._default_proxy_factory` only AFTER the constructor
+  returns, so where there is no sidecar every later call pays the full timeout again. The estate had
+  already measured this for one file (`tests/unit/test_annotation_task_actor.py`): with a sidecar
+  answering it ran in **0.49 s**; with the sidecar unreachable and the timeout at 3 s, **285.54 s**,
+  all 61 tests passing either way.
+- **A SUITE-WIDE BOUND IS SHIPPED, AND IT IS DEFENCE IN DEPTH RATHER THAN THE ROOT FIX — say so
+  plainly.** `conftest.py` now pins `DAPR_HEALTH_TIMEOUT` to 1 s for every test, which converts a
+  60 s-per-call hang into a second. It deliberately does NOT patch `wait_for_sidecar`, for the reason
+  that file already gives about the proxy-factory cache: `test_adversarial_inbox.py` exists to prove
+  that handshake blocks the event loop, and a harness that stubbed it would delete the estate's only
+  evidence of a live production defect. The mechanism still polls, still sleeps, still raises.
+  Gated by `tests/unit/test_the_suite_never_waits_a_minute_for_a_sidecar.py`, mutation-checked, with a
+  leg that fails if the SDK stops exposing the setting rather than passing by luck.
+- **THE OBVIOUS CULPRIT WAS TESTED AND IS NOT IT — recorded because the reasoning was persuasive and
+  wrong.** Every test that starts the notifications or annotator app runs `warm_actor_proxy_factory()`
+  (`lifespan.py:138`, `main.py:102`), which bounds at 10 s, so "10 s per app startup x many tests"
+  looked like the whole hang. Measured instead of asserted: `services/notifications/tests/
+  test_health_probes.py` — ten tests that start the app — runs in **2.47 s with the bound at 1 s and
+  2.49 s with it at 60 s**. Identical. That path does not pay the handshake at all, so the offender is
+  elsewhere and the warm-up is exonerated.
+- **AND THE HANG DOES NOT REPRODUCE LOCALLY, which bounds what this fix may be said to prove.** Every
+  local run of the offline suite this session has passed; the 8m17s stall is CI-only so far. The bound
+  is therefore justified on its own merits — a 60 s default inside a test suite is wrong whatever is
+  triggering it — and **is NOT yet demonstrated to be the cure**. The proof is `ms-test` going green.
+- *What is left:* **Find the file that still reaches the real factory and stub it at
+  `typed_proxy`/`inbox_for`, as thirty of the estate's thirty-one Dapr-touching files already do.** The
+  bound makes the suite survive it; it does not make the test correct. A per-file guard exists for the
+  last offender (`test_annotation_task_actor.py::test_a_transition_builds_NO_real_dapr_proxy...`) and
+  did not travel — the hang returned through a different file — so the replacement wants to be a check
+  that no test reaches `ActorProxyFactory` at all, not a thirty-second per-file assertion. The
+  environmental difference between CI and a developer box is part of that hunt, not a footnote to it.
+- *Closes when:* No test in the offline suite constructs a real `ActorProxyFactory`, proven by a gate
+  that fails when one does, and `ms-test` is green in CI.
+- *Evidence:* CI run 35726435185 `ms-test` (8m17s in `wait_for_sidecar`, exit 1) ·
+  `conftest.py` `_bounded_dapr_handshake` + `_no_dapr_proxy_factory_carryover` ·
+  `packages/service-kit/src/service_kit/governed/actor_warmup.py` (the lifespan path, bounded at 10 s) ·
+  `tests/unit/test_annotation_task_actor.py:446-462` (0.49 s vs 285.54 s, measured)
 
 **THE CHART CI GATE WAS DEAD FOR SEVEN WEEKS AND NOW PASSES — 2026-09-22**
 `chart, dagger` · OBSERVATION, not a row
