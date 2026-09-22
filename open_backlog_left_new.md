@@ -1201,6 +1201,14 @@ have no `uv.lock` and so cannot be built to emit anything.
   restart can strand. Observed here: `Outstanding Acks: 152 out of maximum 72` — MORE outstanding than
   the current bound allows, because the 152 were stranded under the previous, larger one, and
   JetStream will deliver nothing until enough of them expire to fall below 72.
+- **EVIDENCE AGAINST THE CHEAPEST REMEDY, and it is an INFERENCE rather than a measurement.** The
+  sidecar already carries `dapr.io/block-shutdown-duration: 20s`, so the obvious first move is to
+  raise it. But `Redelivered: 0` says the app never saw those units — had it, the drain would have
+  asked for redelivery and that counter would have moved — so the sidecar did not dispatch its buffer
+  during the 20s it already blocks for. At 0.21s a unit, 20s is ample time to dispatch 152 of them,
+  which is what makes the reading suggestive. **NOT TESTED DIRECTLY:** confirming it means watching
+  `daprd` logs through a termination, which costs another full outage, so it is recorded as the
+  inference it is rather than as a result.
 - *What is left:* Decide how a shutting-down worker releases what it holds. The candidates are a
   graceful drain on SIGTERM (finish or NAK the outstanding units, so they redeliver at once rather
   than after 720s), a shorter `ackWait` (bounded below by the longest single compaction, so it cannot
