@@ -1037,11 +1037,18 @@ existing `excluded_datasets`.
   `MEDALLION_BRONZE_URI=s3://lance-catalog/medallion/bronze`, and
   `ls /data-0/lance-catalog/medallion/bronze` answers **No such file or directory** — the only child of
   `lance-catalog/medallion/` is `models`. So that env is dead config rather than a second writer.
-- **WHICH SPLITS THE "COLLAPSE" WORK IN TWO, and only one half is what the re-audit called unblocked.**
-  Removing the chart's dead default-root pointer is safe and changes no data path. But the TENANT
-  second homes do not come from the chart at all — `produce.py:117` computes
-  `bronze_uri = f"{root}/medallion/{ns}"` in code for a project-scoped produce — so collapsing THOSE is
-  a data-path change for every tenant, not a values edit, and it is not the free cleanup it looks like.
+- **AND THERE IS NO FREE CLEANUP HERE — the chart pointer is LOAD-BEARING, which corrects a claim made
+  one bullet earlier in this same session.** Calling it "dead config" was wrong: `produce.py:152` reads
+  `if settings.catalog_url and settings.compute_enabled and bronze_uri:`, so an EMPTY `bronze_uri`
+  makes the cascade head skip catalog registration entirely and fall to "the pure-emit shape". Removing
+  `MEDALLION_BRONZE_URI` would therefore silently UNGOVERN the default-root head — the exact defect
+  this row exists to close. The path is absent from disk only because no default-root produce has run
+  since the last reap, not because nothing would use it.
+- **SO EVERY PART OF THIS ROW IS EITHER A DATA-PATH CHANGE OR A DISPOSITION CALL.** The tenant second
+  homes come from `produce.py:117` (`f"{root}/medallion/{ns}"`) rather than from the chart, so
+  collapsing them repoints every tenant's writes; the default-root pointer cannot be removed without
+  disabling registration; and the nine frozen prefixes need the reap-or-register ruling. Nothing here
+  is a values edit.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: Collapse the chart's second home (medallion.yaml:331,357,595,596) so each tier has one home —
 unblocked, needs no ruling. Rule on lance-catalog/medallion/models, then reap or register it. And
