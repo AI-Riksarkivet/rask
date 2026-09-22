@@ -101,3 +101,50 @@ def test_the_render_actually_produced_both_halves(rendered: str) -> None:
 
     assert len(streams) >= 5, f"only {len(streams)} streams declared — the stream job did not render"
     assert len(topics) >= 10, f"only {len(topics)} topics rendered — the walk is broken, not clean"
+
+
+#: The `nats` CLI prompts for any option a command does not supply, and a Job has no terminal.
+_NON_INTERACTIVE = "--defaults"
+
+
+def _creation_bodies(rendered: str) -> dict[str, str]:
+    """``{helper name: its body}`` for each `add_*_if_missing` shell function in the rendered Job."""
+    found = {}
+    for match in re.finditer(r"^\s*(add(?:_workqueue)?_if_missing)\(\)\s*\{(.*?)^\s*\}", rendered, re.MULTILINE | re.DOTALL):
+        found[match.group(1)] = match.group(2)
+    return found
+
+
+def test_the_walk_finds_both_creation_helpers(rendered: str) -> None:
+    """Two helpers exist and both create streams; a walk that found one would half-cover the rule."""
+    assert set(_creation_bodies(rendered)) == {"add_if_missing", "add_workqueue_if_missing"}
+
+
+def test_a_stream_is_created_WITHOUT_ASKING_because_a_Job_has_no_terminal(rendered: str) -> None:
+    """MEASURED LIVE 2026-09-22, and it is why this exists.
+
+    `MAINTENANCE_INDEX` was declared in the chart, the Job ran, printed "not present yet — creation
+    below will set retention=workqueue", reported **Complete 1/1** — and the stream did not exist.
+    `nats stream add` had answered `invalid input: cannot ask for confirmation without a terminal`
+    (nats CLI 0.4.0, `--defaults` = "Accept default values for all prompts").
+
+    Every stream in the cluster predates this, so the whole creation path was inert and nothing said
+    so: the chart-level gate above checks that a topic is DECLARED, which it was. A declaration the
+    runtime cannot act on is the same hole one layer down.
+    """
+    for helper, body in _creation_bodies(rendered).items():
+        assert _NON_INTERACTIVE in body, (
+            f"`{helper}` runs `nats stream add` without `{_NON_INTERACTIVE}`, so it prompts and dies in a "
+            "Job with no terminal — the stream is never created and the Job still succeeds"
+        )
+
+
+def test_a_FAILED_creation_fails_the_job(rendered: str) -> None:
+    """The second half, and the one that made the first invisible for a whole release.
+
+    The script has no `set -e`, so a creation that dies leaves the Job green. A topic then has a
+    publisher, a component, a declaration and no stream — the exact state [[LH-151]] exists to make
+    impossible, reached from the side the chart cannot see.
+    """
+    for helper, body in _creation_bodies(rendered).items():
+        assert "exit 1" in body, f"`{helper}` does not fail the Job when `nats stream add` fails, so a missing stream reports success"

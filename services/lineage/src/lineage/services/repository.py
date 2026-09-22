@@ -32,6 +32,7 @@ from psycopg import sql
 from psycopg_pool import AsyncConnectionPool
 
 from lineage.core.age import fetch, run_cypher
+from lineage.core.source_uri import unresolvable_sources
 from lineage.models import Dataset, RunEvent, vertex_name_for
 from lineage.schemas import (
     ColumnEdge,
@@ -179,6 +180,30 @@ class LineageRepository:
         harmlessly. It is also what keeps the four ingest paths (HTTP, the JetStream consumer, the DLQ
         replay door, the reconcile relay) identical without each having to remember a second call.
         """
+        # ATTRIBUTION, HERE, BECAUSE THE PRODUCER EXISTS ONLY NOW ([[LH-187]]). A `dataSource` URI that
+        # names no storage location is stored happily and refused by every later sweep — which reports
+        # the DATASET, because by then the event is gone and nothing links the URI to whoever wrote it.
+        # Measured on the live estate 2026-09-22: `unreadable=23` of `checked=483`, none attributable.
+        #
+        # ON THIS SEAM rather than a door: all four ingest paths (HTTP, the JetStream consumer, the DLQ
+        # replay, the reconcile relay) come through here, and the HTTP door's own comment records what a
+        # one-door report costs — "counting it only on the subscriber made the same loss alertable on
+        # one door and invisible on the other".
+        #
+        # REPORTS, does not refuse. `dataSource` is an OPTIONAL facet that external producers emit, so
+        # rejecting the event would cost a third party its whole run over one field — a policy call
+        # that is the owner's, and one this warning does not pre-empt.
+        for unresolvable in unresolvable_sources(event):
+            log.warning(
+                "lineage_unresolvable_dataset_location",
+                extra={
+                    "dataset": unresolvable.dataset,
+                    "uri": unresolvable.uri,
+                    "producer": unresolvable.producer,
+                    "job": f"{event.job.namespace}/{event.job.name}",
+                    "run_id": str(event.run.run_id),
+                },
+            )
         async with self._pool.connection() as conn, conn.transaction():
             await run_cypher(
                 conn,

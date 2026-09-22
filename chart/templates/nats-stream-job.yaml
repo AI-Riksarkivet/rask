@@ -63,11 +63,18 @@ spec:
                 if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
                   echo "stream $1 already exists"
                 else
-                  nats --server "$S" stream add "$1" \
+                  # `--defaults` ANSWERS THE PROMPTS, and without it nothing is created. The nats CLI asks
+                  # for any option a command does not supply, and a Job has no terminal: measured
+                  # 2026-09-22, `nats stream add` answered "invalid input: cannot ask for confirmation
+                  # without a terminal" and MAINTENANCE_INDEX was never created while the Job reported
+                  # Complete. Every other stream predates this, so the creation path was inert and the
+                  # only thing that noticed was a stream listing.
+                  nats --server "$S" stream add "$1" --defaults \
                     --subjects "$2" --storage file --retention limits \
                     --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
                     --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }} \
-                    --no-allow-rollup --deny-delete --deny-purge
+                    --no-allow-rollup --deny-delete --deny-purge \
+                    || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                 fi
               }
               # INGEST is a WORK QUEUE, not a retained log, and it needs its own creation path.
@@ -93,11 +100,12 @@ spec:
                 if nats --server "$S" stream info "$1" >/dev/null 2>&1; then
                   echo "stream $1 already exists"
                 else
-                  nats --server "$S" stream add "$1" \
+                  nats --server "$S" stream add "$1" --defaults \
                     --subjects "$2" --storage file --retention work \
                     --max-age=168h --max-bytes=-1 --max-msgs=-1 --max-msgs-per-subject=-1 \
                     --max-msg-size=-1 --discard old --dupe-window=2m --replicas {{ (hasKey .Values.nats "streamReplicas") | ternary .Values.nats.streamReplicas 1 }} \
-                    --no-allow-rollup
+                    --no-allow-rollup \
+                    || { echo "!! FAILED to create stream $1 — a publisher would have nowhere to land"; exit 1; }
                 fi
               }
               # RETENTION IS A FAN-OUT CORRECTNESS INVARIANT, and nothing asserted it.
