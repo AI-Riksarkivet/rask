@@ -170,12 +170,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**198 open items**, of which **102 are blocked on a decision** and **96 can be picked up today**.
+**199 open items**, of which **102 are blocked on a decision** and **97 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 40 | 6 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1156,6 +1156,39 @@ have no `uv.lock` and so cannot be built to emit anything.
   sized for *a* compaction, not for however many land at once; the real ceiling today is FastAPI's
   threadpool, which is an accident rather than a decision. Harmless while every unit is a no-op at
   167Mi; worth a bound before a tier with real rewrite work arrives.
+
+
+**LH-188 · The maintenance worker bounds pod SIZE but not units in flight, and the real ceiling is two library defaults**
+`maintenance` · **MEDIUM** · OPEN
+- [[LH-183]] moved heavy work onto a pod sized for it. That is necessary and not sufficient: 4Gi is
+  sized for *a* compaction, and nothing in the estate says how many arrive at once.
+- **MEASURED ON THE LIVE LANE 2026-09-22, every number read rather than derived:**
+  * `nats consumer info MAINTENANCE_WORK maintenance-work-durable` -> **`Max Ack Pending: 1,000`**,
+    `Flow Control: false`, `Ack Wait: 12m0s`. The 1,000 is NATS's DEFAULT — the work component sets no
+    `maxAckPending`, so nobody chose it.
+  * `anyio.to_thread.current_default_thread_limiter().total_tokens` -> **40**. `execute_unit` runs
+    through `run_in_threadpool`, so at most 40 units EXECUTE concurrently per pod; the rest are
+    delivered and wait.
+  * Observed in flight during a normal tick: **181** across 2 replicas.
+- **SO THE WORST CASE IS 40 CONCURRENT COMPACTIONS PER 4Gi POD (80 across the fleet), with up to 1,000
+  delivered and waiting.** The waiting ones are cheap — units are claim-check POINTERS, not payloads —
+  so the exposure is the 40, which is ~100 MB each before the limit. A compaction bounded at
+  `batch_size=64, num_threads=2` over a blob tier can exceed that, which is the [[LH-183]] shape
+  arriving by a different route.
+- **A SECOND EFFECT, and it is the one that bites first:** `Ack Wait` runs from DELIVERY, not from the
+  start of execution. A unit queued behind 40 others is burning its 12m window while idle, so a
+  backlog does not merely slow down — it redelivers, and a redelivered compaction runs twice.
+  `Redelivered 0` today because every table is at target and each unit is a no-op.
+- *What is left:* Decide the bound. `maxAckPending` on the work pubsub component is the direct lever;
+  the threadpool limiter is the other. THE NUMBER SHOULD BE MEASURED, NOT PICKED — nothing in this
+  estate has yet run a compaction that rewrites fragments, so there is no per-unit memory figure to
+  size against. Capture one when a tier with real rewrite work lands, or set a deliberately
+  conservative ceiling in the meantime and say it is provisional.
+- *Closes when:* The number of units a worker may hold is a value someone chose, with the measurement
+  behind it recorded, and a gate refuses a work component that sets none.
+- *Evidence:* live `consumer info` 2026-09-22 (`Max Ack Pending: 1,000`, `Flow Control: false`,
+  `Ack Wait: 12m0s`) · anyio default limiter 40 · `chart/templates/dapr-component.yaml` (the work
+  component sets ackWait/maxDeliver/backOff and no maxAckPending) · [[LH-183]] for the sizing half
 
 
 ## PHASE 1 · CROSS-CUTTING

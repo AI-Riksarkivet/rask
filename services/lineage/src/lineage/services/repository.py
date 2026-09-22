@@ -193,6 +193,13 @@ class LineageRepository:
         # REPORTS, does not refuse. `dataSource` is an OPTIONAL facet that external producers emit, so
         # rejecting the event would cost a third party its whole run over one field — a policy call
         # that is the owner's, and one this warning does not pre-empt.
+        #
+        # THE URI IS PRODUCER-SUPPLIED AND LOGGED VERBATIM, which is a redaction question worth
+        # answering rather than assuming. It is safe STRUCTURALLY, not by luck: every value that
+        # reaches this line has already failed `names_a_storage_location`, so it carries neither a
+        # scheme nor a leading `/` — and a URI cannot hold a `user:password@` userinfo component
+        # without a scheme. A well-formed credential-bearing URI is precisely the shape this branch
+        # never sees.
         for unresolvable in unresolvable_sources(event):
             log.warning(
                 "lineage_unresolvable_dataset_location",
