@@ -188,15 +188,15 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **100 are blocked on a decision** and **97 can be picked up today**.
+**201 open items**, of which **100 are blocked on a decision** and **101 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 35 | 3 | 7 |
+| **PHASE 1 · LAKEHOUSE** | 34 | 2 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
-| **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
-| **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
+| **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
+| **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 25 | 20 | 0 |
 
@@ -1206,290 +1206,6 @@ measured (~10-14 MiB per commit pas
 
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
-
-
-**LH-185 · Heavy, unbounded work runs INLINE in pods sized for coordination — the maintenance OOM is one instance of a pattern across all four lakehouse services**
-`catalog, lineage, medallion, maintenance` · **HIGH** · OPEN
-- **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
-STILL UNMET: Split the five out-of-phase candidates into rows in their own phases — two phase-2 (medallion
-stage runner compute.py:520, the external-blob carry fallback compute.py:641) and three phase-3
-(notifications inbox_actor.py:340, reconciler.py:254, control_events.py:206) — then delete this row.
-Register bookkeeping, not engineering.
-- **FOUND BY SWEEPING FOR THE SHAPE [[LH-183]] TURNED OUT TO BE (2026-09-22).** The maintenance planner
-  OOMKilled because it executed the sweep in its own 512Mi request rather than enqueueing it. A
-  16-agent sweep of the other three lakehouse services for the SAME defect class — a handler doing work
-  that scales with DATA size or dataset COUNT, in-process, in a pod sized for coordination — returned
-  **12 candidates, of which 10 survived adversarial verification** (each verifier instructed to default
-  to refuted and to read the code rather than the claim).
-- **THE SHARPEST IS THE CATALOG'S INDEX DOOR, and it is the maintenance defect exactly:**
-  `indices.py:85-87` calls `_queue_build(...)` and falls straight through to an in-process
-  `native.call(ns, "create_table_index", body)` when `settings.maintenance_index_topic` is empty — and
-  **empty is the shipped default** (`chart/values.yaml` `indexTopic: ""`, and `services.yaml` gates the
-  whole `LANCE_MAINTENANCE_INDEX_TOPIC` env block on it, so the queued lane is unreachable as shipped).
-  An IVF_PQ build trains over the table's whole vector column and an FTS build tokenises every row;
-  **nothing bounds it** — no batch size, no thread cap — unlike the sibling compact door, which pins
-  `batch_size=64, num_threads=2` and whose own comment names the hazard: "rows are not a unit of
-  memory, and the default batch size on a blob tier read ~15 GB/thread — the OOM measured on the
-  maintenance pod is just as available to the catalog pod through this button". The chart concedes the
-  magnitude too: "a compaction unit is minutes and a vector index over a large table is not".
-- **THE FULL CANDIDATE SET, recorded so the next pass does not re-derive it:**
-  * **catalog** — `indices.py:87` (high): The index-build doors run the build INLINE in the catalog process on the shipped configuration. `create_index` (indices.py:87) and `create_scalar_index` (indices.py:120) call `_queue_build` first, but…
-  * **catalog** — `dataplane.py:1547` (high): The change-feed door materialises an unbounded scan three times over in the request handler. `POST /management/v1/table/{id}/changes` (api/v1/endpoints/data.py:644, calling into dataplane at data.py:6…
-  * **catalog** — `erasure.py:168` (medium): The erasure door compacts the whole table AND full-scans every retained version, inline, with no queue path at all. `POST /management/v1/table/{id}/erasure` (api/v1/endpoints/erasure.py:42) hands the …
-  * **lineage** — `discovery.py:122` (high): GET /graph materialises the ENTIRE lineage estate — every Dataset node, every DERIVED_FROM edge and every WROTE edge in the graph — into the lineage process before its `limit` is applied, so the endpo…
-  * **lineage** — `discovery.py:87` (medium): GET /search pulls the whole dataset list AND the estate's entire column inventory into the process on EVERY request and substring-scans them in Python; `limit` (≤100) is applied only after the full sc…
-  * **lineage** — `reconcile_cron.py:457` (medium): The Dapr cron handler `_on_cron` reconciles the WHOLE estate inline, in-process, under a cluster-wide lock: an uncapped per-dataset loop that pays up to three AGE round-trips plus five object-store re…
-  * **medallion stage runners (bronze-to-silver / silver-to-gold / media-to-silver)** — `compute.py:520` (high): The stage runner's Dapr subscription handler POST /medallion-event runs the whole stage transform IN ITS OWN PROCESS on the in-process lane, full-materialising the entire upstream Lance table AND ever…
-  * **medallion-producer** — `media_produce.py:201` (medium): POST /ingest-media harvests the external source prefix inline in the producer's own process, and the two ceilings that exist to bound it are both checked AFTER the unbounded work has already happened:…
-  * **medallion stage runners (media lane, external-base tiers)** — `compute.py:641` (medium): The external-blob carry path — written specifically so a stage does NOT materialise the corpus — falls back to reading EVERY blob payload in the tier into a Python list whenever the first 64 rows happ…
-  * **notifications** — `inbox_actor.py:340` (medium): Every notification delivery does a whole-partition read-modify-write of the recipient's ENTIRE inbox, in the notifications pod's own process, and the row cap that is supposed to bound that partition (…
-  * **notifications** — `reconciler.py:254` (low): The reconcile cron's per-page bound is on ROW COUNT, not on bytes: each page asks lineage for up to 500 events with `summary=false` (the full OpenLineage payload), and the response is buffered whole, …
-  * **notifications** — `control_events.py:206` (low): The control-event lane expands a userset grant to its members and then delivers to them in a SEQUENTIAL, uncapped, unbudgeted loop inside the bus handler — one actor round-trip per member, with no pag…
-- **ONE OF THE TEN IS CLOSED (2026-09-22): the catalog index door.** `indexTopic` now ships
-  `maintenance.index.v1`, so `_queue_build` publishes and the door answers with the unit id instead of
-  training an IVF_PQ in the catalog's request handler. Spec-correct rather than merely convenient —
-  `lance_docs/ns_catalog/spec.yaml:1705` states "Index creation is handled asynchronously" and
-  `CreateTableIndexResponse` carries an optional `transaction_id` and nothing else, so the queued id is
-  the whole contract. **Turning the value on exposed three chart holes that the value being empty had
-  been hiding, and all three are fixed here:** no JetStream stream captured `maintenance.index.>`, so
-  every publish would have landed nowhere (caught RED by the [[LH-151]] gate, both halves — publisher
-  and subscriber); `maintenance-index-durable` was missing from `lance.chartDurables`, so the orphan
-  pass would have DELETED the index subscription every run — the 2026-07-13 dead-subscription failure
-  produced by the loop built to prevent it; and nothing pinned the index lane OUT of the drift loop,
-  whose EXP config its 3600s ackWait can never match. Every hop is now gated and each gate was
-  mutation-checked: the planner does not subscribe (`execute_work=False`, pinned in
-  `test_an_index_build_leaves_the_request_handler.py`), the component is scoped to `catalog`, and a
-  failed publish raises rather than answering 200 with a phantom transaction id.
-- **TWO OF THE TEN ARE CLOSED (2026-09-22): the second is the change feed.** `read_changes` and its
-  `read_deleted_row_ids` sibling now YIELD an Arrow FILE a batch at a time instead of building the
-  whole answer three times over (`to_table()`, then the IPC encoding beside it, then `to_pybytes()`
-  onto the Python heap). The endpoint answers with `StreamingResponse`, matching the blob door in the
-  same file. **Measured, same projection both sides** (200k rows x 256B, 58.4 MB of Arrow over the
-  feed's five columns): peak RSS **147.6 MB -> 60.1 MB**, 2.53x payload -> 1.03x, with the wire output
-  **byte-identical** (58,410,370 both), same schema, same rows — so it is a pure memory change and no
-  consumer can tell. Two things worth keeping: `tracemalloc` reports **0 MB** for the scan and the
-  encode because Arrow allocates off the Python heap, so RSS is the only instrument that sees this;
-  and the first batch is pulled INSIDE `_user_sql`, because `to_batches()` is lazy and a generator
-  body runs after the response has started — a malformed predicate would otherwise become a truncated
-  200 instead of a 400. No bound was added because none exists to add: the version window is the only
-  cursor a consumer has, and one version can carry the whole table.
-- **THREE OF THE TEN ARE CLOSED (2026-09-22): the third is the erasure door.** It reached
-  `dataset.optimize.compact_files()` with NO bound, while `services/maintenance.py`'s `compact_now`
-  pins `batch_size=64, num_threads=2` and its own comment names this exact hazard — "the OOM measured
-  on the maintenance pod is just as available to the catalog pod through this button". Erasure was a
-  second such button on the same pod that nobody had counted, and it runs over exactly the tables most
-  likely to carry a blob column. The bound is now `COMPACTION_BOUND`, named once and imported, so a
-  third door cannot quietly differ. **Also found while writing the gate: TWO residual checks**
-  (`_versions_still_matching` and `_answers`) did `to_table(filter=...).num_rows` — materialising every
-  matching row to read a count, once per retained version, worst exactly when the subject has the most
-  rows. Both are `count_rows` now. The probe that proves this wraps a REAL dataset and records how it
-  was asked; `ty` refused it against the `_Dataset` protocol because `__getattr__` is statically
-  invisible, so it is `cast` with the reason stated rather than a second copy of the protocol.
-- **THE REQUEST SIDE IS ALREADY BOUNDED — checked 2026-09-22, do not re-derive it.** The catalog's
-  write doors take `data: Annotated[bytes, Body(media_type=ARROW_STREAM_MEDIA_TYPE)]`, so FastAPI
-  buffers the whole upload, which reads exactly like the response defect above. It is not one:
-  `main.py:333` applies `BodySizeLimitMiddleware` (64 MiB, `RASK_MAX_BODY_BYTES`) and a
-  `WriteConcurrencyLimitMiddleware` beside it. So the asymmetry was real but one-sided — writes were
-  capped and reads were not — and closing the read side is what the two rows above did.
-- **THE MEDALLION INGEST FINDING IS FALSE — re-measured 2026-09-22.** It claimed `POST /ingest-media`
-  "harvests the external source prefix inline" with "the two ceilings both checked AFTER the unbounded
-  work has already happened". The code does the opposite (`services/ingest.py:160-200`):
-  `iter(source.iter_objects())` is an ITERATOR, `batches()` is a GENERATOR consumed by
-  `lance.write_dataset(batches(), ...)` so the write is incremental, and BOTH ceilings are checked
-  INSIDE the per-object loop and raise immediately — `if len(source_uris) > max_objects: raise` and
-  `if total_bytes > max_total_bytes: raise`. Nothing unbounded is accumulated: `source_uris` is capped
-  by the same ceiling that raises, and `chunk` holds at most `chunk_objects`/`chunk_bytes`. This door
-  is already the shape the other rows were fixed INTO.
-- **SCORECARD FOR THE SWEEP THAT PRODUCED THESE TEN**, now that each has met the code. Two were real
-  and are fixed (change feed, erasure). One was MISLOCATED but led to a real defect one hop out (the
-  index door was already queued; `indexTopic: ""` was the bug). One is FALSE (this one). Two are
-  phase-2 COMPUTE by the FOCUS block's own split, three are phase-3, and the remaining lineage pair is
-  a DOCUMENTED TRADE-OFF whose "fix" would break governance paging. So a 16-agent sweep with
-  adversarial verification still yielded findings that did not survive contact with the code — the
-  verification stage refutes a CLAIM, and cannot tell that the claim is about the wrong layer, was
-  fixed last week, or describes a decision somebody made on purpose and recorded in the docstring
-  three lines above the flagged call.
-- **TWO OF THE REMAINING SEVEN ARE PHASE 2, NOT PHASE 1 — triaged 2026-09-22, do not work them here.**
-  The medallion stage-runner finding (`compute.py:520`) is real and the code already states it:
-  "Full-materialises payloads into memory, which is fine for this in-process fake-Ray stand-in over
-  the cascade's small overwrite-written datasets; a distributed job streams instead." That is the
-  in-process lane standing in for the distributed one, which is the same class as maintenance's Ray
-  half — the FOCUS block puts both in phase 2 COMPUTE, where BYO lives. Fixing the stand-in's memory
-  profile would harden a lane whose replacement is already scheduled. The lineage `/graph` and
-  `/search` findings are phase 1 but a DIFFERENT fix shape from the three closed above: both apply
-  `limit` AFTER governance filtering in Python, so pushing the bound into AGE changes what `total`
-  can honestly report — that needs a count query beside the bounded fetch, not a streaming rewrite.
-- **THE LINEAGE ROWS ARE A DOCUMENTED TRADE-OFF, NOT AN OVERSIGHT — and "fixing" them would break
-  governance paging.** `repository.list_datasets` says it outright: "Fetch-all + filter/sort in
-  Python... Governance and pagination are applied by the endpoint over this full list, so a page is
-  taken from the VISIBLE set rather than truncating before the visibility filter has run." `/graph`
-  has the same shape — fetch all, `governed(...)`, then cap — and its `total` REPORTS the visible
-  count, which cannot be known without enumerating it.
-  Pushing `limit` into AGE would page over rows the caller may not see: short or empty pages whose
-  length leaks how many hidden rows exist. So the memory cost is the price of a correctness property
-  somebody already reasoned about and wrote down. Whoever revisits this needs a different design (a
-  governed count query, or FGA-aware filtering in the query itself), not a `LIMIT`.
-- **THE TENTH FINDING HAD NO VERDICT AND NOW DOES — `reconcile_cron.py` `_on_cron` (2026-09-22).**
-  The scorecard above accounts for nine of the ten and silently skipped this one, which is the same
-  failure the register's own counts test exists to catch: an item that is neither closed nor refused
-  nor triaged reads as handled. It belongs with the lineage pair — the cost scales with dataset COUNT,
-  not data size — and it carries a safety property neither of them has. **Single-flight:** the cron
-  fires on every replica and the sweep runs under a cluster-wide advisory lock, so a tick that finds
-  one in progress SKIPS and the next retries. An overrun therefore degrades to a less frequent
-  reconcile, never to a pile-up. The drain that runs beside it is separately bounded by
-  `outbox_drain_limit`.
-  **MEASURED LIVE, and it corrects this row's own prose.** The text above says the sweep is
-  "completing every ~5 min against a 300s cron", which reads as a sweep taking its whole interval.
-  Eleven consecutive ticks over 54 minutes complete **exactly 300s apart** (08:05:52 → 08:35:53,
-  sub-second drift) with **zero `lineage_reconcile_skipped_locked` lines** — so the CRON is the pacer
-  and no tick has ever found the lock held. `rask-lineage` sits at 191Mi of 512Mi. This is the least
-  urgent of the three lineage findings, not an unreviewed one.
-- **THE MEASUREMENT STILL STANDS, and it is why this is not urgent — live 2026-09-22.**
-  `rask-lineage` sits at **184Mi of a 512Mi limit, 15h uptime, 0 restarts**, with its own reconcile
-  tick reporting `checked=483` and completing every ~5 min against a 300s cron. `/graph` and
-  `/search` really do materialise the whole estate before applying `limit`, but at 483 datasets that
-  costs nothing an operator would notice. This is the DIFFERENCE from [[LH-183]], which had the same
-  512Mi limit and was OOMKilled repeatedly: there the work was sized by the DATA (4Gi compaction),
-  here it is sized by the dataset COUNT. Fix them when the count grows or when the fix is cheap,
-  not ahead of a row with a measured outage.
-- **THE PATTERN NOW HAS A MECHANISM AND TWO GATES (2026-09-22), and the first attempt at it STALLED
-  THE LANE — which is the part worth keeping.** Bounding memory looked like one number and is two.
-  `maxConcurrentUnits` sizes anyio's thread limiter, which serves BOTH the ~568 no-op units a tick
-  (two HTTP calls each, I/O-bound) and the rare real rewrite (memory-bound). Setting it to the
-  memory-safe figure throttled everything: measured within minutes on the live estate,
-  `Unprocessed Messages` went 2,128 -> 4,285 with 346 outcomes in five minutes — **1.15 units/sec
-  against the 4.7 the sweep injects** — and the delivery bound shrank with it, because [[LH-188]]'s
-  derivation tied the two together.
-  **SO THE BOUND MOVED TO THE ONLY STEP THAT HOLDS BYTES.** `services/rewrite_slot.py` is a
-  process-wide `BoundedSemaphore` acquired around the rewrite itself — `_execute_one` on the
-  distributed path, `compact_files` in-pod — and a no-op unit never acquires it because it never
-  reaches one. `maxConcurrentUnits: 40` is THROUGHPUT; `maxConcurrentCompactions: 4` is MEMORY.
-  **BOTH HOPS GATED, as an AST walk over the call sites**, because this estate has shipped the
-  half-wiring before (`create_table` reached `_write_blob` at two sites, one wired, every test green).
-  `rewrite_slots` is REQUIRED rather than defaulted: a defaulted parameter makes an un-wired chain
-  look clean. A leg asserts it is not the throughput setting — the mistake named where it would be
-  made again.
-- **THE EXISTING GATE COULD NOT HAVE CAUGHT IT, and that is a lesson about gates rather than about
-  this bug.** [[LH-188]]'s gate ties the lanes' delivery bounds to the fleet's execution capacity, so
-  it kept them CONSISTENT while both shrank — `6 + 2 == 4 x 2` held perfectly. **Consistency is not
-  adequacy.** The new gate compares the sweep's own cadence with the lane's capacity, two numbers that
-  live in different files: `expectedDatasets / scheduleSeconds x secondsPerUnit` units must be
-  admissible. `secondsPerUnit` is measured (6 in flight -> 1.15 units/sec -> ~5.2s), and the gate is a
-  FLOOR rather than an equality because the units are claim-check POINTERS — over-provisioning
-  delivery costs a pointer per queued unit, under-provisioning grows a backlog without bound.
-  Mutation-checked against the exact configuration that stalled it.
-- **THE PER-UNIT MEMORY FIGURE, which this row and [[LH-183]] both wanted:** a 240 MiB table in 60
-  fragments was built through the catalog and left for the sweep; `/proc/1/status` inside the worker
-  every 2s went `294Mi -> ... -> 729Mi -> ... -> 317Mi`. One rewrite bounded at `maxSourceBytes`
-  (256 MiB) peaked at **+434 MiB resident, ~1.7x the byte bound**, and released cleanly. That ratio is
-  what `test_the_worker_can_hold_every_unit_it_admits.py` multiplies against the declared pod limit, so
-  raising the byte bound without lowering concurrency now fails the RENDER rather than the pod. The 2s
-  interval makes 434 MiB a LOWER bound; the gate's 0.75 usable fraction carries that.
-- **THE GATE THE `Closes when` ASKED FOR NOW EXISTS, and writing it found a fourth unbounded door
-  (2026-09-22).** `tests/unit/test_a_compaction_door_is_bounded.py` resolves the keywords every
-  `compact_files()` call site in the four lakehouse services actually carries — following ONE hop of
-  indirection, so a `**`-unpacked dict built locally, updated from a module constant, or handed in as
-  a PARAMETER by a caller in the same module all resolve (the last shape is `optimize._rewrite`, whose
-  bound is the most carefully built one in the estate and which a naive walk would fail). All four
-  doors must pass `max_source_bytes`, `batch_size` AND `num_threads`. Three mutations, three distinct
-  legs red: strip erasure's bound → catalog fails; drop maintenance's byte bound → maintenance fails;
-  blind the walk → the leg that counts the doors fails, which is the gate this estate has shipped
-  before that could not fail.
-- **THE FOURTH DOOR IS `compact_one`'s OWN DEFAULTS, and the asymmetry is the tell.** Its three bound
-  parameters defaulted to `None`, and `None` meant the keyword was never added to `size_kw` at all —
-  so a caller that simply does not mention them gets Lance's 8192-ROW batch, the HOST's core count and
-  no byte ceiling. `rewrite_slots` on the SAME function already defaulted the safe way, with the
-  rationale written beside it: "a caller that does not care is bounded rather than unbounded". The
-  three knobs that bound the bytes defaulted the other way. **The parameter default alone does not
-  close it**, and that is the second half: `DatasetWorkItem`'s bound fields are `int | None = None`
-  because the wire model must express "the policy said nothing", and the sweep hands
-  `plan.scan_batch_size` straight through — so the value crossing the queue for an UNPOLICIED dataset
-  is a literal `None`. The floor is now applied where `size_kw` is built, so omitted and explicit-None
-  both mean the floor. Numbers named once in `core.config` and read by both the `Settings` defaults
-  and the parameter defaults: two spellings of 64 is how a bound gets raised in one place and kept in
-  the other.
-- **THE CATALOG'S BOUND DID NOT BOUND THE CATALOG, measured 2026-09-22.** `COMPACTION_BOUND` pinned
-  `batch_size=64, num_threads=2` and no byte ceiling — a ceiling in a unit nobody can size in advance,
-  because on a blob tier one row IS the blob. It is weakest exactly on the tables the erasure door
-  runs over, which is the door it was added for. Sized for THIS pod rather than copied from the
-  sweep's: the catalog runs at **248Mi of a 512Mi limit** (live), and a pass bounded at B peaks near
-  1.7xB resident, so the sweep's 256 MiB would peak ~435 MiB against ~264 MiB of headroom. 64 MiB
-  peaks ~109 MiB. A slower one-shot compaction is recoverable; an OOMKilled catalog is an outage for
-  every caller of the lakehouse.
-- *What is left:* Triage the remaining rows against the fix [[LH-183]] shipped — for each, either a
-  queue + a worker sized for the work, or an explicit bound (`batch_size`/`num_threads`) where the work
-  must stay in-process. The pattern, not the instances, is the deliverable: a door whose cost is a
-  property of the DATA does not belong in a pod sized for a request.
-  **PHASE 1 IS DONE ON THIS ROW and the residue is out of phase, which is why it stays open rather
-  than closing:** every phase-1 instance is fixed (index door, change feed, erasure, the compaction
-  defaults) or accepted with its rationale recorded (the lineage pair, `reconcile_cron`), and three
-  gates now cover the three sub-classes — `test_pagination_bounds_are_declared.py`,
-  `test_every_lineage_walk_can_be_bounded.py` and the compaction gate above. What keeps it open is
-  the FIVE out-of-phase candidates enumerated in this row: two phase-2 (the medallion stage runner's
-  in-process lane, the external-blob carry fallback) and three phase-3 (`inbox_actor`,
-  `reconciler`, `control_events`). This row is their only record — it closes when they land as rows
-  in their own phases, not before, because deleting it would lose the candidate set.
-- *Closes when:* No lakehouse handler performs data-scaled work in-process without either a worker lane
-  or a declared bound, and a gate refuses a new one.
-- *Evidence:* workflow `wf_46997777-6d5`, 16 agents, 12 findings / 10 confirmed · `services/catalog/src/catalog/api/v1/endpoints/indices.py:85-87,264-266` · `chart/values.yaml indexTopic: ""` · `services/maintenance/src/maintenance/services/maintenance.py:327-328 (the bound the index doors lack)` · [[LH-183]] for the measured instance
-
-**CRITERION 1 (provenance survives a write) — MEASURED ON THE LIVE ESTATE 2026-09-22, and it reads clean**
-`lineage` · OBSERVATION, not a row
-- One full `lineage_reconcile_sweep` tick, read off the running pod rather than reasoned about:
-  `checked=483 backfilled=0 storage_loss=1 ungoverned=63 graph_ahead=36 unreadable=23
-  dangling_blobs=0 stale=366 contract_violations=0 provenance_holes=0 unknown_to_graph=0
-  outbox_drained=0 outbox_stranded=0 outbox_refused=0`.
-- **The two sharpest axes are ZERO.** `provenance_holes=0` and `unknown_to_graph=0` — and the second
-  is the one that matters most, because `None` there would mean the question went unasked while `0`
-  means it was asked and every governed table has a graph node. `SweepReport`'s own docstring records
-  **127 governed tables with no node on 2026-09-19**; that gap is closed. `contract_violations=0` and
-  `dangling_blobs=0` alongside, and the outbox loop is quiet (`stranded=0`, `refused=0`).
-- **THE 1,297 -> 483 DROP IS REAL, NOT A BLIND SWEEP.** The same docstring measured 1,297 graph
-  datasets on 2026-09-19 against 483 checked now. `unknown_to_graph=0` is what rules out the
-  frightening reading: a sweep that had lost its sight would report `None`, not `0`. The estate
-  genuinely shrank this week (bucket reaps, one of them mine and accidental) and the graph tracked it.
-- *What is actually left on this axis:* `storage_loss=1` (the graph holds a dataset whose storage is
-  gone) and `unreadable=23` (datasets the sweep cannot open — cause unrecorded per dataset in the log
-  line, though `unreadable` is a `dict[str, str | None]` carrying the reason in the response body).
-  `ungoverned=63` and `graph_ahead=36` are documented as mostly-benign by design and split into their
-  own fields precisely so they do not drown these two.
-
-
-**[[LH-183]] / [[LH-185]] index lane — DEPLOYED AND OBSERVED WORKING 2026-09-22**
-`maintenance` · PROOF, not a row
-- `make k3s-converge TAG=main-2ffdd524` rolled all ten `lance-rest-catalog` workloads to one tag in
-  one helm transaction, which also resolved a release that had drifted to a FIFTH tag none of them
-  was running.
-- **The split is live and behaving as designed**, read off the cluster rather than the chart:
-  `rask-maintenance` 1 replica / 512Mi / `MAINTENANCE_EXECUTE_WORK=false`, and
-  `rask-maintenance-worker` 2 replicas / **4Gi** with the flag unset. Both carry
-  `WORK_TOPIC=maintenance.work.v1` and `INDEX=maintenance.index.v1`.
-- **The planner plans and does not execute** — `planned=567` with **zero** `compaction_distributed` /
-  `execute_unit` / `compact_files` lines in its log — while the workers run the units:
-  `POST /maintenance-work 200`, each calling the catalog's `compaction_plan` door and answering
-  `compaction_distributed_nothing_to_do` for tables already at target.
-- **MEASURED MEMORY, which is the whole point of the row:** planner **159Mi of 512Mi** against the
-  pre-fix baseline of 319Mi climbing to OOMKill; workers 167Mi and 166Mi of 4Gi. The heavy half is on
-  the pods sized for it and the planner is flat.
-- **THE INDEX LANE IS LIVE TOO, and proving it took a second deploy** ([[LH-151]]). The first
-  converge left `MAINTENANCE_INDEX` declared and absent: the stream job reported `Complete 1/1` while
-  `nats stream add` had died on "cannot ask for confirmation without a terminal", and the worker's
-  sidecar retried forever against `nats: no stream matches subject`. After the `--defaults` fix and a
-  redeploy (job r200): the stream exists, **0 subscribe failures in 90s** where there had been a
-  continuous stream of them, and `maintenance-index-durable` is bound with **ackWait 1h0m0s** — the
-  window that justified giving this lane its own component, an order of magnitude past the work
-  queue's 720s.
-- **THE LANE IS HEALTHY UNDER ITS CURRENT LOAD**, read off the consumer rather than inferred:
-  `maintenance-work-durable` reports `Unprocessed 0`, `Redelivered 0`, `Ack Floor 44,682` — nothing
-  queued undelivered, and no unit has ever exceeded the 720s ack window and been redelivered.
-- *Not yet observed, and the caveat got sharper on inspection:* every table this tick was already at
-  target, so the 4Gi headroom has not been exercised under real compaction load. The proven claim is
-  "the planner no longer does the work", NOT "a large compaction fits in 4Gi". And the consumer shows
-  **`Ack Pending 181`** across two workers with no `maxAckPending` or concurrency bound on the work
-  pubsub component — so the split bounds the pod SIZE but not the number of units in flight. 4Gi is
-  sized for *a* compaction, not for however many land at once; the real ceiling today is FastAPI's
-  threadpool, which is an accident rather than a decision. Harmless while every unit is a no-op at
-  167Mi; worth a bound before a tier with real rewrite work arrives.
 
 
 **LH-191 · The sweep re-plans the WHOLE estate every 120s because no policy sets a cadence**
@@ -2670,6 +2386,42 @@ now possible — but I could not confirm a
   converge log `UPGRADE FAILED: post-upgrade hooks failed`
 
 
+**CP-051 · The stage runner's in-process lane full-materialises the whole upstream tier into the pod**
+`medallion` · **MED**
+- **SPLIT OUT OF [[LH-185]] 2026-09-22, and RE-VERIFIED against the code on the way out** — that row's
+  own evidence paths for its notifications half were wrong, so none of its five residual candidates
+  was carried forward on the strength of the claim alone.
+- *The site:* `services/medallion/src/medallion/services/compute.py:520`. `blobs.read_aligned_table(ds,
+  columns=[...], with_row_id=True)` pulls every row and every blob payload of the upstream tier into
+  the stage runner's process, then builds `columns`/`blob_payloads` beside the Arrow table. Cost is a
+  property of the DATA, in a pod sized for coordination — the defect class [[LH-183]] was an instance of.
+- *It is DOCUMENTED, not overlooked, and that is why it is phase 2:* the comment three lines above the
+  call says it outright — "Full-materialises payloads into memory, which is fine for this in-process
+  fake-Ray stand-in over the cascade's small overwrite-written datasets; **a distributed job streams
+  instead**". This is the in-process lane standing in for the distributed one, which is the same class
+  as maintenance's Ray half. Hardening the stand-in's memory profile would harden a lane whose
+  replacement is already scheduled.
+- *Closes when:* The stage transform streams, or the in-process lane is gone. Either answer is fine;
+  what must not happen is the stand-in acquiring a bound that makes it look like the real thing.
+- *Evidence:* `services/medallion/src/medallion/services/compute.py:513-530` (the comment and the call) · [[LH-185]] for the sweep that found it
+
+**CP-052 · The external-blob carry path falls back to reading EVERY payload when its probe window is all-null**
+`medallion` · **MED**
+- **SPLIT OUT OF [[LH-185]] 2026-09-22, re-verified against the code.**
+- *The site:* `services/medallion/src/medallion/services/compute.py:641`. The path exists SPECIFICALLY
+  so a stage does not materialise the corpus: it probes `_DERIVE_PROBE_ROWS` rows, asks `is_derivable`
+  of the first non-null payload, and carries nothing when the answer is no. But when the probe window
+  is entirely null and more rows remain, it does `full = blobs.read_aligned_table(ds, columns=blob_cols)`
+  and `to_pylist()`s every payload — the exact thing the probe exists to avoid, reached by a data
+  shape rather than by a decision.
+- *The trade IS recorded and is defensible as far as it goes:* "Cannot answer cheaply; pay for the full
+  read rather than skip a derivation that may be owed." Skipping an owed derivation is worse than a
+  large read. What is missing is a third option between them — a wider probe, or a bounded scan that
+  stops at the first non-null — so the fallback's cost is not the whole tier.
+- *Phase 2 for the same reason as [[CP-051]]:* it is the in-process stand-in's memory profile.
+- *Closes when:* An all-null probe window no longer implies a full-corpus read, or the lane is gone.
+- *Evidence:* `services/medallion/src/medallion/services/compute.py:634-650` · [[LH-185]]
+
 ## PHASE 3 · CONTROLPLANE
 
 **XC-027 · `chart/values-prod.yaml` sets `ingress.enabled/className/host` but no `tls:` block, so OIDC tokens and vended S3 credentials traverse plaintext at the edge**
@@ -2942,6 +2694,48 @@ flag and the Configuration must la
 - *Closes when:* C2 has run and the owner has named the MLflow capabilities the models plane must match.
 - *Evidence:* `frontend/microfrontends/models/src/lib/models/Experiments.svelte:4,88 (MLflow not used)` · `docs/RAY-TRAIN.md:206-215 (no MLflow anywhere in the code)`
 
+
+**CTL-025 · Every notification delivery read-modify-writes the recipient's WHOLE inbox partition**
+`notifications` · **MED**
+- **SPLIT OUT OF [[LH-185]] 2026-09-22. Re-verified — and the row's recorded path was WRONG**
+  (`notifications/services/inbox_actor.py`; the file is `notifications/inbox_actor.py`), which is why
+  the five candidates were checked against the code rather than copied.
+- *The site:* `services/notifications/src/notifications/inbox_actor.py:340`, in the delivery turn.
+  `rows = await self._read_rows()` loads the subject's entire pointer list to answer one question —
+  "does this inbox already hold `delivery.notification_id`?" — and the turn then writes the list back.
+  Cost scales with how much a person has accumulated, paid on EVERY delivery to them.
+- *It is claim-check POINTERS, not payloads,* so the constant is small and this is MED rather than
+  HIGH. The shape is still the one the sweep was looking for: work sized by stored data, in-process,
+  on every request.
+- *Closes when:* A delivery's duplicate check and append do not cost the whole partition, or the row
+  cap is enforced where the partition is written rather than where it is read.
+- *Evidence:* `services/notifications/src/notifications/inbox_actor.py:334-352` · [[LH-185]]
+
+**CTL-026 · The notifications reconciler pages by ROW COUNT while asking for the full OpenLineage payload**
+`notifications` · **LOW**
+- **SPLIT OUT OF [[LH-185]] 2026-09-22, re-verified (path corrected to `notifications/api/reconciler.py`).**
+- *The site:* `reconciler.py:254`. Each page requests `limit=self._page_limit` events with
+  `summary=false`, and the response is buffered whole by `response.json()`. `summary=false` is
+  load-bearing and correctly explained in place — "the summary projection has no run id anywhere in
+  it" — so the fix is not to drop it. The gap is that the bound is a row count over a payload whose
+  size is unbounded, so one page's cost is not knowable from the limit.
+- *Closes when:* The page bound is in bytes, or the events the reconciler needs carry a projection
+  that has a run id and is small.
+- *Evidence:* `services/notifications/src/notifications/api/reconciler.py:248-262` · [[LH-185]]
+
+**CTL-027 · A group grant delivers to its members in a sequential, uncapped loop inside the bus handler**
+`notifications` · **LOW**
+- **SPLIT OUT OF [[LH-185]] 2026-09-22, re-verified (path corrected to `notifications/api/control_events.py`).**
+- *The site:* `control_events.py:206`. A userset grant expands to its members and then
+  `for subject in subjects: await open_inbox(subject).deliver(payload)` — one actor round-trip per
+  member, in order, with no page and no budget, inside the subscription handler. A large team makes
+  one control event a long handler, and `ackWait` is the only thing bounding it.
+- *The failure posture is deliberate and should be preserved by any fix:* a partial failure RETRIES
+  the whole set, which is safe only because delivery is idempotent on `notification_id`
+  (`<event_id>@<ACTION>`). "A group grant must not be able to half-deliver and then stop."
+- *Closes when:* Member fan-out is bounded or moved off the handler, without losing the all-or-retry
+  property the comment names.
+- *Evidence:* `services/notifications/src/notifications/api/control_events.py:200-215` · [[LH-185]]
 
 ## FRONTEND
 
