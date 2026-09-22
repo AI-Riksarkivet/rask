@@ -1095,13 +1095,23 @@ have no `uv.lock` and so cannot be built to emit anything.
   driving the deployed catalog where undrop 400'd on the very location `describe_table` had just
   reported. So the strip is required, and "branch on the backend" — what this row originally asked for
   — would have changed correct code.
-- *What is actually open:* where the live `unreadable=23` URIs come from is STILL UNIDENTIFIED. Two of
-  them do not fit the undrop story at all and should have been the tell: `acme-bronze$objects` points
-  at `4750a5b9_acme-bronze$events` — a DIFFERENT table's directory — and `media$chunks` points at
-  `transcripts_v2.lance/chunks.lance`, a nested path the `dir` backend's flat `<uuid>_<table>` layout
-  never produces. Both read as rows written into the graph directly by a fixture rather than through a
-  catalog door. Whoever picks this up should find the WRITER of a graph dataset URI that is not
-  absolute, and confirm whether any production path can reach it, before proposing a fix.
+- **WHAT IS ACTUALLY WRONG, located and DRIVEN 2026-09-22: the ingest door applies no validation the
+  sweep applies at read time.** `_names_a_storage_location` lives in `reconcile.py` and is called
+  only when reading. `RunEvent` was driven with a `dataSource.uri` of
+  `4750a5b9_acme-bronze$events`: the model ACCEPTS it, `source_uri` stores it verbatim, and
+  `_names_a_storage_location` answers False. So the door records exactly what every later sweep will
+  refuse — each tick, forever — and the refusal names the DATASET, never the producer that emitted
+  the bad facet, so nothing can attribute it back.
+- **THE ASYMMETRY IS THE POINT, and it is the second of this shape found today.** Validation exists
+  and runs on the wrong side: here reads are checked and writes are not (the catalog's body limit was
+  the mirror image — writes capped, reads not, closed in [[LH-185]]).
+- **A POLICY CALL BELONGS TO THE OWNER BEFORE THIS IS CODED.** Refusing at the door matches the
+  estate's stated posture ("a lane driven around the platform is correctly refused rather than
+  under-served") and would raise a `lance_namespace` typed error for `install_problem_handlers` to
+  translate. But `dataSource` is an OPTIONAL OpenLineage facet and external producers emit it, so a
+  refusal costs a third party its whole run event over one malformed field. The cheaper half — record
+  the producer alongside the unresolvable URI so the sweep's report can name who to fix — is
+  uncontroversial either way and could land first.
 - *Closes when:* The writer of a non-absolute graph dataset URI is named, and either a production path
   to it is found and fixed, or it is shown to be reachable only from test fixtures and the residual
   graph rows are reaped — with the sweep reporting `unreadable=0` either way.
