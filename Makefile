@@ -812,15 +812,20 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# does not name keeps the tag it is running rather than falling back to the chart default.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
 	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN}; 	rm -f "$$LIVE"
+	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
+	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
+	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —
+	@# make[1]: Entering directory" — after which the stem check printed twice because k3s-up ran its
+	@# own. Harmless only because k3s-up is idempotent.
 	@# EVIDENCE, NOT A GATE — and the difference decides the exit code. The upgrade above already
 	@# happened; `--check-only` reads EVERY stem, so an unrelated one being split would fail this
 	@# target after a deploy that succeeded, which reads as "the deploy failed". It reports instead,
 	@# and says what is still true so the operator's next move is obvious.
 	@if KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only; then \
-	  echo ">> every stem converged — `make k3s-up` will now pass its own check"; \
+	  echo ">> every stem converged — 'make k3s-up' will now pass its own check"; \
 	else \
 	  echo ">> this deploy SUCCEEDED, but another stem is still split (named above)."; \
-	  echo ">> `make k3s-up` will keep refusing until that one is converged too — same fix, different TAG/STEM."; \
+	  echo ">> 'make k3s-up' will keep refusing until that one is converged too — same fix, different TAG/STEM."; \
 	fi
 
 k9s: bootstrap ## Browse the k3s cluster in k9s (the chart's NOTES.txt points here)

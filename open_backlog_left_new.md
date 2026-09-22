@@ -1121,6 +1121,35 @@ have no `uv.lock` and so cannot be built to emit anything.
   [[a-verdict-is-not-evidence-it-is-still-true]]
 
 
+**[[LH-183]] / [[LH-185]] index lane — DEPLOYED AND OBSERVED WORKING 2026-09-22**
+`maintenance` · PROOF, not a row
+- `make k3s-converge TAG=main-2ffdd524` rolled all ten `lance-rest-catalog` workloads to one tag in
+  one helm transaction, which also resolved a release that had drifted to a FIFTH tag none of them
+  was running.
+- **The split is live and behaving as designed**, read off the cluster rather than the chart:
+  `rask-maintenance` 1 replica / 512Mi / `MAINTENANCE_EXECUTE_WORK=false`, and
+  `rask-maintenance-worker` 2 replicas / **4Gi** with the flag unset. Both carry
+  `WORK_TOPIC=maintenance.work.v1` and `INDEX=maintenance.index.v1`.
+- **The planner plans and does not execute** — `planned=567` with **zero** `compaction_distributed` /
+  `execute_unit` / `compact_files` lines in its log — while the workers run the units:
+  `POST /maintenance-work 200`, each calling the catalog's `compaction_plan` door and answering
+  `compaction_distributed_nothing_to_do` for tables already at target.
+- **MEASURED MEMORY, which is the whole point of the row:** planner **159Mi of 512Mi** against the
+  pre-fix baseline of 319Mi climbing to OOMKill; workers 167Mi and 166Mi of 4Gi. The heavy half is on
+  the pods sized for it and the planner is flat.
+- **THE LANE IS HEALTHY UNDER ITS CURRENT LOAD**, read off the consumer rather than inferred:
+  `maintenance-work-durable` reports `Unprocessed 0`, `Redelivered 0`, `Ack Floor 44,682` — nothing
+  queued undelivered, and no unit has ever exceeded the 720s ack window and been redelivered.
+- *Not yet observed, and the caveat got sharper on inspection:* every table this tick was already at
+  target, so the 4Gi headroom has not been exercised under real compaction load. The proven claim is
+  "the planner no longer does the work", NOT "a large compaction fits in 4Gi". And the consumer shows
+  **`Ack Pending 181`** across two workers with no `maxAckPending` or concurrency bound on the work
+  pubsub component — so the split bounds the pod SIZE but not the number of units in flight. 4Gi is
+  sized for *a* compaction, not for however many land at once; the real ceiling today is FastAPI's
+  threadpool, which is an accident rather than a decision. Harmless while every unit is a no-op at
+  167Mi; worth a bound before a tier with real rewrite work arrives.
+
+
 ## PHASE 1 · CROSS-CUTTING
 
 **XC-001 · Helm-written Secrets carry no content checksum and ESO-written Secrets have no watcher, so a rotation never reaches running pods**
