@@ -173,3 +173,101 @@ def test_the_handler_does_NOT_retire_below_the_mark(monkeypatch: pytest.MonkeyPa
     settings = cast(Any, SimpleNamespace(storage_options=lambda: {}, delimiter="$", recycle_after_passes=200))
     asyncio.run(work_module.handle_unit({"data": {"uri": "s3://b/t", "table_id": "ns$t", "plan": {}}}, settings, cast(Any, object())))
     assert retired == []
+
+
+# --------------------------------------------------------------------------- #
+# EVERY path that rewrites must count, or the budget bounds only one of them
+# --------------------------------------------------------------------------- #
+
+
+def test_every_module_that_holds_a_rewrite_slot_also_counts_the_pass() -> None:
+    """The structural half, and it caught a real hole the hour this was written.
+
+    `rewrite_slot` is documented as "the only step that holds bytes", and TWO modules acquire it:
+    `compaction_executor` on the distributed path and `optimize` in-pod. Only the first called
+    `record_committed_rewrite`, so a worker doing in-pod compactions retained ~12 MiB per pass and
+    could never reach its budget — the retirement bounded one path and looked like it bounded both.
+
+    Asserted over the SOURCE rather than by calling them, because the failure is an ABSENCE: a third
+    rewrite path added later is covered the day it acquires a slot, which no behavioural test of the
+    two existing ones can promise.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src" / "maintenance" / "services"
+    holders: dict[str, set[str]] = {}
+    for module in sorted(root.glob("*.py")):
+        tree = ast.parse(module.read_text(encoding="utf-8"))
+        called = {node.func.id for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        if module.name == "rewrite_slot.py" or "rewrite_slot" not in called:
+            continue
+        holders[module.name] = called
+
+    assert holders, "no module acquires a rewrite slot — the walk found nothing, so it proves nothing"
+    uncounted = sorted(name for name, called in holders.items() if "record_committed_rewrite" not in called)
+    assert uncounted == [], (
+        f"{uncounted} hold a rewrite slot and never count the pass — the [[LH-183]] budget would bound "
+        "every OTHER path and silently not this one. Call `record_committed_rewrite()` once per "
+        "completed compaction there, at the same granularity as the distributed commit."
+    )
+
+
+def test_the_IN_POD_path_counts_a_pass_that_moved_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The behavioural half of the gate above: the in-pod compaction must advance the same counter
+    the distributed commit does, or the two paths disagree about what this worker has spent."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from maintenance.services import optimize as optimize_module
+
+    counted: list[int] = []
+    monkeypatch.setattr(optimize_module, "record_committed_rewrite", lambda: (counted.append(1), len(counted))[1])
+    monkeypatch.setattr(optimize_module, "_rewrite", lambda *_a, **_k: SimpleNamespace(fragments_removed=6, fragments_added=1))
+
+    result = SimpleNamespace(refused=None, refused_by=None, fragments_removed=0, fragments_added=0, error=None, error_type=None)
+    optimize_module._compact_files(
+        cast(Any, SimpleNamespace(has_stable_row_ids=True)),
+        cast(Any, result),
+        uri="s3://b/t",
+        refusal=None,
+        target_rows_per_fragment=None,
+        scan_batch_size=None,
+        max_source_bytes=None,
+        repack_mode=None,
+        compact_threads=None,
+        rewrite_slots=1,
+        table_id="ns$t",
+    )
+    assert result.fragments_removed == 6
+    assert counted == [1], f"the in-pod pass was not counted: {counted}"
+
+
+def test_the_IN_POD_path_does_NOT_count_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The control. A compaction that moved nothing allocated nothing, and counting it would retire a
+    worker that has spent no budget — which on an estate where nearly every unit is a no-op would
+    restart the worker constantly."""
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from maintenance.services import optimize as optimize_module
+
+    counted: list[int] = []
+    monkeypatch.setattr(optimize_module, "record_committed_rewrite", lambda: (counted.append(1), len(counted))[1])
+    monkeypatch.setattr(optimize_module, "_rewrite", lambda *_a, **_k: SimpleNamespace(fragments_removed=0, fragments_added=0))
+
+    result = SimpleNamespace(refused=None, refused_by=None, fragments_removed=0, fragments_added=0, error=None, error_type=None)
+    optimize_module._compact_files(
+        cast(Any, SimpleNamespace(has_stable_row_ids=True)),
+        cast(Any, result),
+        uri="s3://b/t",
+        refusal=None,
+        target_rows_per_fragment=None,
+        scan_batch_size=None,
+        max_source_bytes=None,
+        repack_mode=None,
+        compact_threads=None,
+        rewrite_slots=1,
+        table_id="ns$t",
+    )
+    assert counted == []

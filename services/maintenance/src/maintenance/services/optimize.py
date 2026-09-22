@@ -23,7 +23,7 @@ from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_
 from maintenance.core.lineage_emit import declared_table_id
 from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome, MaintenanceDenied
 from maintenance.services.index_health import inspect_indices
-from maintenance.services.rewrite_slot import rewrite_slot
+from maintenance.services.rewrite_slot import record_committed_rewrite, resident_bytes, rewrite_slot
 from service_kit.lakehouse.base_refs import BaseRefs, containment_of
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
@@ -430,6 +430,20 @@ def _compact_files(
             metrics = _rewrite(ds, size_kw, slots=rewrite_slots, defer=False)
     result.fragments_removed = int(getattr(metrics, "fragments_removed", 0))
     result.fragments_added = int(getattr(metrics, "fragments_added", 0))
+    # COUNT THE PASS HERE TOO ([[LH-183]]). The retirement budget was wired to the DISTRIBUTED commit
+    # alone, so a worker compacting in-pod retained the same ~12 MiB per pass and could never reach
+    # its ceiling — a bound that covered one of the two paths through `rewrite_slot` and read as if it
+    # covered both. `test_every_module_that_holds_a_rewrite_slot_also_counts_the_pass` refuses that now.
+    #
+    # ONLY WHEN BYTES ACTUALLY MOVED, which is what the distributed site means by a commit: it counts
+    # inside the `committed` branch, unreachable when the plan was empty. A refusal leaves `metrics`
+    # None and a no-op compaction reports zero, so both read as no pass — and counting them would
+    # retire a worker that had allocated nothing.
+    if result.fragments_removed or result.fragments_added:
+        log.info(
+            "maintenance_compaction_in_pod_committed",
+            extra={"uri": uri, "table_id": table_id, "rewrite_passes": record_committed_rewrite(), "rss_bytes": resident_bytes()},
+        )
 
 
 def _optimize_indices(ds: lance.LanceDataset, result: DatasetResult, *, uri: str, enabled: bool, index_columns: list[str] | None) -> None:
