@@ -1837,8 +1837,21 @@ Register bookkeeping, not engineering.
   is `MIN AVAILABLE 1, ALLOWED DISRUPTIONS 1` — so no *voluntary* disruption (drain, rollout, eviction)
   can take both replicas. My test used `kubectl delete pod -l`, which goes through the DELETE path and
   is NOT gated by a PodDisruptionBudget, so it reproduced a scenario the PDB exists to stop. What
-  remains genuinely exposed is the involuntary case: a node loss taking both pods, which
-  `topologySpreadConstraints` is supposed to make unlikely and which this test did not measure.
+  remains genuinely exposed is the involuntary case: a node loss taking both pods.
+- **AND THAT EXPOSURE IS NOT "UNLIKELY" HERE — I WROTE THAT AN HOUR AGO AND IT IS FALSE FOR THIS
+  ESTATE.** The sentence rested on `topologySpreadConstraints`. Measured: `kubectl get nodes` returns
+  **ONE** node (`dmlpai01`, control-plane), both workers are scheduled on it, and the constraint is
+  `topologyKey: kubernetes.io/hostname` with **`whenUnsatisfiable: ScheduleAnyway`**. A single hostname
+  domain means there is nothing to spread ACROSS, and `ScheduleAnyway` means the constraint never
+  refuses a placement even when there is — so it is a preference that cannot bind, and the two replicas
+  are co-located by construction. On this estate a node event takes both pods and the ~320 s stall is
+  therefore CERTAIN rather than unlikely. On a multi-node production cluster it would spread them, but
+  still only as a preference.
+- **SO THE TWO MITIGATIONS COVER DIFFERENT HALVES AND ONLY ONE OF THEM BINDS HERE.** Voluntary
+  disruption (drain, rollout, eviction) is held by the PDB — one replica at a time, no stall, measured
+  at 1.16 s. Involuntary loss (node down, both pods killed) ignores PDBs entirely and is not mitigated
+  at all on a single-node estate. That is the case worth building a remedy for, and it is narrower than
+  the row's original "a worker restart".
 - **MEASURED LIVE 2026-09-22, and it is the true cause of every "stall" read today.** Two minutes
   after a rolling restart the consumer reports:
   `Last delivery: 1m57s ago` · `Outstanding Acks: 152 out of maximum 152` · `Ack Wait: 12m0s` ·
