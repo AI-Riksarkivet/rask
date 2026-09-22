@@ -1,0 +1,301 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "rask maintenance \u2014 how it runs today",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1360,
+      600
+    ]
+  },
+  "components": [
+    {
+      "id": "arrival",
+      "type": "messagebus",
+      "label": "Write-event arrival",
+      "sublabel": "lineage.events.v1",
+      "tag": "primary",
+      "pos": [
+        30,
+        50
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "cron",
+      "type": "cloud",
+      "label": "Sweep cron",
+      "sublabel": "maintenance-cron",
+      "tag": "@every 120s",
+      "pos": [
+        30,
+        260
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "reconcile",
+      "type": "cloud",
+      "label": "Reconcile cron",
+      "sublabel": "read-only pass",
+      "tag": "@every 300s",
+      "pos": [
+        30,
+        480
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "planner",
+      "type": "backend",
+      "label": "rask-maintenance",
+      "sublabel": "plan_sweep \u00b7 512Mi",
+      "tag": "512Mi",
+      "pos": [
+        315,
+        260
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "queue",
+      "type": "messagebus",
+      "label": "maintenance.work.v1",
+      "sublabel": "JetStream work queue",
+      "pos": [
+        600,
+        260
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "dlq",
+      "type": "messagebus",
+      "label": "dlq.maintenance.work",
+      "sublabel": "parked units",
+      "pos": [
+        600,
+        480
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "maintenance-worker",
+      "sublabel": "execute_unit \u00b7 1Gi/4Gi",
+      "tag": "1Gi / 4Gi x2",
+      "pos": [
+        885,
+        260
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "catalog",
+      "type": "backend",
+      "label": "catalog",
+      "sublabel": "plan + commit",
+      "pos": [
+        885,
+        50
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "Lance tables",
+      "sublabel": "RustFS S3",
+      "pos": [
+        1170,
+        260
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "lineage",
+      "type": "database",
+      "label": "OpenLineage",
+      "sublabel": "per-unit event",
+      "pos": [
+        1170,
+        480
+      ],
+      "size": [
+        155,
+        68
+      ]
+    },
+    {
+      "id": "raygap",
+      "type": "external",
+      "label": "lance-ray",
+      "sublabel": "compact_database",
+      "tag": "not wired",
+      "pos": [
+        885,
+        480
+      ],
+      "size": [
+        155,
+        68
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "k3s \u2014 rask release",
+      "wraps": [
+        "planner",
+        "queue",
+        "dlq",
+        "worker",
+        "catalog",
+        "store",
+        "lineage"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "arrival-plan",
+      "from": "arrival",
+      "to": "planner",
+      "label": "queue group, replan one"
+    },
+    {
+      "id": "cron-plan",
+      "from": "cron",
+      "to": "planner",
+      "label": "POST /maintenance-cron",
+      "variant": "emphasis",
+      "labelDy": 12
+    },
+    {
+      "id": "reconcile-plan",
+      "from": "reconcile",
+      "to": "planner",
+      "label": "read-only drift report",
+      "variant": "dashed"
+    },
+    {
+      "id": "plan-queue",
+      "from": "planner",
+      "to": "queue",
+      "label": "enqueue DatasetWorkItem",
+      "variant": "emphasis"
+    },
+    {
+      "id": "queue-worker",
+      "from": "queue",
+      "to": "worker",
+      "label": "POST /maintenance-work",
+      "variant": "emphasis"
+    },
+    {
+      "id": "queue-dlq",
+      "from": "queue",
+      "to": "dlq",
+      "label": "delivery exhausted",
+      "variant": "dashed",
+      "labelDy": 89
+    },
+    {
+      "id": "worker-catalog",
+      "from": "worker",
+      "to": "catalog",
+      "label": "plan, then commit",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "worker-store",
+      "from": "worker",
+      "to": "store",
+      "label": "in-pod rewrite",
+      "variant": "emphasis"
+    },
+    {
+      "id": "worker-lineage",
+      "from": "worker",
+      "to": "lineage",
+      "label": "emit"
+    },
+    {
+      "id": "worker-raygap",
+      "from": "worker",
+      "to": "raygap",
+      "label": "the BYO gap",
+      "variant": "dashed",
+      "labelDy": 89
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Three triggers, one planner",
+      "items": [
+        "Arrival on lineage.events.v1 is the primary trigger",
+        "The sweep cron is the backstop for tables nobody wrote",
+        "Reconcile has its own binding, so the cheap read never rides the expensive write"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "The queue lane",
+      "items": [
+        "The planner publishes and does not consume: MAINTENANCE_EXECUTE_WORK=false",
+        "WORK retention \u2014 an acked unit leaves the stream, so the 2 replicas compete",
+        "Exhausted deliveries park on the DLQ instead of looping"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "What actually executes",
+      "items": [
+        "execute_unit: compaction, index optimize, old-version cleanup via pylance",
+        "DISTRIBUTED_COMPACTION=true moves only PLAN and COMMIT to the catalog",
+        "The rewrite itself stays a for-loop over tasks in one process"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Not here yet",
+      "items": [
+        "No Dapr Workflow and no Ray anywhere in services/maintenance",
+        "The target is named in the docstring: lance-ray compact_database",
+        "Live now: one 512Mi pod, no worker Deployment, no work topic set"
+      ]
+    }
+  ]
+}

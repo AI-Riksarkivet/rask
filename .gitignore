@@ -69,3 +69,10 @@ sbom-*.cdx.json
 # fixture removes them on exit, so these survive only a KILLED run — and then `git add -A` would commit
 # them, which is how this line came to exist.
 .otlp-probe-*/
+
+# archify output: the `.archify.json` spec is the source of truth and is tracked;
+# the rendered HTML is a build artifact (~700 KB, over the large-file gate).
+# Regenerate: node ~/.claude/skills/archify/bin/archify.mjs deliver architecture \
+#   docs/architecture/<name>.archify.json docs/architecture/<name>.html --quality showcase
+docs/architecture/*.html
+docs/architecture/*.visual-check.*
