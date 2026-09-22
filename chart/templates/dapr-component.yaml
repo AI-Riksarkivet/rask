@@ -443,6 +443,19 @@ spec:
     - { name: maxDeliver, value: "5" }
     - { name: backOff, value: "720s,720s,720s,720s" }
     {{- end }}
+    {{- /*
+       DELIVER NO MORE THAN THE FLEET CAN RUN, which is why this is DERIVED and not chosen. `ackWait`
+       above runs from DELIVERY, so a unit queued behind others burns its whole 720s window while idle
+       and is then redelivered — and two concurrent passes over one dataset is exactly the race the
+       executor's single-flight lock exists to prevent. Setting nothing here means NATS's default of
+       1,000 in flight against an execution ceiling of `maxConcurrentUnits x replicas`; measured live
+       2026-09-22 as `Max Ack Pending: 1,000` versus 40 x 2, and a manual sweep drove `Ack Pending`
+       181 -> 721 with a redelivery.
+
+       It bounds DELIVERY, not memory: the same number of units still execute at once. Pinned by
+       tests/unit/test_a_work_unit_is_not_delivered_before_it_can_run.py.
+    */}}
+    - { name: maxAckPending, value: "{{ mul .Values.maintenance.dedicatedWorkers.maxConcurrentUnits (int .Values.maintenance.dedicatedWorkers.replicas) }}" }
 scopes:
   - {{ .Values.maintenance.daprAppId }}
   {{- /*

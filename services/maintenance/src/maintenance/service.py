@@ -26,6 +26,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
+import anyio.to_thread
 from dapr.aio.clients import DaprClient
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
@@ -104,6 +105,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.shutting_down = False
     settings = get_settings()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
+    # APPLY THE EXECUTION CEILING, because the broker's delivery bound is derived from it. `execute_unit`
+    # runs through `run_in_threadpool`, whose limit is anyio's process-global thread limiter; leaving it
+    # at the library default makes `maxAckPending` a number computed from something nobody chose. Set
+    # here rather than at the call site: the limiter is process-global, so one assignment at boot is the
+    # honest shape and a per-request one would race. Pinned by
+    # tests/unit/test_a_work_unit_is_not_delivered_before_it_can_run.py.
+    anyio.to_thread.current_default_thread_limiter().total_tokens = settings.max_concurrent_units
     # Fail closed if behind a Dapr sidecar but the app-token is unset — the cron route would otherwise be an
     # open forged-sweep path (symmetric with the lineage service). No-op in dev (dapr_enabled off).
     assert_app_token_configured(dapr_enabled=settings.dapr_enabled)

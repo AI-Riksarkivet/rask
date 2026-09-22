@@ -119,6 +119,11 @@ spec:
             {{- if .Values.maintenance.workTopic }}
             - { name: MAINTENANCE_WORK_PUBSUB, value: {{ .Values.maintenance.workPubsub | quote }} }
             - { name: MAINTENANCE_WORK_TOPIC, value: {{ .Values.maintenance.workTopic | quote }} }
+            {{- /* The execution ceiling this pod actually applies to its threadpool, and the number the
+                 work component's `maxAckPending` is derived from. Passed rather than assumed so the two
+                 cannot drift: a delivery bound computed from a ceiling the process does not enforce is a
+                 bound nobody applies. */}}
+            - { name: MAINTENANCE_MAX_CONCURRENT_UNITS, value: {{ .Values.maintenance.dedicatedWorkers.maxConcurrentUnits | quote }} }
             - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
             {{- if .Values.maintenance.indexTopic }}
             # The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a

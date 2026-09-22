@@ -151,6 +151,18 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: chart decision, never a code default. Mirrors Lakekeeper, which disables workers on its API pods
     #: with `LAKEKEEPER__TASK_EXPIRE_SNAPSHOTS_WORKERS=0` and runs dedicated worker pods beside them.
     execute_work: bool = Field(default=True, alias="MAINTENANCE_EXECUTE_WORK")
+    #: How many work units this pod may EXECUTE at once — the ceiling the broker's `maxAckPending` is
+    #: derived from (`maxConcurrentUnits x replicas`, rendered in `dapr-component.yaml`).
+    #:
+    #: IT EXISTS TO MAKE THE CEILING A DECISION. `execute_unit` runs through `run_in_threadpool`, so
+    #: without this the real limit is anyio's default thread limiter — 40 — which nobody chose and an
+    #: upstream change could move underneath the delivery bound derived from it.
+    #:
+    #: DEFAULT 40 IS TODAY'S EFFECTIVE CEILING, deliberately, so declaring it changes no throughput.
+    #: It is NOT sized for memory: 40 concurrent compactions in a 4Gi pod is ~100MB each before the
+    #: limit, and no tier here has yet run a compaction that rewrites fragments, so there is no
+    #: per-unit figure to size against ([[LH-188]]).
+    max_concurrent_units: int = Field(default=40, gt=0, alias="MAINTENANCE_MAX_CONCURRENT_UNITS")
     #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
     #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
     #: per-dataset boundary was supposed to fix.

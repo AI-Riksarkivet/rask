@@ -1567,6 +1567,22 @@ maintenance:
   dedicatedWorkers:
     enabled: true
     replicas: 2
+    # How many units ONE worker may execute at once, and the number the work queue's `maxAckPending`
+    # is derived from (`maxConcurrentUnits x replicas`). It exists so the ceiling is a DECISION: without
+    # it the real limit is anyio's default thread limiter — 40 — which nobody chose and an upstream
+    # change could move underneath the delivery bound.
+    #
+    # DELIVER NO MORE THAN CAN RUN. `ackWait` runs from DELIVERY, not from the start of execution, so a
+    # unit sitting behind others burns its 720s window while idle and is redelivered — and a redelivered
+    # compaction runs twice on one dataset, which is the race the in-process single-flight lock exists
+    # to prevent. Measured 2026-09-22: `Max Ack Pending: 1,000` (NATS's default) against 40 x 2 that can
+    # actually run.
+    #
+    # PROVISIONAL, and deliberately equal to today's effective ceiling so this is not also a throughput
+    # change. It is NOT sized for MEMORY: 40 concurrent compactions in a 4Gi pod is ~100MB each before
+    # the limit, and no tier in this estate has yet run a compaction that rewrites fragments, so there is
+    # no per-unit figure to size against. Lower it when there is one.
+    maxConcurrentUnits: 40
     resources:
       requests: { cpu: 250m, memory: 1Gi }
       # Sized for the WORK, unlike the planner's 512Mi. Compaction reads whole fragments: on bronze,
