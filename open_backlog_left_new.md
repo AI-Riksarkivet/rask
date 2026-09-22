@@ -1192,6 +1192,14 @@ have no `uv.lock` and so cannot be built to emit anything.
 - **RAISING `maxAckPending` MAKES IT WORSE, which is the counter-intuitive part:** the bound is exactly
   how many units a restart can orphan. The lane that was unbounded (NATS's 1,000) could orphan a
   thousand.
+- **THE WHOLE CYCLE WAS WATCHED END TO END, so the mechanism is observed rather than inferred.**
+  Last delivery `09:55:57`; the consumer then sat frozen for twelve minutes while `num_pending` grew
+  by exactly one tick's injection each sample. Recovery, to the second:
+  `10:07:26 ack_pending=80/72 outcomes=0` · `10:07:51 ack_pending=72/72 redelivered=0 -> 18,
+  pending 7,270 -> 7,220` · `10:07:57 outcomes_last_60s=51`.
+  **Delivery resumed 11m54s after it stopped — `ackWait` is 12m0s.** `redelivered` moving off zero is
+  the expiry releasing them; nothing else changed, no pod restarted, no configuration was touched. So
+  the recovery time IS `ackWait`, exactly, and that is the number any remedy has to beat.
 - **THE DRAIN MACHINERY ALREADY EXISTS AND DOES NOT COVER THIS, which narrows the remedy.** The app
   arms a drain on SIGTERM (`service_kit.draining.arm_drain_on_sigterm`) and `work.py:87-98` answers a
   NEW delivery with `retry_when_draining` — "ask for redelivery rather than start work". The pod has
