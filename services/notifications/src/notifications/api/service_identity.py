@@ -57,4 +57,25 @@ def feed_token(settings: IngressSettings) -> SecretStr | None:
     resolver = dedicated_token_for(settings)
     if resolver is not None and (own := resolver(settings.service_identity)):
         return SecretStr(own)
+    # THE SHARED FALLBACK IS THE SAME SECRET THE INBOUND DOORS AUTHENTICATE AGAINST, so it is read
+    # through the SAME resolver. `expected_app_token()` returns the Dapr store's value when
+    # `RASK_APP_TOKEN_FROM_STORE` is set and the env value otherwise; `settings.app_api_token` is
+    # env-only, and on a store-path deployment the two disagree — which is every deployment the
+    # estate's secrets rule produces.
+    #
+    # Measured live 2026-09-22: `POST /notifications-reconcile-cron` answered 500 3,087 times, ~9.6
+    # per five minutes, each an unhandled 401 from `invoke/lineage/method/events`. This fallback was
+    # `None`, so `_headers()` sent NEITHER header and lineage routed the walk to OIDC. The reconciler
+    # exists because the bus alone is provably incomplete, so what was lost is not a retry — it is
+    # every event only the walk could have caught.
+    #
+    # `medallion.outbound_app_token` and `maintenance.catalog_identity` carry this same fix for the
+    # same reason; this was the subject left reading env.
+    #
+    # IT DOES NOT CATCH `SecretStoreUnreadable`: a store outage must not degrade into an
+    # unauthenticated request, which turns a transient condition into a 401 raised a service away.
+    from service_kit.governed import dapr_auth
+
+    if resolved := dapr_auth.expected_app_token():
+        return SecretStr(resolved)
     return settings.app_api_token

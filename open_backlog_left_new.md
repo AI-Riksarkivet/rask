@@ -2396,6 +2396,32 @@ have no `uv.lock` and so cannot be built to emit anything.
 **CTL-021 · notifications cannot present a dedicated lineage credential: its reconciler reaches lineage through Dapr service invocation and daprd overwrites dapr-api-token**
 `notifications, lineage, chart` · **MED**
 - **blocked:** Move the notifications reconciler's `GET /events` call off Dapr service invocation onto direct HTTP (as ingest does), or accept that sidecar-invoked hops authenticate as the estate
+- **THE ROW'S PREMISE WAS WRONG AND THE LANE WAS DEAD — MEASURED LIVE 2026-09-22, FIXED HERE.** The
+  choice is framed as dedicated-credential vs "authenticate as the estate", which reads as though the
+  second was what the reconciler did. It was not authenticating at all. `POST
+  /notifications-reconcile-cron` answered **500 three thousand and eighty-seven times** (~9.6 per five
+  minutes, still climbing when found), every one an unhandled `httpx` 401 from
+  `invoke/lineage/method/events`; lineage's own counter shows the matching **401 x 169**. So the
+  durable half of the notifications design — the walk that exists *because the bus alone is provably
+  incomplete*, for ingest, Ray TRAIN and external OpenLineage producers that emit over HTTP only — has
+  **never run**, on a Ready pod with a healthy bus lane beside it.
+- **THE CAUSE IS A SECOND ACCESSOR FOR ONE SECRET, not the transport this row is about.**
+  `feed_token()` fell back to `settings.app_api_token`, which is env-only, while the pod carries
+  `RASK_APP_TOKEN_FROM_STORE=true` and no `APP_API_TOKEN` — so it resolved to `None`, `_headers()`
+  sent NEITHER header (both-or-neither, by design), and lineage routed the walk to OIDC. It now reads
+  `dapr_auth.expected_app_token()`, the same single resolver the INBOUND doors use, with the env value
+  kept as the fallback behind it. **`medallion` and `maintenance` already carried this exact fix**
+  (medallion's measured at 2,700 failed catalog calls in twenty-five minutes); this subject was the
+  one left reading env, and `ingest` is moved with it — not live there, because its dedicated resolver
+  answers first, but the same second accessor waiting for the day that path is turned off.
+- **GATED ESTATE-WIDE, because three sites fixed three times is a class rather than three bugs:**
+  `tests/unit/test_an_outbound_credential_follows_the_token_to_the_store.py` refuses any production
+  function that reads `app_api_token` without reaching `expected_app_token`, plus a leg that fails if
+  the walk finds nothing. Both mutation-checked.
+- **WHAT THIS DOES NOT DECIDE:** the ruling stands exactly as written. The shared-token path now
+  WORKS; whether this hop should instead move to direct HTTP and present a dedicated credential is
+  still open, and the fix here is what the row's second branch actually requires in order to be a
+  real option rather than a description of a lane that was dark.
 - *What is left:* Take the ruling. If direct HTTP: change `IngressSettings.feed_base_url` (`services/notifications/src/notifications/api/settings.py:157-181`, which routes through `127.0.0.1:3500/v1.0/invoke/lineage/method` when Dapr is on) to call lineage's own URL so the dedicated token survives, add `notifications` to the lineage-privileged subject list in `chart/templates/services.yaml` (deliberately absent, lines 718-726), and re-drive both directions at lineage's service door as ingest's were (own token 200, shared bearer 401). If accepted: record the boundary in `docs/DECISIONS.md`.
 - *Closes when:* Either the reconciler authenticates at lineage with its own credential in both directions, or the estate-identity boundary is recorded in docs/DECISIONS.md.
 - *Evidence:* `services/notifications/src/notifications/api/settings.py:157-181` · `chart/templates/services.yaml:718-726`

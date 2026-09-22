@@ -89,3 +89,56 @@ def test_the_token_never_leaves_SecretStr() -> None:
     resolved = service_identity.feed_token(_settings(RASK_NOTIFICATIONS_SECRETS_FROM_DAPR=False))
     assert isinstance(resolved, SecretStr)
     assert "the-shared-bearer" not in repr(resolved)
+
+
+def test_the_shared_fallback_follows_the_token_to_the_STORE(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fallback is the SAME secret the inbound doors authenticate against, so it must be read the
+    same way. `expected_app_token()` is that one resolver — store when `RASK_APP_TOKEN_FROM_STORE` is
+    set, env otherwise — and reading `settings.app_api_token` directly is a second accessor that
+    disagrees with it on exactly the deployments the estate's secrets rule produces.
+
+    MEASURED LIVE 2026-09-22, which is why this leg exists: `POST /notifications-reconcile-cron`
+    answered **500 three thousand and eighty-seven times**, ~9.6 per five minutes, every one an
+    unhandled `httpx` 401 from `invoke/lineage/method/events`. The pod carries
+    `RASK_APP_TOKEN_FROM_STORE=true` and no `APP_API_TOKEN`, so this fallback resolved to `None`,
+    `_headers()` sent NEITHER header (both-or-neither), and lineage routed the walk to OIDC. The
+    reconciler exists because the bus alone is provably incomplete; it has therefore never run.
+
+    Every sibling already moved: `medallion.outbound_app_token` and `maintenance.catalog_identity`
+    both carry this reasoning and this fix, measured on their own outages (2,700 failures in
+    twenty-five minutes, on medallion's). This subject was the one left reading env.
+
+    THE EXISTING LEGS COULD NOT HAVE CAUGHT IT: `_settings()` supplies `APP_API_TOKEN` in its base, so
+    the fallback always had an env value to find — the deployment shape that breaks is the one with
+    none."""
+    from service_kit.governed import dapr_auth
+
+    monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _s: None)
+    monkeypatch.setattr(dapr_auth, "expected_app_token", lambda: "the-token-from-the-store")
+
+    token = service_identity.feed_token(_settings(APP_API_TOKEN=None))
+
+    assert token is not None, (
+        "the outbound credential resolved to None on a store-path deployment, so `_headers()` sends "
+        "neither service header and lineage answers 401 — a reconciler that never runs"
+    )
+    assert token.get_secret_value() == "the-token-from-the-store"
+
+
+def test_an_unreadable_store_raises_on_the_SHARED_path_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The sibling leg above covers the DEDICATED resolver; this covers the shared fallback, which
+    reads the same store through `expected_app_token()`. Degrading either to an unauthenticated
+    request turns a transient, retryable outage into a 401 raised one service away — the reconciler
+    would report a permission problem for a condition that heals by itself."""
+    from service_kit.governed import dapr_auth
+
+    class _Unreadable(RuntimeError): ...
+
+    def _explode() -> str | None:
+        raise _Unreadable("the store is unreachable")
+
+    monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _s: None)
+    monkeypatch.setattr(dapr_auth, "expected_app_token", _explode)
+
+    with pytest.raises(_Unreadable):
+        service_identity.feed_token(_settings(APP_API_TOKEN=None))

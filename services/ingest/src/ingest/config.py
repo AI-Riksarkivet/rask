@@ -195,7 +195,7 @@ class IngestSettings(BaseSettings):
         about — would win and the estate token would never be tried. `or` treats blank as absent,
         which is what the two `os.getenv(...) or os.getenv(...)` call sites this replaces did.
         """
-        return self.catalog_app_token_override or self.app_api_token
+        return self.catalog_app_token_override or _shared_app_token(self)
 
     #: Whether a vending FAILURE may sign the run's bytes with the pod's ambient credential.
     #:
@@ -226,7 +226,30 @@ class IngestSettings(BaseSettings):
     @property
     def lineage_app_token(self) -> str | None:
         """The token presented to the lineage door. Same fallback, same reason, as the catalog's."""
-        return self.lineage_app_token_override or self.app_api_token
+        return self.lineage_app_token_override or _shared_app_token(self)
+
+
+def _shared_app_token(config: IngestSettings) -> str | None:
+    """The estate's shared token, read through the resolver the INBOUND doors use.
+
+    `expected_app_token()` returns the Dapr store's value when `RASK_APP_TOKEN_FROM_STORE` is set and
+    the env value otherwise; `config.app_api_token` is env-only, so on a store-path deployment the two
+    disagree — and this service runs on one (measured live 2026-09-22:
+    `RASK_APP_TOKEN_FROM_STORE=true`).
+
+    NOT A LIVE DEFECT HERE, and saying so is the point of writing it down: ingest is privileged at both
+    doors and `RASK_INGEST_SECRETS_FROM_DAPR=true`, so the dedicated resolver answers and this fallback
+    is unreached in production. It becomes one the moment the dedicated path is turned off while the
+    estate's token stays in the store — every outbound call then goes out unauthenticated, silently.
+    `notifications` is what that looks like: 3,087 cron failures against a reconciler that had never
+    run.
+
+    IT DOES NOT CATCH `SecretStoreUnreadable`: a store outage must not degrade into an unauthenticated
+    request, which turns a transient condition into a 401 raised a service away.
+    """
+    from service_kit.governed import dapr_auth
+
+    return dapr_auth.expected_app_token() or config.app_api_token
 
 
 def settings() -> IngestSettings:
