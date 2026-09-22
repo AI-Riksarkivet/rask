@@ -395,6 +395,22 @@ of mine in this same session.**
   where the format puts it — table verbs plus the vend's `tree/<branch>/` prefix. Re-measured
   independently in that pass: parsing `spec.yaml` yields **exactly two path variables in 6,742 lines**,
   `{id}` x51 and `{index_name}` x2. There is no branch, column or base address anywhere.
+- **THE CORRECTED `estate` TYPE, DERIVED FROM THE CALL SITES RATHER THAN FROM THE PRECEDENT
+  (2026-09-22).** The refutations above were re-checked at source and they hold: `compute/security.py:39`
+  and `controlplane/security.py:42` both declare `READ = "reader"` and check it on
+  `settings.fga_root_object`, gating their WHOLE routers; `flows/security.py:18` checks the **`writer`**
+  tier on the same object, "not a `can_*` verb", and passes the bootstrap owner through
+  `writer: ... or owner`. A `type estate` carrying only the ruling's admin/operator/project plus four
+  `can_*` rungs would refuse every one of them on the day `fga_root_object` is repointed.
+  **So the type must declare, at minimum:** `reader` and `writer` (the tiers three services gate on),
+  `owner` (`can_observe_events: owner`, `can_browse_storage: owner`), `event_stager` (because
+  `can_stage_events: event_stager or owner` is NOT a pure computed userset and does not migrate like
+  its two neighbours), plus the ruling's `admin` / `operator` / `project` and the four rungs.
+- **AND THE REPOINT IS A TUPLE MIGRATION, NOT A CHECK MIGRATION — the part most likely to be missed.**
+  `fga.parent_object()` returns `fga_root_object` as the PARENT of every top-level namespace, and
+  `namespace#parent` is typed, so changing the root changes what every `namespace` tuple points AT.
+  Any port must write the new parent tuples before the repoint and keep the old ones until after it,
+  or top-level namespace creation fails on a type mismatch rather than on a permission.
 - *Closes when:* model.fga declares a column relation and an estate type, carries a machine identity
   and a `can_set_protection` rung, every new rung has a .fga.yaml case, and `fga_root_object` names the
   estate object. **NOT a `branch` type** — this row established that one would invent a resource
