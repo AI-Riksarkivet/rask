@@ -1531,23 +1531,25 @@ maintenance:
   # Declared so the sweep's cadence and the queue's capacity can be compared — they are set in
   # different files and nothing compared them until a lane stalled.
   #
-  # MEASURED 2026-09-22 FROM THE UNIT ITSELF — every log line of a unit's trace id, first to last:
-  # 19 traces, median 0.12s, p90 0.60s, max 1.17s. Declared as 1, the p90 rounded up. A no-op unit is
-  # two HTTP calls and a base-ref pre-pass of ~16 reads at ~8ms, and that is all it is.
+  # END-TO-END SECONDS PER UNIT, and it is deliberately NOT the handler's duration. Measured
+  # 2026-09-22 from `ack_floor` deltas on a settled lane — 6 samples of 30s, 158 +/- 18 units acked
+  # each, 5.25 units/sec at 72 in flight: **13.7s per unit end to end**, declared as 14.
   #
-  # THREE EARLIER READINGS OF THIS SAME NUMBER WERE ALL CONTAMINATED, and by the same thing: a worker
-  # restart ORPHANS every in-flight unit, and JetStream delivers nothing further until `ackWait`
-  # (720s) expires on them. Rates read inside that window — 1.15/sec at 6 in flight, 3.28/sec at 72 —
-  # measure the orphan block, not the unit, and yielded "5.2s" and then "22s" per unit against a real
-  # 0.21s. Read this from the TRACE SPAN, never from a drain rate, and never within ackWait of a
-  # deploy.
+  # THE HANDLER IS 0.21s (19 trace spans, median 0.12s, p90 0.60s). Both figures are right and they
+  # answer different questions: the span measures the work, this measures what the LANE costs per
+  # unit — dispatch, ack round-trip and queueing included. Only the second decides whether a sweep's
+  # output can be absorbed, and using the first here made this gate demand 5 units in flight where
+  # ~70 are needed, which would have certified a lane that could not keep up.
   #
-  # `datasets / (schedule seconds) * secondsPerUnit` is how many units must be in flight to keep up.
-  # At 600 datasets, 120s and 1s that is 5 — so throughput was never the constraint; the orphan
-  # window was. tests/unit/test_the_lane_can_keep_up_with_its_own_sweep.py holds the floor anyway,
-  # because a slower unit (a real rewrite) moves the figure and nothing else would notice.
+  # READ IT FROM `ack_floor`, ON A SETTLED LANE. Earlier attempts read a drain RATE within `ackWait`
+  # of a deploy, where a worker restart strands every in-flight unit ([[LH-190]]) and delivery halts
+  # entirely; those windows produced "5.2s" and then "22s" for this same quantity.
+  #
+  # MARGIN IS THIN AND THAT IS THE POINT OF DECLARING IT: `datasets / schedule * secondsPerUnit` is
+  # 600/120 x 14 = 70 against the 72 the lanes admit. The estate measured 5.25/sec against 4.75
+  # injected, so it keeps up by ~11% — and this gate turns red as soon as it stops.
   expectedDatasets: 600
-  secondsPerUnit: 1
+  secondsPerUnit: 14
   # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
   # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
   # files, which is why it gets its own schedule instead of inheriting that one.
