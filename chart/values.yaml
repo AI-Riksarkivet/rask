@@ -1582,17 +1582,30 @@ maintenance:
     # to prevent. Measured 2026-09-22: `Max Ack Pending: 1,000` (NATS's default) against 40 x 2 that can
     # actually run.
     #
-    # PROVISIONAL, and deliberately equal to today's effective ceiling so this is not also a throughput
-    # change. It is NOT sized for MEMORY: 40 concurrent compactions in a 4Gi pod is ~100MB each before
-    # the limit, and no tier in this estate has yet run a compaction that rewrites fragments, so there is
-    # no per-unit figure to size against. Lower it when there is one.
-    maxConcurrentUnits: 40
+    # MEASURED 2026-09-22, which is what this number now rests on. A table of 240 MiB in 60 fragments
+    # (4 rows x 1 MiB per fragment) was built through the catalog and left for the sweep. Sampling
+    # /proc/1/status inside the worker every 2s across the compaction:
+    #
+    #   baseline 294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> 729 -> 380 -> 316 -> 431 -> 317Mi
+    #
+    # ONE unit peaked at 729Mi, +434 MiB over its own baseline, and released cleanly (+22Mi retained).
+    # The peaks line up with the three commit passes the log records (fragments_removed 5, 14, 9).
+    #
+    # SO THE CEILING FOLLOWS FROM THE LIMIT, not from a preference: (4Gi - ~320Mi baseline) / 434 MiB
+    # is ~8 units. The chart's own sizing note above puts bronze rows at ~1.8 MB against the 1 MiB used
+    # here, so a real tier costs more per unit; 4 keeps a factor of two in hand. It was 40 — anyio's
+    # default thread limiter — which would have admitted ~17 GB of concurrent rewrite into a 4Gi pod.
+    #
+    # WHAT THE FIGURE DOES NOT CARRY: the sample interval is 2s, so a sharper peak between samples is
+    # possible and 434 MiB is a lower bound. Throughput is unaffected in practice — a tick plans ~568
+    # units and all but a handful are no-ops of ~100ms, which 4 at a time still drains in seconds.
+    maxConcurrentUnits: 4
     # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
     # A reservation, not a measurement — an index build holds its token far longer than a compaction
     # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool
     # would starve the lane that runs every 120s, and letting compaction take it would leave a build
     # delivered with nothing to run it while its hour-long window burns.
-    indexConcurrentUnits: 4
+    indexConcurrentUnits: 1
     resources:
       requests: { cpu: 250m, memory: 1Gi }
       # Sized for the WORK, unlike the planner's 512Mi. Compaction reads whole fragments: on bronze,

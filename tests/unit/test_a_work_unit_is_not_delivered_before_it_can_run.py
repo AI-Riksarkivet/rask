@@ -168,13 +168,25 @@ def test_the_JOB_and_the_COMPONENT_agree_on_the_number() -> None:
     assert int(found.group(1)) == component, f"the Job converges to {found.group(1)} while the component sets {component}"
 
 
-@pytest.mark.parametrize(("index_share", "should_render"), [(4, True), (39, True), (40, False), (41, False)])
-def test_an_index_share_that_swallows_the_pool_FAILS_THE_RENDER(index_share: int, should_render: bool) -> None:
+def _declared_total() -> int:
+    """`maintenance.dedicatedWorkers.maxConcurrentUnits` as the chart declares it.
+
+    DERIVED, NOT HARD-CODED. This leg first spelled the boundary as literals against a total of 40 and
+    went red the moment the total was lowered to a MEASURED value — a test asserting the number rather
+    than the relationship, which is the thing it exists to protect.
+    """
+    workers = [d for d in render(*DEFAULT_ARGS) if d.get("kind") == "Deployment" and "maintenance-worker" in d["metadata"]["name"]]
+    env = {e["name"]: str(e.get("value", "")) for c in workers[0]["spec"]["template"]["spec"]["containers"] for e in c.get("env", [])}
+    return int(env[WORKER_ENV])
+
+
+@pytest.mark.parametrize("offset", [-1, 0, +1])
+def test_an_index_share_that_swallows_the_pool_FAILS_THE_RENDER(offset: int) -> None:
     """A share at or above the total leaves the compaction lane with zero or negative capacity.
 
     Refused where an operator is reading rather than where a consumer is failing: the runtime symptom
     is a lane that delivers nothing, or an invalid consumer config, and neither names the values file.
-    Same reasoning as the multibase allowlist cross-check.
+    Walked as total-1 / total / total+1 so the boundary moves with the declared number.
     """
     import shutil
     import subprocess
@@ -182,13 +194,16 @@ def test_an_index_share_that_swallows_the_pool_FAILS_THE_RENDER(index_share: int
     helm = shutil.which("helm") or str(REPO / ".localbin/helm")
     if not pathlib.Path(helm).exists():
         pytest.skip("helm not available")
+    index_share = _declared_total() + offset
+    if index_share < 1:
+        pytest.skip(f"a total of {_declared_total()} leaves no legal share below it to test")
     argv = [
         helm, "template", "rask", str(REPO / "chart"),
         *OIDC_ARGS, *DEFAULT_ARGS,
         "--set", f"maintenance.dedicatedWorkers.indexConcurrentUnits={index_share}",
     ]  # fmt: skip
     done = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
-    if should_render:
+    if offset < 0:
         assert done.returncode == 0, f"a legal index share of {index_share} failed to render: {done.stderr[-500:]}"
     else:
         assert done.returncode != 0, f"an index share of {index_share} rendered, leaving the compaction lane with no capacity"

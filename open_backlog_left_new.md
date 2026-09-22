@@ -1215,17 +1215,28 @@ have no `uv.lock` and so cannot be built to emit anything.
   failure rather than a simulation: overlapping two converges produced
   `Error: UPGRADE FAILED: another operation (install/upgrade/rollback) is in progress` followed by
   `!! helm upgrade FAILED (exit 1) — the release was NOT converged` and a non-zero make exit.
-- *What is left:* **The MEMORY half only.** `maxConcurrentUnits: 40` is PROVISIONAL and both the chart
-  and the setting say so — it is today's effective ceiling, chosen so declaring it changed no
-  throughput, and it is NOT sized for memory: 40 concurrent compactions in a 4Gi pod is ~100MB each
-  before the limit. Sizing it needs a per-unit figure this estate still cannot produce, because no
-  tier has yet run a compaction that rewrites fragments. Capture one when such a tier lands and lower
-  the number; the delivery bounds follow from it automatically.
-- *What is left:* Decide the bound. `maxAckPending` on the work pubsub component is the direct lever;
-  the threadpool limiter is the other. THE NUMBER SHOULD BE MEASURED, NOT PICKED — nothing in this
-  estate has yet run a compaction that rewrites fragments, so there is no per-unit memory figure to
-  size against. Capture one when a tier with real rewrite work lands, or set a deliberately
-  conservative ceiling in the meantime and say it is provisional.
+- **THE MEMORY HALF IS NOW MEASURED, AND IT SAYS 40 WAS WRONG BY AN ORDER OF MAGNITUDE (2026-09-22).**
+  The figure this row called impossible to produce — "no tier has yet run a compaction that rewrites
+  fragments" — was produced by BUILDING one: a 240 MiB table in 60 fragments (4 rows x 1 MiB each)
+  written through the catalog's own door and left for the sweep. Sampling `/proc/1/status` inside the
+  worker every 2s across the compaction:
+  `baseline 294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> **729** -> 380 -> 316 -> 431 -> 317Mi` and
+  then flat for 60s. **ONE unit peaked at +434 MiB over its own baseline and released cleanly**
+  (+22Mi retained); the peaks line up with the three commit passes the log records
+  (`fragments_removed` 5, 14, 9), and the second worker showed the same shape at +128Mi.
+  **So the ceiling follows from the pod limit rather than from a preference:**
+  `(4Gi - ~320Mi baseline) / 434 MiB` is ~8 units, and the chart's own sizing note puts bronze rows at
+  ~1.8 MB against the 1 MiB used here, so `maxConcurrentUnits` is now **4** (index share 1), keeping a
+  factor of two in hand. At 40 the lane admitted ~17 GB of concurrent rewrite into a 4Gi pod.
+  **WHAT THE FIGURE DOES NOT CARRY:** the sample interval is 2s, so a sharper peak between samples is
+  possible and 434 MiB is a LOWER BOUND. Throughput is unaffected in practice — a tick plans ~568
+  units of which all but a handful are ~100ms no-ops, which 4 at a time still drains in seconds.
+  **THE FIRST ATTEMPT MEASURED NOTHING AND LOOKED LIKE A RESULT:** the sampler was started 19s AFTER
+  the compaction had already committed (09:28:14Z against 09:27:55Z — the host is UTC+2 and the pod
+  logs are UTC), and reported a 3Mi swing on an idle worker. A 240 MiB compaction costing 3 MiB is
+  plausible enough to publish. The window is established against the event before the number is read.
+- *What is left:* **Nothing on the ack-window or the memory axis.** Both bounds are now measured
+  rather than picked.
 - *Closes when:* The number of units a worker may hold is a value someone chose, with the measurement
   behind it recorded, and a gate refuses a work component that sets none.
 - *Evidence:* live `consumer info` 2026-09-22 (`Max Ack Pending: 1,000`, `Flow Control: false`,
