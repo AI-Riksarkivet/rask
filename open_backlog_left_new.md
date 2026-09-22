@@ -203,6 +203,20 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## PHASE 1 · LAKEHOUSE
 
+**CRITERION 5 (resilient) HELD THROUGH THREE DEPLOYS — measured 2026-09-22 after the day's converges**
+`maintenance` · OBSERVATION, not a row
+- Read off the broker rather than inferred: `maintenance-work-durable` reports **`Unprocessed
+  Messages: 0`**, **`Redelivered Messages: 0`**, and **`Max Ack Pending: 72`** — so [[LH-188]]'s
+  derived bound is live on the consumer, nothing is queued undelivered, and no unit has ever exceeded
+  the ack window and been redelivered.
+- **THREE CONVERGES LANDED TODAY** (`main-a265ce25`, `main-fc1b8bfd` on two stems) and the lane is at
+  zero afterwards, so whatever [[LH-190]]'s restart window cost was, it cleared on its own. That is
+  the row's severity confirmed rather than softened: LH-190 is a TIMELINESS defect, not a durability
+  one, and the evidence is that the backlog it creates drains without intervention.
+- Every pod Running, and the only non-zero restart counts in the estate belong to infrastructure
+  operators (dapr-operator, kuberay-operator, cnpg, greptimedb) rather than to any of the four
+  lakehouse services.
+
 **THE BLOCKERS WERE AUDITED AND THEY ARE REAL — measured 2026-09-22, and it CORRECTS an earlier claim
 of mine in this same session.**
 `OBSERVATION, not a row`
