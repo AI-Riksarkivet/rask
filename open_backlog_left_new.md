@@ -1215,6 +1215,12 @@ have no `uv.lock` and so cannot be built to emit anything.
   which is what makes the reading suggestive. **NOT TESTED DIRECTLY:** confirming it means watching
   `daprd` logs through a termination, which costs another full outage, so it is recorded as the
   inference it is rather than as a result.
+- **IT COSTS TIMELINESS, NOT DURABILITY, and that bounds how urgent the remedy is.** The stream is
+  `Retention: WorkQueue`, `Maximum Age: 7d`, messages and bytes unlimited, holding **7,350 units in
+  6.8 MiB** at the peak of the outage — ~1 KB each, which is the claim-check POINTER shape working as
+  designed. Nothing is dropped and nothing is lost: a stalled lane means maintenance runs LATE, and
+  the next tick re-plans whatever is still owed anyway. So this is a resilience defect about
+  RECOVERY TIME, not about work disappearing, and it should be weighed as one.
 - *What is left:* Decide how a shutting-down worker releases what it holds. The candidates are a
   graceful drain on SIGTERM (finish or NAK the outstanding units, so they redeliver at once rather
   than after 720s), a shorter `ackWait` (bounded below by the longest single compaction, so it cannot
