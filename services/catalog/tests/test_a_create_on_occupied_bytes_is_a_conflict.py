@@ -18,6 +18,14 @@ is the actionable fact, and it is the one thing the 500 withheld.
 THE SIBLING TRANSLATION IN THE SAME `except OSError` IS THE MODEL: it matches lance's specific phrase
 rather than a broad word, so a genuine infra OSError still surfaces as a 500 rather than being
 mislabelled a client error.
+
+NAMING THE LOCATION IS NOT A DISCLOSURE, and it is worth writing down because it looks like one.
+`fastapi/exception-handlers.md` says a response body never carries file paths, and the location that
+surfaced here was in ANOTHER warehouse's bucket than the caller named. It is still safe: the spec's
+own `CreateTableResponse` carries `location` as a plain field, so a SUCCESSFUL create on this exact
+call returns the same string. A 409 that withheld it would tell the caller less than the 200 would,
+for a request they are already authorized to make. The rule bites on paths the API does not publish —
+tracebacks, server filesystem, driver internals — not on a resource location the contract names.
 """
 
 from __future__ import annotations
