@@ -1562,6 +1562,53 @@ of mine in this same session.**
 
 ## PHASE 1 · CROSS-CUTTING
 
+**THE CHART CI GATE WAS DEAD FOR SEVEN WEEKS AND NOW PASSES — 2026-09-22**
+`chart, dagger` · OBSERVATION, not a row
+- `dagger call charts` is the estate's only coverage of the PRODUCTION render path: `renderArgs`
+  deliberately renders with a real registry rather than `image.localImages=true`, and the comment
+  beside it says why — all thirteen chart-render invariants in `tests/unit/test_invariants.py` take
+  the side-load path, so "the production path ... is rendered by NO test in the estate. This gate is
+  where that gets covered."
+- **IT EXITED 1 ON EVERY INVOCATION, and its own prose says it "has not RUN since 2026-08-04".** Found
+  by running it rather than by reading it. Three independent staleness faults, each a case of the
+  chart moving correctly while the gate asserted the shape it used to have:
+  1. **`prod-credentials.yaml` (landed 2026-09-11) refuses a real-registry render carrying well-known
+     dev credentials** — correctly, since "holding the repository is holding the credential". The gate
+     renders exactly that shape on purpose, so the two were in direct conflict from the day the guard
+     landed. `renderArgs` now supplies the four credentials a real deployment would, which changes
+     nothing the gate tests: the guard is about the SHAPE of the image reference.
+  2. **The retry assertions pinned `policy: exponential` / `duration: 30s` / a present `maxInterval`.**
+     The chart has rendered `constant` / `120s` / `4` since [[LH-106]] (2026-09-14) moved it because
+     the exponential shape delivered 3.5 seconds where both comments claimed 7.5 minutes, and the
+     template states why `maxInterval` is now omitted. The gate's own comment already promised to
+     assert "the INVARIANT the comments always claimed (the window), not the shape that happened to
+     implement it" — it asserted the shape anyway. It now computes the window per the RENDERED policy
+     and reports **`resiliency window 480s (120s x4)`**, inside its own 400-500s band and under the
+     broker's 720s step. The exponential-only branch also fixed an unevaluable comparison: with
+     `maxInterval` legitimately absent, the step-vs-cap test compared against an empty string.
+  3. **"Resiliency off means zero DLQ topics" stopped being true when the BYO-worker lanes arrived.**
+     Measured: ON renders LINEAGE(1), MEDALLION(4), NOTIFICATIONS(1), MAINTENANCE_WORK(2),
+     MAINTENANCE_INDEX(2); OFF renders only the two maintenance pairs, which have their own Dapr
+     components, their own ackWait and their own DLQ that the medallion retry policy does not govern.
+     The gate now names the three POLICY-GOVERNED topics, so a new lane wiring its own DLQ no longer
+     reds a gate about somebody else's retry policy.
+- **THE FIX BROKE THE MODULE SILENTLY ONCE, which is the part worth keeping.** A backtick written for
+  emphasis inside a shell comment TERMINATED the Go raw string holding the gate script. Dagger's
+  answer was `unknown command "charts" for "dagger call"` — the function vanished from the module
+  rather than failing to compile with a line number. The same character ran `make k3s-up` out of a
+  Makefile `echo` earlier in this estate's history.
+- **CI CONFIRMS IT, AND SHOWS THIS IS NOT THE ONLY RED LEG.** `gh run list` on the last completed run
+  (35726435185): **`ms-charts` failed**, which is this gate, alongside `ms-test`, `web-gate`,
+  `web-e2e`, `web-smoke` and `supply-chain-secrets` (the two `report-only` supply-chain legs are
+  labelled as such and do not gate). So CI is genuinely red across six gating jobs and the charts leg
+  is one of them — the gate was not "never run", it was run and its failure was not acted on.
+  **THE OTHER FIVE ARE NOT DIAGNOSED HERE** and this note must not be read as covering them: `ms-test`
+  in particular passes locally, so its CI failure is an environment question somebody has to open
+  separately rather than something this change touches.
+- *Net:* `dagger call charts --src=.` exits **0**. Seven weeks of chart changes were unverified by it;
+  they are verified now, and the three assertions it regained are written against invariants rather
+  than shapes so the next legitimate re-shaping is measured instead of refused.
+
 **XC-070 · The estate cannot be brought up on arm64: one chart image is amd64-only and the chart-lint container curls amd64 tooling**
 `deploy, chart, dagger` · **MED** · OPEN
 - **MEASURED 2026-09-22, prompted by the owner asking whether the estate can move to a DGX Spark
@@ -1586,16 +1633,36 @@ of mine in this same session.**
   * **`pylance` ships a manylinux aarch64 wheel** (12.0.0), which is the dependency that would have
     been fatal and silent.
   * `openbao:2.2.0` and `otel/opentelemetry-collector-contrib:0.157.0` are both multi-arch.
-- **NOT YET CHECKED, and named so the next pass does not mistake this for a complete survey:** nats,
-  openfga, greptimedb, rustfs, kueue, kuberay, cnpg, dex, `daprio/dashboard`, and the Ray images.
+- **THE SURVEY IS NOW COMPLETE, run against every image the LIVE cluster pulls (30 refs) rather than
+  against the chart's prose — 2026-09-22.** `apache/age` is the **only** confirmed amd64-only image in
+  the estate. Multi-arch with arm64, each read from the registry: `alpine/k8s`, `busybox`,
+  `curlimages/curl`, `daprio/dashboard`, `greptime/greptimedb`, `persesdev/perses`,
+  `cloudnative-pg`, all six `ghcr.io/dapr/*`, `dexidp/dex`, `external-secrets`, `nats`,
+  `natsio/nats-box` (both tags), `natsio/nats-server-config-reloader`, `openbao`, `openfga`,
+  `otel/opentelemetry-collector-contrib`, `quay.io/kuberay/operator`, `rancher/klipper-helm`,
+  `rancher/klipper-lb`.
+- **TWO ARE UNRESOLVED AND NEITHER IS EVIDENCE OF ANYTHING YET:** `minio/minio` and `minio/mc` both
+  answer **401** to an anonymous manifest read that succeeds for every other Docker Hub repo probed in
+  the same pass (`busybox:latest` answered immediately afterwards, so it is not rate limiting). Low
+  stakes either way — the chart's target object store is **RustFS**, not MinIO, and MinIO is what the
+  live dev cluster happens to run. `nvcr.io/nvidia/k8s-device-plugin` was skipped (NGC needs its own
+  credential) and is GPU-lane only.
+- **THE TOOLING HALF IS FIXED (2026-09-22).** `.dagger/charts.go` now reads the arch off the container
+  with `dpkg --print-architecture` for BOTH fetches — helm and prometheus spell it the same way
+  (`amd64`/`arm64`), so one substitution serves both and no translation table sits between them to
+  drift. Gated by `tests/unit/test_the_build_does_not_pin_one_cpu.py`, which scans every `.dagger/*.go`
+  including COMMENTS — a stale "the archive extracts to linux-amd64/" note beside a fixed fetch is
+  exactly what a later reader trusts — plus a leg that fails if the glob matches nothing.
+  Mutation-checked by reintroducing the literal.
 - **THE CONFIG-TRAVELS-WITH-THE-CODE RISK WAS CHECKED AND IS CLEAN.** An earlier write-up claimed
   `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS` "renders ZERO times from the chart" and existed "only as
   cluster drift", which would have meant a fresh install silently loses it. False at HEAD: it renders
   from `chart/values-local.yaml` and `chart/templates/services.yaml`, and the live pod carries it
   alongside `LANCE_MULTIBASE_DATA_BASES`. A machine move does not lose it.
-- *What is left:* Resolve the AGE image for arm64 (build, substitute, or move to the CNPG extension
-  path), parametrise the two `linux-amd64` curls in `.dagger/charts.go` off the build platform, and
-  finish the third-party image survey above.
+- *What is left:* Resolve the AGE image for arm64 — build it, substitute a distribution that ships
+  one, or move to the CNPG-with-extension path (`.docker/cnpg-age-ext.dockerfile`, gated off today by
+  `age.cnpgCluster.enabled: false`, and note it needs K8s 1.33+ with CNPG >= 1.27). That is the whole
+  of the remaining work: the tooling pins are fixed and the survey is done.
 - *Closes when:* `make k3s-install` -> `make k3s-up` brings the estate to Ready on an arm64 host, and
   `make check` passes there.
 - *Evidence:* `apache/age:release_PG16_1.5.0` config blob -> `linux/amd64` · `.dagger/charts.go:37,66`

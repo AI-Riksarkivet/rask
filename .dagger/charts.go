@@ -32,10 +32,13 @@ func helmBinary() *dagger.File {
 		From(chartsBaseImage).
 		WithExec([]string{"apt-get", "update"}).
 		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "curl", "ca-certificates"}).
-		// The official get.helm.sh archive extracts to linux-amd64/helm.
+		// The official get.helm.sh archive extracts to linux-<arch>/helm, and the arch is READ off the
+		// container rather than written here ([[XC-070]]). `dpkg --print-architecture` spells it exactly
+		// as get.helm.sh does — `amd64`, `arm64` — so no translation table sits between them to drift.
 		WithExec([]string{"sh", "-c",
-			"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-amd64.tar.gz" +
-				" | tar xz -C /tmp && install -m0755 /tmp/linux-amd64/helm /usr/local/bin/helm"}).
+			"set -eu; a=\"$(dpkg --print-architecture)\"; " +
+				"curl -fsSL https://get.helm.sh/helm-v" + helmVersion + "-linux-${a}.tar.gz" +
+				" | tar xz -C /tmp && install -m0755 /tmp/linux-${a}/helm /usr/local/bin/helm"}).
 		File("/usr/local/bin/helm")
 }
 
@@ -61,11 +64,14 @@ func (m *Rask) chartsBase(src *dagger.Directory) *dagger.Container {
 		// Pinned helm, shared with the pytest lane so the two cannot drift onto different Helm minors.
 		WithFile("/usr/local/bin/helm", helmBinary()).
 		// Pin promtool — same URL + version the CI job uses; the archive nests promtool under its dir.
+		// Arch read off the container for the same reason helm's is: prometheus spells it `amd64`/`arm64`
+		// too, so one `dpkg --print-architecture` serves both fetches.
 		WithExec([]string{"sh", "-c",
-			"curl -fsSL https://github.com/prometheus/prometheus/releases/download/v" + promVersion +
-				"/prometheus-" + promVersion + ".linux-amd64.tar.gz" +
+			"set -eu; a=\"$(dpkg --print-architecture)\"; " +
+				"curl -fsSL https://github.com/prometheus/prometheus/releases/download/v" + promVersion +
+				"/prometheus-" + promVersion + ".linux-${a}.tar.gz" +
 				" | tar xz -C /tmp && install -m0755 /tmp/prometheus-" + promVersion +
-				".linux-amd64/promtool /usr/local/bin/promtool"}).
+				".linux-${a}/promtool /usr/local/bin/promtool"}).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
 			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", ".dagger", "frontend/node_modules", ".localbin"},
 		}).
@@ -147,10 +153,27 @@ func (m *Rask) Charts(
 // gets covered, so it takes the registry and the pytest suite keeps the side-load path. The value is a
 // placeholder: the guard is about SHAPE (a registry-qualified name, not a bare one that would resolve
 // to Docker Hub and ImagePullBackOff), not about which registry.
+//
+// THE CREDENTIALS BELOW ARE WHAT MAKE THE REGISTRY PATH RENDERABLE AT ALL ([[XC-070]]).
+// `chart/templates/prod-credentials.yaml` refuses a real-registry render that still carries the
+// well-known dev values — correctly, since "holding the repository is holding the credential" — and
+// this gate renders exactly that shape on purpose. Without them `dagger call charts` fails on every
+// invocation, which is not a gate: it cannot separate a good chart from a bad one, so its result
+// stops being read and the production path goes back to uncovered.
+//
+// Supplying them is what a real deployment does, and it changes nothing the gate is testing: the
+// guard is about the SHAPE of the reference, and these values are never resolved by a render.
+// `tests/unit/test_the_production_render_gate_can_pass.py` reads the guard for every value it
+// compares against a published literal and fails if this list stops covering one.
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum " +
 	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +
-	"--set-string frontend.oidc.publicOrigin=http://localhost:8080"
+	"--set-string frontend.oidc.publicOrigin=http://localhost:8080 " +
+	"--set openbao.devMode=false " +
+	"--set-string dapr.appToken=render-gate-app-token-not-a-real-credential " +
+	"--set-string age.password=render-gate-age-password-not-a-real-credential " +
+	"--set-string minio.secretKey=render-gate-store-key-not-a-real-credential " +
+	"--set-string dex.clientSecret=render-gate-client-secret-not-a-real-credential"
 
 // networkPolicyGate: the NetworkPolicy layer is off by default and, when flipped on, renders the full
 // isolation set (default-deny, DNS allow, the exclusive openbao lock). Copied verbatim from ci.yml.
@@ -244,21 +267,28 @@ grep -q "pubsubDeliveryRetry" /tmp/resil.yaml
 # applied ONCE while this gate stayed green. A render gate cannot see an apply failure — hence the
 # explicit CRD-vocabulary assertion below, which is the part that would have caught it.
 awk '/^ +pubsubDeliveryRetry:/{f=1;next} f&&/^ +[a-zA-Z]+: /{print} f&&/^ +[a-z]+:$/{exit}' /tmp/resil.yaml > /tmp/policy.txt
-# THE POLICY MOVED constant -> exponential UNDER A DEAD GATE (found 2026-08-22). These three lines read
-# "policy: constant" / "duration: 90s" / "maxRetries: 5" until today; the chart renders exponential /
-# 30s / maxInterval 300s / 4. Nothing was wrong with the chart — the change is deliberate and documents
-# itself at the template — but this gate has not RUN since 2026-08-04 (see Charts()), so it could not
-# say so. What is asserted below is the INVARIANT the comments always claimed (the window), not the
-# shape that happened to implement it, so the next equivalent re-shaping does not silently rot again.
-grep -q "policy: exponential" /tmp/policy.txt
-grep -q "duration: 30s" /tmp/policy.txt
-grep -q "maxRetries: 4" /tmp/policy.txt
+# THE WINDOW IS THE INVARIANT; THE POLICY SHAPE IS NOT. This block asserted
+# "policy: exponential" / "duration: 30s" / a present "maxInterval", which the chart has not rendered
+# since 2026-09-14: LH-106 moved it to constant/120s/4 because the exponential shape delivered 3.5
+# seconds where both comments claimed 7.5 minutes, and the template states why maxInterval is now
+# omitted — "it is read only under exponential, so carrying it here would be a value that looks like a
+# bound and bounds nothing". The chart was right and this gate was stale, which it could not say
+# because it has not RUN since 2026-08-04 (see Charts()). Asserting the WINDOW instead is what the
+# comment above already promised, so the next equivalent re-shaping is measured rather than refused.
+grep -qE "policy: (constant|exponential)" /tmp/policy.txt
+grep -qE "duration: [0-9]+s" /tmp/policy.txt
+grep -qE "maxRetries: [0-9]+" /tmp/policy.txt
 # CRD vocabulary: a Resiliency retry accepts only policy/duration/maxInterval/maxRetries/matching and
 # the status-code matchers. Anything else is dropped by strict decoding and the CR never lands.
 ! grep -qE "initialInterval:|multiplier:|randomizationFactor:" /tmp/policy.txt
-# maxInterval is exponential-only. Under the old constant policy it was dead config and its ABSENCE was
-# asserted; under exponential it is the per-step ceiling and must be PRESENT, or a step can run away.
-grep -q "maxInterval:" /tmp/policy.txt
+# maxInterval is EXPONENTIAL-ONLY, so it is required exactly there and refused under constant, where it
+# would read as a bound while bounding nothing. Conditional rather than unconditional in either
+# direction, because both shapes are legitimate and only one of them uses the field.
+if grep -q "policy: exponential" /tmp/policy.txt; then
+  grep -q "maxInterval:" /tmp/policy.txt || { echo "FAIL: exponential retry with no maxInterval — a step can run away"; exit 1; }
+else
+  ! grep -q "maxInterval:" /tmp/policy.txt || { echo "FAIL: constant retry carries maxInterval, which Dapr reads only under exponential"; exit 1; }
+fi
 d=$(sed -n 's/.*duration: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
 n=$(sed -n 's/.*maxRetries: \([0-9]*\).*/\1/p' /tmp/policy.txt)
 cap=$(sed -n 's/.*maxInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
@@ -266,18 +296,35 @@ cap=$(sed -n 's/.*maxInterval: \([0-9]*\)s.*/\1/p' /tmp/policy.txt)
 # The old ` + "`w=$((d*n))`" + ` was the CONSTANT-policy sum and understates exponential by 3.75x here (120s vs
 # 450s), so leaving it in place would have failed the window check for a policy that in fact preserves
 # the documented window exactly: 30 + 60 + 120 + 240 = 450s.
-w=0; step=$d
-for _ in $(seq 1 "$n"); do
-  w=$((w + step)); step=$((step * 2)); [ "$step" -gt "$cap" ] && step=$cap
-done
+# Sum the ladder the RENDERED policy actually produces. A single exponential formula computed the wrong
+# window for a constant policy — and with maxInterval legitimately absent, the step-vs-cap comparison
+# compares against an empty string, so the arithmetic was not merely wrong but unevaluable.
+if grep -q "policy: exponential" /tmp/policy.txt; then
+  w=0; step=$d
+  for _ in $(seq 1 "$n"); do
+    w=$((w + step)); step=$((step * 2)); [ "$step" -gt "$cap" ] && step=$cap
+  done
+else
+  w=$((d * n))
+fi
 [ "$w" -ge 400 ] && [ "$w" -le 500 ] || { echo "FAIL: rendered retry window ${w}s is not the ~450s (7.5 min) the comments claim"; exit 1; }
 [ "$w" -lt 720 ] || { echo "FAIL: retry window ${w}s meets/exceeds the broker's 720s first backOff step — the broker would redeliver mid-retry"; exit 1; }
-echo "resiliency window ${w}s (exponential ${d}s x${n}, capped ${cap}s) — matches the documented 7.5 min, under the 720s broker step"
+echo "resiliency window ${w}s (${d}s x${n}) — matches the documented 7.5 min, under the 720s broker step"
 dlq=$(grep -c "DLQ_TOPIC" /tmp/resil.yaml || true); [ "$dlq" -ge 3 ] || exit 1
 grep -q '"dlq.>"' /tmp/resil.yaml
 grep -q "720s,720s" /tmp/resil.yaml
 ! grep -q "30s,60s,120s,300s" /tmp/resil.yaml
 render --set dapr.resiliency.enabled=false > /tmp/legacy.yaml
 off=$(grep -c "kind: Resiliency" /tmp/legacy.yaml || true); [ "$off" = "0" ] || exit 1
-offdlq=$(grep -c "DLQ_TOPIC" /tmp/legacy.yaml || true); [ "$offdlq" = "0" ] || exit 1
+# THE TOGGLE OWNS THE POLICY LANES, NOT EVERY DLQ IN THE ESTATE. This asserted zero DLQ_TOPIC of any
+# kind with resiliency off, which was true when the medallion lane was the only one that had a
+# dead-letter topic. It is not true now: the maintenance WORK and INDEX lanes are BYO-worker lanes with
+# their own Dapr components, their own ackWait and their own DLQ, none of which the medallion retry
+# policy governs -- so they correctly survive the toggle. Measured 2026-09-22: ON renders LINEAGE(1),
+# MEDALLION(4), NOTIFICATIONS(1), MAINTENANCE_WORK(2), MAINTENANCE_INDEX(2); OFF renders only the two
+# maintenance pairs. Asserting the policy-governed three by NAME says what the toggle actually means,
+# and a new lane that wires its own DLQ no longer reds a gate about somebody else's retry policy.
+for governed in LINEAGE_DLQ_TOPIC MEDALLION_DLQ_TOPIC RASK_NOTIFICATIONS_DLQ_TOPIC; do
+  ! grep -q "$governed" /tmp/legacy.yaml || { echo "FAIL: $governed survives dapr.resiliency.enabled=false, but the retry policy that gives it meaning does not"; exit 1; }
+done
 grep -q '30s,60s,120s,300s' /tmp/legacy.yaml`
