@@ -1107,8 +1107,8 @@ have no `uv.lock` and so cannot be built to emit anything.
   own fields precisely so they do not drown these two.
 
 
-**LH-187 · FALSIFIED — undrop does NOT leave a relative location behind**
-`catalog, lineage` · **FALSIFIED 2026-09-22** · the real source of the relative URIs is still unidentified
+**LH-187 · CLOSED — the relative-URI defect was real, was at the register door, and was already fixed**
+`catalog, lineage` · **CLOSED 2026-09-22** · attribution shipped; the live residue is historical
 - **THE CLAIM WAS WRONG AND IT WAS MINE.** Filed on the reasoning that undrop registers a table with
   `location.rstrip("/").rsplit("/", 1)[-1]` (`namespaces.py:831`, `tables.py:911`) and therefore
   leaves a relative location the lineage sweep can never resolve. The first half is true; the second
@@ -1140,9 +1140,23 @@ have no `uv.lock` and so cannot be built to emit anything.
   refusal costs a third party its whole run event over one malformed field. The cheaper half — record
   the producer alongside the unresolvable URI so the sweep's report can name who to fix — is
   uncontroversial either way and could land first.
-- *Closes when:* The writer of a non-absolute graph dataset URI is named, and either a production path
-  to it is found and fixed, or it is shown to be reachable only from test fixtures and the residual
-  graph rows are reaped — with the sweep reporting `unreadable=0` either way.
+- **THE WRITER WAS NAMED, by asking the graph** — which is what the attribution work above exists to
+  make routine. `GET /datasets/acme-bronze$objects/producers` (dex password grant, lineage
+  port-forwarded) returns
+  `producer: .../services/catalog/src/catalog/core/lineage_emit.py`, `event_time: 2026-09-06`. Not an
+  external tool, not a fixture harness — **rask's own catalog emitter**.
+- **AND THE DOOR IT CAME THROUGH IS ALREADY FIXED.** `tables.py:805` in `register_table`:
+  `location = await run_in_threadpool(absolute_table_location, ns, segments, response.location)`,
+  with the comment naming this exact symptom — "RESOLVED, not echoed — `response.location` is the
+  caller's own relative path and a relative `source_uri` reports this table as storage loss on every
+  sweep tick". Register is the one door that takes a CALLER-supplied location; the other emit sites
+  (`declare_table`, `rename_table`, `create_table`) pass a location the catalog MINTS, so they were
+  never exposed.
+- **SO THE LIVE `unreadable=23` IS PRE-FIX RESIDUE**, dated 2026-09-06, not an active leak. Reaping
+  those graph rows would take the sweep to `unreadable=0`; leaving them costs one warning per tick.
+- *Closes when:* CLOSED. The ingest-side attribution stays — it is what made the producer nameable in
+  one query instead of an archaeology session, and it will name the next one at the moment it happens
+  rather than months later.
 - *Evidence:* live sweep 2026-09-22 `unreadable=23`, every entry "names no storage location" ·
   `services/lineage/src/lineage/core/reconcile.py:60-85` (the refusal, correct and deliberate) ·
   the round-trip measurement above · [[my-own-residue-looks-like-a-defect]],
