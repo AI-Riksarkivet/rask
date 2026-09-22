@@ -413,6 +413,22 @@ of mine in this same session.**
   every live check resolves exactly as before — which is why the suite passes IDENTICALLY with and
   without the type, and why that result proves only the absence of harm. The new cases are what prove
   it works.
+- **DEPLOYED AND OBSERVED IN THE STORE (2026-09-22, `main-795a4aa7`) — and the before/after is the
+  argument for checking this hop at all.** Read from inside the cluster against
+  `http://rask-openfga:8080`, the address the catalog itself uses:
+  * BEFORE the catalog rolled: newest model `01M31N78PTV07F5986A0Y2Q0JY`, **10 types, no `estate`**.
+  * AFTER: newest model `01M34P37P53P9HHY2E658MQ7JX`, **11 types including `estate`**, relations
+    `admin, can_browse_storage, can_create_project, can_observe_events, can_stage_events,
+    event_stager, operator, owner, reader, writer`.
+  **BOTH READINGS WERE TAKEN WITH EVERY GATE GREEN.** `model.fga` and `model.json` declared the type
+  in both cases, `make fga-test` passed in both, `ms-authz` was green in CI in both — and for the
+  first reading the authorization model actually governing every request did not have it. The repo
+  cannot tell those two states apart; only the store can. Had this stopped at "committed, tests
+  green", the type would have been reported as shipped while nothing enforced it.
+- **AND THE RELATION LIST IS THE ADVERSARIAL PASS CONFIRMED IN PRODUCTION:** `reader` and `writer`
+  are in the deployed model, so the day `fga_root_object` is repointed, `compute`, `controlplane` and
+  `flows` keep answering. The shape the research pass first proposed — admin/operator/project plus
+  four verbs — would have refused all three.
 - **BOTH FAILURE MODES THE VERIFIERS FOUND ARE NOW UNSHIPPABLE, mutation-checked:** deleting `reader`
   — the naive port's exact defect — is a HARD error (`relation 'estate#reader' not found`), and
   collapsing `can_stage_events` to a pure userset over `owner` reds exactly one check, the stager who
