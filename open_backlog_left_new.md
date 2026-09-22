@@ -170,12 +170,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**199 open items**, of which **102 are blocked on a decision** and **97 can be picked up today**.
+**198 open items**, of which **102 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 40 | 6 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -355,121 +355,6 @@ have no `uv.lock` and so cannot be built to emit anything.
   the rung on every output — so the gap is narrower than "anyone can claim anyone".
 - *Closes when:* A bus event whose signature does not verify is refused at `/lineage-events`, pinned by a unit test, with no `accessControl` in the tree — and the signing key is not derivable from `dapr.appToken`.
 - *Evidence:* `services/lineage/src/lineage/api/fga_deps.py:237-275 (`_StampedAuthor` "nothing proves the stamp"; `enforce_bus_authz` delegates to `enforce_output_authz`)` · `grep -rniE 'signature|hmac' services/lineage/src packages/lineage-kit/src → prose only, no verification code` · `chart/templates/dapr-component.yaml:204-245 (scopes only on notifications; comment records the non-additive breakage)` · `tests/unit/test_the_inbox_may_read_the_provenance_bus_but_never_write_it.py (exists)`
-
-**LH-067 · Warehouse storage cannot be expressed as bases: one endpoint and one key for the whole estate, and a warehouse-rooted connection swaps only `root`**
-`catalog, storage` · **MED** · PARTIAL
-- **THE ENDPOINT HALF SHIPPED 2026-09-20, and the CREDENTIAL half of this row's own prescription is refused.** A warehouse record now carries an optional `endpoint`, and `build_namespace_for_root` opens the warehouse there instead of at the estate's single target. `allow_http` is RE-DERIVED from whichever endpoint is in force — not cosmetic symmetry: it is a function of the scheme, so an override that changed the endpoint and left the derivation reading `self.s3_endpoint` gives an `http://` warehouse behind an `https://` estate `allow_http=false`, and every open fails with a TLS error naming the store rather than the configuration. The override lives in `Settings.namespace_properties(root=…, endpoint=…)` so the `storage.` property vocabulary stays spelled in one module. It is SETTABLE at the create door and READABLE on the response, which is the `primary` lesson applied rather than re-learned — a field the record honours and no door can set is hardening an operator cannot apply. The routing path reads the WHOLE warehouse record where it already read the status, so "which store" is as fresh as "is it active" at no extra GET, and the connection cache keys on `(root, endpoint)` because a root is immutable while an endpoint is caller-owned and may be corrected. **NO CREDENTIAL FIELD GOES BESIDE IT.** This row asked for "per-warehouse endpoint/credential fields on the warehouse record"; the credential half is refused by the estate's standing secrets rule — material never travels in a record, and a scoped static key is not a fix. The catalog already resolves its own S3 secret from the Dapr secret store (`dapr_secret_store`/`dapr_secret_key`/`dapr_secret_s3_field`), so a second store's material belongs behind that same door under its own key with the record naming a REFERENCE. Mutation-checked both ways (reverting the `allow_http` derivation, and dropping the record's endpoint at the resolver) — each turns exactly its own leg red. **OBSERVED on the deployed catalog (`lance-rest-catalog:lh067-endpoint2`), three warehouses:** one at `http://10.43.44.177:9000` (the same MinIO by its ClusterIP rather than its service name) created a table and read back 3 rows; one at `http://127.0.0.1:1` FAILED — which is the decisive leg, since an ignored endpoint would have succeeded through the estate default; one with no endpoint worked as before. Scratch warehouses dropped afterwards, registry clean.
-- **AN UNREACHABLE STORE IS NOW 503, NOT 500 (2026-09-20) — the defect this row's own endpoint work made reachable, fixed in the same batch.** pylance raises a bare `ValueError` for every construction failure, so a warehouse pointed at a store that will not answer surfaced as `500 InternalError code 18` — which says the catalog is broken when the catalog is fine, and sends whoever is on call to the wrong system. Same conversion and same reasoning as `open_dataset`'s missing-dataset case one function away. **IT READS THE ERROR, NOT THE TYPE:** `LanceError(IO)` marks the transport failure, and a construction failure without it is not an outage (measured: a bogus impl says `No module named 'no'`) — telling an operator to wait for a store to come back when the configuration names a missing module is the wrong answer delivered confidently. Mutation-checked: dropping that discriminator turns the control leg red. **WHICH store reaches the LOG, not the caller**, and that split is the estate's own rule rather than an oversight — `ns_errors` redacts every 5xx detail to "Internal Server Error" because those are faults whose text leaks, and an endpoint is exactly the internal hostname that must not go out on the wire. So a 503 without a log line would be barely better than the 500 it replaced, which is why `warehouse_store_unreachable` carries the root and the address. **OBSERVED on the deployed catalog (`lance-rest-catalog:lh067-503b`):** the dead-endpoint warehouse's bind answered `503 serviceunavailableerror` (detail redacted, as designed) while the pod logged `warehouse_store_unreachable root='s3://lh067b1e267a' endpoint='http://127.0.0.1:1'`.
-- **RE-MEASURED 2026-09-20, and the remaining half is LATENT rather than live.** `LANCE_MULTIBASE_DATA_BASES` is EMPTY on the deployed catalog, so `data_bases` is empty, so `base_store_params` is `None` and no base is currently being written with credentials at all — the asymmetry cannot bite until a data base is configured. The pylance side of the prescription is confirmed against the installed library rather than quoted: `inspect.signature(lance.dataset)` on **pylance 11.0.0** lists `base_store_params`. And the read path is three named call sites, none of which passes it: `catalog/core/namespace.py:133`, `:155` and `catalog/services/vending.py:276`. `dataplane.py:259` already passes `base_store_params`, but as `dict(so)` for every base — the same credentials — and its own comment states the invariant that makes that safe today: every allowlisted base must share the catalog's endpoint and creds, precisely because the read path does not carry them.
-- *What is left:* **The per-base CREDENTIAL composition alone.** Compose per-base credentials on the write door via `base_store_params`/`base_<id>.<key>` instead of the same `so` dict for every base (`dataplane.py:224-228`), and pass `base_store_params` on the READ path too (pylance 11.0.0 `lance.dataset()` accepts it) so a base with different creds is readable. `initial_bases` and `target_bases` are already passed (`dataplane.py:236-237`) and there is no storage-profile code path to delete. **The material must arrive by secret REFERENCE, never as a record field** — which of the three sanctioned paths a second store's identity takes (a Dapr secret-store key per warehouse, ESO-delivered material, or an STS role in that account) is the open design question, and it is what the credential clause now means. The `aws_provider_scheme` sub-clause stays upstream-blocked: it is absent from the installed pylance. Owner acknowledgement of R3 is given (R1–R11 stand).
-- **THE DOOR THE CREDENTIAL HALF MUST USE ALREADY EXISTS, located 2026-09-21 so the remaining work is an implementation rather than a search.** `service_kit.governed.secrets.fetch_required_secrets(store, key, require=field)` is how the catalog resolves its OWN S3 secret, and it returns the WHOLE bundle precisely so a caller needing a second field reads it off one fetch (lineage's AGE password already does this). So a warehouse record naming a reference resolves through that same door, under its own key, with no new mechanism and no material in the record.
-  **ONE SHAPE DIFFERENCE DECIDES THE WORK, and it is why this is not a two-line edit:** the existing call runs ONCE in the lifespan, single-threaded, before the first request, and splices the result into the cached `Settings` in place — `apply_*_secrets` documents at length that this is sound only because no reader exists yet, and that it must never be called from a request handler. Per-warehouse credentials are the opposite case: warehouses are created at run time, so resolution happens per connection, on the request path, and needs its own cached holder rather than the boot splice. That is the "credential object the storage seam reads" the same docstring already names as the genuinely better shape and prices as "a change across four services and every `storage_options()` caller".
-  **NOT STARTED, and not half-started either.** Adding the record field alone would be a field no resolver reads — decoration, and the same failure this row already calls out in its own endpoint half ("a field the record honours and no door can set is hardening an operator cannot apply"). It wants the reference, the request-path resolver and the cache together, with a live warehouse on a second store to verify against.
-- **THE REFERENCE MECHANISM SHIPPED 2026-09-21 — the design question this row called open is answered by
-  the estate's own rule, not by preference.** For a pod WITH a Dapr sidecar the sanctioned path is the
-  Dapr secret store, and the catalog already resolves its own S3 secret through that door
-  (`dapr_secret_store`/`dapr_secret_key`/`dapr_secret_s3_field`). So a warehouse record names a
-  `credential_ref` and `catalog.services.warehouse_credentials.resolve` fetches the material there.
-  ESO and STS remain the answers for the pods that have no sidecar and for STORAGE vending; neither is
-  this path.
-  **REQUEST-PATH, NEVER THE BOOT SPLICE, and that is why it is a new holder rather than a reuse.**
-  `apply_dapr_secrets` mutates the shared `@lru_cache`d `Settings` once inside the lifespan and its own
-  docstring forbids calling it from a request handler. A warehouse credential is per-RECORD and is
-  discovered when a request names that warehouse, so it is cached on `(store, ref, field)` and never
-  written back onto settings.
-  **FAILS CLOSED BY INHERITANCE:** `fetch_required_secrets` raises on a missing field and nothing
-  catches it. An unset reference resolves to `None` — "this record names no second store" — rather than
-  to the estate key, because returning that would make a misconfigured record indistinguishable from a
-  resolved one and start writing somewhere nobody intended. Five cases, RED first, both legs
-  mutation-checked.
-  **THE READ HALF SHIPPED AND IS DEPLOYED (`main-6b2d67d2`, 2026-09-21).** `open_dataset` forwards
-  `base_store_params` on BOTH legs — a branch read opens the dataset before `checkout_version`, so the
-  main leg alone would have left branch reads of a foreign-credentialled base failing exactly as
-  before, and that leg is mutation-checked on its own. This closes the asymmetry `_write_blob`'s own
-  comment records: the write side already composed per-base params while the read side passed none, so
-  a base needing different credentials "would write OK but be unreadable" — the worst shape a storage
-  bug takes, because the write succeeds and nobody is told.
-  **VERIFYING THE API AGAINST THE INSTALLED SOURCE CHANGED THE ANSWER.** This row proposed
-  "`base_store_params`/`base_<id>.<key>`" as if interchangeable. pylance 11.0.0 documents them as not:
-  `base_store_params` is "Runtime-only ... not persisted to the manifest" and takes PRECEDENCE over the
-  `base_<id>.<key>` entries in `storage_options`. The non-persistence is what makes it the only form a
-  CREDENTIAL may take, so the composition below should use it exclusively rather than either.
-  **ADDITIVE, AND OBSERVED SO:** pylance falls back to the top-level options for any base with no entry,
-  so passing `None` is byte-identical to before — pinned as its own case, and confirmed in-cluster,
-  where a full bronze->gold cascade passed against the deployed image (5 legs, 64s). `open_dataset` is
-  on every read path, which is why a signature change there was deployed and driven rather than trusted.
-  **THE COMPOSITION SHIPPED AND IS DEPLOYED (`main-92ce156b`, 2026-09-21).**
-  `catalog.services.base_credentials.compose_base_store_params` gives each registered data base its own
-  options: a base with a configured credential REFERENCE gets the material resolved through the Dapr
-  secret store, and one without keeps the estate's. That retires the operator obligation
-  `core/config.py`'s allowlist comment carried — "every base here MUST share the catalog's S3 endpoint
-  + creds" — which was only ever an obligation because the read path could not carry per-base options.
-  **TWO REFUSALS, NOT A FALLBACK, both mutation-checked.** A reference naming a base the write does not
-  register raises, because configuration that does nothing is this row's own failure shape: the write
-  then succeeds on the estate credential and looks correct. A reference that does not RESOLVE raises
-  for the stronger version — falling back would put the caller's bytes in a store under an identity
-  they did not choose and report success.
-  **THE INVARIANT LAYER CAUGHT A DESIGN REGRESSION AND WAS RIGHT.** `tests/unit/test_multibase.py` pins
-  that every base gets an entry; the first implementation made unreferenced bases ABSENT, leaning on
-  pylance's documented fallback. Behaviourally identical today, but it rested this code's correctness
-  on an upstream fallback for no benefit. Fixed in the implementation rather than the test.
-  **Deployed and driven:** a full bronze->gold cascade passed against the image (5 legs, 50s), which is
-  the non-regression proof the write door needs — with no references configured the composed map is
-  exactly today's.
-  **THE OPERATOR MAP SHIPPED AND IS DEPLOYED (`main-7c526f8f`, 2026-09-21).**
-  `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS` takes `base-uri=secret-ref` pairs, parsed beside the allowlist
-  it completes. Both malformed shapes RAISE rather than dropping the entry — a missing separator and a
-  base given two references — because a reference that silently vanishes leaves its base on the estate
-  credential and looks correct, which is this row's own failure shape. Wired `table_create` ->
-  `create_table` -> `_write_blob`, empty by default, deployed and driven with a full cascade.
-  **A GATE FOR THE MISTAKE ACTUALLY MADE:** `create_table` reaches `_write_blob` at TWO sites — fresh
-  create and overwrite-existing — and only one was wired at first. Every test stayed green, because no
-  case drives that branch with a configured reference, so the un-wired path would have written its
-  bases on the estate credential silently. The gate now reads the call sites as an AST and fails if any
-  omits the argument.
-  **ALL THAT IS LEFT IS THE PROOF, and it needs a SECOND STORE to point at:** a MinIO user with its own
-  key, that key in the Dapr secret store, a base allowlisted and referenced to it, then a create and a
-  read-back through the catalog. Every mechanism the closing bar names is in place and deployed; what is
-  missing is an estate that has two stores in it.
-  **WHAT REMAINS IS NARROWER THAN THE CLAUSE READS:** the composition itself — `base_store_params` /
-  `base_<id>.<key>` on the write door (`dataplane.py:224-228`) and `base_store_params` on the read path
-  — plus an in-cluster drive of a table in a base needing different credentials. The mechanism the
-  clause demanded ("arrived by secret reference") is in place and pinned.
-- **WHY THE PROOF HAS NOT HAPPENED — measured on the live estate 2026-09-22, and it is a one-value
-  config gap, not missing code.** The composition IS shipped (`base_credentials.compose_base_store_params`;
-  `core/namespace.py:176` forwards `base_store_params` on the READ path). The live catalog carries
-  `LANCE_MULTIBASE_BASE_CREDENTIAL_REFS = s3://lh067-second-store/data=lh067-second-store` — the
-  second store's credential reference is wired. But `LANCE_MULTIBASE_DATA_BASES` is rendered with **no
-  value at all**, because `chart/values.yaml:1053` is `multibase.dataBases: []` and nothing overrides
-  it. The chart's own comment states the consequence: "Empty = feature off."
-- **SO THE TWO HALVES DISAGREE: a base has a credential reference and is not on the allowlist.** A
-  `?data_base=s3://lh067-second-store/data` request is refused before the per-base credential path is
-  ever reached, which is why the fixture store, its `lh067user` and its OpenBao entry have sat unused.
-  The allowlist is validated per request against `multibase_data_base_list`, which parses the empty
-  string to `[]`.
-- **TWO OF THE THREE GAPS ARE CLOSED (2026-09-22).** `catalog.multibase.baseCredentialRefs` is now a
-  CHART VALUE declared beside the allowlist it depends on, and a ref naming a base the allowlist does
-  not carry **fails the render** with the reason — the runtime symptom is indistinguishable from a
-  caller inventing a bucket, so it has to fail where someone can read it. The `lh067-second-store`
-  pair moved out of cluster drift and into `values-local.yaml`. Five gates, mutation-checked, incl. a
-  default-off leg so `values.yaml` keeps the feature off.
-- **THE THIRD GAP REMAINS AND IT IS THE SAME SHAPE: nothing PROVISIONS the secret the ref names.**
-  `rask-openbao-seed` seeds `secret/lance` and `secret/viewer-s3` and nothing else; `lh067` appears
-  nowhere in `chart/` or `scripts/` beyond the values added today. So the OpenBao entry the ref points
-  at is hand-made, exactly as the env var was. Under the estate's rule that is HALF right — a record
-  NAMES a secret and never carries one — but something must still put it there, and today nothing
-  does. The catalog has attempted no resolve (the lane was unreachable), so whether the key exists
-  right now is unknown; step 3 below answers it, because a missing entry surfaces as a resolve failure
-  at the write door rather than silently.
-- **THE MECHANISM FOR CLOSING IT ALREADY EXISTS AND THIS FIXTURE DOES NOT USE IT.**
-  `chart/templates/openbao.yaml:283` seeds `secret/viewer-s3` from chart values with exactly this
-  shape — a dev credential PAIR put into OpenBao by the seed job, so the store registry can point at a
-  credential without every reader of the shared bundle gaining it. A third entry would follow it. The
-  reason not to write one speculatively: the bucket and its `lh067user` would need provisioning too,
-  and the fixture may already be present from the session that made it. Run step 3 first; build the
-  provisioning only if the resolve fails, and then for the whole fixture rather than the secret alone.
-- *Closes when:* A write door names its target base with per-base credentials that arrived by secret reference, and a table in a base needing different creds reads back through the catalog — the endpoint half is done and observed.
-- *Evidence:* `services/catalog/src/catalog/services/warehouses.py:117 (_CALLER_OWNED has no endpoint/credential field)` · `services/catalog/src/catalog/core/namespace.py:28-35 (swaps only root)` · `services/catalog/src/catalog/services/dataplane.py:218-237 (same so for every base; initial_bases/target_bases already passed)` · `open_backlog_left.md:164 (R1–R11 STAND); grep aws_provider_scheme services/catalog → none`
 
 **LH-074 · Storage is accounted per bucket; quota ENFORCEMENT has no limit source yet**
 `catalog, maintenance` · **MED** · PARTIAL
