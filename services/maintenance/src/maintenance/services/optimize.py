@@ -23,6 +23,7 @@ from maintenance.core.config import shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
 from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome, MaintenanceDenied
 from maintenance.services.index_health import inspect_indices
+from maintenance.services.rewrite_slot import rewrite_slot
 from service_kit.lakehouse.base_refs import BaseRefs, containment_of
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
@@ -279,6 +280,21 @@ _WHY_PROTECTED = {
 }
 
 
+def _rewrite(ds: lance.LanceDataset, size_kw: dict[str, Any], *, slots: int, defer: bool) -> Any:
+    """The one call that moves bytes, under the one bound that limits how many may move at once.
+
+    A function rather than three inline `with` blocks: the rewrite is reached from the stable-row-id
+    branch, its fallback and the deferred-remap recovery, and holding the slot at each site put
+    `_compact_files` past the god-function gate while spreading the bound across three places that
+    could drift apart.
+
+    `rewrite_slot` bounds MEMORY (how many rewrites are resident); it is deliberately not the bound on
+    how many UNITS run, which is a throughput question — see `services/rewrite_slot.py`.
+    """
+    with rewrite_slot(slots):
+        return ds.optimize.compact_files(defer_index_remap=True, **size_kw) if defer else ds.optimize.compact_files(**size_kw)
+
+
 def _compact_files(
     ds: lance.LanceDataset,
     result: DatasetResult,
@@ -290,6 +306,7 @@ def _compact_files(
     max_source_bytes: int | None,
     repack_mode: str | None,
     compact_threads: int | None,
+    rewrite_slots: int,
     rewrite: Rewriter | None = None,
     table_id: str | None = None,
 ) -> None:
@@ -384,10 +401,7 @@ def _compact_files(
             # The except stays, and is not belt-and-braces: Lance refuses in the OTHER direction too
             # ("requires row_addrs but none were provided") for a dataset that is neither, and a third
             # reason should degrade to a plain compaction rather than fail a tick.
-            if getattr(ds, "has_stable_row_ids", False):
-                metrics = ds.optimize.compact_files(**size_kw)
-            else:
-                metrics = ds.optimize.compact_files(defer_index_remap=True, **size_kw)
+            metrics = _rewrite(ds, size_kw, slots=rewrite_slots, defer=not getattr(ds, "has_stable_row_ids", False))
         except Exception as exc:
             # defer_index_remap needs row_addrs (a stable-row-id, fragment-reuse-able layout). A dataset
             # WITHOUT them — e.g. a small model-REGISTRY dataset (models$<model>) — raises
@@ -410,7 +424,7 @@ def _compact_files(
             if "defer_index_remap" not in str(exc):
                 raise
             log.warning("compact_defer_index_remap_unsupported", extra={"uri": uri, "error": str(exc)})
-            metrics = ds.optimize.compact_files(**size_kw)
+            metrics = _rewrite(ds, size_kw, slots=rewrite_slots, defer=False)
     result.fragments_removed = int(getattr(metrics, "fragments_removed", 0))
     result.fragments_added = int(getattr(metrics, "fragments_added", 0))
 
@@ -607,6 +621,9 @@ def compact_one(
     max_source_bytes: int | None = None,
     repack_mode: str | None = None,
     compact_threads: int | None = None,
+    #: How many rewrites may be resident at once. Defaults to 1 so a caller that does not care
+    #: (a test, a one-off) is bounded rather than unbounded; the service passes its setting.
+    rewrite_slots: int = 1,
     auto_cleanup_interval_commits: int | None = None,
     protected: BaseRefs | None = None,
     index_columns: list[str] | None = None,
@@ -782,6 +799,8 @@ def compact_one(
             max_source_bytes=max_source_bytes,
             repack_mode=repack_mode,
             compact_threads=compact_threads,
+            # The MEMORY bound. Separate from how many UNITS run, because only this step holds bytes.
+            rewrite_slots=rewrite_slots,
             rewrite=rewrite,
             # THE CALLER'S RESOLVED ID FIRST, the producer's stamp only where the caller has none —
             # the same precedence `sweep.maintain_one_item` applies when it vends this rewrite's

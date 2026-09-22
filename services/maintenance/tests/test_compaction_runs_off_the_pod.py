@@ -93,6 +93,7 @@ def test_the_bytes_are_rewritten_where_the_plan_was_not(tmp_path: Path) -> None:
         write_options={},
         plan=catalog.plan,
         commit=catalog.commit,
+        rewrite_slots=1,
         policy={"target_rows_per_fragment": 1024},
     )
 
@@ -111,7 +112,7 @@ def test_a_table_already_at_TARGET_is_a_successful_no_op(tmp_path: Path) -> None
     uri = _fragmented(tmp_path, writes=1)
     catalog = _Catalog(uri)
 
-    outcome = ce.compact_distributed(uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, policy={})
+    outcome = ce.compact_distributed(uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, rewrite_slots=1, policy={})
 
     assert outcome is not None
     assert outcome.tasks_executed == 0
@@ -143,6 +144,7 @@ def test_the_EXECUTE_credential_is_the_one_this_worker_was_given(tmp_path: Path,
         write_options=vended,
         plan=catalog.plan,
         commit=catalog.commit,
+        rewrite_slots=1,
         policy={"target_rows_per_fragment": 1024},
     )
 
@@ -162,11 +164,13 @@ def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Pat
     calls = {"n": 0}
     real_execute = ce._execute_one
 
-    def _flaky(task_json: str, dataset: lance.LanceDataset) -> str:
+    # The WHOLE signature, `slots` included: a stand-in narrower than what it replaces cannot see the
+    # argument it is meant to pass through, and would make an un-wired rewrite bound look wired.
+    def _flaky(task_json: str, dataset: lance.LanceDataset, *, slots: int) -> str:
         calls["n"] += 1
         if calls["n"] == 2:
             raise RuntimeError("worker OOM on task 2")
-        return real_execute(task_json, dataset)
+        return real_execute(task_json, dataset, slots=slots)
 
     monkeypatch.setattr(ce, "_execute_one", _flaky)
     outcome = ce.compact_distributed(
@@ -175,6 +179,7 @@ def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Pat
         write_options={},
         plan=catalog.plan,
         commit=catalog.commit,
+        rewrite_slots=1,
         policy={"target_rows_per_fragment": 20},
     )
 
@@ -196,7 +201,7 @@ def test_EVERY_task_failing_commits_NOTHING(tmp_path: Path, monkeypatch: pytest.
 
     monkeypatch.setattr(ce, "_execute_one", _always_fails)
     with pytest.raises(ce.DistributedCompactionError, match="no task"):
-        ce.compact_distributed(uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, policy={})
+        ce.compact_distributed(uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, rewrite_slots=1, policy={})
 
     assert catalog.committed == []
 

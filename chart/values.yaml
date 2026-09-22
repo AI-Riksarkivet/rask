@@ -1582,30 +1582,34 @@ maintenance:
     # to prevent. Measured 2026-09-22: `Max Ack Pending: 1,000` (NATS's default) against 40 x 2 that can
     # actually run.
     #
-    # MEASURED 2026-09-22, which is what this number now rests on. A table of 240 MiB in 60 fragments
-    # (4 rows x 1 MiB per fragment) was built through the catalog and left for the sweep. Sampling
-    # /proc/1/status inside the worker every 2s across the compaction:
+    # A THROUGHPUT bound, applied to anyio's thread limiter — how many UNITS this pod may have in
+    # flight, not how much memory they may hold. The sweep plans ~568 units a tick and all but a
+    # handful are no-ops of two HTTP calls, so the lane needs ~4.7 units/sec to keep up.
     #
-    #   baseline 294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> 729 -> 380 -> 316 -> 431 -> 317Mi
+    # MEASURED 2026-09-22, the hard way: cutting this to the memory-safe figure (4) took the lane to
+    # ~0.67 units/sec, `Unprocessed Messages` climbed past 2,000 and nothing drained. One knob cannot
+    # serve both questions — the MEMORY bound is `maxConcurrentCompactions` below, which is held
+    # around the rewrite itself, the only step that holds bytes.
+    maxConcurrentUnits: 40
+    # The MEMORY bound: how many REWRITES may be resident at once. A no-op unit never acquires one.
     #
-    # ONE unit peaked at 729Mi, +434 MiB over its own baseline, and released cleanly (+22Mi retained).
-    # The peaks line up with the three commit passes the log records (fragments_removed 5, 14, 9).
+    # MEASURED 2026-09-22: a table of 240 MiB in 60 fragments was built through the catalog and left
+    # for the sweep; /proc/1/status inside the worker, every 2s across the compaction, went
+    #   294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> 729 -> 380 -> 316 -> 431 -> 317Mi
+    # One rewrite bounded at `maxSourceBytes` (256 MiB) peaked at +434 MiB resident, ~1.7x that bound.
+    # `(4Gi - ~320Mi baseline) / 434 MiB` is ~8, and bronze rows are ~1.8 MB against the 1 MiB used
+    # here, so 4 keeps a factor of two in hand. The arithmetic is gated against the declared pod limit
+    # by tests/unit/test_the_worker_can_hold_every_unit_it_admits.py.
     #
-    # SO THE CEILING FOLLOWS FROM THE LIMIT, not from a preference: (4Gi - ~320Mi baseline) / 434 MiB
-    # is ~8 units. The chart's own sizing note above puts bronze rows at ~1.8 MB against the 1 MiB used
-    # here, so a real tier costs more per unit; 4 keeps a factor of two in hand. It was 40 — anyio's
-    # default thread limiter — which would have admitted ~17 GB of concurrent rewrite into a 4Gi pod.
-    #
-    # WHAT THE FIGURE DOES NOT CARRY: the sample interval is 2s, so a sharper peak between samples is
-    # possible and 434 MiB is a lower bound. Throughput is unaffected in practice — a tick plans ~568
-    # units and all but a handful are no-ops of ~100ms, which 4 at a time still drains in seconds.
-    maxConcurrentUnits: 4
+    # The sample interval was 2s, so 434 MiB is a LOWER bound; the gate's 0.75 usable fraction carries
+    # that uncertainty rather than pretending to precision.
+    maxConcurrentCompactions: 4
     # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
     # A reservation, not a measurement — an index build holds its token far longer than a compaction
     # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool
     # would starve the lane that runs every 120s, and letting compaction take it would leave a build
     # delivered with nothing to run it while its hour-long window burns.
-    indexConcurrentUnits: 1
+    indexConcurrentUnits: 4
     resources:
       requests: { cpu: 250m, memory: 1Gi }
       # Sized for the WORK, unlike the planner's 512Mi. Compaction reads whole fragments: on bronze,

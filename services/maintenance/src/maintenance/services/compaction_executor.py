@@ -40,6 +40,7 @@ import lance.optimize as lance_optimize
 from pydantic import BaseModel, ConfigDict
 
 from maintenance.core.config import shared_lance_session
+from maintenance.services.rewrite_slot import rewrite_slot
 
 
 log = logging.getLogger(__name__)
@@ -183,13 +184,18 @@ def _open_for_rewrite(uri: str, write_options: Mapping[str, str]) -> lance.Lance
     return lance.dataset(uri, storage_options=dict(write_options) or None, session=shared_lance_session())
 
 
-def _execute_one(task_json: str, dataset: lance.LanceDataset) -> str:
+def _execute_one(task_json: str, dataset: lance.LanceDataset, *, slots: int) -> str:
     """Run one planned task and return its serialized result.
 
     Its own function so a failure can be attributed to ONE task — the whole point of the grain — and
     so a test can make a single task fail without stubbing the protocol.
+
+    UNDER A REWRITE SLOT, because this call is where the bytes are: `rewrite_slot` bounds how many
+    rewrites may be resident at once, which is a different question from how many UNITS may run and
+    must not be answered by the same knob (see that module).
     """
-    return cast(str, _CompactionTask.from_json(task_json).execute(dataset).json())
+    with rewrite_slot(slots):
+        return cast(str, _CompactionTask.from_json(task_json).execute(dataset).json())
 
 
 def compact_distributed(
@@ -200,6 +206,7 @@ def compact_distributed(
     plan: Planner,
     commit: Committer,
     policy: Mapping[str, Any],
+    rewrite_slots: int,
 ) -> DistributedOutcome | None:
     """Plan elsewhere, rewrite here, commit elsewhere. ``None`` means this path is unavailable.
 
@@ -229,7 +236,7 @@ def compact_distributed(
     failed = 0
     for index, task_json in enumerate(planned.tasks):
         try:
-            results.append(_execute_one(task_json, dataset))
+            results.append(_execute_one(task_json, dataset, slots=rewrite_slots))
         except Exception as exc:  # noqa: BLE001 — one task's failure must not cost the rest their commit
             failed += 1
             log.warning(

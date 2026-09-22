@@ -535,6 +535,9 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
             plan=lambda tid, pol: catalog_compaction.plan_via_catalog(tid, pol, settings=settings),
             commit=lambda tid, results: catalog_compaction.commit_via_catalog(tid, results, settings=settings),
             policy=policy,
+            # The MEMORY bound, and deliberately not `max_concurrent_units`, which is the THROUGHPUT
+            # one. Only the rewrite holds bytes; a no-op unit never reaches it.
+            rewrite_slots=settings.max_concurrent_compactions,
         )
         if outcome is None:  # pragma: no cover - `compact_distributed` returns an outcome or raises
             raise compaction_executor.CompactionPlaneUnavailable(f"no outcome for {table_id}")
@@ -663,6 +666,8 @@ def _maintain_one(
             max_source_bytes=plan.max_source_bytes,
             repack_mode=plan.repack_mode,
             compact_threads=settings.compact_threads,
+            # The MEMORY bound on the in-pod path, matching the distributed one above.
+            rewrite_slots=settings.max_concurrent_compactions,
             protected=protected,
             auto_cleanup_interval_commits=plan.auto_cleanup_interval_commits,
             index_columns=plan.index_columns,

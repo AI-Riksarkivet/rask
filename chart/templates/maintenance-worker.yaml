@@ -127,6 +127,9 @@ spec:
             {{- /* The per-unit BYTE bound the pod's memory is sized against, beside the concurrency it
                  multiplies with. A measured ~1.7x of this is resident per unit. */}}
             - { name: MAINTENANCE_MAX_SOURCE_BYTES, value: {{ int64 .Values.maintenance.maxSourceBytes | quote }} }
+            {{- /* The MEMORY bound, held around the rewrite. Separate from the units ceiling above,
+                 which is throughput: one knob for both throttled the whole lane. */}}
+            - { name: MAINTENANCE_MAX_CONCURRENT_COMPACTIONS, value: {{ .Values.maintenance.dedicatedWorkers.maxConcurrentCompactions | quote }} }
             - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
             {{- if .Values.maintenance.indexTopic }}
             # The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a

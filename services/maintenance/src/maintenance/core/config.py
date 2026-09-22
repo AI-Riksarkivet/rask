@@ -162,7 +162,16 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: It is NOT sized for memory: 40 concurrent compactions in a 4Gi pod is ~100MB each before the
     #: limit, and no tier here has yet run a compaction that rewrites fragments, so there is no
     #: per-unit figure to size against ([[LH-188]]).
+    #: How many units this pod may EXECUTE at once — a THROUGHPUT bound, applied to anyio's thread
+    #: limiter. The sweep plans ~568 units a tick and all but a handful are no-ops of two HTTP calls,
+    #: so the lane needs this wide to drain 4.7 units/sec; measured 2026-09-22, cutting it to the
+    #: memory-safe figure took the lane to ~0.67 units/sec and the backlog grew without bound.
     max_concurrent_units: int = Field(default=40, gt=0, alias="MAINTENANCE_MAX_CONCURRENT_UNITS")
+    #: How many REWRITES may be resident at once — the MEMORY bound, and deliberately not the number
+    #: above. Only a rewrite holds bytes; a no-op unit never reaches it. Measured: one rewrite bounded
+    #: at `max_source_bytes` peaked at ~1.7x that bound resident, so this times that product is what
+    #: the pod must hold ([[LH-185]]'s gate does the arithmetic against the declared limit).
+    max_concurrent_compactions: int = Field(default=4, gt=0, alias="MAINTENANCE_MAX_CONCURRENT_COMPACTIONS")
     #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
     #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
     #: per-dataset boundary was supposed to fix.

@@ -4,9 +4,15 @@
 DATA does not belong in a pod sized for a request*. Three numbers decide whether that holds for the
 compaction lane, and until now all three were separately editable with nothing comparing them:
 
-  * `maintenance.dedicatedWorkers.maxConcurrentUnits` — how many units may execute at once
+  * `maintenance.dedicatedWorkers.maxConcurrentCompactions` — how many REWRITES may be resident
   * `maintenance.maxSourceBytes`                      — how many bytes ONE unit may pull in
   * `dedicatedWorkers.resources.limits.memory`        — what the pod may hold
+
+IT MULTIPLIES THE COMPACTION BOUND, NOT THE UNIT ONE, and that distinction is the whole reason
+this gate is worth having. `maxConcurrentUnits` is a THROUGHPUT bound on anyio's thread limiter; a
+no-op unit holds no bytes. Bounding memory with it throttled the entire lane — measured 2026-09-22,
+the drain fell to ~0.67 units/sec against the 4.7 it must sustain and `Unprocessed Messages` climbed
+past 2,000. Only the rewrite holds bytes, so only the rewrite's bound belongs in this arithmetic.
 
 MEASURED 2026-09-22, which is what turns this from arithmetic into a bound. A table of 240 MiB in 60
 fragments was built through the catalog and left for the sweep; `/proc/1/status` inside the worker,
@@ -69,7 +75,8 @@ def _env() -> dict[str, str]:
 def test_the_three_numbers_are_all_declared() -> None:
     """A missing one would make the arithmetic below vacuous rather than false."""
     env = _env()
-    assert "MAINTENANCE_MAX_CONCURRENT_UNITS" in env, "the worker declares no concurrency ceiling"
+    assert "MAINTENANCE_MAX_CONCURRENT_UNITS" in env, "the worker declares no throughput ceiling"
+    assert "MAINTENANCE_MAX_CONCURRENT_COMPACTIONS" in env, "the worker declares no REWRITE ceiling, so nothing bounds resident bytes"
     assert "MAINTENANCE_MAX_SOURCE_BYTES" in env, "the worker declares no per-unit byte bound, so the pod is sized against nothing"
     limits = _worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
     assert "memory" in limits, "the maintenance worker names no memory limit"
@@ -88,7 +95,7 @@ def test_the_byte_bound_survives_the_render_as_an_INTEGER() -> None:
 def test_the_worker_can_hold_every_unit_it_admits() -> None:
     """The invariant: concurrency x per-unit residency + baseline must fit inside the usable limit."""
     env = _env()
-    units = int(env["MAINTENANCE_MAX_CONCURRENT_UNITS"])
+    units = int(env["MAINTENANCE_MAX_CONCURRENT_COMPACTIONS"])
     source_mib = int(env["MAINTENANCE_MAX_SOURCE_BYTES"]) / (1024 * 1024)
     limit_mib = _mib(_worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"])
 
@@ -96,10 +103,10 @@ def test_the_worker_can_hold_every_unit_it_admits() -> None:
     usable = limit_mib * USABLE_FRACTION
 
     assert needed <= usable, (
-        f"the worker admits {units} concurrent units of up to {source_mib:.0f} MiB each. At a MEASURED "
+        f"the worker admits {units} concurrent REWRITES of up to {source_mib:.0f} MiB each. At a MEASURED "
         f"{RESIDENT_PER_SOURCE_BYTE}x resident per source byte that is {needed:.0f} MiB against "
         f"{usable:.0f} MiB usable ({limit_mib:.0f} MiB limit x {USABLE_FRACTION}). Lower "
-        "`maxConcurrentUnits` or `maintenance.maxSourceBytes`, or raise the worker's memory limit — "
+        "`maxConcurrentCompactions` or `maintenance.maxSourceBytes`, or raise the worker's memory limit — "
         "this is the [[LH-183]] OOM arriving by configuration instead of by accident."
     )
 
