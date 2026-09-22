@@ -997,11 +997,26 @@ have no `uv.lock` and so cannot be built to emit anything.
     between natural restarts. Needs the per-pass figure below to be pinned first.
   * **UPSTREAM** — the retention is in Lance/pyarrow's native allocator, not in this code, so a real
     fix is not this estate's to make. Worth reporting with this measurement attached.
-- *Still unmeasured, and it decides the arithmetic:* whether retention is per UNIT or per PASS. Round
-  1 committed once and kept 14.4Mi; round 2 committed four times and kept 54.2Mi. If it is per pass,
-  the cost tracks how FRAGMENTED a table is rather than how many units run, and a well-maintained
-  estate is cheap while a neglected one is not. Two rounds cannot separate those; a third and fourth
-  with the pass count recorded would.
+- **MEASURED: RETENTION TRACKS COMMITS (PASSES), ~10-14 MiB EACH, and it is close to linear.** A
+  third round varied the fragmentation — same 240 MiB in 15 fragments instead of 60 — and landed on
+  the other worker, so it is also a replication on a second process:
+
+  | round | fragments | commits | retained | settled |
+  | --- | --- | --- | --- | --- |
+  | 3 | 15 | 1 | **+9.6Mi** | sd 0.6, n=23 |
+  | 1 | 60 | 1 | **+14.4Mi** | sd 0.8, n=113 |
+  | 2 | 60 | 4 | **+54.2Mi** | sd 1.2, n=48 |
+
+  `54.2 / 4 = 13.6` per commit, against 14.4 and 9.6 for single-commit runs. So the unit of cost is
+  the PASS, not the dataset and not the work item — fragmentation only matters through how many
+  passes it provokes. Peaks were 644Mi, 724Mi and 677Mi, all released.
+  **THE ARITHMETIC THE REMEDY NEEDS:** a worker doing K passes retains ~12K MiB, so a 4Gi pod over a
+  ~300Mi baseline affords roughly 300 passes before the limit. That is a long time on this estate,
+  where nearly every unit is a no-op — and short on one where tables are genuinely fragmented, which
+  is exactly when maintenance matters most.
+  **WHAT THIS DOES NOT ESTABLISH:** three points, one shape of table, one row size. And the second
+  worker's own baseline moved ~13Mi between the two windows for reasons not attributed here, so it is
+  NOT a clean control and is not claimed as one.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
