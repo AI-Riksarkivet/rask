@@ -94,9 +94,9 @@ commit.** Background watchers report themselves — do not narrate them each tur
 ## RIPE DECISIONS — evidence complete, work starts the moment each is answered (2026-09-17)
 
 124 rows carry a decision marker. This section does NOT rank them — the other 121 were not assessed —
-it lists the three that were driven far enough TODAY that only the ruling is missing, each naming what
+it lists the four that were driven far enough that only the ruling is missing, each naming what
 happens either way. They are here because a decision buried in row 7,200 is a decision nobody makes.
-Adding a fourth means driving it to the same point first, not promoting it from the list below.
+Adding a fifth means driving it to the same point first, not promoting it from the list below.
 
 **1 · Does an ESO-written Secret delivered by `secretKeyRef` satisfy the secrets rule?**
 *Blocks [[XC-002]]; defines what [[LH-160]]'s "baseline reaches 0" even means.*
@@ -144,6 +144,24 @@ construction and cannot desynchronise. Measured on the live head 2026-09-17: 176
 log field carrying stage+token restores the legibility if it turns out to matter. The alternatives widen
 `WorkOrder` or the `Executor.submit` signature to buy back a naming convenience.
 
+**4 · Should the lineage ingest door REFUSE a `dataSource.uri` that names no storage location?**
+*Driven to the bar 2026-09-22 while closing [[LH-187]]; the attribution half already shipped.*
+`_names_a_storage_location` runs only on the READ side (`reconcile.py`), so the door accepts what
+every later sweep refuses — each tick, forever. Driven: a `RunEvent` carrying
+`dataSource.uri = 4750a5b9_acme-bronze$events` is accepted, stored verbatim, and answers False to the
+sweep's own predicate. The live `unreadable=23` is that shape, dated 2026-09-06 and traced to rask's
+own `catalog/core/lineage_emit.py`; the door it came through (`register_table`) is fixed, so the
+residue is historical rather than an active leak.
+*What already landed, and needs no ruling:* the ingest seam logs
+`lineage_unresolvable_dataset_location` with producer, job and run id, so the next one is nameable in
+one query rather than by archaeology.
+*If YES:* a `lance_namespace` typed error at the door, translated by `install_problem_handlers` —
+matching the estate's stated posture that a lane driven around the platform is refused rather than
+under-served. *If NO:* the log line is the whole answer and the sweep keeps carrying the residue.
+*It is an owner call because `dataSource` is an OPTIONAL OpenLineage facet emitted by EXTERNAL
+producers*, so a refusal costs a third party its entire run event over one malformed field — the
+platform would be rejecting provenance it could otherwise keep.
+
 ## Answered 2026-09-18 — provenance placement, and it is a RULING not a row
 
 **Lakekeeper does not do provenance.** No lineage crate; `openlineage` appears nowhere in its source. It
@@ -170,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**198 open items**, of which **102 are blocked on a decision** and **96 can be picked up today**.
+**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 5 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 9 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 54 | 35 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -998,44 +1016,6 @@ have no `uv.lock` and so cannot be built to emit anything.
   or a declared bound, and a gate refuses a new one.
 - *Evidence:* workflow `wf_46997777-6d5`, 16 agents, 12 findings / 10 confirmed · `services/catalog/src/catalog/api/v1/endpoints/indices.py:85-87,264-266` · `chart/values.yaml indexTopic: ""` · `services/maintenance/src/maintenance/services/maintenance.py:327-328 (the bound the index doors lack)` · [[LH-183]] for the measured instance
 
-**LH-186 · Every binary door in the catalog publishes `application/json` in its own OpenAPI, so the generated client describes Arrow as JSON**
-`catalog` · **MEDIUM** · FIXED 2026-09-22
-- **MEASURED 2026-09-22** by generating the app's OpenAPI and reading the declared 200 content type
-  per route. Three doors serve bytes and advertise JSON:
-  * `POST /v1/table/{id}/query` -> serves `application/vnd.apache.arrow.file`, declares `application/json`
-  * `POST /management/v1/table/{id}/changes` -> same
-  * `GET /management/v1/table/{id}/blobs` -> serves `application/octet-stream`, declares `application/json`
-  (`count_rows` is correct — it really does answer JSON.)
-- **IT IS THE PUBLISHED CONTRACT, not cosmetics.** `frontend/packages/api/src/generated/catalog.ts`
-  is generated FROM this document and carries the `/changes` path at :661, so a client generated from
-  the catalog's own spec is told to parse Arrow as JSON. FastAPI defaults the 200 content type to
-  `application/json` whenever a route does not declare `responses=`, and none of these three do —
-  the media type they actually answer with is set on the `Response` object, which the schema
-  generator never sees.
-- **Not caused by the streaming change**: the declaration was already wrong when these doors returned
-  a buffered `Response`, and it is byte-identical after. Found while verifying that the change feed's
-  contract survived streaming, which is the only reason anyone looked.
-- **FIXED, and `responses=` ALONE WAS NOT THE FIX.** Declaring it produced the right media type
-  *alongside* `application/json`, because FastAPI merges the declaration with the default it derives
-  from `response_class` — which is `JSONResponse` unless a door says otherwise. The working form is a
-  `Response` subclass carrying `media_type` (`ArrowFileResponse`, `OctetStreamResponse`) passed as
-  `response_class=`, with `responses=` kept only to refine the schema to `{"type": "string", "format":
-  "binary"}`. Both generated artefacts were refreshed in the same change: `docs/catalog-openapi.json`
-  (the drift-gated contract) and `frontend/packages/api/src/generated/catalog.ts`, whose entries went
-  from `"application/json": unknown` to the real media types; `@rask/api` type-checks clean after.
-- **The gate reads BOTH SIDES rather than listing the doors it knows about**
-  (`test_a_binary_door_says_so_in_its_own_contract.py`): the ACTUAL media type comes from an AST walk
-  of `data.py` (the `media_type=` on whatever Response a handler returns), the DECLARED one from the
-  generated OpenAPI. A binary door added later is covered without anyone remembering to register it.
-  It carries a leg asserting the walk finds something at all, because an empty walk would pass
-  everything — and it was mutation-checked by stripping one decorator.
-- *Closes when:* The catalog's OpenAPI names the media type each door actually answers with, the
-  generated client agrees, and a gate refuses a new door that disagrees.
-- *Evidence:* generated OpenAPI 2026-09-22 — `query`/`changes`/`blobs` all `application/json` ·
-  `services/catalog/src/catalog/api/v1/endpoints/data.py` (`ARROW_FILE` set on the Response, absent
-  from `responses=`) · `frontend/packages/api/src/generated/catalog.ts:661`
-
-
 **CRITERION 1 (provenance survives a write) — MEASURED ON THE LIVE ESTATE 2026-09-22, and it reads clean**
 `lineage` · OBSERVATION, not a row
 - One full `lineage_reconcile_sweep` tick, read off the running pod rather than reasoned about:
@@ -1056,62 +1036,6 @@ have no `uv.lock` and so cannot be built to emit anything.
   line, though `unreadable` is a `dict[str, str | None]` carrying the reason in the response body).
   `ungoverned=63` and `graph_ahead=36` are documented as mostly-benign by design and split into their
   own fields precisely so they do not drown these two.
-
-
-**LH-187 · CLOSED — the relative-URI defect was real, was at the register door, and was already fixed**
-`catalog, lineage` · **CLOSED 2026-09-22** · attribution shipped; the live residue is historical
-- **THE CLAIM WAS WRONG AND IT WAS MINE.** Filed on the reasoning that undrop registers a table with
-  `location.rstrip("/").rsplit("/", 1)[-1]` (`namespaces.py:831`, `tables.py:911`) and therefore
-  leaves a relative location the lineage sweep can never resolve. The first half is true; the second
-  does not follow, and was never checked before the row was written.
-- **MEASURED against the real `dir` backend 2026-09-22** — create, deregister, re-register with the
-  relative form exactly as undrop does, describing at each step:
-  `after create -> /tmp/.../t1.lance` · `re-registered with -> t1.lance` ·
-  `after re-register -> /tmp/.../t1.lance`. The backend takes a relative location IN and reports the
-  ABSOLUTE one OUT, because it joins the connection root. Undrop leaves nothing relative behind.
-- **THE RELATIVE FORM IS THE BACKEND'S RULE, not a workaround to remove.** `register_table` refuses an
-  absolute URI outright ("Location must be a relative path within the root directory"), found by
-  driving the deployed catalog where undrop 400'd on the very location `describe_table` had just
-  reported. So the strip is required, and "branch on the backend" — what this row originally asked for
-  — would have changed correct code.
-- **WHAT IS ACTUALLY WRONG, located and DRIVEN 2026-09-22: the ingest door applies no validation the
-  sweep applies at read time.** `_names_a_storage_location` lives in `reconcile.py` and is called
-  only when reading. `RunEvent` was driven with a `dataSource.uri` of
-  `4750a5b9_acme-bronze$events`: the model ACCEPTS it, `source_uri` stores it verbatim, and
-  `_names_a_storage_location` answers False. So the door records exactly what every later sweep will
-  refuse — each tick, forever — and the refusal names the DATASET, never the producer that emitted
-  the bad facet, so nothing can attribute it back.
-- **THE ASYMMETRY IS THE POINT, and it is the second of this shape found today.** Validation exists
-  and runs on the wrong side: here reads are checked and writes are not (the catalog's body limit was
-  the mirror image — writes capped, reads not, closed in [[LH-185]]).
-- **A POLICY CALL BELONGS TO THE OWNER BEFORE THIS IS CODED.** Refusing at the door matches the
-  estate's stated posture ("a lane driven around the platform is correctly refused rather than
-  under-served") and would raise a `lance_namespace` typed error for `install_problem_handlers` to
-  translate. But `dataSource` is an OPTIONAL OpenLineage facet and external producers emit it, so a
-  refusal costs a third party its whole run event over one malformed field. The cheaper half — record
-  the producer alongside the unresolvable URI so the sweep's report can name who to fix — is
-  uncontroversial either way and could land first.
-- **THE WRITER WAS NAMED, by asking the graph** — which is what the attribution work above exists to
-  make routine. `GET /datasets/acme-bronze$objects/producers` (dex password grant, lineage
-  port-forwarded) returns
-  `producer: .../services/catalog/src/catalog/core/lineage_emit.py`, `event_time: 2026-09-06`. Not an
-  external tool, not a fixture harness — **rask's own catalog emitter**.
-- **AND THE DOOR IT CAME THROUGH IS ALREADY FIXED.** `tables.py:805` in `register_table`:
-  `location = await run_in_threadpool(absolute_table_location, ns, segments, response.location)`,
-  with the comment naming this exact symptom — "RESOLVED, not echoed — `response.location` is the
-  caller's own relative path and a relative `source_uri` reports this table as storage loss on every
-  sweep tick". Register is the one door that takes a CALLER-supplied location; the other emit sites
-  (`declare_table`, `rename_table`, `create_table`) pass a location the catalog MINTS, so they were
-  never exposed.
-- **SO THE LIVE `unreadable=23` IS PRE-FIX RESIDUE**, dated 2026-09-06, not an active leak. Reaping
-  those graph rows would take the sweep to `unreadable=0`; leaving them costs one warning per tick.
-- *Closes when:* CLOSED. The ingest-side attribution stays — it is what made the producer nameable in
-  one query instead of an archaeology session, and it will name the next one at the moment it happens
-  rather than months later.
-- *Evidence:* live sweep 2026-09-22 `unreadable=23`, every entry "names no storage location" ·
-  `services/lineage/src/lineage/core/reconcile.py:60-85` (the refusal, correct and deliberate) ·
-  the round-trip measurement above · [[my-own-residue-looks-like-a-defect]],
-  [[a-verdict-is-not-evidence-it-is-still-true]]
 
 
 **[[LH-183]] / [[LH-185]] index lane — DEPLOYED AND OBSERVED WORKING 2026-09-22**
