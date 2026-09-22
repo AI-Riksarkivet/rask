@@ -102,6 +102,17 @@ async def _require_classifier_for_governance_keys(
     await fga_deps.require_relation(
         client, settings, token, relation="can_classify", obj=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}"
     )
+    # THE SECOND QUESTION ([[LH-055]]). `can_classify` is ONE BIT — whoever may label anything may
+    # label everything — so the ruling's "per-tag `apply` delegation" needs the VALUE asked about too.
+    # Asked second on purpose: a caller with no business on this table is already refused above,
+    # without the door revealing which values the vocabulary holds.
+    #
+    # ONLY NON-NULL VALUES, because `apply` attaches a label and never detaches one. A clear names no
+    # value to be delegated, and gating it on one would let a narrow grant strand a label its holder
+    # could attach and nobody present could remove — so removal stays on the table rung alone.
+    values = {str(v) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(GOVERNANCE_FIELD_PREFIX) and v is not None}
+    for value in sorted(values):
+        await fga_deps.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
 
 
 router = APIRouter(prefix="/v1/table", tags=["columns"])

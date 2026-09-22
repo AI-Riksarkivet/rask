@@ -12605,6 +12605,368 @@
         ]
       }
     },
+    "/management/v1/classification/{id}/access/grant": {
+      "post": {
+        "description": "Delegate a classification label to a subject \u2014 gated per rung by ``can_grant_apply``.\n\nTHE DOOR THE RUNG WAS POINTLESS WITHOUT. `apply` exists so a data-protection officer may be trusted\nwith `pii` and not with `restricted`; without somewhere to confer it, the vocabulary is estate-admin\nonly and the separation is decorative. `model.fga` makes the same argument for `classifier` one\nlevel along \u2014 \"a person's grant belongs on the grant door rather than in a deploy\".",
+        "operationId": "grant_classification_access_management_v1_classification__id__access_grant_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Grant Classification Access",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/management/v1/classification/{id}/access/my-permissions": {
+      "post": {
+        "description": "Which classification actions the caller holds on this label \u2014 the same self-service read the\ndata types carry, and the only way a holder can discover a delegation made to them.",
+        "operationId": "my_classification_permissions_management_v1_classification__id__access_my_permissions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyPermissionsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "My Classification Permissions",
+        "tags": [
+          "access"
+        ]
+      }
+    },
+    "/management/v1/classification/{id}/access/revoke": {
+      "post": {
+        "description": "Withdraw a classification delegation \u2014 ``can_revoke_grant``, stricter than the grant, exactly as\non table and namespace: taking a rung back is administration, never delegation.",
+        "operationId": "revoke_classification_access_management_v1_classification__id__access_revoke_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-api-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Api-Token"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-service-identity",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Service-Identity"
+            }
+          },
+          {
+            "in": "header",
+            "name": "dapr-caller-app-id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dapr-Caller-App-Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Revoke Classification Access",
+        "tags": [
+          "access"
+        ]
+      }
+    },
     "/management/v1/namespace/{id}/access/check": {
       "post": {
         "description": "Simulate 'does <user> hold <relation> on this namespace?' \u2014 owner-gated (``can_delete``).",
@@ -18019,7 +18381,7 @@
         ]
       },
       "post": {
-        "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:\nwhoever may destroy the table decides whether destroying it needs a second thought). The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
+        "description": "Set or clear deletion protection on the table at ``id`` (#73 \u2014 the warehouse contract on the\nrung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to\n``can_set_protection``, a computed userset over ``owner``: whoever may destroy the table decides\nwhether destroying it needs a second thought). Its OWN relation at the drop's tier rather than\n``can_drop`` itself, because `#41` audits by the relation and the route suffix is not in the\nrecord \u2014 sharing the name made arming the safety and destroying the table one audit line. The flag is\na CONTROL-ROOT record, deliberately not schema metadata \u2014 control-plane state that emits a\ncontrol event and never creates a table version, readable even when the dataset is corrupted,\nand unreachable from the future properties write door (#78).",
         "operationId": "set_table_protection_management_v1_table__id__protection_post",
         "parameters": [
           {

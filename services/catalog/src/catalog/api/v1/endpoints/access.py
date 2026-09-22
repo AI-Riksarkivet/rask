@@ -76,6 +76,9 @@ warehouse_router = APIRouter(prefix="/management/v1/warehouse", tags=["access"])
 # the projects module so the access surface stays in one file — the place someone looks when asking
 # "what is gated, and how".
 project_router = APIRouter(prefix="/management/v1/projects", tags=["access"])
+#: The classification VOCABULARY ([[LH-055]]). Its own router because a classification is not a data
+#: object: it has no rows, no parent warehouse and no `id` to parse — the path segment IS the label.
+classification_router = APIRouter(prefix="/management/v1/classification", tags=["access"])
 
 
 # The base rungs an admin may directly assign. The model defines each as ``[user, role#assignee] or …``
@@ -88,7 +91,16 @@ project_router = APIRouter(prefix="/management/v1/projects", tags=["access"])
 # no way to confer it. They are not more dangerous than ``owner`` — both are reachable only through
 # ``can_grant_manage_grants`` / ``can_grant_pass_grants``, which are ``manage_grants``-only, so a
 # grant-option delegate can neither mint further delegates nor promote themselves.
-_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants")
+#: The rungs this surface may hand out. NOT every relation the model defines: `maintainer` and
+#: `publisher` are SERVICE rungs the chart's bootstrap hook seeds, and a person's grant door is the
+#: wrong place to mint a service identity.
+#:
+#: IT MUST COVER EVERY `can_grant_<rung>` THE MODEL DECLARES, and did not — `classifier` shipped with
+#: its grant action and the argument for it written into `model.fga`, while this hand-kept tuple
+#: refused the rung 400 at the only door that could delegate it. `_grant_actions` (fga_deps) reads the
+#: model and this does not, so the two drifted in silence.
+#: `tests/unit/test_a_grantable_rung_has_a_door.py` compares them now.
+_GRANTABLE_BASE: tuple[str, ...] = ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants", "classifier", "apply")
 
 
 @lru_cache
@@ -460,6 +472,36 @@ async def revoke_namespace_access(
     return await _access_mutate(client, control, settings, token, "namespace", id, body, grant=False)
 
 
+@classification_router.post("/{id}/access/grant")
+async def grant_classification_access(
+    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken, body: AccessGrantRequest
+) -> AccessGrantResponse:
+    """Delegate a classification label to a subject — gated per rung by ``can_grant_apply``.
+
+    THE DOOR THE RUNG WAS POINTLESS WITHOUT. `apply` exists so a data-protection officer may be trusted
+    with `pii` and not with `restricted`; without somewhere to confer it, the vocabulary is estate-admin
+    only and the separation is decorative. `model.fga` makes the same argument for `classifier` one
+    level along — "a person's grant belongs on the grant door rather than in a deploy".
+    """
+    return await _access_mutate(client, control, settings, token, "classification", id, body, grant=True)
+
+
+@classification_router.post("/{id}/access/revoke")
+async def revoke_classification_access(
+    id: str, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken, body: AccessGrantRequest
+) -> AccessGrantResponse:
+    """Withdraw a classification delegation — ``can_revoke_grant``, stricter than the grant, exactly as
+    on table and namespace: taking a rung back is administration, never delegation."""
+    return await _access_mutate(client, control, settings, token, "classification", id, body, grant=False)
+
+
+@classification_router.post("/{id}/access/my-permissions")
+async def my_classification_permissions(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MyPermissionsResponse:
+    """Which classification actions the caller holds on this label — the same self-service read the
+    data types carry, and the only way a holder can discover a delegation made to them."""
+    return await _my_permissions(client, settings, token, "classification", id)
+
+
 def _graph_node(node_id: str) -> GraphNode:
     """Split ``<type>:<rest>`` into a typed, labelled node (a userset like ``role:admin#assignee`` keeps
     its full id, labelled without the leading type)."""
@@ -644,3 +686,4 @@ router.include_router(table_router)
 router.include_router(namespace_router)
 router.include_router(warehouse_router)
 router.include_router(project_router)
+router.include_router(classification_router)

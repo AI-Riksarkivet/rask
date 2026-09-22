@@ -387,6 +387,11 @@ type warehouse
     define can_grant_writer: manage_grants or (writer and pass_grants)
     define can_grant_reader: manage_grants or (reader and pass_grants)
     define can_grant_validator: manage_grants or (validator and pass_grants)
+    # The same tier as its three neighbours, and at the SAME level as the rung it confers:
+    # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
+    # beneath it. Declaring the rung without its grant action is how it ended up ungated one
+    # level down — caught by `test_grant_routes_are_intercepted_before_the_suffix_fallthrough`.
+    define can_grant_classifier: manage_grants or (classifier and pass_grants)
     # Both meta-rungs are `manage_grants`-only. `can_grant_owner` is too: ownership is the authority to
     # hand out authority, so passing it through the grant option would let a delegate exceed the rung
     # they were delegated.
@@ -488,6 +493,11 @@ type namespace
     define can_grant_writer: manage_grants or (writer and pass_grants)
     define can_grant_reader: manage_grants or (reader and pass_grants)
     define can_grant_validator: manage_grants or (validator and pass_grants)
+    # The same tier as its three neighbours, and at the SAME level as the rung it confers:
+    # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
+    # beneath it. Declaring the rung without its grant action is how it ended up ungated one
+    # level down — caught by `test_grant_routes_are_intercepted_before_the_suffix_fallthrough`.
+    define can_grant_classifier: manage_grants or (classifier and pass_grants)
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants
     # REVOKING is `manage_grants` alone, and is NOT the mirror of `can_grant_<rung>`.
@@ -623,6 +633,52 @@ type table
 # name). Concentric rungs mirror `table`: owner ⊇ refresher ⊇ reader, all cascading from the parent
 # namespace. `refresher` is the writer-equivalent rung — it gates the async REFRESH (rematerialize) op,
 # a data-plane write — while `reader` only reads the view + its metadata.
+type classification
+    relations
+        # THE CLASSIFICATION VOCABULARY ([[LH-055]], owner ruling docs/DECISIONS.md — "the FGA model
+        # shape is a PORT"). The reference model declares no `column` type; column governance is a TAG
+        # type with per-tag `apply`, "Independent of `modify` (separation of duties: classify without
+        # holding data/DDL rights)".
+        #
+        # NAMED `classification`, NOT `tag`, and the deviation is Lance's rather than a preference:
+        # `tag` already means a VERSION REF in this estate because the FORMAT defines it that way —
+        # `can_create_tag`/`can_update_tag` on `table`, `_refs/tags/` on disk. Two meanings for one
+        # identifier in an authorization model is how a check ends up answering the wrong question.
+        # The ruling's substance is per-value `apply` delegation, which this is; the identifier is not.
+        #
+        # PER-TAG IS THE WHOLE POINT, and `classifier` on `table` is not a substitute for it. That rung
+        # is ONE BIT: whoever may label anything may label everything, so a data-protection officer
+        # trusted to mark `pii` is equally able to mark a table `restricted` and make it unvendable.
+        # The door asks two different questions — may this subject label THIS TABLE, and may they apply
+        # THIS TAG — and only a type can answer the second.
+        #
+        # PARENTED ON `estate`, NOT ON A TABLE OR WAREHOUSE. A per-tenant tag would put the vocabulary
+        # in the hands of whoever owns the data, which is exactly the separation being built: a tenant
+        # owner must not be able to mint a label, delegate it to themselves and classify their way out
+        # of a policy. `parent` is typed `[estate]` alone, so the model refuses the other shape.
+        define parent: [estate]
+        # Minting and delegating a tag is estate administration. `admin from parent` rather than
+        # `owner`, because a tag has no data and therefore no data owner.
+        define curator: [user, role#assignee] or admin from parent
+        # The grantable rung, time-boxable like every other DATA rung — a classification delegation is
+        # exactly the kind that should be able to expire (an audit, a secondment, an incident).
+        define apply: [user, role#assignee, user with non_expired_grant, role#assignee with non_expired_grant] or curator
+        define can_apply: apply
+        # `can_get_metadata` so a subject who may apply a tag can also SEE it in a vocabulary listing;
+        # without it the door can authorize a write the caller could not have discovered how to make.
+        define can_get_metadata: apply or curator
+        # Delegation admitted on the grant, `curator` alone on the revoke — the asymmetry the
+        # reference model states as "taking a privilege back is administration, never delegation".
+        define can_grant_apply: curator or (apply and pass_grants)
+        define can_revoke_apply: curator
+        define pass_grants: [user, role#assignee] or curator
+        # `pass_grants` is itself grantable here because `_GRANTABLE_BASE` carries it, so it needs its
+        # own gate or the delegation option is handed out ungated. `curator` alone, never
+        # `… and pass_grants`: a delegate who could mint further delegates turns a narrow, expiring
+        # classification grant into a permanent tree nobody issued.
+        define can_grant_pass_grants: curator
+
+
 type materialized_view
   relations
     define parent: [namespace]

@@ -1642,3 +1642,60 @@ tests:
           can_observe_events: false
           can_browse_storage: false
           can_stage_events: false
+
+  # ------------------------------------------------------------------------------------------------
+  # [[LH-055]] — the classification VOCABULARY is a tag type with per-tag `apply`
+  # ------------------------------------------------------------------------------------------------
+  - name: a classifier may apply the tags delegated to them and no others — the vocabulary is per-tag
+    # The ruling (docs/DECISIONS.md, "the FGA model shape is a PORT"): the reference model has no
+    # `column` type, and column governance is "a TAG type with per-tag `apply` delegation, Independent
+    # of `modify` (separation of duties: classify without holding data/DDL rights)".
+    #
+    # `classifier` on the TABLE is not that vocabulary — it is one bit, so whoever may label anything
+    # may label everything. The two checks are different questions and the door asks both: MAY THIS
+    # SUBJECT LABEL THIS TABLE, and MAY THEY APPLY THIS TAG.
+    tuples:
+      - { user: user:dpo, relation: classifier, object: table:acme_bronze$pages }
+      - { user: user:dpo, relation: apply, object: classification:pii }
+      # grace holds the TAG and not the table; dpo holds the table and only one of the two tags.
+      - { user: user:grace, relation: apply, object: classification:restricted }
+    check:
+      - user: user:dpo
+        object: table:acme_bronze$pages
+        assertions: { can_classify: true }
+      - user: user:dpo
+        object: classification:pii
+        assertions: { can_apply: true }
+      # THE POINT OF THE TYPE. Without it this is `can_classify: true` and nothing else is asked.
+      - user: user:dpo
+        object: classification:restricted
+        assertions: { can_apply: false }
+      # ...and holding the tag is not holding the table, which is the other half of the pair.
+      - user: user:grace
+        object: table:acme_bronze$pages
+        assertions: { can_classify: false }
+      - user: user:grace
+        object: classification:restricted
+        assertions: { can_apply: true }
+
+  - name: a tag is estate vocabulary, so a tenant owner cannot mint or delegate one
+    # A per-TABLE tag would put the vocabulary in the hands of whoever owns the data, which is the
+    # separation this rung exists to create. The estate's `admin` seeds tags; `curator` delegates.
+    tuples:
+      - { user: estate:rask, relation: parent, object: classification:pii }
+      - { user: estate:rask, relation: parent, object: classification:restricted }
+      - { user: user:platform_admin, relation: admin, object: estate:rask }
+    check:
+      # alice owns the acme warehouse and every table under it (see the base tuples).
+      - user: user:alice
+        object: classification:pii
+        assertions: { can_apply: false, can_grant_apply: false }
+      - user: user:platform_admin
+        object: classification:pii
+        assertions: { can_apply: true, can_grant_apply: true }
+      # ESTATE `owner` IS NOT ENOUGH, and that is deliberate rather than an oversight. `owner` on the
+      # estate is the tier `compute`/`controlplane`/`flows` gate whole routers on, so a service holding
+      # it would silently gain the power to mint classification labels. Minting is `admin`.
+      - user: user:root_admin
+        object: classification:pii
+        assertions: { can_apply: false, can_grant_apply: false }

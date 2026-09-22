@@ -86,12 +86,23 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
     / ``can_grant_pass_grants``, both ``manage_grants``-only, so a grant-option delegate can neither
     mint further delegates nor promote themselves.
 
+    ``classifier`` joined them for the same reason one level along ([[LH-058]]): it is a standing,
+    narrow capability meant for a PERSON — a data-protection officer labelling data they may not read —
+    and `model.fga` argues in as many words that such a grant "belongs on the grant door rather than in
+    a deploy". It shipped without this entry and was refused 400 by the only door that could confer it.
+
     Asserted as an exact tuple on purpose: this list is what the grant API will accept, so a rung
     appearing here without a ``can_grant_*`` gate would be grantable and ungated. That pairing is
-    proven in ``test_fga_model_contract`` — this half pins the membership.
+    proven in ``test_fga_model_contract``, and the converse — a ``can_grant_*`` with no door — by
+    ``test_a_grantable_rung_has_a_door``. This half pins the membership.
+
+    ``apply`` is absent from the answer below and present in the tuple, which is the mechanism
+    working: ``_grantable_relations`` intersects with what the TYPE defines, and neither table nor
+    namespace defines it. It is a rung of ``classification`` alone.
     """
     for t in ("table", "namespace"):
-        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants")
+        assert access._grantable_relations(t) == ("owner", "writer", "reader", "validator", "manage_grants", "pass_grants", "classifier")
+    assert access._grantable_relations("classification") == ("pass_grants", "apply")
 
 
 def test_grant_writes_the_tuple_and_reports_granted(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,3 +225,24 @@ def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: p
     rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
     assert rows and rows[-1]["audit.outcome"] == FAILURE
     assert rows[-1]["audit.subject"] == "alice" and rows[-1]["audit.grantee"] == "user:bob"
+
+
+# --------------------------------------------------------------------------- #
+# [[LH-055]] — the classification vocabulary has a door of its own
+# --------------------------------------------------------------------------- #
+
+
+def test_a_classification_delegation_writes_the_apply_tuple(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The rung was inert without this route. `apply` exists so a data-protection officer may be
+    trusted with `pii` and not with `restricted`; with nowhere to confer it the vocabulary is
+    estate-admin only and the separation of duties is decorative."""
+    resp, captured = _run(monkeypatch, user="dpo", relation="apply", grant=True, fga_type="classification", ident="pii")
+    assert resp.granted is True
+    assert (captured[0].user, captured[0].relation, captured[0].object) == ("user:dpo", "apply", "classification:pii")
+
+
+def test_a_data_rung_is_refused_on_a_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The type defines no data rungs, and `_grantable_relations` intersects with what the type
+    declares — so the base tuple's `reader` cannot be written onto a label by naming it."""
+    with pytest.raises(InvalidInputError):
+        _run(monkeypatch, user="dpo", relation="reader", grant=True, fga_type="classification", ident="pii")

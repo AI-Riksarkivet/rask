@@ -66,12 +66,17 @@ log = logging.getLogger(__name__)
 # to ``table``. A transaction is authorized PARENT-SCOPED against its enclosing namespace (see
 # ``_authorize_transaction``) — the old ``table:<txn-id>`` alias targeted an object nothing ever seeds,
 # so every transaction op always-denied.
-_RESOURCES: tuple[str, ...] = ("namespace", "table", "materialized_view", "transaction")
+#: `classification` is the odd one and belongs here anyway: it is a governance VOCABULARY rather than a
+#: data object — no rows, no parent warehouse, and the path segment IS the label ([[LH-055]]). It
+#: reaches this map because its grant/revoke doors must be authorized like every other, through
+#: `_authorize_grant` reading the rung out of the body.
+_RESOURCES: tuple[str, ...] = ("namespace", "table", "materialized_view", "transaction", "classification")
 _FGA_TYPE: dict[str, str] = {
     "namespace": "namespace",
     "table": "table",
     "materialized_view": "materialized_view",
     "transaction": "transaction",
+    "classification": "classification",
 }
 
 # Read-only trailing actions (reader rung). ``query``/``count_rows`` read DATA; the rest
@@ -765,6 +770,16 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # batch routes above, this one cannot be answered from the path alone.
     if suffix in _GRANT_SUFFIXES:
         await _authorize_grant(request, client, settings, user=token.sub, fga_type=fga_type, segments=segments, revoking=suffix == "access/revoke")
+        return
+    # A CLASSIFICATION IS A LABEL, NOT A DATASET ([[LH-055]]). Its router carries exactly three routes
+    # and the two grant ones returned above, so only `access/my-permissions` reaches here. Refusing the
+    # rest EXPLICITLY rather than letting `_action_relation` answer them: the writer-tier fall-through
+    # resolves `can_write_data`, which this type does not define, and OpenFGA answers an undefined
+    # relation with a 400 that fails closed to 503 — an outage wearing a permission error's clothes.
+    if fga_type == "classification":
+        if suffix != "access/my-permissions":
+            raise PermissionDeniedError(f"{suffix!r} is not an action on a classification label")
+        await _require(client, user=token.sub, relation="can_get_metadata", obj=_object(fga_type, segments, settings.delimiter))
         return
     relation = _action_relation(fga_type, suffix)
     obj = _object(fga_type, segments, settings.delimiter)

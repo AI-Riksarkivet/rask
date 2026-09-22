@@ -132,7 +132,10 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         | set(fga_deps._DATA_READ_ACTIONS)
         | {"", "index/create", "version/delete", "insert", "some/unmapped/mutation"}
     )
-    for fga_type in set(fga_deps._FGA_TYPE.values()) - {"transaction"}:
+    # `transaction` and `classification` both return from their own branch in `authorize` before
+    # `_action_relation` is consulted, so enumerating the generic suffix map against them would assert
+    # relations the app can never send. `classification` refuses every suffix but `my-permissions`.
+    for fga_type in set(fga_deps._FGA_TYPE.values()) - {"transaction", "classification"}:
         for suffix in suffixes:
             pairs.add((fga_type, fga_deps._action_relation(fga_type, suffix)))
 
@@ -395,13 +398,30 @@ def test_grant_routes_are_intercepted_before_the_suffix_fallthrough() -> None:
     accepts has a ``can_grant_*`` gate to be checked against. A rung without one would be refused by
     ``_authorize_grant``, so this cannot silently open; it would simply make the rung ungrantable."""
     from catalog.api.fga_deps import _GRANT_SUFFIXES, _grant_actions
-    from catalog.api.v1.endpoints.access import _GRANTABLE_BASE
+    from catalog.api.v1.endpoints import access as access_module
+    from catalog.api.v1.endpoints.access import _grantable_relations
 
     assert frozenset({"access/grant", "access/revoke"}) == _GRANT_SUFFIXES
-    for fga_type in ("warehouse", "namespace", "table"):
+    # WHAT THE DOOR ADMITS, on the TYPES THE DOOR SERVES — and neither half is a hand-kept list any
+    # more. They stopped agreeing when `_GRANTABLE_BASE` grew type-specific rungs ([[LH-055]]:
+    # `classifier` on the data types, `apply` on `classification` alone), so iterating the base tuple
+    # against three named types began asking `warehouse` about a rung only `classification` defines.
+    #
+    # The SUBJECTS come from the routes that exist, because a rung is only grantable if something
+    # serves it: `estate` declares `owner`/`writer`/`reader` and has no grant route, so demanding
+    # `can_grant_owner` there would be a gate on an unreachable door. A new `<type>_router` carrying
+    # `/access/grant` is covered the day it is added, which is the property a list cannot have.
+    served = {
+        name.removesuffix("_router")
+        for name, obj in vars(access_module).items()
+        if name.endswith("_router") and any(r.path.endswith("/access/grant") for r in obj.routes)
+    }
+    assert served == {"table", "namespace", "classification"}, f"the grant doors changed: {sorted(served)}"
+    for fga_type in sorted(served):
+        grantable = _grantable_relations(fga_type)
+        assert grantable, f"{fga_type} has a grant route and no grantable rung — the door admits nothing"
         actions = _grant_actions(fga_type)
-        assert actions, f"no can_grant_* enumerated for {fga_type}"
-        for rung in _GRANTABLE_BASE:
+        for rung in grantable:
             assert f"can_grant_{rung}" in actions, f"{fga_type}: {rung} is grantable with no can_grant_{rung} gate"
 
 
@@ -429,6 +449,10 @@ _OBJECT_AS_USER_SHAPES: dict[tuple[str, str, str], str] = {
     ("materialized_view", "parent", "namespace"): "tuple's object IS the dropped object",
     ("transaction", "parent", "namespace"): "tuple's object IS the dropped object",
     ("transaction", "parent", "warehouse"): "tuple's object IS the dropped object",
+    # A tag's parent edge ([[LH-055]]). Same shape as the rows above — dropping a TAG reads by object
+    # and finds it — and the estate side cannot dangle for a second reason: there is exactly one
+    # `estate:` object, seeded at bootstrap, and no door deletes it.
+    ("classification", "parent", "estate"): "tuple's object IS the dropped object; the estate is never dropped",
     # Subject types, not governed objects with a lifecycle of their own — nothing drops them.
     ("project", "team", "team"): "team is a subject type, not a droppable object",
     ("namespace", "managed_access", "role"): "role is a subject type, not a droppable object",
@@ -541,6 +565,12 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
         ("warehouse", "classifier"),
         ("namespace", "classifier"),
         ("table", "classifier"),
+        # [[LH-055]] — the per-tag delegation. WHAT THE EXPIRY LEAVES BEHIND is nothing, which is why
+        # it is safe here and why it is the rung most worth time-boxing: `apply` grants the power to
+        # ATTACH a label, never to remove one, so a lapsed grant strands no object in a state its
+        # holder can no longer leave. The labels an expired classifier applied stay applied, and
+        # un-labelling is a separate action gated on `can_classify` at the table.
+        ("classification", "apply"),
     }
 )
 
