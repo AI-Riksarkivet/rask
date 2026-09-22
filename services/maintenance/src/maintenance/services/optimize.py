@@ -19,7 +19,7 @@ import lance
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
-from maintenance.core.config import shared_lance_session
+from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE, shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
 from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome, MaintenanceDenied
 from maintenance.services.index_health import inspect_indices
@@ -326,20 +326,23 @@ def _compact_files(
     size_kw: dict[str, Any] = {"target_rows_per_fragment": target_rows_per_fragment} if target_rows_per_fragment else {}
     # Rows are not a unit of memory — see the docstring. Passed to BOTH compaction attempts below,
     # because the fallback path reads exactly the same bytes as the deferred one.
-    if scan_batch_size is not None:
-        size_kw["batch_size"] = scan_batch_size
+    #
+    # UNCONDITIONAL, AND `None` FALLS BACK TO THE FLOOR RATHER THAN TO LANCE'S DEFAULT. These arrive
+    # from `DatasetWorkItem`, whose fields are `int | None` because the wire model must express "the
+    # policy said nothing" — and a guarded `if x is not None` turned that into "no ceiling at all",
+    # which is Lance's 8192-ROW batch and the HOST's core count. An absent policy is the UNPOLICIED
+    # estate, which is exactly the case the floor exists for.
+    size_kw["batch_size"] = DEFAULT_SCAN_BATCH_SIZE if scan_batch_size is None else scan_batch_size
     # THE BOUND IN THE UNIT THAT MATTERS. `batch_size` caps a read chunk in ROWS; this caps what one
     # compaction pass may pull in at all, in BYTES — the thing the row-count knob was standing in for.
     # Passed to BOTH attempts below for the same reason the batch size is: the fallback path reads
     # exactly the same bytes as the deferred one.
-    if max_source_bytes is not None:
-        size_kw["max_source_bytes"] = max_source_bytes
+    size_kw["max_source_bytes"] = DEFAULT_MAX_SOURCE_BYTES if max_source_bytes is None else max_source_bytes
     # HOW the bytes move, when an estate has chosen. Absent, Lance re-encodes, which is what every
     # compaction here has always done — so an unset knob changes no byte.
     if repack_mode is not None:
         size_kw["compaction_mode"] = repack_mode
-    if compact_threads is not None:
-        size_kw["num_threads"] = compact_threads
+    size_kw["num_threads"] = DEFAULT_COMPACT_THREADS if compact_threads is None else compact_threads
     # THE REWRITE OFF THIS POD, when a rewriter was supplied and this dataset is one the catalog can
     # name. `compact_files` below does plan, execute and commit in one call, so the pod's memory
     # ceiling is a function of the largest table anyone owns; the distributed protocol leaves only the
@@ -617,10 +620,13 @@ def compact_one(
     target_rows_per_fragment: int | None = None,
     cleanup_enabled: bool = True,
     optimize_indices_enabled: bool = True,
-    scan_batch_size: int | None = None,
-    max_source_bytes: int | None = None,
+    #: The three bounds default to the FLOOR, never to None — `None` means Lance's own ceilings, and
+    #: the estate has already been OOMKilled once by exactly that (#93). Same direction as
+    #: ``rewrite_slots`` below: a caller that does not care is bounded rather than unbounded.
+    scan_batch_size: int | None = DEFAULT_SCAN_BATCH_SIZE,
+    max_source_bytes: int | None = DEFAULT_MAX_SOURCE_BYTES,
     repack_mode: str | None = None,
-    compact_threads: int | None = None,
+    compact_threads: int | None = DEFAULT_COMPACT_THREADS,
     #: How many rewrites may be resident at once. Defaults to 1 so a caller that does not care
     #: (a test, a one-off) is bounded rather than unbounded; the service passes its setting.
     rewrite_slots: int = 1,

@@ -19,6 +19,7 @@ import pyarrow as pa
 import pytest
 from lance.blob import Blob
 
+from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE
 from maintenance.services.optimize import compact_one
 
 
@@ -191,15 +192,18 @@ def test_a_scan_batch_size_reaches_compaction_and_still_compacts(tmp_path: Path)
     assert result.fragments_removed > 0, "compaction did not run at a small batch size"
 
 
-def test_no_batch_size_leaves_lance_defaulting(tmp_path: Path) -> None:
-    """The negative: `compact_one` itself must not pin a batch size. Passing `batch_size=None`
-    through to Lance is NOT the same as omitting it.
+def test_an_unnamed_batch_size_is_the_floor_not_lances_default(tmp_path: Path) -> None:
+    """The caller's value wins; SILENCE is the floor, never Lance's own ceiling ([[LH-185]]).
 
-    Still true after #93, and the layering is the point: the safe DEFAULT lives in
-    `MaintenanceSettings` and is applied by the SWEEP, so `compact_one` stays a faithful pass-through
-    for callers that have bounded memory some other way. What #93 changed is that nothing in the
-    deployed estate reaches Lance's unbounded default any more — see
-    `test_maintenance_policies.py::test_an_unpolicied_sweep_is_still_bounded`."""
+    The bound is applied at every hop rather than only at the sweep. One layer up is not enough here
+    for a specific reason: `DatasetWorkItem`'s bound fields are `int | None` because the wire model
+    must express "the policy said nothing", and that `None` crosses the queue for every unpolicied
+    dataset — so "the sweep always sets it" holds only while planner and worker agree, and a gate on
+    the innermost call alone cannot see a hop that does not. `rewrite_slots` on this same function
+    already defaults to the safe value for the same reason.
+
+    What this still protects is the other direction: a caller that DOES name a batch size gets
+    exactly that one, unchanged — see the sibling test above."""
     uri = _fragmented_indexed_dataset(tmp_path)
     seen: dict[str, object] = {}
     real = lance.dataset(uri).optimize.__class__.compact_files
@@ -214,7 +218,12 @@ def test_no_batch_size_leaves_lance_defaulting(tmp_path: Path) -> None:
     finally:
         lance.dataset(uri).optimize.__class__.compact_files = real
 
-    assert "batch_size" not in seen, f"an unset policy pinned a batch size anyway: {seen}"
+    assert seen.get("batch_size") == DEFAULT_SCAN_BATCH_SIZE, (
+        f"an unset policy reached Lance with batch_size={seen.get('batch_size')!r} — unset means Lance's "
+        "own 8192 ROWS, and rows are not a unit of memory: ~1.8 MB bronze rows are ~15 GB per thread"
+    )
+    assert seen.get("max_source_bytes") == DEFAULT_MAX_SOURCE_BYTES, f"no byte ceiling reached Lance: {seen}"
+    assert seen.get("num_threads") == DEFAULT_COMPACT_THREADS, f"num_threads was left to the HOST's core count: {seen}"
 
 
 def test_handing_cleanup_to_the_dataset_skips_our_own_sweep(tmp_path: Path) -> None:

@@ -8,7 +8,7 @@ human door — its routes are gated by the Dapr app token and it only ever READS
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +20,20 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 
 if TYPE_CHECKING:
     import lance
+
+
+# THE FLOOR A COMPACTION RUNS UNDER, named once because two consumers read it: the `Settings` fields
+# below (what the estate configures) and `optimize.compact_one`'s parameter defaults (what a caller
+# that names nothing gets). Two spellings of 64 is how a bound gets raised in one place and kept in
+# the other. Their rationale is on the fields; these are the numbers.
+#: Lance's own default is 8192 ROWS, and rows are not a unit of memory — against ~1.8 MB bronze rows
+#: (measured) that is ~15 GB per compute thread.
+DEFAULT_SCAN_BATCH_SIZE: Final = 64
+#: Lance defaults to the machine's parallelism, which is the HOST's core count and not the pod's
+#: `limits.cpu`, so it multiplies the read batch by a number the cgroup never agreed to.
+DEFAULT_COMPACT_THREADS: Final = 2
+#: The bound in the unit that matters: what one pass may pull in at all, in bytes.
+DEFAULT_MAX_SOURCE_BYTES: Final = 256 * 1024 * 1024
 
 
 class MaintenanceSettings(FgaSettings, BaseSettings):
@@ -83,12 +97,12 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # the deliberate trade: slow compaction is recoverable, an OOM-killed sweep is an outage. Raise
     # both per tier via the maintenance policy (`scan_batch_size`) once a tier's row size is known —
     # that is what the per-tier surface is FOR; this only stops the UNPOLICIED estate killing itself.
-    scan_batch_size: int = Field(default=64, ge=1, le=8192, alias="MAINTENANCE_SCAN_BATCH_SIZE")
+    scan_batch_size: int = Field(default=DEFAULT_SCAN_BATCH_SIZE, ge=1, le=8192, alias="MAINTENANCE_SCAN_BATCH_SIZE")
     # Lance's `num_threads` defaults to the machine's parallelism, which is the HOST's core count, not
     # the pod's `limits.cpu: "1"` — so on a 64-core node the batch bound above would have been
     # multiplied by 64 while the cgroup still allowed one core's worth of work. Pinning it makes the
     # ceiling a number someone can actually compute.
-    compact_threads: int = Field(default=2, ge=1, le=64, alias="MAINTENANCE_COMPACT_THREADS")
+    compact_threads: int = Field(default=DEFAULT_COMPACT_THREADS, ge=1, le=64, alias="MAINTENANCE_COMPACT_THREADS")
     # THE BOUND THE TWO ABOVE WERE REACHING FOR. `scan_batch_size` bounds the READ, in rows, and the
     # note above says plainly why that is a proxy rather than the thing itself: "Rows are not a unit of
     # memory". pylance 11 exposes a bound on the PASS in the unit that actually matters — how many
@@ -100,7 +114,7 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # whose rows turn out larger than whoever set the row count assumed — the exact way incident #93
     # happened. `max_source_rows` and `max_source_fragments` are deliberately not mirrored: they are
     # more row-count proxies, and one honest bound beats three that need reconciling.
-    max_source_bytes: int = Field(default=256 * 1024 * 1024, ge=1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
+    max_source_bytes: int = Field(default=DEFAULT_MAX_SOURCE_BYTES, ge=1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
     # HOW a compaction moves the bytes, not how many. Read off pylance 11's own signature rather than a
     # summary: `Literal["reencode", "try_binary_copy", "force_binary_copy"]`, and its docstring —
     # reencode decodes and re-encodes (Lance's default), `try_binary_copy` copies the encoded pages

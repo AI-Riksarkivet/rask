@@ -46,7 +46,15 @@ log = logging.getLogger(__name__)
 #: read ~15 GB/thread — the OOM measured on the maintenance pod is just as available to the catalog pod
 #: through any of these doors. `num_threads` is pinned for the sibling reason: Lance defaults it to the
 #: HOST's parallelism, which a container's limit does not bound.
-COMPACTION_BOUND: Final[dict[str, int]] = {"batch_size": 64, "num_threads": 2}
+#:
+#: THE ROW BOUNDS ALONE DO NOT BOUND THIS POD, and the erasure door is where that shows. 64 rows is a
+#: ceiling in the unit nobody can size in advance — on a blob tier one row is the blob — so the proxy
+#: is weakest exactly on the tables erasure runs over. `max_source_bytes` is the ceiling in the unit
+#: that matters, and it is sized for THIS pod rather than copied from the sweep's: measured 2026-09-22
+#: the catalog runs at 248Mi of a 512Mi limit, and a pass bounded at B peaks near 1.7xB resident
+#: ([[LH-185]], 256 MiB -> +434 MiB). 64 MiB therefore peaks ~109 MiB against ~264 MiB of headroom.
+#: A slower one-shot compaction is recoverable; an OOMKilled catalog is an outage for every caller.
+COMPACTION_BOUND: Final[dict[str, int]] = {"batch_size": 64, "num_threads": 2, "max_source_bytes": 64 * 1024 * 1024}
 
 
 # --------------------------------------------------------------------------- #

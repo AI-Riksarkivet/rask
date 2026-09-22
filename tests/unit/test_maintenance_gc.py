@@ -129,7 +129,7 @@ def test_compact_now_passes_target_and_optimizes_indices() -> None:
     ds = _FakeDs(version=1, versions=_versions(1), tags={})
     out = maintenance.compact_now(ds, target_rows_per_fragment=1_000_000, storage_options={})
     assert out == {"ok": True, "fragments_removed": 4, "fragments_added": 1}
-    assert ds.optimize.compact_kw == {"target_rows_per_fragment": 1_000_000, "batch_size": 64, "num_threads": 2}
+    assert ds.optimize.compact_kw == {"target_rows_per_fragment": 1_000_000, **maintenance.COMPACTION_BOUND}
     assert ds.optimize.indices_optimized is True  # indices kept covering the new fragments
 
 
@@ -137,8 +137,9 @@ def test_compact_now_omits_target_when_unset() -> None:
     ds = _FakeDs(version=1, versions=_versions(1), tags={})
     maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
     # None → Lance's default FRAGMENT sizing; the #93 memory floor is forced regardless — rows are
-    # not a unit of memory, and this door runs on the catalog pod.
-    assert ds.optimize.compact_kw == {"batch_size": 64, "num_threads": 2}
+    # not a unit of memory, and this door runs on the catalog pod. Asserted against the constant
+    # rather than its numbers: a fourth spelling of the bound is the drift the constant exists to stop.
+    assert ds.optimize.compact_kw == dict(maintenance.COMPACTION_BOUND)
 
 
 # ---------------------------------------------------------------- #121 the on-demand doors ask the SWEEP'S gate, per verb
