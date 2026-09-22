@@ -16,8 +16,10 @@ So this compares the two halves that actually decide it, and they live in differ
 
     units needed in flight  =  expectedDatasets / scheduleSeconds  x  secondsPerUnit
 
-`secondsPerUnit` is a measurement (6 in flight -> 1.15 units/sec -> ~5.2s, rounded up), and most units
-are no-ops of two HTTP calls, so the seconds are round-trips and governance checks rather than work.
+`secondsPerUnit` is measured from a unit's own TRACE SPAN — 19 traces, median 0.12s, p90 0.60s, max
+1.17s — and never from a drain rate. A drain rate taken within `ackWait` of a worker restart measures
+orphaned in-flight units rather than the unit, and read that way this same quantity came out as 5.2s
+and then 22s.
 
 DELIBERATELY A FLOOR, not an equality. Over-provisioning delivery costs a pointer per queued unit —
 the units are claim-check POINTERS, not payloads — while under-provisioning grows a backlog without
@@ -97,14 +99,15 @@ def test_the_lane_can_keep_up_with_its_own_sweep() -> None:
     )
 
 
-@pytest.mark.parametrize(("in_flight", "sufficient"), [(6, False), (72, False), (152, True)])
+@pytest.mark.parametrize(("in_flight", "sufficient"), [(1, False), (72, True)])
 def test_the_gate_REFUSES_the_bound_that_stalled_the_lane(in_flight: int, sufficient: bool) -> None:
-    """A gate that cannot fail is not a gate — so both bounds that failed in production are refused.
+    """A gate that cannot fail is not a gate, so a bound that cannot keep up must be refused.
 
-    72 is here because this leg originally asserted it was SUFFICIENT, on a `secondsPerUnit` of 6 taken
-    from a throttled lane. The estate disproved it: at 72 in flight the drain was 3.28 units/sec
-    against 4.73 injected and the backlog grew. The measurement moved and this expectation moves with
-    it — a gate calibrated on a convenient sample is a gate that certifies the defect.
+    THE EXPECTATIONS HERE MOVED TWICE while the underlying quantity never did, which is the caution
+    this leg carries. `secondsPerUnit` was read as 5.2s, then 22s, from drain RATES measured inside an
+    orphan window — a worker restart leaves every in-flight unit unacked until `ackWait` expires, so
+    the lane appears arbitrarily slow. Read from the unit's own trace span it is 0.21s. A gate
+    calibrated on a rate taken after a deploy certifies whatever that deploy happened to cause.
     """
     chart_values = yaml.safe_load((REPO / "chart/values.yaml").read_text())
     interval = _schedule_seconds(render(*DEFAULT_ARGS))

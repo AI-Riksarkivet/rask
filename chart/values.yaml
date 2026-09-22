@@ -1531,22 +1531,23 @@ maintenance:
   # Declared so the sweep's cadence and the queue's capacity can be compared — they are set in
   # different files and nothing compared them until a lane stalled.
   #
-  # MEASURED 2026-09-22 AT REPRESENTATIVE CONCURRENCY, which is the part that matters: 72 units in
-  # flight drained 3.28 units/sec over four samples (94 and 103 per 30s between injections), so ~22s
-  # per unit. Most units are no-ops of two HTTP calls, so the seconds are round-trips and governance
-  # checks rather than work — and the CATALOG is the shared bottleneck, which is why the figure does
-  # not hold across concurrencies.
+  # MEASURED 2026-09-22 FROM THE UNIT ITSELF — every log line of a unit's trace id, first to last:
+  # 19 traces, median 0.12s, p90 0.60s, max 1.17s. Declared as 1, the p90 rounded up. A no-op unit is
+  # two HTTP calls and a base-ref pre-pass of ~16 reads at ~8ms, and that is all it is.
   #
-  # A FIRST READING OF 5.2s CAME FROM A THROTTLED LANE (6 in flight) AND DID NOT GENERALISE. Per-unit
-  # latency rises with concurrency because the contention is downstream, so a figure taken at a
-  # concurrency nobody runs sizes the lane for a world that does not exist. Re-measure this at the
-  # concurrency actually configured, never at a convenient one.
+  # THREE EARLIER READINGS OF THIS SAME NUMBER WERE ALL CONTAMINATED, and by the same thing: a worker
+  # restart ORPHANS every in-flight unit, and JetStream delivers nothing further until `ackWait`
+  # (720s) expires on them. Rates read inside that window — 1.15/sec at 6 in flight, 3.28/sec at 72 —
+  # measure the orphan block, not the unit, and yielded "5.2s" and then "22s" per unit against a real
+  # 0.21s. Read this from the TRACE SPAN, never from a drain rate, and never within ackWait of a
+  # deploy.
   #
   # `datasets / (schedule seconds) * secondsPerUnit` is how many units must be in flight to keep up.
-  # At 600 datasets, 120s and 22s that is 110 — against 72, which is why the backlog grew.
-  # tests/unit/test_the_lane_can_keep_up_with_its_own_sweep.py fails the render if it cannot.
+  # At 600 datasets, 120s and 1s that is 5 — so throughput was never the constraint; the orphan
+  # window was. tests/unit/test_the_lane_can_keep_up_with_its_own_sweep.py holds the floor anyway,
+  # because a slower unit (a real rewrite) moves the figure and nothing else would notice.
   expectedDatasets: 600
-  secondsPerUnit: 22
+  secondsPerUnit: 1
   # The drift reconciler's OWN cron. It only READS three stores (OpenFGA, the control-root registries,
   # the bucket listing) and reports where they disagree — cheap next to the sweep, which rewrites data
   # files, which is why it gets its own schedule instead of inheriting that one.
@@ -1610,7 +1611,7 @@ maintenance:
     # ~0.67 units/sec, `Unprocessed Messages` climbed past 2,000 and nothing drained. One knob cannot
     # serve both questions — the MEMORY bound is `maxConcurrentCompactions` below, which is held
     # around the rewrite itself, the only step that holds bytes.
-    maxConcurrentUnits: 80
+    maxConcurrentUnits: 40
     # The MEMORY bound: how many REWRITES may be resident at once. A no-op unit never acquires one.
     #
     # MEASURED 2026-09-22: a table of 240 MiB in 60 fragments was built through the catalog and left

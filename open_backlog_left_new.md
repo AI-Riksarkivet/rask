@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **102 are blocked on a decision** and **94 can be picked up today**.
+**197 open items**, of which **102 are blocked on a decision** and **95 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 36 | 2 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1148,6 +1148,38 @@ have no `uv.lock` and so cannot be built to emit anything.
   sized for *a* compaction, not for however many land at once; the real ceiling today is FastAPI's
   threadpool, which is an accident rather than a decision. Harmless while every unit is a no-op at
   167Mi; worth a bound before a tier with real rewrite work arrives.
+
+
+**LH-190 · A worker restart orphans every in-flight unit, and the lane delivers nothing for a full `ackWait`**
+`maintenance` · **HIGH** · OPEN
+- **MEASURED LIVE 2026-09-22, and it is the true cause of every "stall" read today.** Two minutes
+  after a rolling restart the consumer reports:
+  `Last delivery: 1m57s ago` · `Outstanding Acks: 152 out of maximum 152` · `Ack Wait: 12m0s` ·
+  `Redelivered: 0` · `Unprocessed Messages: 4,420` · worker pods aged 2m10s and 2m20s.
+  Every outstanding unit was delivered to pods that no longer exist. JetStream will not deliver
+  another until `ackWait` expires on them, so **a deploy costs this lane ~12 minutes of total stall.**
+- **THE UNITS ARE NOT SLOW — 0.21s, measured from each unit's own trace span** (19 traces, median
+  0.12s, p90 0.60s, max 1.17s). A no-op unit is two HTTP calls plus a base-ref pre-pass of ~16 reads
+  at ~8ms. The lane's steady-state capacity is therefore enormous next to the 4.73 units/sec the
+  sweep injects; throughput was never the constraint.
+- **IT POISONS EVERY RATE-BASED MEASUREMENT TAKEN NEAR A DEPLOY, which is how it stayed invisible.**
+  Drain rates read inside the window gave "5.2s per unit" and then "22s per unit" for a quantity whose
+  real value is 0.21s, and each of those drove a configuration change. A rate measured after a restart
+  measures the orphan block.
+- **RAISING `maxAckPending` MAKES IT WORSE, which is the counter-intuitive part:** the bound is exactly
+  how many units a restart can orphan. The lane that was unbounded (NATS's 1,000) could orphan a
+  thousand.
+- *What is left:* Decide how a shutting-down worker releases what it holds. The candidates are a
+  graceful drain on SIGTERM (finish or NAK the outstanding units, so they redeliver at once rather
+  than after 720s), a shorter `ackWait` (bounded below by the longest single compaction, so it cannot
+  go far), or accepting the window and not measuring inside it. The first is the only one that removes
+  the stall rather than shortening it.
+- *Closes when:* A rolling restart of `rask-maintenance-worker` is followed by delivery resuming in
+  seconds rather than in `ackWait`, observed on the live consumer, and a gate covers whichever
+  mechanism is chosen.
+- *Evidence:* live `consumer info` 2026-09-22 (above) · unit trace spans (19 traces, p90 0.60s) ·
+  `chart/templates/dapr-component.yaml` (`ackWait: 720s` on the work component) · [[LH-188]] for the
+  bound this interacts with
 
 
 ## PHASE 1 · CROSS-CUTTING
