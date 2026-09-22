@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **100 are blocked on a decision** and **100 can be picked up today**.
+**201 open items**, of which **100 are blocked on a decision** and **101 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 38 | 6 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 39 | 7 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1150,6 +1150,33 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   that is answered the closing bar ("zero UNGOVERNED medallion datasets") cannot be met either way.
 - *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
 - *Evidence:* `services/maintenance/src/maintenance/services/compaction_executor.py:107` · `services/maintenance/src/maintenance/services/reconcile.py:95,127,261` · `chart/templates/medallion.yaml:293,523` · ``grep -i 'two homes\|bind86' docs/DECISIONS.md` → no ruling recorded`
+
+**LH-192 · The reconciler compares the catalog against authz in BOTH directions and against storage in only ONE, so a table registered at a location holding no bytes is invisible**
+`maintenance, catalog` · **MED**
+- **FOUND BY HAND 2026-09-22 with a live instance, after the re-audit's four sweeps missed it.** The
+  drift report's own pairings, read off their docstrings: `_ungoverned_tables` is "catalog tables
+  carrying NO authorization tuples at all" and `_unregistered_datasets` names itself "THE INVERSE" —
+  "storage holds a dataset and the catalog does not". So catalog↔authz is covered both ways, and
+  catalog↔storage is covered ONE way: bytes without a record. **A record without bytes is detected by
+  nothing.**
+- *The live instance:* `POST /v1/table/bronze$events/describe` answers **200** with
+  `location = s3://lance-catalog/medallion/bronze`; `ls /data-0/lance-catalog/medallion/bronze` answers
+  **No such file or directory**. This is the cascade HEAD — the dataset whose registration the
+  producer's "GOVERNANCE PRECEDES THE FIRST ROW" comment exists for — so a policy set on it polices no
+  bytes, a protection record guards nothing, and an FGA grant keys off a table whose data is not there.
+  The reconcile report ran clean over it: `ghost_tables 7` is an FGA-side category and does not mean
+  this.
+- *Why it is not a one-line addition, and this is the part to know before starting:* the missing check
+  cannot reuse `_unregistered_datasets`'s machinery. That detector RECOVERS a table id from a location
+  in the catalog's own `<root>/<uuid8>_<ns>$<name>` layout, and `bronze$events` was registered with an
+  EXPLICIT location by `register_written_dataset`, so it is outside that layout and a storage-side scan
+  never produces its id. Answering "does this record's location exist" means a storage probe per table
+  across 97 warehouses — the order of work `reconcile`'s own comment reserves for the orphan pass ("it
+  opens every dataset rather than comparing three stores"), not for the cheap three-store compare.
+- *Closes when:* A catalog record whose registered location holds no bytes is reported by the drift
+  report, gated by a test, with `bronze$events` (or its successor) as the fixture — and the probe sits
+  in the separately-gated expensive pass rather than on the 300 s tick.
+- *Evidence:* `services/maintenance/src/maintenance/services/reconcile.py:627 (_unregistered_datasets, "THE INVERSE")` · `:655 (_ungoverned_tables)` · `:150 (GhostObject — "An FGA object carrying tuples that no registry record names")` · live describe + `ls` on 2026-09-22
 
 **LH-171 · Nine governed transform records fail `TransformSpec` validation and the estate only WARNs**
 `medallion, service-kit` · **MED**
