@@ -433,7 +433,12 @@ of mine in this same session.**
   — the naive port's exact defect — is a HARD error (`relation 'estate#reader' not found`), and
   collapsing `can_stage_events` to a pure userset over `owner` reds exactly one check, the stager who
   holds the rung while holding no tier.
-- **A HOP NOBODY GATES, found while trying to prove the new type live (2026-09-22):** `make fga-test`'s
+- **THAT HOP NOW HAS A GATE (2026-09-22): `make fga-store-check`.** It reads the store through the
+  CATALOG'S OWN POD, using the address the code reads (`RASK_FGA_API_URL`) rather than a port-forward
+  that answers for a different one, and diffs the store's type set against `model.json`. Mutation-
+  checked: adding a type the store lacks prints both sides and exits 1. Deliberately NOT in `make
+  check` — it needs a live cluster and `check` is offline.
+- **A HOP NOBODY GATED, found while trying to prove the new type live (2026-09-22):** `make fga-test`'s
   drift check diffs `model.fga` against `model.json` — two files in the repo — and **nothing compares
   either against the model actually loaded in the running OpenFGA store**. `write_model.py` PUTs it at
   deploy (`/stores/{id}/authorization-models`), so a store whose newest model predates a commit answers

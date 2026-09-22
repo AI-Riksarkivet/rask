@@ -1,4 +1,4 @@
-.PHONY: sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -257,6 +257,16 @@ check: fmt lint typecheck knip fga-test
 # `model test` does fail on an invalid model (exit 1) but reports it as an rpc error from the test
 # runner; and because `model transform` does NOT — it emits well-formed JSON from an invalid model, so
 # regenerating `model.json` as `model.fga.yaml`'s header instructs makes the drift check agree.
+fga-store-check: ## Does the RUNNING store hold the model this repo declares? (needs a cluster)
+	@bash scripts/fga-store-check.sh
+
+# THE FOURTH COPY. `fga-test` below diffs `model.fga` against `model.json` — two files in the repo
+# that agree with each other — and the estate already killed a three-copy lie once. The copy it still
+# cannot see is the one in the STORE, which is where every live check is answered from.
+# Measured 2026-09-22: with both repo files declaring `type estate`, `make fga-test` green and
+# `ms-authz` green in CI, the store held ten types and no `estate`. Nothing in the repo could tell
+# that state from the one after the hook ran. `fga-store-check` is the only thing that can, and it is
+# deliberately NOT in `check`: it needs a live cluster, and `check` is offline.
 fga-test: ## The OpenFGA model's validity + its own suite + the three-copy drift check
 	@AUTH=packages/service-kit/src/service_kit/governed/auth; \
 	FGA=$$(command -v fga 2>/dev/null || echo $(LOCALBIN)/fga); \
