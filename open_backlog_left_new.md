@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **100 are blocked on a decision** and **101 can be picked up today**.
+**200 open items**, of which **100 are blocked on a decision** and **100 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 39 | 7 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 38 | 6 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1150,54 +1150,6 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   that is answered the closing bar ("zero UNGOVERNED medallion datasets") cannot be met either way.
 - *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
 - *Evidence:* `services/maintenance/src/maintenance/services/compaction_executor.py:107` · `services/maintenance/src/maintenance/services/reconcile.py:95,127,261` · `chart/templates/medallion.yaml:293,523` · ``grep -i 'two homes\|bind86' docs/DECISIONS.md` → no ruling recorded`
-
-**LH-192 · The reconciler compares the catalog against authz in BOTH directions and against storage in only ONE, so a table registered at a location holding no bytes is invisible**
-`maintenance, catalog` · **MED**
-- **FOUND BY HAND 2026-09-22 with a live instance, after the re-audit's four sweeps missed it.** The
-  drift report's own pairings, read off their docstrings: `_ungoverned_tables` is "catalog tables
-  carrying NO authorization tuples at all" and `_unregistered_datasets` names itself "THE INVERSE" —
-  "storage holds a dataset and the catalog does not". So catalog↔authz is covered both ways, and
-  catalog↔storage is covered ONE way: bytes without a record. **A record without bytes is detected by
-  nothing.**
-- *The live instance:* `POST /v1/table/bronze$events/describe` answers **200** with
-  `location = s3://lance-catalog/medallion/bronze`; `ls /data-0/lance-catalog/medallion/bronze` answers
-  **No such file or directory**. This is the cascade HEAD — the dataset whose registration the
-  producer's "GOVERNANCE PRECEDES THE FIRST ROW" comment exists for — so a policy set on it polices no
-  bytes, a protection record guards nothing, and an FGA grant keys off a table whose data is not there.
-  The reconcile report ran clean over it: `ghost_tables 7` is an FGA-side category and does not mean
-  this.
-- *Why it cannot reuse the existing machinery:* `_unregistered_datasets` RECOVERS a table id from a
-  location in the catalog's own `<root>/<uuid8>_<ns>$<name>` layout, and `bronze$events` was registered
-  with an EXPLICIT location by `register_written_dataset` — outside that layout, so a storage-side scan
-  never produces its id and the detector skips it by design ("a location `table_id_from_location`
-  cannot answer for is skipped, never reported").
-- *AND THE COST IS NOT WHERE THIS ROW FIRST PUT IT — corrected TWICE, and it ends up small.* It first
-  said "a storage probe per table across 97 warehouses", then "a `describe` per table". Both are wrong,
-  and `lance_docs` settles it. **The storage side is already paid for:** `_orphan_category` runs
-  `discover_datasets` over every scannable bucket and holds the URIs in memory as `datasets`, which is
-  what it hands to `_unregistered_datasets` — membership is a dict lookup. **And the catalog side is
-  already on disk:** `lance_docs/namespace.md:968-976` gives the `__manifest` schema as `object_id`,
-  `object_type`, **`location` — "String (nullable) … Relative path to the table directory within the
-  root (only for tables)"** — plus `metadata` and `base_objects`. The reconciler's `_tables()` reads
-  `columns=["object_id", "object_type"]` and simply does not select it.
-- *SO THE WORK IS: select one more column, and compare.* Add `location` to the manifest read, thread it
-  through `Sources.tables`, and report a table whose resolved location is absent from the URIs
-  `discover_datasets` already found. No new storage call and no new catalog call.
-- *The spec also hands over the false-positive discriminator.* `location` is **nullable** and present
-  "only for tables", so a declared-only table — "reserved, no storage yet", the class
-  `include_declared=false` exists to drop — carries no location to check. The detector is therefore
-  exactly: `object_type == "table"` AND a non-null `location` that resolves to nothing. That is
-  self-discriminating rather than needing an exclusion list.
-- *The false positive to design against, and the catalog already models it:* a DECLARED-ONLY table has
-  a record and no storage legitimately — `GET /v1/table`'s own `include_declared=false` exists to drop
-  "declared-only tables (reserved, no storage yet)". A detector that does not exclude them would report
-  every reservation in the estate as a defect, which is the loudest possible way to say nothing.
-- *Closes when:* A catalog record whose registered location holds no bytes is reported by the drift
-  report, gated by a test with `bronze$events` (or its successor) as the fixture, and declared-only
-  tables are excluded by their null location rather than by an allowlist. It rides
-  `_orphan_category`'s existing walk — that pass already holds both sides — so it inherits that
-  category's gating and adds no call of its own.
-- *Evidence:* `services/maintenance/src/maintenance/services/reconcile.py:627 (_unregistered_datasets, "THE INVERSE")` · `:655 (_ungoverned_tables)` · `:150 (GhostObject — "An FGA object carrying tuples that no registry record names")` · `lance_docs/namespace.md:968-976` (the `__manifest` schema, incl. the unselected `location` column) · `services/maintenance/.../reconcile.py:476 (_tables reads only object_id+object_type)` · live describe + `ls` on 2026-09-22
 
 **LH-171 · Nine governed transform records fail `TransformSpec` validation and the estate only WARNs**
 `medallion, service-kit` · **MED**
