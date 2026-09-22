@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **102 are blocked on a decision** and **95 can be picked up today**.
+**198 open items**, of which **102 are blocked on a decision** and **96 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 37 | 3 | 10 |
+| **PHASE 1 · LAKEHOUSE** | 38 | 4 | 10 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 9 |
 | **PHASE 2 · COMPUTE** | 55 | 36 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 28 | 11 | 6 |
@@ -1264,6 +1264,41 @@ have no `uv.lock` and so cannot be built to emit anything.
 - *Evidence:* live `consumer info` 2026-09-22 (above) · unit trace spans (19 traces, p90 0.60s) ·
   `chart/templates/dapr-component.yaml` (`ackWait: 720s` on the work component) · [[LH-188]] for the
   bound this interacts with
+
+
+**LH-191 · The sweep re-plans the WHOLE estate every 120s because no policy sets a cadence**
+`maintenance` · **MEDIUM** · OPEN
+- **MEASURED LIVE 2026-09-22.** Every tick reports `planned=570 skipped=7`, and those 7 are the trash
+  exclusions the code names — **not one dataset is skipped for cadence.** At `@every 120s` that is
+  ~17,100 units an hour, re-planning an estate in which almost every table is already at target and
+  answers `compaction_distributed_nothing_to_do`.
+- **THE CONTROL EXISTS AND NOTHING USES IT.** `sweep._policy_skip_reason` implements
+  `compact_interval_hours` — "skips until the interval has elapsed since the sweep's own per-dataset
+  `last_maintained_at` stamp" — with the fail-safe already thought through (an unreadable, absent or
+  malformed stamp MAINTAINS, so a lost stamp cannot silence maintenance). The estate registers 27
+  policies (`policies=27` on the planner) and the live planner carries
+  `MAINTENANCE_POLICY_ROOT = None` against a chart default of `policyRoot: ""`. Whatever those 27
+  cover, the zero interval-skips say none of them sets one.
+- **IT IS THE VOLUME BEHIND TWO OTHER ROWS.** The work lane keeps up by only ~9% ([[LH-188]]'s
+  bounds are sized against 4.73 units/sec) and an outage's backlog drains at ~1,600 units an hour, so
+  [[LH-190]]'s stalls take hours to clear. Both numbers are consequences of planning 570 datasets
+  every two minutes; a cadence that skipped tables maintained an hour ago would cut the steady-state
+  volume by most of itself and shorten every recovery in proportion. It attacks the VOLUME where
+  those rows attack delivery and recovery.
+- **WHY THIS IS NOT JUST A VALUE TO SET:** the right interval is a statement about how often a
+  governed table genuinely needs compacting, and it differs per tier — a bronze blob tier taking
+  continuous ingest is not a gold table written once a day. The mechanism is per-POLICY for exactly
+  that reason. Picking one global number would be the same mistake as the thread-limiter bound: one
+  knob answering two questions.
+- *What is left:* Decide whether the estate declares cadences per policy and what they are, or whether
+  planning everything every tick is intended. If intended, the two rows above are sized correctly and
+  nothing further is needed; if not, this is the cheapest lever on both.
+- *Closes when:* A tick reports a non-zero cadence skip count, or this row records the ruling that
+  re-planning the whole estate every 120s is deliberate.
+- *Evidence:* live planner 2026-09-22 `planned=570 skipped=7` on every tick · `policies=27` ·
+  `MAINTENANCE_POLICY_ROOT = None`, `chart/values.yaml policyRoot: ""` ·
+  `services/maintenance/src/maintenance/services/sweep.py:103-118` (`compact_interval_hours` and its
+  fail-safe) · [[LH-188]] for the bounds this volume sizes, [[LH-190]] for the recovery it lengthens
 
 
 ## PHASE 1 · CROSS-CUTTING
