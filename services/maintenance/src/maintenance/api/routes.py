@@ -39,7 +39,7 @@ from maintenance.services.rebuild import rebuild_tuples
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
 from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.repair import repair_drift
-from maintenance.services.sweep import emit_sweep_lineage, plan_sweep, run_sweep, summarize
+from maintenance.services.sweep import emit_sweep_lineage, memory_readings, plan_sweep, run_sweep, summarize
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
 from maintenance.services.work_queue import enqueue_units
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -105,7 +105,19 @@ async def on_cron(settings: SettingsDep, emitter: LineageEmitterDep, dapr: DaprC
             # The trash exclusions are decided WITHOUT work and are results, not units — they must not be
             # enqueued, and their lineage is emitted here because no subscription will ever see them.
             await emit_sweep_lineage(emitter, decided, delimiter=settings.delimiter)
-            summary = {"status": "enqueued", "planned": len(items), "published": published, "not_queued": len(not_queued), "skipped": len(decided)}
+            # `memory_readings()` BESIDE THE COUNTERS, because this lane is the one that runs and
+            # [[LH-183]] is a live row about THIS pod. Enqueueing moved the compaction to a worker
+            # sized for it; it did not move the discovery pass, which still opens one manifest per
+            # dataset here. The readings rode `summarize` — the SERIAL lane's summary — so the
+            # diagnostic for the OOM was absent from every tick the estate actually emits.
+            summary = {
+                "status": "enqueued",
+                "planned": len(items),
+                "published": published,
+                "not_queued": len(not_queued),
+                "skipped": len(decided),
+                **memory_readings(),
+            }
             # THE COMPLETION HALF OF THE PAIR `plan_sweep` OPENED. `record_run_started` fires inside
             # `plan_sweep`, which both lanes call; `record_run` used to fire only inside `run_sweep`,
             # which only the serial lane calls — so on the lane every deployment actually runs, the pair

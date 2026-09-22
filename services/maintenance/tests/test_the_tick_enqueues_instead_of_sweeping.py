@@ -177,7 +177,12 @@ async def test_the_cron_tick_MAINTAINS_NOTHING_when_a_work_topic_is_configured(m
 
     summary = await routes.on_cron(settings, cast(Any, object()), cast(Any, object()))
 
-    assert summary == {"status": "enqueued", "planned": 2, "published": 2, "not_queued": 0, "skipped": 0}
+    # THE COUNTERS, not the whole dict. What this test is about is above — `run_sweep` is stubbed to
+    # raise, so reaching it fails here rather than in an assertion. Pinning the summary by EQUALITY
+    # made it a change-detector for every field added beside the counters: the memory readings
+    # [[LH-183]] needs on this lane turned it red while nothing it tests had changed.
+    counters = {"status": "enqueued", "planned": 2, "published": 2, "not_queued": 0, "skipped": 0}
+    assert summary.items() >= counters.items(), summary
     assert published == ["s3://b/a.lance", "s3://b/b.lance"]
 
 

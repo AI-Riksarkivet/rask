@@ -1191,11 +1191,56 @@ def summarize(results: list[DatasetResult]) -> dict[str, Any]:
         # else is resident". Measured in the pod 2026-09-21: cgroup 512 MB, caps clamped from 128+256
         # to 68+136 MB — a denominator no values file carries, because `affordable_cache_bytes`
         # derives it from the cgroup at runtime.
-        **_session_occupancy(),
-        # Beside the Lance bytes, because the two together are the measurement: if this tracks RSS the
-        # growth is Python, and if it is flat while RSS climbs it is native and no heap reading will see it.
-        "python_blocks": _python_heap_blocks(),
+        # THE THREE READINGS TOGETHER, via one seam both lanes call. They are the measurement only as a
+        # set — a lane carrying `python_blocks` without RSS carries a series with nothing to compare it
+        # to — and `summarize` is the SERIAL lane, while every deployment runs the queue one.
+        **memory_readings(),
     }
+
+
+def memory_readings() -> dict[str, int]:
+    """The three numbers [[LH-183]] turns on, for whichever lane is reporting.
+
+    ONE SEAM BECAUSE THEY ARE ONE MEASUREMENT. The row's method is a comparison, not three facts:
+    ``python_blocks`` tracking RSS means Python retention, flat while RSS climbs means native
+    allocation that no heap fix will touch. A caller that reports a subset reports nothing.
+
+    IT EXISTS BECAUSE THE LANE THAT RUNS WAS NOT REPORTING. The readings rode ``summarize``, which
+    only ``run_sweep`` — the serial lane — calls; the queue lane builds its own summary in
+    ``routes.on_cron``, and on the deployed estate 2026-09-22 that line carried five counters and no
+    memory at all. The planner still does the accused work either way: ``plan_sweep`` opens one
+    manifest per dataset, 568 a tick, in a 512Mi pod.
+    """
+    return {**_session_occupancy(), "python_blocks": _python_heap_blocks(), "rss_bytes": _rss_bytes()}
+
+
+def _rss_bytes() -> int:
+    """Resident set size of THIS process, from ``/proc/self/status``.
+
+    ON THE TICK LINE RATHER THAN FROM A SAMPLER, and that is the whole reason it is here: the
+    comparison above needs both series at the same instant. Read from outside, RSS arrives on its own
+    cadence and has to be joined to a tick by timestamp — and this row already measured ~10Mi of
+    spread between two samplers reading the SAME tick seconds apart, which is larger than several of
+    the per-tick steps being argued about.
+
+    ``VmRSS`` AND NOT ``resource.getrusage(RUSAGE_SELF).ru_maxrss``, which is a HIGH-WATER mark: it
+    can never come back down, so it cannot distinguish a tick that grew and released from one that
+    retained — the exact question. (The row used it once as a deliberate upper bound, to REFUTE a
+    candidate; an upper bound is sound for refuting and useless for tracking.)
+
+    NEVER RAISES, on the same terms as :func:`_session_occupancy`: this is diagnostics riding a cron
+    tick that reclaims disk, so a kernel without procfs costs the estate a metric rather than the
+    sweep, and ``-1`` keeps the field's presence a fixed contract.
+    """
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    # `VmRSS:\t  123456 kB` — procfs reports kB for this field on every supported arch.
+                    return int(line.split()[1]) << 10
+    except (OSError, IndexError, ValueError):  # pragma: no cover - a platform without procfs
+        return -1
+    return -1
 
 
 def _python_heap_blocks() -> int:
