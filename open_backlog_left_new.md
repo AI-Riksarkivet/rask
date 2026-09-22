@@ -1204,6 +1204,31 @@ measured (~10-14 MiB per commit pas
   fixture series could not have shown. Not a contradiction of the row's answer; a reason the closing
   bar is a soak rather than another three tables.
 
+- **THE REMEDY SHIPPED 2026-09-23 — the worker retires on a PASS BUDGET, and the premise that
+  rejected it is gone.** This row read "every restart strands the sidecar's buffer for a full
+  `ackWait`, so the recycle interval and that remedy must be chosen together". [[LH-190]] was
+  falsified on the live lane the day before: a restart costs pod-restart-time plus ~5s and the held
+  units redeliver at once, because NATS sees the subscriber's connection drop rather than waiting on
+  the ack timer. Recycling is cheap, so it is the answer rather than the crude fallback.
+- *The mechanism:* `should_retire(passes, after=...)` in `rewrite_slot.py`, checked in `handle_unit`
+  AFTER `ack_for` so the unit that tripped the mark is still acked, and effected by **SIGTERM to
+  self** — the same path a rolling restart takes, so `arm_drain_on_sigterm` flips the drain flag (the
+  next delivery is answered RETRY) and uvicorn finishes the in-flight response before the container
+  exits. Counted in PASSES, not units: a no-op unit never reaches a rewrite, and retention tracks
+  commits.
+- *The default is 150 and the gate picked it, not me.* The first number written was 200, taken from
+  this row's raw "~300 passes" of headroom. The sibling arithmetic has always applied a 0.75 usable
+  fraction for shape uncertainty; applying it gives a ceiling of `((4Gi x 0.75) - 320Mi) / 14 MiB` =
+  **~196**, so 200 overruns by 48 MiB. `test_the_worker_can_hold_every_unit_it_admits.py` now carries
+  both arithmetics and refuses 200 by name.
+- **NOT YET OBSERVED FIRING, and that is a real gap rather than a formality.** Both wiring hops are
+  mutation-checked (retiring unconditionally fails the below-the-mark leg; moving the check before the
+  ack fails the ordering leg) and the setting is read back off the live Deployment as
+  `MAINTENANCE_RECYCLE_AFTER_PASSES=150`. What has not happened is a retirement on the cluster,
+  because **every table on this estate is at target**: measured 2026-09-23, the worker logged
+  **97 `nothing_to_do` and ZERO committed rewrites in three hours**. Forcing one needs a #50 policy
+  record with a small `target_rows_per_fragment` through the authenticated catalog door — that is the
+  must-fire probe this row still owes, and it is the same fixture the retention rounds used.
 - *Closes when:* The worker survives a full day of sweep AND reconcile ticks inside its limit with coverage unchanged, and what bounds it is named and measured rather than inferred.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
