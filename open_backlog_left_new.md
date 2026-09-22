@@ -322,6 +322,11 @@ have no `uv.lock` and so cannot be built to emit anything.
   contract_violations=0`. **All 23 unreadable are the relative-`source_uri` kind** — every entry
   carries "names no storage location". Against this row's stated 60 relative nodes and 24 reaching the
   sweep as MISSING_ON_STORAGE, the population is **60 -> 23** and the storage-loss tail is **24 -> 1**.
+- **THE LIVE `storage_loss=1` IS THIS ROW TOO — it is `bronze$events`**, already named in the restamp
+  list below. So it is not a separate defect and needs no separate row: the same blocked ruling covers
+  it. Whether its bytes went with a bucket reap or were never at the composed `medallion/<tier>`
+  location the graph records, the repair is identical — correct the stamp, and the sweep stops
+  reporting it.
 - **AND THE SOURCE IS CLOSED, which changes what the blocked ruling is FOR** ([[LH-187]]). The door
   that emitted a relative `source_uri` was `register_table` — the one door taking a CALLER-supplied
   location — and it already resolves before emitting (`tables.py:805`, `absolute_table_location`).
