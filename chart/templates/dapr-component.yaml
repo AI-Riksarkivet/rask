@@ -455,7 +455,7 @@ spec:
        It bounds DELIVERY, not memory: the same number of units still execute at once. Pinned by
        tests/unit/test_a_work_unit_is_not_delivered_before_it_can_run.py.
     */}}
-    - { name: maxAckPending, value: "{{ mul .Values.maintenance.dedicatedWorkers.maxConcurrentUnits (int .Values.maintenance.dedicatedWorkers.replicas) }}" }
+    - { name: maxAckPending, value: "{{ include "lance.maintenanceMaxAckPending" . }}" }
 scopes:
   - {{ .Values.maintenance.daprAppId }}
   {{- /*

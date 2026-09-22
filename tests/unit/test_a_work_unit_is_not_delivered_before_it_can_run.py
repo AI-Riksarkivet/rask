@@ -56,6 +56,11 @@ def _work_component(docs: tuple[dict, ...]) -> dict:
     return found[0]
 
 
+def _script(job: dict) -> str:
+    """Every argv token of a Job's containers as one string — the shell script is the last of them."""
+    return " ".join(part for c in job["spec"]["template"]["spec"]["containers"] for part in [*c.get("command", []), *c.get("args", [])])
+
+
 def test_the_work_component_renders_at_all() -> None:
     """An empty render would make every leg below vacuously true."""
     assert _work_component(render(*DEFAULT_ARGS))
@@ -104,3 +109,32 @@ def test_the_WORKER_actually_enforces_the_number_it_is_given() -> None:
 def test_the_value_is_declared_where_an_operator_can_find_it(flag: str) -> None:
     """Beside the replica count it is multiplied with, not buried in a template."""
     assert flag.rsplit(".", 1)[-1] in (REPO / "chart/values.yaml").read_text(encoding="utf-8"), f"{flag} is not declared in values.yaml"
+
+
+def test_an_EXISTING_consumer_is_converged_too() -> None:
+    """The component sets the bound at CREATION only, so a live estate needs someone to converge it.
+
+    MEASURED 2026-09-22: adding `maxAckPending` to the component left the deployed durable — created
+    2026-09-03 — on NATS's default of 1,000 while the chart, the rendered Component and the legs above
+    all said 80. Deleting the durable and letting Dapr rebuild it gave `Max Ack Pending: 80`, so the key
+    is honoured and only at creation. Without this step the gate is green on an estate that is not.
+    """
+    job = [d for d in render(*DEFAULT_ARGS) if d.get("kind") == "Job" and "nats-stream" in d["metadata"]["name"]]
+    assert job, "no nats-stream Job rendered"
+    script = _script(job[0])
+    assert "converge_max_ack_pending MAINTENANCE_WORK" in script, (
+        "the stream Job never converges the work durable's max_ack_pending, so an estate whose consumer "
+        "predates the setting keeps the old bound silently and forever — the chart says 80 and the "
+        "broker does 1,000"
+    )
+
+
+def test_the_JOB_and_the_COMPONENT_agree_on_the_number() -> None:
+    """Two spellings of one bound is how they drift; both come from `lance.maintenanceMaxAckPending`."""
+    docs = render(*DEFAULT_ARGS)
+    component = int(_meta(_work_component(docs))["maxAckPending"])
+    job = next(d for d in docs if d.get("kind") == "Job" and "nats-stream" in d["metadata"]["name"])
+    script = _script(job)
+    found = re.search(r"converge_max_ack_pending MAINTENANCE_WORK \S+ (\d+)", script)
+    assert found, "the converge call carries no number"
+    assert int(found.group(1)) == component, f"the Job converges to {found.group(1)} while the component sets {component}"

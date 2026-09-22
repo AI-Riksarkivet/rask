@@ -147,6 +147,34 @@ spec:
                   echo "stream $1: retention=$got (as intended)"
                 fi
               }
+              {{- /*
+                 A CONSUMER'S CONFIG DOES NOT SELF-HEAL FROM THE COMPONENT, and that is why this is
+                 here rather than trusted to Dapr. MEASURED 2026-09-22: adding `maxAckPending` to the
+                 work component left the LIVE durable — created 2026-09-03 — on NATS's default of
+                 1,000, while the chart, the rendered Component and the gate all said 80. Deleting the
+                 durable and letting Dapr rebuild it produced `Max Ack Pending: 80`, so the key IS
+                 honoured, but only at CREATION. An estate that already has the consumer keeps the old
+                 bound silently and forever.
+
+                 Unlike a STREAM's retention this CAN be converged in place — `nats consumer edit
+                 --max-pending=N --force` is non-interactive (verified against the live broker before
+                 this was written, the lesson [[LH-151]]'s silent `stream add` failure taught) — so
+                 this repairs rather than refusing and telling an operator to drain something.
+              */}}
+              converge_max_ack_pending() {
+                local want="$3" got
+                got=$(nats --server "$S" consumer info "$1" "$2" --json 2>/dev/null | sed -n 's/.*"max_ack_pending":[ ]*\([0-9]*\).*/\1/p' | head -1)
+                if [ -z "$got" ]; then
+                  echo "consumer $1/$2: not present yet — Dapr creates it with maxAckPending=$want from the component"
+                elif [ "$got" != "$want" ]; then
+                  echo ">> consumer $1/$2 has max_ack_pending=$got, the chart intends $want — converging"
+                  nats --server "$S" consumer edit "$1" "$2" --max-pending="$want" --force >/dev/null \
+                    || { echo "!! FAILED to converge $1/$2 max_ack_pending — the lane keeps delivering $got units to a fleet that can run $want, and a queued unit burns its ackWait while idle"; exit 1; }
+                  echo "consumer $1/$2: max_ack_pending now $want"
+                else
+                  echo "consumer $1/$2: max_ack_pending=$got (as intended)"
+                fi
+              }
               for stream in LINEAGE MEDALLION TRAINING DLQ{{ if .Values.catalog.controlEmit }} CATALOG_CONTROL{{ end }}; do
                 assert_retention "$stream" limits
               done
@@ -220,6 +248,7 @@ spec:
               # would answer that question wrongly by 168 hours.
               add_workqueue_if_missing MAINTENANCE_WORK "maintenance.work.>"
               assert_retention MAINTENANCE_WORK workqueue
+              converge_max_ack_pending MAINTENANCE_WORK "{{ .Values.maintenance.daprAppId }}-work-durable" {{ include "lance.maintenanceMaxAckPending" . }}
               {{- end }}
               {{- if .Values.maintenance.indexTopic }}
               # The index-build lane, a SECOND work queue beside the one above. Same retention and the
