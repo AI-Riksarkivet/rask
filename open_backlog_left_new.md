@@ -675,6 +675,23 @@ have no `uv.lock` and so cannot be built to emit anything.
   **`rss_bytes` IS NOT `kubectl top` AND THE TWO MUST NOT BE MIXED:** VmRSS read 256.7 MiB on the same
   pod `kubectl top` reported at 217Mi, because the metrics API reports a container's WORKING SET.
   Within a series each is consistent; across series the difference is the measure, not the memory.
+- **THE WORKER HALF IS MEASURED NOW, and a rewrite RELEASES what it takes.** This row's claim is
+  native allocation that is never given back, and until today no unit had ever rewritten a fragment,
+  so the claim had never met a real compaction. One was built: a 240 MiB table in 60 fragments through
+  the catalog, left for the sweep. `/proc/1/status` inside the worker every 2s:
+  `294Mi -> 365 -> 414 -> 370 -> 323 -> 427 -> 729 -> 380 -> 316 -> 431 -> 317Mi`, then flat for 60s.
+  **Peak +434 MiB over baseline, settling at +22Mi.** The second worker showed the same shape at
+  +128Mi. So the bulk IS released; what the row is really about is that +22Mi.
+- **WHETHER THAT +22Mi IS WARM-UP OR RETENTION IS THE ROW'S REMAINING QUESTION, and one compaction
+  cannot answer it.** The planner's own series settles the analogous question for the discovery pass —
+  two independent pods stepped to *exactly* 303.9Mi at tick 3 and then oscillated in a 2.1Mi band, so
+  that step is deterministic warm-up rather than a leak. The worker needs the same treatment: two
+  successive compactions on ONE worker, comparing the SETTLED baseline between them. `B2 - B1 ~= B1 -
+  B0` means it retains per rewrite and this row holds for that path; `B2 ~= B1` means the first was
+  warm-up.
+  **THE EXPERIMENT IS WRITTEN AND HAS NOT RUN CLEANLY**: both attempts were spoiled by the work lane
+  being stalled ([[LH-190]]), so no second compaction ever executed. It needs a lane that delivers,
+  which is that row's business, not this one's.
 - **THE OOM DOES NOT REPRODUCE TODAY — 14 samples over 13 minutes, 2026-09-22.** The planner held
   **214 -> 217Mi of 512Mi**, max-minus-min **4Mi**, against this row's pre-split baseline of 319Mi
   climbing to OOMKill. Flat inside the +/-10Mi spread the row documents, so a slight upward drift
