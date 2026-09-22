@@ -1712,6 +1712,16 @@ maintenance:
   # raising this global, so the blob tiers stay bounded.
   scanBatchSize: 64
   compactThreads: 2
+  # THE BOUND THE TWO ABOVE REACH FOR, in BYTES rather than rows, and the one the pod's memory is
+  # actually sized against. Declared here — it was a code default only — because the worker's memory
+  # limit, `dedicatedWorkers.maxConcurrentUnits` and this number must fit together and all three are
+  # separately editable.
+  #
+  # MEASURED 2026-09-22: a compaction unit bounded at this 256 MiB peaked at 729Mi against a 294Mi
+  # baseline, so ~1.7x the byte bound is resident per unit. That ratio is what
+  # `test_the_worker_can_hold_every_unit_it_admits.py` multiplies out against the pod limit, so raising
+  # this without lowering the concurrency (or raising the limit) fails the render rather than the pod.
+  maxSourceBytes: 268435456
   # Emit a maintenance lineage event per materially-compacted dataset (shows GC in producers() next to
   # writes) AND a FAIL event per maintain:-errored dataset (deterministic per-dataset run id — the flood
   # guard). Off by default (opt-in, like the medallion toggles); on → compaction joins the pubsub scope +
