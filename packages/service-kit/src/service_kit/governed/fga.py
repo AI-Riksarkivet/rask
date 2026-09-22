@@ -200,22 +200,28 @@ def parent_namespace_id(table_id: list[str] | str, *, delimiter: str) -> str | N
     return canonical_object_id(segments[:-1], delimiter=delimiter)
 
 
-def parent_object(resource: str, id_segments: list[str] | str, *, delimiter: str, root_object: str) -> str | None:
+def parent_object(resource: str, id_segments: list[str] | str, *, delimiter: str, warehouse_object: str) -> str | None:
     """The FGA parent object a just-created child links to (its ``parent`` tuple), or ``None``.
 
     The whole concentric cascade (owner/writer/reader inherited via ``parent``) hangs off
     this edge, so every created object that *has* a parent must write it:
 
     - Nested child (``a$b``)  -> ``namespace:<a>`` (its parent namespace).
-    - Top-level **namespace** -> ``root_object`` (the ``warehouse:`` bucket root), so warehouse-level
-      grants cascade into the medallion stages ``bronze``/``silver``/``gold``.
+    - Top-level **namespace** -> ``warehouse_object`` (the default warehouse, a bucket root), so
+      warehouse-level grants cascade into the medallion stages ``bronze``/``silver``/``gold``.
     - Top-level **table**     -> ``None``: ``table.parent`` only accepts ``namespace`` in the
       model, so a namespace-less table cannot link to the warehouse (owner grant only).
+
+    ``warehouse_object`` MUST be a ``warehouse:`` id and is ``fga_default_warehouse_object``, never
+    ``fga_root_object``: the model types ``namespace#parent`` as ``[warehouse, namespace]``, and every
+    rung the namespace inherits ``from parent`` has to be defined on the parent's type. Pointing this
+    at the estate root would be refused by the model, and — the part that does not announce itself —
+    would detach the 7 top-level namespaces whose cascade the medallion writes through.
     """
     parent_id = parent_namespace_id(id_segments, delimiter=delimiter)
     if parent_id is not None:
         return f"namespace:{parent_id}"
-    return root_object if resource == "namespace" else None
+    return warehouse_object if resource == "namespace" else None
 
 
 # --------------------------------------------------------------------------- #

@@ -139,6 +139,7 @@ tuples:
   - { user: user:service-maintenance, relation: event_stager, object: warehouse:lance_catalog }
   - { user: user:service-ingest, relation: event_stager, object: warehouse:lance_catalog }
 
+
   # ---- annotation projects (B3/S2) -------------------------------------------------------------
   # gina is a PLAIN project member (not via team:eng, so not an admin) — the subject that proves
   # "tenant member is a viewer but NOT an annotator". frank belongs to a different tenant entirely.
@@ -1547,6 +1548,21 @@ tests:
           can_observe_events: false
       # A subject with no tuple on the root holds nothing there. Fail-closed, stated.
       - user: user:nobody
+        object: estate:rask
+        assertions:
+          reader: false
+          writer: false
+          can_create_project: false
+          can_observe_events: false
+          can_browse_storage: false
+          can_stage_events: false
+      # THE SCOPE FIX, and it is what a separate TYPE buys over a second warehouse. The
+      # `can_browse_storage` case above records the arrangement this replaces in its own words: the
+      # relation "resolves on ANY warehouse its owner owns — alice owns acme_bucket, so it is true
+      # THERE", and the privilege was estate-scoped only because the app never checked it anywhere but
+      # `fga_root_object`. A tenant cannot own an `estate:` object, so the scope stops depending on
+      # every call site remembering which object to name.
+      - user: user:alice
         object: estate:rask
         assertions:
           reader: false

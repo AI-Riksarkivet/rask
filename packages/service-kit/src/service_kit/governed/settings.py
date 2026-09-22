@@ -73,14 +73,34 @@ class FgaSettings:
     fga_store_id: str | None = Field(default=None, alias="RASK_FGA_STORE_ID")
     fga_model_id: str | None = Field(default=None, alias="RASK_FGA_MODEL_ID")
     fga_timeout_seconds: float = Field(default=5.0, ge=0.1, alias="RASK_FGA_TIMEOUT_SECONDS")
-    #: The estate's root FGA object — the one a platform-wide privilege is checked against, as
+    #: The estate's root FGA object — the one a platform-wide PRIVILEGE is checked against, as
     #: opposed to a per-tenant one. Shared here rather than redeclared per service because it is a
-    #: coordinate every governed service must agree on: the catalog gates `GET /v1/events` on it, the
-    #: reconciler excludes it from the ghost report, the chart's bootstrap-admin job seeds the grant
-    #: on it, and the viewer gates its object browser on it (#90). Three copies of the same default in
-    #: three configs is exactly how one of them ends up naming a different object and quietly
-    #: authorizing against something nobody grants.
+    #: coordinate every governed service must agree on: the catalog gates `GET /v1/events` on it,
+    #: lineage gates its whole-estate projection on it, compute and controlplane gate their routers
+    #: on `reader` there, flows on `writer`, and the viewer gates its object browser on it. Three
+    #: copies of the same default in three configs is exactly how one of them ends up naming a
+    #: different object and quietly authorizing against something nobody grants.
     fga_root_object: str = Field(default="warehouse:lance_catalog", alias="RASK_FGA_ROOT_OBJECT")
+    #: The estate's default WAREHOUSE — a structural coordinate, and deliberately NOT the one above.
+    #:
+    #: [[LH-055]]'s port moves the estate privileges onto `type estate`, and the single setting was
+    #: answering two unrelated questions. This one answers "which warehouse does a namespace with no
+    #: warehouse of its own live in": `fga.parent_object` writes the `parent`/`child` edge to it, and
+    #: `_create_parent_check` gates top-level creation on `can_create_namespace` there when
+    #: `fga_lock_root_create` is set. Both require a `warehouse:`, and MEASURED on the live store
+    #: 2026-09-22 it is load-bearing: `warehouse:lance_catalog` carries 7 `child` edges (bronze,
+    #: silver, gold, bronze-media, silver-media, models, lakehouse) and 10 principal grants, which is
+    #: the cascade every medallion write depends on.
+    #:
+    #: THREE THINGS BREAK IF THESE TWO EVER COLLAPSE BACK INTO ONE, each measured rather than argued:
+    #: `namespace#parent` is typed `[warehouse, namespace]` and every `… from parent` rung it inherits
+    #: must exist on the parent's type, so an `estate:` parent is a model error and a lost cascade;
+    #: `can_create_namespace` is not an estate relation, and `LANCE_FGA_LOCK_ROOT_CREATE` defaults to
+    #: TRUE on a real deployment, so top-level creation would fail in production and nowhere else;
+    #: and maintenance's reconcile excludes the platform's own warehouse from the ghost report by
+    #: matching the root's TYPE, so a non-warehouse root reports the default warehouse as a ghost on
+    #: every tick.
+    fga_default_warehouse_object: str = Field(default="warehouse:lance_catalog", alias="RASK_FGA_DEFAULT_WAREHOUSE_OBJECT")
 
     @model_validator(mode="before")
     @classmethod

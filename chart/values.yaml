@@ -951,9 +951,12 @@ auth:
   fgaStoreId: ""
   fgaModelId: ""
   # First estate admin, seeded BY THE CHART (goal cond 4): a Dex subject (the id_token's `sub`) granted
-  # `owner` on the FGA root object (warehouse:lance_catalog) by the bootstrap-admin post-install/upgrade
-  # hook Job — the grant every estate-wide surface (GET /v1/events, the admin console) gates on. Empty
-  # (default) = no Job renders and grants stay out-of-band (seed scripts / the UI). Requires auth.enabled.
+  # TWO tuples by the bootstrap-admin post-install/upgrade hook Job, because they are two authorities —
+  # `owner` on the default warehouse (warehouse:lance_catalog), which cascades into every namespace and
+  # table it parents, and `admin` on the estate root (estate:rask), which every estate-wide surface
+  # (GET /v1/events, the object browser, the admin console) gates on. Empty (default) = the human grants
+  # stay out-of-band (seed scripts / the UI) while the SERVICE grants below still render.
+  # Requires auth.enabled.
   bootstrapAdmin: ""
 
 # --- Data-plane credential vending (Track B). How a client gets storage_options for DIRECT object I/O. ----

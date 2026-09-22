@@ -78,7 +78,7 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
     from service_kit.governed import fga
 
     for segments in (["orphan"], ["bronze", "pages"], ["acme", "silver", "features"]):
-        would_orphan = fga.parent_object("table", segments, delimiter=DELIM, root_object="warehouse:lance_catalog") is None
+        would_orphan = fga.parent_object("table", segments, delimiter=DELIM, warehouse_object="warehouse:lance_catalog") is None
         refused = False
         try:
             fga_deps.require_parent("table", segments, delimiter=DELIM)

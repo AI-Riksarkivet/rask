@@ -1,4 +1,4 @@
-.PHONY: fga-store-check sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -259,6 +259,17 @@ check: fmt lint typecheck knip fga-test
 # regenerating `model.json` as `model.fga.yaml`'s header instructs makes the drift check agree.
 fga-store-check: ## Does the RUNNING store hold the model this repo declares? (needs a cluster)
 	@bash scripts/fga-store-check.sh
+
+# THE TUPLES DO NOT MOVE THEMSELVES when `fga_root_object` is repointed onto the estate ([[LH-055]]).
+# Run this BEFORE deploying the repoint, never after: a principal holding `owner` on the default
+# warehouse passes every estate door today and none of them the moment the setting flips.
+# Piped into the CATALOG'S OWN POD for the reason `fga-store-check` is — the address the code reads
+# (`RASK_FGA_API_URL`) is the one that matters, and a port-forward answers for a different one.
+fga-estate-migrate: ## Carry the estate privileges from the default warehouse onto the estate root (needs a cluster)
+	@POD="$$(kubectl -n $${NS:-default} get pods -o name | grep -m1 'rask-catalog' | sed 's|pod/||')"; \
+	[ -n "$$POD" ] || { echo "!! no rask-catalog pod in namespace $${NS:-default}"; exit 1; }; \
+	echo ">> through $$POD (DRY_RUN=$${DRY_RUN:-})"; \
+	kubectl -n $${NS:-default} exec -i "$$POD" -c catalog -- env DRY_RUN="$${DRY_RUN:-}" python - < scripts/fga_estate_root_migrate.py
 
 # THE FOURTH COPY. `fga-test` below diffs `model.fga` against `model.json` — two files in the repo
 # that agree with each other — and the estate already killed a three-copy lie once. The copy it still

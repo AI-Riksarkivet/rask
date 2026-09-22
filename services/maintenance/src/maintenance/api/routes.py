@@ -198,6 +198,7 @@ async def on_reconcile_cron(settings: SettingsDep, client: FgaClientDep, bucket_
             warehouses_enabled=settings.warehouses_enabled,
             control_root=settings.resolved_control_root,
             fga_root_object=settings.fga_root_object,
+            default_warehouse_object=settings.fga_default_warehouse_object,
             bucket_client=bucket_client,
             into_sources=read_sources,
         )

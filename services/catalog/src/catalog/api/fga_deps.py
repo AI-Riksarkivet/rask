@@ -15,7 +15,7 @@ The op -> ``can_*`` mapping below is the ONLY policy logic in the app; the privi
   create     -> can_create_table / can_create_namespace on the PARENT (create-on-parent)
 
 Create-on-parent: creating a child authorizes the parent (the child has no id yet); a
-top-level child gates on the catalog root only when ``fga_lock_root_create`` is set,
+top-level child gates on the DEFAULT WAREHOUSE only when ``fga_lock_root_create`` is set,
 else it is open self-serve. Batch routes read the (Starlette-cached) body and check each
 named table. Fail-closed twice over: an unwired client raises 503 here, and
 ``fga.check``/``fga.batch_check`` raise 503 on an OpenFGA outage rather than allowing.
@@ -372,11 +372,17 @@ def _action_relation(fga_type: str, suffix: str) -> str:
 def _create_parent_check(resource: str, id_segments: list[str] | str, settings: Settings) -> tuple[str, str] | None:
     """``(parent_object, can_create_* relation)`` for a create-on-parent op, or ``None`` to allow.
 
-    Nested child -> its parent ``namespace:<parent>``. Top-level child -> the catalog root
+    Nested child -> its parent ``namespace:<parent>``. Top-level child -> the default WAREHOUSE
     object only when ``fga_lock_root_create`` is set; otherwise ``None`` (open self-serve
     top-level create — preserves the default behaviour). The relation is named after the child
     being created (``can_create_namespace`` / ``can_create_materialized_view`` / ``can_create_table``),
     all of which reduce to the writer rung on the parent namespace.
+
+    ``fga_default_warehouse_object``, never ``fga_root_object`` ([[LH-055]]): the three relations above
+    are defined on ``warehouse`` and on ``namespace``, and on no other type. This lock defaults ON for a
+    real deployment (``LANCE_FGA_LOCK_ROOT_CREATE`` = ``rask.isRealDeployment``) and OFF for local k3s,
+    so checking them against a non-warehouse root would fail top-level creation in production and pass
+    every local run — the failure mode with no local reproduction.
     """
     relation = {
         "namespace": "can_create_namespace",
@@ -386,7 +392,7 @@ def _create_parent_check(resource: str, id_segments: list[str] | str, settings: 
     if parent_id is not None:
         return f"namespace:{parent_id}", relation
     if settings.fga_lock_root_create:
-        return settings.fga_root_object, relation
+        return settings.fga_default_warehouse_object, relation
     return None
 
 
@@ -1181,7 +1187,8 @@ async def seed_ownership(
         obj_id=fga.canonical_object_id(segments, delimiter=settings.delimiter),
         actor=token.sub,
         origin="create",
-        parent_object=parent_object or fga.parent_object(resource, segments, delimiter=settings.delimiter, root_object=settings.fga_root_object),
+        parent_object=parent_object
+        or fga.parent_object(resource, segments, delimiter=settings.delimiter, warehouse_object=settings.fga_default_warehouse_object),
     )
 
 

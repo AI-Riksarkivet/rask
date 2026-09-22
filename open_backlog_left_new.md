@@ -451,6 +451,43 @@ of mine in this same session.**
   `namespace#parent` is typed, so changing the root changes what every `namespace` tuple points AT.
   Any port must write the new parent tuples before the repoint and keep the old ones until after it,
   or top-level namespace creation fails on a type mismatch rather than on a permission.
+- **THE ROOT SETTING WAS ANSWERING TWO QUESTIONS, AND THE REPOINT IS ONLY SAFE ONCE THEY SPLIT
+  (2026-09-22).** The closes-when below says `fga_root_object` must name the estate object, and doing
+  that literally breaks three things — each measured, none of which the row anticipated:
+  **(1)** `fga.parent_object` returns the root as the PARENT of every top-level namespace, and
+  `namespace#parent` is typed `[warehouse, namespace]` with eight rungs inherited `… from parent`;
+  `type estate` defines three of them. So an `estate:` parent is a model error AND a lost cascade —
+  measured on the live store, `warehouse:lance_catalog` carries **7 `child` edges** (bronze, silver,
+  gold, bronze-media, silver-media, models, lakehouse) and **10 principal grants**, which is the path
+  every medallion write authorizes through. **(2)** `_create_parent_check` gates top-level creation on
+  `can_create_namespace` at the root when `fga_lock_root_create` is set, and that flag renders as
+  `rask.isRealDeployment` — **TRUE in production, FALSE on local k3s** (verified on the running
+  catalog: `LANCE_FGA_LOCK_ROOT_CREATE=false`). `estate` defines no `can_create_*`, so this one fails
+  in production and passes every local run. **(3)** maintenance's reconcile excludes the platform's own
+  warehouse from the ghost report by matching the ROOT's type; once the root is an `estate:` the test
+  stops matching and the default warehouse becomes a permanent false finding on every 300 s tick.
+- **SO THE SETTING IS NOW TWO (2026-09-22):** `fga_root_object` is the estate PRIVILEGE coordinate, and
+  `fga_default_warehouse_object` is the structural default warehouse. This is not a deviation from the
+  ruling — the reference model puts `project` beneath `server`, never a namespace, so the estate root
+  was never the namespace's parent there either. Three gates hold them apart, each mutation-checked:
+  `test_the_two_fga_roots_answer_two_different_questions` (the inherited rungs are read out of
+  `model.json`'s `tupleToUserset` nodes, so a new `… from parent` rung is covered by landing),
+  `test_the_platform_warehouse_is_never_a_ghost`, and the per-object form of
+  `test_the_chart_only_grants_relations_the_model_defines`.
+- **AND THE PORT IS A TIGHTENING, which the migration REPORTS rather than performs silently.**
+  `scripts/fga_estate_root_migrate.py` (`make fga-estate-migrate`) carries `owner` and `event_stager`
+  onto the estate and DELIBERATELY refuses the rest. Measured on the live store: a blanket carry would
+  have written `estate#writer` for **four cascade services** — and `estate#writer` is what flows gates
+  run/terminate on, so `service-ingest` would have acquired the authority to execute flows estate-wide
+  as a side-effect of a setting moving. Verified before narrowing that none of them, nor
+  `notifications`, calls compute, controlplane or flows. Dry run: **3 carried, 7 refused**, each
+  refusal naming what it would have granted.
+- **THE `.fga.yaml` CASE THAT PROVES THE TYPE EARNS ITS KEEP.** The existing `can_browse_storage` case
+  had already recorded the defect in its own words — the relation "resolves on ANY warehouse its owner
+  owns … What makes the privilege estate-scoped is not the model, it is that the app only ever checks
+  it against `fga_root_object`." A tenant cannot own an `estate:` object, so the scope stops depending
+  on every call site remembering which object to name. Pinned as `user:alice` holding nothing on
+  `estate:rask`; 53/53 tests, 405/405 checks, mutation-checked.
 - *Closes when:* model.fga declares a column relation and an estate type, carries a machine identity
   and a `can_set_protection` rung, every new rung has a .fga.yaml case, and `fga_root_object` names the
   estate object. **NOT a `branch` type** — this row established that one would invent a resource

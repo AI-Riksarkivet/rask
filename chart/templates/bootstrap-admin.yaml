@@ -1,10 +1,13 @@
 {{- if .Values.auth.enabled }}
 {{- /*
    FGA grant bootstrap (goal cond 4): the chart itself seeds the estate's standing tuples instead of an
-   out-of-band `fga tuple write`. A post-install/post-upgrade hook grants `owner` on the FGA root object
-   (warehouse:lance_catalog — RASK_FGA_ROOT_OBJECT's default; a grant there cascades estate-wide and is
-   what can_observe_events / the admin console gate on) to the Dex subject in auth.bootstrapAdmin, plus
-   one rung per SERVICE principal that needs a standing capability.
+   out-of-band `fga tuple write`. A post-install/post-upgrade hook grants the Dex subject in
+   auth.bootstrapAdmin two things, on TWO objects, because they are two different authorities:
+   `owner` on the default warehouse (warehouse:lance_catalog — RASK_FGA_DEFAULT_WAREHOUSE_OBJECT's
+   default), which cascades down into every namespace and table that warehouse parents; and `admin` on
+   the estate root (estate:rask — RASK_FGA_ROOT_OBJECT's), which is what can_observe_events,
+   can_browse_storage and the admin console gate on. Plus one rung per SERVICE principal that needs a
+   standing capability, each on whichever of the two its capability belongs to.
 
    THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
    was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first
@@ -71,7 +74,11 @@ spec:
           env:
             - { name: FGA_API_URL, value: "http://{{ include "lance.openfgaHost" . }}:8080" }
             {{- /*
-               Must match the catalog's RASK_FGA_ROOT_OBJECT default (services/catalog/core/config.py).
+               The DEFAULT WAREHOUSE, matching `fga_default_warehouse_object` in
+               packages/service-kit/src/service_kit/governed/settings.py — the structural root a
+               top-level namespace hangs off, not the estate root the privileges are checked on.
+               `test_the_chart_only_grants_relations_the_model_defines` holds the two apart by
+               checking each grant list against the type its own object names.
             */}}
             - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
             {{- with .Values.auth.fgaStoreId }}
@@ -93,6 +100,15 @@ spec:
               # store name must match what the catalog provisions (services/common/fga.py provision()).
               store_name = "lance-catalog"
               obj = os.environ["FGA_ROOT_OBJECT"]
+              # THE ESTATE ROOT ([[LH-055]], ruling docs/DECISIONS.md:2240). A render-time constant for
+              # the reason `store_name` is: an env read only by this inline script is reported as dead
+              # chart config by `test_no_dead_chart_env_vars`, which scans services/ for a consumer.
+              #
+              # SEEDED BEFORE ANYTHING CHECKS IT, deliberately. This hook is post-install/post-upgrade,
+              # so the fleet's pods are already rolling when it runs; writing the tuples one release
+              # AHEAD of the repoint is what keeps the window between them from being a window of 403s.
+              # `test_the_estate_root_is_seeded_before_anything_checks_it` holds the two in that order.
+              estate_obj = "estate:rask"
               subject = {{ .Values.auth.bootstrapAdmin | quote }}
               user = subject if ":" in subject else f"user:{subject}"
 
@@ -243,12 +259,29 @@ spec:
                   + [(m if ":" in m else f"user:{m}", "maintainer") for m in maintainers]
                   + [(s if ":" in s else f"user:{s}", "event_stager") for s in stagers]
               )
+              # ESTATE GRANTS — a SHORTER list than the warehouse one, and the difference is the point.
+              #
+              # The warehouse rungs above are about DATA: `reader` is how the notifications reconciler
+              # sees the runs it must target, `maintainer` is how the sweep rewrites bytes, and both
+              # reach every tier by cascading down `warehouse -> namespace -> table`. None of that is an
+              # estate privilege and none of it moves here.
+              #
+              # `admin` reaches every estate rung (`owner`/`writer`/`reader` and the three can_* verbs),
+              # so the first human needs exactly one tuple. `event_stager` is the one SERVICE rung that
+              # really is estate-scoped: `can_stage_events` guards the lineage outbox prefix, which is a
+              # platform control surface rather than anyone's data — which is why it was minted on the
+              # root in the first place and why it is the only service grant that follows the root.
+              estate_grants = (
+                  ([(user, "admin")] if subject else [])
+                  + [(s if ":" in s else f"user:{s}", "event_stager") for s in stagers]
+              )
 
-              for subject_id, relation in grants:
-                  tuple_key = {"user": subject_id, "relation": relation, "object": obj}
+              for target, pairs in ((obj, grants), (estate_obj, estate_grants)):
+                for subject_id, relation in pairs:
+                  tuple_key = {"user": subject_id, "relation": relation, "object": target}
                   r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key}, timeout=10)
                   if r.status_code == 200 and r.json().get("allowed"):
-                      print(f"bootstrap-admin: {subject_id} already {relation} of {obj} — nothing to do")
+                      print(f"bootstrap-admin: {subject_id} already {relation} of {target} — nothing to do")
                       continue
 
                   r = httpx.post(
@@ -257,10 +290,10 @@ spec:
                       timeout=10,
                   )
                   if r.status_code == 200:
-                      print(f"bootstrap-admin: granted {subject_id} {relation} {obj}")
+                      print(f"bootstrap-admin: granted {subject_id} {relation} {target}")
                   elif r.status_code in (400, 409) and "already exists" in r.text:
                       # Duplicate write raced past the check — the grant is in place, which is all we want.
-                      print(f"bootstrap-admin: {subject_id} {relation} {obj} already written (concurrent) — ok")
+                      print(f"bootstrap-admin: {subject_id} {relation} {target} already written (concurrent) — ok")
                   else:
                       sys.exit(f"tuple write failed: HTTP {r.status_code} {r.text}")
 {{- end }}

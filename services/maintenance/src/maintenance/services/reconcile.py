@@ -64,11 +64,17 @@ _BINDINGS_PREFIX = "_warehouses/bindings"
 #: Trash records are keyed `<kind>/<id>` UNDER this prefix, so the listing is recursive by nature.
 _TRASH_PREFIX = "_trash"
 
-#: The FGA object the estate-admin gates check against (`Settings.fga_root_object`'s default). It is the
-#: platform's own root, NOT a tenant warehouse, so it has no registry record BY DESIGN — without this
-#: exclusion every run would report the estate root as a ghost warehouse forever, and a report that
-#: always contains a known-good finding is a report nobody reads.
-DEFAULT_FGA_ROOT_OBJECT = "warehouse:lance_catalog"
+#: The platform's own default WAREHOUSE (`Settings.fga_default_warehouse_object`'s default) — the
+#: warehouse a namespace with no warehouse of its own hangs off. It is the platform's, NOT a tenant's,
+#: so it has no registry record BY DESIGN: without this exclusion every run would report it as a ghost
+#: warehouse forever, and a report that always contains a known-good finding is a report nobody reads.
+#:
+#: EXCLUDED BY ITS OWN NAME, never by matching the estate root's type ([[LH-055]]). `fga_root_object`
+#: and `fga_default_warehouse_object` are two settings that may or may not name the same object, so a
+#: `root_type == "warehouse"` test excludes this one only by coincidence: point the estate coordinate
+#: at an `estate:` and the default warehouse becomes a permanent false ghost on every tick — a silent
+#: regression in the one report whose job is to surface drift.
+DEFAULT_FGA_WAREHOUSE_OBJECT = "warehouse:lance_catalog"
 
 #: Page ceiling for one object-type tuple scan. An estate's project/warehouse tuple count is small, so
 #: this is unreachable in practice; it exists so a continuation-token bug cannot spin the report
@@ -943,12 +949,14 @@ def build_report(
     warehouses_enabled: bool,
     platform_buckets: set[str],
     fga_root_object: str,
+    default_warehouse_object: str = DEFAULT_FGA_WAREHOUSE_OBJECT,
 ) -> ReconcileReport:
     """Run every detector whose inputs are present; record the rest as unavailable or skipped."""
     report = ReconcileReport(checked_at=datetime.now(UTC).isoformat(), incomplete=list(sources.incomplete))
     project_ids = {str(r["id"]) for r in sources.project_records or []}
     warehouse_ids = {str(r["id"]) for r in sources.warehouse_records or []}
     root_type, _, root_id = fga_root_object.partition(":")
+    _, _, default_warehouse_id = default_warehouse_object.partition(":")
     # The shared input orders, named once. Three categories read the tuple scan and the project
     # registry; two read the binding index and the warehouse registry. Naming them is what stops a
     # fourth category from quietly introducing a fourth opinion about which outage to report.
@@ -966,7 +974,13 @@ def build_report(
         report,
         "ghost_warehouses",
         inputs=tuples_and_warehouses,
-        detect=lambda: _ghosts("warehouse", _by_type(sources, "warehouse"), record_ids=warehouse_ids, exclude={root_id} if root_type == "warehouse" else set()),
+        detect=lambda: _ghosts(
+            "warehouse",
+            _by_type(sources, "warehouse"),
+            record_ids=warehouse_ids,
+            # BOTH platform objects, because they are two settings and either may be a `warehouse:`.
+            exclude={default_warehouse_id} | ({root_id} if root_type == "warehouse" else set()),
+        ),
     )
     report.unreferenced_projects = _run_category(
         report,
@@ -1208,7 +1222,8 @@ async def reconcile(
     # live control root can disagree and the difference would surface as an unexplained grant.
     into_sources: list[Sources] | None = None,
     platform_buckets: Iterable[str] | None = None,
-    fga_root_object: str = DEFAULT_FGA_ROOT_OBJECT,
+    fga_root_object: str = DEFAULT_FGA_WAREHOUSE_OBJECT,
+    default_warehouse_object: str = DEFAULT_FGA_WAREHOUSE_OBJECT,
     bucket_client: Any = None,
 ) -> ReconcileReport:
     """Scan the three stores and REPORT their disagreements. Deletes nothing; mutates nothing.
@@ -1272,6 +1287,7 @@ async def reconcile(
         warehouses_enabled=warehouses_enabled,
         platform_buckets=platform,
         fga_root_object=fga_root_object,
+        default_warehouse_object=default_warehouse_object,
     )
     # The unreferenced-FILE pass runs after the store comparison and is separately gated: it opens
     # every dataset rather than comparing three stores, so it is a different order of work. Blocking

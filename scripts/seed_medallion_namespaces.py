@@ -35,8 +35,10 @@ the OpenFGA STORE name, and it is never a warehouse id. Three different objects 
 * the S3 bucket ``lance-catalog`` (RustFS Tenant + the ``rustfs-mkbucket`` Job), which is the
   catalog's shared default root, ``LANCE_REST_ROOT``;
 * the OpenFGA store ``lance-catalog`` (``fga.provision(..., store_name="lance-catalog")``);
-* the FGA root OBJECT ``warehouse:lance_catalog`` (underscore) — a synthetic authorization anchor
-  with no registry record, and correct as written: the catalog's id regex never applies to it.
+* the FGA DEFAULT WAREHOUSE object ``warehouse:lance_catalog`` (underscore) — the structural anchor a
+  top-level namespace hangs off (``fga_default_warehouse_object``, not the estate root the platform
+  privileges are checked on), a synthetic object with no registry record, and correct as written: the
+  catalog's id regex never applies to it.
 
 A warehouse named ``lance-catalog`` cannot be created at all: the catalog root bucket is reserved
 platform storage (``Settings.reserved_bucket_set``) and ``POST /v1/warehouses`` refuses it 400. So the

@@ -157,8 +157,8 @@ class _Estate:
             {
                 "project:acme": [("user:alice", "admin")],
                 "warehouse:wh-a": [("user:alice", "owner"), ("project:acme", "project")],
-                # The estate root: real tuples, no registry record, BY DESIGN.
-                mod.DEFAULT_FGA_ROOT_OBJECT: [("user:alice", "owner")],
+                # The platform's default warehouse: real tuples, no registry record, BY DESIGN.
+                mod.DEFAULT_FGA_WAREHOUSE_OBJECT: [("user:alice", "owner")],
             }
         )
         self.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a"])
