@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **100 are blocked on a decision** and **101 can be picked up today**.
+**201 open items**, of which **99 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 34 | 2 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 34 | 3 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -761,11 +761,32 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   **THE LESSON IS THE TOOL'S, AND IT GENERALISES:** an object store has no directories. Any prefix
   delete must be anchored — `medallion/bronze/` with the trailing delimiter, never `medallion/bronze` —
   and a dry-run listing must be taken with the SAME pattern the delete will use, not a similar one.
-- **blocked:** one prefix remains and it is not a tier — `lance-catalog/medallion/models` (388KiB, 126
-  objects, every entry an `e2etrain*` Lance dataset). Both reap rulings covered TIER-shaped residue; a
-  model registry is a different thing and nothing has established what reads this one. Either it is
-  named as residue and reaped with the rest, or it is a real store that must be REGISTERED — and until
-  that is answered the closing bar ("zero UNGOVERNED medallion datasets") cannot be met either way.
+- **THE BLOCKER IS ANSWERED BY THE CODE, NOT BY A RULING — established 2026-09-23.** The marker asked
+  whether `lance-catalog/medallion/models` "is named as residue and reaped with the rest, or is a real
+  store that must be REGISTERED". It is neither, and the estate already says so in
+  `catalog/core/config.py:516-522`: *"the medallion trainer writes it DIRECTLY there
+  (`registry_uri_for`), so the catalog can NOT reach it through native namespace resolution (that
+  would drop the `/medallion/` prefix): the promote/describe endpoints open it by EXPLICIT URI"*. It is
+  the **model registry root** — a real, platform-owned store that is deliberately OUTSIDE catalog
+  namespace resolution, and `reserved_bucket_set` already reserves it so no warehouse may claim it.
+  Registering it as a namespace is not a decision someone has been putting off; it is something the
+  resolution path cannot do.
+- *What is actually under it, measured 2026-09-23 from the reconcile scan:* **16 datasets — `churn`
+  plus 15 `e2etrain*`**. So the prefix is a real store whose current CONTENTS are almost entirely e2e
+  residue. Those are two different dispositions and the marker conflated them.
+- **AND THE REAL DEFECT IS THAT NOTHING REPORTS THEM, which is why this bar could not be met.** The
+  reconciler knows nothing about the registry (no `models_root` anywhere in `services/maintenance`),
+  and both directions of the drift report miss it: `_unregistered_datasets` recovers a table id from
+  the catalog's `<root>/<uuid8>_<ns>$<name>` layout and *"a location `table_id_from_location` cannot
+  answer for is skipped, never reported"* — `medallion/models/churn` is not in that layout — while
+  [[LH-192]]'s `absent_datasets` reads REGISTERED records, which these are not. Measured: the live
+  report says `unregistered_datasets: 0` over an estate holding 16 of them. So "zero UNGOVERNED
+  medallion datasets" is unverifiable rather than met, and a genuinely unknown dataset in that shape
+  would be equally invisible.
+- *What is left, and it is engineering rather than a ruling:* teach the reconciler the registry root so
+  a platform-owned store is reported as DECLARED rather than silently skipped, and reap the 15
+  `e2etrain*` datasets as the test residue they are. The `churn` dataset is the janitor script's own
+  documented example (`scripts/model_artifact_janitor.py:24`) and is not residue.
 - *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
 - *Evidence:* `services/maintenance/src/maintenance/services/compaction_executor.py:107` · `services/maintenance/src/maintenance/services/reconcile.py:95,127,261` · `chart/templates/medallion.yaml:293,523` · ``grep -i 'two homes\|bind86' docs/DECISIONS.md` → no ruling recorded`
 
