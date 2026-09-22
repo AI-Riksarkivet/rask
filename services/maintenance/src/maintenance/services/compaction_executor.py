@@ -40,7 +40,7 @@ import lance.optimize as lance_optimize
 from pydantic import BaseModel, ConfigDict
 
 from maintenance.core.config import shared_lance_session
-from maintenance.services.rewrite_slot import rewrite_slot
+from maintenance.services.rewrite_slot import record_committed_rewrite, resident_bytes, rewrite_slot
 
 
 log = logging.getLogger(__name__)
@@ -261,6 +261,11 @@ def compact_distributed(
             "tasks_executed": len(results),
             "tasks_failed": failed,
             "fragments_removed": committed.fragments_removed,
+            # WHAT THIS COST THE PROCESS, beside what it reclaimed. A pass retains ~10-14 MiB that is
+            # never returned ([[LH-183]]), so the running count is what predicts this worker's ceiling,
+            # and the resident bytes beside it are what turns that prediction into something checkable.
+            "rewrite_passes": record_committed_rewrite(),
+            "rss_bytes": resident_bytes(),
         },
     )
     return DistributedOutcome(

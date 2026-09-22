@@ -23,6 +23,7 @@ widen the bound, and the bounded form raises instead.
 from __future__ import annotations
 
 import functools
+import itertools
 import logging
 import threading
 from collections.abc import Iterator
@@ -40,6 +41,46 @@ def _slots(size: int) -> threading.BoundedSemaphore:
     the process contends for the SAME object.
     """
     return threading.BoundedSemaphore(size)
+
+
+#: Rewrites this PROCESS has committed. The count that predicts the OOM: [[LH-183]] measured ~10-14 MiB
+#: retained per PASS — 9.6 / 14.4 / 54.2 MiB across runs of 1, 1 and 4 commits — against peaks of 644,
+#: 724 and 677Mi that all released. The floor rises, the ceiling does not, so `passes x ~12 MiB` over
+#: the baseline is what a 4Gi pod is spending. Per COMMIT because that is what the cost tracks: two runs
+#: over identically-shaped tables differed 4x in retention and 4x in commits.
+_committed = itertools.count(1)
+
+
+def record_committed_rewrite() -> int:
+    """Count one committed rewrite and return the running total for this process.
+
+    `itertools.count` rather than a lock-guarded int: `next()` on it is atomic under CPython, and this
+    is called from the threadpool where `execute_unit` runs. A miscount would be a diagnostic that
+    quietly disagrees with the thing it is diagnosing.
+    """
+    return next(_committed)
+
+
+def resident_bytes() -> int:
+    """This process's resident set size, from ``/proc/self/status``.
+
+    Beside the pass count on the same line, because the pair is the measurement: `passes x ~12 MiB`
+    over the baseline should track this, and a divergence is the interesting signal either way.
+
+    ``VmRSS`` and never ``ru_maxrss``, which is a high-water mark and so cannot show the release that
+    [[LH-183]] measured — the peak of a rewrite DOES come back; only the floor rises.
+
+    NEVER RAISES: this is diagnostics riding a compaction commit, so a kernel without procfs costs a
+    field rather than the rewrite, and ``-1`` keeps the field's presence a fixed contract.
+    """
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) << 10
+    except (OSError, IndexError, ValueError):  # pragma: no cover - a platform without procfs
+        return -1
+    return -1
 
 
 @contextmanager
