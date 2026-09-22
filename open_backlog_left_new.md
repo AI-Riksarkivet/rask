@@ -1044,6 +1044,22 @@ existing `excluded_datasets`.
   `MEDALLION_BRONZE_URI` would therefore silently UNGOVERN the default-root head — the exact defect
   this row exists to close. The path is absent from disk only because no default-root produce has run
   since the last reap, not because nothing would use it.
+- **AND THE CASCADE HEAD IS A REGISTERED TABLE WITH NO BYTES — measured 2026-09-22, and it is the
+  sharpest form of this row's defect.** `POST /v1/table/bronze$events/describe` answers **200** with
+  `location = s3://lance-catalog/medallion/bronze`, and
+  `ls /data-0/lance-catalog/medallion/bronze` answers **No such file or directory**. So the catalog
+  governs a location that holds nothing: a policy set on it polices no bytes, a protection record
+  guards nothing, and an FGA grant keys off a table whose data is not there. `bronze$events` is the
+  dataset the producer's own "GOVERNANCE PRECEDES THE FIRST ROW" comment is about, so the registration
+  worked and the write did not follow it.
+- **THE THREE TIERS ALSO SPAN TWO WAREHOUSES, which nothing in the register says.** Read off the
+  catalog with the producer's own `MEDALLION_LANE_DESTINATION_DATASETS` as the key
+  (`{"bronze":"silver$features","silver":"gold$catalog"}`): the head is
+  `s3://lance-catalog/medallion/bronze` while **silver AND gold are in `bind86-wh`**
+  (`37523719_silver$features`, `90fe5c65_gold$catalog`, both real Lance datasets with
+  `_refs/_transactions/_versions/data`). The cascade therefore crosses a warehouse boundary between
+  bronze and silver, so no single vended credential spans it and the tiers cannot share a storage
+  policy. The estate holds **97 warehouses**.
 - **SO EVERY PART OF THIS ROW IS EITHER A DATA-PATH CHANGE OR A DISPOSITION CALL.** The tenant second
   homes come from `produce.py:117` (`f"{root}/medallion/{ns}"`) rather than from the chart, so
   collapsing them repoints every tenant's writes; the default-root pointer cannot be removed without
