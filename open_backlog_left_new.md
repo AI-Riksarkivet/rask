@@ -1816,6 +1816,29 @@ Register bookkeeping, not engineering.
 
 **LH-190 · A worker restart orphans every in-flight unit, and the lane delivers nothing for a full `ackWait`**
 `maintenance` · **HIGH** · OPEN
+- **MEASURED END TO END ON THE LIVE LANE (2026-09-22), AND THE ROW'S MAGNITUDE IS WRONG WHILE ITS
+  EXISTENCE CLAIM IS RIGHT — for one configuration only.** Two restarts, threshold pre-registered
+  before either ran (`Last Ack` age > 300 s confirms the row, < 120 s falsifies it):
+  - **ONE replica of two (what a rollout, an eviction or a single crash does): NO STALL.** Across a
+    full delete/terminate/replace cycle `Last Ack` never exceeded **1.16 s** — 24 samples over 6
+    minutes, max 1.16 s — while Unprocessed cycled normally with the 120 s ticks. The surviving
+    replica absorbs the work. Control held: the pod really churned (`8shb6` gone, `gdlrl` created, the
+    old pod's readiness probe refusing mid-termination).
+  - **BOTH replicas at once: a REAL stall of ~320 s.** `Last Ack` climbed 13.88 s -> **5 m 17 s** and
+    recovered at t=+334 s; Unprocessed went **140 -> 1,847**, a 13x backlog. By the pre-registered rule
+    (>300 s) the row is CONFIRMED on the stall existing — but **it is not "a full `ackWait`"**: 320 s
+    against `ackWait: 720s`, well under half, and `Redelivered Messages` stayed **0** throughout.
+- **THE INSTRUMENT THE OBVIOUS READING WOULD HAVE USED IS THE WRONG ONE, and it would have inverted the
+  first result.** `Acknowledgment Floor` is the LOWEST UNACKED sequence, not a throughput counter: with
+  `Max Ack Pending: 72` and out-of-order acks it sat frozen at 149,068 for **five minutes** while the
+  lane ran flat out at ~4.8 units/sec (`Last Ack: 138ms`, Unprocessed falling 432 -> 374). Reading the
+  floor would have reported a total stall during normal operation. The instrument is `Last Ack` age.
+- **AND THE CONFIGURATION THAT STALLS IS THE ONE THE ESTATE ALREADY PREVENTS.** `pdb/rask-maintenance-worker`
+  is `MIN AVAILABLE 1, ALLOWED DISRUPTIONS 1` — so no *voluntary* disruption (drain, rollout, eviction)
+  can take both replicas. My test used `kubectl delete pod -l`, which goes through the DELETE path and
+  is NOT gated by a PodDisruptionBudget, so it reproduced a scenario the PDB exists to stop. What
+  remains genuinely exposed is the involuntary case: a node loss taking both pods, which
+  `topologySpreadConstraints` is supposed to make unlikely and which this test did not measure.
 - **MEASURED LIVE 2026-09-22, and it is the true cause of every "stall" read today.** Two minutes
   after a rolling restart the consumer reports:
   `Last delivery: 1m57s ago` · `Outstanding Acks: 152 out of maximum 152` · `Ack Wait: 12m0s` ·
