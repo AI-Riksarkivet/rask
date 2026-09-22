@@ -314,6 +314,26 @@ def _write_blob(
                 "external base; configure LANCE_EXTERNAL_BLOB_BASES with the approved base(s), or "
                 "LANCE_ALLOW_EXTERNAL_BLOBS for the blanket bypass, to accept Blob.from_uri columns"
             ) from exc
+        # A CREATE THAT LANDS ON OCCUPIED BYTES IS A CONFLICT, NOT AN INTERNAL FAILURE
+        # ([[LH-164]]). `spec.yaml:1461` declares `ConflictErrorResponse` on `CreateTable`, so a
+        # collision is a modelled outcome of this operation. Measured on the live catalog 2026-09-21:
+        # `POST /v1/table/silver$features/create` answered 500 `detail: "Internal Server Error"` while
+        # the reason — `Dataset already exists: s3://bind86-wh/medallion/silver` — existed only in the
+        # pod's traceback.
+        #
+        # THE DETAIL NAMES THE LOCATION AND DENIES THE TABLE, because those bytes are ungoverned
+        # residue at the path the catalog COMPOSES for this id, not a table record. "Table already
+        # exists" would send the caller looking for something that does not exist; the location is the
+        # one actionable fact, and it is exactly what the 500 withheld.
+        #
+        # Matches lance's specific phrase for the same reason the branch above does: a translation
+        # that swallowed every OSError would relabel genuine infra failures as client errors.
+        if "dataset already exists" in str(exc).lower():
+            raise TableAlreadyExistsError(
+                f"a dataset already occupies {uri}, and the catalog holds no table record for it — "
+                "so it is storage residue rather than a governed table. Clear or relocate that "
+                "location, or create under an id that composes to a different one"
+            ) from exc
         raise
 
 

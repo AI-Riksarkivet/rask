@@ -581,11 +581,23 @@ have no `uv.lock` and so cannot be built to emit anything.
   because the ruling authorised four. So this class of residue is not merely reported-and-ignored: it
   occupies a location the catalog composes for a real table id and makes that table impossible to
   create, on an estate where nothing references the residue.
-  **AND THE REFUSAL IS THE WRONG SHAPE, which is a defect of its own.** A create colliding with bytes
-  already at the composed location is a CONFLICT the caller can act on; it surfaces as a raw `OSError`
-  through a 500 `InternalError` with `detail: "Internal Server Error"`, so the caller is told nothing
-  and the reason exists only in the pod's traceback. Whatever is ruled about the ten, a create that
-  lands on an occupied location should answer 409 with the location it collided on.
+  **AND THE REFUSAL WAS THE WRONG SHAPE — FIXED 2026-09-22, independently of the ruling.** A create
+  colliding with bytes already at the composed location is a CONFLICT the caller can act on; it
+  surfaced as a raw `OSError` through a 500 `InternalError` with `detail: "Internal Server Error"`, so
+  the caller was told nothing and the reason existed only in the pod's traceback. **The spec had
+  already said so:** `lance_docs/ns_catalog/spec.yaml:1461` declares `ConflictErrorResponse` on
+  `CreateTable`, so a collision is a modelled outcome of the operation rather than an internal
+  failure. `_write_blob`'s `except OSError` now raises `TableAlreadyExistsError` naming the location,
+  matching lance's specific phrase exactly as the sibling external-blob translation beside it does —
+  a handler that swallowed every `OSError` would relabel genuine infra faults as client errors.
+  **The detail NAMES THE LOCATION AND DENIES THE TABLE**, because these bytes are ungoverned residue
+  at a path the catalog composes, not a table record: "table already exists" would send the caller
+  looking for something that does not exist, and the location is the one actionable fact the 500
+  withheld. Four legs, each mutation-checked, and **the second hop caught a real trap**: `status_for`
+  takes a NUMERIC code, so the obvious `status_for(exc)` answers 500 — the leg now asks exactly as the
+  installed handler does (`ns_errors.py:140`, `int(exc.code)`). A fourth leg pins that every
+  `write_dataset` in the catalog is inside `_write_blob`, by ENCLOSING FUNCTION rather than by line
+  number, so one translation genuinely covers every write door and a second one cannot quietly differ.
 - **THE EIGHT TIER-SHAPED PREFIXES ARE REAPED (owner ruling 2026-09-21, extending the first four), AND
   ONE MORE WENT WITH THEM BY MISTAKE.** Authorised and reaped: `lakehouse$bronze`,
   `lakehouse$bronze-media`, `lakehouse$silver-media`, `bronze`, `silver`, `gold`, `bronze-media` and
@@ -2208,6 +2220,22 @@ have no `uv.lock` and so cannot be built to emit anything.
   That is fixed and gated (`tests/unit/test_a_deploy_cannot_report_success_when_helm_failed.py`), so
   the NEXT occurrence will fail a deploy loudly instead of being swallowed. That makes this row more
   urgent than its severity suggests: the swallow was also what stopped it blocking anyone.
+- **A SECOND FAILURE MODE IN THE SAME HOOK, measured 2026-09-22 on a later converge — and it is NOT
+  the 401.** `rask-kueue-setup` crash-looped five times on
+  `conversion webhook for kueue.x-k8s.io/v1beta2, Kind=LocalQueue failed: Post
+  "https://rask-kueue-webhook-service.default.svc:443/convert?timeout=30s": tls: failed to verify
+  certificate`, then SUCCEEDED (`localqueue.kueue.x-k8s.io/rask serverside-applied`) and the converge
+  exited 0. It is a startup RACE, not a broken cert: the job's own `restart-kueue-controller` init
+  container restarts the controller to force cert regeneration, `await-kueue-controller` waits for
+  Ready, and `apply-queues` then races the controller's asynchronous patch of the CRD's `caBundle` —
+  the CRD carries one (1,516 bytes) and the controller was Running throughout.
+- **SO THE COST IS THE ROW'S REAL SUBJECT, and it is paid on a SUCCESSFUL deploy too.** That converge
+  took ~17 minutes wall-clock, nearly all of it `helm --wait --wait-for-jobs` watching a job back off.
+  This row's bar — "a deploy following a failed hook run does not pay the 20m timeout" — is therefore
+  not only about the 401 aftermath: the ordinary path pays minutes per deploy, every deploy, and
+  `backoffLimit: 20` is what makes both modes eventually invisible. Whatever is ruled about the delete
+  policy should also make `apply-queues` wait for the webhook it is about to call rather than for the
+  controller's readiness probe, which answers a different question.
 - *What is left:* Decide whether the Job should carry `hook-failed` in its delete policy so a failed
   run does not leave a retrying Job behind, or whether the SA should outlive the hook (drop
   `hook-succeeded` from the SA/RBAC trio so the token stays valid for any Job still running). The
