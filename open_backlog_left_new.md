@@ -1024,6 +1024,24 @@ existing `excluded_datasets`.
 
 **LH-164 · Chart-path medallion datasets at `s3://<bucket>/medallion/<ns>` are unregistered and ungoverned, so each tier has two homes and only one is governed**
 `maintenance, medallion, chart` · **MED** · PARTIAL
+- **THE SECOND HOMES ARE FROZEN RESIDUE, NOT A LIVE DIVERGENCE — measured object by object
+  2026-09-22, and it corrects both this row and the re-audit's own reading of it.** Every chart-path
+  prefix in every bucket, with its date: **eight bronze-shaped prefixes all at 2026-09-11**
+  (`acme-bucket`, `advref31-wh`, `c6t115034-wh`, `lakehouse-wh/bronze`, `lakehouse-wh/bronze-media`,
+  `lens222127-wh`, `med215609-wh`, `vaud31a-wh`) and **`lance-catalog/medallion/models` at
+  2026-09-14**. Nothing has been written to any of them for 8-11 days. The row reads as an ongoing
+  split — "each tier has two homes" — and the producing mechanism is already closed: `produce.py`
+  registers its write location before the first row ("GOVERNANCE PRECEDES THE FIRST ROW"), and the
+  governed bronze answers `s3://lance-catalog/bronze/pages` off `describe`, not a `medallion/` path.
+- **AND THE CHART'S DEFAULT-ROOT SECOND HOME POINTS AT NOTHING AT ALL.** The running producer carries
+  `MEDALLION_BRONZE_URI=s3://lance-catalog/medallion/bronze`, and
+  `ls /data-0/lance-catalog/medallion/bronze` answers **No such file or directory** — the only child of
+  `lance-catalog/medallion/` is `models`. So that env is dead config rather than a second writer.
+- **WHICH SPLITS THE "COLLAPSE" WORK IN TWO, and only one half is what the re-audit called unblocked.**
+  Removing the chart's dead default-root pointer is safe and changes no data path. But the TENANT
+  second homes do not come from the chart at all — `produce.py:117` computes
+  `bronze_uri = f"{root}/medallion/{ns}"` in code for a project-scoped produce — so collapsing THOSE is
+  a data-path change for every tenant, not a values edit, and it is not the free cleanup it looks like.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: Collapse the chart's second home (medallion.yaml:331,357,595,596) so each tier has one home —
 unblocked, needs no ruling. Rule on lance-catalog/medallion/models, then reap or register it. And
