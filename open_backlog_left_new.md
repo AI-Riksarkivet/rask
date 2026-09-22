@@ -697,6 +697,34 @@ have no `uv.lock` and so cannot be built to emit anything.
   is unambiguous — forty seconds of flat after it. This is the same shape as the earlier ad-hoc
   reading (+434 peak, +22 settled) on a different worker generation, so the magnitudes are stable
   across runs.
+- **ANSWERED 2026-09-22: A REWRITE RETAINS. This row's central claim holds for the worker path.**
+  Two compactions of identical tables (240 MiB, 60 fragments) on the SAME worker, `/proc/1/status`
+  every 2s, decided by a rule fixed before the data existed:
+
+  | baseline | value | samples | sd |
+  | --- | --- | --- | --- |
+  | B0 (before round 1) | 302.3Mi | 46 | 4.3 |
+  | B1 (after round 1) | **316.7Mi** | 113 | 0.8 |
+  | B2 (after round 2) | **370.9Mi** | 48 | 1.2 |
+
+  `B1-B0 = +14.4Mi` · `B2-B1 = +54.2Mi` · threshold was >=10Mi. **Not warm-up:** the planner's own
+  discovery pass shows what warm-up looks like — two independent pods stepping to *exactly* 303.9Mi
+  at tick 3 and then holding a 2.1Mi band. This does not plateau; it steps again, and both baselines
+  here are flat to under 1.2Mi.
+- **THE RETENTION IS NOT A CONSTANT PER UNIT, and two points cannot give the rate.** Round 1
+  committed once; round 2 committed FOUR times on the same-shaped table, and retained ~4x as much.
+  That is consistent with retention per PASS rather than per unit, which would make the cost a
+  function of how fragmented the table is rather than of how many units run. Establishing that needs
+  a third and fourth round with the pass count recorded.
+- **THE PEAK RELEASES; ONLY THE FLOOR RISES.** Round 2 peaked at 724Mi (a second pass at 560Mi) and
+  fell to a flat 370Mi within 15s. So [[LH-188]]'s memory bound is still the right shape for the
+  peak — what this row adds is that the BASELINE the peak sits on climbs with every rewrite.
+- **A VERDICT WAS NEARLY PUBLISHED ON AN ARTEFACT, and the pre-registered rule is what caught it.**
+  The first evaluation ran six seconds after the commit and reported `B2-B1 = +71.0Mi` from 16
+  samples at **sd 46.6** — the decay tail of the peak, not a baseline. Having B1 at sd 0.8 beside it
+  made the discrepancy obvious. The rule fixed what counts as a POSITIVE result but not what counts
+  as a VALID measurement; both halves belong in it. B2 was recomputed only once it held sd 1.2 over
+  48 samples.
 - **THE DECISION RULE IS FIXED BEFORE ROUND 2'S DATA ARRIVES, so it cannot be rationalised after.**
   Measured from round 1's own samples: **B0 = 302.3Mi**, **B1 = 316.6Mi (71 samples, sd 0.9Mi)** — a
   retained step of **+14.3Mi at ~15 standard deviations**, so the baseline is tight enough to decide
