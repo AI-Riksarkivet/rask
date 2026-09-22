@@ -1872,6 +1872,13 @@ Register bookkeeping, not engineering.
     independently reproduces `chart/values.yaml`'s own declared ~9%. Cutting concurrency to strand
     fewer units pushes the drain BELOW the injection and the lane never catches up — so this lever is
     owned by [[LH-191]]'s cadence question, not by this row.
+  - **AND THE MARGIN IS NOT A SIZING PROBLEM, which closes off the remedy anyone would reach for
+    first.** Measured on the deployed workers 2026-09-22, three samples over 60 s: CPU **678-769 m
+    against a limit of 2000 m (~37%)** and memory **225-230 Mi against 4 Gi (~5.6%)**, while the lane
+    only just keeps up. Each replica runs 36 concurrent units (`maxConcurrentUnits` 40 minus
+    `indexConcurrentUnits` 4) and spends them waiting on object storage, so the lane is I/O-bound, not
+    compute-bound. Giving the workers more CPU or memory buys nothing; the margin is set by how many
+    datasets get re-planned per tick, which is [[LH-191]]'s question and not a resource one.
   - **`ackWait` has large headroom on the typical unit and an unmeasured tail.** The chart records the
     handler at **0.21 s** (median 0.12, p90 0.60) with the 14 s `secondsPerUnit` being dispatch, ack
     round-trip and QUEUEING rather than work. So `720 s` is ~51x the lane cost per unit and ~1,200x
