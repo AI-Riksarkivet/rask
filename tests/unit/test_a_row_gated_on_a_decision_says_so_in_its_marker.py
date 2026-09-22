@@ -36,13 +36,7 @@ _DECISION = re.compile(r"owner call|owner ruling|owner decides|owner decision|ne
 _MATCHES_BUT_NOT_GATED: dict[str, str] = {
     # A row is added here only with a sentence a reader can check, and every entry so far has left the
     # set the only way a row may: LH-034, LH-096, LH-159 and LH-164 by gaining a `**blocked:**` marker
-    # or losing the incidental phrase, and LH-184 by closing.
-    #
-    # LH-055 matches on the TITLE OF THE RULING THAT UNBLOCKED IT. `docs/DECISIONS.md:2240` is headed
-    # "A · The FGA model shape is a PORT, not a decision", and the row quotes it to explain why it is
-    # no longer waiting on one. So the phrase argues the OPPOSITE of what this gate reads it as —
-    # which is the one case the regex cannot distinguish and a reader can in a second.
-    "LH-055": "quotes the ruling that unblocked it, whose title contains the word — 'a PORT, not a decision'",
+    # or losing the incidental phrase, and LH-184 and LH-055 by closing.
 }
 
 

@@ -1635,6 +1635,27 @@ maintenance:
     # The sample interval was 2s, so 434 MiB is a LOWER bound; the gate's 0.75 usable fraction carries
     # that uncertainty rather than pretending to precision.
     maxConcurrentCompactions: 4
+    # RETIRE THE WORKER AFTER N COMMITTED REWRITES ([[LH-183]]). The two bounds above cap what is
+    # resident AT ONCE; this one caps what is never given back.
+    #
+    # MEASURED 2026-09-22, three rounds on two worker processes: retention tracks COMMITS at ~10-14 MiB
+    # each (+9.6Mi for 1 commit in 15 fragments, +14.4Mi for 1 in 60, +54.2Mi for 4 in 60 — 13.6 per
+    # commit), while the transient peaks of 644/724/677Mi all came back. The floor rises and the
+    # ceiling does not. THE ARITHMETIC, and it is the sibling gate's: `(4Gi x 0.75 usable) - 320Mi
+    # baseline) / 14 MiB` is a CEILING of ~196 passes, not the ~300 the raw headroom suggests — the
+    # 0.75 fraction carries the same shape uncertainty it carries for the concurrency bound. 150 sits
+    # at ~76% of that ceiling, which is the margin the figure deserves: it rests on three points, one
+    # table shape and one row size. `test_the_worker_can_hold_every_unit_it_admits.py` refuses 200.
+    #
+    # A RESTART IS CHEAP, which is what makes this the remedy rather than the crude fallback it was
+    # first filed as. Measured on the live lane the same day: delivery resumes ~5 seconds after the
+    # replacement is ready and the held units redeliver at once, because NATS sees the subscriber's
+    # connection drop instead of waiting out `ackWait`. The PDB (`minAvailable: 1`) and a rollout that
+    # floors to 0 unavailable mean a recycle never takes both replicas.
+    #
+    # 0 disables it, and an estate that has not measured its own retention should say 0 rather than
+    # inherit this number: it is a property of the tables, not of the code.
+    recycleAfterPasses: 150
     # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
     # A reservation, not a measurement — an index build holds its token far longer than a compaction
     # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool

@@ -186,6 +186,17 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: at `max_source_bytes` peaked at ~1.7x that bound resident, so this times that product is what
     #: the pod must hold ([[LH-185]]'s gate does the arithmetic against the declared limit).
     max_concurrent_compactions: int = Field(default=4, gt=0, alias="MAINTENANCE_MAX_CONCURRENT_COMPACTIONS")
+    #: Retire this worker after N committed rewrites, so it leaves before it is OOMKilled ([[LH-183]]).
+    #: The two bounds above cap what is resident AT ONCE; this one caps what is never given back.
+    #: Measured: a pass leaves ~10-14 MiB permanently resident in the native allocator while its
+    #: 400-700Mi peak returns every time. The ceiling is `((limit x 0.75) - baseline) / 14 MiB`, which
+    #: on a 4Gi worker is ~196 passes — not the ~300 raw headroom suggests. 150 sits below it with the
+    #: margin the figure deserves, and the chart's gate refuses anything that does not fit.
+    #:
+    #: `ge=0` and not `gt=0` — 0 means never, which an estate that has not measured its own retention
+    #: must be able to say. Affordable only because a restart is cheap: measured on the live lane
+    #: 2026-09-22 ([[LH-190]]), delivery resumes ~5s after readiness and the units redeliver at once.
+    recycle_after_passes: int = Field(default=150, ge=0, alias="MAINTENANCE_RECYCLE_AFTER_PASSES")
     #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
     #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
     #: per-dataset boundary was supposed to fix.

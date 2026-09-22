@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
+from maintenance.services.rewrite_slot import passes_committed, retire_this_worker, should_retire
 from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, execute_unit
 from maintenance.services.work_queue import SUCCESS, ack_for
 from service_kit.draining import retry_when_draining
@@ -93,6 +94,11 @@ async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emit
             "error_type": result.error_type,
         },
     )
+    # AFTER the log and before the return, so the unit that tripped the mark is still acked: the
+    # signal starts uvicorn's graceful shutdown, which finishes this response first ([[LH-183]]).
+    passes = passes_committed()
+    if should_retire(passes, after=settings.recycle_after_passes):
+        retire_this_worker(passes=passes)
     return {"status": status}
 
 

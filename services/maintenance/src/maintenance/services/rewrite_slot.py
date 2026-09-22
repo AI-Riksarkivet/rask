@@ -25,6 +25,8 @@ from __future__ import annotations
 import functools
 import itertools
 import logging
+import os
+import signal
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -51,6 +53,17 @@ def _slots(size: int) -> threading.BoundedSemaphore:
 _committed = itertools.count(1)
 
 
+#: The last value `record_committed_rewrite` handed out. The counter itself is consumed by reading, so
+#: the handler deciding whether to retire cannot ask it — calling `next()` to LOOK would advance the
+#: number being looked at. A plain int beside it: the assignment is atomic under CPython, and a read
+#: that is one pass stale simply retires one unit later.
+_last_committed = 0
+
+#: One-way, per process. Every unit finishing after the mark would otherwise re-signal, and a worker
+#: that is already draining does not need to be told again.
+_retiring = False
+
+
 def record_committed_rewrite() -> int:
     """Count one committed rewrite and return the running total for this process.
 
@@ -58,7 +71,57 @@ def record_committed_rewrite() -> int:
     is called from the threadpool where `execute_unit` runs. A miscount would be a diagnostic that
     quietly disagrees with the thing it is diagnosing.
     """
-    return next(_committed)
+    global _last_committed
+    _last_committed = next(_committed)
+    return _last_committed
+
+
+def passes_committed() -> int:
+    """How many rewrites this process has committed, WITHOUT advancing the count."""
+    return _last_committed
+
+
+def retire_this_worker(*, passes: int) -> None:
+    """Ask this process to finish what it holds and leave, so Kubernetes starts a fresh one.
+
+    SIGTERM TO SELF, never `sys.exit` and never `os._exit`, because the point is to take the SAME
+    path a rolling restart takes: `arm_drain_on_sigterm` flips `app.state.shutting_down` so the next
+    delivery is answered RETRY instead of started, uvicorn finishes the in-flight response — which is
+    the ack for the very unit that tripped the mark — and the container then exits. Any other exit
+    abandons that response and loses the ack the pass was counted for.
+
+    ONE-WAY: `_retiring` cannot become false again, so the units still finishing behind this one do
+    not each re-signal.
+    """
+    global _retiring
+    if _retiring:
+        return
+    _retiring = True
+    log.warning(
+        "maintenance_worker_retiring",
+        extra={"passes": passes, "rss_bytes": resident_bytes(), "reason": "committed-rewrite budget spent ([[LH-183]] ~12 MiB retained per pass)"},
+    )
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
+def should_retire(passes: int, *, after: int) -> bool:
+    """Has this process spent its memory budget? ([[LH-183]])
+
+    The retention is in Lance/pyarrow's native allocator and is not this estate's to fix: a pass
+    leaves ~10-14 MiB resident for good while its 400-700Mi peak comes back every time. Retiring on a
+    count is the standard answer for an allocator that does not give memory back, and it is the only
+    one wholly inside this estate's control.
+
+    CHEAP, WHICH IT WAS NOT BELIEVED TO BE. Measured on the live lane 2026-09-22 ([[LH-190]]): a
+    worker restart costs pod-restart-time plus ~5s and the units redeliver at once, because NATS sees
+    the subscriber's connection drop rather than waiting out the 720s ack timer.
+
+    `>=` rather than `==`: two threads can commit between checks, and a worker that skipped its exact
+    number would run on to the OOM this exists to prevent. Non-positive is OFF, so a misconfiguration
+    fails toward NOT recycling — the opposite reading turns a typo into a worker that exits after
+    every pass, which is indistinguishable from a crash loop.
+    """
+    return after > 0 and passes >= after
 
 
 def resident_bytes() -> int:

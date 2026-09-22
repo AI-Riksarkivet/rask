@@ -130,6 +130,7 @@ spec:
             {{- /* The MEMORY bound, held around the rewrite. Separate from the units ceiling above,
                  which is throughput: one knob for both throttled the whole lane. */}}
             - { name: MAINTENANCE_MAX_CONCURRENT_COMPACTIONS, value: {{ .Values.maintenance.dedicatedWorkers.maxConcurrentCompactions | quote }} }
+            - { name: MAINTENANCE_RECYCLE_AFTER_PASSES, value: {{ .Values.maintenance.dedicatedWorkers.recycleAfterPasses | quote }} }
             - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
             {{- if .Values.maintenance.indexTopic }}
             # The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a

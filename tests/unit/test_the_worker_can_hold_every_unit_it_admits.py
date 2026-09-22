@@ -123,3 +123,49 @@ def test_the_gate_REFUSES_the_ceiling_it_replaced(units: int) -> None:
     limit_mib = _mib(_worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"])
     fits = units * source_mib * RESIDENT_PER_SOURCE_BYTE + BASELINE_MIB <= limit_mib * USABLE_FRACTION
     assert fits == (units == 4), f"{units} concurrent units: expected fits={units == 4}, got {fits}"
+
+
+# --------------------------------------------------------------------------- #
+# The OTHER axis: what a pass never gives back ([[LH-183]])
+# --------------------------------------------------------------------------- #
+
+#: MiB a committed rewrite leaves RESIDENT FOR GOOD. Measured 2026-09-22 on two worker processes:
+#: +9.6 MiB for 1 commit over 15 fragments, +14.4 for 1 over 60, +54.2 for 4 over 60 — 13.6 per
+#: commit. The unit of cost is the PASS, not the dataset and not the work item. Raise this only
+#: against a new measurement.
+RETAINED_PER_PASS_MIB = 14.0
+
+
+def test_the_worker_retires_before_its_retention_reaches_the_limit() -> None:
+    """The second arithmetic, and it is a DIFFERENT question from the one above.
+
+    `maxConcurrentCompactions` bounds what is resident AT ONCE and the peaks measured there all came
+    back. This bounds what never comes back: the floor rises ~14 MiB per committed pass and nothing
+    lowers it, so a worker that runs long enough reaches its limit with no single pass being large.
+    That is the shape of the [[LH-183]] OOM — two allocator fixes moved it 87m -> 442m -> 460m and
+    neither stopped it, because the cause is not a peak.
+    """
+    env = _env()
+    after = int(env["MAINTENANCE_RECYCLE_AFTER_PASSES"])
+    limit_mib = _mib(_worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"])
+    if after == 0:
+        pytest.skip("recycling disabled — an estate that has not measured its own retention says 0")
+
+    needed = after * RETAINED_PER_PASS_MIB + BASELINE_MIB
+    usable = limit_mib * USABLE_FRACTION
+    assert needed <= usable, (
+        f"the worker retires after {after} passes, and a pass retains a MEASURED {RETAINED_PER_PASS_MIB} MiB — "
+        f"{needed:.0f} MiB against {usable:.0f} MiB usable ({limit_mib:.0f} MiB x {USABLE_FRACTION}). "
+        "Lower `recycleAfterPasses` or raise the worker's limit. The peaks are not the problem here; "
+        "the floor is."
+    )
+
+
+@pytest.mark.parametrize(("after", "expected_fits"), [(150, True), (200, False), (300, False)])
+def test_the_gate_REFUSES_a_budget_that_does_not_fit(after: int, expected_fits: bool) -> None:
+    """A gate that cannot fail is not a gate, and this one caught its own author: 200 was the first
+    default written here, taken from the row's raw "~300 passes" without applying the 0.75 usable
+    fraction its sibling has always applied. It overruns by 48 MiB and is refused."""
+    limit_mib = _mib(_worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"])
+    fits = after * RETAINED_PER_PASS_MIB + BASELINE_MIB <= limit_mib * USABLE_FRACTION
+    assert fits == expected_fits, f"{after} passes: expected fits={expected_fits}, got {fits}"
