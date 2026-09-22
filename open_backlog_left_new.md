@@ -1187,6 +1187,20 @@ have no `uv.lock` and so cannot be built to emit anything.
   others and was redelivered, which is the mechanism this row describes, reproduced on demand.
   Causation is not proven — the counter is cumulative and one tick is one sample — but the sequence
   is: 0 before, 567 published, 1 after.
+- **THE LANE DRAINS, AND ONE SAMPLE SAID OTHERWISE.** Six samples 20s apart, after the manual sweep:
+  `ack_pending` 786 -> 682 -> 565 -> 422 -> 307, then 772 when the next cron tick landed, with
+  `ack_floor` climbing 47,752 -> 48,323 throughout. That is a SAWTOOTH that returns toward zero:
+  ~115-140 units acked per 20s (~6.5/sec, ~780 per 120s cycle) against ~567 injected per tick, so
+  drain capacity exceeds injection and the spike this row's manual trigger created cleared in about
+  two minutes. `Redelivered` was 0 in every one of the six samples.
+- **A SINGLE `Ack Pending` READING CARRIES NO DIRECTION**, and reading one as saturation was this
+  row's first mistake: 919 of 1,000 looked like a lane at its ceiling, measured moments after an
+  out-of-band sweep had been injected on top of a normal tick. The trend is the measurement; the
+  gauge is not. (`Redelivered` is likewise CURRENT-STATE, not cumulative — the 1 observed earlier was
+  a unit briefly in that state, not a running total.)
+- **SO THIS ROW IS LATENT, NOT URGENT.** The bound still belongs in the component — nobody chose
+  1,000 and nothing stops a slower unit from changing the arithmetic — but the lane is not saturating
+  today and the headroom is real.
 - **Memory stayed flat through it** (planner 161Mi; workers 176Mi and 178Mi of 4Gi, CPU 790m/744m),
   because every unit is still a no-op against tables already at target. So the ACK-WINDOW half of
   this row is now demonstrated and the MEMORY half remains untested — the two fail independently and
