@@ -116,8 +116,6 @@ spec:
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           {{- /* mc writes its client config under $HOME, which a read-only rootfs turns into a failure. HOME on the tmp
                  emptyDir is the pair every app container in this chart already uses. */}}
-          env:
-            - { name: HOME, value: /tmp }
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
           resources:
@@ -156,6 +154,8 @@ spec:
             - name: VIEWER_SECRET_KEY
               value: {{ include "lance.scopedStorageSecret" (list . .Values.minio.viewerAccessKey .Values.minio.viewerSecretKey) | quote }}
             {{- end }}
+            {{- /* HOME on the tmp emptyDir: this container now runs with a read-only rootfs, and the CLI writes under $HOME. */}}
+            - { name: HOME, value: /tmp }
           command:
             - sh
             - -c

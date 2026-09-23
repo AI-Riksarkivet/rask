@@ -22,6 +22,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.dapr.sidecars }}
+        {{- include "rask.daprAnnotations" (list $root .Values.medallion.producer.daprAppId $port) | nindent 8 }}
+        {{- end }}
         {{- /* THE SECRET NEEDS ITS OWN HASH — a `secretKeyRef` env is injected at pod CREATION and
                never refreshed, so a rotated Secret leaves this pod holding a dead credential while the
                render, the reference and every probe stay green. Measured 2026-09-08 on the zones: six
@@ -33,10 +36,6 @@ spec:
         app.kubernetes.io/component: medallion-producer
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
-      {{- if .Values.dapr.sidecars }}
-      annotations:
-        {{- include "rask.daprAnnotations" (list $root .Values.medallion.producer.daprAppId $port) | nindent 8 }}
-      {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if .Values.security.serviceAccounts.enabled }}
@@ -443,6 +442,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if $root.Values.dapr.sidecars }}
+        {{- include "rask.daprAnnotations" (list $root .daprAppId $port) | nindent 8 }}
+        {{- end }}
         {{- /* THE SECRET NEEDS ITS OWN HASH — a `secretKeyRef` env is injected at pod CREATION and
                never refreshed, so a rotated Secret leaves this pod holding a dead credential while the
                render, the reference and every probe stay green. Measured 2026-09-08 on the zones: six
@@ -454,10 +456,6 @@ spec:
         app.kubernetes.io/component: {{ .name }}
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
-      {{- if $root.Values.dapr.sidecars }}
-      annotations:
-        {{- include "rask.daprAnnotations" (list $root .daprAppId $port) | nindent 8 }}
-      {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ $root.Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if $root.Values.security.serviceAccounts.enabled }}

@@ -22,6 +22,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.dapr.sidecars }}
+        {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.daprAppId .Values.services.catalog.port) | nindent 8 }}
+        {{- end }}
         {{- /* THE SECRET NEEDS ITS OWN HASH — a `secretKeyRef` env is injected at pod CREATION and
                never refreshed, so a rotated Secret leaves this pod holding a dead credential while the
                render, the reference and every probe stay green. Measured 2026-09-08 on the zones: six
@@ -33,10 +36,6 @@ spec:
         app.kubernetes.io/component: catalog
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
-      {{- if .Values.dapr.sidecars }}
-      annotations:
-        {{- include "rask.daprAnnotations" (list $root .Values.services.catalog.daprAppId .Values.services.catalog.port) | nindent 8 }}
-      {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if .Values.podDisruptionBudget.enabled }}
@@ -511,6 +510,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.dapr.sidecars }}
+        {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.daprAppId .Values.services.lineage.port) | nindent 8 }}
+        {{- end }}
         {{- /* THE SECRET NEEDS ITS OWN HASH — a `secretKeyRef` env is injected at pod CREATION and
                never refreshed, so a rotated Secret leaves this pod holding a dead credential while the
                render, the reference and every probe stay green. Measured 2026-09-08 on the zones: six
@@ -522,10 +524,6 @@ spec:
         app.kubernetes.io/component: lineage
         {{- include "rask.daprPodLabels" $root | nindent 8 }}
         lance.dev/logs: otlp # ships logs via the OTel SDK (OTLP) → the collector filter drops the file-tailed dup
-      {{- if .Values.dapr.sidecars }}
-      annotations:
-        {{- include "rask.daprAnnotations" (list $root .Values.services.lineage.daprAppId .Values.services.lineage.port) | nindent 8 }}
-      {{- end }}
     spec:
       terminationGracePeriodSeconds: {{ .Values.lifecycle.terminationGracePeriodSeconds }}
       {{- if .Values.podDisruptionBudget.enabled }}
