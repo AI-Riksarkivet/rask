@@ -76,3 +76,4 @@ sbom-*.cdx.json
 #   docs/architecture/<name>.archify.json docs/architecture/<name>.html --quality showcase
 docs/architecture/*.html
 docs/architecture/*.visual-check.*
+.soak/
