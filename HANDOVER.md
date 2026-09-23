@@ -125,7 +125,7 @@ the drain and index-lane fixes, LH-191's planner-side cadence skip.
 3. [[LH-194]] — how a failed seed's registration is removed, given a machine may not deregister what
    it registers.
 
-**One thing left unproven on this host**, recorded so it is not claimed: the cadence skip was proven
-via `compact_enabled: false` (`policy_disabled: 1` in the tick, `published` 570 → 569). The
-`compact_interval_hours` path was NOT observed firing — the stamp probe did not land before the
-migration. The planner code is identical for both; only the live proof of the interval arm is owed.
+**Both arms of the cadence skip are proven live**, so nothing is owed there: `compact_enabled: false`
+gave `policy_disabled: 1`, and `compact_interval_hours: 8760` (stamped by driving the unit once, with
+the policy left in place) gave `planned=569 published=569 skipped_by={'trashed': 14,
+'policy_interval': 1}`.

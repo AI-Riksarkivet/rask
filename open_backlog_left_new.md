@@ -1387,6 +1387,19 @@ measured (~10-14 MiB per commit pas
   `plan.skipped is not None`, because re-stamping a paced dataset "would push the next maintenance out
   by another full interval on every tick". A skipped unit's only effect at the worker was the round
   trip.
+- **BOTH ARMS ARE NOW PROVEN LIVE, including the cadence one.** The opt-out arm was shown first
+  (`compact_enabled: false` -> `policy_disabled: 1`). The INTERVAL arm needs a stamp before it can
+  refuse, so: set `compact_interval_hours: 8760` on `bronze$pages`, drive its unit once so
+  `_stamp_policy_state` writes `last_maintained_at`, then leave the policy in place. The tick:
+
+  ```
+  planned=569 published=569 skipped=15 skipped_by={'trashed': 14, 'policy_interval': 1}
+  ```
+
+  *The first attempt failed for a reason worth keeping:* the policy was deleted before the tick that
+  would have shown it, so the planner resolved no policy and there was nothing to skip. The cadence is
+  read from the REGISTRY at plan time, not from the stamp alone — a probe has to leave the record in
+  place. The policy was deleted afterwards and the table is unpoliced again.
 - **WHAT IS LEFT IS YOURS, AND IT IS THE NUMBERS.** All 27 policies carry
   `compact_interval_hours: null`, so nothing is skipped for CADENCE today — only the opt-out above
   exercises the path. The per-tier intervals, plus whether the ~543 datasets no policy covers get a
