@@ -345,6 +345,23 @@ scope here, and named so the residual is not mistaken for this defect.
   to a declared status, or the upstream spec should declare 406 where a parameter is unserviceable, is
   an owner call.
 
+**AND THE CHECKSUM IS NOW WRITTEN WHERE THE TOKEN IS HANDED OVER, so no pod can be given one without
+it — 2026-09-23.** The duplicate-key fix repaired four Deployments; a gate derived from the ANNOTATION
+rather than from a list of services then found two more that had simply never had it
+(`rask-maintenance-worker` — a lakehouse service — and `rask-controlplane`). Measured: 14 pods handed
+the app token, 12 carrying the checksum.
+- **THE TWO FAILURE MODES LOOK NOTHING ALIKE**, which is why a per-template line could not hold it:
+  one lost the annotation to a duplicate key, the other never wrote it. `rask.daprAnnotations` now
+  emits `checksum/dapr-app-token` beside `dapr.io/app-token-secret`, and the six restatements are
+  gone — a pod given the token carries the checksum by construction, including a service nobody has
+  written yet.
+- **OBSERVED ON THE CLUSTER: 17 of 17** workloads handed the token carry the checksum, both former
+  gaps included, estate 89/89 healthy.
+- **THE DEPLOY REPORTED FAILURE AGAIN AND CONVERGED AGAIN.** Changing an annotation every sidecar'd
+  pod carries rolls the whole fleet, which outruns the 20-minute `--wait`. `helm status` reads
+  `failed` while every workload is ready — not `pending-upgrade`, so nothing is blocked. Read the
+  cluster, not the exit code, in both directions.
+
 **A DUPLICATE YAML KEY HAD DISABLED THE SECRET-ROTATION CONTROL ON EVERY SIDECAR'D SERVICE — found
 and fixed 2026-09-23, and it explains an observation made earlier the same day.** A duplicate mapping
 key is not a YAML error: the parser keeps the LAST one and silently drops the rest. `maintenance.yaml`,
