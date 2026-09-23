@@ -10,7 +10,9 @@
 #     scripts/seed_labeling_task.sh
 set -euo pipefail
 
-NS="${RASK_NAMESPACE:-default}"
+# The release's own namespace. `RASK_NAMESPACE` pins it for the seeders alone; `NAMESPACE` is the name
+# the Makefile and the other operator scripts share.
+NS="${RASK_NAMESPACE:-${NAMESPACE:-rask}}"
 # The tenant the UI will actually show. The annotator zone resolves it from the signed-in user's
 # FIRST project (`me.projects[0]`), so seeding into a different one produces the worst possible
 # outcome: a task that exists, that the API returns, and that the UI reports as "No labeling tasks

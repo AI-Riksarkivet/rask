@@ -17,10 +17,15 @@
 # yesterday's address fails in a way that reads as a broken service. The one input is the release name.
 #
 # Usage:  bash scripts/e2e_live.sh [-m MARKER | FILE...]
-#         RELEASE=rask KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash scripts/e2e_live.sh -m cas
+#         RELEASE=rask NAMESPACE=rask KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash scripts/e2e_live.sh -m cas
 set -euo pipefail
 
 RELEASE="${RELEASE:-rask}"
+# The release's own namespace. Every discovery below is a namespaced read, and asked anywhere else
+# each one answers "not found" — which this script reports as a service the release does not have.
+NAMESPACE="${NAMESPACE:-rask}"
+# The suites that shell out to kubectl read the release's namespace from here.
+export LANCE_E2E_NAMESPACE="$NAMESPACE"
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.localbin"
 export PATH="$BIN:$PATH"
@@ -42,9 +47,9 @@ kubectl get ns >/dev/null 2>&1 || fail "no reachable cluster (KUBECONFIG=$KUBECO
 # Measured 2026-09-06: rask-openfga ports are grpc=8081, http=8080, playground=3000, metrics=2112.
 svc() {
   local name="$1" ip port
-  ip="$(kubectl get svc "$name" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
-  port="$(kubectl get svc "$name" -o jsonpath='{.spec.ports[?(@.name=="http")].port}' 2>/dev/null || true)"
-  [ -n "$port" ] || port="$(kubectl get svc "$name" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
+  ip="$(kubectl -n "$NAMESPACE" get svc "$name" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+  port="$(kubectl -n "$NAMESPACE" get svc "$name" -o jsonpath='{.spec.ports[?(@.name=="http")].port}' 2>/dev/null || true)"
+  [ -n "$port" ] || port="$(kubectl -n "$NAMESPACE" get svc "$name" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
   [ -n "$ip" ] && [ -n "$port" ] && printf '%s:%s' "$ip" "$port"
 }
 
@@ -71,15 +76,15 @@ MEDALLION="$(svc "$RELEASE-medallion-producer")" || true
 # is the lane the cascade always has.
 STAGE_RUNNER="$(svc "$RELEASE-bronze-to-silver")" || true
 AGE="$(svc "$RELEASE-age")" || true
-[ -n "$CATALOG" ] || fail "no $RELEASE-catalog service — is the release deployed?"
+[ -n "$CATALOG" ] || fail "no $RELEASE-catalog service in namespace $NAMESPACE — is the release deployed there?"
 printf '   catalog=%s lineage=%s gateway=%s s3=%s\n' "$CATALOG" "$LINEAGE" "$GATEWAY" "$S3"
 
 step "2/4 minting a real bearer through Dex"
 # The estate is governed, so an unauthenticated suite proves nothing. The password grant is the same
 # one `e2e_stack.sh` uses; the static client and users come from the deployed configmap, so this
 # follows the estate rather than assuming it.
-DEX_CLIENT="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^ *- id: *//p' | head -1)"
-DEX_SECRET="$(kubectl get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^ *secret: *//p' | head -1)"
+DEX_CLIENT="$(kubectl -n "$NAMESPACE" get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^ *- id: *//p' | head -1)"
+DEX_SECRET="$(kubectl -n "$NAMESPACE" get cm "$RELEASE-dex" -o jsonpath='{.data.config\.yaml}' 2>/dev/null | sed -n 's/^ *secret: *//p' | head -1)"
 : "${DEX_CLIENT:=lance-catalog}" ; : "${DEX_SECRET:=lance-catalog-secret}"
 mint() {
   curl -s -m 20 "http://$DEX/dex/token" -d grant_type=password -d client_id="$DEX_CLIENT" \
@@ -99,22 +104,22 @@ printf '   alice=%s… bob=%s…\n' "${ALICE:0:18}" "${BOB:0:18}"
 step "3/4 reading the estate's own secrets"
 # From the Dapr app-token Secret, never from a values file: the token the sidecar stamps is the one
 # the doors verify, and any other copy is a guess.
-DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
+DAPR_TOKEN="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d || true)"
 # Same two-backend rule as the address above, and the key NAMES differ as well as the secret's: the
 # MinIO path keeps its root credential in the shared `<release>-infra-credentials` under
 # `minio-access-key`/`minio-secret-key` (read off the running StatefulSet's own env, 2026-09-14),
 # where RustFS ships a dedicated `<release>-rustfs` with `accesskey`/`secretkey`.
-S3_KEY="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-access-key}' 2>/dev/null | base64 -d || true)"
-S3_SECRET="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-secret-key}' 2>/dev/null | base64 -d || true)"
+S3_KEY="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-access-key}' 2>/dev/null | base64 -d || true)"
+S3_SECRET="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.minio-secret-key}' 2>/dev/null | base64 -d || true)"
 if [ -z "$S3_KEY" ]; then
-  S3_KEY="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.accesskey}' 2>/dev/null | base64 -d || true)"
-  S3_SECRET="$(kubectl get secret "$RELEASE-rustfs" -o jsonpath='{.data.secretkey}' 2>/dev/null | base64 -d || true)"
+  S3_KEY="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-rustfs" -o jsonpath='{.data.accesskey}' 2>/dev/null | base64 -d || true)"
+  S3_SECRET="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-rustfs" -o jsonpath='{.data.secretkey}' 2>/dev/null | base64 -d || true)"
 fi
 # The lineage suites open the AGE graph DIRECTLY rather than through the service, because what they
 # assert is that the write reached the store — an assertion the service's own read cannot make. The
 # deployment's `LINEAGE_DATABASE_URL` carries no password (the pod takes it from the Dapr secret
 # store at lifespan), so the host-run form is rebuilt here from the same secret the cluster uses.
-PG_PASSWORD="$(kubectl get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.postgres-password}' 2>/dev/null | base64 -d || true)"
+PG_PASSWORD="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-infra-credentials" -o jsonpath='{.data.postgres-password}' 2>/dev/null | base64 -d || true)"
 
 # AN ADDRESS THAT DID NOT RESOLVE IS EXPORTED AS NOTHING, never as the scheme alone. Every line below
 # used to be `export X="http://$Y"` unconditionally, so a service this script could not find became the
@@ -134,7 +139,7 @@ url() {  # url VARNAME HOST[/path] — export VARNAME=http://HOST... only if HOS
 # (chart/values.yaml ships it FALSE). Read off the running pod rather than the values, because the pod
 # is what the suite will actually meet; absent, the legs skip with a reason instead of failing on a
 # NULL field, which is what they did before (measured 2026-09-14).
-QUALITY_ON="$(kubectl get deploy "$RELEASE-bronze-to-silver" -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="MEDALLION_QUALITY_ENABLED")]}{.value}{end}' 2>/dev/null || true)"
+QUALITY_ON="$(kubectl -n "$NAMESPACE" get deploy "$RELEASE-bronze-to-silver" -o jsonpath='{range .spec.template.spec.containers[0].env[?(@.name=="MEDALLION_QUALITY_ENABLED")]}{.value}{end}' 2>/dev/null || true)"
 [ "$QUALITY_ON" = "true" ] && export LANCE_E2E_QUALITY=1
 
 url LANCE_E2E_CATALOG_URL     "$CATALOG"
@@ -268,7 +273,7 @@ fi
 if [ -n "$AGE" ] && [ -n "$PG_PASSWORD" ]; then
   export LINEAGE_DATABASE_URL="postgresql://lance:$PG_PASSWORD@$AGE/lineage"
 else
-  printf '   note: no %s-age service or no postgres-password — the 10 direct-AGE legs will SKIP\n' "$RELEASE"
+  printf '   note: no %s-age service in namespace %s or no postgres-password — the 10 direct-AGE legs will SKIP\n' "$RELEASE" "$NAMESPACE"
 fi
 
 # ---- a SECOND tenant, so the credential-isolation legs can run ----------------------------------
@@ -332,10 +337,10 @@ for dep in medallion-producer bronze-to-silver media-to-silver silver-to-gold; d
   # serving and still settled, so the probe answered "ready" 1 second after a restart while the NEW
   # pod had not registered anything. Waiting for the deployment to converge first means the pod the
   # probe reaches is the pod the suite will actually be talking to.
-  kubectl rollout status "deploy/$RELEASE-$dep" --timeout="${LANCE_E2E_SETTLE_SECONDS:-120}s" >/dev/null 2>&1 \
+  kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-$dep" --timeout="${LANCE_E2E_SETTLE_SECONDS:-120}s" >/dev/null 2>&1 \
     || fail "$dep did not finish rolling out within ${LANCE_E2E_SETTLE_SECONDS:-120}s"
   while :; do
-    if kubectl exec "deploy/$RELEASE-$dep" -- python -c '
+    if kubectl -n "$NAMESPACE" exec "deploy/$RELEASE-$dep" -- python -c '
 import json, sys, urllib.request
 m = json.load(urllib.request.urlopen("http://127.0.0.1:3500/v1.0/metadata", timeout=5))
 topics = {s.get("topic") for s in (m.get("subscriptions") or [])}

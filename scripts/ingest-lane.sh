@@ -19,7 +19,7 @@
 #   scripts/ingest-lane.sh all        # all three
 set -euo pipefail
 
-NS="${NS:-default}"
+NS="${NS:-${NAMESPACE:-rask}}"
 RELEASE="${RELEASE:-rask}"
 # THE CONTROL-PLANE DOORS NEED A PERSON, and the service token is not one. `/v1/projects` and
 # `/v1/warehouses` are estate-admin gated on an OIDC bearer — deliberately, since that is what stops a
@@ -124,7 +124,7 @@ cmd_deploy() {
 
 	# THE LANE MAY CHANGE CONFIGURATION; IT MAY NEVER CHANGE AN IMAGE IT DID NOT BUILD.
 	#
-	# `NS` defaults to `default`, which is the estate's OWN release namespace — so this is not the
+	# `NS` defaults to `rask`, which is the estate's OWN release namespace — so this is not the
 	# isolated slice the split below was written for, it is a second writer to the live release. The
 	# render carries the chart's image DEFAULTS (`:dev`), and applying it rewrites every Deployment to
 	# a tag the registry does not hold. Measured 2026-09-10: twelve Deployments went Pending in one

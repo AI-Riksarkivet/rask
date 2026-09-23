@@ -19,6 +19,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PATH="$PWD/.localbin:$PATH"
 RELEASE="${RELEASE:-lance-ns}"
+# The release's own namespace, where every service forwarded below lives.
+NAMESPACE="${NAMESPACE:-rask}"
 ORIGIN_PORT="${ORIGIN_PORT:-8090}" # must equal frontend.oidc.publicOrigin's port (the registered redirect URI)
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
@@ -28,8 +30,8 @@ fail() { echo "!! FAIL: $*"; exit 1; }
 # One origin = the ingress-nginx controller (path-routes every zone); Dex for the browser host-resolver rule;
 # OpenFGA to seed alice's admin grant.
 kubectl -n ingress-nginx port-forward svc/ingress-nginx-controller "$ORIGIN_PORT:80" >/tmp/pf-ingress.log 2>&1 & PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
 for i in $(seq 1 30); do
   # Probe the ORIGIN ROOT, not a zone path. This polled "/data" — a path the 7 -> 4 zone merge deleted
   # (data is an area of the lakehouse zone now), so it answered 404, never matched, and the loop below

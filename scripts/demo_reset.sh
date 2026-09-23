@@ -12,8 +12,8 @@
 # (every warehouse whose registry record belongs to a keep-project, plus any explicitly-listed id).
 #
 # Prereqs — port-forward the two services this talks to (same shape as e2e_stack.sh):
-#   kubectl port-forward svc/lance-ns-rustfs  9900:9000 &
-#   kubectl port-forward svc/lance-ns-openfga 8081:8080 &
+#   kubectl -n rask port-forward svc/rask-minio   9900:9000 &
+#   kubectl -n rask port-forward svc/rask-openfga 8081:8080 &
 # Then:
 #   scripts/demo_reset.sh            # enumerate only (dry-run)
 #   scripts/demo_reset.sh --apply    # actually delete

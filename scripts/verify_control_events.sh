@@ -32,6 +32,8 @@ for arg in "$@"; do
 done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RELEASE="${RELEASE:-lance-ns}"
+# The release's own namespace, where every service forwarded below lives.
+NAMESPACE="${NAMESPACE:-rask}"
 CAT_PORT="${CAT_PORT:-2333}"
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
@@ -41,9 +43,9 @@ ok() { echo "OK: $*"; }
 
 # Port-forward the catalog (serves /v1/events + the mutation endpoints), Dex (mint user tokens), OpenFGA
 # (seed the estate-admin + project-admin tuples).
-kubectl port-forward "svc/$RELEASE-catalog" "$CAT_PORT:2333" >/tmp/pf-cat.log 2>&1 & PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-catalog" "$CAT_PORT:2333" >/tmp/pf-cat.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PIDS+=($!)
 for i in $(seq 1 30); do
   c=$(curl -s -o /dev/null -w '%{http_code}' -m2 "http://localhost:$CAT_PORT/livez" 2>/dev/null || true)
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)

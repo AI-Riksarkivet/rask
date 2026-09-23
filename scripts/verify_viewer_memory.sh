@@ -24,6 +24,8 @@
 set -euo pipefail
 
 RELEASE="${RELEASE:-lance-ns}"
+# The release's own namespace, where the viewer pod this drives and measures runs.
+NAMESPACE="${NAMESPACE:-rask}"
 CHART="${CHART:-chart}"
 # The measured high-water was 955Mi (the KG build's transient, cgroup memory.peak, 2026-07-26). The
 # floor sits just above it so a tier that would survive only by luck still fails leg 1.
@@ -110,7 +112,7 @@ echo "without resources.viewer the chart falls back to $missing (below the floor
 # ── 2. what is actually deployed ─────────────────────────────────────────────────────────────────
 
 step "2/4 the deployed viewer matches what the chart renders"
-live_limit=$(kubectl get "deploy/$RELEASE-viewer" \
+live_limit=$(kubectl -n "$NAMESPACE" get "deploy/$RELEASE-viewer" \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="viewer")].resources.limits.memory}')
 [ -n "$live_limit" ] || fail "the deployed viewer has no memory limit at all"
 [ "$(to_mi "$live_limit")" = "$lim_mi" ] ||
@@ -120,12 +122,12 @@ echo "deployed viewer memory limit = $live_limit"
 # ── 3. drive the load that killed it ─────────────────────────────────────────────────────────────
 
 step "3/4 drive the load that OOM-killed the 512Mi pod"
-pod=$(kubectl get pods -l app.kubernetes.io/component=viewer -o jsonpath='{.items[0].metadata.name}')
+pod=$(kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=viewer -o jsonpath='{.items[0].metadata.name}')
 [ -n "$pod" ] || fail "no viewer pod (is explorer.enabled set?)"
-before=$(kubectl get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].restartCount}')
+before=$(kubectl -n "$NAMESPACE" get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].restartCount}')
 echo "pod=$pod restarts before=$before"
 
-kubectl port-forward "svc/$RELEASE-viewer" "$PORT:8101" >/dev/null 2>&1 &
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-viewer" "$PORT:8101" >/dev/null 2>&1 &
 PF_PID=$!
 for _ in $(seq 30); do
   sleep 0.5
@@ -157,23 +159,23 @@ code=$(get "/api/graph/status")
 body=$(curl -s -m 300 "http://127.0.0.1:$PORT/api/graph/status" || true)
 echo "  GET /api/graph/status → ${code:-<no response>}  $body"
 [ "$code" = "200" ] ||
-  fail "/api/graph/status returned '${code:-<connection dropped>}' — the container was killed mid-request (kubectl get pod $pod -o jsonpath='{.status.containerStatuses[*].lastState}')"
+  fail "/api/graph/status returned '${code:-<connection dropped>}' — the container was killed mid-request (kubectl -n $NAMESPACE get pod $pod -o jsonpath='{.status.containerStatuses[*].lastState}')"
 case "$body" in
 *'"built":true'*) ;;
 *) fail "the graph is not built in this corpus — the drive proves nothing; stage the KG tables first" ;;
 esac
 
-after=$(kubectl get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].restartCount}')
+after=$(kubectl -n "$NAMESPACE" get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].restartCount}')
 [ "$after" = "$before" ] || fail "viewer restarted during the drive ($before → $after) — still being OOM-killed"
-reason=$(kubectl get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].lastState.terminated.reason}')
+reason=$(kubectl -n "$NAMESPACE" get "pod/$pod" -o jsonpath='{.status.containerStatuses[?(@.name=="viewer")].lastState.terminated.reason}')
 [ -z "$reason" ] || fail "the viewer container's last termination reason is '$reason' — it has been killed under this tier"
 echo "restarts after=$after, no terminated state on the viewer container"
 
 # ── 4. the high-water actually fits ──────────────────────────────────────────────────────────────
 
 step "4/4 the observed high-water fits under the limit"
-peak_mi=$(kubectl exec "$pod" -c viewer -- cat /sys/fs/cgroup/memory.peak | awk '{printf "%d", $1/1048576}')
-cur_mi=$(kubectl exec "$pod" -c viewer -- cat /sys/fs/cgroup/memory.current | awk '{printf "%d", $1/1048576}')
+peak_mi=$(kubectl -n "$NAMESPACE" exec "$pod" -c viewer -- cat /sys/fs/cgroup/memory.peak | awk '{printf "%d", $1/1048576}')
+cur_mi=$(kubectl -n "$NAMESPACE" exec "$pod" -c viewer -- cat /sys/fs/cgroup/memory.current | awk '{printf "%d", $1/1048576}')
 echo "cgroup memory.current = ${cur_mi}Mi, memory.peak = ${peak_mi}Mi, limit = ${lim_mi}Mi"
 [ "$peak_mi" -lt "$lim_mi" ] || fail "high-water ${peak_mi}Mi reached the ${lim_mi}Mi limit"
 

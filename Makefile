@@ -216,7 +216,7 @@ alert-rules-check: ## promtool: the alert rules are valid AND actually fire on s
 # Exit 2 (no datasource) is a SKIP so a laptop without a cluster is not a red build — which means it
 # is the k3s/CI run that actually proves anything. Run it before shipping a rule change.
 alert-rules-drill: ## replay every alert rule against a REAL GreptimeDB (skips with no cluster)
-	@uv run python scripts/alert_rules_drill.py; s=$$?; [ $$s -eq 1 ] && exit 1 || exit 0
+	@NAMESPACE=$(NAMESPACE) uv run python scripts/alert_rules_drill.py; s=$$?; [ $$s -eq 1 ] && exit 1 || exit 0
 
 # ---- frontend dead-code + dep gate (knip, repo-wide; see knip.json) ---------
 # Cross-workspace tool — analyses the whole JS graph at once, so it stays a
@@ -258,7 +258,7 @@ check: fmt lint typecheck knip fga-test
 # runner; and because `model transform` does NOT — it emits well-formed JSON from an invalid model, so
 # regenerating `model.json` as `model.fga.yaml`'s header instructs makes the drift check agree.
 fga-store-check: ## Does the RUNNING store hold the model this repo declares? (needs a cluster)
-	@bash scripts/fga-store-check.sh
+	@NAMESPACE=$(NAMESPACE) bash scripts/fga-store-check.sh
 
 # THE TUPLES DO NOT MOVE THEMSELVES when `fga_root_object` is repointed onto the estate ([[LH-055]]).
 # Run this BEFORE deploying the repoint, never after: a principal holding `owner` on the default
@@ -266,10 +266,10 @@ fga-store-check: ## Does the RUNNING store hold the model this repo declares? (n
 # Piped into the CATALOG'S OWN POD for the reason `fga-store-check` is — the address the code reads
 # (`RASK_FGA_API_URL`) is the one that matters, and a port-forward answers for a different one.
 fga-estate-migrate: ## Carry the estate privileges from the default warehouse onto the estate root (needs a cluster)
-	@POD="$$(kubectl -n $${NS:-default} get pods -o name | grep -m1 'rask-catalog' | sed 's|pod/||')"; \
-	[ -n "$$POD" ] || { echo "!! no rask-catalog pod in namespace $${NS:-default}"; exit 1; }; \
+	@POD="$$(kubectl -n $${NS:-$(NAMESPACE)} get pods -o name | grep -m1 'rask-catalog' | sed 's|pod/||')"; \
+	[ -n "$$POD" ] || { echo "!! no rask-catalog pod in namespace $${NS:-$(NAMESPACE)}"; exit 1; }; \
 	echo ">> through $$POD (DRY_RUN=$${DRY_RUN:-})"; \
-	kubectl -n $${NS:-default} exec -i "$$POD" -c catalog -- env DRY_RUN="$${DRY_RUN:-}" python - < scripts/fga_estate_root_migrate.py
+	kubectl -n $${NS:-$(NAMESPACE)} exec -i "$$POD" -c catalog -- env DRY_RUN="$${DRY_RUN:-}" python - < scripts/fga_estate_root_migrate.py
 
 # THE FOURTH COPY. `fga-test` below diffs `model.fga` against `model.json` — two files in the repo
 # that agree with each other — and the estate already killed a three-copy lie once. The copy it still
@@ -542,7 +542,7 @@ harvest-ead:
 # nothing, /annotator has no page and /lakehouse lists no tables — and "not seeded" is
 # indistinguishable from "not built". One command fixes that for the whole estate.
 seed-dev: ## Seed the dev estate: media corpus + a labeling task with items (needs a running cluster)
-	scripts/seed_dev_estate.sh
+	NAMESPACE=$(NAMESPACE) scripts/seed_dev_estate.sh
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove packages/storage + LanceDB work against a REAL rustfs backend (not moto).
@@ -621,11 +621,15 @@ COMPOSE_IMAGES = gateway compute controlplane ingest notifications flows
 # compute ZONE.)
 # "home" is the catch-all; the rest are pinned to their /<zone> base path.
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+# THE RELEASE'S NAMESPACE, named once. The chart is namespace-agnostic (`.Release.Namespace` throughout);
+# this is where the local estate lives, handed to helm as HELM_NAMESPACE, to kubectl as `-n` and to the
+# scripts as NAMESPACE. tests/unit/test_the_estate_lives_in_its_own_namespace.py pins every reader.
+NAMESPACE ?= rask
 # Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
 # Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
 # re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
-HELM ?= KUBECONFIG=$(KUBECONFIG) ./scripts/helm.sh
-KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
+HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(NAMESPACE) ./scripts/helm.sh
+KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl -n $(NAMESPACE)
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + medallion + maintenance +
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
@@ -745,9 +749,9 @@ k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then instal
 	fi; \
 	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — a Serve application that pulls a gated Hugging Face model will 401"; fi; \
 	LIVE=$$(mktemp); \
-	IMGARGS=$$(KUBECONFIG=$(KUBECONFIG) K3S_TAG=$(K3S_TAG) ./scripts/k3s-image-args.sh "$$LIVE" chart/values-live-pins.yaml) || exit 1; \
+	IMGARGS=$$(KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(NAMESPACE) K3S_TAG=$(K3S_TAG) ./scripts/k3s-image-args.sh "$$LIVE" chart/values-live-pins.yaml) || exit 1; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
-	  --take-ownership \
+	  --take-ownership --create-namespace \
 	  $$IMGARGS \
 	  -f chart/values-local.yaml \
 	  --set explorer.enabled=$(EXPLORER) \
@@ -772,7 +776,7 @@ seed-medallion-namespaces: ## Provision the cascade's TOP-LEVEL catalog namespac
 	uv run python scripts/seed_medallion_namespaces.py --warehouse "$(SEED_WAREHOUSE)"
 
 seed-corpus: ## Seed the demo corpus into the volume the media plane actually READS
-	./scripts/seed-corpus.sh
+	NAMESPACE=$(NAMESPACE) ./scripts/seed-corpus.sh
 
 k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag ([[LH-169]])
 	@# A PREREQUISITE OF k3s-up, not a courtesy target. The chart carries ONE tag per image stem and ten
@@ -784,7 +788,7 @@ k3s-stem-check: ## Refuse an upgrade while any image stem runs more than one tag
 	@# The detection already existed inside `k3s-pins.sh` and was reachable only by asking for a pin file.
 	@# Same script, `--check-only`: one implementation, and it now stands in FRONT of the destructive
 	@# operation instead of beside it.
-	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only
+	@KUBECONFIG=$(KUBECONFIG) NAMESPACE=$(NAMESPACE) ./scripts/k3s-pins.sh --check-only
 
 k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yaml (#135)
 	@# KUBECTL is deliberately NOT passed through. `KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl` is a
@@ -794,7 +798,7 @@ k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yam
 	@# so passing it correctly would fail too: it would exec a binary literally named
 	@# `KUBECONFIG=... kubectl`. KUBECONFIG is already in the environment; the script's own `kubectl`
 	@# default is the right one.
-	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
+	@KUBECONFIG=$(KUBECONFIG) NAMESPACE=$(NAMESPACE) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
 	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f chart/values-live-pins.yaml)"
 	@echo ">> NOT bare 'helm upgrade' — the release lives in Postgres; see scripts/helm.sh"
 
@@ -824,7 +828,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	STEM="$${STEM:-lance-rest-catalog}"; \
 	$(HELM) status rask >/dev/null 2>&1 || { echo "!! no live release to converge — make k3s-up installs one"; exit 1; }; \
 	LIVE=$$(mktemp); \
-	IMGARGS=$$(KUBECONFIG=$(KUBECONFIG) K3S_TAG=$(K3S_TAG) ./scripts/k3s-image-args.sh "$$LIVE" /dev/null) || { rm -f "$$LIVE"; exit 1; }; \
+	IMGARGS=$$(KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(NAMESPACE) K3S_TAG=$(K3S_TAG) ./scripts/k3s-image-args.sh "$$LIVE" /dev/null) || { rm -f "$$LIVE"; exit 1; }; \
 	echo ">> converging stem $$STEM -> $(TAG)"; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership \
 	  $$IMGARGS \
@@ -850,7 +854,7 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# happened; `--check-only` reads EVERY stem, so an unrelated one being split would fail this
 	@# target after a deploy that succeeded, which reads as "the deploy failed". It reports instead,
 	@# and says what is still true so the operator's next move is obvious.
-	@if KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh --check-only; then \
+	@if KUBECONFIG=$(KUBECONFIG) NAMESPACE=$(NAMESPACE) ./scripts/k3s-pins.sh --check-only; then \
 	  echo ">> every stem converged — 'make k3s-up' will now pass its own check"; \
 	else \
 	  echo ">> this deploy SUCCEEDED, but another stem is still split (named above)."; \
@@ -942,8 +946,8 @@ kind-preload: bootstrap ## Pull the chart's third-party images into the host cac
 # and post-install hooks run AFTER --wait, which was itself blocked on the server the migration had to
 # unblock. Keeping --wait off was the workaround; keeping it ON is now the regression test.
 kind-deploy: k3s-deps ## helm upgrade --install release `rask` into the kind cluster
-	$(HELM) upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --wait --wait-for-jobs --timeout 900s
-	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) rollout status deploy/rask-gateway --timeout=300s
+	$(HELM) upgrade --install rask ./chart --kube-context kind-$(KIND_CLUSTER) --create-namespace --wait --wait-for-jobs --timeout 900s
+	$(LOCALBIN)/kubectl --context kind-$(KIND_CLUSTER) -n $(NAMESPACE) rollout status deploy/rask-gateway --timeout=300s
 
 kind-down: ## Delete the rask kind cluster
 	$(KIND) delete cluster --name $(KIND_CLUSTER)
@@ -953,7 +957,7 @@ kind-down: ## Delete the rask kind cluster
 # scripts bring up their own governed kind stack, seed grants/buckets, run the suites, and
 # (in CI) tear the cluster down.
 e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addresses + credentials from the cluster)
-	@bash scripts/e2e_live.sh $(ARGS)
+	@NAMESPACE=$(NAMESPACE) bash scripts/e2e_live.sh $(ARGS)
 
 e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
@@ -1054,7 +1058,7 @@ e2e-spec-conformance:     ## The STOCK lance_namespace client against a live cat
 # green. This target proves the byte READ, which only a process inside the cluster can; the one above
 # still proves resolution and credential issuance from a developer's own machine.
 e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — proves the READ, not just the vend
-	bash scripts/conformance-incluster.sh
+	NAMESPACE=$(NAMESPACE) bash scripts/conformance-incluster.sh
 
 # THE ITERATION LOOP, and the measurement that made it a target. `tests/unit` + `tests/integration` is
 # what every change runs before it is pushed, and it took 9m57s serially on a 64-core machine. Measured

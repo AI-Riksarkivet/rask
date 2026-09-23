@@ -9,7 +9,7 @@
 # silver→gold stage runner is then denied and the cascade stops at silver — a plain writer cannot promote.
 #
 # Prereq: the catalog has provisioned the model, and OpenFGA is reachable. Port-forward first:
-#   kubectl port-forward svc/lance-ns-openfga 8081:8080 &
+#   kubectl -n rask port-forward svc/rask-openfga 8081:8080 &
 #   OPENFGA_API_URL=http://localhost:8081 scripts/seed_medallion_fga.sh
 set -euo pipefail
 

@@ -24,7 +24,7 @@
 set -euo pipefail
 
 RELEASE="${RELEASE:-rask}"
-NAMESPACE="${NAMESPACE:-default}"
+NAMESPACE="${NAMESPACE:-rask}"
 DATASET_ID="${SEED_DATASET_ID:-transcripts_v2}"
 KUBECTL="${KUBECTL:-kubectl}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

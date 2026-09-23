@@ -33,6 +33,9 @@ import requests
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 RELEASE = os.environ.get("LANCE_E2E_RELEASE", "lance-ns")
+#: The release's namespace. `scripts/e2e_live.sh` exports it for the k3s estate (`rask`); the kind stacks
+#: install into `default`, which is why that is the default here.
+NAMESPACE = os.environ.get("LANCE_E2E_NAMESPACE", "default")
 
 pytestmark = pytest.mark.user_state
 
@@ -196,6 +199,8 @@ def test_the_row_is_in_postgres_under_the_prefixed_key(catalog: str, alice: str)
     out = subprocess.run(  # noqa: S603
         [
             "kubectl",
+            "-n",
+            NAMESPACE,
             "exec",
             f"{RELEASE}-age-0",
             "--",
@@ -232,7 +237,7 @@ def test_the_work_survives_the_pod_that_wrote_it(catalog: str, alice: str) -> No
     ).raise_for_status()
 
     kill = subprocess.run(
-        ["kubectl", "delete", "pod", "-l", "app.kubernetes.io/component=catalog", "--wait=true"],
+        ["kubectl", "-n", NAMESPACE, "delete", "pod", "-l", "app.kubernetes.io/component=catalog", "--wait=true"],
         capture_output=True,
         text=True,
         check=False,
@@ -240,7 +245,7 @@ def test_the_work_survives_the_pod_that_wrote_it(catalog: str, alice: str) -> No
     if kill.returncode != 0:
         pytest.skip(f"could not restart the catalog: {kill.stderr.strip()[:200]}")
     subprocess.run(  # noqa: S603
-        ["kubectl", "rollout", "status", f"deploy/{RELEASE}-catalog", "--timeout=180s"],
+        ["kubectl", "-n", NAMESPACE, "rollout", "status", f"deploy/{RELEASE}-catalog", "--timeout=180s"],
         capture_output=True,
         text=True,
         check=False,
@@ -254,7 +259,7 @@ def test_the_work_survives_the_pod_that_wrote_it(catalog: str, alice: str) -> No
     subprocess.run(["pkill", "-f", f"port-forward svc/{RELEASE}-catalog"], check=False)  # noqa: S603, S607
     time.sleep(1)
     forward = subprocess.Popen(  # noqa: S603
-        ["kubectl", "port-forward", f"svc/{RELEASE}-catalog", f"{port}:2333"],  # noqa: S607
+        ["kubectl", "-n", NAMESPACE, "port-forward", f"svc/{RELEASE}-catalog", f"{port}:2333"],  # noqa: S607
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )

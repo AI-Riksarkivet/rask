@@ -17,10 +17,13 @@
 # holding yesterday's address fails in a way that reads as a broken service.
 #
 # Usage:  bash scripts/conformance-incluster.sh
-#         RELEASE=rask REGISTRY=172.17.0.1:5000 bash scripts/conformance-incluster.sh
+#         RELEASE=rask NAMESPACE=rask REGISTRY=172.17.0.1:5000 bash scripts/conformance-incluster.sh
 set -euo pipefail
 
 RELEASE="${RELEASE:-rask}"
+# The release's own namespace. The Job runs IN it, which is what lets it address the catalog and Dex by
+# their bare service names.
+NAMESPACE="${NAMESPACE:-rask}"
 REGISTRY="${REGISTRY:-172.17.0.1:5000}"
 # k3s pulls through localhost; Dagger pushes through the bridge gateway. Same registry, two names,
 # because Dagger's engine is itself a container and `localhost` there is the engine.
@@ -43,11 +46,11 @@ bash "$REPO/scripts/dagger-image.sh" --name conformance --tag "conformance:$TAG"
 step "2/4 discovering the release's in-cluster addresses"
 # THE NAMED PORT, not ports[0] — `e2e_live.sh` pays for that lesson with OpenFGA, whose gRPC port is
 # published first. A Job addresses services by NAME, which is the whole point of running in-cluster.
-svc_port() { kubectl get svc "$1" -o jsonpath='{.spec.ports[?(@.name=="'"$2"'")].port}' 2>/dev/null; }
+svc_port() { kubectl -n "$NAMESPACE" get svc "$1" -o jsonpath='{.spec.ports[?(@.name=="'"$2"'")].port}' 2>/dev/null; }
 CATALOG_PORT="$(svc_port "$RELEASE-catalog" http)"
-[ -n "$CATALOG_PORT" ] || CATALOG_PORT="$(kubectl get svc "$RELEASE-catalog" -o jsonpath='{.spec.ports[0].port}')"
-DEX_PORT="$(kubectl get svc "$RELEASE-dex" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
-[ -n "$DEX_PORT" ] || fail "no $RELEASE-dex service — the suite mints a real bearer and cannot run without one"
+[ -n "$CATALOG_PORT" ] || CATALOG_PORT="$(kubectl -n "$NAMESPACE" get svc "$RELEASE-catalog" -o jsonpath='{.spec.ports[0].port}')"
+DEX_PORT="$(kubectl -n "$NAMESPACE" get svc "$RELEASE-dex" -o jsonpath='{.spec.ports[0].port}' 2>/dev/null || true)"
+[ -n "$DEX_PORT" ] || fail "no $RELEASE-dex service in namespace $NAMESPACE — the suite mints a real bearer and cannot run without one"
 CATALOG_URL="http://$RELEASE-catalog:$CATALOG_PORT"
 DEX_URL="http://$RELEASE-dex:$DEX_PORT/dex"
 echo "   catalog=$CATALOG_URL dex=$DEX_URL"
@@ -55,7 +58,7 @@ echo "   catalog=$CATALOG_URL dex=$DEX_URL"
 step "3/4 running the suite as a Job"
 # `restartPolicy: Never` + `backoffLimit: 0`: a failing conformance run must FAIL, not be retried into
 # a pass. `ttlSecondsAfterFinished` so repeated runs do not accumulate.
-kubectl apply -f - <<YAML
+kubectl -n "$NAMESPACE" apply -f - <<YAML
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -98,19 +101,19 @@ spec:
 YAML
 
 step "4/4 waiting for the run"
-kubectl wait --for=condition=complete --timeout=900s "job/$JOB" 2>/dev/null &
+kubectl -n "$NAMESPACE" wait --for=condition=complete --timeout=900s "job/$JOB" 2>/dev/null &
 WAIT_OK=$!
-kubectl wait --for=condition=failed --timeout=900s "job/$JOB" 2>/dev/null &
+kubectl -n "$NAMESPACE" wait --for=condition=failed --timeout=900s "job/$JOB" 2>/dev/null &
 WAIT_FAIL=$!
 wait -n "$WAIT_OK" "$WAIT_FAIL" || true
-kubectl logs "job/$JOB" --tail=200 || true
+kubectl -n "$NAMESPACE" logs "job/$JOB" --tail=200 || true
 kill "$WAIT_OK" "$WAIT_FAIL" 2>/dev/null || true
 
-SUCCEEDED="$(kubectl get job "$JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || echo 0)"
+SUCCEEDED="$(kubectl -n "$NAMESPACE" get job "$JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || echo 0)"
 # A SKIP IS NOT A PASS, which is the entire reason this script exists. The suite's own guards skip on
 # an unreachable vended endpoint, so an in-cluster run that still skips has proved nothing and must
 # not exit 0 — that is the failure mode being fixed, reproduced one layer up.
-if kubectl logs "job/$JOB" --tail=200 2>/dev/null | grep -qE '[0-9]+ skipped'; then
+if kubectl -n "$NAMESPACE" logs "job/$JOB" --tail=200 2>/dev/null | grep -qE '[0-9]+ skipped'; then
   fail "the in-cluster run SKIPPED a case — this target exists because a skip reads as green"
 fi
 [ "${SUCCEEDED:-0}" = "1" ] || fail "the conformance Job did not succeed"

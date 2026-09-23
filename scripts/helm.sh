@@ -67,7 +67,16 @@ fi
 # So the probe asks the SQL store whether it holds anything. A store with releases in it is the store
 # in use; an unreachable or empty one means this release is not there and the default driver is right.
 AGE_POD="${RASK_AGE_POD:-rask-age-0}"
-AGE_IP="$(kubectl get pod "$AGE_POD" -o jsonpath='{.status.podIP}' 2>/dev/null || true)"
+# In the namespace helm itself will use — `-n`/`--namespace` on this call, else HELM_NAMESPACE, else the
+# context default. Probed anywhere else the pod is absent and the Secret store is chosen by mistake.
+NS="${HELM_NAMESPACE:-}"
+prev=""
+for arg in "$@"; do
+  case "$prev" in -n|--namespace) NS="$arg" ;; esac
+  case "$arg" in --namespace=*) NS="${arg#--namespace=}" ;; esac
+  prev="$arg"
+done
+AGE_IP="$(kubectl get pod "$AGE_POD" ${NS:+-n "$NS"} -o jsonpath='{.status.podIP}' 2>/dev/null || true)"
 
 if [[ -z "$AGE_IP" ]]; then
   # No Postgres reachable => no SQL-backed release can exist => the Secret driver is authoritative.

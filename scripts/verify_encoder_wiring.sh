@@ -31,6 +31,9 @@
 set -euo pipefail
 
 RELEASE="${RELEASE:-lance-ns}"
+# The release's own namespace. The stub is deployed into it too, so the bare service name the chart is
+# pointed at below resolves from the search pods without a namespace suffix.
+NAMESPACE="${NAMESPACE:-rask}"
 CHART="${CHART:-chart}"
 INGRESS="${INGRESS:-http://localhost:8090}"
 STUB="$RELEASE-encoder-stub"
@@ -116,7 +119,7 @@ echo "encoders=null (the --reuse-values shape): renders clean, no encoder env, n
 # ── 3. live baseline ─────────────────────────────────────────────────────────────────────────────
 
 step "3/5 live baseline through $INGRESS — the vector modes are 503"
-kubectl get "deploy/$RELEASE-search" >/dev/null 2>&1 || fail "release $RELEASE has no search deployment (explorer.enabled?)"
+kubectl -n "$NAMESPACE" get "deploy/$RELEASE-search" >/dev/null 2>&1 || fail "release $RELEASE has no search deployment in namespace $NAMESPACE (explorer.enabled?)"
 code=$(search "mode=semantic")
 [ "$code" = "503" ] || fail "expected mode=semantic to be 503 before wiring, got $code — is an encoder already configured? ($(detail))"
 echo "mode=semantic → 503 $(detail)"
@@ -124,26 +127,26 @@ echo "mode=semantic → 503 $(detail)"
 # Snapshot the operator's own values so the two upgrades below preserve them. NOT --reuse-values:
 # a brand-new key like encoders.* renders EMPTY under --reuse-values, which is exactly how a past
 # run shipped an empty env into a running service.
-"$(dirname "$0")/helm.sh" get values "$RELEASE" -o yaml >"$LIVE_VALUES"
+"$(dirname "$0")/helm.sh" get values "$RELEASE" -n "$NAMESPACE" -o yaml >"$LIVE_VALUES"
 grep -q "^media:" "$LIVE_VALUES" || fail "captured release values look wrong — refusing to upgrade with them"
 
 restore() {
   echo "restoring: encoders unset, stub deleted"
-  "$(dirname "$0")/helm.sh" upgrade "$RELEASE" "$CHART" -f "$LIVE_VALUES" >/dev/null
-  kubectl delete deploy,svc,configmap -l "app.kubernetes.io/component=encoder-stub" --ignore-not-found >/dev/null
-  kubectl rollout status "deploy/$RELEASE-search" --timeout=240s >/dev/null
+  "$(dirname "$0")/helm.sh" upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$LIVE_VALUES" >/dev/null
+  kubectl -n "$NAMESPACE" delete deploy,svc,configmap -l "app.kubernetes.io/component=encoder-stub" --ignore-not-found >/dev/null
+  kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-search" --timeout=240s >/dev/null
 }
 
 # ── 4. wire it to a server that speaks the protocol ──────────────────────────────────────────────
 
 step "4/5 deploy the wire-protocol stub, point the chart at it, drive the same URL"
-kubectl delete deploy,svc,configmap -l "app.kubernetes.io/component=encoder-stub" --ignore-not-found >/dev/null
-kubectl create configmap "$STUB" --from-file=encoder_stub.py=scripts/encoder_stub.py >/dev/null
-kubectl label configmap "$STUB" "app.kubernetes.io/component=encoder-stub" >/dev/null
+kubectl -n "$NAMESPACE" delete deploy,svc,configmap -l "app.kubernetes.io/component=encoder-stub" --ignore-not-found >/dev/null
+kubectl -n "$NAMESPACE" create configmap "$STUB" --from-file=encoder_stub.py=scripts/encoder_stub.py >/dev/null
+kubectl -n "$NAMESPACE" label configmap "$STUB" "app.kubernetes.io/component=encoder-stub" >/dev/null
 # Runs inside the already-deployed service image (python 3.13 at /opt/venv/bin/python3), so there is
 # no image to build and no `kind load` — and therefore none of the same-tag stale-digest trap.
-IMAGE=$(kubectl get "deploy/$RELEASE-search" -o jsonpath='{.spec.template.spec.containers[0].image}')
-kubectl apply -f - >/dev/null <<YAML
+IMAGE=$(kubectl -n "$NAMESPACE" get "deploy/$RELEASE-search" -o jsonpath='{.spec.template.spec.containers[0].image}')
+kubectl -n "$NAMESPACE" apply -f - >/dev/null <<YAML
 apiVersion: apps/v1
 kind: Deployment
 metadata: { name: $STUB, labels: { app.kubernetes.io/component: encoder-stub } }
@@ -177,14 +180,14 @@ spec:
     - { name: embed, port: 8001, targetPort: 8001 }
     - { name: rerank, port: 8002, targetPort: 8002 }
 YAML
-kubectl rollout status "deploy/$STUB" --timeout=180s >/dev/null || fail "stub did not become ready"
+kubectl -n "$NAMESPACE" rollout status "deploy/$STUB" --timeout=180s >/dev/null || fail "stub did not become ready"
 
 trap 'restore; cleanup' EXIT
-"$(dirname "$0")/helm.sh" upgrade "$RELEASE" "$CHART" -f "$LIVE_VALUES" \
+"$(dirname "$0")/helm.sh" upgrade "$RELEASE" "$CHART" -n "$NAMESPACE" -f "$LIVE_VALUES" \
   --set "encoders.embedUrl=http://$STUB:8001" \
   --set "encoders.rerankUrl=http://$STUB:8002" >/dev/null
-kubectl rollout status "deploy/$RELEASE-search" --timeout=300s >/dev/null
-kubectl rollout status "deploy/$RELEASE-viewer" --timeout=300s >/dev/null
+kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-search" --timeout=300s >/dev/null
+kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-viewer" --timeout=300s >/dev/null
 
 # ── 5. the proof ─────────────────────────────────────────────────────────────────────────────────
 
@@ -210,7 +213,7 @@ echo "mode=semantic → 200 with $n rows"
 python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print("  first hit:",{k:d[0][k] for k in ("doc_id","chunk_id","_distance") if k in d[0]})' "$WORK/body.json"
 
 # The health endpoint the media zone reads for its mode gating must agree with what search serves.
-kubectl port-forward "svc/$RELEASE-viewer" 18109:8101 >/dev/null 2>&1 &
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-viewer" 18109:8101 >/dev/null 2>&1 &
 pf=$!
 for _ in $(seq 20); do
   sleep 0.5

@@ -9,7 +9,7 @@ This is the other half of the proof. promtool checks the LOGIC on synthetic seri
 the production ENGINE will accept the expression at all. Neither replaces the other.
 
 Usage:
-    uv run python scripts/alert_rules_drill.py                # resolves the k3s ClusterIP itself
+    uv run python scripts/alert_rules_drill.py                # resolves the k3s ClusterIP itself (in $NAMESPACE, default rask)
     RASK_GREPTIME_URL=http://host:4000 uv run python scripts/alert_rules_drill.py
 
 Exit 0 = every rule evaluable. Exit 1 = at least one rule the engine refuses. Exit 2 = no reachable
@@ -45,9 +45,12 @@ def resolve_datasource() -> str | None:
         return None
     # k3s, not the default context: a bare kubectl on this host resolves a stale kind cluster.
     env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
+    # The release's own namespace: asked anywhere else the Service is absent and the drill reports "no
+    # datasource", which `make alert-rules-drill` treats as a skip rather than a failure.
+    namespace = os.environ.get("NAMESPACE", "rask")
     try:
-        out = subprocess.run(  # noqa: S603 - argv is a literal; kubectl resolved via shutil.which
-            [kubectl, "get", "svc", "rask-greptimedb-standalone", "-o", "jsonpath={.spec.clusterIP}"],
+        out = subprocess.run(  # noqa: S603 - argv is a list (no shell); kubectl resolved via shutil.which
+            [kubectl, "-n", namespace, "get", "svc", "rask-greptimedb-standalone", "-o", "jsonpath={.spec.clusterIP}"],
             capture_output=True,
             text=True,
             timeout=30,

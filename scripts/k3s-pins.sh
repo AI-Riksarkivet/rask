@@ -21,6 +21,8 @@ CHECK_ONLY=""
 if [[ "${1:-}" == "--check-only" ]]; then CHECK_ONLY=1; shift; fi
 OUT="${1:-chart/values-live-pins.yaml}"
 KUBECTL="${KUBECTL:-kubectl}"
+# The release's namespace (the Makefile passes NAMESPACE); its workloads are what this captures.
+NAMESPACE="${NAMESPACE:-rask}"
 export CHECK_ONLY
 # The staging file is removed on ANY exit, so a refused run leaves neither a truncated $OUT (see the
 # `mv` at the end) nor a half-written sibling for the next reader to mistake for output.
@@ -47,8 +49,8 @@ fi
 #
 # `|| true`: an estate with `ray.enabled=false` has no such CRD, and a pin run must not fail there.
 KINDS="deploy,statefulset"
-"$KUBECTL" get raycluster -o name >/dev/null 2>&1 && KINDS="$KINDS,raycluster"
-"$KUBECTL" get "$KINDS" -o json | python3 -c '
+"$KUBECTL" -n "$NAMESPACE" get raycluster -o name >/dev/null 2>&1 && KINDS="$KINDS,raycluster"
+"$KUBECTL" -n "$NAMESPACE" get "$KINDS" -o json | python3 -c '
 import json, os, sys
 
 tags, digests = {}, {}

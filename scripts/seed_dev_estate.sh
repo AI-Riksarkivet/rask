@@ -18,7 +18,9 @@
 # rewrite an existing fixture.
 set -euo pipefail
 
-NS="${RASK_NAMESPACE:-default}"
+# The release's own namespace. `RASK_NAMESPACE` pins it for the seeders alone; `NAMESPACE` is the name
+# the Makefile and the other operator scripts share.
+NS="${RASK_NAMESPACE:-${NAMESPACE:-rask}}"
 CORPUS_HOST_PATH="${RASK_MEDIA_CORPUS:-/home/gabriel/media-corpus}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
@@ -62,9 +64,9 @@ echo "  corpus hostPath confirmed mounted by rask-viewer: $MOUNTED_HOST_PATH"
 kubectl delete job rask-seed-corpus -n "$NS" --ignore-not-found >/dev/null 2>&1 || true
 kubectl create configmap rask-seed-corpus -n "$NS" \
   --from-file=seed_demo_corpus.py="$REPO_ROOT/scripts/seed_demo_corpus.py" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  --dry-run=client -o yaml | kubectl apply -n "$NS" -f - >/dev/null
 
-kubectl apply -f - >/dev/null <<EOF
+kubectl apply -n "$NS" -f - >/dev/null <<EOF
 apiVersion: batch/v1
 kind: Job
 metadata: { name: rask-seed-corpus, namespace: $NS }
@@ -181,7 +183,7 @@ fi
 say "4/4 a labeling task with items"
 # Through the ANNOTATOR's own API — the same door the UI uses, so a task seeded here is a task the
 # UI can claim, review and publish. Auth is the estate's: a dex bearer, minted for the demo user.
-RASK_SEED_DATASET="$DATASET_ID" "$REPO_ROOT/scripts/seed_labeling_task.sh"
+RASK_NAMESPACE="$NS" RASK_SEED_DATASET="$DATASET_ID" "$REPO_ROOT/scripts/seed_labeling_task.sh"
 
 say "5/5 VERIFY — ask the services whether they can actually see it"
 # A Job that reached Complete, three rollouts that finished and two curls that did not crash are

@@ -15,6 +15,8 @@
 set -euo pipefail
 
 RELEASE="${RELEASE:-lance-ns}"
+# The release's own namespace: the upgrade, the pod rolls and every forward below act on it.
+NAMESPACE="${NAMESPACE:-rask}"
 export PATH="$PWD/.localbin:$PATH"
 PF_PIDS=()
 cleanup() { for pid in "${PF_PIDS[@]:-}"; do kill "$pid" 2>/dev/null || true; done; }
@@ -25,25 +27,25 @@ fail() { echo "!! FAIL: $*"; exit 1; }
 step "1/7 apply the chart change (medallion OIDC env + web MEDALLION_API)"
 # --reuse-values keeps the live release's config; the one NEW key is set explicitly (a new values key would
 # render EMPTY under --reuse-values — the documented helm gotcha, and here it would blank the admin project).
-"$(dirname "$0")/helm.sh" upgrade "$RELEASE" ./chart --reuse-values --set medallion.produceAdminProject=acme --timeout 200s
+"$(dirname "$0")/helm.sh" upgrade "$RELEASE" ./chart -n "$NAMESPACE" --reuse-values --set medallion.produceAdminProject=acme --timeout 200s
 
 step "2/7 roll the freshly-loaded images (kind same-tag → delete pods, not just rollout)"
 # catalog too: it carries the #68 access-simulator fix (service_kit/governed/fga.py qualify flag) under the same
 # :dev tag, so without an explicit pod delete the running catalog keeps the old double-prefix Check.
-kubectl delete pod -l app.kubernetes.io/component=medallion-producer --wait=false
-kubectl delete pod -l app.kubernetes.io/component=catalog --wait=false
+kubectl -n "$NAMESPACE" delete pod -l app.kubernetes.io/component=medallion-producer --wait=false
+kubectl -n "$NAMESPACE" delete pod -l app.kubernetes.io/component=catalog --wait=false
 # lineage too: the SAME :dev image carries #83's /admin/dlq ops endpoints (all backend services share
 # lance-rest-catalog:dev), so without rolling lineage the DLQ panel 404s against the old pod.
-kubectl delete pod -l app.kubernetes.io/component=lineage --wait=false
+kubectl -n "$NAMESPACE" delete pod -l app.kubernetes.io/component=lineage --wait=false
 # (the monolithic web app is retired — the MFE zones are web-<name> and none consumes MEDALLION_API,
 # so only the backends roll here)
-kubectl rollout status "deploy/$RELEASE-medallion-producer" --timeout=150s
-kubectl rollout status "deploy/$RELEASE-catalog" --timeout=150s
-kubectl rollout status "deploy/$RELEASE-lineage" --timeout=150s
+kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-medallion-producer" --timeout=150s
+kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-catalog" --timeout=150s
+kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-lineage" --timeout=150s
 
 step "3/7 confirm the OIDC door env is live on medallion-producer"
 env_val() {
-  kubectl get deploy "$RELEASE-medallion-producer" \
+  kubectl -n "$NAMESPACE" get deploy "$RELEASE-medallion-producer" \
     -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='$1')].value}"
 }
 [ "$(env_val RASK_OIDC_ENABLED)" = "true" ] || fail "RASK_OIDC_ENABLED not true on medallion-producer"
@@ -51,15 +53,15 @@ env_val() {
 echo "   OIDC_ENABLED=true  ADMIN_PROJECT=acme  ISSUER=$(env_val RASK_OIDC_ISSUER)"
 # The monolithic web app is retired — every MFE zone carries MEDALLION_API (the produce/train door UI
 # lives in the models zone; the env is shared zone plumbing). Assert on the models zone.
-webapi="$(kubectl get deploy "$RELEASE-web-models" -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='MEDALLION_API')].value}")"
+webapi="$(kubectl -n "$NAMESPACE" get deploy "$RELEASE-web-models" -o jsonpath="{.spec.template.spec.containers[0].env[?(@.name=='MEDALLION_API')].value}")"
 [ -n "$webapi" ] || fail "web-models has no MEDALLION_API"
 echo "   web-models MEDALLION_API=$webapi"
 
 step "4/7 port-forward dex + medallion-producer + openfga + lineage"
-kubectl port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-medallion-producer" 8000:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-lineage" 8010:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-dex" 5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-medallion-producer" 8000:8000 >/tmp/pf-ray.log 2>&1 & PF_PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-lineage" 8010:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
 for i in $(seq 1 30); do
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)
   r=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:8000/livez 2>/dev/null || true)
@@ -92,7 +94,7 @@ for i in $(seq 1 30); do
   sleep 1
 done
 echo "   user:${SUB:0:12}… is admin on project:acme"
-DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
+DAPR_TOKEN="$(kubectl -n "$NAMESPACE" get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 
 step "6/7 drive /produce through every door"
 code() { curl -s -o /dev/null -w '%{http_code}' -m15 -X POST http://localhost:8000/produce "$@"; }

@@ -105,7 +105,21 @@ def captured_upgrade(
     up_to_date: tuple[str, ...] = (),
     variables: dict[str, str] | None = None,
 ) -> list[str]:
-    """The flags `make <target>` passes to `helm upgrade`, from a run against a FAKE helm.
+    """The flags `make <target>` passes to `helm upgrade` — see `captured_upgrade_call`."""
+    return captured_upgrade_call(tmp, target, live=live, cluster_uid=cluster_uid, up_to_date=up_to_date, variables=variables)[0]
+
+
+def captured_upgrade_call(
+    tmp: pathlib.Path,
+    target: str,
+    *,
+    live: dict | None,
+    cluster_uid: str = FRESH_CLUSTER_UID,
+    up_to_date: tuple[str, ...] = (),
+    variables: dict[str, str] | None = None,
+) -> tuple[list[str], str]:
+    """`(flags, namespace)` of the `helm upgrade` `make <target>` runs, from a run against a FAKE helm.
+    `namespace` is the `HELM_NAMESPACE` the call ran with ('' when unset).
 
     The target's upgrade shell runs for real — the `.env` loader, `scripts/k3s-image-args.sh` and every
     other script it calls — in a scratch directory whose `scripts/` links every real script except
@@ -147,7 +161,7 @@ def captured_upgrade(
   "status "*) {"exit 0" if live is not None else "exit 1"} ;;
   "upgrade "*) n=0; prev=""; for a in "$@"; do
       if [ "$prev" = "-f" ] && [ "${{a#/}}" != "$a" ]; then n=$((n+1)); cp "$a" '{snapshots}'/values-$n.yaml; a='{snapshots}'/values-$n.yaml; fi
-      printf '%s\\n' "$a"; prev="$a"; done >'{captured}' ;;
+      printf '%s\\n' "$a"; prev="$a"; done >'{captured}'; printf '%s' "${{HELM_NAMESPACE:-}}" >'{captured}.namespace' ;;
   *) echo "fake helm.sh: unexpected $*" >&2; exit 2 ;;
 esac
 """,
@@ -181,7 +195,7 @@ esac
             positional.append(token)
             i += 1
     assert positional == ["rask", "./chart"], f"unexpected release/chart in the captured upgrade: {positional}"
-    return flags
+    return flags, pathlib.Path(f"{captured}.namespace").read_text(encoding="utf-8")
 
 
 def fresh_host_template_args(tmp: pathlib.Path, variables: dict[str, str] | None = None) -> list[str]:

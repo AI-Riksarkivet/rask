@@ -16,7 +16,7 @@
 # the code reads is the one that matters (`RASK_FGA_API_URL`).
 set -euo pipefail
 
-NS="${NS:-default}"
+NS="${NS:-${NAMESPACE:-rask}}"
 POD="$(kubectl -n "$NS" get pods -o name | grep -m1 'rask-catalog' || true)"
 [ -n "$POD" ] || { echo "!! no rask-catalog pod in namespace $NS"; exit 1; }
 POD="${POD#pod/}"

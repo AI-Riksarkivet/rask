@@ -13,6 +13,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export PATH="$PWD/.localbin:$PATH"
 RELEASE="${RELEASE:-lance-ns}"
+# The release's own namespace, where every service forwarded below lives.
+NAMESPACE="${NAMESPACE:-rask}"
 
 PIDS=()
 cleanup() { for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done; }
@@ -21,9 +23,9 @@ fail() { echo "!! FAIL: $*"; exit 1; }
 
 pkill -f "port-forward.*$RELEASE-(dex|catalog|lineage)" 2>/dev/null || true
 sleep 1
-kubectl port-forward "svc/$RELEASE-dex" 5556:5556     >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-catalog" 2333:2333 >/tmp/pf-cat.log 2>&1 & PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-lineage" 8010:8000 >/tmp/pf-lin.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-dex" 5556:5556     >/tmp/pf-dex.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-catalog" 2333:2333 >/tmp/pf-cat.log 2>&1 & PIDS+=($!)
+kubectl -n "$NAMESPACE" port-forward "svc/$RELEASE-lineage" 8010:8000 >/tmp/pf-lin.log 2>&1 & PIDS+=($!)
 
 for i in $(seq 1 30); do
   d=$(curl -s -o /dev/null -w '%{http_code}' -m2 http://localhost:5556/dex/.well-known/openid-configuration 2>/dev/null || true)

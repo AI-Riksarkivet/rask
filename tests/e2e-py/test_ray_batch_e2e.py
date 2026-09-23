@@ -34,6 +34,8 @@ import pytest
 pytestmark = [pytest.mark.e2e, pytest.mark.ray_batch]
 
 RAY_HEAD_DEPLOY = os.environ.get("LANCE_E2E_RAY_HEAD_DEPLOY", "deploy/ray-lance-head")
+#: The release's namespace — exported by `scripts/e2e_live.sh`; the kind stacks install into `default`.
+NAMESPACE = os.environ.get("LANCE_E2E_NAMESPACE", "default")
 
 
 def _kubectl() -> str:
@@ -75,7 +77,7 @@ def _cleanup(kubectl: str, run: str) -> None:
     leaked prefix is visible in the sweep's own dataset count; a false red is not.
     """
     subprocess.run(
-        [kubectl, "exec", RAY_HEAD_DEPLOY, "--", "python", "-c", _CLEANUP.format(run=run)],
+        [kubectl, "-n", NAMESPACE, "exec", RAY_HEAD_DEPLOY, "--", "python", "-c", _CLEANUP.format(run=run)],
         capture_output=True,
         text=True,
         timeout=180,
@@ -101,7 +103,7 @@ def test_batch_job_distributed_write_index_evolve_compact() -> None:
     kubectl = _kubectl()
     # The head must exist and be Ready — this suite does not deploy it (make ray-demo does).
     probe = subprocess.run(
-        [kubectl, "get", RAY_HEAD_DEPLOY, "-o", "jsonpath={.status.readyReplicas}"],
+        [kubectl, "-n", NAMESPACE, "get", RAY_HEAD_DEPLOY, "-o", "jsonpath={.status.readyReplicas}"],
         capture_output=True,
         text=True,
     )
@@ -113,6 +115,8 @@ def test_batch_job_distributed_write_index_evolve_compact() -> None:
         submit = subprocess.run(
             [
                 kubectl,
+                "-n",
+                NAMESPACE,
                 "exec",
                 RAY_HEAD_DEPLOY,
                 "--",
