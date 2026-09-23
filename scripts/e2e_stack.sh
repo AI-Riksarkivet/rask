@@ -64,6 +64,13 @@ step() { echo; echo "==> $*"; }
 # --------------------------------------------------------------------------------------------------
 step "1/8 cluster + chart deps"
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --config deploy/kind/kind-config.yaml --wait 180s
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). Without it every helm and kubectl call below inherits
+# whatever the environment has, and `scripts/helm.sh` defaults that to the LIVE k3s estate — so this
+# script created a kind cluster and then upgraded the live release instead, measured 2026-09-23.
+# `kind export kubeconfig` writes the context; RASK_EXPECT_CONTEXT is what makes helm.sh refuse if
+# anything later repoints it.
+kind export kubeconfig --name "$CLUSTER"
+export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 for r in dapr https://dapr.github.io/helm-charts/ nats https://nats-io.github.io/k8s/helm/charts/ \
          openfga https://openfga.github.io/helm-charts greptime https://greptimeteam.github.io/helm-charts/ \
          perses https://perses.github.io/helm-charts; do :; done

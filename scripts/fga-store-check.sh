@@ -16,6 +16,14 @@
 # the code reads is the one that matters (`RASK_FGA_API_URL`).
 set -euo pipefail
 
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
+
 NS="${NS:-default}"
 POD="$(kubectl -n "$NS" get pods -o name | grep -m1 'rask-catalog' || true)"
 [ -n "$POD" ] || { echo "!! no rask-catalog pod in namespace $NS"; exit 1; }

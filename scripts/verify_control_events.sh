@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
 # Live proof (kind `lance`) of the control-plane change-event pipeline, end to end:
 #   a governance mutation → best-effort emit → DEDICATED broadcast Dapr topic (catalog.control.v1, no
 #   queueGroupName) → every replica's ring buffer → GET /v1/events → the admin console's query.live feed.

@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
 # Phase 2 live proof: a version-pinned + run-faceted merge_insert surfaces in the lineage graph, and every
 # audit forgery/500 vector is rejected on the deployed image. Drives the LIVE kind `lance` cluster with a
 # real Dex alice id_token (governed auth on). One self-contained process so the port-forwards stay alive.

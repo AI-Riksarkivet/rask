@@ -79,6 +79,13 @@ step "1/6 cluster + chart deps + images"
 # No --config: deploy/kind/kind-config.yaml pins `name: rask`, which conflicts with our own $CLUSTER
 # name (and it only declares a single control-plane node — kind's default anyway).
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --name "$CLUSTER" --wait 180s
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). Without it every helm and kubectl call below inherits
+# whatever the environment has, and `scripts/helm.sh` defaults that to the LIVE k3s estate — so this
+# script created a kind cluster and then upgraded the live release instead, measured 2026-09-23.
+# `kind export kubeconfig` writes the context; RASK_EXPECT_CONTEXT is what makes helm.sh refuse if
+# anything later repoints it.
+kind export kubeconfig --name "$CLUSTER"
+export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # ALL declared chart dependencies' repos — `helm dependency build` needs every one even when the
 # component is disabled (greptime/perses are dependencies regardless of observability.enabled).
 helm repo add dapr    https://dapr.github.io/helm-charts/          >/dev/null 2>&1 || true

@@ -19,6 +19,14 @@
 #   scripts/ingest-lane.sh all        # all three
 set -euo pipefail
 
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
+
 NS="${NS:-default}"
 RELEASE="${RELEASE:-rask}"
 # THE CONTROL-PLANE DOORS NEED A PERSON, and the service token is not one. `/v1/projects` and

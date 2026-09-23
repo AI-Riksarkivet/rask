@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
 # P5 live proof: a REAL per-user Dex login driven through the INGRESS (one origin, all zones), asserting
 # the sealed session cookie carries ACROSS zones (sign in on /lakehouse/data → still signed in on
 # /lakehouse/admin) + per-user

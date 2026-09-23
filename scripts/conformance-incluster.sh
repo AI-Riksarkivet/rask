@@ -20,6 +20,14 @@
 #         RELEASE=rask REGISTRY=172.17.0.1:5000 bash scripts/conformance-incluster.sh
 set -euo pipefail
 
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
+
 RELEASE="${RELEASE:-rask}"
 REGISTRY="${REGISTRY:-172.17.0.1:5000}"
 # k3s pulls through localhost; Dagger pushes through the bridge gateway. Same registry, two names,

@@ -16,6 +16,14 @@
 # whichever half of the stem had been rolled forward. `make k3s-up` runs this mode before helm, so the
 # refusal now stands in front of the destructive operation rather than beside it.
 set -euo pipefail
+
+# THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
+# saying so is the point: an absent declaration and a deliberate one used to look identical, so
+# "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
+# second estate (another host, another context) is a variable rather than an edit.
+: "${RASK_EXPECT_CONTEXT:=default}"
+export RASK_EXPECT_CONTEXT
+
 KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 CHECK_ONLY=""
 if [[ "${1:-}" == "--check-only" ]]; then CHECK_ONLY=1; shift; fi

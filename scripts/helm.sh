@@ -45,6 +45,29 @@ esac
 : "${KUBECONFIG:=/etc/rancher/k3s/k3s.yaml}"
 export KUBECONFIG
 
+# WHICH CLUSTER IS ABOUT TO CHANGE ([[XC-057]]). The default above is right for `make k3s-up`, whose
+# job IS the live estate, and wrong for every caller that meant another one — and the difference is
+# invisible, because a script that sets no KUBECONFIG looks identical to one that meant this cluster.
+#
+# MEASURED 2026-09-23: `scripts/e2e_stack.sh` creates a KIND cluster and then never points anything at
+# it — no KUBECONFIG, no context, no --kube-context anywhere in the file — so its
+# `helm upgrade --install rask ./chart` landed on the live release while the kind cluster sat unused.
+# `ray_e2e_stack.sh` has the same shape. Across scripts/, `--context` appeared zero times.
+#
+# SO A MUTATING CALLER DECLARES AND THIS REFUSES. `RASK_EXPECT_CONTEXT` is the caller's statement of
+# which cluster it means; a mismatch exits non-zero rather than warning, because CI reads exit codes
+# and a warning is read by nobody. Unset stays permitted: the guard's job is to catch a caller whose
+# intent is KNOWN and contradicted, not to break every target that has always meant this estate —
+# `tests/unit/test_a_mutating_script_declares_the_cluster_it_mutates.py` is what makes them declare.
+if [[ -n "${RASK_EXPECT_CONTEXT:-}" ]]; then
+  actual="$(kubectl config current-context 2>/dev/null || echo '<none>')"
+  if [[ "$actual" != "$RASK_EXPECT_CONTEXT" ]]; then
+    echo "!! refusing to '$1' against context '$actual' — this caller declared RASK_EXPECT_CONTEXT='$RASK_EXPECT_CONTEXT'" >&2
+    echo "   KUBECONFIG=$KUBECONFIG" >&2
+    exit 1
+  fi
+fi
+
 # An operator who has already exported a DSN owns the choice; do not second-guess it.
 if [[ -n "${HELM_DRIVER_SQL_CONNECTION_STRING:-}" ]]; then
   export HELM_DRIVER="${HELM_DRIVER:-sql}"
