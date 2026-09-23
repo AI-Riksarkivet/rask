@@ -1308,20 +1308,24 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
   Four consecutive ticks: RSS 259 MiB -> 321 -> 321 -> 323 — a warm-up, then flat at **63% of the
   512Mi limit**; the Lance session cache holds 27.7 MB against its 214 MB cap and `python_blocks`
   moves ~0.5% per tick. Zero restarts, zero OOMKills.
-  **2.4 HOURS, 30 SAMPLES (2026-09-23): RSS 322.5 -> 321.3 MiB, slope -0.49 MiB/h.** The whole run sits
-  in a **3.1 MiB band (319.5-322.6)** with **189 MiB of headroom** to the 512Mi limit, under constant
-  load — `planned=577` on every one of the 30 ticks, so the planner did its full per-dataset discovery
-  pass each time. Session cache flat at 27.7 MB against its 214 MB cap, `python_blocks` trendless, zero
-  restarts.
-  Still 10% of the clause and still not a close. What it rules out is the shape every earlier reading of
-  this row showed: there is no climb toward the limit here, and a leak large enough to have caused the
-  original OOMKills would be plainly visible across this span.
-  **THIS IS NOT THE CLOSE, and four ticks must not be read as one.** The single unmet clause is the
-  SOAK — "survives a full day of sweep AND reconcile ticks inside its limit" — and a flat eight
-  minutes is precisely what a slow native leak looks like early. A 24h collector now samples the tick
-  line every 300s (epoch, rss, session, blocks, planned, restarts), reading the SERVICE's own numbers
-  rather than `kubectl top`, so RSS and the Python/Lance series share one clock instead of being
-  joined across two.
+  **THE REPO'S OWN SAMPLER HAS 15 HOURS OF THIS AND I BUILT A SECOND ONE (2026-09-23).**
+  `scripts/soak_maintenance.sh` was already running against `.soak/maintenance.csv` — **2,269 rows,
+  09:06 to 21:58, 30 distinct pods** — and it is better than what I wrote: it records the POD name, and
+  it reads **VmRSS from /proc rather than `kubectl top`**, with the reason in its own header ("the
+  metrics API reports a container's WORKING SET, which read 217Mi on the same pod whose VmRSS was
+  256.7 MiB … mixing them measures the instrument"). My collector sampled the tick line's `rss_bytes`,
+  a THIRD instrument, and recorded no pod identity.
+  **THE SHAPE IS A CLIMB THEN A PLATEAU, NOT FLAT.** Every planner pod in the record does the same
+  thing: starts **~220 MiB**, rises **+88 to +106 MiB** over roughly an hour, and levels at
+  **~310-325 MiB**. My "2.4 hours flat at 322" caught a pod AFTER its climb had finished — I began
+  sampling at the top of the band and read the plateau as the whole story.
+  **NO POD HAS EVER BEEN GIVEN A DAY.** The longest continuous observation in fifteen hours is
+  **2.73 h**; the ten planner pods lived 0.05-2.73 h each and every one ended in a DEPLOY, not an
+  OOMKill. Across all 30 pods: **zero restarts, zero terminations, nothing above 338.8 MiB** against a
+  512Mi limit.
+  So the clause is not failing — it is untested, and it cannot be tested while the estate is converged
+  every few hours. My own three converges today are part of why. What this row needs is a quiet window,
+  not more sampling; and the sampler to use is the repo's, appending to its existing record.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: Only the soak: 'survives a full day of sweep AND reconcile ticks inside its limit'. The second
 clause ('what bounds it is named and measured rather than inferred') is met — the cause is named (inline
