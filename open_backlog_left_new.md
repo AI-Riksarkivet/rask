@@ -1800,6 +1800,15 @@ measured (~10-14 MiB per commit pas
 
 **LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
 `medallion, tests` · **MED**
+- **SWEPT FOR THE CLASS, AND IT IS NOT WIDESPREAD — a negative result, measured.** A dead diagnostic
+  keyed on a marker nothing emits could plausibly exist all over an estate this size, so I checked:
+  collected the **323 distinct log event names** the source actually emits
+  (`log.<level>("<name>"`), then looked for hyphenated string literals in every test file whose
+  UNDERSCORED form is a real event — i.e. a comparison that can never be true. **Exactly one hit, and
+  it is the one already fixed here.** The two remaining occurrences in the file are comments
+  documenting the fix, not conditions.
+  So the estate does not have a hyphen/underscore marker problem; this file did, twice, and both are
+  closed.
 - **AND THE SIBLING BRANCH WAS DEAD TOO — measured, not guessed, and now fixed.** I had flagged
   `:539`'s `refused` as *possibly* unreachable; it provably was. It read
   `"lineage-emit-failed" in log and "status=403" in log`, and **nothing in the estate produces either
