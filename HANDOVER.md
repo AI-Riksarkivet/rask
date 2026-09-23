@@ -11,10 +11,30 @@ only — read from the image's config blob — and it is the `rask-age` Stateful
 Two smaller arm64 snags beside it: `.dagger/charts.go:37,66` curl `helm-…-linux-amd64.tar.gz` and
 `prometheus-…linux-amd64.tar.gz` into the chart-lint container.
 
-This is [[XC-070]] in `open_backlog_left_new.md`, with the options written out (an arm64 AGE build, a
-different AGE distribution, or the CNPG-with-extension path — `.docker/cnpg-age-ext.dockerfile`
-exists but needs K8s 1.33+ and CNPG >= 1.27). **The code and the frontend are fine on arm64; it is
-one image and two curl strings.**
+**MEASURED 2026-09-23 AGAINST THE REGISTRY, AND IT IS SMALLER THAN THE ROW SAYS.** The blocker is
+the PIN, not the image. Queried on Docker Hub:
+
+| tag | platforms |
+| --- | --- |
+| `release_PG16_1.5.0` (pinned today) | amd64 only |
+| **`release_PG16_1.6.0`** | **amd64, arm64** |
+| `release_PG17_1.7.0`, `release_PG18_1.8.0` | amd64, arm64 |
+
+`1.6.0` is the next patch of the SAME PostgreSQL major, so the move is a version bump rather than an
+AGE build, a distribution swap, or the CNPG cutover [[XC-070]] proposes. The pin lives in four places:
+`chart/values.yaml:3050`, `chart/values-live-pins.yaml:5`, `.dagger/e2e.go:11`, and the comment at
+`chart/templates/age-postgres.yaml:3`.
+
+**Not yet done, and deliberately not done mid-migration:** bumping AGE under a LIVE database may need
+an `ALTER EXTENSION age UPDATE`, and this host's estate holds the lineage graph and the FGA store. On
+the new machine the estate starts EMPTY, so there is no upgrade path to worry about — set the pin to
+`release_PG16_1.6.0` before the first `make k3s-up` and it is simply the right version.
+
+The other half of XC-070 is already fixed: `.dagger/charts.go` reads the arch off the container with
+`dpkg --print-architecture` for both the helm and promtool fetches. The row's "one tooling pin the row
+missed" is stale.
+
+**The code and the frontend are fine on arm64.**
 
 If the new machine is x86_64, ignore this section.
 
@@ -37,6 +57,10 @@ The doc **"Lakehouse — what is actually left"** lives in the cloud, not the re
 
 Everything else gitignored (`.venv/`, `node_modules/`, `.localbin/`, `.svelte-kit/`, `build/`,
 `chart/charts/`, `.dagger/internal/`) is regenerated — do not copy it.
+
+**That is the whole list: three things by hand, everything else `git pull`.** The FOCUS block's TEXT
+travels in git (it lives in `open_backlog_left.md`, which is tracked); what does not travel is the
+Stop hook that injects it, which is why `.claude/settings.local.json` is on the list above.
 
 ## 3. Install on the new machine
 
