@@ -148,6 +148,37 @@ SILVER_WRITER_RUNGS = [
 #: so the "denied" drive promoted anyway and the assertion passed only because it was looking for a run
 #: id that could never exist (see OPERATIONS). Revoking these alongside the rung is what makes the deny
 #: a deny — a strengthening of the assertion, not a relaxation of it.
+#: The warehouse the PLATFORM itself runs on. Revoking `owner` here strips the deployed cascade.
+PLATFORM_WAREHOUSE = "warehouse:lance_catalog"
+
+
+def refuse_shared_warehouse(warehouse: str = "") -> None:
+    """Refuse a deny leg that would revoke `owner` on the warehouse the live cascade shares ([[LH-152]]).
+
+    `_owner_tuples` must reach the WAREHOUSE level — owner outranks the writer/validator rung a deny
+    aims at, so a revoke that stops at the namespace measures an ungated cascade. The `try`/`finally`
+    around it closes every ordinary exit and, as its gate says in as many words, cannot close the crash
+    window: a SIGKILL between the delete and the restore leaves the estate unable to run its own
+    medallion, permanently.
+
+    That residual risk is acceptable against a throwaway tenant and not against the platform's own
+    warehouse, so this is a PRECONDITION rather than a rewrite: point the suite at a probe warehouse
+    (`LANCE_E2E_WAREHOUSE`, or `LANCE_E2E_PROJECT` which derives one) and the same legs prove the same
+    property with the worst case costing a tenant nobody needs.
+
+    FAILS RATHER THAN SKIPS. A skipped leg reads as a passing suite — the hole `.dagger/charts.go`
+    records paying for — and a deny leg that quietly does not run is how the cascade's authz stops
+    being proven while the report still looks green.
+    """
+    target = warehouse or WAREHOUSE
+    if target == PLATFORM_WAREHOUSE:
+        raise AssertionError(
+            f"this leg revokes `owner` on {target}, which is the warehouse the deployed cascade runs on — "
+            "a crash between the revoke and the restore would strip the estate permanently. Set "
+            "LANCE_E2E_WAREHOUSE (or LANCE_E2E_PROJECT) to a probe tenant and re-run."
+        )
+
+
 def _owner_tuples(user: str, namespace: str, table: str) -> list[dict[str, str]]:
     """EVERY owner tuple that outranks the rung being revoked — warehouse, namespace and table.
 
@@ -591,6 +622,8 @@ def test_fga_deny_drops_promotion_and_regrant_restores(stack: tuple[str, str], a
     # land bronze (the producer's own ingest, ungated by the stage runner rung — R23) and stop there: silver's
     # run never lands. This was the audit's untested half — only the validator (can_promote) deny was
     # ever proven.
+    # PRECONDITION: never against the platform's own warehouse — see `refuse_shared_warehouse`.
+    refuse_shared_warehouse()
     silver_owner = _owner_tuples("user:service-bronze-to-silver", _ds("silver"), _ds("silver$features"))
     # THE REVOKE IS INSIDE THE `try`, AND THAT PLACEMENT IS THE WHOLE SAFETY OF THIS LEG ([[LH-152]]).
     # These tuples are the LIVE cascade's — `user:service-bronze-to-silver` holds `owner` on the shared
