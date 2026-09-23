@@ -2881,6 +2881,12 @@ dapr:
     # unconditionally and never becomes Ready without them (verified live — sidecars stuck 1/2 with
     # "no such host: dapr-placement-server / dapr-scheduler-server-a").
 
+# The pre-install hook that deletes Jobs a previous lifetime of this release left behind, so a fresh
+# install never adopts a finished Job of the same revision-derived name in place of running its own
+# (templates/install-job-sweep.yaml).
+installJobSweep:
+  kubectlImage: "registry.k8s.io/kubectl:v1.31.3"
+
 kueue:
   enabled: true
   # Default queue topology (ResourceFlavor + ClusterQueue + a LocalQueue in the

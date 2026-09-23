@@ -1,0 +1,108 @@
+{{- /*
+The bootstrap Jobs are named by revision (`-r<N>`), and a fresh install starts again at revision 1.
+`helm uninstall` deletes only the Jobs its LAST revision's manifest names, so when that revision failed
+before applying, the Jobs of the revision before it survive — and the next install adopts a finished
+Job of its exact name instead of running its own. Measured 2026-09-23: a fresh install adopted the
+previous lifetime's completed `rask-openbao-seed-r1`, the new OpenBao was never seeded, and no
+ExternalSecret could sync. Pre-install runs before any object of the new release exists, so every Job
+carrying this release's instance label is a leftover; the sweep spares only itself, and runs as the
+release's one pre-install Job so it can never delete another hook of the same install.
+Pinned by tests/unit/test_a_fresh_install_never_adopts_a_job_it_did_not_run.py.
+*/}}
+{{- $weightRbac := "-10" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rask.fullname" . }}-job-sweep
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": {{ $weightRbac | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "rask.fullname" . }}-job-sweep
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": {{ $weightRbac | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "rask.fullname" . }}-job-sweep
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": {{ $weightRbac | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "rask.fullname" . }}-job-sweep
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rask.fullname" . }}-job-sweep
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" . }}-job-sweep
+  labels:
+    {{- include "rask.labels" . | nindent 4 }}
+    app.kubernetes.io/component: job-sweep
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: job-sweep
+    spec:
+      serviceAccountName: {{ include "rask.fullname" . }}-job-sweep
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: delete-leftover-jobs
+          image: {{ .Values.installJobSweep.kubectlImage | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests: {cpu: "10m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+          args:
+            - delete
+            - -n
+            - {{ .Release.Namespace }}
+            - jobs.batch
+            - -l
+            - app.kubernetes.io/instance={{ .Release.Name }},app.kubernetes.io/component!=job-sweep
+            - --ignore-not-found
+            - --timeout=120s
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
