@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
+import shlex
 import subprocess
 
-from tests.unit.k3s_recipe import K3S_UP_PREREQUISITES, REPO, captured_upgrade_call, make_value
+from tests.unit.k3s_recipe import K3S_UP_PREREQUISITES, REPO, captured_upgrade_call, logical_commands, make_value
 
 
 def _fake(path: pathlib.Path, body: str) -> pathlib.Path:
@@ -64,6 +66,41 @@ def test_the_helm_wrapper_probes_for_the_sql_store_in_the_releases_namespace(tmp
     probes = record.read_text(encoding="utf-8").splitlines()
     assert any("rask-age-0" in p for p in probes), f"the wrapper did not probe for the AGE pod: {probes}"
     assert all("-n rask" in p for p in probes if "rask-age-0" in p), f"the AGE pod was looked for outside the release namespace: {probes}"
+
+
+def _kubectl_calls(target: str) -> list[tuple[str, list[str]]]:
+    """(the command it sits in, its arguments) for every kubectl call `make <target>` would run."""
+    calls = []
+    for command in logical_commands(target):
+        for segment in re.split(r"\|\||&&|;|\|", command.replace("\\\n", " ")):
+            tokens = shlex.split(segment, comments=True)
+            if "kubectl" in tokens:
+                calls.append((command, tokens[tokens.index("kubectl") + 1 :]))
+    return calls
+
+
+def _scope(args: list[str]) -> tuple[list[str], bool]:
+    """The namespaces a kubectl call names (the last wins) and whether it also asks for all of them."""
+    named = [args[i + 1] for i, a in enumerate(args[:-1]) if a in ("-n", "--namespace")]
+    named += [a.split("=", 1)[1] for a in args if a.startswith("--namespace=")]
+    return named, any(a in ("-A", "--all-namespaces", "--all-namespaces=true") for a in args)
+
+
+def test_the_purge_deletes_the_releases_volumes_where_they_live() -> None:
+    """kubectl refuses `-n <ns>` together with `-A` object by object ('the namespace from the provided
+    object "rask" does not match the namespace ""'), and `|| true` made that a purge that deleted nothing
+    and exited 0. Measured 2026-09-23: all 13 of the release's PVCs survived `make k3s-purge`, so the
+    next `make k3s-up` was not the greenfield install the target promises."""
+    calls = _kubectl_calls("k3s-purge")
+    release_volumes = [(cmd, args) for cmd, args in calls if "delete" in args and "pvc" in args and any("app.kubernetes.io/instance=rask" in a for a in args)]
+    assert release_volumes, f"`make k3s-purge` deletes no PVC of the release: {calls}"
+
+    mixed = [args for _, args in calls if all(_scope(args))]
+    assert not mixed, f"kubectl calls naming a namespace AND all namespaces, which kubectl refuses: {mixed}"
+    for command, args in release_volumes:
+        named, everywhere = _scope(args)
+        assert named[-1:] == ["rask"] and not everywhere, f"the release's PVCs live in `rask`; the purge deletes them in {named or 'every namespace'}"
+        assert "|| true" not in command, f"a refused delete must fail the purge, not report success: {command!r}"
 
 
 def test_k3s_pins_captures_the_releases_namespace(tmp_path: pathlib.Path) -> None:
