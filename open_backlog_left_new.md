@@ -187,13 +187,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **93 are blocked on a decision** and **104 can be picked up today**.
+**196 open items**, of which **93 are blocked on a decision** and **103 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 31 | 6 | 5 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -1796,6 +1796,21 @@ measured (~10-14 MiB per commit pas
 
 **LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
 `medallion, tests` · **MED**
+- **EVERYTHING I WROTE HERE ABOUT A STALE AUTHORIZATION MODEL IS WITHDRAWN (2026-09-23).** The seed
+  failure (`relation 'namespace#publisher' not found`), the zero-tuple reads, the `estate` type
+  "missing", the `can_write_data` denials I reproduced by hand — every one of those was measured
+  against a **Dagger scratch `openfga/openfga:v1.18.3` container** that held port 18081. My
+  `kubectl port-forward` had failed with `address already in use`; the log said so and I did not read
+  it, having hit and fixed that exact failure on port 18080 earlier the same session.
+  The LIVE store (`01KYPGG8F8…`, reached from inside the cluster) holds **50 models, newest with 12
+  types** including `estate`, and `check estate:rask` answers `{"allowed":false}` — a decision. The
+  model was never stale.
+  **SO THE `ingest_denied … can_write_data … acme-silver$dummy` REFUSAL IS STILL UNEXPLAINED.** It is a
+  real log line from the real lineage pod and it is the only measurement in this row taken against the
+  estate. Everything I built on top of it — the governance-producer theory, the stale-script theory,
+  the stale-model theory — came from a container that is not part of this system.
+  *Next measurement, and it must be in-cluster:* read `table:acme-silver$dummy`'s tuples and
+  `can_write_data` for `service-bronze-to-silver` from a pod, via `rask-openfga:8080`, never a forward.
 - **AND THE TEST'S GUIDANCE IS RIGHT IN SPIRIT AFTER ALL — the script is stale against the estate's own
   shape. Measured with `check`, not `read`, after a `read` filtered only by user misled me.**
   `check user:service-bronze-to-silver writer warehouse:lance_catalog` -> **False**, and so is
@@ -2470,71 +2485,6 @@ silent→firing against a real dura
   **What a real fix has to do:** either stop running the agent and let `setup_otel` own the providers, or ship an OTel *configurator/distro* entry point that the agent loads and that installs these views. Both are larger than a bucket list and neither should be bolted on without measuring the metrics plane first.
 - *Closes when:* The alert fires against a service exceeding its threshold, proven by a mutation (point it at a real duration and watch it go from silent to firing) rather than by the expression parsing.
 - *Evidence:* live evaluation 2026-09-21 — alert expression returns 0 series while `maintenance` mean is 39,504 ms · bucket counts `le=10000` 4 vs `le=+Inf` 37 · `chart/alerting/rules.yml:1122-1134` · `chart/templates/perses-dashboards.yaml` (11 `histogram_quantile` uses)
-
-**XC-074 · The authorization model in OpenFGA is 23 days stale — `estate` does not exist, so every estate-admin check ERRORS instead of deciding**
-`chart, service-kit, catalog, lineage` · **HIGH**
-- **THE SYMPTOM IS REPAIRED ON THIS ESTATE, THE CAUSE IS NOT. Do not read the green checks below as a
-  close.** I ran the hook's own entrypoint by hand against the live store —
-  `FGA_API_URL=… python -m service_kit.governed.auth.write_model` — and it wrote immediately:
-  `wrote authorization model 01M381P724AFX0KSTQ3R06V38Y`. The store now holds 2 models, the newest
-  with **12 types**. So the WRITER is correct and `model.json` is current (12 types, same commit
-  `967c487d` as `model.fga`); what has never run to completion in-cluster is the HOOK.
-  Read back against thresholds fixed before the change, with a control:
-  ```
-  check can_observe_events estate:rask   validation_error  ->  {"allowed":false}   (a DECISION)
-  check can_write_data acme-silver$dummy       False       ->  True
-  check writer namespace:acme-silver           False       ->  True
-  CONTROL alice owner warehouse:lance_catalog  True        ->  True  (unchanged)
-  ```
-  With the model current, `seed_medallion_fga.sh acme acme-wh` **succeeds** where it had aborted on
-  `relation 'namespace#publisher' not found` — confirming every [[LH-196]] seed failure was downstream
-  of this one thing.
-- **AND THE DUMMY LANE MOVED, WHICH IS HOW I KNOW THE FIX REACHED THE DOOR.** `ingest_denied …
-  can_write_data … acme-silver$dummy` had fired on every run all session and does not fire any more.
-  The e2e is still red, now on a DIFFERENT and narrower refusal from the same door that I have not yet
-  pinned — so [[LH-196]] is not closed either, but its stated cause is gone.
-- *Still to do, and it is the whole row:* find why the post-upgrade hook never completes the write that
-  the same command performs in one second by hand. Helm reports 235 and 236 `deployed`, the Job renders
-  at defaults, and `hook-delete-policy: before-hook-creation,hook-succeeded` removes the evidence — an
-  absent hook pod is ambiguous between succeeded-and-deleted and never-ran, which is exactly the
-  condition under which this drifted for 23 days.
-- **MEASURED LIVE 2026-09-23, and it overturns my own closure of [[XC-073]] the same day.**
-  ```
-  live model  : 10 types  [annotation_project materialized_view namespace project role
-                           table team transaction user warehouse]
-  repo model.fga : 12 types (adds `estate` and `classification`)
-  check user:alice can_observe_events estate:rask
-    -> {"code":"validation_error","message":"invalid relation: type 'estate' not found"}
-  ```
-  ONE store (`lance-catalog`), ONE model in it, and its id `01M1BZR50FPPVF6X7JKE8K854S` shares the
-  store's own `01M1BZR50` prefix — written at store creation **2026-08-31** and never replaced since.
-- **`fga_root_object` DEFAULTS TO `estate:rask`** (`governed/settings.py:83`) and is the estate-admin bar
-  for lineage (`fga_deps.py:167`), the catalog's store and project doors, controlplane and viewer. So on
-  this estate those checks do not DENY, they ERROR — a different failure mode with a different status,
-  and one no `allowed: false` path is written for.
-- **THE HOOK RUNS AND WRITES NOTHING.** `chart/templates/openfga-model.yaml` is
-  `post-install,post-upgrade` weight 0, renders at defaults (4 occurrences in a plain `helm template`),
-  and helm reports success — revisions 235 and 236 both `deployed`. Its own header states the design:
-  "IDEMPOTENT BY COMPARISON, not by blind write … The hook compares the store's newest against the
-  image's and writes only on a difference." It is finding no difference where there are two whole types
-  of difference. It also says "50 models already"; the store holds **one**.
-- **WHY MY XC-073 CLOSURE MISSED IT, which is the part worth keeping.** I verified the IMAGE (rebuilt,
-  re-pinned, `main-77dc8049` on all 12 deployments) and the RELEASE (helm 235 `deployed`,
-  bootstrap-admin gone, 52 Running). Both were true. Neither reads the STORE. The gate I added,
-  `test_the_pinned_catalog_is_not_older_than_the_authorization_model`, compares the pinned tag's commit
-  against `model.fga`'s commit — necessary, and blind to whether the hook actually wrote. A hook that
-  succeeds without writing is invisible to every check I put in place.
-- **IT IS ALSO WHY NOTHING IN THE CASCADE IS GOVERNED HERE** ([[LH-196]]): `seed_medallion_fga.sh acme
-  acme-wh` aborts on `Invalid tuple 'namespace:gold#publisher@user:service-silver-to-gold'. Reason:
-  relation 'namespace#publisher' not found` — `model.fga` defines `namespace#publisher`; the live model
-  does not. Every seed failure downstream of this is a symptom.
-- *What is left:* Find why the comparison reports no difference and fix it, then a gate that reads the
-  STORE rather than the image — the pairing that matters is "the model OpenFGA answers from" against
-  "the model the code imports", and nothing checks it today. Then re-run the medallion seed.
-- *Closes when:* The store's newest model carries every type `model.fga` declares, a check on
-  `estate:rask` returns an allow/deny rather than a validation error, and a gate compares the STORE's
-  model to the image's.
-- *Evidence:* `GET /stores/<id>/authorization-models -> 1 model, 10 types` · `POST /check estate:rask -> validation_error: type 'estate' not found` · `grep -c '^type ' model.fga -> 12` · `chart/templates/openfga-model.yaml:1,34-36 (auth.enabled, post-install/post-upgrade, weight 0)` · `helm history rask -> 235,236 deployed` · `seed_medallion_fga.sh -> namespace#publisher not found`
 
 ## PHASE 2 · COMPUTE
 
@@ -3698,5 +3648,6 @@ Re-measured at HEAD and found shipped, or closed by work since. Listed so a read
 - **LOW-025** — `GET /api/search` silently ignores `dataset` and `mode`
 - **XC-024** — With frontend.oidc.enabled false, locals.authEnabled is false and the serve-proxy 401 guard never fires, so anonymous callers reach GPU inference
 - **XC-072** — Every privileged service credential was readable by every other scoped service; split per-identity + per-app Dapr secret scopes, proved live (8 credentials -> 1, foreign 403, verifier door intact). A follow-up found the split had updated only ONE of the credential's two readers: ESO (which serves the sidecar-less pods) still fetched them as properties of the shared bundle and its OpenBao policy granted only that path, leaving `rask-infra-credentials` in `SecretSyncedError` for two hours with rotation dead. Fixed at both layers and proved live — `SecretSynced/True`, syncedResourceVersion 3->4, all five credentials matching the store byte-for-byte, and the policy grants 5 of the 8 identities in the store so the three sidecar ones stay unreadable to ESO
-- **XC-073** — A pinned catalog older than `model.fga` deployed a stale authorization model and failed every post-upgrade hook silently; rebuilt, and a gate now refuses the pairing. **CLOSED AT THE WRONG LAYER (found 2026-09-23, same day): the image and the release were both verified and neither reads the STORE, whose model is still the one written 2026-08-31. See [[XC-074]].**
+- **XC-073** — A pinned catalog older than `model.fga` deployed a stale authorization model and failed every post-upgrade hook silently; rebuilt, and a gate now refuses the pairing
+- **XC-074** — WITHDRAWN the day it was filed, not fixed: every measurement behind it was taken against a Dagger scratch `openfga/openfga:v1.18.3` container holding port 18081, not the estate. The live store has **50 models, newest with 12 types** including `estate`, and `check estate:rask` returns a decision. The authorization model was never stale and [[XC-073]]'s closure was right
 - **LH-091** — A version advance had no control-lane push trigger for a BYO change-feed consumer; `table_published` already was one, and `POST /v1/table/{id}/changes` now names it, its range and its emitter
