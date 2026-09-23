@@ -1297,6 +1297,20 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
+- **ITS *What is left* IS STALE AND WOULD SEND THE NEXT READER TO REDO A SETTLED EXPERIMENT.** That
+  clause opens "ONE ENV VAR, AND A 7h20m CLOCK TO FALSIFY IT" and proposes deploying
+  `ARROW_DEFAULT_MEMORY_POOL=system`. It was written 2026-09-21 with the experiment IN FLIGHT; it has
+  since concluded, and the standing constraints record the outcome in one line:
+  *"`ARROW_DEFAULT_MEMORY_POOL=system` was tried and FALSIFIED."*
+  **The change is still deployed**, measured 2026-09-24 on both pods —
+  `rask-maintenance` and `rask-maintenance-worker` each carry `ARROW_DEFAULT_MEMORY_POOL=system`
+  beside `MALLOC_ARENA_MAX=2` — and it is chart-managed (`allocator.arrowMemoryPool`,
+  `_helpers.tpl:1566`). So there is nothing to deploy and nothing to clock: the lever is in place and
+  the answer is recorded.
+  **WHAT IS ACTUALLY LEFT IS THE SOAK, and today's data says it is UNTESTED rather than failing** —
+  fifteen hours across 30 pods, zero OOMKills, zero restarts, nothing above 338.8 MiB against 512Mi,
+  and a longest continuous observation of 2.73 h because every pod ended in a deploy. This row needs a
+  quiet window and the repo's existing sampler, not another allocator experiment.
 - **SOAK, FIRST 90 MINUTES (2026-09-23): FLAT, AND SLIGHTLY FALLING.** 19 samples at 300s off the
   planner's own tick line, under CONSTANT load (`planned=577` on every single tick, so this is not a
   quiet window):
