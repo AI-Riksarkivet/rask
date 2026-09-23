@@ -194,7 +194,7 @@ have no `uv.lock` and so cannot be built to emit anything.
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 31 | 2 | 5 |
-| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -595,7 +595,22 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
-- **blocked:** [[ZT-001]]'s deployment-policy call. This row's own *Closes when* requires that "the signing key is not derivable from `dapr.appToken`", and that is precisely what ZT-001 must deliver — it is blocked on the owner choosing between prod values that enable ESO and a render that FAILS without supplied material. Re-measured 2026-09-20 and all three premises hold: no signature or HMAC verification exists in `services/lineage/src` or `packages/lineage-kit/src`, `fga_deps.py:263-264` still states the gap in `_StampedAuthor` ("nothing proves the stamp"), and `test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py` still passes — which pins the tokens as STILL derivable, since that file is deleted rather than inverted when ZT-001 lands. So the work is not merely weaker before ZT-001, it cannot meet its own closing bar: an HMAC keyed on today's material refuses an unauthenticated forger but not any of the 13 pods holding the shared token, and shipping it would read as non-repudiation without being it.
+- **blocked:** [[XC-072]] — per-app-id secret scoping. NOT ZT-001 any more, and the correction matters
+  because the row's stated bar now PASSES while its purpose does not. ZT-001 landed 2026-09-23
+  (`3018ab8f`) and this row's own tell fired:
+  `test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py` is deleted, its inverted
+  replacement passes 7/7, and `lance.dedicatedServiceToken` now emits `randAlphaNum 40`. So "the
+  signing key is not derivable from `dapr.appToken`" is literally true.
+  **It is still not a key that distinguishes a producer, because every producer can READ every other
+  producer's key.** Measured live 2026-09-23 from the `medallion-producer` pod — not lineage —
+  `GET /v1.0/secrets/lance-secrets/lance` on its own sidecar, no API token required, returns the whole
+  21-key bundle including **8 `service-token-*` credentials**: `service-ingest`,
+  `service-maintenance`, `service-trainer`, `service-web` and all three stage runners. Symmetric: the
+  lineage pod reads the same 8. So an HMAC keyed on this material refuses an unauthenticated forger —
+  real value — and refuses none of the eight producer pods, which is the population that can already
+  stamp a neighbour's subject. That is this row's own warning, unchanged except for which credential
+  carries it: it "would read as non-repudiation without being it".
+  ZT-001 fixed DERIVATION; readability is a separate control and it is absent.
 - *What is left:* Add a transport-independent producer signature over the CloudEvent and verify it in the bus door (`on_lineage_event` / `enforce_bus_authz`), with the signing seam in `packages/lineage-kit` so it survives a Dapr retreat; `_StampedAuthor` states the gap ("nothing proves the stamp"). Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
 - **ITS STRENGTH IS CAPPED BY [[ZT-001]], and that should be settled first.** A producer signature needs
   a KEY, and every key a producer holds today is derivable from `dapr.appToken`: the shared app token
@@ -2031,6 +2046,39 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 - *What is left:* A `pyproject.toml` dependency change that never reached `uv.lock` passes CI, so the lock and the declaration disagree until something fails at build time in an unrelated change. The JS plane already gates this; mirror it with `uv lock --check` over the root and each runner lock.
 - *Closes when:* CI fails on a dependency edit with no corresponding lock change, mutation-checked by making one.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
+
+**XC-072 · Every privileged service credential is readable by every other scoped service — Dapr secret scoping is absent**
+`chart, service-kit` · **HIGH**
+- **MEASURED LIVE 2026-09-23, from two pods in both directions.** `GET /v1.0/secrets/lance-secrets/lance`
+  against a pod's OWN sidecar needs no API token and returns the **whole 21-key bundle**. From
+  `rask-medallion-producer`: 8 `service-token-*` credentials, only one of which is its own
+  (`service-ingest`, `service-maintenance`, `service-medallion-producer`, `service-trainer`,
+  `service-web`, `service-bronze-to-silver`, `service-media-to-silver`, `service-silver-to-gold`).
+  From `rask-lineage`: the same 8. Key NAMES were read; values were not printed.
+- **THIS IS WHY [[ZT-001]]'s CLOSE IS NOT THE WHOLE OUTCOME.** ZT-001 made each dedicated token
+  INDEPENDENT of `dapr.appToken` (`lance.dedicatedServiceToken` → `randAlphaNum 40`), which is real and
+  shipped. But a credential only its owner can use needs two properties, and independence is one:
+  nothing stops a scoped app-id reading a neighbour's. The zero-trust bar is an OUTCOME — "a record
+  NAMES a secret; it never carries one" is satisfied, while "this credential identifies THIS producer"
+  is not.
+- **THE CONTROL IS PER-APP-ID, AND THE CHART HAS NONE.** Dapr scopes secrets in the **Configuration**
+  CRD (`spec.secrets.scopes[].storeName` + `defaultAccess: deny` + `allowedSecrets`), not on the
+  Component — `chart/templates/dapr-component.yaml:388` carries only `scopes:`, which decides who may
+  USE the store, never which keys they may read. `grep -rn 'allowedSecrets|deniedSecrets|defaultAccess'
+  chart/templates/` is **empty**, and the only `kind: Configuration` in the chart is observability's
+  tracing config.
+- **IT BLOCKS [[LH-064]].** A producer signature needs a key the other producers cannot read; until
+  then an HMAC refuses an unauthenticated forger and none of the eight pods.
+- *What is left:* One Dapr `Configuration` per app-id (or one carrying a per-app-id scope list),
+  `defaultAccess: deny` plus an `allowedSecrets` naming only that identity's own
+  `service-token-<identity>` and whatever else it genuinely needs, referenced from each workload's
+  `dapr.io/config` annotation. Then prove it the way this was found — read from a pod and confirm the
+  foreign keys are GONE, not merely that the app still boots.
+- *Closes when:* A pod's own sidecar returns only that identity's `service-token-*`, proved live from at
+  least two different app-ids, and a render gate refuses a workload wired to the store without a scope.
+- *Evidence:* live `GET /v1.0/secrets/lance-secrets/lance` from `rask-medallion-producer` and
+  `rask-lineage` (21 keys, 8 service tokens, both pods) · `chart/templates/dapr-component.yaml:388`
+  (`scopes:` only) · `grep allowedSecrets chart/templates/` → empty
 
 **XC-061 · Container hardening is restated per template and applied unevenly — 7 first-party containers and 3 Jobs render with none of it, including OpenBao and Dex**
 `chart` · **HIGH**
