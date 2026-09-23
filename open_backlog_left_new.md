@@ -188,13 +188,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **97 are blocked on a decision** and **99 can be picked up today**.
+**198 open items**, of which **89 are blocked on a decision** and **109 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 2 | 5 |
-| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 10 | 5 |
+| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 10 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -535,7 +535,7 @@ of mine in this same session.**
 
 **LH-178 · An erasure cannot complete while a branch pins the version holding the subject, and deleting that branch destroys someone's work**
 `catalog` · **HIGH**
-- **blocked:** Owner call — when a GDPR erasure meets a branch, does the estate DELETE the branch (completing the erasure, destroying a working ref someone may be mid-change on) or leave it and report the erasure INCOMPLETE? There is no third answer: the pin is what keeps the version reclaimable, and the version is what still holds the row.
+- **blocked:** Whether a REBASE of an in-flight branch is an acceptable cost of completing an erasure, and who is told. **The marker's "there is no third answer" is FALSE on the API it rests on** — `LanceDataset.create_branch(branch, reference=...)` takes a reference, so a branch can be deleted (which this row measured as the thing that releases the pin) and then RECREATED at main's post-erasure head. The estate is not forced to choose between destroying a working ref and never completing an erasure. What genuinely remains is that re-applying the branch's divergent rows is a rebase: it can conflict, and rows derived from the erased subject cannot return. `erase()` already refuses to claim completion (`complete=False` with the residual listed), so the estate cannot report a FALSE erasure today — only an unfinished one.
 - *What is left:* Measured while building `catalog.services.erasure` (2026-09-19, pylance 11.0.0): deleting rows ON a branch does NOT remove that branch's pin on the parent's history. The branch then reads clean, `cleanup_old_versions` still reports `old_versions=0`, and the parent's pre-delete version survives holding the subject — so every step of the erasure reports success and the row stays readable at `checkout_version(N)`. Deleting the branch DOES remove the pin: same fixture, `branches.delete('work')` then cleanup, and the version is gone. `erase()` already refuses to claim completion here — it verifies against every retained version and sets `complete=False` with the residual listed — so the estate cannot report a false erasure today; what it cannot do is finish one. Whichever way this is ruled, the other half needs saying too: if branches are deleted, the owner of that branch has to be told (the notifications delete-subject door this row's parent [[LH-073]] names), and if they are not, the incomplete erasure has to reach a human rather than a log line.
 - **THE BRANCH HALF IS RULED (2026-09-21) — see [[LH-055]].** lance-ns defines no branch resource (three
   table-scoped ops in `spec.yaml`), and the format brief puts branch isolation at the STORAGE PREFIX:
@@ -550,14 +550,14 @@ of mine in this same session.**
 - **THE PRODUCER IS ALREADY GONE, so this residue is CLOSED-ENDED (verified 2026-09-20).** The nested spelling came from the ingest plane composing `f"{project}${dataset}"` while the medallion used `f"{project}-{name}"` — recorded in `warehouse_registry.project_namespace`'s own docstring, which also states the repair: "a naming convention that two services must agree on cannot live inside one of them", so the helper moved into service-kit. Verified rather than taken on trust: the only matches for the old `$` composition anywhere in `services/`, `packages/` and `scripts/` are the two COMMENTS describing it, and six modules across ingest, lineage and medallion now call the shared helper. **So nothing is still producing these**, and the decision this row waits on is about cleaning a fixed-size set rather than stopping a leak.
 - **THREE ROWS, ONE SHAPE — and it is the shape of the phase-1 remainder.** [[LH-102]]'s 869 orphaned trash records came from warehouse deletes (fixed at source 2026-09-20), [[LH-148]]'s 121-of-126 provenance gaps are the same e2e fixtures but NOT the same mechanism — corrected below — and this row's duplicates came from the naming divergence above (fixed earlier). All three producers are closed; all three residues remain; and all three need the same thing to clear — a write-capable reconcile, which is [[LH-061]]. The lakehouse is not accumulating these, it is carrying them.
 - **THE DOUBLE-SPELLING IS BROADER THAN THIS ROW NAMES — measured on the live sweep 2026-09-20.** The row names `silver-media$features` under two spellings and both are there (`silver-media$features`, `lakehouse$silver-media$features`). But `lakehouse-wh` also holds **`lakehouse$silver$features` AND `lakehouse-silver$features`** — distinct datasets with distinct hash prefixes (`dd923b95_` against `03505f8f_`), so it is two logical tables each duplicated rather than one. `lakehouse-gold$catalog` carries only the project-prefix form, which is what a consistent estate looks like. **The two conventions are NESTED-NAMESPACE (`lakehouse$silver$features`) against PROJECT-PREFIX (`lakehouse-silver$features`), and the medallion's own `<project>-<tier>` naming is the second** — so the nested copies are the odd ones out. This also surfaced through [[LH-148]]: `lakehouse$bronze$pages` and `lakehouse-bronze$pages` BOTH appear in `unknown_to_graph`, which is the same pair seen from the lineage side. Worth knowing before the drop-or-relocate call, because it doubles what that call covers.
-- **blocked:** Owner decision: drop or relocate `silver-media$features` (both spellings, `a76d1ca5_silver-media$features/` and `fa8bff0d_lakehouse$silver-media$features/`) — destructive on a real table, and no service identity holds `project:lakehouse#can_administer` by design.
+- **blocked:** No principal in this estate may perform the delete, and the drop-or-relocate call is the owner's. **The "destructive on a real table" half is NOT a blocker** — current state is test data, a recorded rule. The real half is broader than this marker said: `chart/values.yaml:975` is `bootstrapAdmin: ""` and the live bootstrap Job grants only SERVICE principals (`notifications`, `service-medallion-producer`, `service-maintenance`, `service-ingest`), so **no HUMAN principal holds anything here** — there is no bearer with `project:lakehouse#can_administer` to run the `DELETE`. Granting one in order to run it would be proving the diagnosis by changing the thing under test.
 - *What is left:* Take the drop-or-relocate decision for `silver-media$features` in `lakehouse-wh`. Then a human bearer holding `project:lakehouse#can_administer` calls `DELETE /v1/warehouses/{id}/namespaces/silver-media`, which answers 409 `NamespaceNotEmptyError` until the table is gone. `bronze-media` has no object left in the bucket and needs no decision. The live store is not re-measured this session (no cluster access); the register's 2026-09-16 conditions table still lists `lakehouse$silver-media` among live composed paths.
 - *Closes when:* `lakehouse-wh` lists no `silver-media` namespace and the unbind door answers 200 for it.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/warehouses.py:624-685 (unbind door, `NamespaceNotEmptyError` refusal)` · `open_backlog_left.md:222 (2026-09-16 live measurement names `lakehouse$silver-media`)`
 
 **LH-056 · Branch-scoped governance is missing: no FGA branch type, canonical_object_id and vending are branch-blind, protection/trash have no per-branch record, and tag/branch creation emits no control event**
 `catalog, lineage, notifications` · **HIGH** · PARTIAL
-- **blocked:** Who is TARGETED by a tag/branch control event (an event naming nobody is undeliverable) — and the R5 half of this marker was spurious, removed 2026-09-20. R5 is an ACCEPTED owner ruling from 2026-07-24 (`docs/architecture/lance-ns-merge.md:435`, re-affirmed "R1–R11 STAND" in `f1dc8d96`), and it says "whole-plane media namespace — `/api/media/{,search,annotations}`, all three SPAs' fetch bases rewritten", which has no bearing on branch-scoped governance. See `docs/DECISIONS.md` § The `R#` rulings.
+- **NOT BLOCKED — the targeting question has a codified answer, and the marker's premise is backwards.** It read "an event naming nobody is undeliverable", treating nobody as a failure; `_UNTARGETED_ACTIONS` holds **31 members that deliberately name nobody** (`tests/unit/test_control_action_three_file_contract.py`). The rule there is binary and enforced: "a control event is targeted when it changes what a specific person may do or must do, not when it changes an object." Creating a tag or a branch changes an OBJECT, so the answer is UNTARGETED. The branch half is separately RULED (2026-09-21, [[LH-055]]). What remains is ordinary work: five untargeted `ControlAction` members, listed in `_UNTARGETED_ACTIONS`, emitted from `branches.py`/`tags.py`, and kept OUT of notifications' `NAMED_ACTIONS`.
 - *What is left:* Add `type branch { parent: [table]; reader/writer; can_write_data }` to model.fga with .fga.yaml cases (today the only branch rung is can_create_branch: owner at model.fga:434). Make the FGA object chosen in authorize branch-aware, since canonical_object_id joins path segments only and the object is `table:<ns>$<table>` whatever branch the request names. Scope vended STS prefixes to `tree/<b>/` in catalog/core/vending.py, add per-branch protection and trash records, and emit parent_branch/parent_version as lineage facets (they exist only as list_branches response fields, dataplane.py:1892-1893). Add tag and branch values to ControlAction in service_kit/control_events.py:36 (45 values, none for tag or branch) and regenerate docs/catalog-openapi.json plus the TS client. The stats/index body clause and the branches/delete rung are shipped.
 - **THE BRANCH HALF IS RULED (2026-09-21) — see [[LH-055]].** lance-ns defines no branch resource (three
   table-scoped ops in `spec.yaml`), and the format brief puts branch isolation at the STORAGE PREFIX:
@@ -569,7 +569,7 @@ of mine in this same session.**
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
-- **blocked:** Owner ruling: may the catalog re-assert a dataset's location/id through a lineage event no run produced (a synthetic assertion restamping via the existing `SET_DATASET_SRC` path), or must lineage instead gain a catalog client and accept a catalog↔lineage cycle? LH-146 closed by exempting last-writer datasets from retention and never ruled on synthetic assertions.
+- **NOT BLOCKED — its dichotomy asks permission for a mechanism this estate already emits.** `DatasetEvent` is the OpenLineage spec's static-metadata event, defined at `services/lineage/src/lineage/models.py:361-362` as "a dataset change that no job performed" — literally the synthetic assertion this marker asked about — and the catalog already routes to it: `services/catalog/src/catalog/core/lineage_emit.py:366-367`, `if _is_ddl(operation) and not inputs: return _as_dataset_event(...)`. Horn 2 (a catalog client inside lineage, accepting a cycle) was the alternative to a thing that now exists, so it is moot. What remains is ordinary work in `services/maintenance`: a `DatasetEvent` carrying only a `dataSource` facet to restamp the 23 relative-`source_uri` datasets and the one `storage_loss` (`bronze$events`).
 - **RE-MEASURED 2026-09-22 on demand, because this row said its own counts were not** (lineage
   reconcile triggered directly: `POST /lineage-reconcile-cron`, port-forwarded, `dapr-api-token`):
   `checked=483 unreadable=23 storage_loss=1 provenance_holes=0 unknown_to_graph=0
@@ -673,7 +673,7 @@ is reachable — and that needs no
 
 **LH-037 · `mode=Skip` on `drop_namespace` is unreachable (the FGA gate refuses before existence resolves) and `Overwrite` on `create_namespace` is refused pending a ruling**
 `catalog` · **MED** · PARTIAL
-- **blocked:** (1) Whether the authorization gate may admit an idempotent no-op against an id with no tuples (the no-existence-oracle class rule, docs/DECISIONS.md:1394) or `Skip` is withdrawn from `drop_namespace`; (2) whether `Overwrite` on `create_namespace` is implemented against the cascade/trash interaction or stays refused
+- **blocked:** (2) ONLY — whether `Overwrite` on `create_namespace` is implemented against the cascade/trash interaction or stays refused. **Half (1) IS ALREADY RULED, and this marker sent readers to the wrong file.** The rule is recorded verbatim at `tests/integration/test_an_absent_object_is_not_found_rather_than_forbidden.py:10`: "THE OWNER'S RULE (2026-09-11): **404 on READ doors, 403 kept on destructive ones**", and it settles this row's class in its own next sentences — the no-existence-oracle property "is deliberate and documented for `delete_warehouse` / `delete_project` / `_set_warehouse_status`, which collapse PermissionDenied into NotFound precisely so a destructive door cannot enumerate ids. **That stays.**" `drop_namespace` is a destructive door, so admitting an idempotent `Skip` against an id with no tuples is exactly the oracle that rule refuses: withdraw `Skip` from the accepted set and name it in the 400. (`docs/DECISIONS.md:1394` is the cascade-lag detector and says nothing about gates.)
 - *What is left:* Every other mode is honoured: `create_namespace` keeps an existing namespace on `ExistOk` without seeding ownership and refuses `Overwrite` with a 400 (`namespaces.py:142-145`, seam `create_or_keep_namespace` :261); `register_table` refuses `Overwrite` (`tables.py:735-738`); `drop_namespace` parses `Fail`/`Skip` via `DropMode` (`modes.py:54`). Take ruling (1): either let the gate admit a `Skip` drop of an id with no tuples, or remove `Skip` from this door's accepted set and name that in the 400. Take ruling (2): implement `Overwrite` as cascade-drop-then-create, or leave the refusal. Keep `modes.py`'s fold of unrecognised modes to `Create`.
 - **THE CITED RULE IS NOT AT THAT LINE — checked 2026-09-23.** The marker sends a reader to "the
   no-existence-oracle class rule, `docs/DECISIONS.md:1394`". That passage is about the CASCADE-LAG
@@ -726,14 +726,14 @@ MEASURED: Measured live against the deployed GreptimeDB (kubectl port-forward sv
 4000, GET /v1/sql, version() = 1.1.1). `SHOW CREATE TABLE opentelemetry_logs` returns `PRIMARY KEY
 ("scope_name")`, `TIME INDEX ("timestamp")`, a FULLTEXT INDEX on `body` and `ttl = '14days'`; `SHOW INDEX
 FROM opentelemetry_logs` returns exa
-- **blocked:** Owner ruling: promote the audit's `dataset` out of `log_attributes` into a real column (an OTel Collector transform, then index it) or leave it as a JSON key filtered after scope narrowing?
+- **NOT BLOCKED — the row watches the WRONG STORE, and the real gap needs no ruling.** There are TWO read-audit streams and this row knows one. The stream the product QUERIES is `public.lineage_reads` in the lineage Postgres: `services/lineage/src/lineage/services/repository.py:1414-1417` INSERTs there (`postgres.py:135`) and `readers()` reads it back with `SELECT reader, MAX(read_at), COUNT(*) ... WHERE dataset = %s GROUP BY reader` (`postgres.py:169`). **Its DDL has no index on `dataset`** — `postgres.py:131-133` is `seq bigserial PRIMARY KEY, reader text NOT NULL, dataset text NOT NULL, read_at timestamptz` — so every "who read this dataset" query sequentially scans an append-only log that grows without bound. That is the defect, and it is ordinary work: `CREATE INDEX ... ON public.lineage_reads (dataset)` beside the existing DDL, plus the `scope_name` index the row already calls "startable now and gated by no ruling". The GreptimeDB promotion question is secondary and may be moot.
 - *What is left:* Add an index on `opentelemetry_logs.scope_name` in a hook Job shaped like `chart/templates/greptimedb-ttl-job.yaml`; that is startable now and gated by no ruling. `scope_name` is the only first-class column separating the `lance.audit` rows (6.46M of 105.4M, 6.1%) from the rest. No index DDL exists anywhere under `chart/`. Do not rework retention: the 14d database TTL hook is in place. Take the promotion ruling separately.
 - *Closes when:* A chart hook creates the `scope_name` index on `opentelemetry_logs`, and the dataset-promotion question has a recorded answer.
 - *Evidence:* `chart/templates/greptimedb-ttl-job.yaml (only GreptimeDB DDL hook; ALTER DATABASE ttl only)` · `grep -rniE 'CREATE INDEX|scope_name|SKIPPING INDEX|INVERTED INDEX' chart/templates chart/values.yaml → only age-postgres.yaml:41` · `ls chart/templates | grep greptime → greptimedb-ttl-job.yaml only`
 
 **LH-076 · `can_observe_events` is the estate-admin bar under a name that says 'read the feed'**
 `catalog, service-kit` · **MED** · PARTIAL
-- **blocked:** Owner ruling: add a distinctly named `can_administer_estate` that `projects.py`, `access_admin.py` and `POST /v1/stores` alias to (repointing live checks and reseeding tuples), or keep `can_observe_events` as the estate-admin rung under its current name.
+- **NOT BLOCKED — the stated COST is false, measured in the compiled model.** `estate.can_observe_events` compiles to `{"computedUserset": {"relation": "owner"}}` with metadata `{}` and no `directly_related_user_types` (`model.json`), and OpenFGA refuses a Write naming a relation with no direct user types — so **no tuple can carry this rung** and the rename migrates nothing. `model.fga:168` is a pure computed userset. The change is additive (`define can_administer_estate: owner` beside it) plus repointing the ADMIN call sites, and it reverts cleanly.
 - *What is left:* The comment half is shipped: `model.fga:236-244` now states it IS the admin rung and the consumer list is derived from code by `tests/unit/test_the_estate_rung_documents_everything_it_gates.py`. Only the rename half remains: no `can_administer_estate` exists anywhere, and `stores.py:105,135,197`, lineage `fga_deps.py:144`, tenant minting and the raw-tuple routes all still gate on `can_observe_events` at the root object. Do nothing until the ruling lands; if it says rename, repoint those checks and reseed the tuples in one change with `fga model test` green.
 - *Closes when:* Either the owner rules the name stays, or a `can_administer_estate` relation exists and every estate-admin call site checks it.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:236-244 (rewritten comment, define can_observe_events: owner)` · `tests/unit/test_the_estate_rung_documents_everything_it_gates.py (exists)` · `services/catalog/src/catalog/api/v1/endpoints/stores.py:105,135,197; services/lineage/src/lineage/api/fga_deps.py:144` · `grep -rn can_administer_estate services packages chart → none`
@@ -747,14 +747,14 @@ FROM opentelemetry_logs` returns exa
 
 **LH-091 · No control-lane event announces a table version advance, so a BYO change-feed consumer has no push trigger on `catalog.control.v1`**
 `catalog, lineage, notifications` · **MED**
-- **blocked:** Owner decision: point BYO change-feed consumers at `lineage.events.v1` (every governed write already publishes `version` there; costs no new event), or accept the control lane's per-replica broadcast buffer (`GET /v1/events`) carrying data-plane frequency and add a version-advance `ControlAction`.
+- **NOT BLOCKED — the headline is false and the second arm of its own binary already exists.** `table_published` IS a control-lane event announcing a version advance: declared at `packages/service-kit/src/service_kit/control_events.py:101`, its payload carrying `from_version`/`to_version` as "the RANGE (D-R3) the notification carries, so a consumer resolves the delta" (`services/catalog/src/catalog/services/publication.py:245-254`), emitted at `:343-356` gated on `result.advanced`. So the row's own evidence line — "41 members, none for a write/version advance" — is the claim that is wrong. What remains is the docstring half: name `table_published` and its window as the push trigger at the `table_changes` door.
 - *What is left:* Take the lane decision. If lineage: document at the `POST /v1/table/{id}/changes` door that the trigger is the `lineage.events.v1` write event's `version` and nothing else changes. If control lane: add the action to the 41-member `ControlAction` literal with the buffer cost stated, across the three-file contract. Either way do NOT add it to notifications' `NAMED_ACTIONS` — it names no party.
 - *Closes when:* Either the changes-door docs name `lineage.events.v1` as the trigger, or a version-advance action exists in `ControlAction` with an emitter and the stated cost.
 - *Evidence:* `packages/service-kit/src/service_kit/control_events.py:36 (`ControlAction` literal; 41 members, none for a write/version advance)` · `packages/service-kit/src/service_kit/control_events.py:57,105 (`NAMED_ACTIONS` exclusion rationale)`
 
 **LH-097 · Silver re-materialises managed blob bytes copied from bronze instead of being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · **MED**
-- **blocked:** The storage-vs-coupling trade — the R9 half of this marker was spurious, removed 2026-09-20: R9 is an ACCEPTED 2026-07-27 ruling saying "`studio` survives as its own top-navbar zone", which has no bearing on whether silver is a shallow clone of bronze (`docs/DECISIONS.md` § The `R#` rulings). What remains is the trade itself (a referencing silver means bronze can never be reclaimed independently — the sweep already refuses reclaim on shallow-clone/multi-base datasets) and of the recorded clone→source lineage edge.
+- **NOT BLOCKED — the marker's load-bearing fact is INVERTED.** It argued the trade is blocked because "the sweep already refuses reclaim on shallow-clone/multi-base datasets". It permits them: `packages/service-kit/src/service_kit/lakehouse/features.py:172` is `SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS`, and `:617-623` says why — "Version reclamation and index maintenance touch only the dataset's own root, so a shallow clone's `base_paths` does not endanger them". Reclaim is refused on the SOURCE, not the clone, so the coupling cost this row weighs is not the one the code imposes. Re-read the source-side guard, then the measurement script and the `compute.py` clone shape are ordinary work.
 - *What is left:* Land the clone→source lineage pins. Add a `scripts/` measurement of both shapes — materialised copy vs shallow clone + `add_columns` — reporting bytes and latency on one corpus against the medallion's blob path; the existing `measure_blob_descriptor_carry_forward.py` / `measure_add_columns_on_blob_table.py` cover descriptors and add_columns, not clone-vs-copy. Then make silver a `shallow_clone` of bronze at the pinned version plus `add_columns` in `medallion/services/compute.py`, replacing the copy branch that carries bytes on the ground that they exist nowhere else.
 - *Closes when:* A silver produce commits no managed blob bytes of its own and the measurement script's clone shape is the one `compute.py` runs.
 - *Evidence:* `services/medallion/src/medallion/services/compute.py:513 ("MANAGED UPSTREAM: the bytes exist nowhere else, so carrying them IS the only option")` · `grep -rn shallow_clone services/medallion → nothing; only maintenance/optimize.py:645 and service_kit/lakehouse/features.py:238 (the reclaim guard)` · `ls scripts/ | grep measure → measure_add_columns_on_blob_table.py, measure_blob_descriptor_carry_forward.py, measure_external_blob_carry_forward.py`
@@ -763,7 +763,7 @@ FROM opentelemetry_logs` returns exa
 `maintenance, service-kit, notifications` · **MED** · PARTIAL
 - **THE ALERT EXISTS AND NOTHING ON THIS ESTATE EVALUATES IT — measured 2026-09-20, and it is true of all 50 rules, not just the new one.** `MaintenanceDriftRising` is written and PROVEN to fire by `promtool test rules` (a rise from the real 989 to 1010 fires naming `category="orphaned_trash"`; a flat 989 over 3.5 h does not; a category draining to zero does not). It cannot be OBSERVED firing here: `observability.alerting.enabled` defaults false (`values.yaml:2997`) and neither vmalert nor Alertmanager is deployed — confirmed on the live estate, where the Collector, GreptimeDB and Perses ARE running. So metrics flow and are queryable, dashboards render, and **no rule in the file is evaluated by anything**. That is a resilience posture worth stating rather than a gap in this row: the proving harness is what stands in for the engine, which is exactly why `make alert-rules-check` runs the rules against synthetic series instead of only checking their syntax.
 - **THE DRIFT REPORT NOW REACHES A METRIC TOO (2026-09-20), which this row's sibling gap never named.** `metrics.py` carried ten recorders for the sweep, the purge and credential tiers and NONE for the reconcile's drift report — the very report that gates whether the purge may run and answers whether the estate's storage state is understood. It reached a log line and stopped, so no alert could fire on it and no dashboard could show it. `maintenance.drift.items` is a GAUGE labelled by `category` (drift is a level that rises and falls; `delta()` over a counter would read a repaired estate as no change at all), emitted for every CHECKED category and none other — `counts` omits what it could not check so a 0 never reads as clean, and undoing that on the series an alert fires from would put the lie where it does most damage. **OBSERVED end to end in GreptimeDB (`lance-rest-catalog:lh099-driftmetric`): NINE series** — `orphaned_trash=989`, `unbound_namespaces=4`, `orphaned_annotation_tasks=3`, the rest 0, and `orphan_files` ABSENT rather than zero because that tick did not check it. Two of those findings were invisible before this.
-- **blocked:** Owner decision, shared with the branch/tag control-event question: is a compaction an audit record only, or should someone be TOLD (a `table_maintained` action)?
+- **NOT BLOCKED — answered by the same codified rule as [[LH-056]], which this marker named as its shared question.** A compaction changes an OBJECT, not a person's standing, so by `tests/unit/test_control_action_three_file_contract.py`'s enforced line it is UNTARGETED: an audit record plus a metric, and no notification. What remains is recording that DECLINE in `docs/DECISIONS.md` — no service code.
 - **THE METRIC HALF IS SHIPPED AND OBSERVED (release 187).** `compaction.bytes.reclaimed` is exported and `record_reclaimed` takes `bytes_removed`, which `sweep.py` now passes. Before: `compaction_bytes_reclaimed_total` returned ZERO series from GreptimeDB while `compaction_runs_total` returned one. After: one series, value `0` — correct, because the estate has nothing to reclaim right now (branches cleared, the residual 32 beyond Lance's listing floor), and the always-emit rule is what makes idle distinguishable from broken and from absent. Kept SEPARATE from `maintenance.trash.bytes_reclaimed`: the two answer what superseded versions cost versus what dropped tables cost, and one series answering both answers neither. Only the EVENT half is still blocked. If the owner rules for an event: add `table_maintained` across the three-file `ControlAction` contract (41 members today, pinned by `tests/unit/test_control_action_three_file_contract.py`) and emit it from the sweep and the catalog maintenance endpoint. `summarize` already carries `bytes_removed`; do not re-add it.
 - **THE BRANCH HALF IS RULED (2026-09-21) — see [[LH-055]].** lance-ns defines no branch resource (three
   table-scoped ops in `spec.yaml`), and the format brief puts branch isolation at the STORAGE PREFIX:
@@ -775,7 +775,7 @@ FROM opentelemetry_logs` returns exa
 
 **LH-108 · The lineage + OpenFGA store is the hand-rolled `rask-age` StatefulSet; the CNPG cutover is built but off**
 `lineage, chart` · **LOW**
-- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it was waiting on, unchanged: Owner decision: keep the AGE StatefulSet or cut over to CNPG with the ImageVolume extension — plus a K8s 1.33+ / CNPG >= 1.27 cluster to run it on
+- **blocked:** Owner ruling 2026-09-21 — **there is no production estate yet** (*"no not yet so we work with our locally dummies"*), so this and six sibling rows are PARKED at LOW rather than closed: the evidence stands and the row returns at its old priority the day a prod estate exists. The question it waits on is the keep-or-cut call alone: keep the AGE StatefulSet or cut over to CNPG with the ImageVolume extension. **The cluster preconditions this marker used to name are MET** — measured 2026-09-23: k3s **v1.36.2** (needs 1.33+), CNPG operator **1.29.1** (needs >= 1.27), **10** `*.cnpg.io` CRDs installed, and the extension image is built and published (`age-cnpg-ext:1.7.0-18` in the dev registry; `cnpg-age-ext` is a first-class Dagger target). What is unset is `age.cnpgCluster.extensionImage`, a values gap rather than a missing artefact.
 - *What is left:* `age.cnpgCluster.enabled` defaults false with `extensionImage: ""` (chart/values.yaml:2762-2766) while the CNPG operator is installed with nothing to reconcile (values.yaml:2834 `enabled: true`); chart/templates/age-cluster.yaml:3 fails the render if both paths are on, so this is one-way. If CNPG: build and publish `.docker/cnpg-age-ext.dockerfile`, set `extensionImage` and flip `age.cnpgCluster.enabled` (with `age.enabled=false`) in chart/values-prod.yaml, and migrate the `lineage` + `openfga` databases. If StatefulSet: record the ruling and drop the idle operator toggle.
 - *Closes when:* Exactly one graph-store path is the recorded choice and, if CNPG, the two databases run on the `Cluster` with the extension image.
 - *Evidence:* `chart/values.yaml:2762-2766 `cnpgCluster: enabled: false` / `extensionImage: ""`` · `chart/templates/age-cluster.yaml:3 `fail "age.enabled and age.cnpgCluster.enabled are mutually exclusive ..."`` · `.docker/cnpg-age-ext.dockerfile exists (2032 bytes)` · `chart/values.yaml:2834 cnpg operator `enabled: true`; no `cnpgCluster` key in chart/values-prod.yaml`
@@ -1008,7 +1008,7 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
 
 **LH-171 · Nine governed transform records fail `TransformSpec` validation and the estate only WARNs**
 `medallion, service-kit` · **MED**
-- **blocked:** Owner ruling on the field mapping for the older record shapes: does `entrypoint` become `task` verbatim, and what does `lane` become (no successor in `TransformSpec`)?
+- **blocked:** The DISPOSITION only — migrate the nine records or delete them. **Both mapping questions are answered by `TransformSpec` itself** (`packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84`): the model is `extra="forbid"` with no successor for `lane`, so `lane` is DROPPED with nothing to choose between; and `entrypoint` does NOT become `task` verbatim, because `task` is "a registered TASK KEY, resolved against `<control_root>/_tasks/` ... opaque to this library and to the catalog, which is what keeps an engine's name out of the published OpenAPI" — a literal entrypoint is an engine name in the one field designed not to carry one. Each old record's entrypoint must resolve to a registered `_tasks/` key or it does not migrate. The row's other half needs no ruling at all: nine records fail validation behind a WARN and nothing asserts on `transform_spec_malformed`.
 - *What is left:* `_transforms/` holds 10 records in three shapes — one current, one with `name`+`entrypoint`, eight with `lane`+`entrypoint` — and `TransformSpec` (`extra="forbid"`, requires `name`, `task`) rejects nine of them; `_parse` at `transform_specs.py:182-193` logs `transform_spec_malformed` and skips. `cardinality` already defaults to `ONE_TO_ONE` in the model, so only the two mappings above need ruling. Once ruled: migrate or delete the nine (10 records total, 9 sharing one shape), then make an unparseable control record louder than a WARN or gate the set empty — no test asserts on `transform_spec_malformed` today. The live count is not re-measured this session.
 - *Closes when:* Every record under `<control_root>/_transforms/` validates against `TransformSpec`, and a record that does not is surfaced by more than a listing-path WARN.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84 (fields, extra=forbid, cardinality default), :182-193 (_parse warns and skips)` · `grep -rn transform_spec_malformed tests services/*/tests packages/*/tests → none` · `grep -rln 'migrate.*transform' scripts → none`
@@ -1033,7 +1033,7 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 - *Evidence:* `grep -rn 'header\.' services/ packages/ → no workaround site` · `services/catalog/src/catalog/api/v1/endpoints/data.py:613-622` · measured on pylance 11.0.0 + lance-namespace 0.13.0
 **LH-050 · No query store for catalog listings, deliberately, until interactive-frequency listing load is measured**
 `catalog` · **LOW**
-- **blocked:** the tripwire — and it has now been READ rather than merely named. **MEASURED 2026-09-20 against the deployed GreptimeDB**, PromQL over `http_server_duration_milliseconds_count{service_name="catalog"}`: `/v1/namespace/{id}/list` **0.000000 req/s**, `/v1/namespace/{id}/table/list` **0.000000 req/s**, `/v1/warehouses` **0.000627 req/s** — about one request every 27 minutes, and **21 requests across the whole retention window**. Interactive frequency is order ≥1 req/s per active user, so this is three to four orders of magnitude below the trigger and two of the three routes are literally zero. The row stays parked; what changes it is the number, not a ruling. *Bounded honestly:* the counter is per-pod and the catalog rolled several times on the measurement day, so the rate is summed over per-pod series (`sum by (http_target) (rate(…[24h]))`) to survive the restarts; and the `/v1/warehouses` traffic that does exist is largely this session's own drives, so the organic rate is lower still.
+- **NOT BLOCKED — THRESHOLD-PARKED, and this marker said so itself.** Its own last sentence read "what changes it is the number, not a ruling". **MEASURED 2026-09-20 against the deployed GreptimeDB**, PromQL over `http_server_duration_milliseconds_count{service_name="catalog"}`: `/v1/namespace/{id}/list` **0.000000 req/s**, `/v1/namespace/{id}/table/list` **0.000000 req/s**, `/v1/warehouses` **0.000627 req/s** — one request every 27 minutes, three to four orders of magnitude below the interactive-frequency trigger (order >=1 req/s per active user). *Bounded honestly:* the counter is per-pod and the catalog rolled several times that day, so the rate is summed per-pod series to survive restarts, and the `/v1/warehouses` traffic is largely the measuring session's own drives. The row reopens on the NUMBER; the alert that re-reads the tripwire is ordinary work.
 - *What is left:* Nothing to build, and now nothing to re-measure until someone has reason to think the load changed. No query store or listing cache exists in `services/catalog/src` or `service_kit` (grep for `query store|query_store|listing cache` is empty), and no dashboard or alert rule reads the listing routes' rate. The instrument already exists: `service_kit.setup_otel` emits `http.server.*` RED metrics per route into GreptimeDB, so the tripwire is the PromQL read recorded above, not new code. **The cheapest next step is not a query store but an ALERT** — a rule over that same series would trip the wire automatically instead of waiting for someone to re-run this by hand, which is how a tripwire nobody re-reads becomes a row that sits forever.
 - *Closes when:* A recorded measurement shows listing request rate at interactive frequency, followed by a query-store design.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/{namespaces,tables,warehouses}.py (the list handlers)` · `grep -rn -i 'query store|query_store|listing cache|list_cache' services/catalog/src packages/service-kit/src → empty` · `chart/templates/perses-dashboards.yaml, chart/alerting/rules.yml → no listing-rate panel or rule`
@@ -2047,6 +2047,40 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 - *Closes when:* CI fails on a dependency edit with no corresponding lock change, mutation-checked by making one.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
 
+**XC-073 · The authorization model ships inside the catalog image, so a pinned tag silently deploys an OLD model and every upgrade fails its post-upgrade hooks**
+`chart, service-kit, openfga` · **HIGH**
+- **MEASURED LIVE 2026-09-23.** `rask-bootstrap-admin` is in **CrashLoopBackOff, 13 restarts**, failing on
+  `tuple write failed: HTTP 400 {"code":"validation_error","message":"Invalid tuple
+  'estate:rask#event_stager@user:service-ingest'. Reason: type 'estate' not found"}`. `helm history rask`
+  shows revision 234 `failed — post-upgrade hooks failed`.
+- **THE CAUSE IS A DATE, and it is checkable in one command.** `type estate` entered
+  `packages/service-kit/src/service_kit/governed/auth/model.fga:102` on **2026-09-22** (`752e2811`,
+  [[LH-055]]). The deployed and pinned catalog image is `main-c1b4d569`, built from a **2026-09-21**
+  commit: `git merge-base --is-ancestor 752e2811 c1b4d569` answers **no**. `openfga-model.yaml:18,78`
+  runs `python -m service_kit.governed.auth.write_model` and reads the model **from the catalog image**
+  — a deliberate choice ("so the hook reads the same bytes the catalog itself enforces"), which also
+  means the model deployed is whatever the pinned TAG carries.
+- **THE FAILURE IS NEARLY SILENT, which is why it has run for a day.** The model hook SUCCEEDS: it
+  writes the old model without complaint. Nothing compares what it wrote against the repo. The only
+  symptom is a DIFFERENT hook, `bootstrap-admin`, failing on the first tuple naming a type the store
+  has never heard of — and the upgrade reports "post-upgrade hooks failed" with no mention of a model.
+- **WHAT IS ACTUALLY BROKEN, not just noisy:** the LH-055 estate-root model is ABSENT from the store, so
+  `service-ingest` holds no `event_stager` on `estate:rask` and every `can_*` that resolves through the
+  estate root is being answered against a model that lacks it. That is lakehouse condition 2 — the
+  catalog correct for auth/authz/governance — failing live.
+- **IT ALSO CORRUPTS OTHER READINGS.** Two converges earlier on 2026-09-23 reported `failed` and were
+  attributed to the 20-minute wait timing out; revision 234 shows the post-upgrade hook is the real
+  cause. A pre-existing hook failure makes every later deploy's verdict ambiguous.
+- *What is left:* Rebuild and push the catalog image from a commit that carries the current model, refresh
+  `chart/values-live-pins.yaml`, converge, and confirm `bootstrap-admin` reaches Complete. Then the
+  durable half: nothing detects the pairing, so add a gate that refuses a render whose pinned catalog
+  image predates the current `model.fga` — or have `write_model` compare what it is about to write
+  against the repo's `model.json` and FAIL rather than quietly writing an older model.
+- *Closes when:* `bootstrap-admin` completes, `estate:rask#event_stager@user:service-ingest` exists, and a
+  gate fails when the pinned image and `model.fga` disagree — mutation-checked by pinning an older tag.
+- *Evidence:* live `kubectl logs rask-bootstrap-admin-w8c7v` · `helm history rask` rev 234 ·
+  `chart/templates/openfga-model.yaml:18,78` · `git merge-base --is-ancestor 752e2811 c1b4d569` → false
+
 **XC-072 · Every privileged service credential is readable by every other scoped service — Dapr secret scoping is absent**
 `chart, service-kit` · **HIGH**
 - **MEASURED LIVE 2026-09-23, from two pods in both directions.** `GET /v1.0/secrets/lance-secrets/lance`
@@ -2069,11 +2103,75 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
   tracing config.
 - **IT BLOCKS [[LH-064]].** A producer signature needs a key the other producers cannot read; until
   then an HMAC refuses an unauthenticated forger and none of the eight pods.
-- *What is left:* One Dapr `Configuration` per app-id (or one carrying a per-app-id scope list),
-  `defaultAccess: deny` plus an `allowedSecrets` naming only that identity's own
-  `service-token-<identity>` and whatever else it genuinely needs, referenced from each workload's
-  `dapr.io/config` annotation. Then prove it the way this was found — read from a pod and confirm the
-  foreign keys are GONE, not merely that the app still boots.
+- **A `Configuration` ALONE DOES NOTHING HERE, and that is the trap worth writing down.** Dapr scopes
+  by SECRET NAME — the `{key}` in `GET /v1.0/secrets/{store}/{key}` — not by field inside one. Every
+  `service-token-*` is a FIELD of the single secret `lance`: `_secret_bundle(store, key)` fetches one
+  name and returns its whole field map (`dapr_auth.py:157,416-417`), and the seed writes them with one
+  `bao kv put secret/lance …` (`openbao.yaml:183,249`). Measured from the pod: `…/secrets/lance-secrets/lance`
+  → **200 with 21 fields**, `…/secrets/lance-secrets/service-token-service-ingest` → **HTTP 500**, i.e.
+  not an addressable secret. So `allowedSecrets: ["lance"]` grants the entire bundle and scoping cannot
+  reach inside it.
+- **THE ESTATE ALREADY HAS THE PATTERN, APPLIED ONCE.** `openbao.yaml:296` seeds `secret/viewer-s3` as
+  its OWN secret, and its comment states this row's rationale verbatim: "as their OWN secret rather than
+  two more keys on the `lance` bundle … so the store registry can point a store at a credential
+  **without every reader of the shared bundle gaining it**". The service tokens never got that
+  treatment.
+- *What is left:* Two halves, in order, because the second is inert without the first.
+  (1) SPLIT: seed each identity's credential as its own secret (`secret/service-token-<identity>`,
+  following the `viewer-s3` precedent) and move `dedicated_token_from_store` onto it — it is the
+  estate's ONE resolver (`dapr_auth.py:405-419`), so this is one read path, but it is the privileged
+  door for both catalog and lineage and a mistake there fails auth estate-wide.
+  (2) SCOPE: a Dapr `Configuration` per app-id, `defaultAccess: deny` plus an `allowedSecrets` naming
+  only that identity's own secret and whatever else it genuinely needs, referenced from each workload's
+  `dapr.io/config`. Then prove it the way this was found — read from a PEER pod and confirm the foreign
+  keys are GONE, not merely that the app still boots.
+- **BOTH HALVES SHIPPED (2026-09-23), RED-first.** The gate
+  `tests/unit/test_a_dedicated_credential_is_not_readable_by_its_peers.py` failed on both halves before
+  either landed, and was mutation-checked three ways — give every app the full identity set, flip
+  `defaultAccess` to allow, put the credentials back on the shared bundle — each failing exactly one
+  assertion and no other.
+  (1) SPLIT: the seed writes `secret/service-token-<identity>` per identity, and
+  `dedicated_token_from_store` addresses it. Its `key` parameter is gone rather than left dangling, and
+  **the grep found six services plus eight test sites, not the two expected** — `ty` caught the last
+  two after the grep was already clean.
+  (2) SCOPE: one `lance-config-<app-id>` Configuration per app-id in `lance.secretScopes`, each
+  carrying a `deniedSecrets` list naming every identity credential that app does not own.
+  `rask.daprAnnotations` points each scoped app at its own and leaves the rest on `lance-tracing`, so
+  the dangling-reference guard stays honest — verified in the render: 13 Configurations, **zero
+  dangling refs**, verifier doors denied 0, producers denied 7, the three identity-less apps denied 8.
+- **A DENY-LIST RATHER THAN DENY-BY-DEFAULT, and the first cut got this wrong.** `defaultAccess: deny`
+  rendered and passed its gate, and would have broken the estate on contact: **two readers fetch a
+  secret by a name known only at RUNTIME** — `viewer/api/v1/endpoints/objects.py:102` and
+  `ingest/objectstore.py:183` both resolve a per-STORE credential named by the store registry, so a
+  store added after deploy names a secret no rendered allowlist can contain. The object browser would
+  have 503'd on exactly the external stores that mechanism exists for. Caught by reading the consumers
+  before converging, not by a test. Deny-by-default stays the stronger posture and the goal; it needs
+  those readers enumerated first, which is a different change.
+  The Configuration spec body is INCLUDED, not copied: `lance.daprConfigSpecBody` holds the 176 lines
+  once, so HotReload, the tracing exporter and the cardinality bound cannot drift per app.
+- **IT ALSO CLOSES A LATENT STALENESS BUG, found while checking the deploy ordering.** The seed Job
+  carries no `helm.sh/hook`, so it rolls CONCURRENTLY with the pods — a pod can read the store before
+  its credential is written. Under the old shape that miss was a missing FIELD of a bundle that
+  fetched successfully, so `_secret_bundle`'s `lru_cache` cached the bundle WITHOUT it and that pod
+  401'd the identity until someone restarted it; the app-token path guards exactly this with
+  `_secret_bundle.cache_clear()` (`dapr_auth.py:158-167`) and the dedicated-token path never did.
+  Per-identity secrets make the miss an EXCEPTION, and `lru_cache` never caches those, so the next
+  call refetches and the window closes itself when the seed lands.
+- **THE VERIFIER DOORS KEEP THE WHOLE SET, and that is the scheme's ceiling rather than a gap.**
+  `catalog` and `lineage` resolve the CLAIMED identity's token and compare it, so a door that could not
+  read a producer's credential could not admit that producer. Rendered: those two hold all 8, every
+  producer holds exactly 1, and `annotator`/`flows`/`notifications` hold none (they present no dedicated
+  identity — notifications is deliberately unarmed because daprd overwrites the header on service
+  invocation).
+- **THAT EXEMPTION IS NOT INHERENT, and calling it a ceiling was wrong.** It exists because the
+  credential is stored in PLAINTEXT and the door compares plaintext. The house pattern for a
+  service-to-service key is hashed at rest with a constant-time compare (`fastapi/authn.md`, "API
+  keys"); this estate already does the second half (`secrets.compare_digest`, `dapr_auth.py:507`) and
+  not the first. Seed a HASH the doors read and a plaintext only its owner reads, and a door verifies
+  without being able to forge — the verifier exemption disappears and every app holds exactly one
+  usable credential. A signature over the bus event ([[LH-064]]) is the one case where the verifier
+  genuinely needs the key, because recomputing an HMAC requires it; that one does need asymmetric
+  material, and the bearer door does not.
 - *Closes when:* A pod's own sidecar returns only that identity's `service-token-*`, proved live from at
   least two different app-ids, and a render gate refuses a workload wired to the store without a scope.
 - *Evidence:* live `GET /v1.0/secrets/lance-secrets/lance` from `rask-medallion-producer` and

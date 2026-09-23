@@ -125,7 +125,7 @@ def authenticate(
                 # defaulted to None. The store read is deferred inside the resolver, so it happens only
                 # when a privileged subject is actually being verified — never on the shared-token path
                 # and never for an unlisted subject, which the door checks first.
-                dedicated_token=dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key),
+                dedicated_token=dedicated_token_from_store(settings.dapr_secret_store),
             )
         except ServiceDoorClosed as exc:
             # No APP_API_TOKEN here: the door does not exist in this deployment. The caller asked for it

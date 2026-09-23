@@ -623,11 +623,11 @@ def get_settings() -> MedallionSettings:
 
 
 @lru_cache(maxsize=1)
-def _dedicated_token_resolver(store: str, key: str) -> Callable[[str], str | None]:
+def _dedicated_token_resolver(store: str) -> Callable[[str], str | None]:
     """Cached so a resolver is built once per process, not once per catalog call."""
     from service_kit.governed.dapr_auth import dedicated_token_from_store
 
-    return dedicated_token_from_store(store, key)
+    return dedicated_token_from_store(store)
 
 
 def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | None] | None:
@@ -649,7 +649,7 @@ def dedicated_token_for(settings: MedallionSettings) -> Callable[[str], str | No
     """
     if not settings.secrets_from_dapr:
         return None
-    return _dedicated_token_resolver(settings.dapr_secret_store, settings.dapr_secret_key)
+    return _dedicated_token_resolver(settings.dapr_secret_store)
 
 
 def shared_lance_session() -> lance.Session:

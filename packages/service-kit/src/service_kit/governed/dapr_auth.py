@@ -384,7 +384,13 @@ class SecretStoreUnreadable(RuntimeError):
     absent-vs-unreadable rule the estate already enforces in the state plane."""
 
 
-@functools.lru_cache(maxsize=8)
+#: NAME (never a value) of the store's shared bundle -- the estate's common material: app API token,
+#: S3 root secret, the state-store DSN, and since [[XC-072]] no identity credentials at all. Used as the
+#: reachability control that keeps "this identity has no credential" apart from "this store is down".
+SHARED_BUNDLE_NAME = "lance"
+
+
+@functools.lru_cache(maxsize=32)
 def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
     """The secret bundle, fetched once per (store, key) and cached for the process lifetime.
 
@@ -393,7 +399,12 @@ def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
     (the viewer's per-store reads set the precedent). An unreadable store
     RAISES — lru_cache never caches exceptions, so the next request retries — and a successful
     bundle is cached until restart: rotating a dedicated credential means a rollout, the same
-    trade the viewer already made."""
+    trade the viewer already made.
+
+    maxsize IS SIZED FOR THE PER-IDENTITY SECRETS ([[XC-072]]), not for one bundle. Each dedicated
+    credential is its own secret, so a verifier door holds the shared bundle plus one entry per identity
+    it can authenticate — nine live entries on this estate. A cache smaller than that working set
+    evicts on alternating calls, which turns every privileged request back into a sidecar hop."""
     from service_kit.governed.secrets import fetch_dapr_secret  # imported here, not at module scope: keeps this module import-light
 
     bundle = fetch_dapr_secret(store, key, retries=1)
@@ -402,19 +413,43 @@ def _secret_bundle(store: str, key: str) -> tuple[tuple[str, str], ...]:
     return tuple(bundle.items())
 
 
-def dedicated_token_from_store(store: str, key: str) -> Callable[[str], str | None]:
+def dedicated_token_from_store(store: str) -> Callable[[str], str | None]:
     """The estate's ONE resolver for a privileged subject's dedicated credential.
 
     Lifted from `services/lineage`: the shared `service_principal` grew the
     `dedicated_token=` parameter for exactly this callback, but the catalog never passed one — so
     its privileged door hard-refused every privileged subject with "no dedicated credential
     provisioned" no matter what was seeded — while lineage kept a private fork of the resolver.
-    Both halves are closed now: one resolver, one door. Returns ``None`` only when the bundle was READ and
-    ``service-token-<identity>`` is genuinely absent; an unreadable store raises
-    :class:`SecretStoreUnreadable` (§2.17's absent-vs-unreadable split rides along)."""
+    Both halves are closed now: one resolver, one door. Returns ``None`` only when the secret was READ
+    and carries no token; an unreadable store raises :class:`SecretStoreUnreadable` (§2.17's
+    absent-vs-unreadable split rides along).
+
+    EACH CREDENTIAL IS ITS OWN SECRET, and that is what makes it scopeable ([[XC-072]]). Dapr grants by
+    secret NAME -- the ``{key}`` in ``GET /v1.0/secrets/{store}/{key}`` -- never by field within one, so
+    while every credential was a field of the shared ``lance`` bundle the only grant expressible was the
+    whole bundle. Measured live 2026-09-23 before the split: that bundle answered 200 with 21 fields to
+    the ``medallion-producer`` pod, eight of them other identities' credentials. The shared-bundle
+    name is no longer a parameter here: this resolver addresses one secret per identity, so a caller
+    that still passed it would be naming a secret this function never reads.
+    """
 
     def _resolve(identity: str) -> str | None:
-        return dict(_secret_bundle(store, key)).get(f"service-token-{identity}") or None
+        try:
+            return dict(_secret_bundle(store, f"service-token-{identity}")).get("token") or None
+        except SecretStoreUnreadable:
+            # ABSENT-VS-UNREADABLE, RESOLVED BY A CONTROL READ. Addressing one secret per identity
+            # makes "this subject has no credential" and "this store is down" arrive identically -- a
+            # fetch that returned nothing -- and the difference decides the caller's status: `None`
+            # refuses this subject on its merits (401), raising fails the door closed (503). Collapsed
+            # the wrong way, an unreachable store 401s every privileged producer, which reads as a
+            # credential problem and sends an operator to the wrong system entirely.
+            #
+            # The shared bundle is the control. It reads from the SAME store over the SAME sidecar, so
+            # if it answers, the store is reachable and this identity is genuinely absent -- or denied
+            # to this app by its secret scope, which is also correctly "no credential I can use". If it
+            # does not answer either, the store really is unreadable and the original raise stands.
+            _secret_bundle(store, SHARED_BUNDLE_NAME)
+            return None
 
     return _resolve
 

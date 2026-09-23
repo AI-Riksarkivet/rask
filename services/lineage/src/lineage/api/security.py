@@ -115,7 +115,7 @@ def _service_principal(settings: SettingsDep, token: str | None, identity: str |
             # Deferred into the callback: the store is read only when a privileged subject is actually
             # being verified, never on the shared-token path — and never for an unlisted subject, which
             # is checked first so this door is not an enumeration oracle.
-            dedicated_token=dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key),
+            dedicated_token=dedicated_token_from_store(settings.dapr_secret_store),
         )
     except ServiceDoorClosed as exc:
         # The caller asked for the service door by sending both service headers, and it does not exist

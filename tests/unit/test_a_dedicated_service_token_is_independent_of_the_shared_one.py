@@ -76,8 +76,14 @@ def _mounted(rendered: str) -> dict[str, str]:
 
 
 def _seeded(rendered: str) -> dict[str, str]:
-    """`service-token-<identity>=<value>` pairs from the OpenBao seed Job — the copy the DOOR reads."""
-    return {identity: value.strip("'") for identity, value in re.findall(r"service-token-([^=\s]+)=(\S+?) \\\n", rendered)}
+    """Each identity's credential from the OpenBao seed Job — the copy the DOOR reads.
+
+    ONE SECRET PER IDENTITY since [[XC-072]] (`bao kv put secret/service-token-<id> token=<value>`),
+    not a field of the shared `lance` bundle. Dapr grants by secret NAME and never by field, so the
+    split is what makes a per-app scope able to say anything -- and this walk has to follow it or it
+    silently compares nothing and both writers "agree".
+    """
+    return {identity: value.strip("'") for identity, value in re.findall(r"secret/service-token-(\S+) token=(\S+)", rendered)}
 
 
 def test_both_writers_render_something_to_compare() -> None:

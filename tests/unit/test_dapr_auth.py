@@ -142,11 +142,18 @@ def test_the_privileged_door_OPENS_with_the_shared_resolver(monkeypatch: pytest.
 
     monkeypatch.setenv("APP_API_TOKEN", "shared-token")
     dapr_auth._secret_bundle.cache_clear()
-    monkeypatch.setattr(
-        "service_kit.governed.secrets.fetch_dapr_secret",
-        lambda *_a, **_k: {"service-token-service-trainer": "trainer-own"},
-    )
-    resolver = dedicated_token_from_store("lance-secrets", "lance")
+
+    # KEY-AWARE, because since [[XC-072]] each credential is its OWN secret: the resolver addresses
+    # `service-token-<identity>` and reads its `token` field, and falls back to the shared bundle only
+    # as a reachability control. A key-blind stub answers the same dict to both and would pass against
+    # a resolver that no longer works.
+    def _store(_store: str, key: str, **_kw: object) -> dict[str, str]:
+        if key == "service-token-service-trainer":
+            return {"token": "trainer-own"}
+        return {"app-api-token": "shared-token"}
+
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _store)
+    resolver = dedicated_token_from_store("lance-secrets")
 
     admitted = service_principal(
         token="trainer-own",
@@ -174,6 +181,6 @@ def test_the_privileged_door_OPENS_with_the_shared_resolver(monkeypatch: pytest.
             identity="service-trainer",
             allowed_subjects="service-trainer",
             privileged_subjects="service-trainer",
-            dedicated_token=dedicated_token_from_store("lance-secrets", "lance"),
+            dedicated_token=dedicated_token_from_store("lance-secrets"),
         )
     dapr_auth._secret_bundle.cache_clear()

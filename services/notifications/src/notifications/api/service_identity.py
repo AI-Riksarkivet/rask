@@ -44,7 +44,7 @@ def dedicated_token_for(settings: IngressSettings) -> Callable[[str], str | None
         return None
     from service_kit.governed.dapr_auth import dedicated_token_from_store
 
-    return dedicated_token_from_store(settings.secret_store, settings.secret_key)
+    return dedicated_token_from_store(settings.secret_store)
 
 
 def feed_token(settings: IngressSettings) -> SecretStr | None:

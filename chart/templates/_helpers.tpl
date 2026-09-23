@@ -235,7 +235,19 @@ dapr.io/block-shutdown-duration: {{ printf "%ds" (int $root.Values.lifecycle.sid
        not exist. observability.yaml's own comment says the guard it removed was "against a DANGLING
        dapr.io/config reference"; this is that guard, put back on the side that can see both. */}}
 {{- if $root.Values.dapr.enabled }}
+{{- /* THE PER-APP CONFIGURATION WHEN THIS APP-ID MAY USE THE SECRET STORE ([[XC-072]]), else the
+       shared one. A sidecar references exactly one `dapr.io/config`, and `spec.secrets.scopes` lives
+       only on a Configuration -- so an app-id that reads secrets needs its OWN, carrying the same
+       spec body plus a deny-by-default scope. An app-id with no store access has nothing to scope and
+       keeps `lance-tracing`, which also keeps the dangling-reference guard above honest: both names
+       render under this same `dapr.enabled` condition.
+       DERIVED FROM `lance.secretScopes`, the same list that decides the Component's own `scopes:`, so
+       a new consumer added there gets its Configuration without a second edit here. */}}
+{{- if has $appId (splitList "," (include "lance.secretScopes" $root)) }}
+dapr.io/config: "lance-config-{{ $appId }}"
+{{- else }}
 dapr.io/config: "lance-tracing"
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end -}}
@@ -1552,4 +1564,238 @@ Pinned by `tests/unit/test_the_lakehouse_bounds_its_allocator_arenas.py`.
 {{- $root := index . 0 -}}
 - { name: MALLOC_ARENA_MAX, value: {{ $root.Values.allocator.arenaMax | quote }} }
 - { name: ARROW_DEFAULT_MEMORY_POOL, value: {{ $root.Values.allocator.arrowMemoryPool | quote }} }
+{{- end -}}
+
+{{/* The Dapr Configuration spec body, rendered identically into `lance-tracing` and into every
+per-app-id `lance-config-<app>` ([[XC-072]]). Extracted rather than copied: each stanza is a
+measured decision, and a second copy would drift without anything saying so. */}}
+{{- define "lance.daprConfigSpecBody" -}}
+  {{- /*
+     UNCONDITIONAL, and deliberately outside the otel guard below: this loop runs whether or not
+     telemetry ships.
+
+     Dapr 1.18 promoted HotReload to GA and default-ON, and every sidecar in this estate references
+     this Configuration — so each one boots with `Enabled features: HotReload …` and runs a 60-second
+     reconcile ticker that diffs the operator's components against its own in-memory store.
+
+     For `lance-statestore` that diff can never come out equal. Its DSN arrives as a `secretKeyRef`,
+     so the operator's copy holds the REFERENCE while daprd's holds the RESOLVED value; the reconciler
+     therefore concludes it changed on every single tick, tries to hot-reload it, and refuses —
+     because Dapr will not hot-reload a component used as an actor state store. Measured across the
+     fleet: ~540 ERROR lines an hour, `Aborting to hot-reload a state store component that is used as
+     an actor state store: lance-statestore`, one per sidecar per minute, forever. Nothing is pending
+     and nothing is broken; the loop is structurally unable to converge, and it buries real errors.
+
+     Turning it off costs nothing this estate was using. A component change here is a coordinated
+     chart rollout, and for the actor state store a pod restart was ALREADY required — that is the
+     very thing the reconciler was refusing to do for us. The trade is explicit: with HotReload off,
+     a Component/Resiliency/Configuration edit reaches running sidecars only after
+     `kubectl rollout restart`.
+  */}}
+  features:
+    - name: HotReload
+      enabled: false
+{{- if include "lance.otelEnabled" . }}
+  {{- /*
+     CORRECTED 2026-08-22. This block used to say "There is NO otel exporter here … Dapr's own sidecar
+     spans can't carry GreptimeDB's required db-name/pipeline headers", and concluded the estate still
+     had an end-to-end trace. Both halves were wrong.
+
+     `samplingRate` is a SAMPLING probability, NOT an enable switch. With no `otel:`, no `zipkin:` and
+     no `stdout:`, daprd registers its NullExporter: every sidecar span is created, sampled at 100%,
+     has its context propagated — and is dropped by an `ExportSpans` that returns nil. No log, no
+     error, no metric. Indistinguishable from a collector that is down. So NO Dapr hop in this estate
+     had ever produced a span: not service invocation, pub/sub publish or delivery, actor calls, input
+     bindings or workflow steps.
+
+     The stated reason was false twice over. Dapr's `otel.headers` accepts arbitrary {name,value} (and
+     secretKeyRef) pairs, so it CAN carry vendor headers — and it does not need to, because this chart
+     deploys a Collector that adds them itself. That Collector's `otlp` receiver already listened on
+     4317 and 4318 and was already wired into the traces pipeline.
+
+     Gated on otelEnabled, NOT observability.enabled: telemetry also ships to an external collector
+     (externalOtlpEndpoint). Pinned by
+     tests/unit/test_invariants.py::test_dapr_sidecar_spans_actually_have_an_exporter.
+  */}}
+  tracing:
+    samplingRate: {{ .Values.observability.samplingRate | quote }}
+{{- with include "lance.daprOtlpTarget" . }}
+    otel:
+      {{- /*
+         A BARE host:port. Dapr appends no URL path, so `protocol: http` posts to
+         `<endpointAddress>/v1/traces` — exactly the Collector's OTLP/HTTP route on 4318.
+      */}}
+      endpointAddress: {{ . | quote }}
+      {{- /*
+         LOAD-BEARING: isSecure DEFAULTS TO TRUE upstream. Omit it and every sidecar attempts TLS
+         against a plaintext in-cluster Collector and fails — which fails soft, so the symptom is
+         "still no traces" rather than an error anyone sees.
+      */}}
+      isSecure: false
+      {{- /*
+         Exactly "http" or "grpc". Anything else is a fatal daprd startup error, not a fallback.
+      */}}
+      protocol: http
+      timeout: "30s"
+{{- end }}
+{{- end }}
+{{- /* SIDECAR METRIC CARDINALITY. Gated on `dapr.enabled` only, deliberately NOT on
+       `lance.otelEnabled` — the same argument as the retention stanza below. The sidecar's :9090
+       exposition and its log stream exist whether or not this estate ships a collector, so a bound
+       that disappears with telemetry is not a bound.
+
+       `enabled` is REQUIRED by the CRD (chart/charts/dapr-1.18.1.tgz -> crds/configuration.yaml,
+       `required: [enabled]` under spec.metrics); omitting it is refused with
+       `spec.metrics.enabled: Required value`.
+
+       PLURAL `metrics:` ONLY. The CRD also accepts a legacy `metric:` whose schema is byte-identical
+       and states no precedence; daprd resolves it in Go by merging plural over singular field by
+       field, so writing both would make that merge the only tiebreak and the manifest would no longer
+       say what is in force.
+
+       NOTHING VALIDATES THESE FIELD NAMES BEFORE RUNTIME. Helm does not request strict field
+       validation, so `recordErrorCode`, `increasedCardinallity` or `obfuscateUrls` would render, apply
+       CLEANLY, and be pruned by the API server with no error and no warning — "the setting had no
+       effect", the same silent shape as the NullExporter above. Pinned by tests/unit/test_invariants.py
+       ::test_the_sidecars_non_telemetry_config_survives_telemetry_being_off, which is the only gate
+       that fails loudly on a typo here. */}}
+  metrics:
+    enabled: true
+    {{- /*
+       dapr_error_code_total — a closed set of daprd error codes, so bounded by construction.
+    */}}
+    recordErrorCodes: true
+    http:
+      {{- /*
+         THE POINT OF THIS BLOCK. At the upstream default (still `true` in 1.18.1) the sidecar stamps the
+         RAW remainder of a service-invocation URL onto the `path` label. Measured live on this cluster:
+         dapr_http_server_request_count{app_id="gateway",path="/v1.0/invoke/compute/method/api/ray/jobs"}
+         The gateway proxies /api/catalog/... and /api/lineage/..., so that is one series per table,
+         namespace and project id, forever, in a store nothing authorizes reads against.
+
+         NOT A SUBJECT LEAK, and do not describe it as one. daprd 1.18.1 ALREADY templates actor ids
+         (`/v1.0/actors/InboxActor/{id}/method`) and drops state keys (`/v1.0/state/lance-statestore`) at
+         the default — verified by scraping a live sidecar, by an active probe with a subject-shaped key,
+         and by a real non-templated actor id present in app logs but absent from the metrics body. The
+         OIDC subject never reached a metric label. The rule in notifications/api/metrics.py is correct;
+         this is not an instance of it.
+      */}}
+      increasedCardinality: false
+      {{- /*
+         With increasedCardinality false the `path` label is the MATCHED pattern or the empty string, so
+         these three RESTORE labels that would otherwise be erased outright. Detail is still lost on
+         purpose: actor type, pubsub topic and store name collapse into their wildcards. Nothing in this
+         repo queries dapr_http_server_* (the dashboards and alerts use the component/actor/scheduler
+         families and the app SDK's own http_server_duration_milliseconds_*), so no consumer breaks.
+
+         NO `/v1.0/invoke/...` ENTRY, EVER. daprd auto-registers an invoke twin for every non-invoke
+         pattern here and registers the lot on a real http.ServeMux, which PANICS at startup on
+         conflicting patterns. A catch-all does not conflict with THIS list, but panics the moment anyone
+         adds `/` or a bare `/{x...}` to it. One Configuration serves every app-id, so that is the whole
+         fleet crash-looping on a one-line edit three lines above, with no recover() on the path and no
+         validation anywhere before runtime. It also buys nothing: it only renames the "" bucket. Invoke
+         paths therefore label as "", and the gateway->upstream hop is read from the UPSTREAM's own
+         http_server_duration_milliseconds_* instead — a deliberate erasure, not an oversight.
+      */}}
+      pathMatching:
+        - "/v1.0/state/{storeName}"
+        - "/v1.0/publish/{pubsubName}/{topic...}"
+        - "/v1.0/actors/{actorType}/{actorId}/method/{method}"
+  {{- /* NOT SET, and it is a decision rather than an oversight. `latencyDistributionBuckets` is GLOBAL:
+         workflow-execution latency shares the HTTP distribution, so one bucket list has to cover both.
+         Dapr's default 34 buckets top out at 100s, and `promotion_review` blocks on
+         `ctx.wait_for_external_event` — a human approving a promotion — so it is unbounded BY DESIGN and
+         no list covers it. Measured: that workflow already has 0 observations at le=100000 and 1 at
+         le=+Inf. Consequence to know before trusting a chart: the workflow p95 panel renders +Inf for
+         that lane. Setting a wider ceiling trades a visibly-broken quantile for a silently-wrong one. */}}
+  logging:
+    apiLogging:
+      enabled: true
+      {{- /*
+         INSEPARABLE from `enabled` above. With obfuscateURLs false daprd logs the raw
+         `method + URL.Path`, and the actor URL DOES carry base64url(<oidc sub>) as a path segment
+         (service_kit/governed/user_state.py::encode_subject, reversed exactly by decode_subject). With it
+         true daprd logs the matched endpoint NAME instead. This is the one place in this object where a
+         subject could reach telemetry, so the two keys ship together or not at all.
+      */}}
+      obfuscateURLs: true
+      {{- /*
+         The kubelet polls /v1.0/healthz on every sidecar; without this the stream is mostly probe noise.
+      */}}
+      omitHealthChecks: true
+{{- with .Values.dapr.workflowRetention }}
+{{- if .enabled }}
+  workflow:
+    {{- /* A FLOOR, because the failure mode is silent and total. `completed: "0s"` is a valid duration
+           that renders, applies, and purges every workflow instance the moment it terminates — the
+           history is gone before anyone can read it, and nothing reports that. A typo in a values file
+           should not be able to do that, so anything under an hour is REFUSED at render rather than
+           discovered later by its absence. Raise the floor deliberately if a shorter window is ever
+           genuinely wanted. */}}
+    {{- range $k, $v := (dict "completed" .completed "failed" .failed "terminated" .terminated) }}
+    {{- if not (regexMatch "^([1-9][0-9]*)(h|m)$" (toString $v)) }}
+    {{- fail (printf "dapr.workflowRetention.%s = %q — must be a positive duration in h or m. A zero or malformed value silently purges workflow history the instant an instance terminates." $k $v) }}
+    {{- end }}
+    {{- if and (hasSuffix "m" (toString $v)) (lt (int (trimSuffix "m" (toString $v))) 60) }}
+    {{- fail (printf "dapr.workflowRetention.%s = %q is under an hour. Workflow history is the only record of what a run did; raise the floor here deliberately if that is genuinely wanted." $k $v) }}
+    {{- end }}
+    {{- end }}
+    stateRetentionPolicy:
+      completed: {{ .completed | quote }}
+      failed: {{ .failed | quote }}
+      terminated: {{ .terminated | quote }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* The service identities ONE app-id may read a dedicated credential for ([[XC-072]]).
+Call: include "lance.identitiesForApp" (list $root $appId) -> space-separated identities.
+
+TWO POPULATIONS, and the split is forced by how a symmetric credential is checked rather than chosen:
+
+  * THE VERIFIER DOORS (`catalog`, `lineage`) resolve the CLAIMED identity's token and compare it --
+    `service_principal(..., dedicated_token=...)` in `service_kit.governed.dapr_auth` -- so a door that
+    could not read a producer's credential could not authenticate that producer at all. They get the
+    whole set.
+    THE EXEMPTION IS NOT INHERENT, and it should not be read as settled: it exists because the
+    credential is stored in PLAINTEXT. The house pattern for a service-to-service key is hashed at rest
+    with a constant-time compare (`fastapi/authn.md`, "API keys"); the compare is already constant-time
+    (`dapr_auth.py:507`) and the storage is not. Hold a HASH for the doors and a plaintext only its
+    owner reads, and a door can verify without being able to forge -- which removes this exemption
+    entirely. See [[XC-072]].
+  * EVERY OTHER APP presents exactly its own, so it gets exactly its own. That is the population this
+    row is about: before this, `medallion-producer` read `service-ingest`, measured on the live estate.
+
+DERIVED FROM THE SAME VALUES THE SEED USES, never a second hand-written list -- an identity seeded but
+not allowed here is an app that boots and then 401s with nothing naming the cause. */}}
+{{/* EVERY seeded service identity, space-separated. ONE derivation, shared by the seed's own list, by
+`lance.identitiesForApp` and by the deny-list that subtracts from it -- a second copy would let an
+identity be seeded and then denied to its own owner, which boots fine and 401s later. */}}
+{{- define "lance.allServiceIdentities" -}}
+{{- $root := . -}}
+{{- $all := list $root.Values.medallion.train.trainerIdentity $root.Values.medallion.producer.serviceIdentity $root.Values.frontend.serviceIdentity $root.Values.maintenance.catalogServiceIdentity -}}
+{{- range $root.Values.medallion.stageRunners }}{{- $all = append $all .serviceIdentity }}{{- end -}}
+{{- range ($root.Values.medallion.mediaStageRunners | default list) }}{{- $all = append $all .serviceIdentity }}{{- end -}}
+{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}
+{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}
+{{- join " " (compact $all | uniq | sortAlpha) -}}
+{{- end -}}
+
+{{- define "lance.identitiesForApp" -}}
+{{- $root := index . 0 -}}{{- $app := index . 1 -}}
+{{- $all := include "lance.allServiceIdentities" $root | splitList " " -}}
+{{- if or (eq $app $root.Values.services.catalog.daprAppId) (eq $app $root.Values.services.lineage.daprAppId) -}}
+{{- join " " $all -}}
+{{- else -}}
+{{- $mine := list -}}
+{{- if eq $app $root.Values.medallion.producer.daprAppId }}{{- $mine = append $mine $root.Values.medallion.producer.serviceIdentity }}{{- end -}}
+{{- if eq $app $root.Values.maintenance.daprAppId }}{{- $mine = append $mine $root.Values.maintenance.catalogServiceIdentity }}{{- end -}}
+{{- range $root.Values.medallion.stageRunners }}{{- if eq $app .daprAppId }}{{- $mine = append $mine .serviceIdentity }}{{- end }}{{- end -}}
+{{- range ($root.Values.medallion.mediaStageRunners | default list) }}{{- if eq $app .daprAppId }}{{- $mine = append $mine .serviceIdentity }}{{- end }}{{- end -}}
+{{- if eq $app (($root.Values.services.ingest).daprAppId | default "ingest") -}}
+{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $mine = append $mine . }}{{- end -}}
+{{- with (get (($root.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $mine = append $mine . }}{{- end -}}
+{{- end -}}
+{{- join " " (compact $mine | uniq | sortAlpha) -}}
+{{- end -}}
 {{- end -}}

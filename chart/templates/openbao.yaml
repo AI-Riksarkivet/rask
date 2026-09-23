@@ -246,13 +246,6 @@ spec:
                 {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
-                {{- range (compact $privileged | uniq | sortAlpha) }}
-                {{- /* SQUOTED because `auth.serviceTokens` lets an operator supply this value: a generated
-                       token is alphanumeric and safe bare, but a credential from a secret manager carries
-                       `+/=` and can carry `$`, which this `sh -c` would expand — seeding a DIFFERENT value
-                       than the mounted half and 401ing that identity with no error anywhere. */}}
-                service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) | squote }} \
-                {{- end }}
                 {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
                        rather than a second value on `minio-secret-key`: that field IS the tenant root's
                        secret and other services read it, so overwriting it would repoint the whole
@@ -284,6 +277,26 @@ spec:
                 {{- end }}
 
               echo "seeded secret/lance into OpenBao"
+
+              {{- /* EACH DEDICATED CREDENTIAL AS ITS OWN SECRET ([[XC-072]]), which is what makes it
+                     scopeable at all. Dapr grants by secret NAME — the `{key}` in
+                     `GET /v1.0/secrets/{store}/{key}` — and never by field within one, so while these
+                     lived on the `lance` bundle the only grant expressible was the whole bundle.
+                     Measured live 2026-09-23 before the split: `.../secrets/lance-secrets/lance`
+                     answered 200 with 21 fields to the `medallion-producer` pod, eight of them other
+                     identities' credentials, and `.../service-token-service-ingest` answered 500
+                     because it was not an addressable secret.
+                     SAME SHAPE AS `secret/viewer-s3` below, for the reason that one already states:
+                     a credential in its own secret can be handed to one reader without every reader of
+                     the shared bundle gaining it.
+                     SQUOTED because `auth.serviceTokens` lets an operator supply this value: a generated
+                     token is alphanumeric and safe bare, but a credential from a secret manager carries
+                     `+/=` and can carry `$`, which this `sh -c` would expand — seeding a DIFFERENT value
+                     than the mounted half and 401ing that identity with no error anywhere. */}}
+              {{- range (compact $privileged | uniq | sortAlpha) }}
+              bao kv put secret/service-token-{{ . }} token={{ include "lance.dedicatedServiceToken" (list $ .) | squote }}
+              {{- end }}
+              echo "seeded the per-identity service credentials into OpenBao"
               {{- if $.Values.minio.viewerAccessKey }}
 
               {{- /* THE OBJECT BROWSER'S CREDENTIALS, as their OWN secret rather than two more keys on

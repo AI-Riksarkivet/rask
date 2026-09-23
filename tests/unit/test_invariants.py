@@ -6165,7 +6165,8 @@ def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
         subjects |= {s.strip() for s in match.group(1).split(",") if s.strip()}
     assert subjects, "no *_PRIVILEGED_SUBJECTS is rendered at all — the credential binding is inert"
 
-    seeded = set(re.findall(r"service-token-([A-Za-z0-9_-]+)=", rendered))
+    # ONE SECRET PER IDENTITY ([[XC-072]]): `bao kv put secret/service-token-<id> token=<value>`.
+    seeded = set(re.findall(r"secret/service-token-([A-Za-z0-9_-]+) token=", rendered))
     assert seeded, "no service-token-<identity> is seeded — every privileged identity would be refused"
 
     missing_token = sorted(subjects - seeded)

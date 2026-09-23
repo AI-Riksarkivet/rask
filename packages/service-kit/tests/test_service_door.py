@@ -56,7 +56,22 @@ def app_token(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _seed_store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: bundle)
+    """Serve a flat field dict as the store actually shapes it since [[XC-072]]: the shared `lance`
+    bundle plus ONE SECRET PER IDENTITY.
+
+    KEY-AWARE ON PURPOSE. The double used to answer the same dict for every key, which made it blind to
+    the split it now has to model -- `dedicated_token_from_store` addresses `service-token-<identity>`
+    and reads its `token` field, so a key-blind stub would hand back the shared bundle and the tests
+    would pass against a resolver that no longer works.
+    """
+
+    def _fetch(store: str, key: str, **_kw: object) -> dict[str, str]:
+        if key.startswith("service-token-"):
+            value = bundle.get(key)
+            return {"token": value} if value else {}
+        return {k: v for k, v in bundle.items() if not k.startswith("service-token-")}
+
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
 
 
 # --------------------------------------------------------------------------- #
@@ -129,7 +144,7 @@ def test_the_shared_token_cannot_claim_a_privileged_subject(app_token: None, mon
     "may THIS CALLER be that subject". Without the second, any holder of the shared token picks the
     highest-privileged name on the list."""
     _seed_store(monkeypatch, {"service-token-service-trainer": TRAINER_OWN})
-    resolver = dedicated_token_from_store("lance-secrets", "lance")
+    resolver = dedicated_token_from_store("lance-secrets")
 
     admitted = service_principal(
         token=TRAINER_OWN, identity="service-trainer", allowed_subjects=ALLOWED, privileged_subjects="service-trainer", dedicated_token=resolver
@@ -152,7 +167,7 @@ def test_an_unprovisioned_privileged_credential_FAILS_CLOSED(app_token: None, mo
             identity="service-trainer",
             allowed_subjects=ALLOWED,
             privileged_subjects="service-trainer",
-            dedicated_token=dedicated_token_from_store("lance-secrets", "lance"),
+            dedicated_token=dedicated_token_from_store("lance-secrets"),
         )
 
 
@@ -213,7 +228,7 @@ def test_an_UNREADABLE_store_is_not_a_missing_credential(app_token: None, monkey
             identity="service-trainer",
             allowed_subjects=ALLOWED,
             privileged_subjects="service-trainer",
-            dedicated_token=dedicated_token_from_store("lance-secrets", "lance"),
+            dedicated_token=dedicated_token_from_store("lance-secrets"),
         )
     assert not isinstance(exc.value, ServiceDoorError)
 
@@ -221,7 +236,7 @@ def test_an_UNREADABLE_store_is_not_a_missing_credential(app_token: None, monkey
 def test_a_readable_bundle_without_the_field_is_a_genuine_absence(monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_store(monkeypatch, {"unrelated": "field"})
 
-    assert dedicated_token_from_store("lance-secrets", "lance")("service-trainer") is None
+    assert dedicated_token_from_store("lance-secrets")("service-trainer") is None
 
 
 def test_the_bundle_is_fetched_once_and_with_the_REQUEST_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -232,10 +247,10 @@ def test_the_bundle_is_fetched_once_and_with_the_REQUEST_retry_budget(monkeypatc
 
     def _fetch(store: str, key: str, **kwargs: object) -> dict[str, str]:
         calls.append(kwargs)
-        return {"service-token-service-trainer": TRAINER_OWN}
+        return {"token": TRAINER_OWN} if key == "service-token-service-trainer" else {"app-api-token": SHARED}
 
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
-    resolve = dedicated_token_from_store("lance-secrets", "lance")
+    resolve = dedicated_token_from_store("lance-secrets")
 
     assert resolve("service-trainer") == TRAINER_OWN
     assert resolve("service-trainer") == TRAINER_OWN
@@ -248,15 +263,51 @@ def test_an_unreadable_store_is_NOT_cached_as_a_failure(monkeypatch: pytest.Monk
     """`lru_cache` never caches exceptions, and that is load-bearing: a store that was down at the
     first privileged request must be retried on the next one, not remembered as unreadable until the
     pod restarts."""
-    attempts: list[int] = []
+    # A FLAG, NOT A FETCH COUNTER. A failed resolve now makes TWO reads -- the identity's own secret and
+    # the shared bundle it uses as a reachability control -- so counting fetches would flip this double
+    # to "healthy" midway through the first resolve and it would answer None instead of raising.
+    down = [True]
 
     def _fetch(store: str, key: str, **kwargs: object) -> dict[str, str]:
-        attempts.append(1)
-        return {} if len(attempts) == 1 else {"service-token-service-trainer": TRAINER_OWN}
+        if down[0]:
+            return {}
+        return {"token": TRAINER_OWN} if key == "service-token-service-trainer" else {"app-api-token": SHARED}
 
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
-    resolve = dedicated_token_from_store("lance-secrets", "lance")
+    resolve = dedicated_token_from_store("lance-secrets")
 
     with pytest.raises(SecretStoreUnreadable):
         resolve("service-trainer")
+    down[0] = False
     assert resolve("service-trainer") == TRAINER_OWN
+
+
+def test_an_absent_identity_answers_None_while_an_unreadable_store_still_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The absent-vs-unreadable split, preserved across the per-identity split ([[XC-072]]).
+
+    Before each credential became its own secret, a subject with none was a missing FIELD of a bundle
+    that still answered, so the two cases were already distinct. Addressing one secret per identity
+    collapses them -- both look like a fetch that returned nothing -- and the difference decides the
+    caller's status: `None` refuses this subject on its merits (401), raising fails the door closed
+    (503). Collapsed the wrong way, an unreachable store 401s every privileged producer, which reads as
+    a credential problem and sends the operator to the wrong system entirely.
+
+    The shared bundle is the control: same store, same sidecar, so if it answers the store is up.
+    """
+    from service_kit.governed import dapr_auth
+
+    dapr_auth._secret_bundle.cache_clear()
+
+    # STORE UP, IDENTITY GENUINELY ABSENT -> None.
+    def _up(_store: str, key: str, **_kw: object) -> dict[str, str]:
+        return {} if key.startswith("service-token-") else {"app-api-token": SHARED}
+
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _up)
+    assert dedicated_token_from_store("lance-secrets")("service-trainer") is None
+
+    # STORE DOWN -> raise, so the door fails closed rather than blaming the credential.
+    dapr_auth._secret_bundle.cache_clear()
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: {})
+    with pytest.raises(SecretStoreUnreadable):
+        dedicated_token_from_store("lance-secrets")("service-trainer")
+    dapr_auth._secret_bundle.cache_clear()

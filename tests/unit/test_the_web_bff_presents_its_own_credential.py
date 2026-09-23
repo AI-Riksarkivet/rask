@@ -122,7 +122,7 @@ def test_the_seeded_token_and_the_mounted_token_are_THE_SAME_STRING() -> None:
     #: The COMMAND, not `str(container)`: a repr escapes the quotes the seed puts round each value, so a
     #: substring search over it misses a credential that is present and agreeing.
     script = "\n".join(seeds[0]["spec"]["template"]["spec"]["containers"][0].get("command") or [])
-    assert f"service-token-{WEB}={mounted}" in script.replace("'", "")
+    assert f"secret/service-token-{WEB} token={mounted}" in script.replace("'", "")
 
 
 def test_with_the_flag_OFF_nothing_changes() -> None:

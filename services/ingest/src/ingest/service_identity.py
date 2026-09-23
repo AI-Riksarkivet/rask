@@ -46,7 +46,7 @@ def dedicated_token_for(config: IngestSettings) -> Callable[[str], str | None] |
         return None
     from service_kit.governed.dapr_auth import dedicated_token_from_store
 
-    return dedicated_token_from_store(config.secret_store, config.secret_key)
+    return dedicated_token_from_store(config.secret_store)
 
 
 def service_headers(config: IngestSettings, *, identity: str | None, shared_token: str | None) -> dict[str, str]:

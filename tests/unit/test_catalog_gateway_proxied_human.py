@@ -54,12 +54,11 @@ def _creds() -> HTTPAuthorizationCredentials:
 def _settings(**over: Any) -> Any:
     """Structural stand-in for `catalog.core.config.Settings` — every field `authenticate` reads.
 
-    THE STORE COORDINATES ARE NOT OPTIONAL HERE. Since §2.8 unified the two call sites, the resolver
-    is BUILT before the door is called (`dedicated_token_from_store(settings.dapr_secret_store,
-    settings.dapr_secret_key)` is an argument expression), so both fields are read on every request
-    that carries both service headers — not only on the privileged path. Omitting them made an
-    under-specified double raise `AttributeError` where the door should have answered, which is a
-    test-harness failure wearing a security test's name.
+    THE STORE COORDINATE IS NOT OPTIONAL HERE. The resolver is BUILT before the door is called
+    (`dedicated_token_from_store(settings.dapr_secret_store)` is an argument expression), so the field
+    is read on every request that carries both service headers — not only on the privileged path.
+    Omitting it made an under-specified double raise `AttributeError` where the door should have
+    answered, which is a test-harness failure wearing a security test's name.
 
     The subject lists are `str`, matching the real `Settings` fields (`config.py:206`, `:209`). They
     were tuples, which survived only because no test reached the door's `.split()` — one leaked
@@ -222,7 +221,10 @@ def test_catalog_authenticate_passes_the_resolver_so_the_privileged_door_opens(m
     dapr_auth._secret_bundle.cache_clear()
     monkeypatch.setattr(
         "service_kit.governed.secrets.fetch_dapr_secret",
-        lambda *_a, **_k: {"service-token-service-trainer": "trainer-own"},
+        # KEY-AWARE: each credential is its own secret since [[XC-072]], so the resolver asks for
+        # `service-token-<identity>` and reads its `token` field. A key-blind double answers the same
+        # dict to every name and would pass against a resolver that no longer works.
+        lambda _store, key, **_k: {"token": "trainer-own"} if key == "service-token-service-trainer" else {"app-api-token": "the-estate-service-token"},
     )
     settings = _settings(
         service_subjects="service-trainer",

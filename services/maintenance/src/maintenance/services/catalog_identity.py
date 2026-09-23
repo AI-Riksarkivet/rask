@@ -35,7 +35,7 @@ def dedicated_token_for(settings: MaintenanceSettings) -> Callable[[str], str | 
         return None
     from service_kit.governed.dapr_auth import dedicated_token_from_store
 
-    return dedicated_token_from_store(settings.dapr_secret_store, settings.dapr_secret_key)
+    return dedicated_token_from_store(settings.dapr_secret_store)
 
 
 def service_headers(settings: MaintenanceSettings) -> dict[str, str]:
