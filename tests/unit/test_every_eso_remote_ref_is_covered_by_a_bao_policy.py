@@ -6,14 +6,22 @@ Two readers consume those values and only one of them is Dapr: the pods WITHOUT 
 lane and the web zones -- receive theirs through External Secrets Operator instead. The split moved the
 value and left both ESO halves pointing at where it used to be.
 
-MEASURED 2026-09-23: the baked dummy-lane job posted to `rask-lineage:8000/api/v1/lineage` and got
-`403 Forbidden`, because `external-secrets.yaml` still read `property: service-token-<identity>` off the
-`lance` bundle while `openbao.yaml`'s ESO policy granted read on `secret/data/lance` ALONE.
+MEASURED 2026-09-23 on the live estate, from the ExternalSecret's own status:
 
-WHY IT NEEDS A GATE RATHER THAN CARE. Neither half fails loudly. A `remoteRef` naming a property the
-bundle no longer carries syncs an EMPTY value, and a path no policy covers is a denied read ESO retries
-quietly; both arrive at the workload as "no credential", which is indistinguishable from "not configured
-yet" and surfaces only as a 403 in a service that never mentions secrets.
+    Ready=False  SecretSyncedError
+    error processing spec.data[5] (key: lance), err:
+      cannot find secret data for key: "service-token-service-trainer"
+
+`external-secrets.yaml` read `property: service-token-<identity>` off the `lance` bundle, which no
+longer carries it, while `openbao.yaml`'s ESO policy granted read on `secret/data/lance` ALONE -- so
+even a corrected remoteRef would have been denied.
+
+WHY IT NEEDS A GATE RATHER THAN CARE, and the failure is QUIETER than it looks. One unresolvable key
+fails the WHOLE ExternalSecret, so the target Secret is not emptied -- it is FROZEN at its last good
+contents. Every value in it keeps working and nothing anywhere reports a problem; what is dead is
+rotation, and `creationPolicy: Owner` means a deleted Secret would never be rebuilt. A break whose only
+symptom is that a future change will not land is one nothing catches by observation, which is the whole
+case for checking it at render time.
 
 THE PAIRING IS THE SUBJECT, not either file. Checking the ExternalSecret alone would pass with an
 ungranted path; checking the policy alone would pass with a remoteRef aimed elsewhere. Only the join
