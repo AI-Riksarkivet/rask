@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **93 are blocked on a decision** and **102 can be picked up today**.
+**196 open items**, of which **94 are blocked on a decision** and **102 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 5 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 5 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -1793,6 +1793,50 @@ measured (~10-14 MiB per commit pas
 - *Evidence:* live planner 2026-09-23 `planned=570 published=570`, `policies=27` all null ·
   `services/maintenance/src/maintenance/services/sweep.py:90-118` (`_policy_skip_reason`) ·
   [[LH-188]] for the bounds this volume sizes
+
+**LH-196 · A stage runner writing into a PROJECT-QUALIFIED namespace produces a table with zero tuples, so the lane is refused `can_write_data` on its own output**
+`catalog, medallion, lineage` · **HIGH**
+- **blocked:** whether a stage runner's output goes through the CATALOG. The band-aid — teach
+  `seed_medallion_fga.sh` a project argument — is excluded by this repo's own engineering principles
+  ("Fix root causes, not symptoms… Workarounds that 'make it pass' are not acceptable as final
+  fixes"), so the live question is the architectural one underneath: the stage runners write Lance
+  DIRECTLY, which is precisely why no parent tuple exists. Routing their output through the catalog
+  gives governance for free and couples the cascade to the catalog on its write path; keeping the
+  direct write means something else has to mint the link, and "something else mints an authorization
+  tuple" is the question [[LH-144]] shows this estate treats as the owner's.
+  **Filed blocked by my OWN gate, which is the gate working.** I wrote this row and its *What is left*
+  opened "Decide where…"; `test_no_row_whose_REMAINING_STEP_is_a_ruling_goes_unmarked` — added hours
+  earlier today for exactly this — refused it before the commit.
+- **MEASURED LIVE 2026-09-23, from the door's own refusal.** The dummy lane's baked job posts to the
+  lineage ingest door and gets `403 Forbidden`; the lineage service names the reason exactly:
+  `ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']`.
+  Read straight out of OpenFGA: **`table:acme-silver$dummy` holds ZERO tuples, `table:acme-silver$features`
+  holds ZERO, and `namespace:acme-silver` holds ZERO.** `check can_write_data` answers `false` for both
+  tables.
+- **THIS IS A PRODUCER, NOT A RESIDUE, which is what separates it from [[LH-144]].** That row is about
+  ungoverned tables that already exist and how to repair them safely. This is the path that MAKES them:
+  `can_write_data: writer` and `writer: ... or writer from parent`, so a table with no `parent` tuple
+  inherits nothing, and `scripts/seed_medallion_fga.sh` states the mechanism in its own comment — "the
+  catalog seeds these for tables it creates, but **the stage runners write Lance DIRECTLY**". Every
+  project-qualified tier the cascade writes is born ungoverned.
+- **THE SEED SCRIPT CANNOT BE THE ANSWER AND DOES NOT EVEN CLAIM TO BE.** It links the UNQUALIFIED
+  namespaces only (`namespace:bronze|silver|gold|bronze-media|silver-media` under
+  `warehouse:lance_catalog`) and takes no project argument. `tests/e2e-py/test_dummy_lane_e2e.py:515`
+  tells a reader to run `scripts/seed_medallion_fga.sh <project> <zone-warehouse-id>` — **a signature
+  that script does not have**, so the guidance the failing test prints cannot be followed.
+- **AND THE TEST'S OWN DIAGNOSIS IS WRONG ON THIS ESTATE.** It says the missing link is
+  `namespace:acme-silver -> table:acme-silver$dummy` because the script "seeds $features, the HTR lane's
+  output". `$features` is equally ungoverned here — the whole `acme` branch is, so this is not one
+  missing edge.
+- *What is left:* Decide where a project-qualified tier gets its parent link, then wire it. Extending
+  the script is the band-aid the failing test asks for and would leave the producer open; the root-cause
+  shape is the catalog creating the link when the tier is created, which is what it already does for
+  tables it creates and what "GOVERNANCE PRECEDES THE FIRST ROW" means. Note this is NOT [[LH-144]]'s
+  privilege-escalation question: there the table is orphaned and has no creator, here the creator is
+  known at creation time, which is exactly the case `seed_ownership` already handles.
+- *Closes when:* A stage runner writing a project-qualified tier can `can_write_data` its own output
+  without a manual seed, and `tests/e2e-py/test_dummy_lane_e2e.py` passes on the live estate.
+- *Evidence:* `lineage log: ingest_denied sub='service-bronze-to-silver' relation='can_write_data' outputs=['acme-silver$dummy']` · `OpenFGA read: table:acme-silver$dummy, table:acme-silver$features, namespace:acme-silver -> 0 tuples each` · `model.fga type table: can_write_data: writer; writer: ... or writer from parent` · `scripts/seed_medallion_fga.sh (no project arg; links namespace:bronze|silver|gold only)` · `tests/e2e-py/test_dummy_lane_e2e.py:515 (names a signature the script lacks)`
 
 ## PHASE 1 · CROSS-CUTTING
 
