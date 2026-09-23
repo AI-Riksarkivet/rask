@@ -1036,6 +1036,21 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
+- **THE INSTRUMENT IS LIVE AND THE PLANNER IS FLAT SO FAR (2026-09-23, image `main-77dc8049`).** The
+  queue lane's own tick line now carries the whole set on one clock — measured on `rask-maintenance`,
+  the 512Mi PLANNER, which is the pod this row accuses (the 4Gi workers are not it, and reading them
+  instead is how this row looks closed when it is not):
+  `maintenance_tick_enqueued planned=577 lance_session_bytes=27699274
+  lance_session_cap_bytes=214748364 python_blocks=904627 rss_bytes=336756736`.
+  Four consecutive ticks: RSS 259 MiB -> 321 -> 321 -> 323 — a warm-up, then flat at **63% of the
+  512Mi limit**; the Lance session cache holds 27.7 MB against its 214 MB cap and `python_blocks`
+  moves ~0.5% per tick. Zero restarts, zero OOMKills.
+  **THIS IS NOT THE CLOSE, and four ticks must not be read as one.** The single unmet clause is the
+  SOAK — "survives a full day of sweep AND reconcile ticks inside its limit" — and a flat eight
+  minutes is precisely what a slow native leak looks like early. A 24h collector now samples the tick
+  line every 300s (epoch, rss, session, blocks, planned, restarts), reading the SERVICE's own numbers
+  rather than `kubectl top`, so RSS and the Python/Lance series share one clock instead of being
+  joined across two.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: Only the soak: 'survives a full day of sweep AND reconcile ticks inside its limit'. The second
 clause ('what bounds it is named and measured rather than inferred') is met — the cause is named (inline
