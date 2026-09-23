@@ -138,6 +138,10 @@ _WHAT_IS_LEFT = re.compile(r"^- \*What is left:\*(.*?)(?=^- \*|\Z)", re.MULTILIN
 #: Rows whose *What is left* mentions a ruling and are CORRECTLY unmarked, each with a checkable reason.
 _RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE: dict[str, str] = {
     "LH-075": "says the opposite — 'that is startable now and gated by no ruling'; its OTHER arm (the promotion question) is deferred, but the index arm can be picked up today",
+    # The second row to match by DENYING it needs a ruling, which is now two of two — a phrase match
+    # cannot read a negation, and rewording the row to dodge the gate would be worse than recording why
+    # the gate does not apply.
+    "LH-196": "says 'No ruling needed either way; this is test fidelity, not platform policy' — the e2e bypasses a seam production uses, and fixing the TEST needs nobody's permission",
 }
 
 
