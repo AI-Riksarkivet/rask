@@ -890,6 +890,33 @@ FROM opentelemetry_logs` returns exa
 
 **LH-097 · Silver re-materialises managed blob bytes copied from bronze instead of being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · **MED**
+- **THE MEASUREMENT IS SHIPPED AND THE TRADE IS NOT CLOSE (2026-09-23) —
+  `scripts/measure_clone_vs_copy_for_silver.py`, the comparison the row asked for and the one the
+  existing probes did not cover.** On a 300-row corpus with mixed payload sizes (20 MB of managed
+  blobs):
+  ```
+  bronze@1 : total=20,204,911 B  data=203,554  blob=20,000,000
+  copy     : total=20,204,911 B  data=203,554  blob=20,000,000   in 0.096s
+  clone    : total=     2,856 B  data=    278  blob=         0   in 0.003s
+  ```
+  The clone commits **20,202,055 B fewer — 100.0% of the copy — and is ~33x faster**. Silver's carry
+  duplicates the ENTIRE blob payload; a shallow clone of bronze@N commits none of it.
+  **AND IT SERVES THE BYTES, which is the half that makes the saving real rather than a data loss.**
+  Row count is not payload access: a clone answering 300 rows whose blob column read nothing would
+  report an identical 100% saving. Read back through `blobs.read_aligned_table` — the same helper the
+  cascade uses — **300/300 payloads readable and byte-identical to bronze**. The script REFUSES with a
+  non-zero exit if that ever stops holding, so it can report a refutation rather than only a saving.
+  **THE COPY SHAPE IS THE ESTATE'S OWN, not a strawman.** A plain `to_table()` re-write is refused
+  outright (`Blob v2 field 'payload' has descriptor layout`), so the comparison runs through
+  `blobs.read_aligned_table` exactly as `compute.py` does — measuring a shape the medallion does not
+  run would answer a question nobody asked.
+  **lance_docs CONFIRMS THE SHAPE:** `clone_table(..., source_version=..., is_shallow=True)` — "shares
+  the underlying data files with the source table but has its own independent manifest", and pylance's
+  handle is `LanceDataset.shallow_clone(target_path, reference)` where `reference` pins the version.
+  *Still to do:* the clone->source lineage pins, and replacing the carry branch in `compute.py:513`
+  (whose comment "the bytes exist nowhere else, so carrying them IS the only option" is now measurably
+  a false conclusion from a true premise). The cost to weigh is stated by the script and unchanged:
+  a clone pinning bronze@N is a version bronze cannot reclaim while it stands.
 - **NOT BLOCKED — the marker's load-bearing fact is INVERTED.** It argued the trade is blocked because "the sweep already refuses reclaim on shallow-clone/multi-base datasets". It permits them: `packages/service-kit/src/service_kit/lakehouse/features.py:172` is `SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS`, and `:617-623` says why — "Version reclamation and index maintenance touch only the dataset's own root, so a shallow clone's `base_paths` does not endanger them". Reclaim is refused on the SOURCE, not the clone, so the coupling cost this row weighs is not the one the code imposes. Re-read the source-side guard, then the measurement script and the `compute.py` clone shape are ordinary work.
 - *What is left:* Land the clone→source lineage pins. Add a `scripts/` measurement of both shapes — materialised copy vs shallow clone + `add_columns` — reporting bytes and latency on one corpus against the medallion's blob path; the existing `measure_blob_descriptor_carry_forward.py` / `measure_add_columns_on_blob_table.py` cover descriptors and add_columns, not clone-vs-copy. Then make silver a `shallow_clone` of bronze at the pinned version plus `add_columns` in `medallion/services/compute.py`, replacing the copy branch that carries bytes on the ground that they exist nowhere else.
 - *Closes when:* A silver produce commits no managed blob bytes of its own and the measurement script's clone shape is the one `compute.py` runs.
