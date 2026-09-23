@@ -75,9 +75,13 @@ def test_a_denial_is_a_403_that_names_the_missing_tuple() -> None:
     assert resp.status_code == 403
     detail = resp.json()["detail"]
     # The estate's FGA-denial format: <subject> lacks <relation> on <object> — the fix is in the message.
+    # The OBJECT IS READ FROM THE SETTING, not spelled here. It was hardcoded as
+    # `warehouse:lance_catalog` and went stale the moment `fga_root_object` was repointed at
+    # `estate:rask` (LH-055), leaving these two assertions red against a door that was behaving
+    # correctly. Deriving it means the next repoint moves the door and the test together.
     assert "mallory" in detail
     assert "writer" in detail
-    assert "warehouse:lance_catalog" in detail
+    assert FlowsSettings(serve_url="http://serve.invalid:8000").fga_root_object in detail
 
 
 def test_an_allow_proceeds_to_the_run() -> None:
@@ -160,7 +164,7 @@ def test_reading_a_run_is_refused_with_the_same_named_tuple() -> None:
     detail = resp.json()["detail"]
     assert "mallory" in detail
     assert "writer" in detail
-    assert "warehouse:lance_catalog" in detail
+    assert FlowsSettings(serve_url="http://serve.invalid:8000").fga_root_object in detail
     assert "Anno 1723" not in resp.text  # the point of the door: no node output escapes it
 
 
