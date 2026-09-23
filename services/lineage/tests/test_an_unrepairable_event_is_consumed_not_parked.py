@@ -29,7 +29,7 @@ from typing import Any, cast
 import pytest
 from lance_namespace import PermissionDeniedError
 
-from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError
 from lineage.services.consumer import handle_cloud_event
 
 
@@ -73,7 +73,7 @@ async def test_a_MALFORMED_payload_is_acked_not_parked() -> None:
 async def test_an_UNAUTHORED_run_is_acked_not_parked() -> None:
     """36 re-parks of one run across restarts, measured. The author cannot be added after publication."""
 
-    async def refuse_unauthored(_event: RunEvent) -> None:
+    async def refuse_unauthored(_event: RunEvent | DatasetEvent) -> None:
         # The TYPE is what carries the distinction, not the message — the gate raises this one, and a
         # test that hand-rolled a plain `PermissionDeniedError` here would be asserting on a string.
         raise UnauthoredRunError("a bus-delivered run must carry a verified author sub to be authorized")
@@ -92,7 +92,7 @@ async def test_a_PERSON_without_a_grant_still_parks() -> None:
     exactly the silent loss the dead-letter topic exists to prevent.
     """
 
-    async def refuse_person(_event: RunEvent) -> None:
+    async def refuse_person(_event: RunEvent | DatasetEvent) -> None:
         raise PermissionDeniedError("can_write_data required on outputs: acme-ns$t1")
 
     repo = _Repo()
@@ -105,7 +105,7 @@ async def test_a_PERSON_without_a_grant_still_parks() -> None:
 async def test_an_UNAVAILABLE_authorizer_still_retries() -> None:
     """An outage is not a verdict. Acking here would delete provenance for its duration."""
 
-    async def boom(_event: RunEvent) -> None:
+    async def boom(_event: RunEvent | DatasetEvent) -> None:
         raise RuntimeError("authorization service is not available")
 
     repo = _Repo()
@@ -126,7 +126,7 @@ async def test_a_denial_on_an_UNGOVERNED_output_is_acked_not_parked() -> None:
     every one with zero tuples, one of them also 404 from the catalog.
     """
 
-    async def refuse_ungoverned(_event: RunEvent) -> None:
+    async def refuse_ungoverned(_event: RunEvent | DatasetEvent) -> None:
         # The TYPE again, not the message: this refusal and the one below are the same sentence.
         raise UngovernedOutputError("can_write_data required on outputs: e2e-ns$t74eff1b3")
 
@@ -142,10 +142,10 @@ async def test_the_two_refusals_are_told_apart_by_TYPE_not_by_wording() -> None:
     matching on the message would have to give both the same answer, and one of them would be wrong."""
     reason = "can_write_data required on outputs: some-ns$t1"
 
-    async def ungoverned(_event: RunEvent) -> None:
+    async def ungoverned(_event: RunEvent | DatasetEvent) -> None:
         raise UngovernedOutputError(reason)
 
-    async def person(_event: RunEvent) -> None:
+    async def person(_event: RunEvent | DatasetEvent) -> None:
         raise PermissionDeniedError(reason)
 
     assert await handle_cloud_event(cast(Any, _Repo()), _event(), ungoverned) == {"status": "SUCCESS"}

@@ -41,7 +41,7 @@ from openfga_sdk import OpenFgaClient
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
-from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
 from service_kit.governed import fga
 
 
@@ -274,7 +274,7 @@ class _StampedAuthor:
         self.sub = sub
 
 
-async def enforce_bus_authz(event: RunEvent, request: Request, settings: LineageSettings) -> None:
+async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings) -> None:
     """Output-scoped authz for a DAPR-DELIVERED event, as the subject the producer stamped (§ E2).
 
     The HTTP door proves WHO is ingesting (`enforce_author`) and then what they may write
@@ -308,10 +308,10 @@ async def enforce_bus_authz(event: RunEvent, request: Request, settings: Lineage
     except PermissionDeniedError:
         if not await _is_replay(event, payload, request):
             raise
-        log.info("lineage_replay_not_reauthorized", extra={"run": event.run.run_id, "event_type": event.event_type})
+        log.info("lineage_replay_not_reauthorized", extra={"run": event.run_id, "event_type": event.feed_event_type})
 
 
-async def _is_replay(event: RunEvent, payload: dict[str, object], request: Request) -> bool:
+async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
     """Is this the SAME event the feed already holds — a redelivery rather than a new assertion?
 
     THE BUS RE-PRESENTS EVERY RETAINED EVENT ON EVERY RESTART. The consumer is ephemeral with
@@ -331,14 +331,14 @@ async def _is_replay(event: RunEvent, payload: dict[str, object], request: Reque
     field is a new assertion and stays refused.
     """
     repository = getattr(request.app.state, "repository", None)
-    if repository is None or not event.run.run_id:
+    if repository is None or not event.run_id:
         return False
-    stored = await repository.recorded_event(event.run.run_id, event.event_type)
+    stored = await repository.recorded_event(event.run_id, event.feed_event_type)
     return stored is not None and stored == payload
 
 
 async def enforce_output_authz(
-    event: RunEvent, request: Request, settings: LineageSettings, token: Principal | None, *, relations: tuple[str, ...] = _WRITE_RELATIONS
+    event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, token: Principal | None, *, relations: tuple[str, ...] = _WRITE_RELATIONS
 ) -> None:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -380,8 +380,8 @@ async def enforce_output_authz(
     # A run that does not exist yet returns NO outputs and is created freely — refusing that would
     # re-break ingest's START event, whose only input is an external prefix it cannot authorize.
     repository = getattr(request.app.state, "repository", None)
-    if repository is not None and event.run.run_id:
-        prior = await repository.run_output_names(event.run.run_id)
+    if repository is not None and event.run_id:
+        prior = await repository.run_output_names(event.run_id)
         if prior:
             refused = await _denied_objects(client, user=token.sub, relations=relations, names=prior, object_type=object_type)
             # AN UNGOVERNED PRIOR CANNOT GATE, because it cannot be satisfied. A name carrying no
@@ -399,8 +399,8 @@ async def enforce_output_authz(
             # '36944760…' outputs=['e2e_outbox_ds']` — a bare id no catalog object ever carried,
             # recorded by an earlier run, refusing its staged event on every sweep for six days.
             if refused and not await _none_are_governed(client, names=refused, object_type=object_type):
-                log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run.run_id, "outputs": refused})
-                raise PermissionDeniedError(f"{' or '.join(relations)} required to amend run {event.run.run_id}: {', '.join(refused)}")
+                log.info("ingest_run_mutation_denied", extra={"sub": token.sub, "run_id": event.run_id, "outputs": refused})
+                raise PermissionDeniedError(f"{' or '.join(relations)} required to amend run {event.run_id}: {', '.join(refused)}")
     outputs = [d.name for d in event.outputs if d.name]
     if outputs:
         denied = await _denied_objects(client, user=token.sub, relations=relations, names=outputs, object_type=object_type)

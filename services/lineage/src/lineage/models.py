@@ -413,6 +413,36 @@ class DatasetEvent(BaseModel):
         return lance.get("operation") if isinstance(lance, dict) else None
 
     @property
+    def feed_event_type(self) -> str:
+        """The state the durable feed records this change under. A WIRE FIELD IT DOES NOT HAVE.
+
+        The spec defines no ``eventType`` on a ``DatasetEvent`` and the stored event carries none — this
+        is the feed's own projection, and it exists because both of the feed's dedup indexes key on it
+        alongside ``run_id``. COMPLETE because a static fact has no other state: there is no START, no
+        RUNNING, and nothing that can still fail. A non-terminal value here would also drop every DDL
+        change out of the consumers that filter on terminal states, which today includes the one that
+        decides whether a person is told.
+        """
+        return "COMPLETE"
+
+    @property
+    def is_success(self) -> bool:
+        """Always true: a static metadata change is a fact, not an attempt that could still fail.
+
+        Answered so the column-inventory seeding — which a table create is the only source of — runs on
+        this event exactly as it does on a run's, rather than needing a second copy gated differently.
+        """
+        return True
+
+    def output_version(self, name: str) -> str | None:
+        """The Lance version this change produced for ``name``, from the standard ``version`` facet."""
+        if name != self.dataset.name:
+            return None
+        facet = self.dataset.facet("version")
+        version = facet.get("datasetVersion") if facet else None
+        return str(version) if version is not None else None
+
+    @property
     def author(self) -> str | None:
         """Who made the change — rask's ``author`` dataset facet, else the standard ``ownership`` facet.
 
@@ -505,6 +535,11 @@ class RunEvent(BaseModel):
     job: Job
     inputs: list[Dataset] = Field(default_factory=list)
     outputs: list[Dataset] = Field(default_factory=list)
+
+    @property
+    def feed_event_type(self) -> str:
+        """The state the durable feed records this event under — for a run, its own wire state."""
+        return self.event_type
 
     @property
     def run_id(self) -> str | None:

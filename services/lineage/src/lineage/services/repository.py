@@ -33,7 +33,7 @@ from psycopg_pool import AsyncConnectionPool
 
 from lineage.core.age import fetch, run_cypher
 from lineage.core.source_uri import unresolvable_sources
-from lineage.models import Dataset, RunEvent, vertex_name_for
+from lineage.models import Dataset, DatasetEvent, RunEvent, vertex_name_for
 from lineage.schemas import (
     ColumnEdge,
     ColumnGraph,
@@ -65,7 +65,7 @@ from lineage.schemas import (
 from lineage.services import cypher as cy
 from lineage.services import postgres as pg
 from service_kit.lakehouse.schema import SchemaFields
-from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
+from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for, static_event_id
 
 
 log = logging.getLogger(__name__)
@@ -418,6 +418,60 @@ class LineageRepository:
             # public.lineage_events) and two concurrent ingests cannot form a cycle.
             await self._insert_feed_row(conn, **feed_columns(event))
 
+    async def ingest_dataset_event(self, event: DatasetEvent) -> None:
+        """Upsert one static metadata change — the dataset, who originated it, its columns, and the
+        durable feed row — in ONE transaction, and mint no Run and no Job.
+
+        NOT MINTING THEM IS THE POINT ([[LIN-004]]). `build_write_event` wraps every catalog operation
+        in a synthetic run, so a DDL change leaves a `(:Run)` that never executed and a `(:Job)` that
+        never ran, named per-table-per-operation — a population that grows with the table count rather
+        than with work. The `/jobs` fold makes a Job's output set its access handle, so each phantom is
+        an access-control object for an operation nobody performed.
+
+        THE FEED ROW STILL CARRIES AN IDENTITY, derived rather than absent. Both dedup indexes key on
+        `run_id` and SQL NULL never equals NULL, so a row carrying none is appended again on every
+        at-least-once redelivery. `static_event_id` derives one from the event, and the notifications
+        plane derives the SAME id from its own copy — which is what makes one change land one pointer
+        across two lanes. The stored `event` stays spec-correct and carries no `eventType` at all; the
+        feed's own column reads COMPLETE because a static fact has no other state, and a non-terminal
+        value there would drop DDL out of every consumer that filters on terminal states.
+
+        No `job` on the row, because there was none — the column is nullable and an invented name would
+        be the phantom again, one layer down.
+        """
+        async with self._pool.connection() as conn, conn.transaction():
+            await self._merge_dataset(conn, event.dataset)
+            await self._ingest_columns(conn, event)
+            # A table-origination event carries the verified author → the same first-class
+            # `(:User)-[:CREATED]->(:Dataset)` edge a run-shaped create recorded, on the same ops.
+            if event.operation in _CREATE_OPS and event.author:
+                await run_cypher(conn, self._graph, cy.MERGE_USER, {"name": event.author})
+                await run_cypher(
+                    conn,
+                    self._graph,
+                    cy.LINK_CREATED,
+                    {"name": event.author, "ds": event.dataset.name, "tm": event.event_time},
+                )
+            # LAST, inside the same transaction, and in the same lock order as `ingest_event`: the AGE
+            # label tables, then public.lineage_events. Two concurrent ingests cannot form a cycle.
+            await self._insert_feed_row(
+                conn,
+                run_id=static_event_id(
+                    producer=event.producer or "",
+                    namespace=event.dataset.namespace,
+                    name=event.dataset.name,
+                    operation=event.operation or "",
+                    event_time=event.event_time,
+                ),
+                event_type=event.feed_event_type,
+                event_time=event.event_time,
+                job=None,
+                author=event.author,
+                inputs=[],
+                outputs=[event.dataset.name],
+                event=event.model_dump(by_alias=True),
+            )
+
     async def _schema_is_current(self, conn: psycopg.AsyncConnection, name: str, version: str) -> bool:
         """True when ``version`` is at least the newest WROTE version the graph records for ``name``
         — the recency gate that makes the column-inventory seeding AND prune idempotent under
@@ -455,7 +509,7 @@ class LineageRepository:
             merged = list(dict.fromkeys(existing + sanitized))
             await run_cypher(conn, self._graph, cy.SET_DATASET_TAGS, {"name": ds.vertex_name, "tags": ",".join(merged)})
 
-    async def _ingest_columns(self, conn: psycopg.AsyncConnection, event: RunEvent) -> None:
+    async def _ingest_columns(self, conn: psycopg.AsyncConnection, event: RunEvent | DatasetEvent) -> None:
         """Materialise column nodes + field-to-field edges from each output's schema/columnLineage (#24).
 
         Caller guarantees ``event.is_success`` (a failed run asserts no data). Per output dataset: (1) seed
@@ -529,7 +583,7 @@ class LineageRepository:
                         "st": edge.subtype,
                         "mask": edge.masking,
                         "desc": edge.description,
-                        "rid": event.run.run_id,
+                        "rid": event.run_id or "",
                         "ver": version,
                     },
                 )

@@ -24,7 +24,7 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from lineage.api.fga_deps import relations_for_operation
-from lineage.models import RunEvent
+from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 
 
@@ -91,7 +91,7 @@ def test_a_REFUSED_event_is_DROPPED_never_retried() -> None:
     operator reads it as infrastructure rather than policy."""
     repo = _Repo()
 
-    async def deny(_: RunEvent) -> None:
+    async def deny(_: RunEvent | DatasetEvent) -> None:
         raise PermissionDeniedError("can_write_data required on outputs: bronze$pages")
 
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": _event().model_dump(by_alias=True)}, deny))
@@ -105,7 +105,7 @@ def test_an_AUTHZ_OUTAGE_retries_and_never_drops() -> None:
     exact failure this whole durable lane exists to prevent."""
     repo = _Repo()
 
-    async def unavailable(_: RunEvent) -> None:
+    async def unavailable(_: RunEvent | DatasetEvent) -> None:
         raise RuntimeError("authorization service is not available")
 
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": _event().model_dump(by_alias=True)}, unavailable))
@@ -117,7 +117,7 @@ def test_an_AUTHORIZED_event_still_lands() -> None:
     """The guard is worthless if all it proves is that a raising callback raises."""
     repo = _Repo()
 
-    async def allow(_: RunEvent) -> None:
+    async def allow(_: RunEvent | DatasetEvent) -> None:
         return None
 
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": _event().model_dump(by_alias=True)}, allow))

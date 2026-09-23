@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Request
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import get_settings
 from lineage.core.metrics import Door, Outcome, record_outcome
-from lineage.models import RunEvent, author_sub_from_payload, run_id_from_payload
+from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload, run_id_from_payload
 from lineage.services.consumer import handle_cloud_event
 from service_kit.governed.dapr_auth import require_dapr_token
 
@@ -49,7 +49,7 @@ async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated
     principal to resolve before the body is parsed, and the parse is the consumer's (it owns the
     malformed-payload ack contract)."""
 
-    async def authorize(parsed: RunEvent) -> None:
+    async def authorize(parsed: RunEvent | DatasetEvent) -> None:
         await enforce_bus_authz(parsed, request, get_settings())
 
     return await handle_cloud_event(request.app.state.repository, event, authorize)

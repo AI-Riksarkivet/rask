@@ -32,7 +32,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError
 from lineage.services.repository import LineageRepository
 
 
@@ -44,7 +44,25 @@ _RETRY = {"status": "RETRY"}
 _DROP = {"status": "DROP"}
 
 
-async def handle_cloud_event(repository: LineageRepository, body: Any, authorize: Callable[[RunEvent], Awaitable[None]] | None = None) -> dict[str, str]:
+def _parse(data: object) -> RunEvent | DatasetEvent:
+    """One payload as whichever OpenLineage event it is — a run, or a change no job performed.
+
+    DISCRIMINATED ON `dataset` WITHOUT A `run`, which is what the spec's own shape gives: a
+    `DatasetEvent` requires `dataset` and forbids `run` and `job` outright, so the pairing is not an
+    ambiguous case to resolve but a malformed event. `DatasetEvent` refuses it explicitly and this
+    lands in the malformed arm below — the same answer a payload that is neither gets.
+
+    The order matters only for the malformed case: anything carrying `run` goes to `RunEvent`, so a
+    real run cannot be diverted here by a stray `dataset` key.
+    """
+    if isinstance(data, dict) and "dataset" in data and "run" not in data:
+        return DatasetEvent.model_validate(data)
+    return RunEvent.model_validate(data)
+
+
+async def handle_cloud_event(
+    repository: LineageRepository, body: Any, authorize: Callable[[RunEvent | DatasetEvent], Awaitable[None]] | None = None
+) -> dict[str, str]:
     """Ingest one Dapr-delivered CloudEvent. ``body["data"]`` is the OpenLineage event (Dapr parses it
     since we publish with ``datacontenttype=application/json``). ``body`` is an untrusted external
     envelope, hence ``Any`` + the ``isinstance`` guard. Returns the Dapr ack status.
@@ -87,7 +105,7 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
     """
     data = body.get("data") if isinstance(body, dict) else None
     try:
-        event = RunEvent.model_validate(data)
+        event: RunEvent | DatasetEvent = _parse(data)
     except (ValidationError, TypeError, ValueError) as exc:
         log.error("lineage_event_invalid", extra={"error": str(exc)})
         record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
@@ -103,7 +121,7 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
             # UNREPAIRABLE, so it is consumed rather than parked — see `UnauthoredRunError`. Measured on
             # the deployed estate 2026-09-18: 37 of 44 refusals in one hour, all one run id, one burst
             # per roll, each appending a NEW dead-letter message about an event the DLQ already held.
-            log.warning("lineage_event_unauthored", extra={"run": event.run.run_id, "reason": str(exc)})
+            log.warning("lineage_event_unauthored", extra={"run": event.run_id, "reason": str(exc)})
             record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
             return _SUCCESS
         except UngovernedOutputError as exc:
@@ -111,24 +129,31 @@ async def handle_cloud_event(repository: LineageRepository, body: Any, authorize
             # output this names carries zero tuples. Measured on the deployed estate 2026-09-19: all 7
             # parks in a six-hour window were this, four distinct outputs, none with a tuple and one
             # answering 404 from the catalog. Parked, they came back on every roll forever.
-            log.warning("lineage_event_ungoverned_output", extra={"run": event.run.run_id, "reason": str(exc)})
+            log.warning("lineage_event_ungoverned_output", extra={"run": event.run_id, "reason": str(exc)})
             record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
             return _SUCCESS
         except PermissionDeniedError as exc:
-            log.warning("lineage_event_unauthorized", extra={"run": event.run.run_id, "reason": str(exc)})
+            log.warning("lineage_event_unauthorized", extra={"run": event.run_id, "reason": str(exc)})
             record_outcome(Outcome.REFUSED, door=Door.SUBSCRIBER)
             return _DROP
         except Exception as exc:
-            log.warning("lineage_authz_unavailable", extra={"run": event.run.run_id, "error": str(exc)})
+            log.warning("lineage_authz_unavailable", extra={"run": event.run_id, "error": str(exc)})
             record_outcome(Outcome.RETRIED, door=Door.SUBSCRIBER)
             return _RETRY
     started = time.perf_counter()
     try:
         # Graph and durable feed in one transaction — a failure here retries BOTH, which is what makes
         # /events a complete projection rather than a subset (see `ingest_event`).
-        await repository.ingest_event(event)
+        #
+        # TWO DOORS, because a static metadata change has no run and no job to record. Routing it
+        # through the run door is what mints a `(:Job)` for an operation nobody performed, one per
+        # table per operation — and the `/jobs` fold makes that Job's output set an access handle.
+        if isinstance(event, DatasetEvent):
+            await repository.ingest_dataset_event(event)
+        else:
+            await repository.ingest_event(event)
     except Exception as exc:
-        log.warning("lineage_ingest_failed", extra={"run": event.run.run_id, "error": str(exc)})
+        log.warning("lineage_ingest_failed", extra={"run": event.run_id, "error": str(exc)})
         record_outcome(Outcome.RETRIED, door=Door.SUBSCRIBER)
         return _RETRY
     record_ingest_duration(time.perf_counter() - started)
