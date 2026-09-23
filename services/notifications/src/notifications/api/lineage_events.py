@@ -17,9 +17,10 @@ parses unchanged, and the topic's `.v1` is the promise that the fields below kee
 
 from typing import Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from notifications.models import NotificationDelivery, NotificationReason, UtcDatetime, notification_id
+from service_kit.openlineage import static_event_id
 
 
 #: The states a person needs to be told about. RESOLVED as a product decision, not a technical
@@ -38,6 +39,47 @@ AUTHOR_FACET: Final = "author"
 
 #: The lakehouse run facet carrying the producer's OWN run id.
 LANCE_FACET: Final = "lance"
+
+
+def _as_run_event(raw: dict[str, Any]) -> dict[str, Any]:
+    """One ``DatasetEvent`` in the shape the rest of this module reads. Three fields are synthesised.
+
+    THE FACETS MOVE, THEY ARE NOT INVENTED. A static event's ``author``, ``lance`` and ownership facets
+    ride the DATASET because there is no run to hang them on, so the targeting reads — `author_subject`,
+    `originator_subject`, `project_id` — find exactly what they already look for, under the same rules.
+    Nothing here relaxes the verified-``sub`` requirement.
+
+    THE RUN ID IS DERIVED FROM THE EVENT, by the one function lineage's feed writer also uses. This lane
+    and the feed lane see different copies of the same change and must agree on its identity, or one
+    change puts two rows in an inbox.
+
+    ``COMPLETE`` because a static metadata change is a fact that has already happened: there is no
+    START, no RUNNING and nothing that could still fail. Any other value would make `is_terminal` false
+    and silence a change that notifies a person today — measured on the live feed 2026-09-23, all four
+    DDL events project to a deliverable pointer.
+    """
+    dataset = raw.get("dataset")
+    if not isinstance(dataset, dict):
+        return raw
+    facets = dataset.get("facets")
+    facets = facets if isinstance(facets, dict) else {}
+    lance = facets.get(LANCE_FACET)
+    event_time = str(raw.get("eventTime") or "")
+    return {
+        "eventType": "COMPLETE",
+        "eventTime": event_time,
+        "run": {
+            "runId": static_event_id(
+                producer=str(raw.get("producer") or ""),
+                namespace=str(dataset.get("namespace") or ""),
+                name=str(dataset.get("name") or ""),
+                operation=str(lance.get("operation") or "") if isinstance(lance, dict) else "",
+                event_time=event_time,
+            ),
+            "facets": facets,
+        },
+        "outputs": [{"name": dataset.get("name") or ""}],
+    }
 
 
 class LineageDataset(BaseModel):
@@ -63,7 +105,14 @@ class LineageRun(BaseModel):
 
 
 class LineageRunEvent(BaseModel):
-    """The subset of an OpenLineage run event this plane reads."""
+    """The subset of an OpenLineage event this plane reads — a run, or a change no job performed.
+
+    A ``DatasetEvent`` carries no ``run`` and no ``eventType`` (the spec forbids the first and does not
+    define the second), which are the two fields below. It is NORMALISED onto this shape rather than
+    given a parallel model, because everything after the parse — the terminal test, the author and
+    tenant reads, the delivery — is identical for both and a second projection is a second place for
+    the targeting rules to drift. What is synthesised is named in :func:`_as_run_event`.
+    """
 
     model_config = ConfigDict(extra="ignore", frozen=True, populate_by_name=True)
 
@@ -74,6 +123,11 @@ class LineageRunEvent(BaseModel):
     event_time: UtcDatetime = Field(alias="eventTime")
     run: LineageRun
     outputs: list[LineageDataset] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_a_static_metadata_event(cls, raw: object) -> object:
+        return _as_run_event(raw) if isinstance(raw, dict) and "dataset" in raw and "run" not in raw else raw
 
 
 class Notifiable(BaseModel):

@@ -280,3 +280,32 @@ def dataset_type_facet(producer: str, *, external: bool) -> dict[str, object]:
         "_schemaURL": DATASET_TYPE_FACET_SCHEMA_URL,
         "datasetType": DATASET_TYPE_FILE if external else DATASET_TYPE_TABLE,
     }
+
+
+#: The UUID namespace for a static metadata event's derived identity. A fixed literal rather than a
+#: hash of anything, because it must be byte-identical in every service that derives one — a namespace
+#: that varies is two namespaces.
+_STATIC_EVENT_NAMESPACE: Final = uuid.UUID("6f0d9bb2-3c47-5f1a-9b8e-4a2d1c7e5f30")
+
+#: OpenLineage's spec URL for a `DatasetEvent` — a dataset change that no job performed.
+DATASET_EVENT_SCHEMA_URL: Final = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/DatasetEvent"
+
+
+def static_event_id(*, producer: str, namespace: str, name: str, operation: str, event_time: str) -> str:
+    """The identity of a ``DatasetEvent`` — derived from its content, never minted.
+
+    A static metadata event carries no run id, and two things downstream need one anyway: the durable
+    feed dedups on ``(run_id, event_type, event_time)`` where SQL NULL never equals NULL, so a run-less
+    row would be appended again on every at-least-once redelivery; and the notifications plane keys a
+    pointer by ``${run_id}@${state}``, so a minted id would put two rows in an inbox for one change.
+
+    DERIVED HERE BECAUSE IT HAS TWO INDEPENDENT READERS SEEING DIFFERENT COPIES. The notifications bus
+    lane reads the catalog's raw publish while its feed lane reads what lineage stored, and the two
+    must agree exactly or one change lands twice. A shared function is the only thing that makes that
+    true by construction rather than by two implementations happening to match.
+
+    ``event_time`` IS PART OF THE IDENTITY, and both directions matter: a redelivery carries the same
+    instant and so collapses onto one id, while a genuine repeat — a table dropped and created again —
+    carries a different one and stays a second fact rather than being silently swallowed by the first.
+    """
+    return str(uuid.uuid5(_STATIC_EVENT_NAMESPACE, "|".join((producer, namespace, name, operation, event_time))))
