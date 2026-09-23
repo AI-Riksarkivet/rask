@@ -242,6 +242,21 @@ finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
 
+**AND THE DATA THE RULING IS ABOUT IS 159 KiB — measured object by object 2026-09-23, which dissolves
+this row's blocker.** The decision was framed as data disposition: *"roughly 524 rows of unregistered,
+ungoverned medallion data, to reap or to register."* Every one of the 75 ungoverned names was listed
+against the object store as the MinIO root identity:
+- **38 answer `NoSuchBucket`** — the whole warehouse bucket is gone (e2e teardown took it), so there is
+  nothing to reap or register.
+- **25 have an existing bucket and a prefix holding ZERO objects.**
+- **11 hold bytes, totalling 159.4 KiB.** Eight are `models$e2etrain*` at 2.9 KiB each; one is
+  `acme-bronze$stockprobe_4694c99e` (6.0 KiB); one is `lakehouse-bronze$events` (1.8 KiB). The only
+  one that is not obviously residue by name is **`models$churn` at 128.8 KiB in 33 objects** — 81% of
+  the whole population by size.
+- **So 63 of 75 are already gone and the remainder is one non-trivial table.** There is no 524-row
+  disposition to rule on. What is left of this row is the CHART COLLAPSE — one home per tier — which
+  is code, not a decision, plus a single yes/no on `models$churn`.
+
 **THE `ungoverned=75` POPULATION IS NOT CATALOG TABLES, AND THAT CORRECTS [[LH-164]]'s SHAPE AND TWO
 CLAIMS I MADE ABOUT IT TODAY — measured 2026-09-23.** The sweep's `ungoverned` category reads as "a
 catalog table carrying no tuples", and the obvious dispositions are to reap the bytes or register the
