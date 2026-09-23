@@ -2065,7 +2065,23 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
   on the image's own USER and `runAsNonRoot` without a uid fails admission on busybox. Read back off the
   deployed Deployment: `readOnlyRootFilesystem: true`, `runAsUser: 65532`, caps dropped — and the pod
   reached 2/2 Running, so the init COMPLETED under those constraints. 0 non-Running pods of 83.
-- **17 LEFT ON THE RATCHET**, all third-party images the chart templates itself (postgres, minio,
+- **SIX JOBS AND TWO INIT CONTAINERS HARDENED AND OBSERVED COMPLETING (2026-09-23).** `openbao-seed`,
+  `openfga-migrate`, `minio-scoped-users` and `dapr-inject-sweep` all ran **Complete 1/1** under the
+  baseline — the `bao`, `openfga` and `mc` CLIs each needed `HOME` on the tmp emptyDir, because
+  `readOnlyRootFilesystem` turns a write under `$HOME` into a failure.
+- **THE NATS JOB BROKE, AND THE BISECTION IS THE RECORD.** It sat 25 minutes in a `wait-nats` loop
+  while NATS had been up 47 days, because the loop hides its error with `2>&1`. The first control was
+  WRONG — the nats-box Deployment runs 0.19.7 against the Job's 0.14.5, so it compared two CLIs.
+  Controlled: 0.14.5 unhardened succeeds; `readOnlyRootFilesystem` alone succeeds; `runAsNonRoot` /
+  `runAsUser` fails as uid **65532, 1000 AND 65534**, on 0.14.5 and 0.19.7 alike; `HOME` is not the
+  cause. So the container takes the other four keys via `lance.rootSecurityContext` and is listed for
+  the one it cannot. Before/after on the cluster: the rootless version `Running 0/1` at 87 minutes, the
+  root-tolerant one **Complete 1/1 in 13 seconds**, having verified its streams and consumers.
+- **THE RATCHET NAMES KEYS, NOT CONTAINERS**, which is what lets that partial count. Converting it
+  immediately found two entries excusing more than they should — minio already renders
+  `allowPrivilegeEscalation` and `readOnlyRootFilesystem`, the collector already renders
+  `runAsNonRoot`.
+- **EIGHT LEFT ON THE RATCHET**, all third-party images the chart templates itself (postgres, minio,
   openbao, dex, the mc/nats/kubectl CLIs). `readOnlyRootFilesystem` is the key that breaks them — each
   writes under its own root unless given a mount — so each comes off with its pod observed running.
 - *What is left:* `securityContext` is repeated per template rather than defaulted chart-wide, so coverage drifts silently and the two workloads that most need it — the secret store and the IdP — render without it. Hoist the baseline to one chart-wide default that a template opts OUT of with a stated reason, and gate the render.
