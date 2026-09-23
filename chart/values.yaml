@@ -3040,6 +3040,30 @@ openfga:
     # not a side effect of a version bump.
     applyMigrations: false
     waitForMigrations: false
+    # THE SHARE OF A SHARED SERVER, declared rather than inherited ([[XC-016]]). `rask-age` serves the
+    # lineage graph AND openfga AND Dapr's state store from one Postgres running the stock
+    # `max_connections=100` — the chart overrides nothing — and none of the three consumers bounded its
+    # own pool, so the estate's budget was three driver defaults adding up.
+    #
+    # MEASURED 2026-09-23, twelve samples over 2.5 minutes spanning a maintenance sweep tick: openfga
+    # held **28 connections, all idle, 0 active, every sample**; estate-wide 49 of 100 (openfga 28,
+    # daprstate 10, lineage 5, admin 1). So there is no contention here, and RAISING the pool — which
+    # this row originally proposed — would buy nothing. What is real is that one component holds 28% of
+    # a shared budget because pgxpool's default ceiling is 30 and nobody chose it.
+    #
+    # 30 keeps the ceiling that has never been approached, now as a decision.
+    #
+    # `maxIdleConns: 10` DOES NOT REDUCE WHAT IS HELD, measured after deploying it: the pod carries
+    # both variables and the pool sits at 30 idle, stable across six samples over 90s — it grew from
+    # 28 to its new explicit ceiling rather than shrinking to 10. So this pair bounds the pool and does
+    # not return budget; reaping idle connections needs `connMaxIdleTime`, which the 0.3.12 schema also
+    # exposes and which nothing here has measured. It is left unset rather than guessed at.
+    #
+    # `tests/unit/test_the_shared_postgres_budget_is_declared.py` holds the arithmetic — this ceiling
+    # plus what the others hold must fit inside 75% of the server — so a later "just raise it" is
+    # refused by a number rather than by memory.
+    maxOpenConns: 30
+    maxIdleConns: 10
 
 # --- Apache AGE Postgres (first-party template) — the lineage graph store AND openfga's datastore --
 # The ONLY relational store post-P7a (the rask batches/chunks CNPG Cluster is gone): CNPG's stock image
