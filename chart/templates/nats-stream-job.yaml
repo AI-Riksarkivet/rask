@@ -45,7 +45,7 @@ spec:
       containers:
         - name: nats
           image: natsio/nats-box:0.14.5
-          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
+          {{- include "lance.rootSecurityContext" . | nindent 10 }}
           {{- /* the nats CLI writes its context under $HOME, which a read-only rootfs turns into a failure. HOME on the tmp
                  emptyDir is the pair every app container in this chart already uses. */}}
           env:

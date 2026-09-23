@@ -1120,6 +1120,28 @@ Gating the hardening behind a flag postpones exactly the work that makes the fla
 `sh -c "until nc -z host port; do sleep 3; done"` and write nothing at all.
 
 Usage: {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }} */}}
+{{/* The baseline MINUS the non-root pair, for an image whose tool does not work as any other uid.
+
+MEASURED 2026-09-23 before this existed, because "it needs root" is the easiest claim to accept without
+checking: the `nats` CLI answers `could not load schema` for every non-root uid tried — 65532, 1000 and
+65534 — on nats-box 0.14.5 AND 0.19.7, while the same command from the same image as root succeeds.
+Bisected key by key: `readOnlyRootFilesystem` alone is fine; `runAsNonRoot`/`runAsUser` is what breaks
+it. So this drops exactly the pair that fails and keeps the four that do not.
+
+NOT A GENERAL ESCAPE HATCH. A container using this is still named in the hardening ratchet for the two
+keys it lacks, so it cannot quietly stay here once the image can run rootless.
+
+Usage: {{- include "lance.rootSecurityContext" . | nindent 10 }} */}}
+{{- define "lance.rootSecurityContext" -}}
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+{{- end -}}
+
 {{- define "lance.rootlessSecurityContext" -}}
 securityContext:
   runAsNonRoot: true

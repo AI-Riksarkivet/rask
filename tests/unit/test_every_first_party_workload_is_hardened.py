@@ -119,18 +119,27 @@ def test_the_walk_sees_the_chart() -> None:
 #: that breaks things: each writes somewhere under its own root unless given a mount. Applying the
 #: baseline blind would trade a hardening gap for a crash loop, so each comes off this list with its pod
 #: observed running, which is a per-workload piece of work rather than one edit.
-_UNHARDENED_TODAY: dict[str, tuple[str, ...]] = {
-    # Ours to fix, and first in line: short-lived Jobs and init containers running our own or a CLI image.
-    "Job/minio-mkbucket/mc": ("containers",),
-    # Stateful third-party images: each needs a writable path before the baseline can land.
-    "StatefulSet/age/postgres": ("containers",),
-    "StatefulSet/minio/minio": ("containers",),
-    "Deployment/openbao/openbao": ("containers",),
-    "Deployment/dex/dex": ("containers",),
-    # Infra we template, gated behind `security.infraContexts.enabled` (values.yaml defaults it OFF and
-    # stages the flip explicitly) — a sequenced decision, not an oversight.
-    "Deployment/otel-collector/otel-collector": ("containers",),
-    "Deployment/dapr-dashboard/dashboard": ("containers",),
+#: `Kind/workload/container` -> {slot: the baseline keys it may still be missing}. NAMING THE KEYS
+#: rather than the container is what lets a PARTIAL hardening count: the nats CLI answers
+#: `could not load schema` as every non-root uid tried (65532, 1000, 65534; nats-box 0.14.5 and
+#: 0.19.7), so that container takes the other four keys and stays listed for exactly the two it cannot.
+#: An all-or-nothing list would have recorded it as untouched and hidden the four that landed.
+_UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
+    # Long-lived third-party servers the chart templates itself. `readOnlyRootFilesystem` is the key
+    # that breaks each: every one writes under its own root unless given a mount, so each comes off
+    # with its pod observed running rather than by adding a line here.
+    "StatefulSet/age/postgres": {"containers": BASELINE},
+    "Deployment/openbao/openbao": {"containers": BASELINE},
+    "Deployment/dex/dex": {"containers": BASELINE},
+    "Deployment/dapr-dashboard/dashboard": {"containers": BASELINE},
+    "Job/minio-mkbucket/mc": {"containers": BASELINE},
+    # PARTIAL, and the numbers are why the ratchet names keys rather than containers.
+    "StatefulSet/minio/minio": {"containers": ("runAsNonRoot", "seccompProfile")},
+    "Deployment/otel-collector/otel-collector": {"containers": ("seccompProfile", "allowPrivilegeEscalation", "readOnlyRootFilesystem")},
+    # The nats CLI answers `could not load schema` as EVERY non-root uid tried — 65532, 1000 and 65534,
+    # on nats-box 0.14.5 and 0.19.7 — while the same command as root succeeds. Bisected key by key:
+    # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.
+    "Job/nats-stream/nats": {"containers": ("runAsNonRoot",)},
 }
 
 
@@ -157,8 +166,10 @@ def test_no_NEW_first_party_container_renders_without_the_baseline(slot: str) ->
             if not missing:
                 continue
             key = _key(kind, name, container["name"])
-            if tag not in _UNHARDENED_TODAY.get(key, ()):
-                unexpected[key] = missing
+            allowed = _UNHARDENED_TODAY.get(key, {}).get(tag, ())
+            surprising = [m for m in missing if m not in allowed]
+            if surprising:
+                unexpected[key] = surprising
 
     assert not unexpected, (
         f"NEW first-party {slot} rendering without the baseline: {unexpected}. "
@@ -168,12 +179,19 @@ def test_no_NEW_first_party_container_renders_without_the_baseline(slot: str) ->
 
 def test_the_ratchet_names_nothing_that_is_already_hardened() -> None:
     """A stale entry is how a ratchet stops ratcheting: it would excuse a REGRESSION on that container."""
-    rendered: dict[str, set[str]] = {}
+    rendered: dict[str, dict[str, set[str]]] = {}
     for kind, name, pod in _first_party_workloads():
         for slot, tag in (("containers", "containers"), ("initContainers", "init")):
             for container in pod.get(slot) or []:
-                if [key for key in BASELINE if key not in _effective(pod, container)]:
-                    rendered.setdefault(_key(kind, name, container["name"]), set()).add(tag)
+                missing = {key for key in BASELINE if key not in _effective(pod, container)}
+                if missing:
+                    rendered.setdefault(_key(kind, name, container["name"]), {})[tag] = missing
 
-    stale = {key: sorted(tags) for key, tags in _UNHARDENED_TODAY.items() if set(tags) - rendered.get(key, set())}
-    assert not stale, f"the ratchet names containers that now render the baseline — remove them: {stale}"
+    stale = {}
+    for key, by_slot in _UNHARDENED_TODAY.items():
+        for slot, keys in by_slot.items():
+            still_missing = rendered.get(key, {}).get(slot, set())
+            excused_but_present = sorted(set(keys) - still_missing)
+            if excused_but_present:
+                stale[f"{key}[{slot}]"] = excused_but_present
+    assert not stale, f"the ratchet excuses keys these containers now render — narrow or remove them: {stale}"
