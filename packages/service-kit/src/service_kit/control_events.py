@@ -105,6 +105,17 @@ ControlAction = Literal[
     # which is exactly what the notifications plane's `NAMED_ACTIONS` targets. `task_unassigned` is the
     # sharper half — an annotator holding a draft against a task that is no longer theirs discovers it by
     # losing the work, the same way a revoked grant is discovered by a 403 mid-task.
+    # THE REF PLANE ([[LH-056]]), and UNTARGETED for the reason the rule states: a control event is
+    # targeted when it changes what a specific person may do or must do, not when it changes an object.
+    # Creating or deleting a branch, and creating, moving or deleting a tag, change an OBJECT -- nobody's
+    # standing moves -- so they belong with the other object-lifecycle members and stay OUT of
+    # notifications' `NAMED_ACTIONS`. `table_published` is the sibling that is NOT here, and the
+    # difference is instructive: a publication stamps an `originator`, so it names somebody.
+    "table_branch_created",
+    "table_branch_deleted",
+    "table_tag_created",
+    "table_tag_updated",
+    "table_tag_deleted",
     "task_assigned",
     "task_unassigned",
     # THE OTHER DEPARTURE EDGES. `TASK_EDGES` has twelve transitions that take a task out of somebody's

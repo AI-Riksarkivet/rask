@@ -70,6 +70,13 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
     {
         # A gate declaration changes an OBJECT's configuration, not a person's standing — the same
         # shape as `transform_*` below. Nobody's access moved, so there is nobody to tell.
+        # The ref plane ([[LH-056]]): a branch or tag moved, which is an OBJECT changing, not a
+        # person's standing. Same family as the namespace lifecycle below.
+        "table_branch_created",
+        "table_branch_deleted",
+        "table_tag_created",
+        "table_tag_updated",
+        "table_tag_deleted",
         "gate_deleted",
         "gate_set",
         "namespace_created",

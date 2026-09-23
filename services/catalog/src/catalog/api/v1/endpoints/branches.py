@@ -19,9 +19,12 @@ from lance_namespace import (
     ListTableBranchesResponse,
 )
 
-from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
+from service_kit.control_emit import emit_control
+from service_kit.governed import fga
 
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -50,14 +53,66 @@ def list_table_branches(
 
 
 @router.post("/{id}/branches/create", response_model_exclude_none=True)
-def create_table_branch(id: str, body: CreateTableBranchRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> CreateTableBranchResponse:
-    """Create a branch from main (or a source branch/version) — wraps pylance ``create_branch``."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
-    return dataplane.create_branch(ns, so, body)
+async def create_table_branch(
+    id: str,
+    body: CreateTableBranchRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    token: CurrentToken = None,
+) -> CreateTableBranchResponse:
+    """Create a branch from main (or a source branch/version) — wraps pylance ``create_branch``.
+
+    ANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED. The rule the estate codified is that a
+    control event is targeted when it changes what a specific PERSON may do or must do, not when it
+    changes an object; a branch appearing changes an object, so it joins the 31 members that name
+    nobody and stays out of notifications' `NAMED_ACTIONS`. A console invalidating a branch list is
+    the consumer this serves.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    response = dataplane.create_branch(ns, so, body)
+    # AFTER the data-plane call, never before — the rule `namespaces.py` states: a change that did not
+    # happen is never announced, so a refused create emits nothing.
+    await emit_control(
+        control,
+        action="table_branch_created",
+        object_type="table",
+        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. The source ref
+        # rides along because "branched from what" is the question a consumer asks next, and it is only
+        # answerable from the request.
+        extra={"branch": body.name, "from_branch": body.from_branch, "from_version": body.from_version},
+    )
+    return response
 
 
 @router.post("/{id}/branches/delete", response_model_exclude_none=True)
-def delete_table_branch(id: str, body: DeleteTableBranchRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> DeleteTableBranchResponse:
-    """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
-    return dataplane.delete_branch(ns, so, body)
+async def delete_table_branch(
+    id: str,
+    body: DeleteTableBranchRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    token: CurrentToken = None,
+) -> DeleteTableBranchResponse:
+    """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
+
+    The disappearance is the half worth announcing: a console holding a branch list has no other way
+    to learn the branch is gone, and a reader that polls discovers it by a failing read.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    response = dataplane.delete_branch(ns, so, body)
+    await emit_control(
+        control,
+        action="table_branch_deleted",
+        object_type="table",
+        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        extra={"branch": body.name},
+    )
+    return response

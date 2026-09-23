@@ -16,9 +16,12 @@ from lance_namespace import (
     UpdateTableTagResponse,
 )
 
-from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
+from service_kit.control_emit import emit_control
+from service_kit.governed import fga
 
 
 router = APIRouter(prefix="/v1/table", tags=["tag"])
@@ -46,10 +49,38 @@ def list_table_tags(id: str, ns: NamespaceDep, settings: SettingsDep, so: Storag
 
 
 @router.post("/{id}/tags/create", response_model_exclude_none=True)
-def create_table_tag(id: str, body: CreateTableTagRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> CreateTableTagResponse:
-    """Tag the given table version with a name — wraps lance_namespace CreateTableTag."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
-    return dataplane.create_tag(ns, so, body)
+async def create_table_tag(
+    id: str,
+    body: CreateTableTagRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    token: CurrentToken = None,
+) -> CreateTableTagResponse:
+    """Tag the given table version with a name — wraps lance_namespace CreateTableTag.
+
+    ANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED, by the rule the estate codified: a
+    control event is targeted when it changes what a specific PERSON may do or must do, not when it
+    changes an object. A tag is a ref, so this joins the members that name nobody.
+
+    THE REF PLANE IS WHERE `published` LIVES, which is why these three matter more than their size
+    suggests: `table_published` already announces the publication tag moving, and until now the OTHER
+    ref mutations moved in silence — a console could not tell a tag was gone.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    response = dataplane.create_tag(ns, so, body)
+    # AFTER the data-plane call — a change that did not happen is never announced.
+    await emit_control(
+        control,
+        action="table_tag_created",
+        object_type="table",
+        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        extra={"tag": body.tag, "version": body.version},
+    )
+    return response
 
 
 @router.post("/{id}/tags/version", response_model_exclude_none=True)
@@ -62,14 +93,57 @@ def get_table_tag_version(
 
 
 @router.post("/{id}/tags/update", response_model_exclude_none=True)
-def update_table_tag(id: str, body: UpdateTableTagRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> UpdateTableTagResponse:
-    """Move an existing tag to a new table version — wraps lance_namespace UpdateTableTag."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
-    return dataplane.update_tag(ns, so, body)
+async def update_table_tag(
+    id: str,
+    body: UpdateTableTagRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    token: CurrentToken = None,
+) -> UpdateTableTagResponse:
+    """Move an existing tag to a new table version — wraps lance_namespace UpdateTableTag.
+
+    A MOVE IS NOT A CREATE. The name survives and the version under it changes, so a consumer holding
+    "tag -> version" has stale state with no failing read to discover it by; `version` rides in `extra`
+    so it can be corrected without a re-read.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    response = dataplane.update_tag(ns, so, body)
+    # AFTER the data-plane call — a change that did not happen is never announced.
+    await emit_control(
+        control,
+        action="table_tag_updated",
+        object_type="table",
+        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        extra={"tag": body.tag, "version": body.version},
+    )
+    return response
 
 
 @router.post("/{id}/tags/delete", response_model_exclude_none=True)
-def delete_table_tag(id: str, body: DeleteTableTagRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep) -> DeleteTableTagResponse:
+async def delete_table_tag(
+    id: str,
+    body: DeleteTableTagRequest,
+    ns: NamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    token: CurrentToken = None,
+) -> DeleteTableTagResponse:
     """Delete a tag from the table — wraps lance_namespace DeleteTableTag."""
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
-    return dataplane.delete_tag(ns, so, body)
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    response = dataplane.delete_tag(ns, so, body)
+    # AFTER the data-plane call — a change that did not happen is never announced.
+    await emit_control(
+        control,
+        action="table_tag_deleted",
+        object_type="table",
+        object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
+        actor=f"user:{token.sub}" if token is not None else None,
+        extra={"tag": body.tag},
+    )
+    return response
