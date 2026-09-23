@@ -1985,6 +1985,36 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 
 **XC-061 · Container hardening is restated per template and applied unevenly — 7 first-party containers and 3 Jobs render with none of it, including OpenBao and Dex**
 `chart` · **HIGH**
+- **RE-MEASURED 2026-09-23, AND THE ROW UNDERCOUNTS: 19 containers across 15 first-party workloads are
+  missing at least one baseline key**, not "7 first-party containers and 3 Jobs". Two numbers answer
+  two questions — 12 carry NONE of the baseline, 19 are missing at least one. The gap is wider than the
+  row states in three ways the old gate could not see: it walks DEPLOYMENTS only (six Jobs and the AGE
+  StatefulSet were never asked), it walks `containers` only (`rask-lineage` PASSES on its app container
+  while its `wait-age` init carries nothing), and its exemption tuple lumps "not ours to template"
+  together with OpenBao, Dex and MinIO — all rendered from `rask/templates/`, and the first two are the
+  row's own headline.
+- **THE `security.infraContexts.enabled` FLAG HARDENS NOTHING BY ITSELF, measured both ways.** With it
+  ON the count does not move — 19 either way. What changes is the CONTENT: three containers go from
+  missing all four keys to missing only `readOnlyRootFilesystem`. So the flag is not the fix, and
+  gating hardening behind a values flag that defaults OFF postpones exactly the work that would make
+  the flag safe to flip, which its own comment names: "labeling the namespace restricted would REJECT
+  this pod until the init is hardened".
+- **SHIPPED: the gate now walks every first-party workload and slot, as a SHRINK-ONLY RATCHET.**
+  Ownership is derived from the render SOURCE (`rask/charts/` is a subchart, anything else is ours)
+  rather than a hand-written tuple — the same tuple that silently skipped four fleet Deployments. A new
+  unhardened container reds it; a STALE entry reds it too, so the list cannot quietly excuse a
+  regression. Three mutations, and the third needed the gate rewritten: dropping `initContainers` from
+  the parametrize passed until the slot set became a constant a vacuity check also reads.
+- **SHIPPED AND OBSERVED: both `wait-age` init containers, hardened unconditionally.** They carried a
+  full context behind the flag and omitted `readOnlyRootFilesystem`; both run `sh -c "until nc -z host
+  port; do sleep 3; done"` on busybox and write nothing. Now through one `lance.rootlessSecurityContext`
+  helper that pins the uid — which is why they were hand-written, since `lance.securityContext` relies
+  on the image's own USER and `runAsNonRoot` without a uid fails admission on busybox. Read back off the
+  deployed Deployment: `readOnlyRootFilesystem: true`, `runAsUser: 65532`, caps dropped — and the pod
+  reached 2/2 Running, so the init COMPLETED under those constraints. 0 non-Running pods of 83.
+- **17 LEFT ON THE RATCHET**, all third-party images the chart templates itself (postgres, minio,
+  openbao, dex, the mc/nats/kubectl CLIs). `readOnlyRootFilesystem` is the key that breaks them — each
+  writes under its own root unless given a mount — so each comes off with its pod observed running.
 - *What is left:* `securityContext` is repeated per template rather than defaulted chart-wide, so coverage drifts silently and the two workloads that most need it — the secret store and the IdP — render without it. Hoist the baseline to one chart-wide default that a template opts OUT of with a stated reason, and gate the render.
 - *Closes when:* Every first-party container and Job renders the baseline, and a test refuses a new one that does not.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream sets the baseline once, chart-wide
