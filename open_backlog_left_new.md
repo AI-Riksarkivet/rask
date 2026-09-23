@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **92 are blocked on a decision** and **103 can be picked up today**.
+**195 open items**, of which **93 are blocked on a decision** and **102 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 6 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 30 | 5 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -943,6 +943,29 @@ FROM opentelemetry_logs` returns exa
 
 **LH-099 · The sweep's reclaimed bytes reach the summary and audit line but no metric, and no control event says a table was compacted**
 `maintenance, service-kit, notifications` · **MED** · PARTIAL
+- **blocked:** whether a compaction emits a control event AT ALL. **This row's own two bullets
+  contradict each other and the contradiction is resolvable by evidence, so it is resolved here rather
+  than left to whoever reads it next.** One says the remaining step is "recording that DECLINE in
+  `docs/DECISIONS.md` — no service code"; the other says "Only the EVENT half is still blocked".
+  **The second is right, because the first conflates UNTARGETED with NO EVENT.** The codified rule
+  (`test_control_action_three_file_contract.py`) decides TARGETING, not existence — and [[LH-056]]
+  settled that question in the opposite direction on 2026-09-23: five ref-plane actions were added as
+  UNTARGETED control events and are emitting on `catalog.control.v1` right now, precisely because a
+  consumer needed the signal. So "a compaction targets nobody" does not answer "should a compaction
+  announce itself"; only an owner does.
+  *If the answer is an event:* `table_maintained` across the three-file `ControlAction` contract plus
+  an `_UNTARGETED_ACTIONS` entry — the exact shape LH-056 just shipped, so the cost is now known rather
+  than estimated. *If it is a decline:* record it in `docs/DECISIONS.md` and the row closes.
+- **THE METRIC ARM IS VERIFIED LIVE AGAIN (2026-09-23), not carried from release 187.** Queried
+  straight out of GreptimeDB: `compaction_bytes_reclaimed_total` emits from BOTH `rask-maintenance`
+  and `rask-maintenance-worker` at value `0.0`, beside `compaction_runs_total = 52`. Zero is the
+  CORRECT reading — the estate has nothing to reclaim — and the always-emit rule is exactly what makes
+  idle distinguishable from broken and from absent.
+  **AND THE DRIFT GAUGE HAS MOVED SINCE THIS ROW RECORDED IT, which is the gauge doing its job.**
+  Then: `orphaned_trash=989, unbound_namespaces=4, orphaned_annotation_tasks=3`. Now:
+  **`ghost_tables=39`, `unbound_namespaces=3`, `orphan_buckets=1`, `orphaned_trash=0`** — the 989-row
+  trash backlog has drained to nothing and `ghost_tables` is now the estate's largest drift finding,
+  which no row currently names. Worth a look on its own terms; it is not this row.
 - **THE ALERT EXISTS AND NOTHING ON THIS ESTATE EVALUATES IT — measured 2026-09-20, and it is true of all 50 rules, not just the new one.** `MaintenanceDriftRising` is written and PROVEN to fire by `promtool test rules` (a rise from the real 989 to 1010 fires naming `category="orphaned_trash"`; a flat 989 over 3.5 h does not; a category draining to zero does not). It cannot be OBSERVED firing here: `observability.alerting.enabled` defaults false (`values.yaml:2997`) and neither vmalert nor Alertmanager is deployed — confirmed on the live estate, where the Collector, GreptimeDB and Perses ARE running. So metrics flow and are queryable, dashboards render, and **no rule in the file is evaluated by anything**. That is a resilience posture worth stating rather than a gap in this row: the proving harness is what stands in for the engine, which is exactly why `make alert-rules-check` runs the rules against synthetic series instead of only checking their syntax.
 - **THE DRIFT REPORT NOW REACHES A METRIC TOO (2026-09-20), which this row's sibling gap never named.** `metrics.py` carried ten recorders for the sweep, the purge and credential tiers and NONE for the reconcile's drift report — the very report that gates whether the purge may run and answers whether the estate's storage state is understood. It reached a log line and stopped, so no alert could fire on it and no dashboard could show it. `maintenance.drift.items` is a GAUGE labelled by `category` (drift is a level that rises and falls; `delta()` over a counter would read a repaired estate as no change at all), emitted for every CHECKED category and none other — `counts` omits what it could not check so a 0 never reads as clean, and undoing that on the series an alert fires from would put the lie where it does most damage. **OBSERVED end to end in GreptimeDB (`lance-rest-catalog:lh099-driftmetric`): NINE series** — `orphaned_trash=989`, `unbound_namespaces=4`, `orphaned_annotation_tasks=3`, the rest 0, and `orphan_files` ABSENT rather than zero because that tick did not check it. Two of those findings were invisible before this.
 - **NOT BLOCKED — answered by the same codified rule as [[LH-056]], which this marker named as its shared question.** A compaction changes an OBJECT, not a person's standing, so by `tests/unit/test_control_action_three_file_contract.py`'s enforced line it is UNTARGETED: an audit record plus a metric, and no notification. What remains is recording that DECLINE in `docs/DECISIONS.md` — no service code.
