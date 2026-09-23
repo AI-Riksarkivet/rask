@@ -80,9 +80,15 @@ spec:
       containers:
         - name: sweep
           image: {{ .Values.dapr.sweepImage }}
-          {{- if .Values.security.infraContexts.enabled }}
-          securityContext: { runAsNonRoot: true, runAsUser: 65532, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
-          {{- end }}
+          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
+          {{- /* kubectl WRITES, which is what a read-only rootfs turns into a failure: it caches
+                 discovery under $HOME, and the image's HOME is a path this container may no longer
+                 write. Pointing HOME at the tmp emptyDir is what makes the hardening survivable, and
+                 it is the same pair every app container in this chart already uses. */}}
+          env:
+            - { name: HOME, value: /tmp }
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
             limits: { cpu: "200m", memory: "128Mi" }
@@ -119,4 +125,6 @@ spec:
               echo "!!   kubectl get mutatingwebhookconfiguration dapr-sidecar-injector -o yaml"
               echo "!!   kubectl logs -l app=dapr-sidecar-injector"
               exit 1
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
 {{- end }}

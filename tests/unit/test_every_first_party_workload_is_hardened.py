@@ -121,12 +121,7 @@ def test_the_walk_sees_the_chart() -> None:
 #: observed running, which is a per-workload piece of work rather than one edit.
 _UNHARDENED_TODAY: dict[str, tuple[str, ...]] = {
     # Ours to fix, and first in line: short-lived Jobs and init containers running our own or a CLI image.
-    "Job/openfga-migrate/migrate": ("containers",),
-    "Job/openbao-seed/seed": ("containers",),
-    "Job/dapr-inject-sweep/sweep": ("containers",),
-    "Job/nats-stream/nats": ("containers",),
     "Job/minio-mkbucket/mc": ("containers",),
-    "Job/minio-scoped-users/mc": ("containers",),
     # Stateful third-party images: each needs a writable path before the baseline can land.
     "StatefulSet/age/postgres": ("containers",),
     "StatefulSet/minio/minio": ("containers",),

@@ -41,10 +41,19 @@ spec:
       {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       {{- end }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
       containers:
         - name: migrate
           # Same tag as the server (values.openfga.image.tag) so the migrated schema matches.
           image: "openfga/openfga:{{ .Values.openfga.image.tag | default "v1.18.3" }}"
+          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
+          {{- /* kept uniform with its siblings; the binary writes nothing itself, which a read-only rootfs turns into a failure. HOME on the tmp
+                 emptyDir is the pair every app container in this chart already uses. */}}
+          env:
+            - { name: HOME, value: /tmp }
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
           resources:
             requests: { cpu: "50m", memory: "64Mi" }
             limits: { cpu: "500m", memory: "256Mi" }
