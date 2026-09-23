@@ -58,8 +58,15 @@ def _errors_against(definition: str, instance: object) -> list[str]:
 
 
 def _assert_conforms(event: dict[str, Any]) -> None:
-    errors = _errors_against("RunEvent", event)
-    assert not errors, "\n".join(errors)
+    """Validate against the definition this event's SHAPE claims to be.
+
+    A DDL change is a `DatasetEvent` ([[LIN-004]]) and the spec's definition for one carries
+    `"not": {"required": ["job", "run"]}` — so checking it against the right `$defs` entry is not a
+    softer test, it is a stricter one: the schema itself refuses the members the phantom was made of.
+    """
+    definition = "DatasetEvent" if "dataset" in event else "RunEvent"
+    errors = _errors_against(definition, event)
+    assert not errors, f"as {definition}:\n" + "\n".join(errors)
 
 
 def test_vendored_spec_is_the_version_we_claim_to_emit() -> None:
@@ -67,6 +74,8 @@ def test_vendored_spec_is_the_version_we_claim_to_emit() -> None:
     # base of RUN_EVENT_SCHEMA_URL, so bumping one without the other fails here rather than shipping
     # events that name a spec version we never validated against.
     assert f"{_SPEC['$id']}#/$defs/RunEvent" == ol.RUN_EVENT_SCHEMA_URL
+    # The same rule for the static-metadata shape, so the two cannot drift apart.
+    assert f"{_SPEC['$id']}#/$defs/DatasetEvent" == ol.DATASET_EVENT_SCHEMA_URL
 
 
 @pytest.mark.parametrize(

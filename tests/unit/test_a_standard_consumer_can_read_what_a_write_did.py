@@ -148,16 +148,36 @@ def _event(operation: str) -> dict[str, Any]:
 
 
 def test_a_catalog_write_names_the_engine_that_made_it() -> None:
-    """Without it every write path in a multi-engine lakehouse is an anonymous producer."""
+    """Without it every write path in a multi-engine lakehouse is an anonymous producer.
+
+    A DATA write, because that is where the question has an answer. `ProcessingEngineRunFacet` is typed
+    for a RUN, and a DDL change is a `DatasetEvent` with none ([[LIN-004]]) — see the control below.
+    """
     import lance
 
-    facet = _event("create_table")["run"]["facets"]["processing_engine"]
+    facet = _event("insert")["run"]["facets"]["processing_engine"]
 
     assert (facet["name"], facet["version"]) == ("lance", lance.__version__)
 
 
+def test_a_catalog_DDL_write_names_NO_engine_and_that_is_the_spec() -> None:
+    """The cost of moving DDL off a run, stated rather than discovered.
+
+    `ProcessingEngineRunFacet` is a RUN facet and a static metadata change has no run, so there is
+    nowhere spec-correct to put it. Nothing a reader can act on is lost: the `catalog` facet already
+    names who governs the table, and for a DDL change the engine is always the catalog committing
+    in-process. This is a control on that decision — if someone later smuggles the facet onto the
+    dataset, it reds here rather than shipping a run facet on a run-less event.
+    """
+    event = _event("create_table")
+
+    assert "run" not in event
+    assert "processing_engine" not in (event["dataset"].get("facets") or {})
+    assert "processingEngine" not in (event["dataset"].get("facets") or {})
+
+
 def test_a_catalog_DDL_write_states_its_lifecycle_change() -> None:
-    assert _event("drop_table")["outputs"][0]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "DROP"
+    assert _event("drop_table")["dataset"]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "DROP"
 
 
 def test_a_catalog_DATA_write_carries_no_lifecycle_facet() -> None:
@@ -170,5 +190,5 @@ def test_the_rask_operation_name_survives_beside_the_standard_one() -> None:
     loses what the estate's own consumers read."""
     event = _event("create_index")
 
-    assert event["run"]["facets"]["lance"]["operation"] == "create_index"
-    assert event["outputs"][0]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "ALTER"
+    assert event["dataset"]["facets"]["lance"]["operation"] == "create_index"
+    assert event["dataset"]["facets"]["lifecycleStateChange"]["lifecycleStateChange"] == "ALTER"

@@ -36,6 +36,39 @@ from catalog.core.lineage_emit import (
 )
 from lineage.models import RunEvent
 from lineage.services.repository import _CREATE_OPS
+from service_kit.openlineage import event_identity
+
+
+def _parsed(event: dict):
+    """The event through lineage's own models, whichever shape it is.
+
+    A DDL change validates as `DatasetEvent` and a data write as `RunEvent`; a test that pins the
+    round trip is pinning that the CONSUMER can read what the producer emits, not which class it got.
+    """
+    from lineage.models import DatasetEvent
+
+    return DatasetEvent.model_validate(event) if "dataset" in event else RunEvent.model_validate(event)
+
+
+def _written(event: dict) -> dict:
+    """The dataset this event wrote, from whichever shape its operation produces.
+
+    A DDL change is a `DatasetEvent` (no run, no job, one `dataset`); a data write stays a `RunEvent`
+    with one output. The facet CONTENT is the same either way — that is the point of building both
+    from one expression — so a test about a facet should not have to know which shape it got.
+    """
+    return event["dataset"] if "dataset" in event else event["outputs"][0]
+
+
+def _facets(event: dict) -> dict:
+    """Every facet describing the written dataset, run-slot and dataset-slot merged.
+
+    On a DatasetEvent rask's `author` and `lance` facets ride the dataset, because there is no run to
+    hang them on; on a RunEvent they ride the run. Merged here so one assertion covers both.
+    """
+    merged = dict(_written(event).get("facets") or {})
+    merged.update((event.get("run") or {}).get("facets") or {})
+    return merged
 
 
 def test_build_create_event_shape() -> None:
@@ -51,23 +84,26 @@ def test_build_create_event_shape() -> None:
         event_time="2026-06-24T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    assert event["eventType"] == "COMPLETE"
-    output = event["outputs"][0]
+    # A create changes the table's DEFINITION and nothing executed, so it is a `DatasetEvent`: the
+    # spec forbids `run` and `job` on one and defines no `eventType` for it ([[LIN-004]]).
+    assert "run" not in event and "job" not in event and "eventType" not in event
+    output = _written(event)
     assert output["namespace"] == "alpha$bronze"
     assert output["name"] == "alpha$bronze$images"
     # #20: the standard version facet rides the output so the WROTE edge carries the Lance version.
     assert output["facets"]["version"]["datasetVersion"] == "1"
     # Custom facets carry the spec-required _producer + _schemaURL alongside their payload.
-    author = event["run"]["facets"]["author"]
+    author = _facets(event)["author"]
     assert author["name"] == "alice" and author["sub"] == "alice"
     assert author["_producer"] and author["_schemaURL"]
-    lance = event["run"]["facets"]["lance"]
+    lance = _facets(event)["lance"]
     assert lance["operation"] == "create_table" and lance["version"] == 1
     assert lance["_producer"] and lance["_schemaURL"]
     # Top-level schemaURL is present (spec-required on every RunEvent).
     assert event["schemaURL"]
-    # Per-table job identity (not the bare op) so one table's writes don't lump into a shared Job node.
-    assert event["job"] == {"namespace": "lance-catalog", "name": "create_table.alpha$bronze$images"}
+    # NO per-table Job node: that identity is what made the phantom population grow with the table
+    # count, and the `/jobs` fold made each one an access handle for an operation nobody performed.
+    assert "job" not in event
 
 
 def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None:
@@ -95,7 +131,7 @@ def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None
         job_namespace="lance-catalog",
         project="acme",
     )
-    assert event["run"]["facets"]["lance"]["project"] == "acme"
+    assert _facets(event)["lance"]["project"] == "acme"
     # Validated into the CONSUMER's model (notifications' own `LineageRunEvent`), not lineage's
     # `RunEvent`: the assertion worth making is that the plane which reads this wire JSON finds the
     # tenant, and only its parser proves that.
@@ -120,7 +156,7 @@ def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_i
         job_namespace="lance-catalog",
         project="../etc/passwd",
     )
-    assert "project" not in event["run"]["facets"]["lance"]
+    assert "project" not in _facets(event)["lance"]
     assert project_id(LineageRunEvent.model_validate(event).run) is None
 
 
@@ -140,11 +176,11 @@ def test_build_write_event_attaches_schema_facet_and_round_trips() -> None:
         job_namespace="lance-catalog",
         schema_fields=fields,
     )
-    schema = event["outputs"][0]["facets"]["schema"]
+    schema = _written(event)["facets"]["schema"]
     assert schema["fields"] == fields
     assert schema["_producer"] and schema["_schemaURL"].endswith("SchemaDatasetFacet")
     # The lineage model reads it back off the standard facet → real per-version columns on the WROTE edge.
-    parsed = RunEvent.model_validate(event)
+    parsed = _parsed(event)
     assert [f.model_dump(exclude_none=True) for f in parsed.outputs[0].fields] == fields
 
 
@@ -160,7 +196,7 @@ def test_build_write_event_without_schema_omits_facet() -> None:
         event_time="t",
         job_namespace="lance-catalog",
     )
-    assert "schema" not in event["outputs"][0].get("facets", {})
+    assert "schema" not in _written(event).get("facets", {})
 
 
 def test_emit_write_event_forwards_schema_fields() -> None:
@@ -191,8 +227,8 @@ def test_build_create_event_without_author_omits_facet() -> None:
         event_time="t",
         job_namespace="lance-catalog",
     )
-    assert "author" not in event["run"]["facets"]
-    assert event["run"]["facets"]["lance"]["operation"] == "create_table"
+    assert "author" not in _facets(event)
+    assert _facets(event)["lance"]["operation"] == "create_table"
 
 
 def test_create_operation_strings_are_shared() -> None:
@@ -217,7 +253,7 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
         event_time="2026-06-24T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    parsed = RunEvent.model_validate(event)
+    parsed = _parsed(event)
     assert parsed.operation == "create_table"
     assert parsed.author == "alice"
     assert parsed.outputs[0].name == "alpha$bronze$images"
@@ -257,11 +293,11 @@ def test_http_emitter_posts_the_event() -> None:
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
     asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=3))
     assert client.posted is not None
-    output = client.posted["outputs"][0]
+    output = _written(client.posted)
     assert output["namespace"] == "a"
     assert output["name"] == "a$b"
     assert output["facets"]["version"]["datasetVersion"] == "3"  # #20
-    assert client.posted["run"]["facets"]["author"]["sub"] == "alice"
+    assert _facets(client.posted)["author"]["sub"] == "alice"
 
 
 def test_the_dapr_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,19 +340,34 @@ def test_the_dapr_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkey
     assert staged["outbox_uri"] == "s3://staging/outbox"
     assert staged["storage_options"] == {"region": "eu-north-1"}
     assert staged["topic_name"] == "lineage.events.v1"
-    # The run id is what the staged object is keyed on, so a wrong one stages under a name the relay
-    # cannot find — the loss this fix exists to prevent, arriving one layer down.
-    assert staged["run_id"] == "r-1"
+    # THE STAGED KEY IS THE EVENT'S IDENTITY, whichever shape it is: the staged object is keyed on it,
+    # so a wrong one stages under a name the relay cannot find — the loss the outbox exists to prevent,
+    # arriving one layer down. A create is a `DatasetEvent` with no run id, so keying on `run.runId`
+    # alone would stage every DDL change under "".
+    assert staged["run_id"] == event_identity(json.loads(str(staged["event_json"])))
+    assert staged["run_id"], "a static metadata change staged under an empty key"
 
 
 def test_http_emitter_uses_shared_run_id() -> None:
-    # #21: the catalog passes the same run id it stamped into the Lance file, so the file points at
-    # its exact creating run in the lineage graph.
+    # A caller-supplied run id is passed through rather than replaced by a fresh one. Asserted on a
+    # DATA write: a create changes the table's definition, so it goes on the wire as a `DatasetEvent`
+    # with no run id at all — `lineage_metadata` records what that costs and why it costs nothing.
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1, run_id="r-shared"))
+    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=1, operation=INSERT, run_id="r-shared"))
     assert client.posted is not None
     assert client.posted["run"]["runId"] == "r-shared"
+
+    # And the create really does carry none, so the line above cannot quietly start testing a run again.
+    created = _CapturingClient()
+    HttpLineageEmitter(cast(httpx.AsyncClient, created), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
+    asyncio.run(
+        HttpLineageEmitter(cast(httpx.AsyncClient, created), "http://lineage/api/v1/lineage", job_namespace="lance-catalog").emit_create(
+            table_id="a$b", namespace="a", author="alice", version=1, run_id="r-shared"
+        )
+    )
+    assert created.posted is not None
+    assert "run" not in created.posted
 
 
 def test_http_emitter_forwards_authorization() -> None:
@@ -411,7 +462,7 @@ def test_build_write_event_records_derived_from_inputs() -> None:
     )
     # An unversioned input edge carries no version facet — just the (namespace, name) source node.
     assert event["inputs"] == [{"namespace": "db1", "name": "db1$orig"}]
-    assert event["outputs"][0]["name"] == "db1$renamed"
+    assert _written(event)["name"] == "db1$renamed"
 
 
 def test_build_write_event_default_has_no_inputs() -> None:
@@ -425,7 +476,9 @@ def test_build_write_event_default_has_no_inputs() -> None:
         event_time="2026-07-15T00:00:00Z",
         job_namespace="catalog",
     )
-    assert event["inputs"] == []  # a fresh write is derived from nothing
+    # A fresh create is derived from nothing, and a `DatasetEvent` has no `inputs` member to say it
+    # with — which is exactly why a DDL change that DOES name a source keeps its run.
+    assert "inputs" not in event
 
 
 def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() -> None:
@@ -454,12 +507,12 @@ def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() 
     assert version_facet["datasetVersion"] == "4"
     assert version_facet["_producer"] and version_facet["_schemaURL"].endswith("DatasetVersionDatasetFacet")
     # The passed run facet rides verbatim on the run, stamped spec-legal (custom_facet _producer/_schemaURL).
-    params = event["run"]["facets"]["params"]
+    params = _facets(event)["params"]
     assert params["lr"] == 0.01 and params["epochs"] == 5
     assert params["_producer"] and params["_schemaURL"]
     # Adversarial round-trip: the lineage RunEvent model reads the pin back off the standard facet, so the
     # graph really can answer "which exact source version produced this merge?" (#115 reproducibility).
-    parsed = RunEvent.model_validate(event)
+    parsed = _parsed(event)
     assert parsed.input_version("db$silver") == "4"
 
 
@@ -510,9 +563,9 @@ def test_build_write_event_catalog_facets_win_over_caller_facets() -> None:
         job_namespace="catalog",
         extra_run_facets=forged,
     )
-    assert event["run"]["facets"]["lance"]["operation"] == "merge_insert"  # catalog op wins, not create_table
-    assert event["run"]["facets"]["author"]["sub"] == "mallory"  # verified principal wins, not admin
-    parsed = RunEvent.model_validate(event)
+    assert _facets(event)["lance"]["operation"] == "merge_insert"  # catalog op wins, not create_table
+    assert _facets(event)["author"]["sub"] == "mallory"  # verified principal wins, not admin
+    parsed = _parsed(event)
     assert parsed.operation == "merge_insert" and parsed.author == "mallory"
 
 
@@ -588,10 +641,10 @@ def test_build_write_event_drop_is_versionless_and_named_drop_table() -> None:
         event_time="2026-01-01T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    assert "version" not in event["outputs"][0].get("facets", {})  # no version facet for a drop
-    assert event["run"]["facets"]["lance"]["operation"] == "drop_table"
-    assert "version" not in event["run"]["facets"]["lance"]
-    assert event["job"]["name"] == "drop_table.db$t"
+    assert "version" not in _written(event).get("facets", {})  # no version facet for a drop
+    assert _facets(event)["lance"]["operation"] == "drop_table"
+    assert "version" not in _facets(event)["lance"]
+    assert "job" not in event, "a drop still mints a Job node for an operation nobody performed"
 
 
 def test_emit_write_event_deregister_is_versionless_marker() -> None:
@@ -686,9 +739,8 @@ def test_dapr_emitter_publishes_event_to_topic() -> None:
     pub = dapr.published[0]
     assert pub["pubsub"] == "lineage-pubsub" and pub["topic"] == "lineage.events.v1"
     assert pub["content_type"] == "application/json"
-    assert pub["event"]["outputs"][0]["name"] == "a$b"  # the spec-correct OpenLineage event is the data
-    assert pub["event"]["run"]["facets"]["author"]["sub"] == "alice"  # the verified catalog author
-    assert pub["event"]["run"]["runId"] == "r-1"
+    assert _written(pub["event"])["name"] == "a$b"  # the spec-correct OpenLineage event is the data
+    assert _facets(pub["event"])["author"]["sub"] == "alice"  # the verified catalog author
 
 
 def test_dapr_emitter_swallows_publish_failure() -> None:
@@ -718,12 +770,12 @@ def test_build_write_event_insert_omits_version_facet() -> None:
         job_namespace="lance-catalog",
     )
     assert event["job"]["name"] == "insert.a$b"
-    assert event["run"]["facets"]["lance"]["operation"] == "insert"
-    assert "version" not in event["run"]["facets"]["lance"]  # no version key on a version-less insert
+    assert _facets(event)["lance"]["operation"] == "insert"
+    assert "version" not in _facets(event)["lance"]  # no version key on a version-less insert
     # The SUBJECT, stated directly. This was `"facets" not in …` while the version facet was the only
     # dataset facet a version-less insert could carry; `datasetType` is now always present ([[LIN-002]]),
     # so the blanket check would pass or fail for reasons unrelated to versions.
-    assert "version" not in event["outputs"][0]["facets"]
+    assert "version" not in _written(event)["facets"]
 
 
 def test_build_write_event_merge_carries_version() -> None:
@@ -737,10 +789,10 @@ def test_build_write_event_merge_carries_version() -> None:
         event_time="t",
         job_namespace="lance-catalog",
     )
-    assert event["run"]["facets"]["lance"]["operation"] == "merge_insert"
-    assert event["run"]["facets"]["lance"]["version"] == 4
-    assert event["outputs"][0]["facets"]["version"]["datasetVersion"] == "4"
-    assert "author" not in event["run"]["facets"]
+    assert _facets(event)["lance"]["operation"] == "merge_insert"
+    assert _facets(event)["lance"]["version"] == 4
+    assert _written(event)["facets"]["version"]["datasetVersion"] == "4"
+    assert "author" not in _facets(event)
 
 
 def test_write_event_round_trips_into_lineage_model() -> None:
@@ -754,7 +806,7 @@ def test_write_event_round_trips_into_lineage_model() -> None:
         event_time="2026-06-24T00:00:00+00:00",
         job_namespace="lance-catalog",
     )
-    parsed = RunEvent.model_validate(event)
+    parsed = _parsed(event)
     assert parsed.operation == "insert"
     assert parsed.is_success is True
     assert parsed.output_version("a$b") is None  # an insert asserts no Lance version on the WROTE edge
@@ -793,7 +845,7 @@ async def test_a_catalog_write_RESOLVES_its_tenant_so_watchers_are_reachable() -
 
     await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1)
 
-    lance = client.posted["run"]["facets"]["lance"]
+    lance = _facets(client.posted)["lance"]
     assert lance["project"] == "acme", "without this the watcher loop is skipped and every watcher is silently lost"
 
 
@@ -810,7 +862,7 @@ async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
 
     await emitter.emit_create(table_id="acme-bronze$events", namespace="acme-bronze", author="alice", version=1, project="acme")
 
-    assert client.posted["run"]["facets"]["lance"]["project"] == "acme"
+    assert _facets(client.posted)["lance"]["project"] == "acme"
 
 
 @pytest.mark.asyncio
@@ -823,7 +875,7 @@ async def test_an_UNRESOLVABLE_tenant_emits_exactly_as_before() -> None:
 
     await emitter.emit_create(table_id="db$t", namespace="db", author="alice", version=1)
 
-    assert "project" not in client.posted["run"]["facets"]["lance"]
+    assert "project" not in _facets(client.posted)["lance"]
 
 
 @pytest.mark.asyncio
@@ -847,9 +899,9 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
         table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="CiQwOGE4Njg0Yi1kYjg4"
     )
 
-    lance = client.posted["run"]["facets"]["lance"]
+    lance = _facets(client.posted)["lance"]
     assert lance["originator"] == "CiQwOGE4Njg0Yi1kYjg4"
-    assert client.posted["run"]["facets"]["author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
+    assert _facets(client.posted)["author"]["sub"] == "service-publisher", "the service remains the author; originator is additive"
 
 
 @pytest.mark.asyncio
@@ -862,4 +914,4 @@ async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
 
     await emitter.emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
 
-    assert "originator" not in client.posted["run"]["facets"]["lance"]
+    assert "originator" not in _facets(client.posted)["lance"]

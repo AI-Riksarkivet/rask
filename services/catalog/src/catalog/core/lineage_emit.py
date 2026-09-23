@@ -48,13 +48,16 @@ from service_kit.lakehouse.schema import SchemaFields
 from service_kit.lakehouse.subjects import is_person_subject
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 from service_kit.openlineage import (
+    DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     VERSION_FACET_SCHEMA_URL,
     catalog_facet,
     custom_facet,
     dataset_type_facet,
+    event_identity,
     lifecycle_facet,
+    lifecycle_state,
     processing_engine_facet,
     schema_facet,
 )
@@ -191,6 +194,45 @@ def _input_dataset(ref: InputRef) -> dict[str, Any]:
 #: `is_person_subject` is imported from service-kit rather than defined here: it has more than one
 #: producer, and the medallion — whose authors ARE chart role literals — cannot depend on the catalog,
 #: so a rule written here could only ever be applied here. See that module for why that matters.
+def _is_ddl(operation: str) -> bool:
+    """Whether this operation CHANGED THE TABLE'S DEFINITION rather than its rows.
+
+    Read off `_LIFECYCLE_BY_OPERATION` rather than restated: that map already answers "is this DDL" for
+    the standard lifecycle facet, and a second list is a second place for a new operation to be
+    forgotten — it would keep emitting a run, and the phantom it mints is invisible until someone
+    counts Job nodes.
+    """
+    return bool(lifecycle_state(operation))
+
+
+def _as_dataset_event(*, output: dict[str, Any], run_facets: dict[str, Any], event_time: str) -> dict[str, Any]:
+    """The same write, shaped as the spec's ``DatasetEvent``: no run, no job, no event type.
+
+    THE RUN FACETS MOVE ONTO THE DATASET, they are not dropped. `author` and `lance` are rask's OWN
+    custom facets rather than spec-typed run facets, and three readers depend on them: the ingest
+    authorizer takes `author.sub` (and refuses the standard `ownership` facet, so there is nowhere else
+    for it to go), the notifications plane takes `author.sub`, `lance.project` and `lance.originator`,
+    and the graph keys its `(:User)-[:CREATED]->(:Dataset)` edge off `lance.operation`. Leaving them on
+    a run that no longer exists would silently unauthor every DDL change and silence the person it
+    belongs to.
+
+    `processingEngine` DOES NOT MOVE, and the omission is the spec rather than an oversight:
+    `ProcessingEngineRunFacet` is typed for a run, and this event has none. Nothing is lost that a
+    reader can act on — the `catalog` facet already names who governs this table, and for a DDL change
+    the engine is always the catalog committing in-process.
+    """
+    facets = dict(output.get("facets") or {})
+    for name in ("author", "lance"):
+        if name in run_facets:
+            facets[name] = run_facets[name]
+    return {
+        "eventTime": event_time,
+        "producer": _PRODUCER,
+        "schemaURL": DATASET_EVENT_SCHEMA_URL,
+        "dataset": {"namespace": output["namespace"], "name": output["name"], "facets": facets},
+    }
+
+
 def build_write_event(
     *,
     table_id: str,
@@ -315,6 +357,14 @@ def build_write_event(
     facets["datasetType"] = dataset_type_facet(_PRODUCER, external=False)
     if facets:
         output["facets"] = facets
+    # A DDL change that DERIVED the table from another one keeps its run, and the spec is why: a
+    # `DatasetEvent` has only `dataset` — no `inputs` — and the graph builds every `DERIVED_FROM` edge
+    # from a run's inputs (`repository.ingest_event`). A rename passes its SOURCE precisely so the
+    # destination is not an orphan with no history, so moving it would sever the chain this event
+    # exists to preserve. There is no phantom in that case either: something really did derive one
+    # table from another.
+    if _is_ddl(operation) and not inputs:
+        return _as_dataset_event(output=output, run_facets=run_facets, event_time=event_time)
     return {
         "eventType": "COMPLETE",
         "eventTime": event_time,
@@ -740,7 +790,9 @@ class DaprEmitter(_BaseLineageEmitter):
                 self._client,
                 outbox_uri=self._outbox_uri,
                 storage_options=self._storage_options,
-                run_id=str((event.get("run") or {}).get("runId") or ""),
+                # WHICHEVER SHAPE THIS IS. A static metadata change has no run id, and staging one
+                # under "" puts it beyond the relay — the exact loss the outbox exists to prevent.
+                run_id=event_identity(event),
                 event_json=json.dumps(event),
                 pubsub_name=self._pubsub,
                 topic_name=self._topic,

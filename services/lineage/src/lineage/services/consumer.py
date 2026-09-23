@@ -47,9 +47,9 @@ _DROP = {"status": "DROP"}
 def _parse(data: object) -> RunEvent | DatasetEvent:
     """One payload as whichever OpenLineage event it is — a run, or a change no job performed.
 
-    DISCRIMINATED ON `dataset` WITHOUT A `run`, which is what the spec's own shape gives: a
-    `DatasetEvent` requires `dataset` and forbids `run` and `job` outright, so the pairing is not an
-    ambiguous case to resolve but a malformed event. `DatasetEvent` refuses it explicitly and this
+    DISCRIMINATED ON `dataset` WITHOUT A `run`. A `DatasetEvent` requires `dataset`, and while the
+    schema only refuses `run` and `job` TOGETHER, this estate treats either as malformed: one of them
+    is enough to make a static change look like something that ran. `DatasetEvent` refuses it explicitly and this
     lands in the malformed arm below — the same answer a payload that is neither gets.
 
     The order matters only for the malformed case: anything carrying `run` goes to `RunEvent`, so a

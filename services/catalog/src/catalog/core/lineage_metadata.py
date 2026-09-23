@@ -8,9 +8,17 @@ onto the Arrow **schema metadata** of the create payload, so the Lance file is *
 table and reconciled to the lineage graph without the catalog. (The creator's identity is deliberately
 NOT embedded — see below — but stays recoverable via the run id.)
 
-``create_run_id`` is the *same* run id the catalog emits in the OpenLineage create event, so the file
-points at its exact creating run in the graph — and the **creator stays recoverable** from that run via
-the lineage service's FGA-gated ``/creator`` endpoint. We deliberately do **not** stamp the creator's
+``create_run_id`` is the id the catalog generated for the create. It does NOT resolve to a Run node: a
+create changes the table's definition and nothing executed, so it goes on the wire as an OpenLineage
+``DatasetEvent`` which has no run ([[LIN-004]]). That costs nothing a reader had — `prune_runs` deletes
+Run nodes anyway, so this pointer was never durable, while the ``(:User)-[:CREATED]->(:Dataset)`` edge
+"is never removed — it IS the creator's record" (`cypher.py`; measured on the live graph 2026-09-11:
+1150 CREATED edges, 1145 of 1247 datasets carrying one).
+
+**THE RESOLVABLE COORDINATE IS ``lineage.dataset_id``**, and the **creator stays recoverable** through
+it: the lineage service's FGA-gated ``/creator`` endpoint takes a DATASET name and reads that CREATED
+edge, which the static-metadata ingest writes exactly as the run-shaped create did. We deliberately do
+**not** stamp the creator's
 OIDC ``sub`` into the file: it is identity/PII and the Lance file lives on object storage *outside* the
 OpenFGA boundary, so embedding it would leak the principal to anyone with raw bucket access. (#22 audit)
 """

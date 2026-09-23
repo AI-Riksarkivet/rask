@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Iterable
-from typing import Final
+from typing import Any, Final
 
 
 log = logging.getLogger(__name__)
@@ -145,6 +145,17 @@ _LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
 }
 
 
+def lifecycle_state(operation: str) -> str | None:
+    """The spec lifecycle value for ``operation``, or ``None`` when it is not DDL.
+
+    Split out of :func:`lifecycle_facet` because the same question — did this change the table's
+    DEFINITION rather than its rows — also decides whether the catalog emits a ``DatasetEvent``. Two
+    lists would be two places for a new operation to be forgotten, and the one that keeps emitting a
+    run mints a Job node nobody sees until they count.
+    """
+    return _LIFECYCLE_BY_OPERATION.get(operation.lower())
+
+
 def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
     """The standard ``lifecycleStateChange`` payload for ``operation``, or ``{}`` when it is not DDL.
 
@@ -152,7 +163,7 @@ def lifecycle_facet(producer: str, operation: str) -> dict[str, object]:
     estate has added without deciding what it does to the dataset, and a wrong value here is worse than
     an absent one — a reader acts on ``DROP``.
     """
-    state = _LIFECYCLE_BY_OPERATION.get(operation.lower())
+    state = lifecycle_state(operation)
     return {"_producer": producer, "_schemaURL": LIFECYCLE_FACET_SCHEMA_URL, "lifecycleStateChange": state} if state else {}
 
 
@@ -309,3 +320,30 @@ def static_event_id(*, producer: str, namespace: str, name: str, operation: str,
     carries a different one and stays a second fact rather than being silently swallowed by the first.
     """
     return str(uuid.uuid5(_STATIC_EVENT_NAMESPACE, "|".join((producer, namespace, name, operation, event_time))))
+
+
+def event_identity(event: dict[str, Any]) -> str:
+    """The identity of one OpenLineage event on the wire, whichever shape it is.
+
+    A run event IS its run id. A ``DatasetEvent`` has none, and three hops need one anyway — the
+    catalog's outbox stages under it (a wrong key stages under a name the relay cannot find, which is
+    the provenance loss the outbox exists to prevent), lineage's durable feed dedups on it, and the
+    notifications plane keys a pointer by it. One derivation, so a single change cannot acquire three
+    identities and be staged, fed and delivered as three different facts.
+    """
+    run = event.get("run")
+    if isinstance(run, dict) and run.get("runId"):
+        return str(run["runId"])
+    dataset = event.get("dataset")
+    dataset = dataset if isinstance(dataset, dict) else {}
+    facets = dataset.get("facets")
+    facets = facets if isinstance(facets, dict) else {}
+    lance = facets.get("lance")
+    lance = lance if isinstance(lance, dict) else {}
+    return static_event_id(
+        producer=str(event.get("producer") or ""),
+        namespace=str(dataset.get("namespace") or ""),
+        name=str(dataset.get("name") or ""),
+        operation=str(lance.get("operation") or ""),
+        event_time=str(event.get("eventTime") or ""),
+    )

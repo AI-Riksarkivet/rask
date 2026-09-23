@@ -361,9 +361,11 @@ class UngovernedOutputError(PermissionDeniedError):
 class DatasetEvent(BaseModel):
     """An OpenLineage ``DatasetEvent`` — a dataset change that no job performed.
 
-    The spec calls it "A Dataset sent within static metadata events" and forbids the ``job`` and ``run``
-    members on it outright (``"not": { "required": ["job", "run"] }``), which is exactly a catalog DDL
-    change: there is no run to name and nothing executed. Emitting one as a ``RunEvent`` mints a Job node
+    The spec calls it "A Dataset sent within static metadata events", which is exactly a catalog DDL
+    change: there is no run to name and nothing executed. Its ``"not": { "required": ["job", "run"] }``
+    refuses the two TOGETHER rather than either alone — `required` is satisfied only when every listed
+    property is present, so a payload carrying just one passes the schema. This model refuses EITHER,
+    deliberately stricter: one of them is enough to make a static change look like something that ran. Emitting one as a ``RunEvent`` mints a Job node
     for an operation nobody performed, and the ``/jobs`` governance fold makes that Job's output set an
     access handle — so a phantom is an access-control object, not only untidy.
 
