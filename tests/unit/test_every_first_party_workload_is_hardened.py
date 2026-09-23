@@ -18,8 +18,13 @@ DERIVED FROM THE RENDER SOURCE, not from a name list. Every doc rendered from `r
 anything under `rask/charts/` belongs to a subchart. A hand-written tuple is how the gate this widens
 skipped four fleet Deployments silently, and the same tuple is why OpenBao reads as a subchart it is not.
 
-MEASURED 2026-09-23 under default values: **12 first-party workloads, 13 containers** carry none of the
-baseline. The row says "7 first-party containers and 3 Jobs", which undercounts.
+MEASURED 2026-09-23 under default values, reading the EFFECTIVE context: **14 containers across 11
+first-party workloads** are missing at least one baseline key. The row says "7 first-party containers
+and 3 Jobs".
+
+THE FIRST CUT OF THIS GATE READ ONLY THE CONTAINER AND ANSWERED 19. Five of those set `runAsNonRoot`
+and `seccompProfile` at POD level, which every container inherits — so a third of the population it
+reported was a false positive of its own making.
 """
 
 from __future__ import annotations
@@ -31,9 +36,17 @@ import yaml
 from test_invariants import _helm_template
 
 
-#: The baseline `lance.securityContext` writes. A container missing EVERY one of these was never
-#: hardened at all — the condition this gate is about, as distinct from one missing a single key.
+#: The baseline `lance.securityContext` writes.
 BASELINE = ("runAsNonRoot", "seccompProfile", "allowPrivilegeEscalation", "readOnlyRootFilesystem")
+
+#: The baseline keys Kubernetes also accepts on the POD, which every container in it then inherits
+#: unless it overrides them. The other two are container-only fields and a pod-level value for them is
+#: not a thing — so asking the pod about `readOnlyRootFilesystem` would excuse a container that lacks it.
+#:
+#: READING THE CONTAINER ALONE IS A FALSE POSITIVE, and this gate shipped with one: four Jobs set
+#: `runAsNonRoot` and `seccompProfile` at pod level and were reported unhardened. The effective context
+#: is what the kubelet applies, so it is what a hardening gate has to ask about.
+POD_INHERITABLE = ("runAsNonRoot", "seccompProfile")
 
 #: Workloads that genuinely are not ours to template, keyed on the render SOURCE rather than the name.
 #: Nothing belongs here that lives under `rask/templates/`.
@@ -45,6 +58,17 @@ WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob")
 #: Dropping `initContainers` from that list shrinks the gate's reach and every test still passes —
 #: caught by mutation, which is exactly the failure this constant exists to make impossible.
 SLOTS = ("containers", "initContainers")
+
+
+def _effective(pod: dict, container: dict) -> set[str]:
+    """The baseline keys in force on this container once the pod's own context is merged in.
+
+    Container-level wins, which is the kubelet's own rule; for the two pod-inheritable keys an absent
+    container value falls back to the pod's.
+    """
+    own = set(container.get("securityContext") or {})
+    inherited = {key for key in POD_INHERITABLE if key in (pod.get("securityContext") or {})}
+    return own | inherited
 
 
 def _first_party_workloads() -> list[tuple[str, str, dict]]:
@@ -74,6 +98,13 @@ def test_the_walk_sees_the_chart() -> None:
     assert len(workloads) >= 20, f"only {len(workloads)} first-party workloads rendered — the walk or the render is broken"
     assert any(kind == "Job" for kind, _, _ in workloads), "no Jobs rendered; this gate exists because Jobs were never walked"
     assert set(SLOTS) == {"containers", "initContainers"}, "the ratchet stopped walking a container slot"
+    # `readOnlyRootFilesystem` and `allowPrivilegeEscalation` are CONTAINER-only fields in the Kubernetes
+    # API; a pod cannot carry them. Crediting a pod for one would excuse a container that genuinely
+    # lacks it — the inverse of the false positive this merge was added to fix, and invisible while no
+    # pod happens to set them. Caught by mutation: widening the tuple to BASELINE changed no result.
+    assert set(POD_INHERITABLE) == {"runAsNonRoot", "seccompProfile"}, (
+        "POD_INHERITABLE names a container-only key; the pod cannot satisfy it and crediting it hides a real gap"
+    )
     assert any(pod.get("initContainers") for _, _, pod in workloads), "no init containers rendered; one of them is why this gate is parametrised"
 
 
@@ -96,11 +127,6 @@ _UNHARDENED_TODAY: dict[str, tuple[str, ...]] = {
     "Job/nats-stream/nats": ("containers",),
     "Job/minio-mkbucket/mc": ("containers",),
     "Job/minio-scoped-users/mc": ("containers",),
-    "Job/openfga-model/write-model": ("containers",),
-    "Job/greptimedb-ttl/set-ttl": ("containers",),
-    "Job/kueue-setup/apply-queues": ("containers",),
-    "Job/kueue-setup/restart-kueue-controller": ("init",),
-    "Job/kueue-setup/await-kueue-controller": ("init",),
     # Stateful third-party images: each needs a writable path before the baseline can land.
     "StatefulSet/age/postgres": ("containers",),
     "StatefulSet/minio/minio": ("containers",),
@@ -131,7 +157,8 @@ def test_no_NEW_first_party_container_renders_without_the_baseline(slot: str) ->
     unexpected: dict[str, list[str]] = {}
     for kind, name, pod in _first_party_workloads():
         for container in pod.get(slot) or []:
-            missing = [key for key in BASELINE if key not in (container.get("securityContext") or {})]
+            effective = _effective(pod, container)
+            missing = [key for key in BASELINE if key not in effective]
             if not missing:
                 continue
             key = _key(kind, name, container["name"])
@@ -150,7 +177,7 @@ def test_the_ratchet_names_nothing_that_is_already_hardened() -> None:
     for kind, name, pod in _first_party_workloads():
         for slot, tag in (("containers", "containers"), ("initContainers", "init")):
             for container in pod.get(slot) or []:
-                if [key for key in BASELINE if key not in (container.get("securityContext") or {})]:
+                if [key for key in BASELINE if key not in _effective(pod, container)]:
                     rendered.setdefault(_key(kind, name, container["name"]), set()).add(tag)
 
     stale = {key: sorted(tags) for key, tags in _UNHARDENED_TODAY.items() if set(tags) - rendered.get(key, set())}

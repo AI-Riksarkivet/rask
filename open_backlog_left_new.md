@@ -1985,8 +1985,12 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 
 **XC-061 · Container hardening is restated per template and applied unevenly — 7 first-party containers and 3 Jobs render with none of it, including OpenBao and Dex**
 `chart` · **HIGH**
-- **RE-MEASURED 2026-09-23, AND THE ROW UNDERCOUNTS: 19 containers across 15 first-party workloads are
-  missing at least one baseline key**, not "7 first-party containers and 3 Jobs". Two numbers answer
+- **RE-MEASURED 2026-09-23: 14 containers across 11 first-party workloads are missing at least one
+  baseline key**, against the row's "7 first-party containers and 3 Jobs". **The first cut of this gate
+  answered 19, and five of those were its own false positives** — they set `runAsNonRoot` and
+  `seccompProfile` at POD level, which every container inherits, while the gate read only the container.
+  The gate now merges the effective context, and refuses to credit a pod for `readOnlyRootFilesystem` or
+  `allowPrivilegeEscalation`, which are container-only fields a pod cannot carry. Two numbers answer
   two questions — 12 carry NONE of the baseline, 19 are missing at least one. The gap is wider than the
   row states in three ways the old gate could not see: it walks DEPLOYMENTS only (six Jobs and the AGE
   StatefulSet were never asked), it walks `containers` only (`rask-lineage` PASSES on its app container
