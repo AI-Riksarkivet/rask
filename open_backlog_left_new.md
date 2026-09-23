@@ -661,6 +661,19 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **THE SEAM IS DEPLOYED AND EXERCISED IN THE RUNNING POD (2026-09-23, `main-b70c8630`, helm 237).**
+  I had shipped it to a DEPLOYABLE package and never rebuilt — the estate was running `main-77dc8049`
+  and `from lineage_kit import sign_event` answered **ImportError** there. That matters beyond
+  bookkeeping: the change adds names to `lineage_kit/__init__.py`, and a bad export in a package nine
+  services import is a startup failure, not a latent bug.
+  Built with Dagger, pushed, re-pinned, converged, then run inside `rask-lineage`:
+  ```
+  honest event verifies      : True
+  signer != author REFUSED   : True
+  a peer's key does not verify: True
+  ```
+  Estate 52 Running / 31 Completed, zero crashloops. The three properties the unit tests pin now hold
+  in the image the estate actually runs.
 - **THE WIRING IS NOT ONE SEAM, MEASURED 2026-09-23 — the row reads as though it were, and that is
   the part to decide before writing any of it.** THREE distinct producer paths reach the bus:
   **(1) the medallion**, through the shared `outbox.publish_lineage_with_outbox` — **10 call sites**
