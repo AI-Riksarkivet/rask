@@ -211,3 +211,13 @@ catalog:
     # one cluster is invisible to review and gone the next time the release is rebuilt.
     baseCredentialRefs:
       s3://lh067-second-store/data: lh067-second-store
+
+# THE LOCAL ESTATE'S FIRST ADMINISTRATOR: the dex dev user a person signs in as (`dex.staticUser`,
+# alice@example.com / password). The chart default is empty on purpose — a real deployment names its own
+# first owner — but empty here leaves a fresh local estate with no human granted anything: sign-in works,
+# `/v1/me` answers `estate_admin: false`, and every governed surface answers 403 (measured 2026-09-23).
+# The value is dex's `sub` for that static user (base64url of its userID + connector `local`, both in
+# templates/dex.yaml); tests/unit/test_a_local_estate_has_an_admin_who_can_sign_in.py derives it from
+# there, so a dex change that re-keys the user fails that test rather than orphaning this grant.
+auth:
+  bootstrapAdmin: "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjYSBWxvY2Fs"
