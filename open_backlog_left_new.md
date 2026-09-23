@@ -2172,6 +2172,25 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
   usable credential. A signature over the bus event ([[LH-064]]) is the one case where the verifier
   genuinely needs the key, because recomputing an HMAC requires it; that one does need asymmetric
   material, and the bearer door does not.
+- **PROVED LIVE 2026-09-23 — all four PRE-REGISTERED thresholds, on the deployed estate.** The rule
+  and its control were written down BEFORE the converge, so the reading could not be chosen to fit the
+  result. Precondition first: `rask-openbao-seed-r235` **Complete 1/1** in 7s (a zero count before that
+  is an unwritten secret, not a working scope).
+  (1) `medallion-producer` reads its OWN `service-token-service-medallion-producer` → **200**.
+  (2) the same pod reads a FOREIGN `service-token-service-ingest` → **REFUSED, HTTP 403**.
+  (3) **THE CONTROL** — `lineage`, a verifier door, still reads that same foreign credential → **200**.
+      Without it, (2) cannot tell "the scope works" from "every door is blinded", and a blinded door
+      refuses every producer with a message about a missing credential rather than a missing grant.
+  (4) the shared bundle still answers and is down to **13 fields from 21** — exactly the 8
+      `service-token-*` entries that moved out to their own secrets.
+  **BEFORE → AFTER: `medallion-producer` read 8 identity credentials this morning and reads 1 now.**
+  Read back off the running pods; key NAMES only, no values printed.
+- **THE WIRING WAS GATED AT EVERY HOP, not just at the end:** the image is in the registry on the
+  address k3s PULLS from (`localhost:5000`, not the `172.17.0.1:5000` Dagger pushes to — the same
+  registry addressed twice), 13 `lance-config-*` Configurations applied, and the rolled
+  `rask-medallion-producer` pod carries `dapr.io/config: lance-config-medallion-producer`. Dapr's
+  HotReload is OFF in this chart, so a Configuration reaches a sidecar only on restart — the pod had
+  to roll for the scope to bind, and it did because the annotation value changed.
 - *Closes when:* A pod's own sidecar returns only that identity's `service-token-*`, proved live from at
   least two different app-ids, and a render gate refuses a workload wired to the store without a scope.
 - *Evidence:* live `GET /v1.0/secrets/lance-secrets/lance` from `rask-medallion-producer` and
