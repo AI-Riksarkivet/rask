@@ -52,7 +52,11 @@ def _phase_1_rows() -> list[tuple[str, str, bool]]:
     lines = REGISTER.read_text().split("\n")
     start = next(i for i, line in enumerate(lines) if line.startswith("## PHASE 1 · LAKEHOUSE"))
     end = next(i for i, line in enumerate(lines) if line.startswith("## PHASE 1 · CROSS-CUTTING"))
-    heads = [(i, m) for i in range(start, end) if (m := re.match(r"^\*\*(LH-\d+) · (.*)", lines[i]))]
+    # EVERY ID PREFIX, not just `LH-`. The lakehouse section also carries `LIN-`, `ZT-` and `CAT-` rows,
+    # and a walk anchored on `LH-` made each of them invisible to this ratchet — a decision-gated row
+    # could carry the wrong marker for ever as long as its id did not start with those two letters.
+    # Found because this walk answered 30 where the mechanically-derived counts table said 31.
+    heads = [(i, m) for i in range(start, end) if (m := re.match(r"^\*\*([A-Z]+-\d+) · (.*)", lines[i]))]
     rows = []
     for k, (i, m) in enumerate(heads):
         stop = heads[k + 1][0] if k + 1 < len(heads) else end
@@ -64,9 +68,20 @@ def _phase_1_rows() -> list[tuple[str, str, bool]]:
 
 
 def test_the_walk_sees_the_register() -> None:
-    """Without this the ratchet would pass by measuring nothing."""
+    """Without this the ratchet would pass by measuring nothing.
+
+    CHECKED AGAINST THE REGISTER'S OWN COUNT, not a floor. A literal threshold makes closing rows fail
+    this file — it read `> 30` and went red the day the section reached 30, which turns a vacuity guard
+    into a brake on the work it is meant to protect. The counts table is derived mechanically by
+    `test_the_backlog_counts_itself`, so agreeing with it proves the walk sees the same rows without
+    anyone maintaining a number here.
+    """
     rows = _phase_1_rows()
-    assert len(rows) > 30, f"only {len(rows)} open phase-1 lakehouse rows parsed — the section headings or the row shape changed"
+    declared = re.search(r"\| \*\*PHASE 1 · LAKEHOUSE\*\* \| (\d+) \|", REGISTER.read_text())
+    assert declared, "the counts table no longer names PHASE 1 · LAKEHOUSE — this walk cannot be checked"
+    assert len(rows) == int(declared.group(1)), (
+        f"walked {len(rows)} open phase-1 lakehouse rows, the counts table declares {declared.group(1)} — the section headings or the row shape changed"
+    )
 
 
 def test_no_NEW_row_argues_for_a_decision_without_carrying_the_marker() -> None:
