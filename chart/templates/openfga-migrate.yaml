@@ -37,11 +37,7 @@ spec:
             requests: { cpu: "10m", memory: "16Mi" }
             limits: { cpu: "100m", memory: "64Mi" }
           command: ["sh", "-c", "until nc -z {{ include "lance.ageConnectHost" . }} {{ .Values.age.port }}; do echo wait-age; sleep 3; done"]
-          {{- if .Values.security.infraContexts.enabled }}
-          # PSA-restricted compliance for the root busybox init (the audit's sequencing footgun:
-          # labeling the namespace restricted would REJECT this pod until the init is hardened).
-          securityContext: { runAsNonRoot: true, runAsUser: 65532, allowPrivilegeEscalation: false, capabilities: { drop: [ALL] }, seccompProfile: { type: RuntimeDefault } }
-          {{- end }}
+          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
       {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       {{- end }}

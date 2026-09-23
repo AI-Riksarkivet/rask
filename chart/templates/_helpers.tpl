@@ -1095,6 +1095,33 @@ the RuntimeDefault seccomp profile = the restricted PodSecurity baseline. readOn
 default (values.security.readOnlyRootFilesystem) — each app mounts an emptyDir at /tmp for scratch (pyarrow
 spill, OTel), so nothing needs a writable rootfs. Container-level (NOT pod-level) so it never touches the
 injected daprd sidecar or the busybox wait-age initContainer (which legitimately runs as root). */}}
+{{/* The same baseline for a container whose IMAGE runs as root, so the uid must be pinned rather than
+inherited. `lance.securityContext` relies on the image's own USER (catalog uid 10001, web `bun`), and
+`runAsNonRoot: true` without a uid fails admission on an image that declares none — which is why the
+busybox waiters carried a hand-written context instead of the helper.
+
+UNCONDITIONAL, and that is the change ([[XC-061]]). These contexts sat behind
+`security.infraContexts.enabled`, which values.yaml defaults OFF — so the pods the flag exists to make
+PSA-restricted-compliant were not compliant by default, and the flag's own comment names the
+consequence: "labeling the namespace restricted would REJECT this pod until the init is hardened".
+Gating the hardening behind a flag postpones exactly the work that makes the flag safe to flip.
+
+`readOnlyRootFilesystem` IS INCLUDED, which the hand-written contexts omitted: both waiters run
+`sh -c "until nc -z host port; do sleep 3; done"` and write nothing at all.
+
+Usage: {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }} */}}
+{{- define "lance.rootlessSecurityContext" -}}
+securityContext:
+  runAsNonRoot: true
+  runAsUser: {{ . }}
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+{{- end -}}
+
 {{- define "lance.securityContext" -}}
 securityContext:
   runAsNonRoot: true
