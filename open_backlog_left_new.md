@@ -303,6 +303,16 @@ table. Neither is available, because **the catalog does not have these tables at
   or register. That question was built on a premise this measurement falsified**, and the reap was
   stopped at one table rather than run on 69.
 
+**THE TRAIN DOOR'S CATALOG RESOLUTION IS FIXED AND PROVEN LIVE — 2026-09-23.** `POST /train` answered
+`422 cannot resolve feature dataset 'silver$features'` on the deployed estate while the catalog
+described that table at `s3://bind86-wh/90f…`: `_resolve_version` opened a COMPOSED
+`<base>/medallion/<stage>` path, which `stage_uri_for`'s own docstring calls a demo-tier convention.
+It now asks `describe_table_location` first — `ensure_stage_output`'s "ask, do not tell" on the read
+side — and falls back to the composed path for the no-catalog shape, an unregistered dataset, or a
+catalog outage. Re-run live on `main-37d3e852`: **the 422 is gone and the submission is accepted (202)**.
+What now fails is the training RUN itself (`state='FAIL'`), which is the Ray lane and PHASE 2 — out of
+scope here, and named so the residual is not mistaken for this defect.
+
 **A SPEC-CONFORMANCE TENSION THE LIVE SUITE SURFACED, recorded rather than resolved unilaterally —
 2026-09-23.** `describe?branch=work` answers **406 `UnsupportedOperationError`**, and
 `ns_catalog/spec.yaml` does **not** declare 406 among `DescribeTable`'s responses (200, 400, 401, 403,
