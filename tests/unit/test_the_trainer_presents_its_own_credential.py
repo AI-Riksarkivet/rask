@@ -114,8 +114,10 @@ def test_the_seeded_token_and_the_mounted_token_are_THE_SAME_STRING() -> None:
     seeds = [d for d in docs if d.get("kind") == "Job" and "openbao" in d["metadata"]["name"]]
     if not seeds:
         pytest.skip("no openbao seed Job rendered on this profile — nothing to compare against")
-    script = str(seeds[0]["spec"]["template"]["spec"]["containers"][0])
-    assert f"service-token-{TRAINER}={mounted}" in script, (
+    #: The COMMAND, not `str(container)`: a repr escapes the quotes the seed puts round each value, so a
+    #: substring search over it misses a credential that is present and agreeing.
+    script = "\n".join(seeds[0]["spec"]["template"]["spec"]["containers"][0].get("command") or [])
+    assert f"service-token-{TRAINER}={mounted}" in script.replace("'", ""), (
         "the token the head sends is not the token the seed writes — the door compares them with "
         "`secrets.compare_digest`, so anything but an exact match is a 401 nothing renders as an error"
     )

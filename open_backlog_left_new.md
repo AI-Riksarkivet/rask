@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**202 open items**, of which **100 are blocked on a decision** and **102 can be picked up today**.
+**201 open items**, of which **99 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 35 | 3 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 34 | 3 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -241,6 +241,15 @@ the request's metadata KEYS, and `replace: true` un-labels a column without nami
 finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
+
+**[[ZT-001]] CLOSED 2026-09-23 — and the third path needed no owner call after all.** Its blocker asked
+for a deployment-policy choice (prod values enable ESO, or every dedicated token must be supplied and
+the render fails without it), and both halves of that choice make a prod estate undeployable. Neither
+was needed: `lance.dedicatedServiceToken` now GENERATES — supplied value, else the one already live,
+else `randAlphaNum 40` — so nothing has to be supplied and no render fails. Measured on a prod-shaped
+render before the change (5 of 5 derivable, the seed Job absent on that path) and on the LIVE estate
+after it (0 of 5 derivable; the old credential 401s at lineage while the rotated one answers 200, both
+executed from the Ray head that makes the real call).
 BLOCKER ANSWERED, workable today: [[CP-002]], [[CP-045]], [[CTL-004]], [[LH-082]], [[LH-092]], [[LH-160]], [[LIN-004]], [[LOW-028]], [[XC-002]], [[XC-003]], [[XC-004]], [[XC-014]], [[XC-046]], [[ZT-001]].
 
 
@@ -879,19 +888,6 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 - *What is left:* `x-api-key` is read nowhere in catalog, gateway or service-kit, while `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md` B6 still prescribes accepting it against a management-API key store. Take the ruling and edit the losing statement out. If bearer-only wins, rewrite B6 (:122-124, :367) as a conformance note. If the key principal survives, write the key-store and rotation design into the management API RFC and read `x-api-key` in `catalog/api/security.py`.
 - *Closes when:* One answer stands in the tree and the other is gone; if keys survive, the RFC carries the store and rotation design.
 - *Evidence:* `grep -rn 'x-api-key' services/catalog/src services/gateway/src packages/service-kit/src → 0 hits` · `docs/audits/lakehouse-2026-09/lance-conformance-and-build-rules.md:122-124,367` · `grep -n -i 'api.key\|bearer' docs/DECISIONS.md → no ruling`
-
-**ZT-001 · Every privileged service's "dedicated" credential is derived from the shared app token, so holding one yields all of them**
-`chart, service-kit` · **HIGH**
-- **THE BLOCKER IS ANSWERED — this row is workable today (2026-09-22 re-audit, adversarially confirmed).**
-WHAT IS LEFT: One of two dispositions, neither needing an owner: sweep it into the no-prod parking (drop
-from HIGH, on the XC-031/XC-032 precedent), or take the third path — port the `rask.rayAuthToken`
-explicit/lookup/random pattern onto `lance.dedicatedServiceToken` so the credential stops being a function
-of `dapr.appToken`. The one real engineering catch: the helper has TWO writers that must agree byte-for-
-- **blocked:** a deployment-policy call — either the prod values enable ESO so an operator's own material reaches OpenBao, or each dedicated token must be supplied and the render FAILS without it. Both make a prod estate undeployable in a way it is not today, which is the owner's to choose; the property itself is now pinned and measured either way.
-- *What is left:* `lance.dedicatedServiceToken` computes `sha256("<identity>-<dapr.appToken>")[:40]`, so any holder of the shared `dapr.appToken` — which 13 pods carry — can compute the dedicated credential of every privileged identity. That defeats the control `dapr_auth.py` describes it as being: a subject off the privileged allowlist authenticates with the shared token, and the dedicated pair exists precisely so "any holder of that one token may claim ANY allowlisted service" stops being true. The helper's defence is that the prod path supplies independent material through ESO — but `externalSecrets.enabled` is `false` by default and `chart/values-prod.yaml` carries NO uncommented `externalSecrets:` stanza at all, only comments suggesting it, so a prod render from that file gets derived tokens. Either make the prod values enable ESO (and fail the render when a privileged identity has no independent secret), or stop deriving and require each token to be supplied. **Shares its mechanism with [[XC-004]]** — that row is the ESO default itself; this one is what the default costs. Work them together or the fix lands on one side only.
-- *Measured:* **5 privileged identities render a dedicated token and all 5 are derivable** — `service-bronze-to-silver`, `service-media-to-silver`, `service-silver-to-gold`, `service-trainer`, `service-web`. Pinned by `tests/unit/test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py`, which derives each exactly as the chart does and reds if the helper changes shape. That file is deleted, not inverted, when the fix lands.
-- *Closes when:* A privileged identity's credential cannot be computed from `dapr.appToken`, and a prod render refuses rather than silently deriving one.
-- *Evidence:* `chart/templates/_helpers.tpl — lance.dedicatedServiceToken: printf "%s-%s" $identity $secret | sha256sum | trunc 40` · `chart/values.yaml:2811 externalSecrets.enabled: false` · `grep -nE '^externalSecrets:' chart/values-prod.yaml → no match` · `packages/service-kit/src/service_kit/governed/dapr_auth.py — service_principal binds a privileged subject to service-token-<identity>`
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**

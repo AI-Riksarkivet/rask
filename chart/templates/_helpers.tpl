@@ -1314,9 +1314,12 @@ ONE OVERRIDE SECURES THE WHOLE SET, which is the reason to seed from `minio.secr
 from a constant: on a real deployment that value must already be overridden (`prod-credentials.yaml`
 refuses the published default), so every secret derived from it is real without a second decision.
 
-DETERMINISTIC, so a re-render is not a rotation. `sha256sum | trunc 40` matches
-`lance.dedicatedServiceToken`, deliberately — a second shape for the same job is how one of them ends
-up wrong.
+DETERMINISTIC, so a re-render is not a rotation — and unlike `lance.dedicatedServiceToken`, which
+GENERATES, this one must derive. The difference is the other half of the pair: an access key's secret
+is read at eight sites across five templates AND handed to `mc admin user add`, so the two halves
+agree here only by both computing the same function of the same inputs. A dedicated service token has
+no such counterpart to match — one value is written to two places within a single render — so it can
+be independent material, which is what its own threat model requires.
 */}}
 {{- define "lance.scopedStorageSecret" -}}
 {{- $root := index . 0 -}}{{- $identity := index . 1 -}}{{- $explicit := index . 2 -}}
@@ -1328,22 +1331,60 @@ A privileged service identity's DEDICATED credential — `service-token-<identit
 
 `dapr_auth.service_principal` compares what a caller presents against this value with
 `secrets.compare_digest`, so two derivations that merely look alike are a 401 nothing renders as an
-error. It is a helper rather than two inline expressions because it has TWO writers that must agree
+error. It is a helper rather than inline expressions because it has TWO writers that must agree
 byte-for-byte: `openbao.yaml` seeds the store the DOOR reads, and `infra-credentials.yaml` holds the
 copy a daprd-less consumer MOUNTS.
 
-Deterministic from the shared app token on purpose — the dev/demo seed needs no out-of-band material,
-and on the prod path external-secrets syncs whatever an operator actually put in OpenBao, so this
-derivation is never what a real deployment presents.
+INDEPENDENT MATERIAL, NOT A FUNCTION OF THE SHARED TOKEN. The dedicated pair exists to end "any holder
+of the shared app token may claim ANY allowlisted service", so a credential computed FROM that token
+leaves the property exactly where it was — measured 2026-09-23 on a prod-shaped render
+(`openbao.devMode=false`, an operator-supplied `dapr.appToken`): all five rendered identities were
+recomputable from it, while fourteen Deployments carry it.
+
+THREE SOURCES, in order, matching `rask.rayAuthToken`:
+  1. `auth.serviceTokens.<identity>` — an operator's own material, which always wins.
+  2. the value already live in `<release>-infra-credentials`, so a re-render is not a rotation. This is
+     also the ESO path: with `externalSecrets.enabled` the operator owns that Secret and the lookup
+     reads back whatever it synced from OpenBao.
+  3. `randAlphaNum 40` — same length as the hash prefix it replaces, so nothing downstream sees a
+     shorter credential.
+
+A LOOKED-UP VALUE THAT IS STILL DERIVABLE IS TREATED AS ABSENT, which is the only reason this
+remediates rather than merely stops the bleeding: every estate deployed before this holds the old
+`sha256("<identity>-<dapr.appToken>")[:40]` in exactly the Secret step 2 reads, so preserving it would
+carry the compromised credential forward untouched and report a fix. Recomputing the old expression and
+refusing a match rotates precisely the values that are guessable and leaves independent ones alone.
+Rotating a credential restarts the pods that mount it — the trainer, the web BFF and the Ray stage
+lanes — which is the cost of the remediation, paid once.
+
+MEMOISED ON `.Values` BECAUSE `randAlphaNum` IS NOT STABLE ACROSS CALLS. `.Values` is one map shared by
+every template in a render, so the first caller for an identity fixes the value and the second reads
+it — without that, the two writers randomise independently on a first install and every privileged
+call is a silent 401. Verified on helm v3.20.0: two templates including this for one identity render
+identical bytes, and distinct identities do not collide.
 
 Usage: {{ include "lance.dedicatedServiceToken" (list . "service-trainer") }}
 */}}
 {{- define "lance.dedicatedServiceToken" -}}
 {{- $root := index . 0 -}}{{- $identity := index . 1 -}}
-{{- /* `required` INSIDE the pipeline, never on its own line: it EMITS the value it checks, so a bare
-       statement would print the raw app token into the rendered Secret instead of the hash of it. */ -}}
-{{- $secret := required "dapr.appToken must be set — it is the SECRET half of every dedicated service token, and without it the credential is a hash of a public identity name that anyone reading the chart can compute" $root.Values.dapr.appToken -}}
-{{- printf "%s-%s" $identity $secret | sha256sum | trunc 40 -}}
+{{- $supplied := get (default dict $root.Values.auth.serviceTokens) $identity -}}
+{{- if $supplied -}}
+{{- $supplied -}}
+{{- else -}}
+{{- $memo := (index $root.Values "dedicatedServiceTokensRendered") | default dict -}}
+{{- if not (hasKey $memo $identity) -}}
+{{- $live := "" -}}
+{{- $existing := (lookup "v1" "Secret" $root.Release.Namespace (printf "%s-infra-credentials" (include "lance.fullname" $root))) -}}
+{{- if and $existing $existing.data -}}
+{{- $live = (index $existing.data (printf "service-token-%s" $identity)) | default "" -}}
+{{- end -}}
+{{- $prior := ternary (b64dec $live) "" (ne $live "") -}}
+{{- $guessable := printf "%s-%s" $identity ($root.Values.dapr.appToken | default "") | sha256sum | trunc 40 -}}
+{{- $_ := set $memo $identity (ternary $prior (randAlphaNum 40) (and (ne $prior "") (ne $prior $guessable))) -}}
+{{- $_ := set $root.Values "dedicatedServiceTokensRendered" $memo -}}
+{{- end -}}
+{{- index $memo $identity -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -913,6 +913,21 @@ auth:
   # A security default must fail CLOSED — the same rule `auth.enabled` above records. Left off, a
   # fresh install ships the shape where any holder of the shared token can claim any privileged name.
   dedicatedServiceCredentials: true
+  # An operator's OWN material for a privileged identity, keyed by the identity name:
+  #
+  #   serviceTokens:
+  #     service-trainer: <from your secret manager>
+  #
+  # A supplied value WINS at both writers — the OpenBao seed and the mounted Secret — because supplying
+  # only one half is a 401 that nothing renders as an error (`dapr_auth.service_principal` compares with
+  # `compare_digest`).
+  #
+  # EMPTY IS NOT UNSAFE, which is why this defaults to `{}` rather than being required. An unsupplied
+  # identity gets the value already live in `<release>-infra-credentials`, or a fresh `randAlphaNum 40`
+  # on a first install — never a function of `dapr.appToken`, which fourteen Deployments carry. Supply
+  # one here only to pin a credential you hold elsewhere; the alternative to supplying is generation,
+  # not derivation.
+  serviceTokens: {}
   # ON BY DEFAULT (2026-08-06). It was `false`, and values-prod.yaml flipped it — which meant every
   # install that forgot to pass a values file came up UNGOVERNED, silently and green. That is exactly
   # how it kept happening: a `helm upgrade` without `-f values-prod.yaml` reverts a governed estate to
@@ -2305,9 +2320,10 @@ minio:
   # and `rask-observability` all AccessDenied from the pod's own credential).
   #
   # NAMING THE IDENTITY IS ENOUGH: set the access key alone and the secret is DERIVED
-  # (`lance.scopedStorageSecret` — sha256 of the identity plus `minio.secretKey`, the
-  # `lance.dedicatedServiceToken` shape), so declaring a scoped identity in a values file needs no
-  # secret in git. Set the secret key too and yours wins, for an operator supplying one from a manager.
+  # (`lance.scopedStorageSecret` — sha256 of the identity plus `minio.secretKey`), so declaring a
+  # scoped identity in a values file needs no secret in git. DERIVED rather than generated because the
+  # other half of this pair is created separately by `mc admin user add`: the two agree only by
+  # computing the same function of the same inputs. Set the secret key too and yours wins, for an operator supplying one from a manager.
   # One value therefore reaches all of: the pod env, the OpenBao seed and the `mc` user creation —
   # which is the property that matters, because a scoped access key beside any other secret is
   # `SignatureDoesNotMatch` on every call (measured, twice) and looks correct in a diff.

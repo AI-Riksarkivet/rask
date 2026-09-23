@@ -238,7 +238,11 @@ spec:
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
                 {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
                 {{- range (compact $privileged | uniq | sortAlpha) }}
-                service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) }} \
+                {{- /* SQUOTED because `auth.serviceTokens` lets an operator supply this value: a generated
+                       token is alphanumeric and safe bare, but a credential from a secret manager carries
+                       `+/=` and can carry `$`, which this `sh -c` would expand — seeding a DIFFERENT value
+                       than the mounted half and 401ing that identity with no error anywhere. */}}
+                service-token-{{ . }}={{ include "lance.dedicatedServiceToken" (list $ .) | squote }} \
                 {{- end }}
                 {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
                        rather than a second value on `minio-secret-key`: that field IS the tenant root's
