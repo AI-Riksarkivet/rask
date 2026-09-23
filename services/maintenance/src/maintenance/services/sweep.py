@@ -819,17 +819,36 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     # one serial pass; until then it still holds, and per-dataset pacing lives in the policy stamps,
     # which do not care about order.
     random.shuffle(uris)
-    items = [
-        DatasetWorkItem(
-            uri=uri,
-            plan=_resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than),
-            protected_by=protected.is_protected(uri),
-            # Same derivation and same limit as `plan_one`: the flat layout yields an identity, every
-            # other layout yields None rather than a guess.
-            table_id=table_id_from_uri(uri),
+    items: list[DatasetWorkItem] = []
+    for uri in uris:
+        plan = _resolve_plan(uri, policy_records=policy_records, settings=settings, options=options, now=now, older_than=older_than)
+        # A POLICY SKIP IS A DECISION, SO IT IS DECIDED HERE ([[LH-191]]). The plan already knows —
+        # `compact_enabled=False`, or a `compact_interval_hours` that has not elapsed — and publishing
+        # the unit anyway made every cadence a queue hop that answered SUCCESS for doing nothing.
+        # Measured 2026-09-23: `planned=570 published=570` over 27 policies, against a lane that needs
+        # ~127s to clear one tick's injection and gets 120.
+        #
+        # WITHHOLDING LOSES NOTHING, and `_stamp_policy_state` is why: it returns early on
+        # `plan.skipped is not None`, because re-stamping a paced dataset "would push the next
+        # maintenance out by another full interval on every tick". So a skipped unit's only effect at
+        # the worker was the round trip.
+        #
+        # The reason travels into `decided` rather than evaporating, exactly as the trash exclusions
+        # do — that list is what the tick's `skipped_by` is built from, so a cadence that is working
+        # becomes visible instead of being indistinguishable from one that is not configured.
+        if plan.skipped is not None:
+            decided.append(DatasetResult(uri=uri, skipped=plan.skipped))
+            continue
+        items.append(
+            DatasetWorkItem(
+                uri=uri,
+                plan=plan,
+                protected_by=protected.is_protected(uri),
+                # Same derivation and same limit as `plan_one`: the flat layout yields an identity, every
+                # other layout yields None rather than a guess.
+                table_id=table_id_from_uri(uri),
+            )
         )
-        for uri in uris
-    ]
     return items, decided
 
 

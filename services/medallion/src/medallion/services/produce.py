@@ -61,13 +61,19 @@ def _unwind_registration(settings: MedallionSettings, *, table_id: str, token: s
             service_identity=settings.catalog_service_identity,
             dedicated_token=dedicated_token_for(settings),
         )
-    except Exception as unwind:  # noqa: BLE001 — the write error is the cause; this names the residue
+    except catalog_register.RegisterError as unwind:
+        # THE TYPED ERROR, not a bare `Exception`. `deregister_dataset` raises exactly this — for an
+        # unreachable catalog and for a refusal alike — so catching it names the failure this handler
+        # is written for, and a programming error here still surfaces as one instead of being reported
+        # as a catalog problem.
         log.error(
             "medallion_produce_registration_orphaned",
             extra={"token": token, "dataset": table_id, "error": str(cause), "unwind_error": str(unwind)},
         )
         return f"bronze write failed ({cause}) and the catalog registration could not be unwound ({unwind}); {table_id} now governs no bytes"
-    log.warning("medallion_produce_seed_failed", extra={"token": token, "dataset": table_id, "error": str(cause)})
+    # `exception`, not `warning`: this arm is reached by ANY write failure, so the traceback is the only
+    # thing that tells an operational error (S3 refused) from a defect wearing its clothes.
+    log.exception("medallion_produce_seed_failed", exc_info=cause, extra={"token": token, "dataset": table_id})
     return f"bronze write failed: {cause}"
 
 
