@@ -303,6 +303,26 @@ table. Neither is available, because **the catalog does not have these tables at
   or register. That question was built on a premise this measurement falsified**, and the reap was
   stopped at one table rather than run on 69.
 
+**A SPEC-CONFORMANCE TENSION THE LIVE SUITE SURFACED, recorded rather than resolved unilaterally —
+2026-09-23.** `describe?branch=work` answers **406 `UnsupportedOperationError`**, and
+`ns_catalog/spec.yaml` does **not** declare 406 among `DescribeTable`'s responses (200, 400, 401, 403,
+404, 503, 5XX).
+- **THE CODE CHOICE IS DELIBERATE AND WELL ARGUED.** `dataplane.refuse_a_branch_this_door_cannot_honour`
+  unified sixteen doors on spec code 0 ("Operation not supported by this backend") over code 13
+  ("Malformed request or invalid parameters"), because a well-formed branch name this backend does not
+  serve is the former, and a client dispatching on the codes cannot tell one condition apart when two
+  doors answer it differently. `describe` was the outlier and joined them at LH-019 (`6a3a376e`,
+  2026-09-17).
+- **THE SPEC DECLARES 406 ON EXACTLY FOUR OPERATIONS** — namespace create, namespace list, table list,
+  table register — every one of which a backend may not implement AT ALL. `describe` is core and every
+  backend implements it; what rask refuses there is a PARAMETER, not the operation. On that reading the
+  spec's 406 is about an unsupported OPERATION and a spec-generated client does not expect one here.
+- **NOT RESOLVED HERE, because both readings are defensible and sixteen doors hang on it.** The e2e
+  expectation was simply STALE — written 2026-08-31 against describe's old 400, never updated when the
+  door moved — so it now asserts 406 and passes live. Whether rask should special-case `describe` back
+  to a declared status, or the upstream spec should declare 406 where a parameter is unserviceable, is
+  an owner call.
+
 **THE LIVE e2e SUITE WAS RUN AGAINST THE DEPLOYED ESTATE FOR THE FIRST TIME — 2026-09-23.**
 `scripts/e2e_live.sh` exists because "every 'verified live' claim in this repo rested on a manual
 terminal session"; nothing had executed it. **144 passed, 9 failed, 5 skipped in 15 minutes.**

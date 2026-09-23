@@ -852,11 +852,18 @@ def test_describe_refuses_a_branch_on_both_channels_and_an_impossible_version(es
     estate.branch("descchan", "work")
     table = estate.table_id("descchan")
 
+    # 406 `UnsupportedOperationError`, not 400. This door refused inline with `InvalidInputError` (spec
+    # code 13, "Malformed request or invalid parameters") until LH-019 moved it onto the shared refusal
+    # every other branch-declining door already used (spec code 0, "Operation not supported by this
+    # backend"). A well-formed branch name this backend does not serve is the second, and a client
+    # dispatching on the codes cannot tell one condition apart when two doors answer it differently.
+    # The assertion is on the CODE-BEARING status rather than the sentence, so a reworded remedy does
+    # not red this.
     query_branch = requests.post(f"{CATALOG}/v1/table/{table}/describe?branch=work", headers=_auth(), timeout=60)
-    assert query_branch.status_code == 400, f"?branch=work answered {query_branch.status_code}: {query_branch.text[:180]}"
+    assert query_branch.status_code == 406, f"?branch=work answered {query_branch.status_code}: {query_branch.text[:180]}"
 
     body_branch = requests.post(f"{CATALOG}/v1/table/{table}/describe", json={"branch": "work"}, headers=_auth(), timeout=60)
-    assert body_branch.status_code == 400, f"the body channel regressed: {body_branch.status_code} {body_branch.text[:180]}"
+    assert body_branch.status_code == 406, f"the body channel regressed: {body_branch.status_code} {body_branch.text[:180]}"
 
     absent = requests.post(f"{CATALOG}/v1/table/{table}/describe?version=9999", headers=_auth(), timeout=60)
     assert absent.status_code == 404, (
