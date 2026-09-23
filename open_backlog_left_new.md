@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**200 open items**, of which **98 are blocked on a decision** and **102 can be picked up today**.
+**199 open items**, of which **97 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 33 | 3 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 32 | 3 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -241,6 +241,23 @@ the request's metadata KEYS, and `replace: true` un-labels a column without nami
 finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
+
+**[[LH-092]] CLOSED 2026-09-23 — the lane now asserts the DATA chain, not just the trigger chain.**
+`assert_cascade_landed` polls the catalog for a committed version on `<project>-silver$features` and
+`<project>-gold$catalog` and compares each tier's row count against the bronze input. Through the
+CATALOG because that is the only legitimate home for a tier ([[LH-164]]: the composed
+`s3://<bucket>/medallion/<ns>` second homes are frozen residue, measured object by object), and via
+`count_rows` because it is the spec's own operation (`ns_catalog/spec.yaml:1350`, CountTableRows) —
+which also settles the response shape: "REST namespace returns the response as a plain integer",
+matching the catalog's `JSONResponse(count)`. An object there is a contract change and fails rather
+than being coerced.
+**Four branches proven**: the spec shape with a matching count passes; a mismatched count fails naming
+the tier and both numbers; an absent tier fails naming the door's status (run against the LIVE catalog
+— 401/no-version, exit 1); and a non-integer count fails naming the type. A bug in the first cut was
+caught by that last case — a version without a count reported "None rows" and buried the reason.
+**THE BOUND, STATED: no full `ingest-lane.sh all` run.** `cmd_deploy` re-deploys the estate with
+lane-specific values, which would disturb the working cluster, so the success path is proven at the
+logic level plus a live-catalog failure rather than by a green end-to-end lane.
 
 **[[LIN-004]] CLOSED 2026-09-23 — both closes-when clauses met and PROVEN THROUGH THE PRODUCTION PATH.**
 A DDL change now emits the spec's `DatasetEvent`, and the phantom count stopped growing. Driven end to
@@ -530,19 +547,6 @@ FROM opentelemetry_logs` returns exa
 - *What is left:* Take the lane decision. If lineage: document at the `POST /v1/table/{id}/changes` door that the trigger is the `lineage.events.v1` write event's `version` and nothing else changes. If control lane: add the action to the 41-member `ControlAction` literal with the buffer cost stated, across the three-file contract. Either way do NOT add it to notifications' `NAMED_ACTIONS` — it names no party.
 - *Closes when:* Either the changes-door docs name `lineage.events.v1` as the trigger, or a version-advance action exists in `ControlAction` with an emitter and the stated cost.
 - *Evidence:* `packages/service-kit/src/service_kit/control_events.py:36 (`ControlAction` literal; 41 members, none for a write/version advance)` · `packages/service-kit/src/service_kit/control_events.py:57,105 (`NAMED_ACTIONS` exclusion rationale)`
-
-**LH-092 · The ingest-lane slice proves the TRIGGER chain but not the DATA chain — no silver or gold version or row count is ever asserted**
-`medallion` · **MED**
-- **THE BLOCKER IS ANSWERED — this row is workable today (2026-09-22 re-audit, adversarially confirmed).**
-WHAT IS LEFT: Add the silver AND gold assertion to scripts/ingest-lane.sh, through the catalog (describe the
-vended table id, read its committed version and row count, compare against the bronze input) — no ruling
-needed any more. The composed MEDALLION_FROM_URI/TO_URI still render in
-chart/templates/medallion.yaml:595-596, so the collapse-to-one-home chart change (LH-164's residue) is a
-separate, adjacent task
-- **blocked:** The double-home ruling ([[LH-137]]/[[LH-164]]): whether the catalog-vended path becomes the only legitimate home for the silver/gold tiers, or the composed `s3://<stageBucket>/medallion/<ns>` paths stay — which decides whether the lane asserts through the catalog or opens S3 directly
-- *What is left:* The tier URIs are already rendered for every stage runner (chart/templates/medallion.yaml:523-524 under `medallion.compute`), so configuration is not the gap. scripts/ingest-lane.sh asserts bronze only — `committed_version` at line 506 and `units_done` at 513, 618, 719 — and the words silver/gold appear only in the comment at line 89. Once the ruling lands, add an assertion that reads a committed silver AND gold version with row counts through whichever door the ruling makes correct; do not write it before, because the composed tier ids name no catalog table and a catalog lookup 404s today.
-- *Closes when:* scripts/ingest-lane.sh fails when silver or gold has no committed version or its row count does not match the bronze input.
-- *Evidence:* `scripts/ingest-lane.sh:89 (only silver/gold mention, a comment); :506 `committed_version`; :513,618,719 `units_done`` · `chart/templates/medallion.yaml:517-524 — MEDALLION_FROM_URI/TO_URI rendered under `$root.Values.medallion.compute`` · `open_backlog_left.md:2620 LH-137 header (reopened, unruled); :7521 LH-164 header`
 
 **LH-097 · Silver re-materialises managed blob bytes copied from bronze instead of being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · **MED**

@@ -293,6 +293,89 @@ ingest_pod() {
 # Idempotent: each door answers 200 on a repeat, and a 409 means someone got there first, which is
 # success for our purposes. Only a hard failure on the NAMESPACE is fatal, since that is the one the
 # run actually needs.
+# THE DATA CHAIN, not just the trigger chain ([[LH-092]]). Everything above proves a run reached a
+# terminal state and that BRONZE committed a version with one row per fixture. It proves nothing about
+# the cascade: bronze->silver->gold could stop at the first hop, or land an empty table, and every
+# assertion so far would still pass. A lane that reports success while gold is empty is the exact
+# declared-but-absent shape this whole script exists to refuse.
+#
+# THROUGH THE CATALOG, which is now the only legitimate home for a tier: `produce.py` registers its
+# write location before the first row, and the composed `s3://<bucket>/medallion/<ns>` second homes are
+# frozen residue ([[LH-164]], measured object by object 2026-09-22 — nothing written to any of them for
+# 8-11 days). So a tier's version is read where the governance is, not off a bucket path.
+#
+# `count_rows` IS THE SPEC'S OWN OPERATION (`ns_catalog/spec.yaml:1350`, operationId CountTableRows),
+# not a door invented here, and it is reader-gated like every other data read.
+#
+# POLLED, because the cascade is event-driven: the bronze write publishes an arrival, a stage runner
+# picks it up, and gold lands some seconds later. A single immediate read would fail on timing rather
+# than on correctness, which is a flaky gate and worse than none.
+assert_cascade_landed() {
+	local pod="$1" expected="$2"
+	log "A9 — the DATA chain: silver and gold must commit a version and carry the bronze row count"
+	kubectl exec -n "$NS" "$pod" -c ingest -- env LANE_ADMIN_TOKEN="$LANE_ADMIN_TOKEN" EXPECTED="$expected" PROJECT="$PROJECT" python -c "
+import json, os, sys, time, urllib.error, urllib.parse, urllib.request
+import os as _os
+$PY_AUTH
+base = os.getenv('RASK_CATALOG_URL', 'http://rask-catalog:2333').rstrip('/')
+expected = int(os.environ['EXPECTED'])
+project = os.environ['PROJECT']
+
+def post(table, op):
+    url = base + '/v1/table/' + urllib.parse.quote(table, safe='') + '/' + op
+    headers = {'Content-Type': 'application/json'}
+    headers.update(_auth())
+    req = urllib.request.Request(url, data=b'{}', headers=headers, method='POST')
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status, json.loads(r.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        return e.code, {'error': e.read().decode()[:160]}
+
+failures = []
+for tier, table in (('silver', project + '-silver' + chr(36) + 'features'), ('gold', project + '-gold' + chr(36) + 'catalog')):
+    version = rows = None
+    detail = ''
+    # Up to three minutes: the cascade is two event hops, and a stage runner cold-starts.
+    for _ in range(36):
+        code, body = post(table, 'describe')
+        if code == 200 and body.get('version') is not None:
+            version = body['version']
+            code, body = post(table, 'count_rows')
+            if code == 200:
+                # A PLAIN INTEGER, per the spec rather than a guess: 'REST namespace returns the
+                # response as a plain integer instead of the CountTableRowsResponse JSON object'
+                # (ns_catalog/spec.yaml, CountTableRows), and the catalog answers JSONResponse(count).
+                # Anything else is a contract change, so it fails here instead of being coerced.
+                if not isinstance(body, int):
+                    detail = 'count_rows returned ' + type(body).__name__ + ', not the plain integer the spec defines'
+                    break
+                rows = body
+                break
+            detail = 'count_rows -> ' + str(code) + ' ' + (str(body.get('error', '')) if isinstance(body, dict) else '')
+        else:
+            detail = 'describe -> ' + str(code) + ' ' + (str(body.get('error', '')) if isinstance(body, dict) else '')
+        time.sleep(5)
+    if version is None:
+        failures.append(tier + ' (' + table + ') committed NO version: ' + detail)
+        continue
+    if rows is None:
+        # A VERSION WITHOUT A COUNT is its own failure and must say so. Falling through to the
+        # comparison below reports 'None rows, expected 3' and buries the reason, which is the
+        # difference between a cascade that under-produced and a door that changed its contract.
+        failures.append(tier + ' (' + table + ') committed version ' + str(version) + ' but no row count: ' + detail)
+        continue
+    print('   ' + tier + ' committed at version ' + str(version) + ' with ' + str(rows) + ' rows')
+    if rows != expected:
+        failures.append(tier + ' (' + table + ') has ' + str(rows) + ' rows, expected ' + str(expected))
+if failures:
+    for line in failures:
+        print('   ' + line, file=sys.stderr)
+    sys.exit(1)
+" || die "the cascade did not reach silver and gold with the bronze row count"
+	ok "A9 — silver and gold each committed a version carrying $expected rows"
+}
+
 cmd_provision() {
 	local pod
 	pod="$(ingest_pod)" || die "no ingest pod"
@@ -524,6 +607,8 @@ with urllib.request.urlopen(_req, timeout=15) as r:
 
 	[ "$(jq -r .defect <<<"$body")" = "null" ] || die "A8 defect reported: $(jq -r .defect <<<"$body")"
 	ok "A8 — no provenance defect"
+
+	assert_cascade_landed "$pod" "$rows"
 
 	log "A2 — the same Idempotency-Key must start NO second run"
 	local repeat
