@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **99 are blocked on a decision** and **102 can be picked up today**.
+**202 open items**, of which **99 are blocked on a decision** and **103 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 34 | 3 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 35 | 4 | 7 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -790,6 +790,16 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   (`tree/<b>/`)**, 8 `medallion`, 5 `silver`. **The model registry contributes 0** because
   `MAINTENANCE_DECLARED_PLATFORM_ROOTS` names it — a value that MUST change the output, and did.
   `unregistered_datasets` stayed 0 and `absent_datasets` 9, so nothing else moved.
+- **THE REGISTRATION NO LONGER OUTLIVES THE WRITE IT GOVERNS — shipped and proven live 2026-09-23.**
+  `produce` registers the cascade head BEFORE seeding it ("governance precedes the first row"), and
+  `seed_bronze` was unguarded, so a failed write left the record behind governing nothing. That is the
+  `absent_datasets` state this row's own evidence names. The seed is guarded now and unwinds its
+  registration through a new `deregister_dataset` — deregister, never drop, because the seed may have
+  written some bytes before it raised and the unwind must never be what removes them.
+- *Proven with a value that MUST fail:* the producer was pointed at a dead S3 endpoint
+  (`http://127.0.0.1:1`) and a fresh table id, and `POST /produce` answered
+  **`{"status":"seed_failed"}`** carrying the Lance IO error. The record was removed — the `bronze`
+  namespace went 5 tables to 4 — and the tuple set on the probe table is empty afterwards.
 - *What is left:* reap the 15 `e2etrain*` datasets under the registry. `churn` is the janitor script's
   own documented example (`scripts/model_artifact_janitor.py:24`) and is not residue.
 - *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
@@ -1364,6 +1374,39 @@ measured (~10-14 MiB per commit pas
   `services/maintenance/src/maintenance/services/sweep.py:103-118` (`compact_interval_hours` and its
   fail-safe) · [[LH-188]] for the bounds this volume sizes, [[LH-190]] for the recovery it lengthens
 
+
+**LH-194 · A service-credentialed `register` creates an UNGOVERNED table, silently — and the catalog's own comment says no door can repair it**
+`catalog, medallion` · **HIGH**
+- **FOUND BY A MUST-FAIL PROBE 2026-09-23, and reproduced deterministically in one call.** Driving
+  `POST /produce` with a fresh table id registered `bronze$lh164probe` and left it carrying **exactly
+  one tuple — `namespace:bronze -> parent`, and no owner**. `can_deregister: owner` therefore denied
+  every principal including the producer that had just created it, and the unwind came back **403
+  `can_deregister required on table:bronze$lh164probe`**.
+- *The cause is a documented no-op:* `fga_deps.py:1186` reads
+  `if not (settings.fga_enabled and token is not None and client is not None): return`, described as
+  "No-op when FGA is off, **the request is unauthenticated**, or the client is unwired". A service
+  credential resolves no `IDToken`, so the seed returns success having written nothing — and
+  `seed_ownership_or_compensate` only compensates on a FAILURE, which a silent no-op is not.
+- *Confirmed by repair rather than by reading:* writing `user:service-medallion-producer -> owner`
+  directly to the store and re-driving the same probe changed the answer from "could not be unwound
+  (403)" to the clean `bronze write failed: <IO error>`, and the record was removed. The missing owner
+  tuple is the whole cause.
+- **THE ESTATE ALREADY KNOWS, AND THE COMMENT IS EXACT.** `tables.py:776-781`: *"A table registered
+  whose seed never ran carries NO tuples at all, and every `table` relation resolves through a direct
+  tuple or `X from parent` — so it denies every principal, including the identity that registered it,
+  and no door can repair it because re-registering is exactly what lands here. Measured 2026-09-15:
+  five of the estate's own tiers in that state."* That measurement is eight days old and the door that
+  produces the state is unchanged.
+- *And the cascade head is in it:* `namespace:bronze` carries **no owner tuple at all**, so
+  `owner from parent` resolves to nothing for every table beneath it. `bronze$events` survives only
+  because it holds a direct `service-medallion-producer -> owner`.
+- *What is left:* decide which way it fails. Either the register REFUSES when it cannot seed ownership
+  (fail closed, and the caller is told), or a service credential resolves to a seedable subject so the
+  registrar owns what it registered. The silent third option — an ungoverned object nobody can remove
+  — is the one shipping today.
+- *Closes when:* A register that cannot seed ownership leaves no object behind, pinned by a test that
+  drives the door with a service credential and asserts the table is either governed or absent.
+- *Evidence:* `services/catalog/src/catalog/api/fga_deps.py:1186` · `services/catalog/src/catalog/api/v1/endpoints/tables.py:776-781,809` · live probe 2026-09-23 (403 unwind, then clean unwind after granting owner) · `namespace:bronze` owner tuples: none
 
 ## PHASE 1 · CROSS-CUTTING
 
