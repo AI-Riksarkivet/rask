@@ -1800,6 +1800,21 @@ measured (~10-14 MiB per commit pas
 
 **LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
 `medallion, tests` · **MED**
+- **THE RECURRENCE GUARD IS SHIPPED (2026-09-23) and it is mutation-proven against the live estate.**
+  When this lane loses its grant the test used to fail `assert 'Traceback' not in log` — "the baked
+  entrypoint raised" plus 800 truncated characters — which is what sent me through four wrong theories
+  today. It now reads the refusal first and says so: *"the lane RAN and the lineage door REFUSED its
+  emit (403). This is a missing GRANT, not a broken entrypoint"*, names
+  `seed_medallion_fga.sh <project> <zone-warehouse-id>`, names the exact link
+  `namespace:<p>-silver -> table:<p>-silver$dummy`, and says why production does not need it.
+  **PROVED BY DELETING THE TUPLE ON THE LIVE STORE**, not by reasoning: `can_write_data` True -> False,
+  run the test, read the message, write the tuple back, True again and 3 passed.
+  **AND THE FIRST VERSION OF THE GUARD DID NOT FIRE.** I keyed it on `lineage-emit-failed`, copied from
+  the `refused` branch further down — a string this path never produces, because it RAISES out of
+  `lineage_kit.emitter.emit` instead of being caught and logged. The mutation is what exposed it; the
+  condition now matches what the log carries (`403` plus `/api/v1/lineage`).
+  *Worth a look, not measured:* the sibling `refused` branch at :534 keys on the same
+  `lineage-emit-failed` AND `status=403`, so it may be unreachable for the same reason.
 - **RESOLVED ON THE LIVE ESTATE 2026-09-23, and the failing test had been right from the first line.**
   Measured from INSIDE a pod against the real store (`01KYPGG8F8…`), never a forward:
   ```

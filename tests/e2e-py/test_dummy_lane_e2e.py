@@ -445,6 +445,34 @@ def test_the_BAKED_command_exists_in_the_deployed_image_and_runs(driven: dict[st
     """
     log = driven["first_log"]
     assert "can't open file" not in log, f"the entrypoint is not in the deployed image:\n{log[-800:]}"
+
+    # A MISSING GRANT IS NOT AN ENTRYPOINT BUG, and this assertion cannot tell them apart on its own.
+    # Measured 2026-09-23: the lane emitted, the lineage door answered 403 `can_write_data` on
+    # `<p>-silver$dummy`, the emitter raised, and this test reported "the baked entrypoint raised" with a
+    # truncated traceback. The real cause was one absent tuple — `namespace:<p>-silver` parent
+    # `table:<p>-silver$dummy` — and reading it out of that message cost hours. The `refused` branch
+    # below already says the right thing; it just never runs for THIS test, because the run never
+    # reaches the events assertion. So the same reading happens here, first.
+    # MATCHED ON WHAT THE LOG ACTUALLY CARRIES. A first version keyed on "lineage-emit-failed", copied
+    # from the `refused` branch below — and that string never appears here: this path RAISES out of
+    # `lineage_kit.emitter.emit` rather than being caught and logged, so the log holds the requests
+    # traceback and the endpoint, not the emitter's own message. Verified by deleting the tuple and
+    # reading the run: the condition stayed False and the old "entrypoint raised" message fired again.
+    if "403" in log and "/api/v1/lineage" in log:
+        pytest.fail(
+            "the lane RAN and the lineage door REFUSED its emit (403). This is a missing GRANT, not a "
+            "broken entrypoint.\n\n"
+            f"    scripts/seed_medallion_fga.sh {PROJECT} <zone-warehouse-id>\n\n"
+            "It writes the table->namespace parent links the stage runners need, including "
+            f"`namespace:{PROJECT}-silver -> table:{PROJECT}-silver$dummy` (`SILVER_TABLES` names the "
+            "lanes). Production does not need it — `ensure_stage_output` creates the table through the "
+            "catalog, whose register door seeds ownership — but this test submits to Ray DIRECTLY to "
+            "exercise the baked image, so nothing governs its output for it.\n\n"
+            "Find the zone warehouse with the namespace's own parent tuple, NOT by guessing:\n"
+            '    kubectl exec deploy/rask-catalog -c catalog -- python -c "...read namespace:<p>-silver"\n'
+            f"{log[-600:]}"
+        )
+
     assert "Traceback" not in log, f"the baked entrypoint raised:\n{log[-800:]}"
     assert '"rows_written": 64' in log, f"the job did not report 64 written rows:\n{log[-800:]}"
     assert driven["silver_rows"] == 64
