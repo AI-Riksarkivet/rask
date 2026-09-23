@@ -63,6 +63,11 @@ spec:
       containers:
         - name: dashboard
           image: {{ .Values.dapr.dashboard.image }}
+          {{- /* `daprio/dashboard` declares no USER, so it runs as root unless a uid is pinned here —
+                 read off the image config with `dagger core container from --address=... user`, which
+                 answers empty. 65532 is the uid Dapr's own chart gives this image. It writes nothing:
+                 it reads the k8s API through the SA above and serves 8080. */}}
+          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
           ports:
             - { name: http, containerPort: 8080 }
           resources: {{- include "lance.resources" (dict "root" . "comp" "dapr-dashboard") | nindent 12 }}

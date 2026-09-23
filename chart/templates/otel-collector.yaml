@@ -597,6 +597,10 @@ spec:
       containers:
         - name: otel-collector
           image: {{ $c.image }}
+          {{- /* The same uid the pod already pins. Everything the Collector writes goes to the
+                 `offsets` volume below (the file_storage extension's checkpoints); the config is a
+                 read-only mount, so a read-only rootfs takes nothing away from it. */}}
+          {{- include "lance.rootlessSecurityContext" 65534 | nindent 10 }}
           args: ["--config=/etc/otelcol/config.yaml"]
 {{- if $daprState }}
           {{- /*

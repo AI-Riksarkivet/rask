@@ -2081,9 +2081,26 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
   immediately found two entries excusing more than they should — minio already renders
   `allowPrivilegeEscalation` and `readOnlyRootFilesystem`, the collector already renders
   `runAsNonRoot`.
-- **EIGHT LEFT ON THE RATCHET**, all third-party images the chart templates itself (postgres, minio,
-  openbao, dex, the mc/nats/kubectl CLIs). `readOnlyRootFilesystem` is the key that breaks them — each
-  writes under its own root unless given a mount — so each comes off with its pod observed running.
+- **THREE MORE HARDENED AND OBSERVED (2026-09-23): the mkbucket Job, the OTel Collector and the Dapr
+  dashboard.** Read back off the RUNNING pods, not the render — all three carry the full baseline
+  (`runAsNonRoot`, pinned uid, `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true`, caps
+  dropped, `RuntimeDefault`). `minio-mkbucket` reached **Complete 1/1** and logged `verified the
+  operator-owned bucket set: rask-observability lance-catalog`, so it did its real job under the
+  constraints; the Collector's `file_storage` extension **started** under a read-only rootfs with
+  **zero** permission or read-only errors in its log, which was the only thing that could have broken.
+  The dashboard image declares **no USER** — read off the image config with `dagger core container
+  from --address=daprio/dashboard:0.15.0 user`, which answers empty — so `runAsNonRoot` without a
+  pinned uid would have failed admission rather than hardened anything.
+- **FIVE LEFT ON THE RATCHET, and FOUR OF THEM ARE ONE FLAG.** `age`, `openbao`, `dex` and `minio`
+  already carry a full pod-level context in their own templates, gated behind
+  `security.infraContexts.enabled`, which `values.yaml` defaults **OFF**. So the remaining lakehouse-tier
+  gap is not missing hardening, it is hardening that does not render — the same anti-pattern this row
+  already names ("gating hardening behind a values flag that defaults OFF postpones exactly the work
+  that would make the flag safe to flip"). Flipping it unconditional takes `minio` off the ratchet
+  outright and narrows the other three to the two container-only keys. It needs its own live check:
+  the values file records that a mismatched uid on minio does NOT CrashLoop — the server READS fine
+  while every WRITE fails — which took the data plane down on 2026-07-13, so that converge must be
+  proved with an actual S3 write, not a Running pod.
 - *What is left:* `securityContext` is repeated per template rather than defaulted chart-wide, so coverage drifts silently and the two workloads that most need it — the secret store and the IdP — render without it. Hoist the baseline to one chart-wide default that a template opts OUT of with a stated reason, and gate the render.
 - *Closes when:* Every first-party container and Job renders the baseline, and a test refuses a new one that does not.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream sets the baseline once, chart-wide

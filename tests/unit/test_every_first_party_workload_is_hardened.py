@@ -131,11 +131,8 @@ _UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
     "StatefulSet/age/postgres": {"containers": BASELINE},
     "Deployment/openbao/openbao": {"containers": BASELINE},
     "Deployment/dex/dex": {"containers": BASELINE},
-    "Deployment/dapr-dashboard/dashboard": {"containers": BASELINE},
-    "Job/minio-mkbucket/mc": {"containers": BASELINE},
     # PARTIAL, and the numbers are why the ratchet names keys rather than containers.
     "StatefulSet/minio/minio": {"containers": ("runAsNonRoot", "seccompProfile")},
-    "Deployment/otel-collector/otel-collector": {"containers": ("seccompProfile", "allowPrivilegeEscalation", "readOnlyRootFilesystem")},
     # The nats CLI answers `could not load schema` as EVERY non-root uid tried — 65532, 1000 and 65534,
     # on nats-box 0.14.5 and 0.19.7 — while the same command as root succeeds. Bisected key by key:
     # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.
