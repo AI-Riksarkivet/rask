@@ -1133,6 +1133,34 @@ class LineageRepository:
                     await run_cypher(conn, self._graph, delete, {})
         return count
 
+    async def prune_orphan_jobs(self) -> int:
+        """DETACH DELETE Job nodes no run refers to any more. Returns the up-front count.
+
+        THE THIRD HALF OF RETENTION, and without it the Job population only ever grows. `prune_runs`
+        removes the runs and :meth:`prune_orphan_datasets` removes the datasets they leave behind; the
+        JOB between them was removed by nothing, so the mechanism that creates the residue IS retention.
+        Measured on the live graph 2026-09-23: **3,374 Job nodes, 111 with no run at all.**
+
+        NOT DISK — ACCESS. The `/jobs` governance fold makes a Job's output set its access handle, so
+        each orphan is an access-control object for work nobody can reach any more.
+
+        NO `CREATED`-STYLE EXEMPTION, unlike datasets, and the asymmetry is the point: a dataset with a
+        CREATED edge is a DECLARED table someone made and never wrote, which is a fact worth keeping. A
+        job is a record that something RAN, and with no run left there is nothing it can still record.
+
+        Batched under the same argument as :meth:`prune_runs` — one transaction per batch, so a large
+        backlog cannot push a statement past the pool's statement_timeout and roll back for ever.
+        """
+        async with self._pool.connection() as conn:
+            rows = await run_cypher(conn, self._graph, cy.COUNT_ORPHAN_JOBS, {})
+            count = int(rows[0][0]) if rows and rows[0] else 0
+            batches = -(-count // cy.PRUNE_BATCH_SIZE)
+            delete = cast("LiteralString", cy.PRUNE_ORPHAN_JOBS_TEMPLATE.format(limit=cy.PRUNE_BATCH_SIZE))
+            for _ in range(batches):
+                async with conn.transaction():
+                    await run_cypher(conn, self._graph, delete, {})
+        return count
+
     async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
         """Preserve a settled governance refusal, so the staged object can be retired without data loss.
 

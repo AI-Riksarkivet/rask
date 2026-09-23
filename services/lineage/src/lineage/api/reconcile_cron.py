@@ -393,6 +393,15 @@ async def _prune_old_runs(repository: RepositoryDep, settings: SettingsDep) -> i
         return pruned
     if orphans:
         log.info("lineage_orphan_datasets_pruned", extra={"pruned": orphans})
+    # AND THE JOB BETWEEN THEM, which nothing reclaimed. Same containment as the two above: a failure
+    # here must not lose the counts the caller already earned, and must not end the reconcile.
+    try:
+        stale_jobs = await repository.prune_orphan_jobs()
+    except Exception as exc:  # noqa: BLE001 — retention is best-effort; the sweep's report still lands
+        log.warning("lineage_job_prune_failed", extra={"error": str(exc)})
+        return pruned
+    if stale_jobs:
+        log.info("lineage_orphan_jobs_pruned", extra={"pruned": stale_jobs})
     return pruned
 
 

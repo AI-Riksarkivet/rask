@@ -27,6 +27,8 @@ import pytest
 import requests
 from topology import create_top_level
 
+from service_kit.openlineage import event_identity
+
 
 pytestmark = [pytest.mark.e2e, pytest.mark.chaos]
 
@@ -64,10 +66,17 @@ def _ready_replicas() -> int:
 
 
 def _runs_naming(table_id: str, *, limit: int = 200) -> set[str]:
-    """Run ids on the durable feed whose event names ``table_id``."""
+    """Event identities on the durable feed whose event names ``table_id``.
+
+    `event_identity` rather than `event["run"]["runId"]`: a catalog DDL change is an OpenLineage
+    `DatasetEvent` and carries no run at all ([[LIN-004]]), so indexing the run raised `KeyError: 'run'`
+    the moment a table under test had been created — which is every table this suite makes. The shared
+    derivation is what the outbox keys on and what the feed dedups by, so this reads the same identity
+    the estate does instead of a second opinion about what identifies an event.
+    """
     body = requests.get(f"{LINEAGE}/events", headers=_auth(), params={"limit": limit}, timeout=60).json()
     rows = body.get("events", body) if isinstance(body, dict) else body
-    return {row["event"]["run"]["runId"] for row in rows if table_id in str(row.get("outputs", ""))}
+    return {event_identity(row["event"]) for row in rows if table_id in str(row.get("outputs", ""))}
 
 
 @pytest.fixture(scope="module")

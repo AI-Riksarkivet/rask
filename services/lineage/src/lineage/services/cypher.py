@@ -356,6 +356,25 @@ _ORPHAN_DATASETS: Final = (
 COUNT_ORPHAN_DATASETS: Final = _ORPHAN_DATASETS + "RETURN count(d)"
 # Batched for the reason `PRUNE_OLD_RUNS_TEMPLATE` is, and with the same literal-LIMIT constraint.
 PRUNE_ORPHAN_DATASETS_TEMPLATE: Final = _ORPHAN_DATASETS + "WITH d LIMIT {limit} DETACH DELETE d"
+# A Job node no run refers to any more — the residue retention leaves that nothing reclaims. `prune_runs`
+# removes the runs and `_ORPHAN_DATASETS` removes their datasets; the JOB between them was removed by
+# nothing, so the population is monotonic and the mechanism that grows it IS retention.
+#
+# IT IS NOT DISK. The `/jobs` governance fold makes a Job's output set its access handle, so each one is
+# an access-control object for work nobody can reach any more.
+#
+# NO `CREATED`-STYLE EXEMPTION, and the asymmetry with datasets is deliberate: a dataset with a CREATED
+# edge is a DECLARED table someone made and never wrote, which is a fact worth keeping. A job is a
+# record that something RAN — with no run left, there is nothing it can still be a record of.
+#
+# THE NEGATED FORM DOES NOT PARSE, measured against the running database 2026-09-23 before this was
+# written: `MATCH (j:Job) WHERE NOT (j)<-[:OF_JOB]-(:Run)` answers `syntax error at or near ":"` on
+# AGE 1.5.0, the same refusal `_ORPHAN_DATASETS` records. The form below was executed there first and
+# answered 111 orphans out of 3,374 Job nodes.
+_ORPHAN_JOBS: Final = "MATCH (j:Job) OPTIONAL MATCH (j)<-[o:OF_JOB]-() WITH j, count(o) AS no WHERE no = 0 "
+COUNT_ORPHAN_JOBS: Final = _ORPHAN_JOBS + "RETURN count(j)"
+# Batched for the reason `PRUNE_OLD_RUNS_TEMPLATE` is, and with the same literal-LIMIT constraint.
+PRUNE_ORPHAN_JOBS_TEMPLATE: Final = _ORPHAN_JOBS + "WITH j LIMIT {limit} DETACH DELETE j"
 # The per-version column schema rides the same WROTE edge as the version (#24 prerequisite). Stored as
 # a JSON **string** scalar — params are JSON-encoded and ``_parse`` json.loads each cell, so a scalar
 # round-trips cleanly; an array-in-SET is the risky path AGE 1.5.0 mishandles (same reason tags are a
