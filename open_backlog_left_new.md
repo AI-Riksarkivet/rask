@@ -1796,6 +1796,31 @@ measured (~10-14 MiB per commit pas
 
 **LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
 `medallion, tests` · **MED**
+- **RESOLVED ON THE LIVE ESTATE 2026-09-23, and the failing test had been right from the first line.**
+  Measured from INSIDE a pod against the real store (`01KYPGG8F8…`), never a forward:
+  ```
+  table:acme-silver$dummy     0 tuples
+  table:acme-silver$features  2 tuples  (namespace:acme-silver parent, service-bronze-to-silver owner)
+  check writer namespace:acme-silver -> True
+  ```
+  So `$features` WAS seeded and `$dummy` was not — exactly what `test_dummy_lane_e2e.py:515` says, and
+  exactly what I dismissed twice. The service already held `writer` on the namespace, so the one
+  missing thing was the inheritance edge.
+  Wrote the pair the seed script's `link` writes (`parent` plus the inverse `child`):
+  `can_write_data table:acme-silver$dummy` **False -> True**, control `…$features` unchanged True.
+  **`tests/e2e-py/test_dummy_lane_e2e.py` now passes: 3 passed, 4 skipped.** Red on every run this
+  session.
+- **SO THERE WAS NO PLATFORM DEFECT, AND NO STALE SCRIPT.** `seed_medallion_fga.sh` already writes this
+  link — `for silver_table in ${SILVER_TABLES:-features dummy}` — with a comment recording the same
+  symptom: "the dummy lane's e2e could not reach its terminal-event assertion because
+  `namespace:<p>-silver -> table:<p>-silver$dummy` was never written". The estate had simply never had
+  that step run for `$dummy`. Production does not need it: `ensure_stage_output` creates the table
+  through the catalog, whose register door seeds ownership — which is why `$features` carries an
+  `owner` tuple and `$dummy` carried nothing.
+  *What is left:* the e2e depends on a documented seed step that nothing runs, so it will re-break on a
+  fresh estate or a new lane name. Either have the test seed its own project-qualified links in setup,
+  or make the direct-submit path ask the catalog the way the submitter does. That is the row now, and
+  it needs no ruling.
 - **EVERYTHING I WROTE HERE ABOUT A STALE AUTHORIZATION MODEL IS WITHDRAWN (2026-09-23).** The seed
   failure (`relation 'namespace#publisher' not found`), the zero-tuple reads, the `estate` type
   "missing", the `can_write_data` denials I reproduced by hand — every one of those was measured
