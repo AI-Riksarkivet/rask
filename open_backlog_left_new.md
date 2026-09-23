@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **93 are blocked on a decision** and **103 can be picked up today**.
+**196 open items**, of which **94 are blocked on a decision** and **102 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 6 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 5 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -858,6 +858,22 @@ is reachable — and that needs no
 
 **LH-075 · The read audit stream in GreptimeDB has no index; `dataset` is a JSON key inside `log_attributes`, not a column**
 `catalog, chart` · **MED** · PARTIAL
+- **blocked:** the dataset-promotion ruling is the ONLY thing left, because the arm this row calls
+  "startable now and gated by no ruling" is **already satisfied — and the row's own measurement says
+  so two bullets above the request**. It asks to "Add an index on `opentelemetry_logs.scope_name`";
+  re-measured live 2026-09-24 against GreptimeDB 1.1.1, `SHOW INDEX FROM opentelemetry_logs` returns
+  ```
+  Key_name=PRIMARY        Column_name=scope_name   Index_type=PRIMARY
+  Key_name=TIME INDEX     Column_name=timestamp    Index_type=TIME
+  Key_name=FULLTEXT_INDEX_body  Column_name=body   Index_type=FULLTEXT
+  ```
+  `scope_name` IS the primary key — which in GreptimeDB is the tag column the data is sorted by, i.e.
+  the indexed access path for that column. The row recorded exactly this ("`PRIMARY KEY
+  (\"scope_name\")`") and then asked for it to be added. Building a chart hook to create it would
+  create a second index on the primary key.
+  *Stated as a bound, not a claim:* I verified the KEY exists, not that the planner prunes on it —
+  GreptimeDB's `EXPLAIN` answers `MergeScanExec` and does not expose pruning, so that half is
+  unmeasured here.
 - **THE ROW DESCRIBES SOMETHING UNTRUE OF THE CODE (2026-09-22 re-audit) — rewrite before working it.**
 MEASURED: Measured live against the deployed GreptimeDB (kubectl port-forward svc/rask-greptimedb-standalone
 4000, GET /v1/sql, version() = 1.1.1). `SHOW CREATE TABLE opentelemetry_logs` returns `PRIMARY KEY
