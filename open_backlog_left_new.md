@@ -345,6 +345,38 @@ scope here, and named so the residual is not mistaken for this defect.
   to a declared status, or the upstream spec should declare 406 where a parameter is unserviceable, is
   an owner call.
 
+**A DUPLICATE YAML KEY HAD DISABLED THE SECRET-ROTATION CONTROL ON EVERY SIDECAR'D SERVICE — found
+and fixed 2026-09-23, and it explains an observation made earlier the same day.** A duplicate mapping
+key is not a YAML error: the parser keeps the LAST one and silently drops the rest. `maintenance.yaml`,
+`medallion.yaml` and `services.yaml` each carried a second `annotations:` block holding the dapr
+annotations, below the `checksum/dapr-app-token` block — so the checksum was overwritten on every
+Deployment where `dapr.sidecars` is on, which is the default.
+- **MEASURED LIVE BEFORE THE FIX:** `rask-maintenance`, `rask-medallion-producer`, `rask-lineage` and
+  `rask-catalog` each carried 15 pod annotations, ALL `dapr.io/*`, and NO checksum.
+- **THE CONTROL COULD NOT FIRE, AND THAT IS NOT THEORETICAL.** Rotating the dedicated service tokens
+  for [[ZT-001]] earlier the same day left the Ray head holding the old credential until it was
+  restarted BY HAND. Nothing would have restarted it: the annotation whose change triggers that
+  restart was never on the pod. The checksum's own comment states the failure mode exactly — "a
+  `secretKeyRef` env is injected at pod CREATION and never refreshed, so a rotated Secret leaves this
+  pod holding a dead credential while the render, the reference and every probe stay green".
+- **FIXED AND OBSERVED:** five pod templates merged (maintenance, the medallion producer, the
+  stage-runner loop, and two in services). Read off the RUNNING pods afterwards —
+  `rask-maintenance` and `rask-catalog` carry `checksum/dapr-app-token` AND `dapr.io/app-id` together;
+  estate 83/83 healthy.
+- **THE DEPLOY REPORTED FAILURE AND CONVERGED ANYWAY, which is worth knowing before trusting an exit
+  code either way.** `helm upgrade` hit `context deadline exceeded` on its 20-minute wait because the
+  annotation change alters EVERY sidecar'd pod template and the whole fleet rolls — the mechanism
+  working. Release 230 reads `failed`; every Deployment is ready, every Job complete, and the fix is
+  live. `failed` is not `pending-upgrade`, so later upgrades are not blocked.
+- **GATED BY A LOADER, because nothing between the edit and the cluster could see this.** PyYAML
+  permits duplicates by default, so the check runs while the mapping is built:
+  `tests/unit/test_the_chart_renders_no_duplicate_yaml_key.py`, itself checked against a duplicate it
+  must reject. It was written for a bug made minutes earlier — hardening five Jobs added an `env:` to
+  three containers that already had one, dropping `HOME=/tmp` and failing the pre-upgrade hook — and it
+  found this one immediately.
+- **NOT FOLDED IN SILENTLY:** `rask-maintenance-worker` renders no checksum at all and
+  `rask-controlplane` only `checksum/config`. Neither is a duplicate, so this gate does not cover them.
+
 **THE LIVE e2e SUITE WAS RUN AGAINST THE DEPLOYED ESTATE FOR THE FIRST TIME — 2026-09-23.**
 `scripts/e2e_live.sh` exists because "every 'verified live' claim in this repo rested on a manual
 terminal session"; nothing had executed it. **144 passed, 9 failed, 5 skipped in 15 minutes.**
