@@ -1268,6 +1268,24 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
+- **SOAK, FIRST 90 MINUTES (2026-09-23): FLAT, AND SLIGHTLY FALLING.** 19 samples at 300s off the
+  planner's own tick line, under CONSTANT load (`planned=577` on every single tick, so this is not a
+  quiet window):
+  ```
+  min    rss MiB  %limit   session MB    python_blocks  planned  restarts
+    0      322.5   63.0%         27.7          899,359      577         0
+   45      319.8   62.5%         27.7          899,004      577         0
+   90      321.9   62.9%         27.7          898,822      577         0
+  ```
+  **RSS 322.5 -> 321.9 MiB, a slope of -0.37 MiB/h.** The Lance session cache is DEAD flat at 27.7 MB
+  against its 214 MB cap, `python_blocks` oscillates around 899k with no trend, and there have been
+  zero restarts. A native leak of even 1 MiB/h would already be visible across this span; the
+  measured direction is DOWN.
+  **THIS IS NOT THE CLOSE AND MUST NOT BE READ AS ONE — 90 minutes is 6% of the clause.** The row asks
+  for "a full day of sweep AND reconcile ticks inside its limit", and the reason that bar is a day
+  rather than an hour is that the failure it guards against is slow. What 90 flat minutes DOES buy is
+  a direction: the shape is no longer 'climbing towards a limit', which is what every earlier reading
+  of this row showed. The collector runs to 24h.
 - **THE INSTRUMENT IS LIVE AND THE PLANNER IS FLAT SO FAR (2026-09-23, image `main-77dc8049`).** The
   queue lane's own tick line now carries the whole set on one clock — measured on `rask-maintenance`,
   the 512Mi PLANNER, which is the pod this row accuses (the 4Gi workers are not it, and reading them
