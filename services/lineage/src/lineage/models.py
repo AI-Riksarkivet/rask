@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from lance_namespace import PermissionDeniedError
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lineage.schemas import SchemaField
 
@@ -358,6 +358,80 @@ class UngovernedOutputError(PermissionDeniedError):
     """
 
 
+class DatasetEvent(BaseModel):
+    """An OpenLineage ``DatasetEvent`` — a dataset change that no job performed.
+
+    The spec calls it "A Dataset sent within static metadata events" and forbids the ``job`` and ``run``
+    members on it outright (``"not": { "required": ["job", "run"] }``), which is exactly a catalog DDL
+    change: there is no run to name and nothing executed. Emitting one as a ``RunEvent`` mints a Job node
+    for an operation nobody performed, and the ``/jobs`` governance fold makes that Job's output set an
+    access handle — so a phantom is an access-control object, not only untidy.
+
+    THE FORBIDDEN MEMBERS ARE REFUSED RATHER THAN IGNORED. ``extra="allow"`` keeps this model
+    forward-compatible with spec fields it does not read yet, and that same tolerance would accept a
+    ``run`` as an unread extra — re-admitting the phantom through the new door while every test here
+    passed.
+
+    It answers ``run_id`` / ``inputs`` / ``outputs`` so the ingest authorizer needs no second
+    implementation: a static change amends no run and reads no input, and the dataset it changed is the
+    output the write check gates on.
+    """
+
+    model_config = _MODEL
+    event_time: str = Field(alias="eventTime")
+    producer: str | None = Field(default=None)
+    dataset: Dataset
+
+    @model_validator(mode="before")
+    @classmethod
+    def _refuse_a_run_or_a_job(cls, raw: object) -> object:
+        if isinstance(raw, dict):
+            named = sorted(member for member in ("run", "job") if raw.get(member) is not None)
+            if named:
+                raise ValueError(f"a DatasetEvent may not carry {' or '.join(named)}: the spec forbids both on a static metadata event")
+        return raw
+
+    @property
+    def run_id(self) -> str | None:
+        """Always ``None`` — a static metadata change amends no run."""
+        return None
+
+    @property
+    def inputs(self) -> list[Dataset]:
+        """Always empty: this event asserts what a dataset IS, never what was read to produce it."""
+        return []
+
+    @property
+    def outputs(self) -> list[Dataset]:
+        """The one dataset that changed, so the ingest write-check gates on the table the DDL touched."""
+        return [self.dataset]
+
+    @property
+    def operation(self) -> str | None:
+        """The catalog operation (``create_table``, ``drop_columns``, …) from the ``lance`` dataset facet."""
+        lance = (self.dataset.facets or {}).get("lance")
+        return lance.get("operation") if isinstance(lance, dict) else None
+
+    @property
+    def author(self) -> str | None:
+        """Who made the change — rask's ``author`` dataset facet, else the standard ``ownership`` facet.
+
+        Same preference order as :attr:`RunEvent.author` and for the same reason: this is ATTRIBUTION,
+        where a producer's claimed owner beats no owner. It is NOT what authorizes the event — see
+        :func:`author_sub_from_payload`, which takes the verified ``sub`` and nothing else.
+        """
+        facets = self.dataset.facets or {}
+        author = facets.get("author")
+        if isinstance(author, dict) and (name := author.get("name") or author.get("sub")):
+            return str(name)
+        ownership = facets.get("ownership")
+        if isinstance(ownership, dict):
+            owners = ownership.get("owners")
+            if isinstance(owners, list) and owners and isinstance(owners[0], dict) and (owner := owners[0].get("name")):
+                return str(owner)
+        return None
+
+
 def author_sub_from_payload(raw: object) -> str | None:
     """The VERIFIED author sub inside a run-event payload, or ``None`` — tolerant of a payload that
     does not parse.
@@ -375,20 +449,27 @@ def author_sub_from_payload(raw: object) -> str | None:
     producer-supplied and unverified, so a loss record built on them could name someone who is not the
     author of the run that was lost. Anonymous beats misattributed. Same rule
     ``notifications.author_subject`` applies for the same reason.
+
+    TWO HOMES, ONE RULE. A :class:`DatasetEvent` has no run, so its stamp rides the same reserved
+    ``author`` facet on the DATASET — and it is read under exactly the same restriction. Moving DDL off
+    the run must not move its author onto ``ownership``, which this is required to distrust; a producer
+    that could sign there would authorize itself under anyone's display name.
     """
     if not isinstance(raw, dict):
         return None
-    run = raw.get("run")
-    if not isinstance(run, dict):
-        return None
-    facets = run.get("facets")
-    if not isinstance(facets, dict):
-        return None
-    author = facets.get("author")
-    if not isinstance(author, dict):
-        return None
-    sub = author.get("sub")
-    return sub if isinstance(sub, str) and sub.strip() else None
+    for holder in (raw.get("run"), raw.get("dataset")):
+        if not isinstance(holder, dict):
+            continue
+        facets = holder.get("facets")
+        if not isinstance(facets, dict):
+            continue
+        author = facets.get("author")
+        if not isinstance(author, dict):
+            continue
+        sub = author.get("sub")
+        if isinstance(sub, str) and sub.strip():
+            return sub
+    return None
 
 
 def run_id_from_payload(raw: object) -> str | None:
@@ -424,6 +505,17 @@ class RunEvent(BaseModel):
     job: Job
     inputs: list[Dataset] = Field(default_factory=list)
     outputs: list[Dataset] = Field(default_factory=list)
+
+    @property
+    def run_id(self) -> str | None:
+        """This event's run id, as :class:`DatasetEvent` also answers it.
+
+        The ingest authorizer gates on the run a producer is amending, and a static metadata change
+        amends none — so both event kinds answer the question and only one of them has an id. Reading
+        ``event.run.run_id`` there instead would mean a second authorization path for the other kind,
+        which is the drift `enforce_bus_authz` exists to prevent.
+        """
+        return self.run.run_id
 
     @property
     def author(self) -> str | None:
