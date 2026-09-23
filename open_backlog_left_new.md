@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**201 open items**, of which **99 are blocked on a decision** and **102 can be picked up today**.
+**200 open items**, of which **98 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 34 | 3 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 33 | 3 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -241,6 +241,17 @@ the request's metadata KEYS, and `replace: true` un-labels a column without nami
 finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
+
+**[[LIN-004]] CLOSED 2026-09-23 — both closes-when clauses met and PROVEN THROUGH THE PRODUCTION PATH.**
+A DDL change now emits the spec's `DatasetEvent`, and the phantom count stopped growing. Driven end to
+end on the deployed estate: the CATALOG'S OWN BUILDER in the running catalog image produced a
+`DatasetEvent` (no run, no job), the running lineage door accepted it (200), it landed in the feed at
+`seq=397462` with `job=None` and a spec-correct stored event, carrying author / lance /
+lifecycleStateChange / version / datasetType on the dataset — and the Job population was unchanged
+before and after (10 total, 4 DDL-named), with no `add_columns` Job minted.
+Five commits: the wire model and its authorization rule, the notifications plane, lineage's routing and
+graph write, the catalog's emit, and the evidence. **Four pre-existing phantom Job nodes remain** —
+residue from before the change, and a separate item from the growth this row was about.
 
 **[[ZT-001]] CLOSED 2026-09-23 — and the third path needed no owner call after all.** Its blocker asked
 for a deployment-policy choice (prod values enable ESO, or every dedicated token must be supplied and
@@ -315,37 +326,6 @@ of mine in this same session.**
 - *What is left:* **one facet and one ruling.** `NominalTimeRunFacet` is the one that genuinely needs a ruling: what logical window a cascade run covers. **`DataQualityMetricsInputDatasetFacet` leaves this row** — the estate computes its numbers (`assert_quality` runs `count_rows()` and a null count, then keeps only the booleans) but it is an INPUT facet and those numbers describe an OUTPUT, so filling it would need the metrics carried to the next stage's input. That is a different change from emitting a facet. `SQLJobFacet` has no subject until a query engine lands. Emitting a facet the estate cannot fill truthfully is worse than omitting it.
 - *Closes when:* Each remaining applicable facet is emitted with a real value or recorded as deliberately omitted with its reason.
 - *Evidence:* `packages/service-kit/src/service_kit/openlineage.py (lifecycle_facet, processing_engine_facet)` · `tests/unit/test_a_standard_consumer_can_read_what_a_write_did.py` · upstream facet versions read via the GitHub API 2026-09-19 · `gh api repos/OpenLineage/OpenLineage/contents/spec/facets` (~30 published)
-
-**LIN-004 · Every DDL change is emitted as a RunEvent, so half the Job nodes in the graph are jobs that never ran**
-`catalog, lineage` · **MED**
-- **THE RECEIVING SIDE IS SHIPPED AND PROVEN LIVE (2026-09-23). WHAT IS LEFT IS THE PRODUCER AND THE
-  PHANTOMS ALREADY IN THE GRAPH.** Three commits: the `DatasetEvent` model and the authorization rule
-  for its author; the notifications plane; lineage's routing, graph write and feed row.
-- **OBSERVED ON THE DEPLOYED ESTATE**, driving a real `DatasetEvent` through the running lineage door
-  (`main-2dfa7523`): the door answers 200, the event lands in the feed at `seq=396195` with `job=None`
-  and a STORED event carrying no `eventType`, no `run` and no `job`; `/jobs` shows **zero**
-  `add_columns` jobs and `GET /runs/<derived id>` answers **404** — no Run node and no Job node was
-  minted. Three identical deliveries produce **one** feed row, which is the derived identity working:
-  both dedup indexes key on `run_id` and SQL NULL never equals NULL, so a run-less row would have been
-  appended three times. The authorization leg refuses for real — an earlier probe naming an ungoverned
-  output was denied `can_write_data required on outputs: silver`.
-- **IT WAS ALSO A NOTIFICATIONS CHANGE, AND NOTHING IN THIS ROW SAID SO.** `LineageRunEvent` requires
-  `runId` and `eventType` with `min_length=1` and `ingest.py` DROPS what will not validate, while a DDL
-  event today is terminal, authored and has an output. Measured against the live feed: **all four DDL
-  events project to a deliverable pointer**, three of them naming a real Dex sub. Shipping the producer
-  first would have silently stopped telling a person about their own table.
-- **TWO CORRECTIONS TO THIS ROW, from re-measuring it.** It says 11 DDL operations;
-  `_LIFECYCLE_BY_OPERATION` maps **13**. And its live figures (500 events, 168 DDL, 144 phantom Job
-  nodes against 146 real) no longer reproduce — the estate has been rebuilt and the whole durable feed
-  now holds 25 events, 4 of them DDL, against **4 DDL-named Job nodes** still in the graph. The defect
-  is structural in `build_write_event`, which is where it was re-confirmed; the population is too small
-  today to restate "half the Job nodes".
-- *What is left:* the catalog's emit (`build_write_event` routing its 13 DDL operations onto
-  `build_dataset_event`), and the disposition of the 4 phantom Job nodes already in the graph.
-- **blocked:** Owner call — the fix changes the graph's node population and the `/jobs` ACCESS surface, which is bigger than it looks. Either DDL moves to `DatasetEvent` (and the phantom Jobs stop being created, leaving the existing ones to migrate or age out), or emitting DDL as a run is recorded as deliberate with its reason.
-- *What is left:* The OpenLineage spec defines FOUR event types — `BaseEvent`, `RunEvent`, `DatasetEvent`, `JobEvent` (verified in `OpenLineage/OpenLineage/spec/OpenLineage.json`, 2026-09-19). rask emits only `RunEvent`, so `build_write_event` wraps a DDL change in a synthetic run: `eventType: COMPLETE` with a Run that never executed and a Job that never ran. `DatasetEvent` exists for exactly this — "a dataset change outside any job (e.g. a DDL schema change)". **MEASURED on the live feed over 500 events: 168 DDL events producing 144 Job nodes, against 146 from real runs — half the Job population represents no job.** It scales with the TABLE count rather than with work, because the job name is per-table-per-operation (`lance-catalog/add_columns.lh019before299c33ns$t1`). It is not only tidiness: the `/jobs` governance fold makes a Job's output set its access handle, so each phantom is an access-control object for an operation nobody performed.
-- *Closes when:* A DDL change emits `DatasetEvent` (or the RunEvent choice is recorded with its reason), and the phantom Job count stops growing with the table count.
-- *Evidence:* `services/catalog/src/catalog/core/lineage_emit.py:305 ("eventType": "COMPLETE" for every operation)` · `gh api repos/OpenLineage/OpenLineage/contents/spec/OpenLineage.json → BaseEvent, DatasetEvent, JobEvent, RunEvent` · live feed 2026-09-19: 168 DDL events, 144 DDL-only Job nodes, 146 run Job nodes · https://opendatalakehouse.com/kb/data-lineage/
 
 **LH-178 · An erasure cannot complete while a branch pins the version holding the subject, and deleting that branch destroys someone's work**
 `catalog` · **HIGH**
