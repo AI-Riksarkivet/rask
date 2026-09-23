@@ -35,8 +35,9 @@ class FlowsSettings(GovernedAuthSettings, BaseSettings):
     #: Ray Serve's HTTP ingress origin. A `model` node POSTs to `{serve_url}/{app}`.
     serve_url: str = Field(default="http://localhost:8000", alias="RASK_FLOWS_SERVE_URL")
 
-    #: Per-node Serve call budget. Generous because an HTR page through `/htrflow` is a real
-    #: pipeline, not a token stream — the models zone's own inference route allows 180 s.
+    #: Per-node Serve call budget. Generous because one request to a Serve application may run a
+    #: whole multi-stage pipeline, not stream tokens — the zones' shared Serve proxy
+    #: (`@rask/api` `serve-proxy.ts`, `DEFAULT_TIMEOUT_MS`) allows the same 180 s.
     serve_timeout: float = Field(default=180.0, alias="RASK_FLOWS_SERVE_TIMEOUT")
 
     #: How many finished runs stay readable at `GET /flows/runs/{id}`. The store is a process-local

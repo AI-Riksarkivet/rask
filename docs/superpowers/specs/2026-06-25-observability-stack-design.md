@@ -56,7 +56,7 @@ Two findings from grounding the article's stack against current tool support
 
 ```
 FastAPI fleet (6 svcs) ─OTLP/gRPC :4001─┐
-Ray workers (htrflow/runner) ───────────┼──▶ GreptimeDB standalone ──S3──▶ RustFS
+Ray workers (runner + Serve) ───────────┼──▶ GreptimeDB standalone ──S3──▶ RustFS
                                         │     :4001 gRPC / :4000 HTTP       rask-rustfs-io:9000
 k8s pod/container logs ─▶ Vector Agent ─┘     traces+metrics+logs           bucket rask-observability
                          (kubernetes_logs → greptimedb_logs sink :4000)
@@ -130,10 +130,10 @@ Subchart values (under the `vector` key):
 
 ### 6. App instrumentation — Ray workers
 
-- Initialize the same OTel setup in the Ray Serve app (`runner.htrflow_service`)
+- Initialize the same OTel setup in the sealed runner's Ray Serve application
   and the runner entrypoint, reading `OTEL_*` from the environment.
 - The RayService `runtime_env.env_vars` (in `chart/templates/rayservice.yaml`)
-  carries `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME=ray-htrflow`, etc.,
+  carries `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_SERVICE_NAME=ray-serve`, etc.,
   gated by `observability.enabled`.
 
 ### 7. Chart wiring

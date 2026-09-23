@@ -44,11 +44,6 @@ left GPUs idle. Each `TranscribeViaServe` task **shards its line crops three
 ways** and fires three Serve calls at once, so all GPU replicas run concurrently
 even though Ray Data keeps only one task in flight.
 
-**Alternate shapes:** `htrflow` and `htr_http` collapse layout/line/transcribe/
-ALTO into a single Serve deployment (`/htrflow`, `/htr`), used when actor
-fan-out isn't worth a given batch shape — `htr_http` in particular is a
-boto3-only HTTP driver that runs on clusters without the runner's heavy deps.
-
 !!! info "Per-row resilience"
     `PageLoaderActor`, `LayoutActor`, and `LineActor` catch per-page exceptions
     and **drop the row** rather than failing the whole chunk; skipped pages

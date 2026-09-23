@@ -493,11 +493,11 @@ git commit -m "feat(obs): opt-in OpenTelemetry OTLP instrumentation in service-k
 ## Task 6: Ray worker instrumentation + RayService OTLP env
 
 **Files:**
-- Modify: the Ray Serve app entrypoint (`components/apps/runner/src/runner/htrflow_service.py` or wherever `htrflow_app` is defined) and `components/apps/runner/pyproject.toml`; `chart/templates/rayservice.yaml`
+- Modify: the sealed runner's Serve application module (under `components/apps/runner/src/runner/`) and `components/apps/runner/pyproject.toml`; `chart/templates/rayservice.yaml`
 
 **Interfaces:**
 - Consumes: `OTEL_*` env injected into the Ray runtime (this task adds it to `rayservice.yaml`).
-- Produces: Ray Serve process exports OTLP traces to GreptimeDB (`service.name=ray-htrflow`).
+- Produces: Ray Serve process exports OTLP traces to GreptimeDB (`service.name=ray-serve`).
 
 - [ ] **Step 1: Add OTel deps to `components/apps/runner/pyproject.toml`**
 
@@ -510,7 +510,7 @@ Add to its `dependencies`:
 
 - [ ] **Step 2: Add a minimal OTel init in the Serve app**
 
-In the htrflow Serve module, near app construction, add an idempotent setup that runs only when an endpoint is set (the exporter reads `OTEL_*` from env):
+In the sealed runner's Serve application module, near app construction, add an idempotent setup that runs only when an endpoint is set (the exporter reads `OTEL_*` from env):
 
 ```python
 import os
@@ -527,7 +527,7 @@ def _init_otel() -> None:
 
     if isinstance(trace.get_tracer_provider(), TracerProvider):
         return  # already initialised
-    provider = TracerProvider(resource=Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "ray-htrflow")}))
+    provider = TracerProvider(resource=Resource.create({"service.name": os.getenv("OTEL_SERVICE_NAME", "ray-serve")}))
     provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter()))
     trace.set_tracer_provider(provider)
 
@@ -544,7 +544,7 @@ In the `serveConfigV2` `runtime_env.env_vars` block, add (gated):
             OTEL_EXPORTER_OTLP_ENDPOINT: "http://rask-greptimedb-standalone:4001"
             OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
             OTEL_EXPORTER_OTLP_HEADERS: "x-greptime-db-name=public"
-            OTEL_SERVICE_NAME: "ray-htrflow"
+            OTEL_SERVICE_NAME: "ray-serve"
             {{- end }}
 ```
 
@@ -552,9 +552,9 @@ In the `serveConfigV2` `runtime_env.env_vars` block, add (gated):
 
 ```bash
 helm template rask ./chart --set secrets.postgresPassword=x --set secrets.minioSecretKey=y \
-  | grep -E 'OTEL_SERVICE_NAME: "ray-htrflow"' && echo OK-ray-env
+  | grep -E 'OTEL_SERVICE_NAME: "ray-serve"' && echo OK-ray-env
 helm template rask ./chart --set observability.enabled=false --set secrets.postgresPassword=x --set secrets.minioSecretKey=y \
-  | grep -c 'ray-htrflow' | grep -q '^0$' && echo OK-off
+  | grep -c 'ray-serve' | grep -q '^0$' && echo OK-off
 ```
 Expected: `OK-ray-env`, `OK-off`.
 
@@ -562,7 +562,7 @@ Expected: `OK-ray-env`, `OK-off`.
 
 ```bash
 git add components/apps/runner/pyproject.toml components/apps/runner/src/runner chart/templates/rayservice.yaml uv.lock
-git commit -m "feat(obs): instrument Ray Serve htrflow with OTLP traces"
+git commit -m "feat(obs): instrument the runner's Ray Serve application with OTLP traces"
 ```
 
 ---

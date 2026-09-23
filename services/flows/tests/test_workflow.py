@@ -27,7 +27,7 @@ JOB = RunJob(
     graph={  # pydantic coerces the dicts; writing the models out adds nothing
         "nodes": [
             {"id": "t", "kind": "text"},
-            {"id": "m", "kind": "model", "config": {"app": "htrflow"}},
+            {"id": "m", "kind": "model", "config": {"app": "example"}},
             {"id": "a", "kind": "alto"},
             {"id": "s", "kind": "inspect"},
         ],
@@ -123,7 +123,7 @@ def test_the_orchestrator_fans_out_per_wave_and_blocks_on_upstream_failure(monke
     assert state.run_id == "run-wf"  # the run id IS the workflow instance id
     assert state.status == "failed"
     assert state.nodes["t"].status == "succeeded"
-    assert state.nodes["m"].error == "serve returned 500 for app 'htrflow'"
+    assert state.nodes["m"].error == "serve returned 500 for app 'example'"
     assert state.nodes["a"].error == "upstream failed"
     assert state.nodes["s"].error == "upstream failed"
     assert state.nodes["a"].ms is None
@@ -152,7 +152,7 @@ def test_the_orchestrator_refuses_a_cycle_before_dispatching_anything() -> None:
 def _result(job: dict[str, Any]) -> dict[str, Any]:
     """The activity's answer, as the engine would hand it back: the model node fails, the rest pass."""
     if job["node"]["kind"] == "model":
-        return NodeResult(state=NodeRunState(status="failed", ms=1.0, error="serve returned 500 for app 'htrflow'")).model_dump()
+        return NodeResult(state=NodeRunState(status="failed", ms=1.0, error="serve returned 500 for app 'example'")).model_dump()
     return NodeResult(
         state=NodeRunState(status="succeeded", ms=1.0, output_text="ok"),
         payload_text="ok",

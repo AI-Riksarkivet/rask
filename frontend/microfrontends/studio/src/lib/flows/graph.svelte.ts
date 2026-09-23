@@ -4,7 +4,7 @@
  * A single runes-class singleton imported by the canvas AND every custom node
  * component, so they all lock-step on one source of truth. Same architecture as
  * the explorer workflow editor (the estate's reference flow editor), with the
- * domain swapped: edges carry a concrete `FlowPayload` (image bytes / text) and
+ * domain swapped: edges carry a concrete `FlowPayload` (bytes / text) and
  * a Model node POSTs it to a live Ray Serve app.
  *
  * Three pieces of state, kept deliberately separate:
@@ -106,7 +106,8 @@ function defaultConfig(): NodeConfig {
 		file: null,
 		fileName: '',
 		text: '',
-		app: 'htrflow',
+		// Unset: the Model node asks for a live Serve app rather than calling a default one.
+		app: '',
 		requestName: '',
 		modelPath: '',
 		bodyMode: 'upstream',
@@ -186,32 +187,31 @@ class FlowsGraph {
 	}
 
 	/**
-	 * The starter graph — the estate's own HTR chain, end to end:
+	 * The starter graph — the smallest chain that exercises a live Serve app:
 	 *
-	 *   Image ─▶ Model (/htrflow) ─▶ ALTO → text ─▶ Inspect
+	 *   Text ─▶ Model endpoint ─▶ Inspect
 	 *
-	 * Upload a page scan and Run: the Model node POSTs it to the live Serve
-	 * deployment and the chain shows the ALTO XML turned into plain text.
+	 * The Model node starts with NO app chosen: pick one of the cluster's live
+	 * Serve apps (or drop a Ray Serve row from the library), type a payload and
+	 * Run. The seed presumes nothing about what any app on the cluster does —
+	 * swap the Text source for an Image, or the body mode to JSON, to match it.
 	 */
 	seed(): void {
 		this.config = {
-			image: defaultConfig(),
+			text: defaultConfig(),
 			model: defaultConfig(),
-			alto: defaultConfig(),
 			inspect: defaultConfig(),
 		};
 		this.runtime = Object.fromEntries(Object.keys(this.config).map((id) => [id, blankRuntime()]));
 		this.undoHistory.clear();
 		this.nodes = [
-			{ id: 'image', type: 'image', position: { x: -40, y: 60 }, data: {} },
+			{ id: 'text', type: 'text', position: { x: -40, y: 60 }, data: {} },
 			{ id: 'model', type: 'model', position: { x: 280, y: 60 }, data: {} },
-			{ id: 'alto', type: 'alto', position: { x: 620, y: 60 }, data: {} },
-			{ id: 'inspect', type: 'inspect', position: { x: 940, y: 60 }, data: {} },
+			{ id: 'inspect', type: 'inspect', position: { x: 620, y: 60 }, data: {} },
 		];
 		this.edges = [
-			{ id: 'e-img-model', source: 'image', target: 'model' },
-			{ id: 'e-model-alto', source: 'model', target: 'alto' },
-			{ id: 'e-alto-inspect', source: 'alto', target: 'inspect' },
+			{ id: 'e-text-model', source: 'text', target: 'model' },
+			{ id: 'e-model-inspect', source: 'model', target: 'inspect' },
 		];
 		this.seq = 0;
 		this.running = false;

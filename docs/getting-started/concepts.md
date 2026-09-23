@@ -19,27 +19,19 @@ Ray job named `<pipeline>-chunk-NNN-of-MMM-<timestamp>`.
 
 ## Pipeline
 
-A **pipeline** is a named processing recipe. Each `PipelineSpec` declares its
-lane (`Slot.HTR` or `Slot.PREFETCH`), its stages, and how it is launched:
-
-| Pipeline | Kind | What it does |
-|---|---|---|
-| `htr` | runner | Actor-per-stage Ray Data pipeline (PageLoader → Layout → Lines → Transcribe → AltoExport). GPU. |
-| `htrflow` | runner | Collapses layout/line/transcribe/ALTO into one Ray Serve deployment. |
-| `htr_http` | http | A standalone driver that POSTs pages to the deployed `/htr` Serve endpoint — no heavy runner deps. |
-| `prefetch` | runner | Warms the S3 image cache from IIIF. |
-| `fake` | runner | No-GPU smoke pipeline that still writes ALTO. |
-
-The two **shapes** are *actor-per-stage* (fine-grained Ray actors, GPU for
-YOLO + TrOCR via Serve) and *single Serve deployment* (`htrflow` / `htr_http`).
+A **pipeline** is a runner's own named processing recipe. The platform does not
+enumerate them: which pipelines a workload offers, their stages, and which run
+as Ray actors and which behind Ray Serve are that runner's business, documented
+in its own README (`runners/<workload>/README.md`).
 
 ## Runner & Ray Serve
 
-The **runner** is the engine: each CLI invocation submits exactly one Ray Data
-pipeline and blocks on `.materialize()`. It is not a long-lived service. **Ray
-Serve** persists across job submissions — TrOCR weights stay resident in
-`/transcribe` (or the full pipeline in `/htrflow` / `/htr`), so jobs call warm
-models over in-process handles or HTTP.
+A **runner** is a sealed workload under `runners/<workload>` — see
+**[Runners](../projects/runner.md)**. Each invocation submits exactly one Ray Data
+pipeline and blocks on `.materialize()`; it is not a long-lived service. **Ray
+Serve** persists across job submissions — a runner's model weights stay resident
+in the Serve applications it owns, so jobs call warm models over in-process
+handles or HTTP instead of reloading them.
 
 ## Orchestrator
 

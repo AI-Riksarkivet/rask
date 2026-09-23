@@ -86,8 +86,8 @@ async def test_image_node_is_refused_server_side(client: httpx.AsyncClient) -> N
 @pytest.mark.asyncio
 @respx.mock
 async def test_model_node_posts_the_upstream_payload_to_the_serve_app(client: httpx.AsyncClient) -> None:
-    route = respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text="<alto/>"))
-    node = FlowNode(id="m", kind="model", config={"app": "htrflow", "name": "page-7"})
+    route = respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text="<alto/>"))
+    node = FlowNode(id="m", kind="model", config={"app": "example", "name": "page-7"})
 
     async with client:
         out = await dispatch(node, [Payload(text="body")], None, client=client, serve_url=SERVE)
@@ -111,7 +111,7 @@ async def test_model_node_refuses_an_app_name_that_could_escape_the_url(client: 
 
 @pytest.mark.asyncio
 async def test_model_node_without_an_upstream_says_so(client: httpx.AsyncClient) -> None:
-    node = FlowNode(id="m", kind="model", config={"app": "htrflow"})
+    node = FlowNode(id="m", kind="model", config={"app": "example"})
     async with client:
         with pytest.raises(NodeError, match="no upstream payload"):
             await dispatch(node, [], None, client=client, serve_url=SERVE)
@@ -120,23 +120,38 @@ async def test_model_node_without_an_upstream_says_so(client: httpx.AsyncClient)
 @pytest.mark.asyncio
 @respx.mock
 async def test_a_405_from_serve_names_the_real_cause(client: httpx.AsyncClient) -> None:
-    """`make serve-up` deploys `transcribe`, whose __call__ takes list[Image] and is reachable only
-    over a DeploymentHandle — so a perfectly healthy Serve answers 405 to every POST. "405" alone
-    sends the operator looking at the wrong thing."""
-    respx.post(f"{SERVE}/transcribe").mock(return_value=httpx.Response(405))
-    node = FlowNode(id="m", kind="model", config={"app": "transcribe"})
+    """An application whose ingress takes Python objects rather than an HTTP request is reachable
+    only over a DeploymentHandle, so a perfectly healthy Serve answers 405 to every POST to it. "405"
+    alone sends the operator looking at Serve; the message names the APPLICATION, which is the cause."""
+    respx.post(f"{SERVE}/handle-only").mock(return_value=httpx.Response(405))
+    node = FlowNode(id="m", kind="model", config={"app": "handle-only"})
     async with client:
-        with pytest.raises(NodeError, match="no HTTP ingress"):
+        with pytest.raises(NodeError, match=r"serve app 'handle-only' has no HTTP ingress"):
             await dispatch(node, [Payload(text="x")], None, client=client, serve_url=SERVE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("config", [{}, {"app": ""}, {"app": None}], ids=["absent", "empty", "null"])
+@respx.mock
+async def test_a_model_node_names_its_app_there_is_no_built_in_default(client: httpx.AsyncClient, config: dict[str, object]) -> None:
+    """The engine calls whichever Serve application the graph names and ships none of its own. A
+    fallback app would make one workload the answer to "which model?" for every graph that left the
+    field blank, so an unnamed app is refused on the node, and no POST leaves the process (respx
+    fails any request to an unmocked route)."""
+    node = FlowNode(id="m", kind="model", config=config)
+    async with client:
+        with pytest.raises(NodeError, match=r'model node needs config\["app"\]'):
+            await dispatch(node, [Payload(text="x")], None, client=client, serve_url=SERVE)
+    assert not respx.calls
 
 
 @pytest.mark.asyncio
 @respx.mock
 async def test_an_unreachable_serve_names_the_configured_address_not_the_resolved_one(client: httpx.AsyncClient) -> None:
-    respx.post(f"{SERVE}/htrflow").mock(side_effect=httpx.ConnectError("nope"))
-    node = FlowNode(id="m", kind="model", config={"app": "htrflow"})
+    respx.post(f"{SERVE}/example").mock(side_effect=httpx.ConnectError("nope"))
+    node = FlowNode(id="m", kind="model", config={"app": "example"})
     async with client:
-        with pytest.raises(NodeError, match=r"serve unreachable at http://serve\.test:8000/htrflow \(ConnectError\)"):
+        with pytest.raises(NodeError, match=r"serve unreachable at http://serve\.test:8000/example \(ConnectError\)"):
             await dispatch(node, [Payload(text="x")], None, client=client, serve_url=SERVE)
 
 
@@ -159,11 +174,11 @@ async def test_inspect_node_concatenates_its_upstreams_in_edge_order(client: htt
 @pytest.mark.asyncio
 @respx.mock
 async def test_execute_runs_a_text_model_alto_chain() -> None:
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=ALTO))
     graph = FlowGraph(
         nodes=[
             FlowNode(id="t", kind="text"),
-            FlowNode(id="m", kind="model", config={"app": "htrflow"}),
+            FlowNode(id="m", kind="model", config={"app": "example"}),
             FlowNode(id="a", kind="alto"),
         ],
         edges=[FlowEdge(source="t", target="m"), FlowEdge(source="m", target="a")],
@@ -182,11 +197,11 @@ async def test_execute_runs_a_text_model_alto_chain() -> None:
 async def test_a_failed_node_blocks_its_dependents_without_dispatching_them() -> None:
     """The dependent is recorded `failed` / "upstream failed" and never run. Running it against
     missing input would invent a second failure and the builder would paint the wrong node red."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(500))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(500))
     graph = FlowGraph(
         nodes=[
             FlowNode(id="t", kind="text"),
-            FlowNode(id="m", kind="model", config={"app": "htrflow"}),
+            FlowNode(id="m", kind="model", config={"app": "example"}),
             FlowNode(id="a", kind="alto"),
             FlowNode(id="s", kind="inspect"),
         ],
@@ -202,7 +217,7 @@ async def test_a_failed_node_blocks_its_dependents_without_dispatching_them() ->
 
     assert state.status == "failed"
     assert state.nodes["t"].status == "succeeded"
-    assert state.nodes["m"].error == "serve returned 500 for app 'htrflow'"
+    assert state.nodes["m"].error == "serve returned 500 for app 'example'"
     assert state.nodes["a"].error == "upstream failed"
     assert state.nodes["s"].error == "upstream failed"
     # Blocked nodes were never dispatched, so they have no duration to report.
@@ -231,11 +246,11 @@ async def test_a_downstream_node_receives_the_full_payload_not_the_display_trunc
     hand an alto node a document cut mid-element."""
     long_alto = "<TextLine>" + "".join(f'<String CONTENT="w{i}"/>' for i in range(1200)) + "</TextLine>"
     assert len(long_alto) > 4000
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=long_alto))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=long_alto))
     graph = FlowGraph(
         nodes=[
             FlowNode(id="t", kind="text"),
-            FlowNode(id="m", kind="model", config={"app": "htrflow"}),
+            FlowNode(id="m", kind="model", config={"app": "example"}),
             FlowNode(id="a", kind="alto"),
         ],
         edges=[FlowEdge(source="t", target="m"), FlowEdge(source="m", target="a")],
@@ -270,8 +285,8 @@ async def test_a_payload_past_its_own_ceiling_is_cut_loudly() -> None:
     the whole document.
     """
     oversize = "x" * (MAX_PAYLOAD_CHARS + 5_000)
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=oversize))
-    job = NodeJob(node=FlowNode(id="m", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=oversize))
+    job = NodeJob(node=FlowNode(id="m", kind="model", config={"app": "example"}), inputs=["seed"], serve_url=SERVE)
 
     async with httpx.AsyncClient() as client:
         result = await run_node(job, client=client)
@@ -290,8 +305,8 @@ async def test_a_payload_under_the_ceiling_is_untouched() -> None:
     """The cap is a ceiling, not a transform: every real payload passes through byte-for-byte, so a
     marker in a downstream input always means something."""
     body = '<TextLine><String CONTENT="Anno"/></TextLine>'
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=body))
-    job = NodeJob(node=FlowNode(id="m", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=body))
+    job = NodeJob(node=FlowNode(id="m", kind="model", config={"app": "example"}), inputs=["seed"], serve_url=SERVE)
 
     async with httpx.AsyncClient() as client:
         result = await run_node(job, client=client)

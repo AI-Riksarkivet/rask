@@ -36,7 +36,7 @@ CHAIN: dict[str, Any] = {
     "graph": {
         "nodes": [
             {"id": "t", "kind": "text"},
-            {"id": "m", "kind": "model", "config": {"app": "htrflow"}},
+            {"id": "m", "kind": "model", "config": {"app": "example"}},
             {"id": "a", "kind": "alto"},
             {"id": "s", "kind": "inspect"},
         ],
@@ -164,7 +164,7 @@ def test_validate_refuses_a_cycle_and_says_why(client: TestClient) -> None:
 
 @respx.mock
 def test_a_run_executes_inline_and_is_readable_afterwards(client: TestClient) -> None:
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=ALTO))
 
     resp = client.post("/api/flows/runs", json=CHAIN)
     assert resp.status_code == 200
@@ -191,14 +191,14 @@ def test_a_failing_model_node_blocks_its_dependents(client: TestClient) -> None:
     """A 502 from Serve fails the model node; `alto` and `inspect` are recorded blocked and never
     dispatched. The run is a 200 — the RUN succeeded in reporting what happened, and a sandbox that
     5xx'd on a red node would leave the builder nothing to paint."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(502))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(502))
 
     resp = client.post("/api/flows/runs", json=CHAIN)
     assert resp.status_code == 200
     nodes = resp.json()["nodes"]
     assert resp.json()["status"] == "failed"
     assert nodes["t"]["status"] == "succeeded"
-    assert nodes["m"]["error"] == "serve returned 502 for app 'htrflow'"
+    assert nodes["m"]["error"] == "serve returned 502 for app 'example'"
     assert nodes["a"]["error"] == "upstream failed"
     assert nodes["s"]["error"] == "upstream failed"
     assert nodes["a"]["ms"] is None
@@ -257,7 +257,7 @@ def test_an_unconfirmed_schedule_refuses_instead_of_running_the_graph_twice(clie
 
     Serve is mocked but must never be called: the assertion is that NOTHING executed.
     """
-    route = respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    route = respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=ALTO))
     client.app.state.workflow_scheduler = _RefusingScheduler(ScheduleUnconfirmed("the workflow engine neither started nor refused run run-x within 7s"))
 
     resp = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "k-1"})
@@ -273,7 +273,7 @@ def test_a_confirmed_refusal_still_degrades_to_the_inline_lane(client: TestClien
     """The measured 2026-08-06 behaviour, pinned so the fix above cannot quietly take it away: when
     the scheduler has ESTABLISHED that no instance exists (a sidecar whose state store is not scoped
     to this app), the graph is still perfectly runnable here and now."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=ALTO))
     client.app.state.workflow_scheduler = _RefusingScheduler(RuntimeError("the state store is not configured to use the actor runtime"))
 
     resp = client.post("/api/flows/runs", json=CHAIN)
@@ -286,7 +286,7 @@ def test_a_confirmed_refusal_still_degrades_to_the_inline_lane(client: TestClien
 def test_the_same_idempotency_key_resolves_to_the_same_run_and_executes_once(client: TestClient) -> None:
     """The retry-safety the schedule seam depends on: without a caller key there is nothing for a
     503'd client to converge on, and every retry would be a new run."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=ALTO))
 
     first = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "page-7"}).json()
     second = client.post("/api/flows/runs", json=CHAIN, headers={"Idempotency-Key": "page-7"}).json()
@@ -323,7 +323,7 @@ def test_a_run_id_is_derived_from_the_subject_and_the_key() -> None:
 def test_the_run_store_is_bounded_and_evicts_the_oldest(client: TestClient) -> None:
     """`max_runs` is a memory bound on a process-local dict, not a retention policy — stated because
     an unbounded dict on a long-lived pod is a leak that only shows up in production."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text=ALTO))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text=ALTO))
 
     ids = [client.post("/api/flows/runs", json=CHAIN).json()["run_id"] for _ in range(4)]
 

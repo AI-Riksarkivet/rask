@@ -1253,11 +1253,11 @@ medallion:
   #
   # It was flipped ON so S1's watcher would not be dead code in the shipped configuration. That
   # argument is still right, and the configuration it produced now works. It could not until
-  # 2026-08-18: `ray-cluster` was built from `runners/htr`'s sealed lock, which carries torch and
-  # htrflow and NO lance, so every stage job died `ModuleNotFoundError: No module named 'lance'`.
+  # 2026-08-18: `ray-cluster` was built from a sealed runner's lock, which carries that workload's
+  # model stack and NO lance, so every stage job died `ModuleNotFoundError: No module named 'lance'`.
   # That image now builds `packages/ray-cluster-env` from the ROOT lock — ray + pylance + lance-ray + pyarrow at
   # the fleet's own versions, and no workload stack at all (verified in the built image: torch,
-  # htrflow, ultralytics and cv2 all absent). The HTR workload moved to `.docker/ray-htr.dockerfile`.
+  # ultralytics and cv2 all absent). A workload's own image is built by `.docker/ray-runner.dockerfile`.
   #
   # The lane is designed against `.docker/ray-lance.dockerfile` — "a thin CPU Ray image for the
   # medallion compute seam: official Ray + the lance-ray Data integration" — deployed by
@@ -1505,8 +1505,8 @@ medallion:
     # — worse than the lane being absent. Re-landing it means a Ray job entrypoint baked into the
     # ray-cluster image plus `stageJob:` on a stage runner row; no change to the cascade.
     #
-    # The lane was already non-functional: `htrflowUrl` shipped empty and the stage runner dead-lettered
-    # every trigger it received.
+    # The lane was already non-functional: its workload endpoint value shipped empty and the stage
+    # runner dead-lettered every trigger it received.
 
 # --- Compaction/GC microservice (Dapr cron binding) -----------------------------------------------
 # A bindings.cron component POSTs /<bindingName> on `schedule`; the service compacts small Lance
@@ -2503,33 +2503,32 @@ ray:
     # `ray-cluster` rather than `compute`, because the fleet's Ray-plane SERVICE image owns that (R22).
     name: ray-cluster
     pullPolicy: IfNotPresent
-  # THE SERVE APPLICATIONS THIS DEPLOYMENT RUNS. A list, because the platform must be able to express
-  # more than one — the template used to hardcode a single `- name: htrflow`, so a second workload
-  # could not be deployed without editing a platform template. Naming a workload HERE is correct: this
-  # is a deployment's own configuration, and the chart it configures knows nothing about it.
+  # THE SERVE APPLICATIONS THIS DEPLOYMENT RUNS — EMPTY IN THE PLATFORM CHART, by design. Which
+  # workloads a release serves is that release's own configuration, supplied by its values overlay;
+  # the chart it configures names none of them. With the list empty the RayService still renders
+  # (`applications: []`), so the cluster, its dashboard and the Serve controller come up and serve
+  # nothing until an overlay declares an application. A list, so one release can serve several.
+  #
+  # One entry, every field a deployment chooses:
+  #   - name: <application>            # the Serve application name
+  #     importPath: "<module>:<app>"   # a module some runners/<runner>/src/ provides
+  #     routePrefix: "/<application>"
+  #     image: "<registry>/ray-<runner>:<tag>"
+  #     params: {}                     # the workload's own knobs
+  #
+  # `image` is the image whose environment satisfies `importPath`, rendered as runtime_env.image_uri
+  # so THIS application's replicas run it while the head stays agnostic. It is built by
+  #   scripts/dagger-image.sh --runner <runner> --tag ray-<runner>:<tag>
+  # from the parametrized .docker/ray-runner.dockerfile (platform closure + one sealed runner). Left
+  # empty it means "the head image already provides this import path" — and the head installs no
+  # runner, so such an application can never be imported; tests/unit/test_invariants.py::
+  # test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares refuses that pairing.
+  # Ray pulls the image by reference, so a real deployment names a registry address (k3s side-loads
+  # `:dev` images into containerd, which is why a bare `ray-<runner>:dev` resolves there).
   #
   # `params` is the workload's own half of the contract; each key is rendered as RASK_PARAM_<KEY> so a
   # workload cannot reach a platform variable by choosing a colliding name.
-  serveApplications:
-    - name: htrflow
-      importPath: "runner.htrflow_service:htrflow_app"
-      routePrefix: "/htrflow"
-      # The image whose environment satisfies `importPath`, rendered as runtime_env.image_uri so THIS
-      # application's replicas run it while the head stays agnostic. Built by
-      #   scripts/dagger-image.sh --runner htr --tag ray-htr:dev
-      # from the parametrized .docker/ray-runner.dockerfile (platform closure + one sealed runner).
-      #
-      # Empty means "the head image already provides this import path". That was the effective
-      # setting until 2026-08-25 and it was FALSE: fd7dd7e0 emptied `ray-cluster` of every runner on
-      # 2026-08-18 and moved the workload to its own image, but nothing pointed the chart at the
-      # result — so the declared application could never be imported and only the RayService's
-      # reconcile loop knew. Ray pulls this by reference, so it must be a registry address in a real
-      # deployment (k3s side-loads :dev images into containerd, which is why the local default works).
-      image: "ray-htr:dev"
-  # Kept for the compute zone's route hint and the NOTES output — the FIRST application's prefix.
-  # Not read by the RayService any more; serveApplications above is the source of truth.
-  serveRoutePrefix: "/htrflow"
-  importPath: "runner.htrflow_service:htrflow_app"
+  serveApplications: []
   dashboardPort: 8265
   servePort: 8000
   clientPort: 10001
@@ -2539,8 +2538,9 @@ ray:
   # (rask.gpuEnabled / rask.serveGpuFrac in templates/_helpers.tpl):
   #   * the head's `num-gpus` rayStartParam and its `nvidia.com/gpu` limit (omitted entirely at 0),
   #   * `runtimeClassName: nvidia` on the head + the RuntimeClass object itself (runtimeclass.yaml),
-  #   * RASK_SERVE_GPU_FRAC — the htrflow Serve actor's reservation — in BOTH the fleet ConfigMap and
-  #     the RayService serveConfigV2; at 0 it collapses to 0, which is what makes the CPU path work,
+  #   * RASK_SERVE_GPU_FRAC — each declared Serve application's replica reservation — in BOTH the fleet
+  #     ConfigMap and the RayService serveConfigV2; at 0 it collapses to 0, which is what makes the CPU
+  #     path work,
   #   * the Kueue ClusterQueue's nvidia.com/gpu nominalQuota.
   # DEFAULT 0, i.e. a CPU-only estate that installs cleanly on kind/CI/a laptop. It used to default to
   # 1 while the Serve fraction defaulted to 1.0, so a GPU-less cluster left the RayService permanently

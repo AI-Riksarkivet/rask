@@ -43,7 +43,7 @@ Services (ClusterIP):
   - minio:    {{ include "rask.fullname" $root }}-minio:{{ .Values.minio.port }} (in-cluster, console :{{ .Values.minio.consolePort }} via -minio console)
 {{- end }}
 {{- if .Values.ray.enabled }}
-  - ray:       {{ include "rask.fullname" $root }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; htrflow at {{ .Values.ray.serveRoutePrefix }})
+  - ray:       {{ include "rask.fullname" $root }}-ray-head-svc:{{ .Values.ray.dashboardPort }} (KubeRay; {{ with .Values.ray.serveApplications }}Serve {{ range $i, $app := . }}{{ if $i }}, {{ end }}{{ $app.name }} at {{ $app.routePrefix }}{{ end }}{{ else }}no Serve application declared in ray.serveApplications{{ end }})
 {{- end }}
 {{- with .Values.nats }}
 {{- if .enabled }}
@@ -166,8 +166,8 @@ Reminders:
     nvidia.com/gpu request. Check: kubectl get nodes -o jsonpath='{.items[*].status.allocatable}' | tr ' ' '\n' | grep nvidia
 {{- end }}
 {{- if not (include "rask.gpuEnabled" .) }}
-  * GPU-LESS estate (ray.gpuCount=0, the chart default): the htrflow Serve actor is derived to
-    RASK_SERVE_GPU_FRAC=0 and runs on CPU, no nvidia RuntimeClass is created, and the device-plugin +
+  * GPU-LESS estate (ray.gpuCount=0, the chart default): every declared Serve application's replicas are
+    derived to RASK_SERVE_GPU_FRAC=0 and run on CPU, no nvidia RuntimeClass is created, and the device-plugin +
     GPU-Feature-Discovery DaemonSets are not installed. For a GPU node:
       helm upgrade ... --set ray.gpuCount=<n> --set nvdp.enabled=true --set config.RASK_SERVE_GPU_FRAC=<frac>
 {{- end }}

@@ -11,7 +11,7 @@
 		{ id: 'run-0040/ep10', run: 'trocr-court-records-v1', epoch: 10, cer: '4.6%', wer: '13.2%' },
 		{ id: 'run-0040/ep08', run: 'trocr-court-records-v1', epoch: 8, cer: '4.9%', wer: '13.9%' },
 		{ id: 'run-0038/ep12', run: 'trocr-baseline', epoch: 12, cer: '6.1%', wer: '16.4%' },
-		{ id: 'run-0039/ep03', run: 'htrflow-e2e-pilot', epoch: 3, cer: '9.7%', wer: '24.1%' },
+		{ id: 'run-0039/ep03', run: 'end-to-end-pilot', epoch: 3, cer: '9.7%', wer: '24.1%' },
 	];
 	const best = checkpoints[0];
 </script>

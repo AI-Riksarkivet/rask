@@ -76,9 +76,11 @@ export interface NodeConfig {
 	/** text: the inline text fed downstream. */
 	text: string;
 	/** model: the Serve app to POST to — its route prefix without the leading
-	 *  slash (e.g. 'htrflow'), picked from live discovery or typed by hand. */
+	 *  slash (e.g. 'my-app'), picked from live discovery or typed by hand. Empty
+	 *  means unset: the node asks for an app rather than calling a default one. */
 	app: string;
-	/** model: the `?name=` passthrough (names the page in ALTO output). */
+	/** model: an optional request label, forwarded as `?name=` only when set.
+	 *  An app that reads one uses it; any other app ignores it. */
 	requestName: string;
 	/** model: the path WITHIN the Serve app — `/v1/chat/completions`, `/rerank`, or empty for the
 	 *  app root. Load-bearing: a Serve app's route_prefix only reaches its root, and every
@@ -86,8 +88,9 @@ export interface NodeConfig {
 	 *  so without this the whole class of app is uncallable. Measured against the live cluster
 	 *  2026-08-06: POST /gemma-31b 404s, POST /gemma-31b/v1/chat/completions answers. */
 	modelPath: string;
-	/** model: what to put in the request BODY. `upstream` forwards the incoming payload verbatim —
-	 *  right for a bytes-in app like `/htrflow`, which reads the raw image. `json` sends
+	/** model: what to put in the request BODY. `upstream` forwards the incoming payload verbatim,
+	 *  under its own content-type — right for a bytes-in app whose ingress reads the raw request body
+	 *  (an image, an audio clip). `json` sends
 	 *  `bodyTemplate` instead, which is what an LLM / embedding / rerank deployment expects; those
 	 *  are the majority of a real cluster's apps and were uncallable while raw-forward was the only
 	 *  mode. The template is authored by the user rather than guessed from the app name, because
@@ -137,6 +140,23 @@ export interface NodeRuntime {
 	outputKey: string | null;
 	/** True when an upstream node re-ran after this node's last run. */
 	stale: boolean;
+}
+
+/** Whether a content-type names TEXT — the one decision the network lane makes about an answer it
+ *  otherwise passes through untouched. Text becomes a `text` payload (so Extract / Regex / Prompt
+ *  can read it); everything else stays `bytes` under its own content-type, because decoding an
+ *  image or an audio clip into a string would destroy it. The `+json` / `+xml` structured-syntax
+ *  suffixes count as text: they are JSON and XML under a more specific name. */
+export function isTextMime(mime: string): boolean {
+	const essence = (mime.split(';')[0] ?? '').trim().toLowerCase();
+	return (
+		essence.startsWith('text/') ||
+		essence === 'application/json' ||
+		essence === 'application/xml' ||
+		essence === 'application/x-ndjson' ||
+		essence.endsWith('+json') ||
+		essence.endsWith('+xml')
+	);
 }
 
 /** Short human summary of a payload (chips, Inspect header). */

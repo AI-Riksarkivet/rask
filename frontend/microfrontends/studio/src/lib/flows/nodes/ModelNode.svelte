@@ -17,10 +17,14 @@
 	const discovery = $derived(appsQuery.current);
 	// The configured app may not be among the discovered ones (discovery down,
 	// hand-typed slug) — surface it as an extra option so the bind stays honest.
+	// An UNSET app gets a leading prompt row instead, so the select shows the
+	// choice still to be made rather than silently displaying the first app.
 	const options = $derived.by(() => {
 		if (!discovery?.ok) return [];
 		const apps = discovery.apps.map((a) => ({ value: a.app, label: `${a.name} · ${a.status}` }));
-		if (cfg && !apps.some((a) => a.value === cfg.app))
+		if (!cfg) return apps;
+		if (cfg.app === '') apps.unshift({ value: '', label: 'Choose a Serve app…' });
+		else if (!apps.some((a) => a.value === cfg.app))
 			apps.push({ value: cfg.app, label: `${cfg.app} · custom` });
 		return apps;
 	});
@@ -46,12 +50,7 @@
 				{/each}
 			</select>
 		{:else}
-			<input
-				id="app-{id}"
-				class="{FIELD_CLASS} w-full"
-				placeholder="htrflow"
-				bind:value={cfg.app}
-			/>
+			<input id="app-{id}" class="{FIELD_CLASS} w-full" placeholder="my-app" bind:value={cfg.app} />
 			<p class="text-muted-foreground mt-1 text-[0.7rem]">
 				{#if discovery && !discovery.ok}
 					Discovery offline ({discovery.detail}) — type the Serve app name.
@@ -70,8 +69,9 @@
 			bind:value={cfg.modelPath}
 		/>
 		<p class="text-muted-foreground mt-1 text-[0.65rem]">
-			Empty hits the app root — right for a bytes-in app like /htrflow. vLLM apps need
-			<code>/v1/chat/completions</code>.
+			Empty hits the app root — right for an app whose ingress reads the raw body. vLLM apps need <code
+				>/v1/chat/completions</code
+			>.
 		</p>
 		<label class="text-muted-foreground mt-2 mb-1 block text-[0.7rem]" for="body-{id}">Body</label>
 		<select id="body-{id}" class="{FIELD_CLASS} w-full" bind:value={cfg.bodyMode}>
@@ -94,7 +94,7 @@
 		<input
 			id="name-{id}"
 			class="{FIELD_CLASS} w-full"
-			placeholder="page"
+			placeholder="sent as ?name= when set"
 			bind:value={cfg.requestName}
 		/>
 		{#if rt.ms !== null}

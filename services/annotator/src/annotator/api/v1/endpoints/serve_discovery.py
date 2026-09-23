@@ -29,8 +29,8 @@ DEPLOYING/DEPLOY_FAILED/DELETING app is not an endpoint anyone can call).
 DEPLOYMENT DISCIPLINE (from the REST API docs): ``PUT /api/serve/applications/`` is
 declarative and REPLACES — "removes all applications not listed in the new config". One
 writer owns the Serve config: under KubeRay that is the RayService CR's serveConfigV2, and
-ad-hoc ``serve deploy`` PUTs against a cluster carrying /transcribe + /htrflow would DELETE
-them unless the full application list rides along. Same single-writer rule as the Helm
+an ad-hoc ``serve deploy`` PUT naming one application DELETES every other application the
+cluster carries unless the full list rides along. Same single-writer rule as the Helm
 release; discovery only ever READS. The env registry (``MEDIA_ASSIST_BACKENDS``) stays as the OPERATOR OVERRIDE:
 an env entry with the same producer name wins over discovery, because config is intent and
 discovery is observation. Discovery failing (cluster down, dashboard unreachable) degrades to

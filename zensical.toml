@@ -35,7 +35,6 @@ nav = [
   ]},
   { "Packages" = [
     { "Overview" = "packages/index.md" },
-    { "HTR" = "packages/htr.md" },
     { "Storage" = "packages/storage.md" },
   ]},
   { "Components" = [

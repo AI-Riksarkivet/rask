@@ -19,7 +19,8 @@ const ConfigSchema = v.object({
 	enabled: v.fallback(v.boolean(), true),
 	fileName: v.fallback(v.string(), ''),
 	text: v.fallback(v.string(), ''),
-	app: v.fallback(v.string(), 'htrflow'),
+	// Unset, never a particular app: a Model node with no app asks the user to pick a live one.
+	app: v.fallback(v.string(), ''),
 	requestName: v.fallback(v.string(), ''),
 	modelPath: v.fallback(v.string(), ''),
 	bodyMode: v.fallback(v.picklist(BODY_MODES), 'upstream'),

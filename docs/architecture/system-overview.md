@@ -42,8 +42,8 @@ and storage. No proposals here — see siblings (`frontend-microfrontends.md`,
 `rask` is a distributed image-to-ALTO-XML pipeline for the Swedish National
 Archives. A **Python CLI runner** submits **Ray Data** jobs that fan
 **handwritten-text-recognition** (HTR) work across a **local Ray cluster**
-with model weights kept resident in **Ray Serve** (TrOCR on `/transcribe`,
-full HTRflow pipeline on `/htrflow`). Images come from **IIIF** or
+with model weights kept resident in **Ray Serve** (TrOCR on `/transcribe`).
+Images come from **IIIF** or
 pre-staged **S3** buckets; output ALTO XML lands back in **S3**. The HTTP
 backend is a fleet of FastAPI services behind a **gateway** on `:8888`: a
 **core-api** for batch/chunk/catalog state (`:8801`), an **orchestrator**
@@ -90,7 +90,7 @@ flowchart TB
     subgraph ray["Local Ray cluster (Makefile-managed)"]
         head["Ray head :6379<br/>dashboard :8265"]
         workers["Worker actors<br/><sub>PageLoader · Layout · Lines · TranscribeViaServe</sub>"]
-        serve["Ray Serve<br/><sub>/transcribe (TrOCR)<br/>/htrflow (full pipe)</sub>"]
+        serve["Ray Serve<br/><sub>/transcribe (TrOCR)</sub>"]
     end
 
     subgraph storage["Storage"]
@@ -240,11 +240,6 @@ transcription step is decoupled: `TranscribeViaServe` runs as 8 CPU map
 workers, each blocking on a Ray Serve handle to the 3 GPU-resident TrOCR
 replicas.
 
-**Alternate path:** the `htrflow` pipeline collapses Layout+Line+Transcribe+
-Alto into a single Ray Serve deployment (`/htrflow`, 3 replicas × 1 GPU + 2
-CPU, `max_ongoing_requests=4`). Used when actor fan-out isn't worth it for a
-given batch shape.
-
 ## Batch lifecycle — CSV → DB → Ray job → S3
 
 How a batch becomes a queued, then submitted, then transcribed unit. The
@@ -358,7 +353,6 @@ flowchart TB
 
     subgraph serve["Ray Serve (persistent across jobs)"]
         trserve["/transcribe<br/><sub>TrOCR · 3 replicas × 0.99 GPU + 1 CPU<br/>max_ongoing_requests=2</sub>"]
-        hfserve["/htrflow<br/><sub>3 replicas × 1 GPU + 2 CPU<br/>max_ongoing_requests=4</sub>"]
     end
 
     gcs --> workers
@@ -370,12 +364,12 @@ flowchart TB
     classDef serve fill:#581c87,stroke:#c084fc,color:#e9e9ea
     class gcs head
     class pl,ly,ln,tx,ax,aw worker
-    class trserve,hfserve serve
+    class trserve serve
 ```
 
 **GPU sizing** is hardcoded in
-`runners/htr/src/runner/pipeline.py` and the two Serve modules
-(`runner/transcribe_service.py`, `runner/htrflow_service.py`). The numbers
+`runners/htr/src/runner/pipeline.py` and the Serve module
+(`runner/transcribe_service.py`). The numbers
 target a **3-GPU node**: 3 TrOCR replicas at 0.99 GPU each fill the GPUs,
 while Layout/Lines actors hold 0.001 GPU slots just to land them on the
 GPU node. Earlier attempts at 6 transcribe replicas OOM'd host RAM

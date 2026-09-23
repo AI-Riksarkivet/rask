@@ -28,14 +28,15 @@ ENV UV_LINK_MODE=copy \
 
 COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb30f536a6465a3350c647ccd260ec2 /uv /usr/local/bin/uv
 
-# git is for htrflow (git-source dep), kept in builder ONLY.
+# No git: this builder resolves only the ROOT lock, which has no git-source dependency (a sealed
+# runner that needs one builds in .docker/ray-runner.dockerfile, whose builder carries git).
 # Reason: nvidia/cuda apt indexes ship rolling minor-versions; pinning every transitive
 # dep would force constant base-image bumps. The CUDA base + nvidia's signed
 # repo metadata bound the supply-chain risk.
 # hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates git libgomp1 \
+      ca-certificates libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -52,11 +53,11 @@ WORKDIR /app
 # pylance 8.0.0 against a 9.0.0-written dataset made the whole row-aligned blob read path unusable
 # and mis-detected payload presence silently).
 #
-# NO WORKLOAD DEPENDENCIES LIVE HERE. This image previously built from `runners/htr/uv.lock`, so
-# every lane inherited torch and htrflow whether it wanted them or not, and the platform's own
-# `lance` had to be bolted on afterwards with hand-matched pins. A workload's deps belong to the
-# workload (`.docker/ray-htr.dockerfile`, or a per-deployment `runtime_env`), never to the shared
-# base — CLAUDE.md's sealed-runner ruling.
+# NO WORKLOAD DEPENDENCIES LIVE HERE. Every lane on the shared cluster runs this image, so a
+# workload stack installed here is inherited by every other lane whether it wants it or not — and a
+# workload's lock carries no `lance` for the platform's own jobs. A workload's deps belong to the
+# workload: its own image from the parametrized `.docker/ray-runner.dockerfile`, named per Serve
+# application as `runtime_env.image_uri`, never the shared base — CLAUDE.md's sealed-runner ruling.
 # Step 1: deps only (first-party sources not yet COPYed).
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
@@ -90,7 +91,7 @@ LABEL org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.version="${VERSION}" \
       org.opencontainers.image.source="https://github.com/AI-Riksarkivet/rask" \
       org.opencontainers.image.title="rask-ray-cluster" \
-      org.opencontainers.image.description="rask ray head + htrflow Serve"
+      org.opencontainers.image.description="rask ray head — the agnostic platform environment"
 
 # The runner's own provenance channel (#88): every ALTO this image produces stamps the commit that
 # built it (htr.models.COMMIT_SHA -> the `build` Processing block). VCS_REF is already threaded by
@@ -104,16 +105,15 @@ ENV DEBIAN_FRONTEND=noninteractive
 # base is an unpinned arm64 CUDA-13 tag; pin a digest once a known-good one is chosen.
 # Reason: apt version-pinning these transitives would require chasing rolling updates.
 # hadolint ignore=DL3008
-# libgl1 libglib2.0-0 libxcb1: OpenCV (cv2, pulled in by htrflow) dlopen-links
-# libGL.so.1, libglib-2.0.so.0/libgthread-2.0.so.0, and libxcb.so.1 — absent from
-# the slim CUDA runtime base, so `import cv2` fails at replica init without them.
+# No OpenCV system libraries (libgl1/libglib2.0-0/libxcb1): the root lock resolves no cv2, so
+# nothing in this image dlopens them. A runner whose stack does carries them in its own image
+# (.docker/ray-runner.dockerfile installs them for every runner).
 # wget: KubeRay's generated head readiness/liveness probes shell out to `wget`
 # (raylet + gcs healthz); without it the head never goes Ready and the operator
 # never submits the Serve config.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates tini libgomp1 curl wget \
-      libgl1 libglib2.0-0 libxcb1 \
  && rm -rf /var/lib/apt/lists/* \
  && useradd -r --no-create-home --shell /usr/sbin/nologin --uid 10001 app \
  && mkdir -p /cache/hf /app && chown -R app:app /cache /app

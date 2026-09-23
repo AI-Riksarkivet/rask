@@ -1822,8 +1822,26 @@ def test_no_pvc_hardcodes_a_provisioner_specific_storage_class() -> None:
     assert not literals, "a StorageClass name must come from values (empty => the cluster default), never a template literal:\n  " + "\n  ".join(literals)
 
 
+#: ONE synthetic Serve application, declared the way a deployment's overlay declares one. The platform
+#: chart declares none by default, so every gate that inspects a rendered application renders this —
+#: a name no runner uses, so nothing it asserts can lean on a real workload.
+SYNTHETIC_SERVE_APP: Final = (
+    "ray.serveApplications[0].name=example",
+    "ray.serveApplications[0].importPath=example_serve.app:app",
+    "ray.serveApplications[0].routePrefix=/example",
+)
+
+
+def _workload_names() -> list[str]:
+    """Every sealed runner's directory name, read from the tree — so a gate that refuses a workload
+    literal names none itself, and a runner added tomorrow is refused without editing the gate."""
+    names = sorted(p.parent.name for p in (REPO / "runners").glob("*/pyproject.toml"))
+    assert names, "no runners/*/pyproject.toml found — the workload list these gates refuse is empty, so they are blind"
+    return names
+
+
 def test_a_gpuless_estate_renders_a_gpuless_ray_serve() -> None:
-    """ray.gpuCount=0 must make the htrflow Serve actor ask for 0 GPU — or nothing ever becomes ready.
+    """ray.gpuCount=0 must make every declared Serve application ask for 0 GPU — or nothing ever becomes ready.
 
     live-proof defect 3: `config.RASK_SERVE_GPU_FRAC` defaulted to "1.0" INDEPENDENTLY of ray.gpuCount, so
     a GPU-less cluster deployed a Serve deployment waiting on a resource that would never be advertised.
@@ -1834,7 +1852,7 @@ def test_a_gpuless_estate_renders_a_gpuless_ray_serve() -> None:
     Both render sites are checked, because a fraction that is right in the RayService and wrong in the
     fleet ConfigMap is the next debugging round.
     """
-    rendered = _helm_template("singleTenant.enabled=true")  # ray.gpuCount defaults to 0
+    rendered = _helm_template("singleTenant.enabled=true", *SYNTHETIC_SERVE_APP)  # ray.gpuCount defaults to 0
     fracs = re.findall(r"RASK_SERVE_GPU_FRAC:\s*\"?([0-9.]+)\"?", rendered)
     assert fracs, "RASK_SERVE_GPU_FRAC renders nowhere — the guard would pass vacuously"
     assert all(float(f) == 0.0 for f in fracs), (
@@ -1843,6 +1861,7 @@ def test_a_gpuless_estate_renders_a_gpuless_ray_serve() -> None:
     )
     rayservice = next((d for d in rendered.split("\n---") if re.search(r"^kind: RayService$", d, re.MULTILINE)), None)
     assert rayservice is not None, "singleTenant.enabled=true rendered no RayService"
+    assert "RASK_SERVE_GPU_FRAC" in rayservice, "the declared application's runtime_env carries no RASK_SERVE_GPU_FRAC — only the ConfigMap site was checked"
     assert "nvidia.com/gpu" not in rayservice, "a GPU-less head must not request the nvidia.com/gpu extended resource"
     assert "runtimeClassName" not in rayservice, (
         "a GPU-less head must not name the nvidia RuntimeClass — its handler is not registered on a CPU node "
@@ -1850,7 +1869,7 @@ def test_a_gpuless_estate_renders_a_gpuless_ray_serve() -> None:
     )
 
     # ...and the GPU posture still renders the GPU wiring, or the derivation is a one-way ratchet.
-    gpu = _helm_template("singleTenant.enabled=true", "ray.gpuCount=1", "nvdp.enabled=true")
+    gpu = _helm_template("singleTenant.enabled=true", "ray.gpuCount=1", "nvdp.enabled=true", *SYNTHETIC_SERVE_APP)
     gpu_service = next((d for d in gpu.split("\n---") if re.search(r"^kind: RayService$", d, re.MULTILINE)), None)
     assert gpu_service is not None
     assert re.search(r"RASK_SERVE_GPU_FRAC:\s*\"1.0\"", gpu_service), "ray.gpuCount=1 must pass config.RASK_SERVE_GPU_FRAC through"
@@ -3086,19 +3105,23 @@ def test_ray_telemetry_is_release_derived_like_every_other_pods() -> None:
 
 
 def test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity() -> None:
-    """`OTEL_SERVICE_NAME: "ray-htrflow"` put one modality's name on the shared Ray plane's identity.
+    """The shared Ray plane's OTEL_SERVICE_NAME must be the platform's, never one workload's.
 
     CLAUDE.md is explicit that no service, schema or chart may know a workload's name: every runner is
     sealed, and the platform must read the same for audio, text, image and one nobody has written yet.
     A workload literal here means every span and every metric from the shared cluster arrives labelled
     as that one workload, which makes per-workload attribution impossible — the identity has to come
     from the platform, with the workload riding in Serve's own `application`/`deployment` labels.
+
+    Rendered WITH an application declared, so the check also covers a template that derives the plane's
+    identity from whatever the release happens to serve.
     """
-    env = _ray_head_env(_rendered_docs("singleTenant.enabled=true"))
+    env = _ray_head_env(_rendered_docs("singleTenant.enabled=true", *SYNTHETIC_SERVE_APP))
     service_name = env.get("OTEL_SERVICE_NAME", "")
 
     assert service_name, "the Ray head declares no OTEL_SERVICE_NAME, so its telemetry lands as unknown_service"
-    assert "htrflow" not in service_name.lower(), f"OTEL_SERVICE_NAME={service_name!r} names a workload in the platform chart"
+    named = [w for w in [*_workload_names(), "example"] if w in service_name.lower()]
+    assert not named, f"OTEL_SERVICE_NAME={service_name!r} names a workload ({named}) in the platform chart"
 
 
 def test_externalising_telemetry_does_not_silently_drop_ray() -> None:
@@ -3187,8 +3210,8 @@ def test_a_ray_dashboard_exists_and_uses_rays_own_promql_correctly() -> None:
         consistent.
 
     And the agnosticism rule is enforced, not merely intended: `application` and `deployment` are
-    label VALUES that today carry a workload name (chart/values.yaml serveRoutePrefix/importPath), so
-    every Serve panel must GROUP BY them and none may filter on one.
+    label VALUES that carry whatever a release declares in `ray.serveApplications`, so every Serve
+    panel must GROUP BY them and none may filter on one.
     """
     dashboards = _perses_dashboards(_rendered_docs())
     assert dashboards, "no Perses dashboard ConfigMap rendered"
@@ -3205,19 +3228,20 @@ def test_a_ray_dashboard_exists_and_uses_rays_own_promql_correctly() -> None:
 
     assert "ray_" in blob, "no ray_* series is queried at all"
     assert "rate(ray_tasks" not in blob, "ray_tasks is a GAUGE — rate() over it is meaningless"
-    for workload in ("htrflow", "htr", "asr", "diarize", "voiceprint"):
-        assert f'"{workload}"' not in blob, f"a Ray panel filters on the {workload!r} workload — group by application/deployment instead"
+    pinned = re.findall(r'\b(?:application|deployment)\s*(?:=~|!~|!=|=)\s*"[^"]*"', blob)
+    assert not pinned, f"a Ray panel filters Serve series on a literal application/deployment {pinned} — group by them instead"
+    for workload in _workload_names():
+        assert f'"{workload}"' not in blob, f"a Ray panel names the {workload!r} workload — group by application/deployment instead"
 
 
 def test_the_chart_can_express_a_SECOND_serve_application() -> None:
-    """`serveConfigV2` hardcoded `- name: htrflow`, so the platform chart could express exactly ONE
-    Serve application and knew its name.
+    """The RayService renders exactly the Serve applications a release declares — two, here.
 
     CLAUDE.md is explicit that no service, schema or chart may know a workload's name: every runner is
     sealed and the platform must read the same for audio, text, image and one nobody has written yet.
-    A single hardcoded application is the strongest form of that violation — a second workload could
-    not be deployed without editing a platform template, which is precisely what "a workload reaches
-    the platform as config" is supposed to prevent.
+    An application list fixed in the template is the strongest form of that violation — a second
+    workload could not be deployed without editing a platform template, which is precisely what "a
+    workload reaches the platform as config" is supposed to prevent.
     """
     import yaml as _yaml
 
@@ -3236,19 +3260,55 @@ def test_the_chart_can_express_a_SECOND_serve_application() -> None:
     apps = _yaml.safe_load(ray["spec"]["serveConfigV2"])["applications"]
     names = [a["name"] for a in apps]
     assert names == ["alpha", "beta"], f"the chart rendered {names} — it cannot express two Serve applications"
-    assert "htrflow" not in _yaml.dump(apps), "a workload literal survived into a render that never asked for it"
+    imports = [a["import_path"] for a in apps]
+    assert imports == ["runner.alpha:app", "runner.beta:app"], f"the render carries import paths nobody declared: {imports}"
+    # Nothing the TEMPLATE adds to an application may name a workload either — a hardcoded runtime_env
+    # value or image default would pass the two equality checks above.
+    rendered = _yaml.dump(apps)
+    for workload in _workload_names():
+        assert not re.search(rf"\b{re.escape(workload)}", rendered, re.IGNORECASE), f"the rendered Serve applications name the workload {workload!r}"
+
+
+def test_the_platform_chart_declares_NO_serve_application_by_default() -> None:
+    """Which workloads a release serves is that release's overlay's business; the chart declares none.
+
+    The empty default must still render a config Ray ACCEPTS. A bare `applications:` key is YAML null,
+    and Ray's ServeDeploySchema refuses null while accepting `[]` — so the template's empty branch is
+    load-bearing, and this validates both renders (nothing declared, one declared) against the schema
+    of the ray the root lock resolves, the same ray the head image syncs.
+    """
+    import yaml as _yaml
+    from ray.serve.schema import ServeDeploySchema
+
+    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    assert values["ray"]["serveApplications"] == [], (
+        f"chart/values.yaml declares Serve applications {values['ray']['serveApplications']} — the platform chart names no workload"
+    )
+
+    def serve_config(*set_values: str) -> dict:
+        ray = next((d for d in _rendered_docs("singleTenant.enabled=true", *set_values) if d.get("kind") == "RayService"), None)
+        assert ray is not None, "no RayService rendered under singleTenant.enabled=true"
+        return _yaml.safe_load(ray["spec"]["serveConfigV2"])
+
+    empty = serve_config()
+    assert empty == {"applications": []}, f"with nothing declared the RayService must render `applications: []`, got {empty!r}"
+    ServeDeploySchema.model_validate(empty)
+
+    declared = serve_config(*SYNTHETIC_SERVE_APP)
+    assert [a["name"] for a in declared["applications"]] == ["example"], declared
+    ServeDeploySchema.model_validate(declared)
 
 
 def test_the_gpu_coherence_guard_speaks_no_modality() -> None:
-    """The render-time `fail` is a PLATFORM guard rail, and it named both a workload and a MODEL.
+    """The render-time `fail` is a PLATFORM guard rail, so it names no workload and no model.
 
-    An operator on an audio estate hitting a GPU misconfiguration was told about `htrflow` and
-    `TrOCR` — neither of which they run. A platform error that names someone else's modality is worse
-    than a vague one: it sends the reader looking for a component that is not there.
+    An operator on an audio estate hitting a GPU misconfiguration who is told about an image workload
+    and its text-recognition model — neither of which they run — goes looking for a component that is
+    not there. A platform error that names someone else's modality is worse than a vague one.
     """
     body = (REPO / "chart/templates/gpu-coherence.yaml").read_text(encoding="utf-8")
-    for literal in ("htrflow", "TrOCR"):
-        assert literal not in body, f"the GPU coherence guard names {literal!r} — the platform knows no workload"
+    for literal in [*_workload_names(), "TrOCR"]:
+        assert not re.search(rf"\b{re.escape(literal)}", body, re.IGNORECASE), f"the GPU coherence guard names {literal!r} — the platform knows no workload"
 
 
 def test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships() -> None:
@@ -3548,7 +3608,7 @@ def test_the_ray_lane_is_ON_now_that_the_cluster_and_the_job_CONTRACT_both_exist
 
     **Blocker 1 — the image — was never real in the form it was written down.** The OFF docstring said
     `rayAddress` derives to a head running `.docker/ray-cluster.dockerfile`, "the HTR/CUDA image built
-    from `runners/htr` ... torch and htrflow and no pylance", and that every stage job died
+    from `runners/htr` ... torch and no pylance", and that every stage job died
     `ModuleNotFoundError: No module named 'lance'`. That was true of the image AT THE TIME and stopped
     being true on 2026-08-17, when the cluster image started installing the platform compute trio
     beside the workload's lock. Read from the running estate 2026-08-24, the chart's own KubeRay head
@@ -4677,8 +4737,9 @@ def test_the_ray_HEAD_image_can_answer_the_operator_about_SERVE() -> None:
 
     values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
     ray = values["ray"]
-    if not (ray.get("serveApplications") or []):
-        return  # no Serve applications declared -> the operator never polls for their status
+    # UNCONDITIONAL, not gated on the chart's own declarations: the platform chart declares no Serve
+    # application, and a release declares its own in an overlay this gate never sees. The head must
+    # answer GetServeDetails for whatever that overlay declares, so it must carry ray[serve] regardless.
 
     dockerfile_path = REPO / f".docker/{ray['image']['name']}.dockerfile"
     assert dockerfile_path.exists(), f"ray.image.name names no dockerfile: {dockerfile_path}"
@@ -4711,50 +4772,23 @@ def test_the_ray_HEAD_image_can_answer_the_operator_about_SERVE() -> None:
     )
 
 
-def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -> None:
-    """A declared Serve application names an import path the deployed image must actually contain.
+def _serve_application_gaps(apps: list[dict], *, head_name: str, runners_root: Path) -> list[str]:
+    """Every declared application whose import path no image it can run provides; empty = all satisfied.
 
-    The sibling gates above cover JOB scripts — files under `/home/ray/jobs/` submitted to the Ray
-    Jobs API. A Serve APPLICATION fails the same way for the same reason and was covered by nothing:
-    `serveConfigV2` hands KubeRay an `import_path`, and if the image cannot import it the application
-    never becomes healthy. The failure surfaces as a RayService stuck reconciling, not as anything
-    naming the image.
-
-    The head image carries NO workload by design — it builds the platform environment from the root
-    lock and installs no sealed runner — so an application's import path lives only in the image of
-    the runner that provides it. A chart that declares an application without pointing at that image
-    deploys something nothing can import.
-
-    This gate is the coupling made explicit: ONE RayService runs ONE image, so the image named here
-    must satisfy every application declared here. That is also why a second workload is a second
-    RayService rather than a second entry — an image containing both is the fattened shared image
-    CLAUDE.md refuses.
-
-    Workload-agnostic by construction: which runner provides which top-level module is read from the
-    tree, never hardcoded, so this reads the same for audio, text, image or a modality nobody has
-    written yet.
+    Which runner ships which top-level module is read from `runners_root`, never hardcoded, so this
+    reads the same for audio, text, image or a modality nobody has written yet.
     """
-    import yaml as _yaml
-
-    values = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
-    ray = values["ray"]
-    apps = ray.get("serveApplications") or []
-    assert apps, "ray.serveApplications is empty — this gate is now blind; it exists to tie declared applications to the image that runs them"
-
-    repository = ray["image"]["name"]
-    dockerfile_path = REPO / f".docker/{repository}.dockerfile"
-    assert dockerfile_path.exists(), f"ray.image.name is {repository!r} but .docker/{repository}.dockerfile does not exist"
-    # `_uncommented`: `ray-cluster.dockerfile` explains in prose that it USED to build from
-    # `runners/htr/uv.lock`, and a raw substring check reads that sentence as an install. A gate that
-    # a comment can satisfy is a gate that passes exactly when the file documents its own violation.
-    head_dockerfile = _uncommented(dockerfile_path.read_text(encoding="utf-8"))
+    head_dockerfile_path = REPO / f".docker/{head_name}.dockerfile"
+    assert head_dockerfile_path.exists(), f"ray.image.name is {head_name!r} but .docker/{head_name}.dockerfile does not exist"
+    # `_uncommented`: a dockerfile may name a runner path in its PROSE, and a raw substring check reads
+    # that sentence as an install. A gate that a comment can satisfy is a gate that passes exactly when
+    # the file documents its own violation.
+    head_dockerfile = _uncommented(head_dockerfile_path.read_text(encoding="utf-8"))
     # The parametrized per-workload image builds ANY runner from `ARG RUNNER`, so its dockerfile names
     # none. An application that declares its own `image` is satisfied by it for whichever runner the
     # tag was built from — the pairing this gate can check statically is that the module EXISTS.
     runner_image = REPO / ".docker/ray-runner.dockerfile"
-
-    # Which runner ships which top-level module, read from the tree so no workload is named here.
-    provider = {src.name: src.parent.parent.name for src in (REPO / "runners").glob("*/src/*") if src.is_dir()}
+    provider = {src.name: src.parent.parent.name for src in runners_root.glob("*/src/*") if src.is_dir()}
 
     unsatisfied = []
     for app in apps:
@@ -4769,24 +4803,127 @@ def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -
             # own lock cannot be sealed into an image at all (`uv sync --locked` is the seal).
             if not runner_image.exists():
                 unsatisfied.append(f"  {app['name']}: declares image {app['image']!r} but .docker/ray-runner.dockerfile does not exist to build it")
-            elif not (REPO / "runners" / runner / "uv.lock").exists():
+            elif not (runners_root / runner / "uv.lock").exists():
                 unsatisfied.append(f"  {app['name']}: declares an image, but runners/{runner} ships no uv.lock — there is no sealed environment to bake")
         elif f"runners/{runner}" not in head_dockerfile:
             unsatisfied.append(
                 f"  {app['name']}: imports {module!r} (from runners/{runner}), and declares no image of its own, "
-                f"so it falls back to the head image {repository!r} — which does not install that runner"
+                f"so it falls back to the head image {head_name!r} — which does not install that runner"
             )
+    return unsatisfied
 
-    assert not unsatisfied, (
+
+def _runner_serve_applications(runners_root: Path) -> list[dict]:
+    """Every Serve application a sealed runner binds at module level (`<name> = <Deployment>.bind(...)`),
+    as the declaration a deployment's overlay would write for it with the runner's own baked image.
+
+    Read from the tree, so which applications exist — and which workloads provide them — is never
+    written down here.
+    """
+    declarations = []
+    for src in sorted(runners_root.glob("*/src/*")):
+        if not src.is_dir():
+            continue
+        runner = src.parent.parent.name
+        for path in sorted(src.rglob("*.py")):
+            if ".venv" in path.parts or "site-packages" in path.parts:
+                continue
+            module = ".".join(path.relative_to(src.parent).with_suffix("").parts)
+            for node in ast.parse(path.read_text(encoding="utf-8")).body:
+                if (
+                    isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Attribute)
+                    and node.value.func.attr == "bind"
+                ):
+                    name = node.targets[0].id
+                    declarations.append({"name": name, "importPath": f"{module}:{name}", "routePrefix": f"/{name}", "image": f"ray-{runner}:dev"})
+    return declarations
+
+
+def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares(tmp_path: Path) -> None:
+    """A declared Serve application names an import path the deployed image must actually contain.
+
+    The sibling gates above cover JOB scripts — files under `/home/ray/jobs/` submitted to the Ray
+    Jobs API. A Serve APPLICATION fails the same way for the same reason and was covered by nothing:
+    `serveConfigV2` hands KubeRay an `import_path`, and if the image cannot import it the application
+    never becomes healthy. The failure surfaces as a RayService stuck reconciling, not as anything
+    naming the image.
+
+    The head image carries NO workload by design — it builds the platform environment from the root
+    lock and installs no sealed runner — so an application's import path lives only in the image of
+    the runner that provides it. A chart that declares an application without pointing at that image
+    deploys something nothing can import.
+
+    THREE ARMS, because the platform chart itself declares no application and a gate over its own
+    declarations alone would be blind:
+      * every values file in chart/ — whatever it declares must be satisfiable;
+      * every Serve application a real runner binds, declared with that runner's own image, must be
+        satisfiable — so each one CAN be deployed through this chart;
+      * the checker must refuse each broken pairing, proven on a synthetic runner tree.
+
+    Workload-agnostic by construction: which runner provides which top-level module is read from the
+    tree, never hardcoded, so this reads the same for audio, text, image or a modality nobody has
+    written yet.
+    """
+    import yaml as _yaml
+
+    head = _yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))["ray"]["image"]["name"]
+    runners = REPO / "runners"
+
+    # 1. What the chart's own values files declare.
+    declared = {}
+    for values_file in sorted(CHART.glob("values*.yaml")):
+        apps = ((_yaml.safe_load(values_file.read_text(encoding="utf-8")) or {}).get("ray") or {}).get("serveApplications")
+        if apps:
+            declared[values_file.name] = apps
+    gaps = [f"{name}:\n" + "\n".join(g) for name, apps in declared.items() if (g := _serve_application_gaps(apps, head_name=head, runners_root=runners))]
+
+    # 2. Every Serve application a real runner binds, declared the way an overlay would.
+    real = _runner_serve_applications(runners)
+    assert real, (
+        "no runner under runners/ binds a Serve application at module level — arm 2 checks nothing and, "
+        "with the chart declaring none, so does arm 1; teach _runner_serve_applications the new binding shape"
+    )
+    if real_gaps := _serve_application_gaps(real, head_name=head, runners_root=runners):
+        gaps.append("a runner's own Serve application, declared with that runner's image:\n" + "\n".join(real_gaps))
+
+    assert not gaps, (
         "a declared Serve application names an import path no image it can run provides:\n"
-        + "\n".join(unsatisfied)
+        + "\n".join(gaps)
         + "\n\nGive the application its own baked image — `serveApplications[].image`, rendered as "
         "runtime_env.image_uri and built by\n"
         "    scripts/dagger-image.sh --runner <runner> --tag ray-<runner>:<tag>\n"
         "from the parametrized .docker/ray-runner.dockerfile. Do NOT install a second runner into the "
-        "head image to satisfy it — that is the fattened shared image CLAUDE.md refuses, and it is what "
-        "fd7dd7e0 removed."
+        "head image to satisfy it — that is the fattened shared image CLAUDE.md refuses."
     )
+
+    # 3. The checker itself, on a synthetic tree: one sealed runner (with a lock), one unsealed one.
+    sealed = tmp_path / "runners" / "example" / "src" / "example_serve"
+    sealed.mkdir(parents=True)
+    (sealed / "app.py").write_text("app = ExampleDeployment.bind()\n", encoding="utf-8")
+    (tmp_path / "runners" / "example" / "uv.lock").write_text("", encoding="utf-8")
+    unsealed = tmp_path / "runners" / "unsealed" / "src" / "unsealed_serve"
+    unsealed.mkdir(parents=True)
+    (unsealed / "app.py").write_text("app = UnsealedDeployment.bind()\n", encoding="utf-8")
+    synthetic_root = tmp_path / "runners"
+
+    found = _runner_serve_applications(synthetic_root)
+    good = next((a for a in found if a["importPath"] == "example_serve.app:app"), None)
+    assert good == {"name": "app", "importPath": "example_serve.app:app", "routePrefix": "/app", "image": "ray-example:dev"}, (
+        f"the discovery missed or mis-declared a module-level `.bind()` application: {found}"
+    )
+    assert not _serve_application_gaps([good], head_name=head, runners_root=synthetic_root), "a runner-provided module with its own image was refused"
+
+    refused = {
+        "a module no runner provides": {"name": "orphan", "importPath": "nowhere.app:app", "image": "ray-x:dev"},
+        "no image, so the agnostic head": {**good, "image": ""},
+        "an image for a runner with no lock": next(a for a in found if a["importPath"].startswith("unsealed_serve.")),
+    }
+    for why, app in refused.items():
+        assert _serve_application_gaps([app], head_name=head, runners_root=synthetic_root), f"the gate accepted {why}: {app}"
 
 
 def test_stage_run_is_a_MONITOR_and_uses_continue_as_new() -> None:
@@ -5469,10 +5606,11 @@ def test_NO_stray_node_modules_at_the_repo_ROOT() -> None:
 def test_the_shared_ray_image_carries_NO_WORKLOAD_dependencies() -> None:
     """The cluster base is the PLATFORM's image; a workload's stack belongs to the workload.
 
-    `.docker/ray-cluster.dockerfile` used to build from `runners/htr/uv.lock`, so every lane on the
-    shared cluster inherited torch, htrflow and ultralytics — and the platform's own `lance` had to
-    be bolted on afterwards with hand-matched pins, because that workload lock contains no lance at
-    all. Measured: not one of the three baked job scripts imports htrflow.
+    Every lane on the shared cluster runs `.docker/ray-cluster.dockerfile`, so a workload lock resolved
+    there is inherited by every other lane — torch, ultralytics and the rest — and a workload lock
+    carries no `lance`, so the platform's own jobs would need it bolted on with hand-matched pins.
+    Measured 2026-09-23: none of the three baked job scripts, nor the `dummy_runner` source they reach,
+    imports torch, ultralytics, transformers or cv2.
 
     CLAUDE.md's sealed-runner rule states it directly — "a workload's awkward dependencies are ITS
     problem, isolated by Ray Data / Ray Serve runtime environments, never by fattening a shared
@@ -5490,7 +5628,7 @@ def test_the_shared_ray_image_carries_NO_WORKLOAD_dependencies() -> None:
     resolved = re.findall(r"uv sync[^\n]*--project\s+(runners/\w+)", "\n".join(lines))
     assert not resolved, (
         f"the shared ray image resolves a workload lock: {resolved}\n\n"
-        "Put the workload's dependencies in its own image (see .docker/ray-htr.dockerfile) or in a "
+        "Put the workload's dependencies in its own image (see .docker/ray-runner.dockerfile) or in a "
         "per-deployment Ray `runtime_env`, and keep this base agnostic. A second workload must cost "
         "a sibling dockerfile, never a fatter shared base."
     )

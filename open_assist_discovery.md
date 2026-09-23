@@ -107,7 +107,8 @@ pair only under `singleTenant`; neither ⇒ discovery off, yesterday's behaviour
 - **`PUT /api/serve/applications/` REPLACES** ("removes all applications not listed"), and
   KubeRay's controller is itself a client of that API — so ONE writer owns the Serve config
   (under KubeRay: the RayService CR's `serveConfigV2`). An ad-hoc `serve deploy` against the
-  cluster would delete `/transcribe` + `/htrflow`. Discovery only ever reads.
+  cluster would delete every application it does not list — the sealed runners' Serve
+  applications included. Discovery only ever reads.
 - **Autoscaler-managed fields are ignored on the CR**: RayService edits to `replicas` /
   `minReplicas` / `maxReplicas` / `workersToDelete` do not propagate at all.
 - **TTL cache 15 s** (`DISCOVERY_TTL_S`): discovery rides the listing and assist request

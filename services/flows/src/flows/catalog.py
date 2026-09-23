@@ -11,9 +11,11 @@ The response shape is pinned by `models.CatalogResponse`; this module owns only 
 from flows.models import NodeSpec, ParamSpec
 
 
-#: The `name` query parameter Serve's `/htrflow` ingress accepts as the page key (it names the
-#: page in the ALTO it returns). Shared by the two kinds that talk to Serve or read its output.
-_PAGE_NAME = ParamSpec(name="name", label="Page name", type="string")
+#: An optional caller-chosen key, forwarded to the Serve application as `?name=` for an app that
+#: labels its answer with one (see `executor._call_serve`). Opaque to the engine and named for no
+#: modality, because the same model node calls every application. Shared by the two kinds whose
+#: payload reaches Serve.
+_NAME = ParamSpec(name="name", label="Name", type="string")
 
 CATALOG: list[NodeSpec] = [
     NodeSpec(
@@ -23,7 +25,7 @@ CATALOG: list[NodeSpec] = [
         # No params: the payload IS the upload, and it never reaches this service (v0 keeps bytes on
         # the zone's own +server.ts). Declared anyway so the palette is complete and a server run
         # can refuse the kind by name rather than by "unknown".
-        params=[_PAGE_NAME],
+        params=[_NAME],
     ),
     NodeSpec(
         kind="text",
@@ -58,7 +60,7 @@ CATALOG: list[NodeSpec] = [
             # A select with NO options: the live Serve applications are the options, and only the
             # cluster knows them (`GET /api/serve/applications/`). See ParamSpec.options.
             ParamSpec(name="app", label="Serve app", type="select", required=True),
-            _PAGE_NAME,
+            _NAME,
         ],
     ),
     NodeSpec(

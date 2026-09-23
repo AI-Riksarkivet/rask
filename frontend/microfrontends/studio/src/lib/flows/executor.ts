@@ -16,6 +16,7 @@ import type { FlowPayload, NodeConfig, NodeKind, NodeOutput, NodeRuntime } from 
  *  injected via RunDeps so tests run the engine with no network at all. */
 export interface InvokeRequest {
 	app: string;
+	/** Optional request label, forwarded as `?name=` only when non-empty. */
 	name: string;
 	/** Path within the app (`/v1/chat/completions`), or '' for its root. */
 	path: string;
@@ -350,9 +351,9 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
 				}
 				const app = cfg.app.trim();
 				if (!app) throw new Error('Pick a Serve app to call.');
-				// What actually goes on the wire: the upstream payload verbatim (a bytes-in app like
-				// /htrflow), or the rendered JSON template — which is what makes an LLM / embedding /
-				// rerank deployment callable at all.
+				// What actually goes on the wire: the upstream payload verbatim under its own
+				// content-type (a bytes-in app), or the rendered JSON template — which is what makes an
+				// LLM / embedding / rerank deployment callable at all.
 				const wire: FlowPayload =
 					cfg.bodyMode === 'json'
 						? {
@@ -373,7 +374,8 @@ async function runNode(deps: RunDeps, id: string, predOutputs: NodeOutput[]): Pr
 				const t0 = performance.now();
 				const payload = await deps.invoke({
 					app,
-					name: cfg.requestName.trim() || 'page',
+					// Empty unless the user set one: the lane adds nothing to a request it was not asked to.
+					name: cfg.requestName.trim(),
 					path: cfg.modelPath.trim(),
 					payload: wire,
 				});

@@ -4,15 +4,14 @@
  * a remote function — the estate's transport ruling). The BFF validates the app
  * slug, forwards the body to `STUDIO_SERVE_URL/<app>`, and translates upstream
  * failures into `{reason, detail}` JSON — decoded here into a message the node
- * card can show.
+ * card can show. Pinned by `invoke.test.ts`.
  */
 import { base } from '$app/paths';
 import * as v from 'valibot';
-import type { FlowPayload } from './types';
+import { isTextMime, type FlowPayload } from './types';
 import type { InvokeRequest } from './executor';
 
-/** Human message for the BFF's failure reasons (same vocabulary as the models
- *  zone's inference playground — the two proxies share one @rask/api helper). */
+/** Human message for the BFF's failure reasons (`@rask/api/serve-proxy`'s vocabulary). */
 function failureMessage(
 	status: number,
 	reason: string | undefined,
@@ -20,24 +19,23 @@ function failureMessage(
 ): string {
 	// 413 has TWO possible authors and only one of them is ours. The BFF's guard answers JSON naming
 	// the 25 MB ceiling; the Bun server's own `BODY_SIZE_LIMIT` answers an anonymous 413 BEFORE the
-	// route runs, which is what a 512K default produced for a 2.25 MB scan. Say which, so the reader
+	// route runs, which is what a 512K default produced for a 2.25 MB upload. Say which, so the reader
 	// is not left with a bare status: an upload past the SERVER limit is an env fix, not a smaller file.
 	if (status === 413 && !detail) {
 		return 'The upload is too large for the zone server (BODY_SIZE_LIMIT — 512K unless the deploy raises it). Rejected before the inference route ran.';
 	}
 	// A Serve app that EXISTS but exposes no HTTP ingress. Ray answers 500 with this exact text, not
-	// the 405 the `wrong_serve_app` branch was written for — measured 2026-08-06 against the deployed
-	// /htrflow, whose image predates the `__call__(Request)` handler and so offers only its
-	// handle-only methods. Named because the fix is a Serve redeploy, and nothing about the message
-	// otherwise points away from the browser.
+	// the 405 the `wrong_serve_app` branch was written for — measured 2026-08-06 against a deployed
+	// app whose image offered only handle-only methods. Named because the fix is a Serve redeploy,
+	// and nothing about the message otherwise points away from the browser.
 	if (detail?.includes('does not exist. Available methods')) {
-		return `That Serve app has no HTTP handler — its deployed image predates the ingress (${detail.slice(detail.indexOf('Available methods'), 120)}). Redeploy Serve.`;
+		return `That Serve app has no HTTP handler — it exposes only handle methods (${detail.slice(detail.indexOf('Available methods'), 120)}). Redeploy it with an HTTP ingress.`;
 	}
 	switch (reason) {
 		case 'upstream_unreachable':
-			return 'Ray Serve is unreachable — is `make serve-up-htrflow` running?';
+			return 'Ray Serve is unreachable — is Serve listening at STUDIO_SERVE_URL?';
 		case 'wrong_serve_app':
-			return 'That Serve app is deployed without an HTTP handler (405) — pick an ingress app like htrflow.';
+			return 'That Serve app has no HTTP handler (405) — pick an app whose ingress accepts HTTP requests.';
 		case 'upstream_error':
 			return detail || 'The Serve app returned an error.';
 		default:
@@ -45,11 +43,15 @@ function failureMessage(
 	}
 }
 
-/** POST `req.payload` to Serve app `req.app`; resolves to the response as a
- *  text payload (htrflow answers ALTO XML). Throws with a human message on any
- *  failure — the executor records it on the node. */
+/** POST `req.payload` to Serve app `req.app` and resolve to its answer, typed by
+ *  the answer's own content-type: text stays text, anything else stays bytes
+ *  (see `isTextMime`). Throws with a human message on any failure — the
+ *  executor records it on the node. */
 export async function invokeServe(req: InvokeRequest): Promise<FlowPayload> {
-	const qs = new URLSearchParams({ app: req.app, name: req.name, path: req.path });
+	const qs = new URLSearchParams({ app: req.app, path: req.path });
+	// A request label is sent only when the node set one — the door forwards bytes, and a query
+	// parameter nobody asked for is not part of them.
+	if (req.name) qs.set('name', req.name);
 	const res = await fetch(`${base}/api/infer?${qs}`, {
 		method: 'POST',
 		headers: { 'content-type': req.payload.mime },
@@ -80,6 +82,10 @@ export async function invokeServe(req: InvokeRequest): Promise<FlowPayload> {
 		}
 		throw new Error(failureMessage(res.status, reason, detail));
 	}
-	const mime = res.headers.get('content-type') ?? 'text/plain';
-	return { kind: 'text', text: await res.text(), mime, label: req.name };
+	// The BFF always labels its answer (the app's content-type, or octet-stream when the app sent
+	// none), so a missing header here means an intermediary stripped it — treat it as untyped bytes.
+	const mime = res.headers.get('content-type') ?? 'application/octet-stream';
+	const label = req.name || req.app;
+	if (isTextMime(mime)) return { kind: 'text', text: await res.text(), mime, label };
+	return { kind: 'bytes', bytes: await res.arrayBuffer(), mime, label };
 }

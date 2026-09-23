@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -10,7 +10,7 @@ help:
 	@echo "  home frontend-<zone>                   — run one zone each (e.g. frontend-explorer)"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
 	@echo "  ray-up ray-down ray-status   ray-up-htr (2-GPU pool, GPUs 0,1)"
-	@echo "  serve-up serve-down serve-status   serve-up-both (transcribe+htrflow)"
+	@echo "  serve-up serve-down serve-status"
 	@echo "  qwen-serve                             — vLLM Qwen3.6-27B on GPU 2 for OpenCode"
 	@echo "  harvest-ead"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
@@ -487,19 +487,12 @@ serve-down:
 serve-status:
 	uv run --project runners/htr python runners/htr/scripts/deploy_serve.py status
 
-# Single CPU/1-GPU htrflow endpoint for the low-resource / local-k3s shape.
-serve-up-htrflow:
-	RASK_SERVE_REPLICAS=1 RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app htrflow
-
 # ---- GPU split: HTR on 2 GPUs, Qwen LLM on the 3rd -------------------------
-# transcribe + htrflow co-reside on a 2-GPU Ray pool (GPUs 0,1) via fractional
-# Serve reservations: 2 apps x RASK_SERVE_REPLICAS x RASK_SERVE_GPU_FRAC.
-# Defaults: 2 x 2 x 0.49 = 1.96 GPU, leaving headroom for the htr pipeline's
-# Layout/Line num_gpus=0.001 fractions. GPU 2 is reserved for qwen-serve.
+# A 2-GPU Ray pool (GPUs 0,1) for runners/htr; GPU 2 is reserved for qwen-serve.
+# Which Serve applications land on the pool, and at what replica count and GPU
+# fraction, is the runner's business (CLAUDE.md), so the commands live with it:
+# runners/htr/README.md § Serve applications.
 HTR_CUDA_DEVICES    ?= 0,1
-RASK_SERVE_REPLICAS ?= 2
-RASK_SERVE_GPU_FRAC ?= 0.49
 
 ray-up-htr:
 	@if ray status >/dev/null 2>&1; then \
@@ -510,12 +503,6 @@ ray-up-htr:
 	    --dashboard-host=0.0.0.0 --dashboard-port=$(RAY_DASHBOARD_PORT); \
 	  echo "Ray (2-GPU HTR pool, devices $(HTR_CUDA_DEVICES)) dashboard: http://localhost:$(RAY_DASHBOARD_PORT)"; \
 	fi
-
-serve-up-both:
-	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app transcribe
-	RASK_SERVE_REPLICAS=$(RASK_SERVE_REPLICAS) RASK_SERVE_GPU_FRAC=$(RASK_SERVE_GPU_FRAC) \
-	  RAY_ENABLE_UV_RUN_RUNTIME_ENV=0 uv run --project runners/htr --no-sync python runners/htr/scripts/deploy_serve.py up --app htrflow
 
 # ---- Qwen3.6-27B LLM backend for OpenCode (external, isolated venv) --------
 # Lives outside the rask uv workspace: vLLM pins torch/transformers that clash

@@ -54,8 +54,8 @@
 		},
 		{
 			id: 'run-0039',
-			name: 'htrflow-e2e-pilot',
-			model: 'htrflow-e2e',
+			name: 'end-to-end-pilot',
+			model: 'e2e-baseline',
 			state: 'failed',
 			progress: 31,
 			epoch: '3 / 12',

@@ -7,17 +7,20 @@ metadata:
   labels:
     {{- include "rask.componentLabels" (list . "ray") | nindent 4 }}
 spec:
-  {{- /* THE APPLICATION LIST IS VALUES, NOT TEMPLATE. This was a single hardcoded `- name: htrflow`,
-       so the platform chart could express exactly ONE Serve application and knew its name — the
-       strongest form of what CLAUDE.md forbids, because a second workload could not be deployed at
-       all without editing a platform template. A workload must reach the platform as CONFIG.
+  {{- /* THE APPLICATION LIST IS VALUES, NOT TEMPLATE. A workload reaches the platform as CONFIG, so
+       this template names no application and `ray.serveApplications` defaults to none: which
+       workloads a release serves is its own values overlay's business, and the platform chart knows
+       none of them (CLAUDE.md).
 
-       `ray.serveApplications` defaults to the single entry that was hardcoded here, so an existing
-       release renders byte-identically and this is not a redeploy. The env below is the PLATFORM's
-       half of the contract — replica count, GPU fraction, HF token behaviour — applied to every
-       application; a workload's own parameters ride `params`, rendered RASK_PARAM_<KEY> so one
-       cannot reach a platform variable by choosing a colliding name (the rule ray_submit already
-       applies to stage jobs). */}}
+       EMPTY RENDERS `applications: []`, never a bare `applications:`. The bare key is YAML null, and
+       Ray's ServeDeploySchema refuses null while accepting the empty list (checked against the root
+       lock's ray, 2026-09-23) — so the `else` below is what lets a release with nothing declared still
+       bring up its cluster and Serve controller rather than hand KubeRay a config Ray rejects.
+
+       The env below is the PLATFORM's half of the contract — replica count, GPU fraction, HF token
+       behaviour — applied to every application; a workload's own parameters ride `params`, rendered
+       RASK_PARAM_<KEY> so one cannot reach a platform variable by choosing a colliding name (the rule
+       ray_submit already applies to stage jobs). */}}
   serveConfigV2: |
     applications:
       {{- range $app := .Values.ray.serveApplications }}
@@ -36,10 +39,10 @@ spec:
                baked-image answer the ruling asks for.
 
                Unset => the replicas inherit the head's image, which is correct only when the head
-               image already provides the import path. Nothing could tell those two cases apart
-               before: the chart declared `runner.htrflow_service:htrflow_app` while deploying
-               `ray-cluster`, an image emptied of every runner by fd7dd7e0, and the application simply
-               never became healthy. tests/unit/test_invariants.py now refuses that pairing. */}}
+               image already provides the import path — and the head installs no runner, so an
+               application without its own image names a module nothing it runs can import. That
+               pairing renders cleanly and surfaces only as a RayService that never becomes healthy,
+               which is why tests/unit/test_invariants.py refuses it statically. */}}
           image_uri: {{ $app.image | quote }}
           {{- end }}
           env_vars:
@@ -53,18 +56,18 @@ spec:
                  ConfigMap, so the two can never disagree. */}}
             RASK_SERVE_GPU_FRAC: "{{ include "rask.serveGpuFrac" $ }}"
             HF_HUB_DISABLE_IMPLICIT_TOKEN: "0"
-            {{- /* THE OTEL_* BLOCK MOVED OUT OF HERE (2026-08-22). It was five hand-rolled literals in
-                 this runtime_env — release name, db name and trace pipeline hardcoded — and
-                 `runtime_env.env_vars` scopes to ONE Serve application's build task and replica actors.
-                 So it reached neither the ray-head container, GCS, the raylet, the dashboard agent, nor
-                 the Serve controller/proxy, and named a workload (`ray-htrflow`) as the identity of the
-                 shared Ray plane. It now renders on the head CONTAINER via `rask.rayOtelEnv`, derived
-                 from the same helpers every other pod uses. What stays here is the WORKLOAD's own half
-                 of the contract — replica count, GPU fraction, HF token behaviour — which is exactly
-                 what runtime_env is for. */}}
+            {{- /* NO OTEL_* HERE, deliberately. `runtime_env.env_vars` scopes to ONE Serve application's
+                 build task and replica actors, so telemetry configured here reaches neither the
+                 ray-head container, GCS, the raylet, the dashboard agent, nor the Serve
+                 controller/proxy — and a service name set per application is a workload's name, not
+                 the shared Ray plane's identity. Telemetry renders on the head CONTAINER via
+                 `rask.rayOtelEnv`, derived from the same helpers every other pod uses. What stays here
+                 is the WORKLOAD's own half of the contract — replica count, GPU fraction, HF token
+                 behaviour — which is exactly what runtime_env is for. */}}
             {{- range $key, $value := ($app.params | default dict) }}
             {{ printf "RASK_PARAM_%s" $key }}: {{ $value | quote }}
             {{- end }}
+      {{- else }} []
       {{- end }}
   rayClusterConfig:
 {{- include "rask.rayClusterConfig" . }}

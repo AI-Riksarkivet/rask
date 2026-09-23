@@ -62,7 +62,7 @@ Newcomers: read top-to-bottom through §5. Operators in a hurry: §6, §9, §10.
 | **eligibility** | The per-lane set of chunk ids the loop may submit *right now*: `ready − in-flight − cooldown`. |
 | **in-flight** | The set of chunk ids that currently have an active (RUNNING/PENDING) Ray job in that lane. Subtracted from eligibility. |
 | **cooldown** | A 600s suppression after a chunk's job FAILED, so the loop doesn't immediately re-submit a failing chunk. Carries the failure cause. |
-| **pipeline / `PIPELINE_SPECS`** | The registry (`models/pipelines.py`) of named runner pipelines. The four registered names are **`prefetch`**, **`htr`**, **`htrflow`**, **`fake`**. A spec's `name` is both the runner `--pipeline` value and the `submission_id` prefix. |
+| **pipeline / `PIPELINE_SPECS`** | The registry (`models/pipelines.py`) of named runner pipelines. The four registered names are **`prefetch`**, **`htr`**, **`fake`**, and a fourth that handed each whole page to a sealed runner's Serve application. A spec's `name` is both the runner `--pipeline` value and the `submission_id` prefix. |
 | **submission_id** | The Ray job id the viewer assigns: `<name>-chunk-NNN-of-MMM-<ts>`. Its prefix is parsed back to recover the pipeline (no DB linkage). |
 | **orchestrator tick** | One iteration of the background loop: reconcile → derive eligibility → submit every eligible chunk. Runs every `RASK_ORCHESTRATOR_INTERVAL_SECONDS`. |
 | **`hcp_endpoint` (`HCP_ENDPOINT`)** | The S3 (Hitachi Content Platform) endpoint env var. When **unset, S3 is not configured** — reconcile and `/batches/sync` short-circuit. Used throughout as the "is S3 wired up?" gate. See [§9](#9-configuration). |
@@ -145,7 +145,7 @@ flowchart TD
 
   viewer -->|"Job Submission SDK submit/stop"| rayhead["Ray head + dashboard :8265"]
   viewer -->|"dashboard REST: health, jobs, cluster, task summary"| rayhead
-  rayhead --> serve["Ray Serve<br/>warm TrOCR / htrflow"]
+  rayhead --> serve["Ray Serve<br/>warm TrOCR + runner apps"]
 ```
 
 *Takeaway: five external surfaces cross the network; the orchestrator and proxy are internal to the viewer process, not separate services.*
@@ -273,7 +273,7 @@ The aggregator (`api/v1/router.py`) adds **no prefix** — each endpoint module 
 
 **In one line: build the `runner` Ray Data entrypoint for one chunk, submit it off-thread via the Ray Job SDK, and tag/clear `current_rayjob_id` on the chunk's Batch rows.**
 
-Pipeline identity is owned by `PIPELINE_SPECS`, whose four registered names are **`prefetch`**, **`htr`** (the default), **`htrflow`**, and **`fake`**. A spec's `name` doubles as the runner `--pipeline` value **and** the `submission_id` prefix — there is no DB linkage, so the string is parsed back to recover the pipeline. The built entrypoint must stay byte-identical to the runner CLI in `components/cli/runner/src/runner/main.py`.
+Pipeline identity is owned by `PIPELINE_SPECS`, whose four registered names are **`prefetch`**, **`htr`** (the default), **`fake`**, and one that handed each whole page to a sealed runner's Serve application. A spec's `name` doubles as the runner `--pipeline` value **and** the `submission_id` prefix — there is no DB linkage, so the string is parsed back to recover the pipeline. The built entrypoint must stay byte-identical to the runner CLI in `components/cli/runner/src/runner/main.py`.
 
 | At a glance | |
 |---|---|
@@ -460,7 +460,7 @@ flowchart TD
 
 *Takeaway: eligible = ready − in-flight − cooldown; there is no global cap — Ray/Kueue is the only throttle.*
 
-**Per-lane math:** `eligible = ready − per-chunk-in-flight − failure-cooldown`. A chunk with `expected_pages == 0` is never HTR-eligible (this avoids a ZeroDivision and re-submitting done chunks). `htrflow`/`fake` specs carry `stages=()`, so HTR-lane jobs of those pipelines show **no** per-stage bars rather than wrong ones.
+**Per-lane math:** `eligible = ready − per-chunk-in-flight − failure-cooldown`. A chunk with `expected_pages == 0` is never HTR-eligible (this avoids a ZeroDivision and re-submitting done chunks). The Serve-delegating spec and `fake` carry `stages=()`, so HTR-lane jobs of those pipelines show **no** per-stage bars rather than wrong ones.
 
 ---
 
@@ -478,7 +478,7 @@ Three S3 buckets back the pipeline:
 | `images-batch-alto` | ALTO output | `.xml` |
 | `images-batch-search` | LanceDB `lines` + `archive_catalog` | LanceDB tables |
 
-Ray Serve keeps TrOCR/htrflow weights **warm across job submissions** — the viewer never deploys Serve; it only submits jobs whose actors call the warm handle.
+Ray Serve keeps the runner's model weights (TrOCR among them) **warm across job submissions** — the viewer never deploys Serve; it only submits jobs whose actors call the warm handle.
 
 The `batches` table is a single denormalized table. The six concerns its 25 columns fall into:
 

@@ -6,7 +6,6 @@ the root `packages/`, TS/Svelte libraries in `frontend/packages/`.
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
-| `runners/htr` (the sealed HTR runner) | Python | runner, scripts | [HTR](htr.md) · [API reference](../reference/htr.md) |
 | `packages/storage` | Python | runner, the media viewer (objects browser), gateway/ray via service-kit, scripts | [Storage](storage.md) · [API reference](../reference/storage.md) |
 | `packages/service-kit` | Python | gateway, ray, the lance planes (`service_kit.media`/`lancekit`/`lakehouse`) | — |
 | `packages/ray-kit` | Python | the compute service, medallion | — |

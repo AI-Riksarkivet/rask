@@ -14,7 +14,7 @@ This section holds **narrative notes on rask's deployables and sub-projects**.
 | `gateway` | `services/gateway` | [Services](../components/services.md) |
 | `compute` | `services/compute` | [Services](../components/services.md) |
 | `controlplane` | `services/controlplane` | [Services](../components/services.md) |
-| `runner` | `runners/htr` (+ `htr`, `storage`, `htrflow` from git) | [Runner](runner.md) |
+| `ray-<workload>` | `runners/<workload>` — sealed, not a member; built from its own `uv.lock` | [Runners](runner.md) |
 
 There is no `viewer` deployable in the fleet — the old viewer monolith was
 dissolved (June 2026), and the R6/R20 wave (2026-07-28) retired

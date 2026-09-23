@@ -59,9 +59,9 @@ def _traced() -> tuple[InMemorySpanExporter, Any]:
 @respx.mock
 def test_a_FAILING_node_marks_the_activity_span_and_names_itself() -> None:
     """The two facts the sidecar cannot supply: the verdict of a RETURNED failure, and the node."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(503, text="serve is down"))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(503, text="serve is down"))
     exporter, tracer = _traced()
-    job = NodeJob(node=FlowNode(id="ocr-1", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
+    job = NodeJob(node=FlowNode(id="ocr-1", kind="model", config={"app": "example"}), inputs=["seed"], serve_url=SERVE)
 
     with tracer.start_as_current_span("activity: run_node"):
         result = run_node.__wrapped__(cast("Any", _Ctx()), job)
@@ -84,9 +84,9 @@ def test_a_FAILING_node_marks_the_activity_span_and_names_itself() -> None:
 @respx.mock
 def test_a_SUCCEEDING_node_names_itself_but_is_not_marked_an_error() -> None:
     """The other half: attributes ride every node, the ERROR status rides only the failed ones."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(200, text="Anno 1723"))
+    respx.post(f"{SERVE}/example").mock(return_value=httpx.Response(200, text="Anno 1723"))
     exporter, tracer = _traced()
-    job = NodeJob(node=FlowNode(id="ocr-2", kind="model", config={"app": "htrflow"}), inputs=["seed"], serve_url=SERVE)
+    job = NodeJob(node=FlowNode(id="ocr-2", kind="model", config={"app": "example"}), inputs=["seed"], serve_url=SERVE)
 
     with tracer.start_as_current_span("activity: run_node"):
         result = run_node.__wrapped__(cast("Any", _Ctx()), job)

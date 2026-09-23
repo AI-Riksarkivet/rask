@@ -411,7 +411,9 @@ async def _call_serve(
     params = {}
     name = node.config.get("name")
     if isinstance(name, str) and name:
-        # Serve's /htrflow ingress reads ?name= as the page key it stamps into the ALTO it returns.
+        # A caller-chosen key, forwarded as `?name=` for a Serve app that labels its answer with one.
+        # Opaque here: an app that reads no query parameters ignores it, so the node stays one shape
+        # for every application rather than growing a branch per app.
         params["name"] = name
 
     content_type = "text/plain; charset=utf-8" if payload.kind == "text" else "application/octet-stream"
@@ -439,9 +441,10 @@ async def _call_serve(
         raise NodeError(f"serve unreachable at {url} ({type(exc).__name__})") from exc
 
     if resp.status_code == 405:
-        # The trap worth naming: `make serve-up` deploys `transcribe`, whose __call__ takes
-        # list[Image] and is reachable only over a Serve DeploymentHandle — so a Serve that is
-        # perfectly healthy answers 405 to every POST. The honest fix is `make serve-up-htrflow`.
+        # The trap worth naming: an application whose ingress `__call__` takes Python objects rather
+        # than an HTTP request is reachable only over a Serve DeploymentHandle, so a perfectly healthy
+        # Serve answers 405 to every POST to it. "405" alone points the operator at Serve; the cause
+        # is which application is deployed, and the fix is one with an HTTP ingress.
         raise NodeError(f"serve app '{app}' has no HTTP ingress (405) — deploy an app that accepts POST")
     if resp.status_code >= 400:
         raise NodeError(f"serve returned {resp.status_code} for app '{app}'")

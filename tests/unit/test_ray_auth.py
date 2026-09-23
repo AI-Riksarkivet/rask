@@ -76,7 +76,16 @@ def _name(doc: str) -> str:
 
 
 def test_auth_on_renders_secret_head_env_and_exactly_the_ray_talking_fleet() -> None:
-    rendered = _helm("singleTenant.enabled=true", "ray.auth.enabled=true").stdout
+    # ONE declared application, because the platform chart declares none: with an empty list the
+    # serveConfigV2 carries no per-application runtime_env and the plaintext-token check below would
+    # scan nothing.
+    rendered = _helm(
+        "singleTenant.enabled=true",
+        "ray.auth.enabled=true",
+        "ray.serveApplications[0].name=example",
+        "ray.serveApplications[0].importPath=example_serve.app:app",
+        "ray.serveApplications[0].routePrefix=/example",
+    ).stdout
     docs = _docs(rendered)
 
     secrets = [d for d in docs if re.search(r"^kind: Secret$", d, re.MULTILINE) and "rask-ray-auth-token" in d]
@@ -86,6 +95,7 @@ def test_auth_on_renders_secret_head_env_and_exactly_the_ray_talking_fleet() -> 
     rayservices = [d for d in docs if "kind: RayService" in d]
     assert len(rayservices) == 1
     head = rayservices[0]
+    assert "import_path: example_serve.app:app" in head, "no Serve application rendered — the serveConfigV2 checks below would be vacuous"
     # The kuberay >= 1.6.0 NATIVE wiring: authOptions hands the operator our pre-existing
     # Secret (it skips generating its own when secretName is set, injects the env pair into
     # every Ray container, and the RayService controller auths its reconcile calls with it).

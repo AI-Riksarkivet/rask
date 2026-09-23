@@ -1,7 +1,7 @@
 <script lang="ts">
-	/** Image source. Emits the uploaded file's bytes downstream — wire it into a
-	 *  Model node, which POSTs them to a live Serve app (htrflow reads a page
-	 *  scan and answers ALTO XML). */
+	/** Image source. Emits the uploaded file's bytes downstream under the file's
+	 *  own content-type — wire it into a Model node, which POSTs them verbatim to
+	 *  a live Serve app whose ingress reads an image body. */
 	import { Handle, Position, type NodeProps } from '@xyflow/svelte';
 	import { graph } from '$lib/flows/graph.svelte';
 	import NodeShell from './NodeShell.svelte';
@@ -50,7 +50,7 @@
 			</p>
 		{/if}
 		<p class="text-muted-foreground mt-1 text-[0.7rem]">
-			A page scan works best — wire it into a Model node running /htrflow.
+			Sends the raw file — wire it into a Model node whose app reads an image body.
 		</p>
 		<Handle type="source" position={Position.Right} />
 	</NodeShell>

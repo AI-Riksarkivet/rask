@@ -10,8 +10,8 @@ THE ESTATE HAS ALREADY PAID FOR THIS ONCE, and wrote it down:
 unresponsive -> Serve killed every replica -> restart storm"*. That is the real cost — not slow
 requests. Serve's controller health-probes each replica over the same loop the blocked coroutine is
 sitting on, so a long inline call is not merely serialised, it gets the replica declared unhealthy
-and RESTARTED mid-work. `htrflow_service.py` took the lesson (`asyncio.to_thread`); three other
-deployments did not, in three different runners, which is why this is a gate rather than three fixes.
+and RESTARTED mid-work. One deployment took the lesson (`asyncio.to_thread`); three others did not,
+in three different runners, which is why this is a gate rather than three fixes.
 
 WHY A SOURCE GATE AND NOT AN IMPORT. A runner is SEALED — its deps live in its own lock and its own
 venv, and the root interpreter cannot import `toponymy` or a voiceprint encoder by design. Reading
@@ -158,13 +158,71 @@ def test_no_deployment_coroutine_runs_its_work_on_the_event_loop() -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "path",
-    ["runners/htr/src/runner/htrflow_service.py", "runners/htr/scripts/deploy_htr.py"],
-)
-def test_the_deployments_that_already_got_this_right_still_pass(path: str) -> None:
-    """The two that took the lesson. If the rule ever starts flagging these it has gone wrong."""
-    tree = ast.parse((REPO / path).read_text())
-    for cls in _serve_deployment_classes(tree):
-        for fn in [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef)]:
-            assert _yields_for_work(fn) or not _blocking_calls(fn), f"{path} {cls.name}.{fn.name} was flagged — it uses asyncio.to_thread and must not be"
+#: The rule's two sanctioned shapes and its two violations, as SOURCE — synthetic on purpose, so the
+#: rule is pinned by what a deployment DOES rather than by which runner happens to ship one today.
+_SANCTIONED = {
+    "to_thread": """
+from ray import serve
+import asyncio
+
+@serve.deployment
+class Example:
+    async def __call__(self, request):
+        payload = await request.body()
+        return await asyncio.to_thread(self.model.predict, payload)
+""",
+    "run_in_executor": """
+from ray import serve
+import asyncio
+
+@serve.deployment
+class Example:
+    async def __call__(self, request):
+        payload = await request.json()
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self.model.predict, payload)
+""",
+}
+_VIOLATIONS = {
+    "awaits only the request read, then runs the model inline": """
+from ray import serve
+
+@serve.deployment
+class Example:
+    async def __call__(self, request):
+        payload = await request.json()
+        return self.model.predict(payload)
+""",
+    "no await at all while doing the work": """
+from ray import serve
+
+@serve.deployment()
+class Example:
+    async def infer(self, batch):
+        return self.model.predict(batch)
+""",
+}
+
+
+def _flagged(source: str) -> list[str]:
+    tree = ast.parse(source)
+    classes = _serve_deployment_classes(tree)
+    assert classes, "the synthetic source declares a @serve.deployment class the gate could not see"
+    return [
+        f"{cls.name}.{fn.name}"
+        for cls in classes
+        for fn in [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef)]
+        if not _yields_for_work(fn) and _blocking_calls(fn)
+    ]
+
+
+@pytest.mark.parametrize("shape", sorted(_SANCTIONED))
+def test_a_deployment_that_offloads_its_work_is_not_flagged(shape: str) -> None:
+    """The sanctioned shapes. If the rule ever starts flagging these it has gone wrong."""
+    assert not _flagged(_SANCTIONED[shape]), f"a deployment that uses {shape} was flagged — it yields the loop and must not be"
+
+
+@pytest.mark.parametrize("shape", sorted(_VIOLATIONS))
+def test_a_deployment_that_blocks_the_loop_is_flagged(shape: str) -> None:
+    """Both halves of the rule, each caught on its own."""
+    assert _flagged(_VIOLATIONS[shape]), f"a deployment that {shape} was NOT flagged — the gate is blind to it"

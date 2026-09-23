@@ -39,7 +39,7 @@
 			case 'model':
 				return [
 					{ label: 'Serve app', value: cfg.app || '(unset)' },
-					{ label: 'Request name', value: cfg.requestName || 'page' },
+					{ label: 'Request name', value: cfg.requestName.trim() || '(not sent)' },
 				];
 			default:
 				return [];

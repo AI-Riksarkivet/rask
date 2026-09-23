@@ -18,7 +18,7 @@
 //
 //	uv.lock                    232 pkgs   the fleet
 //	frontend/bun.lock          652 pkgs   7 zones + 6 packages
-//	runners/htr/uv.lock        156 pkgs   SEALED — torch, htrflow, ultralytics, transformers
+//	runners/htr/uv.lock        156 pkgs   SEALED — torch, ultralytics, transformers
 //	runners/assist/uv.lock      46 pkgs   SEALED
 //	runners/dummy/uv.lock       32 pkgs   SEALED
 //	tests/e2e/bun.lock           4 pkgs   the standalone Playwright project

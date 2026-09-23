@@ -24,7 +24,7 @@ make install        # = bun install + uv sync
 
 ```bash
 make ray-up            # local Ray head on :6379, dashboard :8265
-make serve-up          # deploy /transcribe + /htrflow on Ray Serve
+make serve-up          # deploy the active runner's model services on Ray Serve
 make dev-micro         # the fleet: gateway :8888 + ray :8804 + controlplane :8820 +
                        #   the media viewer :8101 (via scripts/dev-micro.sh)
 make dev-frontends     # all 7 SvelteKit SSR apps + the Turborepo microfrontends

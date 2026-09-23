@@ -187,7 +187,7 @@ spec:
                    `compute` reads that dashboard for /api/serve, and its comment says the quiet part:
                    "rask's Ray is managed outside this repo, so an external address is the normal case".
                    Defaulting to `<release>-ray-serve-svc` (as this line first did) pointed inference at
-                   the chart's OWN KubeRay, which serves only `htrflow` — so a Model node aimed at
+                   the chart's OWN KubeRay, which serves only its declared apps — so a Model node aimed at
                    `gemma-31b` got Ray Serve's own "Path '/gemma-31b/v1/chat/completions' not found",
                    twice, because a re-render silently replaced a hand-set env. Verified 2026-08-06: the
                    dashboard host also serves the Serve apps (`dev-kuberay.ra.se/gemma-31b/v1/...`
@@ -352,11 +352,11 @@ spec:
             {{- end }}
             {{- end }}
             {{- /* NO per-zone ray block here any more. It set the compute zone's `COMPUTE_SERVE_URL`
-                 to the IN-CLUSTER head (`rask-ray-head-svc:8000<serveRoutePrefix>`), and that address
+                 to the IN-CLUSTER head (`rask-ray-head-svc:8000/<app route prefix>`), and that address
                  is the second half of why the playground it fed never worked: rask's Ray is managed
                  OUTSIDE this repo (`ray.dashboardUrl`, measured live as https://dev-kuberay.ra.se),
                  so the in-cluster head is the opt-in case and this block pointed the one inference
-                 surface at the wrong cluster — a CPU htrflow — whenever ray.enabled was set.
+                 surface at the wrong cluster — a CPU-only in-cluster head — whenever ray.enabled was set.
                  Inference now has exactly one door, studio's, which takes `$serveOrigin` above and is
                  therefore derived from the same ONE signal as discovery. The reasoning for why
                  inference bypasses the gateway at all (its `/api/serve` row is GET/HEAD-only on

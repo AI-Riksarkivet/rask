@@ -29,7 +29,8 @@ ENV UV_LINK_MODE=copy \
 
 COPY --from=ghcr.io/astral-sh/uv:0.5@sha256:7bff3c3776ec467fc1437960f2c469d8beb30f536a6465a3350c647ccd260ec2 /uv /usr/local/bin/uv
 
-# git is for htrflow (git-source dep), kept in builder ONLY.
+# git: runners/htr/uv.lock resolves one dependency from a git source, which uv clones at sync
+# time. Kept in the builder ONLY.
 # Reason: nvidia/cuda apt indexes ship rolling minor-versions; pinning every transitive
 # dep would force constant base-image bumps. The digest pin on the base + nvidia's signed
 # repo metadata bound the supply-chain risk.
@@ -42,7 +43,7 @@ RUN apt-get update \
 WORKDIR /app
 
 # The HTR runner is a SEALED project (runners/htr), deliberately outside the root uv
-# workspace: its model stack (torch/htrflow/ultralytics) must never enter the fleet's
+# workspace: its model stack (torch/ultralytics/transformers) must never enter the fleet's
 # resolution. So it builds from its OWN lock, not the root one. `storage` comes along
 # as a path dependency.
 # Step 1: install deps (frozen — first-party sources not yet COPYed).

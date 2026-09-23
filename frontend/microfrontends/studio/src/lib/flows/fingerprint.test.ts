@@ -10,7 +10,7 @@ function cfg(patch: Partial<NodeConfig> = {}): NodeConfig {
 		file: null,
 		fileName: '',
 		text: '',
-		app: 'htrflow',
+		app: 'example',
 		requestName: '',
 		modelPath: '',
 		bodyMode: 'upstream',
@@ -38,7 +38,7 @@ describe('nodeFingerprint', () => {
 	it('changes when output-affecting config changes', () => {
 		const base = nodeFingerprint('n', cfg(), []);
 		expect(nodeFingerprint('n', cfg({ text: 'x' }), [])).not.toBe(base);
-		expect(nodeFingerprint('n', cfg({ app: 'transcribe' }), [])).not.toBe(base);
+		expect(nodeFingerprint('n', cfg({ app: 'echo' }), [])).not.toBe(base);
 		expect(nodeFingerprint('n', cfg({ requestName: 'p1' }), [])).not.toBe(base);
 		expect(nodeFingerprint('n', cfg({ enabled: false }), [])).not.toBe(base);
 	});

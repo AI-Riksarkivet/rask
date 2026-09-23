@@ -30,6 +30,17 @@ import inspect
 from pathlib import Path
 
 
+REPO = Path(__file__).resolve().parents[3]
+
+
+def _workload_names() -> list[str]:
+    """Every sealed runner's directory name, read from the tree — so the gate that refuses a workload
+    literal names none itself, and a runner added tomorrow is refused without editing it."""
+    names = sorted(p.parent.name for p in (REPO / "runners").glob("*/pyproject.toml"))
+    assert names, "no runners/*/pyproject.toml found — the workload list this gate refuses is empty, so it is blind"
+    return names
+
+
 def _module_tree(module_name: str) -> ast.Module:
     """The parsed AST of an importable module.
 
@@ -130,7 +141,7 @@ def test_the_platform_hook_names_NO_workload() -> None:
         and isinstance(scope.body[0].value.value, str)
     }
     code_literals = {n.value.lower() for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstring_nodes}
-    for workload in ("htr", "htrflow", "asr", "diarize", "voiceprint", "insid3", "topics"):
+    for workload in _workload_names():
         offenders = [lit for lit in code_literals if workload in lit]
         assert not offenders, f"the platform's Ray tracing names the {workload!r} workload in a code literal: {offenders}"
 
@@ -153,18 +164,28 @@ def test_setup_tracing_does_not_stomp_an_existing_sdk_provider() -> None:
     assert trace.get_tracer_provider() is before, "setup_tracing replaced a provider that was already installed"
 
 
-def test_the_inert_workload_private_copy_is_GONE() -> None:
-    """`runners/htr` built its own TracerProvider that emitted zero spans — no span is opened anywhere
-    under runners/ — and defaulted the service name to a workload. CLAUDE.md: dead code goes in the
-    same change that kills it."""
-    from pathlib import Path
+def test_no_runner_installs_a_tracer_provider_of_its_own() -> None:
+    """Tracing is the PLATFORM's (`service_kit.ray_tracing`), and a runner-private provider defeats it.
 
-    repo = Path(__file__).resolve().parents[3]
-    htr = repo / "runners/htr/src/runner/htrflow_service.py"
-    if not htr.exists():  # pragma: no cover — the runner is sealed and may be absent
-        return
-    # AST again: the file now carries a COMMENT naming what was removed and why, which is exactly
-    # what CLAUDE.md asks for and exactly what a substring check would flag.
-    tree = ast.parse(htr.read_text(encoding="utf-8"))
-    defined = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
-    assert "_init_otel" not in defined, "the inert workload-private tracing lane is still there"
+    `setup_tracing` deliberately does not stomp a provider that is already installed (pinned by
+    `test_setup_tracing_does_not_stomp_an_existing_sdk_provider`), so a runner that builds and installs
+    its own `TracerProvider` wins the race inside its worker and silently replaces the platform's
+    exporter, service identity and resource attributes with its own. A runner-private provider also
+    produces nothing on its own: no span is opened anywhere under runners/.
+
+    Checked over EVERY runner's Python, read as AST — a comment explaining why a runner holds no
+    provider is exactly what a substring check would flag.
+    """
+    sources = [p for p in sorted((REPO / "runners").rglob("*.py")) if ".venv" not in p.parts and "site-packages" not in p.parts]
+    assert sources, "no runner Python found under runners/ — this gate is blind"
+
+    offenders = []
+    for path in sources:
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
+            if name in {"TracerProvider", "set_tracer_provider"}:
+                offenders.append(f"{path.relative_to(REPO)}:{node.lineno} {name}()")
+    assert not offenders, f"a runner builds or installs its own tracer provider — the platform hook owns it: {offenders}"

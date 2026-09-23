@@ -167,9 +167,9 @@ RUN --network=none --mount=from=workload-builder,source=/opt/runner-venv,target=
 # The WORKLOAD venv wins on PATH, and that is the ONLY environment this image's default interpreter
 # has. Measured in the built image 2026-08-25:
 #
-#     sys.executable                -> /opt/runner-venv/bin/python
-#     import runner.htrflow_service -> OK
-#     import lance                  -> ModuleNotFoundError
+#     sys.executable                 -> /opt/runner-venv/bin/python
+#     import <runner's Serve module> -> OK
+#     import lance                   -> ModuleNotFoundError
 #
 # `.docker/ray-htr.dockerfile` asserted the opposite — "the platform's own lance/ray stay importable
 # from the base venv behind it" — and it was never true: two venvs are two interpreters, and putting

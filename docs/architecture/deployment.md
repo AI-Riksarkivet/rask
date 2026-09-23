@@ -66,20 +66,19 @@ proxy, the shared `@rask/ui` shell, and per-app `kit.paths.base` — is document
 
 ```mermaid
 flowchart LR
-    rayup["make ray-up<br/><sub>head :6379 · dash :8265</sub>"] --> serveup["make serve-up / serve-up-both<br/><sub>deploy_serve.py</sub>"]
-    serveup --> t["/transcribe · TrOCR"]
-    serveup --> h["/htrflow · full pipeline"]
+    rayup["make ray-up<br/><sub>head :6379 · dash :8265</sub>"] --> serveup["make serve-up<br/><sub>the runner's deploy_serve.py</sub>"]
+    serveup --> apps["the active runner's<br/>Serve applications"]
 ```
 
 - `make ray-up` / `ray-down` / `ray-status` — local Ray head.
 - `make ray-up-htr` — a **2-GPU pool pinned to GPUs 0,1** (`CUDA_VISIBLE_DEVICES=0,1
   --num-gpus=2`); exports `RAY_ENABLE_UV_RUN_RUNTIME_ENV=0` and uses
   `uv run --no-sync` (the documented Ray/uv gotcha).
-- `make serve-up` / `serve-down` / `serve-status` — deploy the Serve apps via
-  `scripts/deploy_serve.py`.
-- `make serve-up-both` — deploy `transcribe` + `htrflow` with fractional GPU
-  reservations (`RASK_SERVE_REPLICAS=2`, `RASK_SERVE_GPU_FRAC=0.49` → ≈1.96 GPU
-  on the 2-GPU pool).
+- `make serve-up` / `serve-down` / `serve-status` — deploy, remove or inspect the
+  active runner's Serve applications through that runner's own
+  `scripts/deploy_serve.py`. Which applications exist, and how their replicas pack
+  onto GPUs (`RASK_SERVE_REPLICAS`, `RASK_SERVE_GPU_FRAC`), is the runner's
+  business and is documented in its README.
 - `make qwen-serve` — an external vLLM LLM backend on GPU 2 (isolated venv,
   OpenAI-compatible API on `:8001`), separate from the HTR workspace.
 
@@ -116,7 +115,7 @@ The chart ships a **CPU-only** estate so a fresh kind/CI/laptop cluster installs
 
 | Derived from `ray.gpuCount` | At 0 (default) |
 |---|---|
-| `RASK_SERVE_GPU_FRAC` — the htrflow Serve actor's reservation, in the fleet ConfigMap **and** `serveConfigV2` | `0` (the CPU path; the raw `config.RASK_SERVE_GPU_FRAC` is never passed through) |
+| `RASK_SERVE_GPU_FRAC` — each Serve replica's GPU reservation, in the fleet ConfigMap **and** `serveConfigV2` | `0` (the CPU path; the raw `config.RASK_SERVE_GPU_FRAC` is never passed through) |
 | head `num-gpus` rayStartParam + `nvidia.com/gpu` limit | `0` / omitted |
 | `runtimeClassName: nvidia` on the head + the `RuntimeClass` object | not rendered |
 | Kueue ClusterQueue `nvidia.com/gpu` nominalQuota | `0` |
@@ -160,8 +159,12 @@ get it automatically).
 **App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
 the services built on `make_service_app` call it automatically, and the gateway
 (a bespoke proxy app, no `Settings`) calls it directly with `service_name="gateway"`
-so the front-door spans root every distributed trace. The Ray Serve htrflow app is
-similarly instrumented. It wires both **traces** (`BatchSpanProcessor`) and **RED
+so the front-door spans root every distributed trace. The Ray plane's tracing
+belongs to the platform, not to any runner: `service_kit.ray_tracing` supplies the Ray
+core hook (`tracing-startup-hook`) and the Ray Serve hook
+(`RAY_SERVE_TRACING_EXPORTER_IMPORT_PATH`), and the chart wires both on the head
+(`chart/templates/_ray-cluster-config.tpl`, OTLP env from `rask.rayOtelEnv`) under a
+platform service name, never a workload's. `setup_otel` wires both **traces** (`BatchSpanProcessor`) and **RED
 metrics** (`MeterProvider` + periodic exporter): the FastAPI/HTTPX instrumentation
 emits `http.server.*`/`http.client.*` request count, duration, and active-request
 metrics automatically — no per-endpoint code. All export OTLP/HTTP **directly to

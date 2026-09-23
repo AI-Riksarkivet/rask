@@ -34,7 +34,7 @@ function cfg(patch: Partial<NodeConfig> = {}): NodeConfig {
 		file: null,
 		fileName: '',
 		text: '',
-		app: 'htrflow',
+		app: 'example',
 		requestName: '',
 		modelPath: '',
 		bodyMode: 'upstream',
@@ -96,9 +96,9 @@ function makeHarness(
 		invoke ??
 			(async (): Promise<FlowPayload> => ({
 				kind: 'text',
-				text: '<alto/>',
-				mime: 'application/xml',
-				label: 'page',
+				text: '{"echo":true}',
+				mime: 'application/json',
+				label: 'example',
 			})),
 	);
 	const fingerprint = (id: string): string => nodeFingerprint(id, config[id] ?? cfg(), flowEdges);
@@ -146,14 +146,48 @@ describe('runGraph', () => {
 		expect(error).toBeNull();
 		expect(h.invoke).toHaveBeenCalledTimes(1);
 		expect(h.invoke.mock.calls[0]?.[0]).toMatchObject({
-			app: 'htrflow',
+			app: 'example',
 			payload: { kind: 'text', text: 'hello' },
 		});
 		expect(h.runtime['model']?.status).toBe('done');
 		expect(h.runtime['model']?.ms).not.toBeNull();
 		expect(h.runtime['inspect']?.status).toBe('done');
 		const out = h.runtime['inspect']?.output?.payload;
-		expect(out?.kind === 'text' && out.text).toBe('<alto/>');
+		expect(out?.kind === 'text' && out.text).toBe('{"echo":true}');
+	});
+
+	it('forwards the upstream payload verbatim and sends no request name unless the node sets one', async () => {
+		const bytes: FlowPayload = {
+			kind: 'bytes',
+			bytes: new Uint8Array([1, 2, 3]).buffer,
+			mime: 'audio/wav',
+			label: 'clip.wav',
+		};
+		const h = makeHarness(
+			[
+				{ id: 'src', kind: 'inspect' },
+				{ id: 'model', kind: 'model' },
+			],
+			[['src', 'model']],
+			{ src: cfg(), model: cfg() },
+		);
+		// Seed the source's cached output as if an upstream node had produced these bytes.
+		h.runtime['src'] = {
+			...h.runtime['src']!,
+			output: { payload: bytes },
+			outputKey: h.deps.fingerprint('src'),
+		};
+		await runSubgraph(h.deps, 'model');
+		expect(h.invoke.mock.calls[0]?.[0]).toEqual({
+			app: 'example',
+			name: '',
+			path: '',
+			payload: bytes,
+		});
+
+		h.config['model'] = cfg({ requestName: '  probe-1 ' });
+		await runSubgraph(h.deps, 'model');
+		expect(h.invoke.mock.calls[1]?.[0]).toMatchObject({ name: 'probe-1' });
 	});
 
 	it('refuses a cyclic graph with the cycle error', async () => {

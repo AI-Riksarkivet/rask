@@ -269,13 +269,13 @@ the Dagger engine, where BuildKit resolves that against a registry. Measured 202
     ! failed to convert Dockerfile to LLB: ray-cluster:dev: pull access denied
 
 So the per-workload image could not be built, nothing referenced it, and `chart/values.yaml` declared
-`importPath: runner.htrflow_service:htrflow_app` while deploying `ray-cluster` — an image with no
+a sealed runner's Serve application `importPath` while deploying `ray-cluster` — an image with no
 `runner` module.
 
 The resolution is per-workload baked images, built from the parametrized
 `.docker/ray-runner.dockerfile` (`ARG RUNNER`, the shape `frontend.dockerfile` already uses for
 zones) and named per application as `serveApplications[].image` → `runtime_env.image_uri`. Verified in
-the built image: `/opt/runner-venv/bin/python` imports `runner.htrflow_service`, `/opt/venv/bin/python`
+the built image: `/opt/runner-venv/bin/python` imports the runner's Serve application module, `/opt/venv/bin/python`
 imports lance 10.0.0 and ray 2.58.0, and the two do not see each other — which is the seal, not a gap.
 
 ### Does every corpus have a catalog node? — ANSWERED 2026-08-25: NO

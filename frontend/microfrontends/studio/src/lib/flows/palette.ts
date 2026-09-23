@@ -50,7 +50,7 @@ export const STATIC_GROUPS: PaletteGroup[] = [
 	{
 		label: 'Inputs',
 		entries: [
-			{ kind: 'image', label: 'Image', blurb: 'Upload a page scan — emits its bytes.' },
+			{ kind: 'image', label: 'Image', blurb: 'Upload an image — emits its bytes.' },
 			{ kind: 'text', label: 'Text', blurb: 'Type a payload to send downstream.' },
 			{
 				kind: 'dataset',
@@ -117,7 +117,7 @@ export function serveGroup(
 	}
 	return {
 		label: 'Ray Serve',
-		emptyNote: 'No Serve apps are deployed — try `make serve-up-htrflow`.',
+		emptyNote: 'No Serve apps are deployed on this cluster yet.',
 		entries: apps.map((a) => ({
 			kind: 'model' as const,
 			label: a.name,

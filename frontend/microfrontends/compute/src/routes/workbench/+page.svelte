@@ -52,7 +52,7 @@
 			component: ServePanel,
 			label: 'Serve apps',
 			icon: ServerCog,
-			keywords: ['serve', 'deployments', 'replicas', 'transcribe', 'htrflow', 'endpoints'],
+			keywords: ['serve', 'deployments', 'replicas', 'applications', 'inference', 'endpoints'],
 		},
 	};
 

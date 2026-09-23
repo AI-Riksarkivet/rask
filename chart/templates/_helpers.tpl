@@ -124,8 +124,8 @@ app.kubernetes.io/component: {{ $component }}
      compute zone read "Ray offline" beside a perfectly healthy head).
 
      Derived from it: the head's `num-gpus` rayStartParam + `nvidia.com/gpu` limit, the nvidia
-     RuntimeClass (runtimeclass.yaml), the htrflow Serve actor's GPU fraction (rask.serveGpuFrac, fed to
-     BOTH the fleet ConfigMap and the RayService serveConfigV2), and the Kueue ClusterQueue's
+     RuntimeClass (runtimeclass.yaml), every declared Serve application's replica GPU fraction
+     (rask.serveGpuFrac, fed to BOTH the fleet ConfigMap and the RayService serveConfigV2), and the Kueue ClusterQueue's
      nvidia.com/gpu nominalQuota. The ONE thing it cannot gate is the nvidia-device-plugin SUBCHART:
      Helm resolves `condition:` against a static values path and cannot compute `gpuCount > 0`, so that
      stays `nvdp.enabled` — kept honest by the fail-closed coherence guard in gpu-coherence.yaml. */}}

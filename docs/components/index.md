@@ -29,7 +29,6 @@ that mutates live state goes through the HTTP services. Notable scripts:
 | Script | Purpose |
 |---|---|
 | `build_batches_db.py` | Build the master batches table from the source list. |
-| `deploy_serve.py` | Deploy/undeploy the `transcribe` and `htrflow` Serve apps (`make serve-up`). |
 | `harvest_ead.py` | Harvest EAD archival descriptions. |
 | `index_alto.py` | Build the `lines` full-text Lance index from ALTO output (`make search-index`). |
 | `index_catalog.py` | Build the `archive_catalog` Lance index. |

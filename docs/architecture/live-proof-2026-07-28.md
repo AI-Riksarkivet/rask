@@ -65,7 +65,7 @@ governed tier, the external `iiif://…` source is an input, and no raw table ex
 Operator-injected pod env verified: `RAY_AUTH_MODE=token`, and pod `RAY_AUTH_TOKEN` **matches** the
 `rask-ray-auth-token` Secret's `auth_token` key. Beyond the four: the **KubeRay 1.6.2 controller
 authenticates its own `/api/serve` reconcile calls** with the same Secret — the RayService reached
-`Ready=True` with the `htrflow` app RUNNING on CPU. This is exactly the coupling R3's commit
+`Ready=True` with the sealed runner's Serve application RUNNING on CPU. This is exactly the coupling R3's commit
 predicted (a pre-1.6.0 operator would have wedged at `WaitForServeDeploymentReady`).
 
 ### 3. All seven zones, live backend, no black pages
@@ -119,7 +119,7 @@ pre-fix chart/code (each was checked against the original render).
    `ray.hfCacheStorageClass`, also `""`.
    *Guard:* `test_no_pvc_hardcodes_a_provisioner_specific_storage_class` — scans EVERY rendered doc, not
    just `kind: PersistentVolumeClaim`, because the Tenant volumes are a `volumeClaimTemplate` inside a CR.
-3. The htrflow serve actor demands a full GPU, so a GPU-less cluster leaves the RayService
+3. The sealed runner's Serve actor demands a full GPU, so a GPU-less cluster leaves the RayService
    permanently `Initializing`, never creates the stable head Service, and the compute zone reads
    "Ray offline" despite a healthy head.
    **Fix:** `ray.gpuCount` is now the chart's ONE GPU signal (default **0**) and everything GPU-shaped

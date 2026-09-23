@@ -74,7 +74,7 @@ plane, and language purity is what lets both workspaces glob their members.
 `runners/htr` is the HTR engine: the Ray Data pipeline (`src/runner`) **and** the model
 actors (`src/htr`), together in one project with **its own `pyproject.toml` and its own
 `uv.lock`**. It is matched by no glob in `[tool.uv.workspace] members`, so its dependency
-stack — torch, htrflow, ultralytics, transformers, opencv — never enters the fleet's
+stack — torch, ultralytics, transformers, opencv — never enters the fleet's
 resolution. That is the whole point: sealing it took the root lock from 200 packages to
 145, and the fleet's test suite from ~32 minutes to ~6 seconds.
 

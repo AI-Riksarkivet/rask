@@ -3,7 +3,7 @@
 Unlike the HTR Serve apps (deploy_serve.py), this MUST be run from the
 ray+vLLM venv (~/qwen-serve/.venv-ray) — that venv has `ray` matching the
 cluster plus `vllm`, which the rask HTR venv deliberately lacks (vLLM's
-torch/transformers pins clash with TrOCR/htrflow).
+torch/transformers pins clash with the HTR runner's model stack).
 
     ~/qwen-serve/.venv-ray/bin/python scripts/deploy_qwen_llm.py up
     ~/qwen-serve/.venv-ray/bin/python scripts/deploy_qwen_llm.py down
