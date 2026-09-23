@@ -674,6 +674,17 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **PROVED LIVE IN THE DEPLOYED IMAGE (2026-09-24, `main-ef6e555a`, helm 238), by configuring it to a
+  value that MUST fail and pairing it with a control:**
+  ```
+  gate present in the deployed image : True
+  CONTROL  correct key               -> admitted
+  peer key                           -> REFUSED  PermissionDeniedError
+  unsigned                           -> admitted   (the rollout property holds)
+  ```
+  The control is what makes the refusal mean anything: without it, a 403 is equally consistent with
+  "the gate works" and "the gate refuses everything". Estate 52 Running / 31 Completed, zero
+  crashloops.
 - **THE DOOR NOW REFUSES A SIGNATURE THAT DOES NOT VERIFY (2026-09-24) —
   `enforce_signature_if_present`, called from `enforce_bus_authz` before the author is trusted for
   anything.** VERIFY-IF-PRESENT is the rollout, not a compromise: an unsigned event passes exactly as
