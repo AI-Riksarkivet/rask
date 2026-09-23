@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**202 open items**, of which **100 are blocked on a decision** and **102 can be picked up today**.
+**202 open items**, of which **101 are blocked on a decision** and **101 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 35 | 3 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 35 | 2 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -1281,137 +1281,6 @@ measured (~10-14 MiB per commit pas
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
 
-**LH-191 · The sweep re-plans the WHOLE estate every 120s because no policy sets a cadence**
-`maintenance` · **MEDIUM** · OPEN
-- **MEASURED LIVE 2026-09-22.** Every tick reports `planned=570 skipped=7`, and those 7 are the trash
-  exclusions the code names — **not one dataset is skipped for cadence.** At `@every 120s` that is
-  ~17,100 units an hour, re-planning an estate in which almost every table is already at target and
-  answers `compaction_distributed_nothing_to_do`.
-- **THE CONTROL EXISTS AND NOTHING USES IT.** `sweep._policy_skip_reason` implements
-  `compact_interval_hours` — "skips until the interval has elapsed since the sweep's own per-dataset
-  `last_maintained_at` stamp" — with the fail-safe already thought through (an unreadable, absent or
-  malformed stamp MAINTAINS, so a lost stamp cannot silence maintenance). The estate registers 27
-  policies (`policies=27` on the planner) and the live planner carries
-  `MAINTENANCE_POLICY_ROOT = None` against a chart default of `policyRoot: ""`. Whatever those 27
-  cover, the zero interval-skips say none of them sets one.
-- **THE REGISTRY WAS READ, so this is no longer an inference from a skip count.** Under
-  `s3://lance-catalog/_policies/`: **27 `table-*.json` policies — every one of them
-  `compact_interval_hours: null` and `compact_enabled: true`** — beside 181 `dataset-*` stamps
-  carrying `{"last_planned_version": N}`. The field is PRESENT on every policy record and SET on
-  none.
-- **AND THE 27 COVER 27 TABLES, not the estate.** Their ids are all of one family
-  (`media$annotations_m1_*`), so even with intervals set they would skip 27 of ~570 datasets. The
-  lever therefore needs two things, not one: intervals declared, AND coverage for the rest — either
-  more policy records or a global default the sweep falls back to.
-- **THE MECHANISM IS COHERENT AND WOULD WORK — checked, so it is not blamed for this.** The interval
-  check reads `last_maintained_at` from `_policies/state/` via `_state_key(record, uri)`, a key the
-  code documents as existing "only for datasets carrying a policy with an interval"; the
-  `dataset-*` objects in that prefix are the EVENT lane's, keyed by uri alone, and are a separate
-  mechanism. With an interval set, the first tick finds no stamp, maintains (the documented
-  fail-safe), writes one, and later ticks skip. Nothing here is broken.
-- **THE EMPTY `MAINTENANCE_POLICY_ROOT` IS NOT THE CAUSE EITHER — also checked.**
-  `resolved_policy_root` is `self.policy_root or f"s3://{self.s3_bucket}"`, so blank falls back to the
-  estate bucket, which is where those 27 were found.
-- **THE REDUNDANCY CLAIM WAS TESTED BY PURGING THE QUEUE, 2026-09-22.** If a backlog is genuinely
-  ~13 re-plans of each dataset, deleting it costs nothing — the next tick republishes the estate.
-  Done on the live lane: `stream purge MAINTENANCE_WORK` took **7,194 messages (6.6 MiB) to 0**. The
-  very next tick logged `planned=570 published=570`, both workers and the planner stayed Running with
-  zero restarts, and the stream settled at **518 messages** — one tick's worth — instead of 7,194.
-  **Nothing was lost, because there was nothing there that the next two minutes would not produce
-  again.** That is the row's claim demonstrated rather than argued, and it doubles as the operational
-  recipe: a lane buried by an outage can be purged rather than waited out.
-- **IT IS THE VOLUME BEHIND TWO OTHER ROWS.** The work lane keeps up by only ~9% ([[LH-188]]'s
-  bounds are sized against 4.73 units/sec) and an outage's backlog drains at ~1,600 units an hour, so
-  [[LH-190]]'s stalls take hours to clear. Both numbers are consequences of planning 570 datasets
-  every two minutes; a cadence that skipped tables maintained an hour ago would cut the steady-state
-  volume by most of itself and shorten every recovery in proportion. It attacks the VOLUME where
-  those rows attack delivery and recovery.
-- **WHY THIS IS NOT JUST A VALUE TO SET:** the right interval is a statement about how often a
-  governed table genuinely needs compacting, and it differs per tier — a bronze blob tier taking
-  continuous ingest is not a gold table written once a day. The mechanism is per-POLICY for exactly
-  that reason. Picking one global number would be the same mistake as the thread-limiter bound: one
-  knob answering two questions.
-- **THE CLOSING CONDITION WAS UNOBSERVABLE, AND NOW IS NOT (2026-09-22).** This row closes on "a tick
-  reports a non-zero cadence skip count" — and the tick could not have reported one. The queue lane's
-  summary carried `skipped` as a single integer over everything `plan_sweep` decided without work, so
-  a trash exclusion, a `compact_enabled: false` opt-out and a `policy_interval` skip were the same
-  number. The moment somebody sets an interval, the only evidence it took effect would be `skipped`
-  moving 7 -> 8, which one more dataset reaching the trash does identically. `skipped_by` now carries
-  the breakdown beside the unchanged total (an alert reads the total), attributing the reason literal
-  each `DatasetResult` already holds rather than classifying anything anew, with an `unattributed`
-  bucket so the parts always sum to the whole. **The serial lane already split these** — `summarize`
-  has separate `skipped` and `trashed` keys — so the same key meant different things on the two lanes,
-  and the lane every deployment runs was the coarse one. Pinned by
-  `test_a_skip_says_which_kind_it_was.py`, whose third leg reproduces today's estate exactly:
-  `{"trashed": 7}` and no cadence key at all.
-- *What is left:* Decide whether the estate declares cadences per policy and what they are, or whether
-  planning everything every tick is intended. **The ruling is now a value, not a value plus an
-  instrument** — set an interval on a policy and the very next tick says whether it took. If intended, the two rows above are sized correctly and
-  nothing further is needed; if not, this is the cheapest lever on both.
-- *What the ruling has to cover:* not just "what interval", but WHICH DATASETS — 27 policy records
-  exist against ~570 datasets, so a per-policy interval alone moves 5% of the volume.
-- **MEASURED ON THE LIVE LANE 2026-09-22, and it sizes the ruling.** Two traces of
-  `maintenance-work-durable` at 5s (100 and 120 samples): the lane drains at **~4.5 units/s** while the
-  planner injects **570 per 120s tick = 4.75/s**. It is under water by design, not by accident —
-  `num_pending` ran 3.6k-4.8k throughout and rose at each tick boundary (a visible +570 step at
-  23:07:11 and 23:13:11) without ever being worked off in between.
-- *And the saturation is not a defect, which is worth saying because it looks like one:* `num_ack_pending`
-  sits at exactly **72**, the consumer's `max_ack_pending`, in every sample. A backlogged queue at its
-  flow-control bound is what health looks like — `ack_floor.stream_seq` (261,394) tracks the stream's
-  own `first_seq` (261,395) exactly, so every acked unit has been removed and nothing is held.
-  `num_redelivered` is 0 at steady state. **Read `ack_floor.consumer_seq` instead and the same lane
-  looks frozen**, because that field counts deliveries rather than positions; it moves in jumps and
-  sat still for eight minutes while the stream floor advanced continuously. The two fields disagree by
-  construction and only one of them answers "is anything stuck".
-- *So the ruling has a number attached:* at 570 datasets a tick the lane needs ~127s to clear one
-  tick's injection and gets 120. Either the cadence lengthens, the planner stops re-planning datasets
-  already at target, or `max_ack_pending` rises — and the third is the one that trades memory for
-  throughput, so it cannot be chosen without [[LH-183]]'s per-unit figure.
-- **THE PLANNER HALF SHIPPED AND IS PROVEN LIVE 2026-09-23 — the tick reports a cadence skip.**
-  `plan_sweep` built a work item for every discovered dataset and let the cadence land in
-  `plan.skipped`, so the whole estate was enqueued regardless of any policy and the skip happened a
-  queue hop later. A policy skip is now DECIDED at the planner and its reason travels into `decided`
-  beside the trash exclusions, which is what `skipped_by` is built from.
-- *Proven with a value that MUST produce a skip* — `compact_enabled: false` on one table, then the
-  next tick, read off the deployed planner (`main-7ddfc4e1`):
-
-  ```
-  before   planned=570 published=570 skipped=14 skipped_by={'trashed': 14}
-  after    planned=569 published=569 skipped=15 skipped_by={'trashed': 14, 'policy_disabled': 1}
-  ```
-
-  `published` fell 570 -> 569, so the dataset was WITHHELD rather than enqueued-and-skipped, and the
-  reason is reported rather than lost. The policy was deleted afterwards and the table is unpoliced
-  again.
-- *Withholding loses nothing, and the code already said so:* `_stamp_policy_state` returns early on
-  `plan.skipped is not None`, because re-stamping a paced dataset "would push the next maintenance out
-  by another full interval on every tick". A skipped unit's only effect at the worker was the round
-  trip.
-- **BOTH ARMS ARE NOW PROVEN LIVE, including the cadence one.** The opt-out arm was shown first
-  (`compact_enabled: false` -> `policy_disabled: 1`). The INTERVAL arm needs a stamp before it can
-  refuse, so: set `compact_interval_hours: 8760` on `bronze$pages`, drive its unit once so
-  `_stamp_policy_state` writes `last_maintained_at`, then leave the policy in place. The tick:
-
-  ```
-  planned=569 published=569 skipped=15 skipped_by={'trashed': 14, 'policy_interval': 1}
-  ```
-
-  *The first attempt failed for a reason worth keeping:* the policy was deleted before the tick that
-  would have shown it, so the planner resolved no policy and there was nothing to skip. The cadence is
-  read from the REGISTRY at plan time, not from the stamp alone — a probe has to leave the record in
-  place. The policy was deleted afterwards and the table is unpoliced again.
-- **WHAT IS LEFT IS YOURS, AND IT IS THE NUMBERS.** All 27 policies carry
-  `compact_interval_hours: null`, so nothing is skipped for CADENCE today — only the opt-out above
-  exercises the path. The per-tier intervals, plus whether the ~543 datasets no policy covers get a
-  global default or their own records, are the ruling this row is really waiting on.
-- *Closes when:* A tick reports a non-zero cadence skip count, or this row records the ruling that
-  re-planning the whole estate every 120s is deliberate.
-- *Evidence:* live planner 2026-09-22 `planned=570 skipped=7` on every tick · `policies=27` ·
-  `MAINTENANCE_POLICY_ROOT = None`, `chart/values.yaml policyRoot: ""` ·
-  `services/maintenance/src/maintenance/services/sweep.py:103-118` (`compact_interval_hours` and its
-  fail-safe) · [[LH-188]] for the bounds this volume sizes, [[LH-190]] for the recovery it lengthens
-
-
 **LH-194 · A service cannot unwind its own failed registration, so a seed that fails leaves a record only a human can remove**
 `catalog, medallion` · **MED**
 - **blocked:** how a failed seed's registration is removed, given the 2026-09-10 ruling that a machine
@@ -1458,6 +1327,31 @@ measured (~10-14 MiB per commit pas
 - *Evidence:* `services/catalog/src/catalog/api/fga_deps.py:1188-1213` (the ruling and its transitive
   guarantee) · `services/catalog/src/catalog/api/v1/endpoints/tables.py:802-806` (`_undo_register`,
   FGA-free) · live 2026-09-23: warehouse owners present, probe unwind 403, clean after a hand grant
+
+**LH-195 · Nothing sets a compaction cadence, so the sweep re-plans every dataset every 120s**
+`maintenance` · **MED**
+- **blocked:** the per-tier `compact_interval_hours` numbers, plus whether the ~543 datasets no policy
+  covers get a global default or their own records. The MECHANISM is done and proven ([[LH-191]],
+  closed 2026-09-23); what is missing is the values, and they are a judgement about how often each
+  tier deserves maintenance rather than something measurable from here.
+- *Split out of [[LH-191]] when that row's bar was met.* LH-191 asked whether the planner could skip on
+  cadence at all; it can, and a tick now reports it. This row is the remaining half: nothing has told
+  it to.
+- *The state, measured 2026-09-23:* `policies=27` and **every one carries
+  `compact_interval_hours: null`**, so no dataset is ever skipped for cadence. `planned=570
+  published=570` on every tick, against a lane that drains ~4.5 units/s while 4.75/s inject — ~127s to
+  clear a tick, and it gets 120.
+- *What it costs to leave undecided:* **~17,100 units/hour** re-planned and delivered for datasets
+  nobody asked to be maintained that often. Harmless while nearly every unit is a no-op at 167Mi;
+  the bill arrives when a tier with real rewrite work does.
+- *Why one global number is refused:* per-tier is the point. Bronze page images are ~1.8 MB rows and
+  silver/gold features are not, so one interval cannot be right for both — the same argument
+  `target_rows_per_fragment` already carries in `chart/values.yaml`.
+- *Closes when:* Every governed tier has a declared cadence, or the register records that
+  whole-estate re-planning is deliberate.
+- *Evidence:* live planner 2026-09-23 `planned=570 published=570`, `policies=27` all null ·
+  `services/maintenance/src/maintenance/services/sweep.py:90-118` (`_policy_skip_reason`) ·
+  [[LH-188]] for the bounds this volume sizes
 
 ## PHASE 1 · CROSS-CUTTING
 
