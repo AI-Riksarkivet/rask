@@ -46,12 +46,12 @@ _MATCHES_BUT_NOT_GATED: dict[str, str] = {
     # set the only way a row may: LH-034, LH-096, LH-159 and LH-164 by gaining a `**blocked:**` marker
     # or losing the incidental phrase, and LH-184 and LH-055 by closing.
     #
-    # LH-164 MATCHES ON A SENTENCE ARGUING THE OPPOSITE, which is the one shape the regex cannot tell
-    # apart. Its body reads "Registering it as a namespace is not a decision someone has been putting
-    # off; the resolution path cannot do it" — the row says the marker it used to carry was WRONG,
-    # because `catalog/core/config.py:516-522` answers the question the marker was waiting on. A
-    # reader confirms that in one line; a phrase match cannot.
-    "LH-164": "says the remaining step is NOT a decision — the code already answered it (config.py:516-522)",
+    # EMPTY, and LH-164 left it the way this set says a row may: by gaining a marker. It was recorded
+    # here for arguing the opposite ("Registering it as a namespace is not a decision someone has been
+    # putting off"), which was true of the NAMESPACE question `config.py:516-522` answered. A different
+    # question outlived it — which of two homes each tier keeps, where its own clause says "Reaping the
+    # wrong one destroys live rows" — and that one is a ruling. An exemption is only ever about the
+    # question a row was carrying when it was written.
 }
 
 
@@ -126,3 +126,49 @@ def test_the_recorded_exceptions_are_still_real() -> None:
             stale.append(f"{rid}: no longer matches the phrase set, so the exception is spent")
 
     assert stale == [], "these recorded exceptions are stale — drop them in this commit:\n  " + "\n  ".join(stale)
+
+
+#: A RULING, not the noun "rule". `\brule\b` matches "alert rule" and "key the rule on a statistic",
+#: which is how a first draft of this flagged LH-050 and XC-067 for saying nothing of the kind.
+_RULING = re.compile(r"\brul(?:ed|ing|ings)\b|\bdecision\b|\bdecides?\b", re.IGNORECASE)
+
+#: The clause where a row says what REMAINS, which is the only place the distinction lives.
+_WHAT_IS_LEFT = re.compile(r"^- \*What is left:\*(.*?)(?=^- \*|\Z)", re.MULTILINE | re.DOTALL)
+
+#: Rows whose *What is left* mentions a ruling and are CORRECTLY unmarked, each with a checkable reason.
+_RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE: dict[str, str] = {
+    "LH-075": "says the opposite — 'that is startable now and gated by no ruling'; its OTHER arm (the promotion question) is deferred, but the index arm can be picked up today",
+}
+
+
+def test_no_row_whose_REMAINING_STEP_is_a_ruling_goes_unmarked() -> None:
+    """The phrase list above kept missing rows, so this checks the CLAUSE instead of the whole body.
+
+    THREE ROWS IN ONE DAY said their remaining step was a ruling while carrying no marker — LH-076
+    ("Do nothing until the ruling lands"), LH-141 ("needs a ruling") and LH-164 ("Obtain the ruling
+    above"). Only the second matched `_DECISION`. Widening that list caught LH-076 and still missed
+    LH-164, which is the signal that collecting phrasings does not converge: there is always another
+    way to write it.
+
+    WHY THE CLAUSE AND NOT THE BODY. A row citing a ruling that already LANDED is reporting a fact --
+    `_RULING` over the whole body flags nine Phase-1 rows and most are exactly that. What a row says in
+    *What is left* is different in kind: it is the claim the workable count is computed from.
+
+    If this is red: read the clause. Either the remaining step really is a ruling — give it a
+    `**blocked:**` marker naming the question — or the row has a startable arm as well, and belongs in
+    `_RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE` with the sentence that says so.
+    """
+    offenders = []
+    for rid, body, marked in _phase_1_rows():
+        if marked or rid in _RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE:
+            continue
+        clause = _WHAT_IS_LEFT.search(body)
+        if clause and _RULING.search(clause.group(1)):
+            offenders.append(rid)
+
+    assert sorted(offenders) == [], (
+        f"{sorted(offenders)} say in *What is left* that the remaining step is a ruling, but carry no "
+        "`**blocked:**` marker — so the register counts them as work anyone can pick up. Add the marker "
+        "with the question, or record the row in `_RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE` with the arm "
+        "that IS startable."
+    )

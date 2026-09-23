@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **90 are blocked on a decision** and **105 can be picked up today**.
+**195 open items**, of which **91 are blocked on a decision** and **104 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 8 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 30 | 7 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -979,6 +979,17 @@ still the owner's. Note the row's own analysis make
 
 **LH-164 · Chart-path medallion datasets at `s3://<bucket>/medallion/<ns>` are unregistered and ungoverned, so each tier has two homes and only one is governed**
 `maintenance, medallion, chart` · **MED** · PARTIAL
+- **blocked:** WHICH home each tier keeps. Its own *What is left* says "Obtain the ruling above, then
+  either reap or register the five datasets" and "collapse each tier to one home once ruled", and the
+  next sentence states the stake plainly — **"Reaping the wrong one destroys live rows."** Both code
+  halves are shipped (`denial_remedy`, the reconciler's `ungoverned_tables` category); what remains is
+  a choice between two irreversible directions, on data.
+  `chart/templates/medallion.yaml:293` (`MEDALLION_BRONZE_URI`) and `:523` (`MEDALLION_FROM_URI`) still
+  render `s3://<bucket>/medallion/<ns>` while `ensure_stage_output` vends a different governed location
+  per tier. And the pointer is LOAD-BEARING, not dead config: `produce.py:152` reads
+  `if settings.catalog_url and settings.compute_enabled and bronze_uri:`, so an EMPTY `bronze_uri`
+  makes the cascade head skip catalog registration and fall to the pure-emit shape — removing it would
+  silently UNGOVERN the default-root head, which is the exact defect this row exists to close.
 - **THE SECOND HOMES ARE FROZEN RESIDUE, NOT A LIVE DIVERGENCE — measured object by object
   2026-09-22, and it corrects both this row and the re-audit's own reading of it.** Every chart-path
   prefix in every bucket, with its date: **eight bronze-shaped prefixes all at 2026-09-11**
