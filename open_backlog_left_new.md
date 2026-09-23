@@ -661,6 +661,23 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **THE WIRING IS NOT ONE SEAM, MEASURED 2026-09-23 — the row reads as though it were, and that is
+  the part to decide before writing any of it.** THREE distinct producer paths reach the bus:
+  **(1) the medallion**, through the shared `outbox.publish_lineage_with_outbox` — **10 call sites**
+  (`transform.py` 5, `workflow.py` 3, `produce.py` 1, `media_produce.py` 1). One function, but it
+  takes `event_json` and NO identity and NO key, so signing there means threading both through every
+  one of those call sites — a wide diff for a narrow change.
+  **(2) the catalog** and **(3) maintenance**, each publishing to its own sidecar directly
+  (`catalog/core/lineage_emit.py:747`, `maintenance/core/lineage_emit.py:290`), neither going through
+  the shared seam at all.
+  So "make the producers sign" is three changes, not one, and the cheap-looking seam is the one that
+  cannot see the credential. The alternative is to sign where the event is BUILT rather than where it
+  is published — each builder already knows its own identity — which is more places but each one
+  already holds what it needs.
+  **AND THE ORDER IS FORCED: producers must sign BEFORE the door refuses,** or the first deploy takes
+  the lineage bus down estate-wide. That also means the door's refusal cannot be proved live until
+  every one of the three paths is signing, and a partially-signed estate is indistinguishable from a
+  broken one from the door's side.
 - **THE SEAM NOW CARRIES ITSELF, AND COVERING THE AUTHOR TURNED OUT NOT TO BE ENOUGH (2026-09-23).**
   The signature rides IN the event as a `signature` run/dataset facet rather than in a header, which
   is what makes it transport-independent as the row requires — a header belongs to whatever carries
