@@ -21,6 +21,23 @@ ENV UV_LINK_MODE=copy \
 
 WORKDIR /app
 
+# arm64 ONLY: a native toolchain, because `lance-graph` (viewer's graph endpoint) publishes x86_64 wheels
+# alone — every release through 0.5.4 — so on arm64 uv builds it from the sdist with maturin. It needs a
+# C linker, pkg-config + libssl-dev (openssl-sys), protoc for prost-build PLUS libprotobuf-dev — Debian
+# ships the well-known types (`google/protobuf/empty.proto`, which lance-encoding imports) in the -dev
+# package, not with protoc — and Rust. RUST IS PINNED TO 1.94.0: the sdist's locked ethnum 1.5.2 fails
+# E0512 (transmute size mismatch) on rustc 1.98.1 — measured 2026-09-23 on a DGX Spark — and builds clean
+# on 1.94.0, the stable current at lance-graph 0.5.4's release (2026-03-21). cmake and libclang are NOT
+# needed: the image builds and passes its import gate without them. The arch comes from dpkg, as in .dagger/charts.go, so no build arg has to reach
+# the frontend. amd64 installs nothing here. Builder stage only; the final stage copies /opt/venv alone.
+RUN if [ "$(dpkg --print-architecture)" = "arm64" ]; then \
+      apt-get update \
+      && apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev protobuf-compiler libprotobuf-dev curl ca-certificates \
+      && rm -rf /var/lib/apt/lists/* \
+      && curl -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain 1.94.0; \
+    fi
+ENV PATH=/root/.cargo/bin:$PATH
+
 # Step 1: third-party deps only, from the lockfile (--frozen tolerates the absent workspace
 # source trees; --no-install-workspace skips the members themselves). The union of --package
 # flags covers every service the chart runs from this image — cached until pyproject/uv.lock change.
