@@ -1295,10 +1295,14 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
   Four consecutive ticks: RSS 259 MiB -> 321 -> 321 -> 323 — a warm-up, then flat at **63% of the
   512Mi limit**; the Lance session cache holds 27.7 MB against its 214 MB cap and `python_blocks`
   moves ~0.5% per tick. Zero restarts, zero OOMKills.
-  **TWO HOURS, 25 SAMPLES (2026-09-23): RSS 322.5 -> 321.8 MiB, slope -0.35 MiB/h, PEAK 322.6.** A
-  2 MiB band, under constant load (`planned=577` on every tick), with the session cache flat at 27.7 MB
-  and `python_blocks` trendless. Still 8% of the clause, still not a close — but the shape has not
-  moved off flat in two hours of the exact work this row accuses.
+  **2.4 HOURS, 30 SAMPLES (2026-09-23): RSS 322.5 -> 321.3 MiB, slope -0.49 MiB/h.** The whole run sits
+  in a **3.1 MiB band (319.5-322.6)** with **189 MiB of headroom** to the 512Mi limit, under constant
+  load — `planned=577` on every one of the 30 ticks, so the planner did its full per-dataset discovery
+  pass each time. Session cache flat at 27.7 MB against its 214 MB cap, `python_blocks` trendless, zero
+  restarts.
+  Still 10% of the clause and still not a close. What it rules out is the shape every earlier reading of
+  this row showed: there is no climb toward the limit here, and a leak large enough to have caused the
+  original OOMKills would be plainly visible across this span.
   **THIS IS NOT THE CLOSE, and four ticks must not be read as one.** The single unmet clause is the
   SOAK — "survives a full day of sweep AND reconcile ticks inside its limit" — and a flat eight
   minutes is precisely what a slow native leak looks like early. A 24h collector now samples the tick
