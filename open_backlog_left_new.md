@@ -568,6 +568,27 @@ of mine in this same session.**
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
+- **THE CALLER HAS A HOME PROBLEM, AND IT COLLIDES WITH [[LH-183]] — needs a ruling before it is
+  written.** Maintenance is the right SERVICE (it holds `catalog_url` and a service door, and
+  `_discover_all` already enumerates every dataset's ABSOLUTE location from the bucket listing). What
+  it cannot see is the GRAPH's current stamp, so it cannot tell which of the 577 datasets it sweeps
+  are the 23 that are wrong. Three ways to give it that, materially different:
+  **(a) Expose it.** `LIST_DATASETS` is `MATCH (d:Dataset) RETURN d.name, d.namespace, d.tags` and
+  `DatasetSummary` carries no `source_uri`; adding both is four mechanical lines. It also makes the
+  defect observable to a human for the first time. It does widen a `can_get_metadata`-gated browse
+  response with physical bucket layout, which is a governance call rather than a mechanical one.
+  **(b) Ask per dataset** via the existing `GET /{name}/reconcile` — no new field, but 577 round trips
+  a tick to find 23 rows.
+  **(c) Emit unconditionally** for every discovered dataset. `SET d.source_uri` is idempotent so it is
+  CORRECT, and it is the wrong shape: 577 durable feed rows per tick to repair a closed population of
+  23.
+  **AND THE OBVIOUS HOME IS THE WRONG ONE RIGHT NOW.** The natural place to run this is the sweep
+  tick — which runs in the 512Mi PLANNER that [[LH-183]] is open on, and whose accused work is
+  precisely the per-dataset pass. Adding a per-dataset comparison and emit there loads the one pod
+  under investigation while its soak is collecting, and would make that soak unreadable. A one-shot
+  repair verb (an operator door, run once against a closed population) does not have that problem and
+  is probably the right shape, but it is a different thing from a recurring reconcile and should be
+  chosen deliberately.
 - **THE PRODUCER'S BUILDER IS SHIPPED (2026-09-23) — `build_restamp_event` in
   `maintenance/core/lineage_emit.py`. THE CALLER IS NOT WIRED, so nothing is repaired yet and this
   row does not close.** Verified first that every OTHER hop already exists, because the row's own
