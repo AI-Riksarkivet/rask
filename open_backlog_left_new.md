@@ -1297,20 +1297,6 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
-- **ITS *What is left* IS STALE AND WOULD SEND THE NEXT READER TO REDO A SETTLED EXPERIMENT.** That
-  clause opens "ONE ENV VAR, AND A 7h20m CLOCK TO FALSIFY IT" and proposes deploying
-  `ARROW_DEFAULT_MEMORY_POOL=system`. It was written 2026-09-21 with the experiment IN FLIGHT; it has
-  since concluded, and the standing constraints record the outcome in one line:
-  *"`ARROW_DEFAULT_MEMORY_POOL=system` was tried and FALSIFIED."*
-  **The change is still deployed**, measured 2026-09-24 on both pods —
-  `rask-maintenance` and `rask-maintenance-worker` each carry `ARROW_DEFAULT_MEMORY_POOL=system`
-  beside `MALLOC_ARENA_MAX=2` — and it is chart-managed (`allocator.arrowMemoryPool`,
-  `_helpers.tpl:1566`). So there is nothing to deploy and nothing to clock: the lever is in place and
-  the answer is recorded.
-  **WHAT IS ACTUALLY LEFT IS THE SOAK, and today's data says it is UNTESTED rather than failing** —
-  fifteen hours across 30 pods, zero OOMKills, zero restarts, nothing above 338.8 MiB against 512Mi,
-  and a longest continuous observation of 2.73 h because every pod ended in a deploy. This row needs a
-  quiet window and the repo's existing sampler, not another allocator experiment.
 - **SOAK, FIRST 90 MINUTES (2026-09-23): FLAT, AND SLIGHTLY FALLING.** 19 samples at 300s off the
   planner's own tick line, under CONSTANT load (`planned=577` on every single tick, so this is not a
   quiet window):
@@ -1637,143 +1623,17 @@ measured (~10-14 MiB per commit pas
   workload-independent driver. Sampling it properly showed **oscillation, not growth**: 98 -> 107 -> 98
   across ninety seconds, with `lance_backgroun` going 12 -> 1 as a work cycle ended. Thread count is a
   work signal here, not a leak.
-- *What is left:* **ONE ENV VAR, AND A 7h20m CLOCK TO FALSIFY IT.** `ARROW_DEFAULT_MEMORY_POOL` is read
-  by the shipped `libarrow.so.2500` (verified with `strings`, not assumed) and `system` routes Arrow's
-  allocations through plain `malloc` — which the EXISTING `MALLOC_ARENA_MAX=2` then does govern. So the
-  next experiment does not add a lever, it makes the lever already in the chart reach the allocator
-  doing the work. The clock is known and short enough to run twice in a day: a pod that passes ~442
-  minutes has falsified the old ceiling, and one that plateaus below 512Mi has closed the row.
-  A host-side sampler (`/proc/<pid>/status` every 5 min: threads, VmRSS, RssAnon, RssFile, VmData) is
-  the instrument; it never enters the cgroup, which is the mistake that corrupted an earlier series.
-- **THE EXPERIMENT IS RUNNING, WITH A PAIRED CONTROL (2026-09-21 20:26Z).** The fix is deployed to the
-  live worker (`ARROW_DEFAULT_MEMORY_POOL=system` beside the existing `MALLOC_ARENA_MAX=2`, both read
-  back off the running pod) and two host-side series are being collected five minutes apart, neither
-  entering the cgroup under study:
-  * **CONTROL (mimalloc), 4 samples over 15 min:** RssAnon 213,892 -> 232,096 kB — **+1.21 MB/min**,
-    RssFile flat at ~138 MB, threads constant at 98. The growth is entirely ANONYMOUS, which is what
-    distinguishes allocator retention from page cache and is the shape this change targets.
-  * **TREATMENT (system), from 20:26Z.** First reading already differs where the mechanism predicts:
-    `VmData` **2.86 GB against the control's 4.03 GB** — about 1.2 GB less virtual data reserved, which
-    is mimalloc's large arena reservations not being made. That is a plausibility signal, not a result;
-    the slope decides.
-  **THE WIRING IS PROVEN, not assumed** — `ARROW_DEFAULT_MEMORY_POOL=system` flips
-  `pa.default_memory_pool().backend_name` from `mimalloc` to `system` on this exact wheel, checked
-  outside the cluster so the measurement was not perturbed to prove it.
-  **WHAT WOULD FALSIFY IT, stated before the answer arrives:** a pod that dies OOMKilled near 442
-  minutes again, or an anonymous slope that stays near 1.21 MB/min. What would close the row is a slope
-  that flattens and a pod that clears a full day. Either outcome is decided by the same two series, and
-  the previous prediction from this fit landed within 5%, so the model is trusted enough to read early.
-- **THE CAUSE IS THE DESIGN, NOT THE ALLOCATOR — AND THE OWNER NAMED IT (2026-09-22).** "It should not
-  even run stuff in memory, it should BYO workers for doing stuff since operations can be heavy and take
-  time." Measured immediately after, and it is exactly right:
-  * `api/routes.py:97-125` has TWO LANES. `if settings.work_topic and dapr is not None:` the planner
-    PLANS and enqueues units to Dapr/JetStream and returns; **otherwise it falls through to
-    `run_sweep(settings)` and executes the whole sweep INLINE.**
-  * The live planner's `MAINTENANCE_WORK_TOPIC` is **EMPTY**, so it is on the serial lane. It emitted
-    **2,227 `compaction_*` log lines in 30 minutes** — it is doing the compaction itself.
-  * Its limit is **512Mi**. The chart's own `dedicatedWorkers` block sizes the WORK at requests 1Gi /
-    limits **4Gi** and says why in its own comment: "Compaction reads whole fragments: on bronze, whose
-    rows are ~1.8MB page images, `scanBatchSize: 64` is ~115MB in flight before Lance's own overhead."
-  So a pod sized for PLANNING is executing work sized for a 4Gi pod. It does not leak; it is doing a job
-  it was never sized for, and the only question was how long that takes.
-- **BOTH ALLOCATOR FIXES WERE SYMPTOM-CHASING, and the numbers say so.** `MALLOC_ARENA_MAX=2` moved the
-  death 87m -> 442m; `ARROW_DEFAULT_MEMORY_POOL=system` moved it 442m -> **460m50s** (OOMKilled, exit
-  137, 93 samples, steady-state anon slope 0.63 MiB/min). **The second hypothesis is FALSIFIED on the
-  criterion set before the run** ("a pod that dies OOMKilled near 442 minutes again"). Both reduced
-  allocator overhead around the work; neither could stop a 512Mi pod doing 4Gi work.
-- **AND MY "WORKLOAD-INDEPENDENT" CLAIM WAS UNSOUND — the test was 2.5%.** I argued the slope was
-  identical either side of reaping fifteen datasets and concluded growth ignores dataset count. Fifteen
-  of **585** is 2.5%; no slope change was detectable at that size, so the reap excluded nothing. The
-  dataset-count hypothesis was never actually tested, and the inline-execution finding above is what it
-  should have pointed at.
-- *What is left:* **BYO WORKERS — enable the plane the chart already ships.** `maintenance.dedicatedWorkers.enabled`
-  plus `workTopic` (the chart requires both: "with no queue there is nothing for a worker to consume"),
-  which flips `routes.py` to the queue lane — plan, enqueue, and let subscriptions execute and ack for
-  themselves on pods sized 1Gi/4Gi. Then the closing bar is measurable as intended: the PLANNER's memory
-  should go flat because it stops holding fragments, and the workers absorb the work on a pod sized for it.
-- *What is left:* **The REMEDY, not the diagnosis.** The closing bar's second half — "what bounds it
-  is named and measured rather than inferred" — is now satisfied: a rewrite costs a transient peak of
-  ~1.7x `maxSourceBytes` and leaves **+14 to +54Mi permanently resident**, both measured on the live
-  worker. What is undecided is what to do about an allocation the process never returns:
-  * **RECYCLE THE WORKER** — count rewrites and exit after N, letting Kubernetes restart it. Crude,
-    but it is the standard answer for a native allocator that does not give memory back, and it is the
-    only one wholly inside this estate's control. It interacts with [[LH-190]]: every restart strands
-    the sidecar's buffer for a full `ackWait`, so the recycle interval and that remedy must be chosen
-    together, and a graceful drain would make recycling cheap.
-  * **SIZE FOR IT** — pick the pod limit from `baseline + N x retention` for the N rewrites expected
-    between natural restarts. Needs the per-pass figure below to be pinned first.
-  * **UPSTREAM** — the retention is in Lance/pyarrow's native allocator, not in this code, so a real
-    fix is not this estate's to make. Worth reporting with this measurement attached.
-- **MEASURED: RETENTION TRACKS COMMITS (PASSES), ~10-14 MiB EACH, and it is close to linear.** A
-  third round varied the fragmentation — same 240 MiB in 15 fragments instead of 60 — and landed on
-  the other worker, so it is also a replication on a second process:
-
-  | round | fragments | commits | retained | settled |
-  | --- | --- | --- | --- | --- |
-  | 3 | 15 | 1 | **+9.6Mi** | sd 0.6, n=23 |
-  | 1 | 60 | 1 | **+14.4Mi** | sd 0.8, n=113 |
-  | 2 | 60 | 4 | **+54.2Mi** | sd 1.2, n=48 |
-
-  `54.2 / 4 = 13.6` per commit, against 14.4 and 9.6 for single-commit runs. So the unit of cost is
-  the PASS, not the dataset and not the work item — fragmentation only matters through how many
-  passes it provokes. Peaks were 644Mi, 724Mi and 677Mi, all released.
-  **THE ARITHMETIC THE REMEDY NEEDS:** a worker doing K passes retains ~12K MiB, so a 4Gi pod over a
-  ~300Mi baseline affords roughly 300 passes before the limit. That is a long time on this estate,
-  where nearly every unit is a no-op — and short on one where tables are genuinely fragmented, which
-  is exactly when maintenance matters most.
-  **WHAT THIS DOES NOT ESTABLISH:** three points, one shape of table, one row size. And the second
-  worker's own baseline moved ~13Mi between the two windows for reasons not attributed here, so it is
-  NOT a clean control and is not claimed as one.
-- **THE INSTRUMENT IS DEPLOYED AND ANSWERED ON ITS FIRST PASS (live, 2026-09-22, `main-b301e0ef`).**
-  A committed rewrite now carries `rewrite_passes` and `rss_bytes`, so `passes x ~12 MiB` against the
-  reported RSS is a prediction the estate checks continuously instead of a figure established once
-  over fixtures. First line off the cluster:
-  `compaction_distributed_committed ... fragments_removed=70 rewrite_passes=1 rss_bytes=648585216`
-  — 618.5 MiB resident at commit, on a 280 MiB / 70-fragment table bounded at 256 MiB, which is the
-  ~1.7x peak this row measured. **The peak released:** the worker was 212Mi before and is 236Mi after,
-  so the ceiling came back down and the floor moved **+24 MiB for ONE pass**. That is the same order as
-  the ~10-14 MiB/pass measured over the retention rounds and about twice it, on a table 2-3x larger —
-  a data point that says the per-pass cost is not independent of table size, which the three-point
-  fixture series could not have shown. Not a contradiction of the row's answer; a reason the closing
-  bar is a soak rather than another three tables.
-
-- **THE REMEDY SHIPPED 2026-09-23 — the worker retires on a PASS BUDGET, and the premise that
-  rejected it is gone.** This row read "every restart strands the sidecar's buffer for a full
-  `ackWait`, so the recycle interval and that remedy must be chosen together". [[LH-190]] was
-  falsified on the live lane the day before: a restart costs pod-restart-time plus ~5s and the held
-  units redeliver at once, because NATS sees the subscriber's connection drop rather than waiting on
-  the ack timer. Recycling is cheap, so it is the answer rather than the crude fallback.
-- *The mechanism:* `should_retire(passes, after=...)` in `rewrite_slot.py`, checked in `handle_unit`
-  AFTER `ack_for` so the unit that tripped the mark is still acked, and effected by **SIGTERM to
-  self** — the same path a rolling restart takes, so `arm_drain_on_sigterm` flips the drain flag (the
-  next delivery is answered RETRY) and uvicorn finishes the in-flight response before the container
-  exits. Counted in PASSES, not units: a no-op unit never reaches a rewrite, and retention tracks
-  commits.
-- *The default is 150 and the gate picked it, not me.* The first number written was 200, taken from
-  this row's raw "~300 passes" of headroom. The sibling arithmetic has always applied a 0.75 usable
-  fraction for shape uncertainty; applying it gives a ceiling of `((4Gi x 0.75) - 320Mi) / 14 MiB` =
-  **~196**, so 200 overruns by 48 MiB. `test_the_worker_can_hold_every_unit_it_admits.py` now carries
-  both arithmetics and refuses 200 by name.
-- **OBSERVED FIRING ON THE LIVE POD 2026-09-23, end to end.** Every table on this estate is at
-  target (97 `nothing_to_do`, zero committed rewrites in three hours), so a retirement cannot occur by
-  waiting — it had to be provoked. A 40-fragment table was written through the live catalog at 100
-  rows per fragment against the **bronze target of 512** (`tiers.py:49`; the first attempt used 4096
-  and planned nothing, because Lance merges fragments SMALLER than target and those were four times
-  too big), the worker was set to `MAINTENANCE_RECYCLE_AFTER_PASSES=1` — a value that MUST fire — and
-  one unit was driven at the same `/maintenance-work` door the sidecar delivers to:
-
-  ```
-  22:52:14,820  compact_dataset  fragments_removed=40 fragments_added=12   a real committed rewrite
-  22:52:14,878  maintenance_unit_done  status='SUCCESS'                    the unit is acked FIRST
-  22:52:14,879  maintenance_worker_retiring  passes=1 rss_bytes=332845056  1 ms later, in order
-                Waiting for application shutdown. / Application shutdown complete.
-                exit reason=Completed  exitCode=0
-  ```
-
-  `restarts=1` on that pod and `restarts=0` on its sibling, which is the PDB working: a recycle takes
-  one replica. **The ordering the unit test asserts is confirmed where it runs** — ack at ...878,
-  retirement at ...879 — and the exit is `Completed`/0 through uvicorn's graceful shutdown rather than
-  a kill. The worker was returned to the shipped 150 and both probe tables dropped.
+- *What is left:* **THE SOAK, AND ONLY THE SOAK.** The allocator question is closed: the standing
+  constraints record `ARROW_DEFAULT_MEMORY_POOL=system` as tried and FALSIFIED, `MALLOC_ARENA_MAX` as
+  glibc-only against pyarrow's mimalloc and duckdb's jemalloc, and the cause as a SIZING/DESIGN one —
+  the planner running the sweep inline when `workTopic` is unset, with BYO WORKERS as the shape. Both
+  env vars are nonetheless still DEPLOYED (measured 2026-09-24 on `rask-maintenance` and
+  `rask-maintenance-worker`, chart-managed as `allocator.arrowMemoryPool` / `arenaMax`), so there is
+  nothing to deploy and no clock to run.
+  What the clause needs is a QUIET WINDOW. Fifteen hours of `scripts/soak_maintenance.sh`
+  (`.soak/maintenance.csv`, 2,269 rows, 30 pods) show zero OOMKills, zero restarts and nothing above
+  338.8 MiB against 512Mi — but a longest continuous observation of **2.73 h**, because every pod ended
+  in a DEPLOY. Use the repo's sampler, which appends; do not write a second one.
 - *Closes when:* **ONLY THE SOAK REMAINS — a day of clock, not a decision and not an unknown.** Both halves of the original bar are met: what bounds the worker is named and measured (inline execution in a coordination-sized pod; ~1.7x `maxSourceBytes` transient, ~12 MiB retained per pass), and the remedy is proven where it runs. What has not happened is a full day of sweep AND reconcile ticks inside the limit, and it cannot be compressed. The pods restarted today for this very probe, so the clock starts from 2026-09-23.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
