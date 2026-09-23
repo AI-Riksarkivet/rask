@@ -78,6 +78,7 @@ from lineage_kit.schemas import (
     WireModel,
     custom_facet,
 )
+from lineage_kit.signing import sign_event, verify_event
 from lineage_kit.stage import stage
 
 
@@ -135,7 +136,9 @@ __all__ = [
     "resolve_context",
     "run_id_for",
     "set_default_emitter",
+    "sign_event",
     "stage",
     "use_context",
     "use_emitter",
+    "verify_event",
 ]

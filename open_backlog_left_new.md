@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **89 are blocked on a decision** and **106 can be picked up today**.
+**195 open items**, of which **90 are blocked on a decision** and **105 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 9 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 30 | 8 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -568,6 +568,10 @@ of mine in this same session.**
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
+- **blocked:** WHERE the repair runs, and whether `source_uri` may join a `can_get_metadata`-gated
+  browse response. The builder half is SHIPPED and needed no ruling; the caller cannot be written
+  without one, because its three options differ in kind rather than in effort and its obvious home is
+  the 512Mi planner [[LH-183]] is open on. Both questions are stated in the bullets below.
 - **THE CALLER HAS A HOME PROBLEM, AND IT COLLIDES WITH [[LH-183]] — needs a ruling before it is
   written.** Maintenance is the right SERVICE (it holds `catalog_url` and a service door, and
   `_discover_all` already enumerates every dataset's ABSOLUTE location from the bucket listing). What
@@ -657,6 +661,29 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **THE SIGNING SEAM IS SHIPPED (2026-09-23) — `lineage_kit.signing`, exported as `sign_event` /
+  `verify_event`. THE DOOR DOES NOT VERIFY YET AND NO PRODUCER SIGNS, so the row does not close.**
+  HMAC-SHA256 over CANONICAL JSON (`sort_keys`, tight separators), keyed on the identity's own
+  `service-token-<identity>`. It lives in `lineage-kit` rather than in a service because the row
+  requires it to survive a Dapr retreat: the envelope belongs to the transport, the signature belongs
+  to the PRODUCER, and a seam bolted to the sidecar would be rewritten when that changes.
+  **THE SIGNATURE COVERS THE AUTHOR**, which is the one property a naive implementation drops — signing
+  a body that excludes `run.facets.author.sub` verifies perfectly and prevents exactly the substitution
+  this exists to stop. Mutation-checked: excluding `run` from the signed body reds
+  `test_SUBSTITUTING_THE_AUTHOR_BREAKS_THE_SIGNATURE` and nothing else, which is the shape of the bug
+  that would otherwise ship looking correct.
+  Canonical rather than textual, because a transport may re-encode the envelope and a signature valid
+  for one encoder's byte order starts refusing honest producers the moment anything re-serialises
+  (mutation-checked the same way). `compare_digest`, and a malformed signature answers FALSE rather
+  than raising — a verifier that threw on junk would turn a forged request into a 500 and hand any
+  unauthenticated caller a way to fail the ingest door.
+  **THE CLAIM IS BOUNDED AND THE DOCSTRING SAYS SO:** symmetric HMAC proves the event came from a
+  holder of that identity's credential. It is authentication, not public-key signing, and it proves
+  nothing to a third party who does not already trust the verifier — the right strength for an
+  in-estate bus, the wrong one for external attestation.
+  *Still to do:* verify in `enforce_bus_authz` / `on_lineage_event` (refuse when the signature does not
+  check), and make the producers sign. Note the verifier must READ the signer's credential, which is
+  the one cross-identity read [[XC-072]]'s scoping deliberately left open for verifier doors.
 - **NOT BLOCKED ANY MORE (2026-09-23) — both arms of the blocker are closed, the second one today.**
   The marker held this row on two independent controls, and it was right to: a producer signature is
   only non-repudiation if the key both DISTINGUISHES a producer and is unreadable by its peers.

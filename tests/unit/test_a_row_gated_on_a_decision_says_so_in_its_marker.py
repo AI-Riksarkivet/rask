@@ -29,7 +29,15 @@ REGISTER = pathlib.Path(__file__).resolve().parents[2] / "open_backlog_left_new.
 
 #: How the register says "this needs a ruling". Collected from rows that carry the marker correctly
 #: rather than invented, so a new row phrasing it a fourth way is a gap in this list, not a false pass.
-_DECISION = re.compile(r"owner call|owner ruling|owner decides|owner decision|needs a ruling|is a decision|owner picks|an owner's", re.IGNORECASE)
+_DECISION = re.compile(
+    r"owner call|owner ruling|owner decides|owner decision|needs a ruling|is a decision|owner picks|an owner's"
+    # ADDED 2026-09-23 after this list MISSED one, which is the failure the comment above predicts.
+    # LH-076's remaining step opened "Do nothing until the ruling lands" and it matched nothing here, so
+    # the row read as pickable and was picked — the gate was green and the register was wrong. These are
+    # the phrasings that row actually used, collected the same way: from the text, not invented.
+    r"|until the ruling|do nothing until|awaiting a ruling|not mine to pick|only the owner can",
+    re.IGNORECASE,
+)
 
 #: Rows that match the phrase set and are CORRECTLY unmarked, each with the reason. A row leaves this
 #: set by gaining a marker or by losing the phrase — never by being deleted to quiet the gate.
