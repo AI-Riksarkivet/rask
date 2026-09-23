@@ -10,7 +10,7 @@ services:
   lineage-postgres:
     # PostgreSQL 16 + Apache AGE. Pinned to PG16 — the 'latest' tag tracks PG18,
     # on which AGE crashes the backend on create_graph (verified).
-    image: apache/age:release_PG16_1.5.0
+    image: apache/age:release_PG16_1.6.0
     container_name: lance-lineage-postgres
     environment:
       POSTGRES_USER: lineage

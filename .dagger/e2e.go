@@ -8,7 +8,7 @@ import (
 
 // ageImage pins PostgreSQL 16 + Apache AGE — the 'latest' tag tracks PG18, on which AGE crashes the
 // backend on create_graph (verified). Same pin as .docker/docker-compose.lineage.yml and the chart.
-const ageImage = "apache/age:release_PG16_1.5.0"
+const ageImage = "apache/age:release_PG16_1.6.0"
 
 // TestLineage runs the AGE-backed lineage e2e: the repository's REAL openCypher against a real Apache
 // AGE Postgres service container — hermetic and identical locally and in CI (`dagger call test-lineage`

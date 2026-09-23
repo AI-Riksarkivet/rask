@@ -3047,7 +3047,12 @@ openfga:
 # ImageVolume path that eventually folds it into CloudNativePG.
 age:
   enabled: true
-  image: apache/age:release_PG16_1.5.0
+  # PG16 THROUGHOUT, and the patch is chosen for the PLATFORM rather than for features: 1.5.0 ships
+  # `linux/amd64` ONLY — read from the image's config blob, since a v2 manifest carries no top-level
+  # architecture — while 1.6.0 is a manifest list carrying amd64 AND arm64 ([[XC-070]], measured
+  # against the registry 2026-09-23). This StatefulSet serves BOTH the lineage graph and OpenFGA, so
+  # on the older pin nothing governed comes up on an arm64 host at all.
+  image: apache/age:release_PG16_1.6.0
   user: lance
   password: lance
   lineageDb: lineage

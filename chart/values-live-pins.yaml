@@ -2,7 +2,7 @@
 # Regenerate after every build+roll; never hand-edit. See #135.
 image:
   tags:
-    age: "release_PG16_1.5.0"
+    age: "release_PG16_1.6.0"
     assist-runner: "main-31b161ec"
     compute: "d4-205851"
     controlplane: "fix-71d7b04f"

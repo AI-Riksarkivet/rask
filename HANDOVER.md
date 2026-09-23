@@ -25,10 +25,24 @@ AGE build, a distribution swap, or the CNPG cutover [[XC-070]] proposes. The pin
 `chart/values.yaml:3050`, `chart/values-live-pins.yaml:5`, `.dagger/e2e.go:11`, and the comment at
 `chart/templates/age-postgres.yaml:3`.
 
-**Not yet done, and deliberately not done mid-migration:** bumping AGE under a LIVE database may need
-an `ALTER EXTENSION age UPDATE`, and this host's estate holds the lineage graph and the FGA store. On
-the new machine the estate starts EMPTY, so there is no upgrade path to worry about — set the pin to
-`release_PG16_1.6.0` before the first `make k3s-up` and it is simply the right version.
+**DONE AND PROVEN ON THE LIVE ESTATE 2026-09-23 — you do not need to do this on the new machine.**
+The pin is `release_PG16_1.6.0` in all four places. It was rolled onto this host's `rask-age`
+StatefulSet, which holds real lineage and FGA data, and everything answered:
+
+* `rask-age-0` Running, **0 restarts**, image `apache/age:release_PG16_1.6.0`;
+* the graph answers through psql (`SELECT count(*) FROM ag_graph`);
+* OpenFGA `/stores` 200 and a real `check` verdict;
+* **the lineage service reads the graph end to end — `GET /datasets` 200, `total: 433`.**
+
+**No `ALTER EXTENSION age UPDATE` was needed**: the 1.6.0 library runs against the 1.5.0-installed
+extension. Worth knowing because that was the risk this bump was being held back for.
+
+*One artefact of upgrading IN PLACE, which a fresh estate will NOT see:* postgres warns `database
+"lineage" has a collation version mismatch ... created using collation version 2.36, but the
+operating system provides version 2.41`. That is glibc moving between the two image bases. On the new
+machine the databases are created by the 1.6.0 image itself, so the versions agree and the warning
+never appears. If you ever hit it on an upgraded host, the remedy is `REINDEX DATABASE` then
+`ALTER DATABASE <db> REFRESH COLLATION VERSION`.
 
 The other half of XC-070 is already fixed: `.dagger/charts.go` reads the arch off the container with
 `dpkg --print-architecture` for both the helm and promtool fetches. The row's "one tooling pin the row
