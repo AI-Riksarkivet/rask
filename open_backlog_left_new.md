@@ -445,6 +445,15 @@ is reachable — and that needs no
 `catalog` · **MED** · PARTIAL
 - **blocked:** (1) Whether the authorization gate may admit an idempotent no-op against an id with no tuples (the no-existence-oracle class rule, docs/DECISIONS.md:1394) or `Skip` is withdrawn from `drop_namespace`; (2) whether `Overwrite` on `create_namespace` is implemented against the cascade/trash interaction or stays refused
 - *What is left:* Every other mode is honoured: `create_namespace` keeps an existing namespace on `ExistOk` without seeding ownership and refuses `Overwrite` with a 400 (`namespaces.py:142-145`, seam `create_or_keep_namespace` :261); `register_table` refuses `Overwrite` (`tables.py:735-738`); `drop_namespace` parses `Fail`/`Skip` via `DropMode` (`modes.py:54`). Take ruling (1): either let the gate admit a `Skip` drop of an id with no tuples, or remove `Skip` from this door's accepted set and name that in the 400. Take ruling (2): implement `Overwrite` as cascade-drop-then-create, or leave the refusal. Keep `modes.py`'s fold of unrecognised modes to `Create`.
+- **THE CITED RULE IS NOT AT THAT LINE — checked 2026-09-23.** The marker sends a reader to "the
+  no-existence-oracle class rule, `docs/DECISIONS.md:1394`". That passage is about the CASCADE-LAG
+  detector — "neither door offers an existence oracle by design; the repair is to govern the table" —
+  and is reasoning about a metric's blindness, not a recorded ruling about what an authorization gate
+  may admit. `grep -n "existence oracle" docs/DECISIONS.md` returns that one line and nothing else.
+- *The PRINCIPLE is live even though the ruling is not written down*, which is why the row reads as if
+  it were: measured on the deployed catalog 2026-09-23, `POST /v1/table/<unknown>/describe` answers
+  **403 `can_get_metadata required`**, not 404 — the door refuses to say whether the id exists. So the
+  question this row asks is real and open; only its evidence pointer is wrong.
 - *Closes when:* Both rulings are recorded in docs/DECISIONS.md and the doors' behaviour matches them.
 - *Evidence:* `services/catalog/src/catalog/core/modes.py:21,54` · `services/catalog/src/catalog/api/v1/endpoints/namespaces.py:142-145,261` · `services/catalog/src/catalog/api/v1/endpoints/tables.py:735-738` · `docs/DECISIONS.md:1394`
 
@@ -457,6 +466,12 @@ is reachable — and that needs no
   "storage ACLs can be read-only on main and write-only on the branch". So no `branch` FGA type; the
   work is a branch-aware vended prefix (`<table>/tree/<b>/*`), which the credentials door cannot express
   today because it takes no branch parameter.
+- **OPTION (b) IS NOT AVAILABLE TODAY — measured 2026-09-23 against the pinned Lance.** pylance
+  **11.0.0** exposes `Tags.update(tag, reference=None)` and `Tags.create(tag, reference=None)`; neither
+  takes a precondition, an expected-current-version or a compare-and-swap argument. So "raise a
+  conditional `Tags::update` upstream" is an upstream ASK with no version to wait for, not a switch to
+  flip — which means (a), accepting last-writer-wins and recording it, is the only option that can be
+  taken now. Worth knowing before the ruling rather than after.
 - *Closes when:* The ruling is recorded (and, under (b), the upstream conditional update is consumed).
 - *Evidence:* `services/catalog/src/catalog/services/publication.py:298` · `services/catalog/src/catalog/services/models.py:213-215` · `uv.lock:3276-3277 (pylance 11.0.0)` · `chart/values.yaml:2022-2023 (minio.enabled: true)`
 
