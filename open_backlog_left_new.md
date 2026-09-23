@@ -242,6 +242,29 @@ finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
 
+**THE `ungoverned=75` POPULATION IS NOT CATALOG TABLES, AND THAT CORRECTS [[LH-164]]'s SHAPE AND TWO
+CLAIMS I MADE ABOUT IT TODAY — measured 2026-09-23.** The sweep's `ungoverned` category reads as "a
+catalog table carrying no tuples", and the obvious dispositions are to reap the bytes or register the
+table. Neither is available, because **the catalog does not have these tables at all**.
+- Established by granting `owner` on one and asking again: an ungoverned name answers 403 at `exists`
+  AND at `describe`, because authorization runs BEFORE existence — so the two cannot be told apart
+  from outside. With a tuple written, `exists` answers **404 `TableNotFoundError`**. Repeated on three,
+  including the two that looked most like real data (`lakehouse$gold$catalog`, `models$churn`): all
+  404.
+- **So `ungoverned` means a LINEAGE-GRAPH Dataset node naming a table the catalog does not carry.**
+  The bytes may still exist on S3 — this row already measured `lakehouse$gold` at 6.1KiB/5 objects —
+  which is precisely the "second home": data with a graph node and NO catalog entry. The disposition
+  is therefore a graph prune plus an object reap, not a `drop_table`; the governed door cannot reach
+  them by construction.
+- **AND DISPOSAL HAS NO ROUTE WITHOUT BREAK-GLASS, which is its own finding.** A name carrying no
+  tuples is holdable by nobody, so no subject holds `can_drop` and the governed door refuses EVERYONE.
+  This estate seeds no `auth.bootstrapAdmin`, so the only paths are a raw tuple write or seeding an
+  estate admin. The `_ORPHAN_DATASETS` prune does not reach them either: it requires no WROTE/READ/
+  CREATED edge and these carry edges from the runs that wrote them.
+- **I told the owner these split into "67 residue and 6 plausibly-real tables" and asked which to reap
+  or register. That question was built on a premise this measurement falsified**, and the reap was
+  stopped at one table rather than run on 69.
+
 **THE LIVE e2e SUITE WAS RUN AGAINST THE DEPLOYED ESTATE FOR THE FIRST TIME — 2026-09-23.**
 `scripts/e2e_live.sh` exists because "every 'verified live' claim in this repo rested on a manual
 terminal session"; nothing had executed it. **144 passed, 9 failed, 5 skipped in 15 minutes.**
