@@ -568,6 +568,22 @@ of mine in this same session.**
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
+- **RE-MEASURED 2026-09-23 against the live reconcile, and the row's POPULATION CLAIM HOLDS — but the
+  headline count does not, and reading it alone says the opposite.** The sweep now reports
+  `checked=535 unreadable=51 storage_loss=1 provenance_holes=0 contract_violations=0`, against
+  `checked=483 unreadable=23` the day before. `unreadable` more than doubled, which reads as this row
+  leaking. It is not: parsing the `lineage_reconcile_unreadable` dict rather than the summary integer
+  splits the 51 into **23 + 28**, and only the 23 are this row.
+  **THE 23 ARE UNCHANGED** — every one carries "names no storage location", the same closed,
+  historical population the row describes. **THE 28 ARE SOMETHING ELSE ENTIRELY**: all in `trackans*`
+  namespaces, all failing with `LanceError(IO) … NoSuchBucket` (e.g.
+  `http://rask-minio:9000/tracka8500765e-wh?list-type=2&prefix=…` -> 404). Those are TEST-SUITE
+  residue whose warehouse buckets were torn down while the graph kept the nodes; nothing in this row
+  produced them and repairing `source_uri` cannot help them.
+  **WHY THIS IS WORTH A BULLET RATHER THAN A FOOTNOTE:** a dataset whose bucket is permanently gone is
+  reported unreadable on EVERY tick forever, so the count this row is judged by drifts upward on its
+  own and a real regression would arrive inside that drift unnoticed. Judge this row by the
+  "names no storage location" subset, never by `unreadable=`.
 - **NOT BLOCKED — its dichotomy asks permission for a mechanism this estate already emits.** `DatasetEvent` is the OpenLineage spec's static-metadata event, defined at `services/lineage/src/lineage/models.py:361-362` as "a dataset change that no job performed" — literally the synthetic assertion this marker asked about — and the catalog already routes to it: `services/catalog/src/catalog/core/lineage_emit.py:366-367`, `if _is_ddl(operation) and not inputs: return _as_dataset_event(...)`. Horn 2 (a catalog client inside lineage, accepting a cycle) was the alternative to a thing that now exists, so it is moot. What remains is ordinary work in `services/maintenance`: a `DatasetEvent` carrying only a `dataSource` facet to restamp the 23 relative-`source_uri` datasets and the one `storage_loss` (`bronze$events`).
 - **RE-MEASURED 2026-09-22 on demand, because this row said its own counts were not** (lineage
   reconcile triggered directly: `POST /lineage-reconcile-cron`, port-forwarded, `dapr-api-token`):
