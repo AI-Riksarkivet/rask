@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **89 are blocked on a decision** and **107 can be picked up today**.
-18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
+**195 open items**, of which **88 are blocked on a decision** and **107 can be picked up today**.
+21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 10 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 30 | 10 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -592,22 +592,17 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
-- **blocked:** [[XC-072]] — per-app-id secret scoping. NOT ZT-001 any more, and the correction matters
-  because the row's stated bar now PASSES while its purpose does not. ZT-001 landed 2026-09-23
-  (`3018ab8f`) and this row's own tell fired:
-  `test_a_dedicated_service_token_is_not_derivable_from_the_shared_one.py` is deleted, its inverted
-  replacement passes 7/7, and `lance.dedicatedServiceToken` now emits `randAlphaNum 40`. So "the
-  signing key is not derivable from `dapr.appToken`" is literally true.
-  **It is still not a key that distinguishes a producer, because every producer can READ every other
-  producer's key.** Measured live 2026-09-23 from the `medallion-producer` pod — not lineage —
-  `GET /v1.0/secrets/lance-secrets/lance` on its own sidecar, no API token required, returns the whole
-  21-key bundle including **8 `service-token-*` credentials**: `service-ingest`,
-  `service-maintenance`, `service-trainer`, `service-web` and all three stage runners. Symmetric: the
-  lineage pod reads the same 8. So an HMAC keyed on this material refuses an unauthenticated forger —
-  real value — and refuses none of the eight producer pods, which is the population that can already
-  stamp a neighbour's subject. That is this row's own warning, unchanged except for which credential
-  carries it: it "would read as non-repudiation without being it".
-  ZT-001 fixed DERIVATION; readability is a separate control and it is absent.
+- **NOT BLOCKED ANY MORE (2026-09-23) — both arms of the blocker are closed, the second one today.**
+  The marker held this row on two independent controls, and it was right to: a producer signature is
+  only non-repudiation if the key both DISTINGUISHES a producer and is unreadable by its peers.
+  *Derivation* fell with ZT-001 (`3018ab8f`): `lance.dedicatedServiceToken` emits `randAlphaNum 40`,
+  so a key is no longer `sha256("<identity>-<dapr.appToken>")[:40]`. *Readability* fell with
+  [[XC-072]]: each credential is its own `service-token-<identity>` secret and the per-app Dapr
+  Configuration denies the rest, measured live — `medallion-producer` read 8 identity credentials that
+  morning and reads 1 now, with a foreign fetch answering 403 and a verifier door still answering 200.
+  So the material this row needs now exists: a key per producer, that no other producer can read.
+  *What has NOT changed:* `_StampedAuthor` still bounds the forgery — a forged subject must hold the
+  rung on every output — so this closes a non-repudiation gap, not an authorization one.
 - *What is left:* Add a transport-independent producer signature over the CloudEvent and verify it in the bus door (`on_lineage_event` / `enforce_bus_authz`), with the signing seam in `packages/lineage-kit` so it survives a Dapr retreat; `_StampedAuthor` states the gap ("nothing proves the stamp"). Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
 - **ITS STRENGTH IS CAPPED BY [[ZT-001]], and that should be settled first.** A producer signature needs
   a KEY, and every key a producer holds today is derivable from `dapr.appToken`: the shared app token
@@ -723,6 +718,7 @@ MEASURED: Measured live against the deployed GreptimeDB (kubectl port-forward sv
 4000, GET /v1/sql, version() = 1.1.1). `SHOW CREATE TABLE opentelemetry_logs` returns `PRIMARY KEY
 ("scope_name")`, `TIME INDEX ("timestamp")`, a FULLTEXT INDEX on `body` and `ttl = '14days'`; `SHOW INDEX
 FROM opentelemetry_logs` returns exa
+- **HALF OF IT IS SHIPPED (2026-09-23) — the Postgres half, which is the one the product queries.** `public.lineage_reads` now carries `CREATE INDEX IF NOT EXISTS lineage_reads_dataset ON public.lineage_reads (dataset)` beside its DDL (`lineage/services/postgres.py`), executed in `ensure_reads_table` (`repository.py`); both statements are `IF NOT EXISTS`, so an estate whose table predates the index gains it on the next boot and no migration is needed. Until this, `readers()` (`postgres.py:READERS`, `WHERE dataset = %s GROUP BY reader`) sequentially scanned an append-only audit log that grows without bound — and a missing index is never an ERROR, only a query that keeps returning the right answer more slowly every day. Gated by `tests/unit/test_the_read_audit_is_indexed_on_the_column_it_is_queried_by.py`, which derives the (table, filter-column) pairing FROM THE QUERIES this module declares rather than from a hand-written table list, so a new filter on a new column is covered without anyone remembering to extend it. Mutation-checked twice: removing the index reds it, and indexing a DIFFERENT column (`reader`) reds it too — which a "has some index" check would have passed. **THE ROW STAYS OPEN ON ITS OWN TERMS:** its `Closes when` names the GreptimeDB `opentelemetry_logs.scope_name` index and the dataset-promotion ruling, and neither is this.
 - **NOT BLOCKED — the row watches the WRONG STORE, and the real gap needs no ruling.** There are TWO read-audit streams and this row knows one. The stream the product QUERIES is `public.lineage_reads` in the lineage Postgres: `services/lineage/src/lineage/services/repository.py:1414-1417` INSERTs there (`postgres.py:135`) and `readers()` reads it back with `SELECT reader, MAX(read_at), COUNT(*) ... WHERE dataset = %s GROUP BY reader` (`postgres.py:169`). **Its DDL has no index on `dataset`** — `postgres.py:131-133` is `seq bigserial PRIMARY KEY, reader text NOT NULL, dataset text NOT NULL, read_at timestamptz` — so every "who read this dataset" query sequentially scans an append-only log that grows without bound. That is the defect, and it is ordinary work: `CREATE INDEX ... ON public.lineage_reads (dataset)` beside the existing DDL, plus the `scope_name` index the row already calls "startable now and gated by no ruling". The GreptimeDB promotion question is secondary and may be moot.
 - *What is left:* Add an index on `opentelemetry_logs.scope_name` in a hook Job shaped like `chart/templates/greptimedb-ttl-job.yaml`; that is startable now and gated by no ruling. `scope_name` is the only first-class column separating the `lance.audit` rows (6.46M of 105.4M, 6.1%) from the rest. No index DDL exists anywhere under `chart/`. Do not rework retention: the 14d database TTL hook is in place. Take the promotion ruling separately.
 - *Closes when:* A chart hook creates the `scope_name` index on `opentelemetry_logs`, and the dataset-promotion question has a recorded answer.
@@ -741,13 +737,6 @@ FROM opentelemetry_logs` returns exa
 - *What is left:* `model.fga:514` `can_set_property: editor` and `:516` `can_cancel: committer` are still referenced by nothing; `fga_deps._authorize_transaction` (`:410`) picks only `can_describe`/`can_set_status` (or `can_get_metadata`/`can_update_properties` on a namespaced txn), and `transactions.py:28-32` forwards the whole body after that one check. On the ruling: either extend the `alter` route to check per action, or delete both lines with `fga model test` green — deleting the `editor` rung is a second decision since `viewer` inherits from it. The `fga` CLI is at `.localbin/fga` (v0.6.4, not on PATH); the store is an in-cluster ClusterIP (`rask-openfga`), so a port-forward is the path for `fga model test`, not the sandbox proxy.
 - *Closes when:* Either `POST /v1/transaction/{id}/alter` authorizes each state action against its own relation, or `can_set_property` and `can_cancel` are gone from `model.fga` with `fga model test` green.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/auth/model.fga:505-516 (removal-candidate comment; the two relations)` · `services/catalog/src/catalog/api/fga_deps.py:410-425 (_authorize_transaction picks describe/set_status)` · `services/catalog/src/catalog/api/v1/endpoints/transactions.py:28-32 (single-check alter route)`
-
-**LH-091 · No control-lane event announces a table version advance, so a BYO change-feed consumer has no push trigger on `catalog.control.v1`**
-`catalog, lineage, notifications` · **MED**
-- **NOT BLOCKED — the headline is false and the second arm of its own binary already exists.** `table_published` IS a control-lane event announcing a version advance: declared at `packages/service-kit/src/service_kit/control_events.py:101`, its payload carrying `from_version`/`to_version` as "the RANGE (D-R3) the notification carries, so a consumer resolves the delta" (`services/catalog/src/catalog/services/publication.py:245-254`), emitted at `:343-356` gated on `result.advanced`. So the row's own evidence line — "41 members, none for a write/version advance" — is the claim that is wrong. What remains is the docstring half: name `table_published` and its window as the push trigger at the `table_changes` door.
-- *What is left:* Take the lane decision. If lineage: document at the `POST /v1/table/{id}/changes` door that the trigger is the `lineage.events.v1` write event's `version` and nothing else changes. If control lane: add the action to the 41-member `ControlAction` literal with the buffer cost stated, across the three-file contract. Either way do NOT add it to notifications' `NAMED_ACTIONS` — it names no party.
-- *Closes when:* Either the changes-door docs name `lineage.events.v1` as the trigger, or a version-advance action exists in `ControlAction` with an emitter and the stated cost.
-- *Evidence:* `packages/service-kit/src/service_kit/control_events.py:36 (`ControlAction` literal; 41 members, none for a write/version advance)` · `packages/service-kit/src/service_kit/control_events.py:57,105 (`NAMED_ACTIONS` exclusion rationale)`
 
 **LH-097 · Silver re-materialises managed blob bytes copied from bronze instead of being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · **MED**
@@ -3292,9 +3281,9 @@ governs a non-table artifact and either add the distinct type or record that the
 - *Closes when:* `model.fga` declares the asset type and `models.py` no longer queries `object_type="table"`.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/models.py:9,48,106,109` · `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530` · `grep -i 'opaque|K-F9' docs/DECISIONS.md: no hits`
 
-## Dropped as ALREADY DONE by the audit
+## Left this register
 
-Re-measured at HEAD and found shipped. Listed so a reader who remembers the row can see where it went, not to keep a changelog.
+Re-measured at HEAD and found shipped, or closed by work since. Listed so a reader who remembers the row can see where it went, not to keep a changelog — the reasoning lives in the commit that closed it.
 
 - **CP-026** — `GET/POST /stage-runners/{stage runner}/stages/{instance_id}` ignores both path parameters
 - **CP-028** — Dapr `daprstate` workflow-history rows accumulate with no retention and no alert
@@ -3316,3 +3305,4 @@ Re-measured at HEAD and found shipped. Listed so a reader who remembers the row 
 - **XC-024** — With frontend.oidc.enabled false, locals.authEnabled is false and the serve-proxy 401 guard never fires, so anonymous callers reach GPU inference
 - **XC-072** — Every privileged service credential was readable by every other scoped service; split per-identity + per-app Dapr secret scopes, proved live (8 credentials -> 1, foreign 403, verifier door intact)
 - **XC-073** — A pinned catalog older than `model.fga` deployed a stale authorization model and failed every post-upgrade hook silently; rebuilt, and a gate now refuses the pairing
+- **LH-091** — A version advance had no control-lane push trigger for a BYO change-feed consumer; `table_published` already was one, and `POST /v1/table/{id}/changes` now names it, its range and its emitter

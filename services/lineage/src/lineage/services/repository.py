@@ -1407,9 +1407,12 @@ class LineageRepository:
                     return deleted
 
     async def ensure_reads_table(self) -> None:
-        """Create the read-audit log table if absent (idempotent, called on boot)."""
+        """Create the read-audit log table and its query index if absent (idempotent, called on boot)."""
         async with self._pool.connection() as conn:
             await conn.execute(pg.CREATE_READS_TABLE)
+            # Beside the table, not in a migration: this runs on every boot and both statements are
+            # `IF NOT EXISTS`, so an estate whose table predates the index gains it on the next roll.
+            await conn.execute(pg.CREATE_READS_DATASET_INDEX)
 
     async def record_read(self, *, reader: str, dataset: str) -> None:
         """Append one read-audit row — who (``reader``) read which ``dataset`` (#6)."""

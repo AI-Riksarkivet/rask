@@ -688,6 +688,18 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     one (§ J1), because following every row a table ever received is the most disclosing read
     available, not a metadata lookup.
 
+    THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
+    it. That `ControlAction` (`service_kit/control_events.py:101`) announces a version advance and
+    carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
+    resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
+    door takes. Its emitter is a DIFFERENT `publication.py`, the route module
+    `catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real
+    advance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and
+    calls here with it — no new `ControlAction` member, so no added control-buffer cost.
+    It is deliberately NOT in notifications' `NAMED_ACTIONS`: a version advance changes an OBJECT, not
+    what any particular person may do, so it is an untargeted control event like the other 31 and
+    reaches a feed rather than a person.
+
     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
     shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every

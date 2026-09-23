@@ -132,6 +132,12 @@ CREATE_READS_TABLE: Final = (
     "seq bigserial PRIMARY KEY, reader text NOT NULL, dataset text NOT NULL, "
     "read_at timestamptz NOT NULL DEFAULT now())"
 )
+# THE QUERY'S INDEX. `READERS` below filters `WHERE dataset = %s`, and the table's only other index is
+# the `seq` primary key -- so without this every "who read this dataset" answer sequentially scans an
+# append-only log that grows without bound. Same shape and same reason as
+# `CREATE_EVENTS_RECEIVED_AT_INDEX` on the sibling feed; a missing index never surfaces as an error,
+# because the query keeps returning the right answer and only gets slower.
+CREATE_READS_DATASET_INDEX: Final = "CREATE INDEX IF NOT EXISTS lineage_reads_dataset ON public.lineage_reads (dataset)"
 INSERT_READ: Final = "INSERT INTO public.lineage_reads (reader, dataset) VALUES (%s, %s)"
 
 # The outbox's TERMINAL STATE for a governance refusal ([[LH-182]]). A refused event is settled — the
