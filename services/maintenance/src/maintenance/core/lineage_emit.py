@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
@@ -44,7 +45,14 @@ from service_kit.lakehouse import outbox
 # dataset has a per-dataset maintenance-failure surface at all.
 from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY
 from service_kit.lakehouse.table_locations import table_id_from_location
-from service_kit.openlineage import ERROR_MESSAGE_FACET_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
+from service_kit.openlineage import (
+    DATASET_EVENT_SCHEMA_URL,
+    DATASOURCE_FACET_SCHEMA_URL,
+    ERROR_MESSAGE_FACET_SCHEMA_URL,
+    RUN_EVENT_SCHEMA_URL,
+    custom_facet,
+    run_id_for,
+)
 
 
 log = logging.getLogger(__name__)
@@ -163,6 +171,60 @@ def table_id_from_uri(uri: str) -> str | None:
     needs the identical crossing, and two implementations of one convention is how that drift happened.
     """
     return table_id_from_location(uri)
+
+
+RESTAMP = "restamp"
+
+#: A location the reconcile can act on names a scheme. Anything else is a path fragment relative to a
+#: base only the writer knew, which is the whole defect being repaired.
+_ABSOLUTE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.\-]*://")
+
+
+def build_restamp_event(*, table_id: str, namespace: str, source_uri: str, event_time: str, author: str = "") -> dict[str, Any]:
+    """Build the OpenLineage ``DatasetEvent`` (wire JSON) that corrects one dataset's stored location.
+
+    [[LH-141]]. A `:Dataset` carrying a RELATIVE `source_uri` fails the reconcile's readability crossing
+    on every tick — "names no storage location, a relative path cannot say whether the data is there" —
+    and nothing ever rewrites it, because `ensure_declared_dataset_id` runs only from the medallion's
+    write paths and a dataset whose bytes are never rewritten is never re-stamped. The guard is correct;
+    what was missing is a way to say "this is where it actually lives" without pretending work happened.
+
+    A STATIC EVENT, NOT A RUN, and that is the reason this is not `build_maintenance_event` with a
+    different operation. That builder emits a `RunEvent` with a per-table `job`, so restamping the
+    population would plant one `(:Run)` for an operation nobody performed and one `(:Job)` per dataset —
+    and the `/jobs` governance fold makes a Job's output set an access handle, so each phantom is an
+    access-control object. The spec's `DatasetEvent` is exactly "a dataset change that no job
+    performed"; `repository.ingest_dataset_event` mints neither.
+
+    THE FACET IS `dataSource` BECAUSE THAT IS WHERE THE REPOSITORY LOOKS. `_merge_dataset` reads
+    `Dataset.source_uri`, which reads `facet("dataSource")["uri"]`, and then runs
+    ``MATCH (d:Dataset) WHERE d.name = $name SET d.source_uri=$src`` — an unconditional SET, so a
+    correct absolute URI replaces a relative one with no create-vs-update distinction to get wrong.
+    Putting the location anywhere else would emit cleanly and correct nothing.
+
+    AUTHOR IS THE SERVICE, NEVER A PERSON, for the reason `build_maintenance_event` states: a repair is
+    nobody's request, and the service's own identity is the only claim this emitter is entitled to make.
+    Empty means ABSENT rather than a placeholder — a fabricated subject is worse than none, because a
+    bus gate would authorize it.
+
+    Raises `ValueError` if `source_uri` is not absolute: restamping one relative value with another is
+    indistinguishable from success at every later hop — the node keeps failing the same guard on the
+    same tick — so the refusal belongs here, where the caller can still fix it.
+    """
+    if not _ABSOLUTE.match(source_uri):
+        raise ValueError(f"a restamp must carry an absolute location, got {source_uri!r}: a relative path repairs nothing and the node fails the same crossing")
+    facets: dict[str, Any] = {
+        "dataSource": {"_producer": _PRODUCER, "_schemaURL": DATASOURCE_FACET_SCHEMA_URL, "name": source_uri, "uri": source_uri},
+        "lance": custom_facet(_PRODUCER, operation=RESTAMP),
+    }
+    if author:
+        facets["author"] = custom_facet(_PRODUCER, name=author, sub=author)
+    return {
+        "eventTime": event_time,
+        "producer": _PRODUCER,
+        "schemaURL": DATASET_EVENT_SCHEMA_URL,
+        "dataset": {"namespace": namespace, "name": table_id, "facets": facets},
+    }
 
 
 def build_maintenance_event(

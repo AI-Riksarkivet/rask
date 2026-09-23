@@ -568,6 +568,32 @@ of mine in this same session.**
 
 **LH-141 · A stale `lineage.dataset_id` stamp or a relative Dataset `source_uri` is repaired only by a write that never comes — the guard refuses the crossing each tick but nothing corrects it**
 `medallion, maintenance, lineage, catalog` · **HIGH** · PARTIAL
+- **THE PRODUCER'S BUILDER IS SHIPPED (2026-09-23) — `build_restamp_event` in
+  `maintenance/core/lineage_emit.py`. THE CALLER IS NOT WIRED, so nothing is repaired yet and this
+  row does not close.** Verified first that every OTHER hop already exists, because the row's own
+  dichotomy was about a mechanism rather than a defect: `consumer._parse` discriminates a
+  `DatasetEvent` on `dataset`-without-`run`, `enforce_bus_authz` authorizes it, and
+  `repository.ingest_dataset_event` -> `_merge_dataset` runs `SET_DATASET_SRC` =
+  ``MATCH (d:Dataset) WHERE d.name = $name SET d.source_uri=$src`` — an UNCONDITIONAL set, so an
+  absolute URI overwrites a relative one with no create-vs-update distinction to get wrong. Only a
+  producer was missing.
+  **IT IS A STATIC EVENT AND NOT A RUN, which is why it needed its own builder rather than a new
+  `operation` on `build_maintenance_event`.** That one emits a `RunEvent` with a per-table `job`, so
+  restamping this population through it would plant 23 `(:Run)`s for an operation nobody performed and
+  23 `(:Job)`s — and the `/jobs` governance fold makes a Job's output set an access handle, so each
+  phantom is an access-control object rather than clutter.
+  The location rides the standard `dataSource` facet because that is where `Dataset.source_uri` reads
+  it; anywhere else emits cleanly and corrects nothing. A RELATIVE uri is refused at the builder — one
+  relative value replacing another is indistinguishable from success at every later hop, so the
+  refusal belongs where the caller can still fix it. The facet is spelled with service-kit's
+  `DATASOURCE_FACET_SCHEMA_URL` and `name`=uri, matching `catalog/core/lineage_emit.py` exactly, so one
+  facet has one convention across both producers.
+  Gated by `tests/unit/test_a_relative_source_uri_is_repaired_by_a_static_restamp.py` (4 tests, driven
+  through lineage's REAL `_parse` rather than a shape assertion). Mutation-checked three ways: moving
+  the uri off `dataSource`, dropping the absolute-uri refusal, and adding a `job` each red it.
+  *Still to do:* enumerate the 23 offenders, resolve each absolute location through the catalog
+  (maintenance already holds `catalog_url` and a service door), and emit — then re-run the reconcile
+  and watch the "names no storage location" subset go to 0.
 - **RE-MEASURED 2026-09-23 against the live reconcile, and the row's POPULATION CLAIM HOLDS — but the
   headline count does not, and reading it alone says the opposite.** The sweep now reports
   `checked=535 unreadable=51 storage_loss=1 provenance_holes=0 contract_violations=0`, against
