@@ -242,6 +242,29 @@ finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
 
+**THE LIVE e2e SUITE WAS RUN AGAINST THE DEPLOYED ESTATE FOR THE FIRST TIME — 2026-09-23.**
+`scripts/e2e_live.sh` exists because "every 'verified live' claim in this repo rested on a manual
+terminal session"; nothing had executed it. **144 passed, 9 failed, 5 skipped in 15 minutes.**
+- **ONE FAILURE WAS A REGRESSION INTRODUCED THE SAME DAY**, and nothing else could have caught it:
+  moving catalog DDL onto `DatasetEvent` ([[LIN-004]]) removed `run`, and `test_chaos_e2e`'s
+  `_runs_naming` indexed `event["run"]["runId"]` for every feed row naming its table — `KeyError:
+  'run'` on the first create. Five unit+integration runs (5,482 tests) were green throughout, because
+  none of them reads a running estate's durable feed. Fixed to read `event_identity`; re-run live,
+  PASSED in 107.7s.
+- **FOUR MORE ARE ONE CONDITION, AND IT IS [[LH-164]]'s.** Every `ingest_denied` on the live estate is
+  a subject writing a table that carries NO tuples: the sweep reports `ungoverned=75` of `checked=533`.
+  The dummy lane shows the shape at its sharpest — the job wrote its rows (`rows_in 64, rows_written
+  64, version 1`) and its provenance emit was refused 403, so the DATA landed and the PROVENANCE did
+  not. That makes LH-164's disposition ruling a blocker on the acceptance suite, not tidiness.
+- **THE REST ARE PHASE 2/3**: two observability legs (GreptimeDB answering 500 to the log-count query),
+  two train legs (`422 cannot resolve feature dataset 'silver$features'`), one track-A branch refusal.
+
+**RETENTION NOW RECLAIMS ORPHANED JOB NODES, and it was measured end to end on the live graph.**
+`prune_runs` removed runs and `prune_orphan_datasets` removed their datasets; the JOB between them was
+removed by nothing, so the population was monotonic and retention itself was the mechanism growing it.
+Before: **3,374 Job nodes, 111 orphans**. Deployed, one reconcile tick logged
+`lineage_orphan_jobs_pruned pruned=112`. After: **3,279 Job nodes, 0 orphans.**
+
 **[[LH-152]] CLOSED 2026-09-23 — all three legs RUN against the governed live estate and passed.**
 The row's bar was a run, not code: the engineering had landed and nothing had executed it against a
 governed deployment. Run through `scripts/e2e_live.sh` against the deployed k3s release:
