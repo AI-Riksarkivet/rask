@@ -674,6 +674,28 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **THE DOOR NOW REFUSES A SIGNATURE THAT DOES NOT VERIFY (2026-09-24) —
+  `enforce_signature_if_present`, called from `enforce_bus_authz` before the author is trusted for
+  anything.** VERIFY-IF-PRESENT is the rollout, not a compromise: an unsigned event passes exactly as
+  before, because three producer paths still have to sign and refusing unsigned events first would
+  take the bus down estate-wide. What changes is that a signature which does NOT verify is a refusal
+  rather than a decoration — strictly stronger than today, and it breaks nothing because nothing signs
+  yet. It is also the ONLY way to gate this hop before the flip: a signer with a bug would otherwise
+  be accepted silently until the day unsigned events start being refused.
+  **The resolver arrives as a FACTORY** so an unsigned event never reaches for a secret store — which
+  is every event today, and which is why five existing bus-door tests needed no change: their doubles
+  legitimately configure no store for a path they never take.
+  Absent-vs-unreadable rides along: no credential for the named identity is a 403 on the merits, an
+  unreadable store is a `ServiceUnavailableError` (503), the same translation `api/security.py` makes.
+  **TWO MUTATIONS SLIPPED THROUGH THE FIRST TESTS AND BOTH WERE MY OWN OLD MISTAKES.** Deleting the
+  call from the door left all six green — the gate was unwired and nothing noticed. And the resolver
+  double was ARGUMENT-BLIND (`lambda _i: KEY`), so keying on the wrong field was invisible; that is the
+  identical defect [[XC-072]] hit this morning. Both fixed: a key-AWARE resolver, and a test that
+  drives `enforce_bus_authz` itself.
+  *A third mutation is provably harmless and is recorded rather than chased:* keying on `author.sub`
+  instead of the signature's identity cannot admit anything, because `verify_signed_event` already
+  requires the two to be equal — wherever an event would be admitted the lookups are the same call.
+  *Still to do:* make the producers sign (three paths), then flip to requiring a signature.
 - **THE SEAM IS DEPLOYED AND EXERCISED IN THE RUNNING POD (2026-09-23, `main-b70c8630`, helm 237).**
   I had shipped it to a DEPLOYABLE package and never rebuilt — the estate was running `main-77dc8049`
   and `from lineage_kit import sign_event` answered **ImportError** there. That matters beyond

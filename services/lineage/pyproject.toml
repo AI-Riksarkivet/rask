@@ -6,6 +6,10 @@ requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
     "service-kit[governed,lakehouse]",
+    # The producer-signature seam ([[LH-064]]): `api/fga_deps.py` verifies a bus event's signature
+    # with `lineage_kit.signing`, and the verifier has to share the producer's definition of what
+    # was signed — a second implementation here would disagree the first time either changed.
+    "lineage-kit",
     "fastapi>=0.115",
     "pydantic>=2.7",
     "pydantic-settings>=2.5",
@@ -41,3 +45,4 @@ packages = ["src/lineage"]
 
 [tool.uv.sources]
 service-kit = { workspace = true }
+lineage-kit = { workspace = true }

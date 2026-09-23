@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import Annotated, Final
+from typing import Annotated, Any, Final
 
 from fastapi import Depends, Request
 from lance_namespace import (
@@ -42,7 +42,9 @@ from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
+from lineage_kit.signing import signature_of, verify_signed_event
 from service_kit.governed import fga
+from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
 
 
 log = logging.getLogger(__name__)
@@ -274,6 +276,52 @@ class _StampedAuthor:
         self.sub = sub
 
 
+def enforce_signature_if_present(payload: dict[str, Any], resolver_for: Callable[[], Callable[[str], str | None]]) -> None:
+    """Refuse a bus event whose carried signature does not check out ([[LH-064]]).
+
+    VERIFY-IF-PRESENT, WHICH IS THE ROLLOUT AND NOT A COMPROMISE. An unsigned event passes exactly as
+    before, because three producer paths still have to be taught to sign — the medallion's shared
+    outbox seam plus the catalog and maintenance, each publishing to its own sidecar — and refusing
+    unsigned events before they do would take the lineage bus down estate-wide. What this adds is that
+    a signature which does NOT verify becomes a refusal instead of a decoration. Nothing signs yet, so
+    nothing can fail it; the moment something does, a broken signer is caught here rather than on the
+    day unsigned events start being refused, which is the worst moment to find out.
+
+    THE KEY IS CHOSEN BY THE SIGNATURE, AND THAT IS CLARITY RATHER THAN A CONTROL — checked, because it
+    looked like one. Keying on `author.sub` instead is PROVABLY EQUIVALENT on the admit path:
+    `verify_signed_event` already requires the signing identity to equal the stamped author, so wherever
+    an event would be ADMITTED the two lookups are the same call. The mutation only changes which reason
+    a refusal carries. It is written this way because the signature should name its own signer, not
+    because the other spelling lets anything through.
+
+    THE KEY IS CHOSEN BY THE SIGNATURE, NEVER BY THE AUTHOR. `signature_of` names its own signer, and
+    `verify_signed_event` then requires that identity to equal the stamped author. Keying on
+    `author.sub` instead would ask "does the key of whoever this claims to be verify it?", which any
+    producer holding its own key can satisfy for a stamp it has no right to.
+
+    ABSENT IS A REFUSAL, UNREADABLE IS AN OUTAGE. A resolver answering `None` has READ the store and
+    found no credential for the identity the signature names — that is a 403 on the merits. A store
+    that cannot be read raises, and the raise propagates as a 503: collapsing the two would answer
+    "your signature is bad" to every honest producer during a store blip.
+    """
+    found = signature_of(payload)
+    if found is None:
+        return
+    # THE RESOLVER IS BUILT ONLY NOW, which is why it arrives as a factory. Every event on this bus is
+    # unsigned today, and reaching for a secret store to check a signature that is not there would make
+    # the store a dependency of the whole ingest path — and would force every caller's test double to
+    # configure one for a code path it never reaches.
+    try:
+        key = resolver_for()(found.identity)
+    except SecretStoreUnreadable as exc:
+        # An outage is an outage, never a 403 — the same translation `api/security.py` makes for the
+        # service door, and for the same reason: a store blip must not answer "your signature is bad".
+        raise ServiceUnavailableError(str(exc)) from exc
+    if not key or not verify_signed_event(payload, key=key):
+        log.info("lineage_signature_refused", extra={"identity": found.identity, "reason": "no credential" if not key else "does not verify"})
+        raise PermissionDeniedError(f"the event's signature does not verify for {found.identity!r}")
+
+
 async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings) -> None:
     """Output-scoped authz for a DAPR-DELIVERED event, as the subject the producer stamped (§ E2).
 
@@ -300,6 +348,10 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     if not settings.fga_enabled:
         return
     payload = event.model_dump(by_alias=True)
+    # BEFORE the author is trusted for anything. A signature that does not verify makes the stamp
+    # worthless, so there is no point authorizing against it — and refusing here keeps the reason in
+    # the refusal rather than surfacing as an unrelated output denial.
+    enforce_signature_if_present(payload, lambda: dedicated_token_from_store(settings.dapr_secret_store))
     subject = author_sub_from_payload(payload)
     try:
         if not subject:
