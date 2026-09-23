@@ -91,6 +91,13 @@ dependencies:
     version: "0.28.3"
     repository: https://cloudnative-pg.github.io/charts
     condition: cnpg.enabled
+  # External Secrets Operator — syncs the infra Secrets FROM OpenBao/Vault when externalSecrets.enabled.
+  # A local convenience: production runs the cluster's own operator, so it is off by default and in
+  # values-prod.yaml. CRDs vendored at crds-bootstrap/ (`external-secrets.installCRDs: false`).
+  - name: external-secrets
+    version: "2.11.0"
+    repository: https://charts.external-secrets.io
+    condition: externalSecrets.operator.enabled
   # Observability — GreptimeDB (unified metrics/logs/traces store) + Perses (dashboards-as-code),
   # both shared with lance-ns at the same version.
   - name: greptimedb-standalone

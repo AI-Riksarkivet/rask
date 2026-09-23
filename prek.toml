@@ -14,8 +14,10 @@ hooks = [
   { id = "check-yaml", exclude = "^(chart/(templates|crds-bootstrap)|deploy)/" },
   { id = "check-toml" },
   # Lockfiles are legitimately large and MUST be committed — the root uv.lock is already
-  # 501 KB and only slips past because this hook checks newly-added files by default.
-  { id = "check-added-large-files", exclude = "(^|/)(uv\\.lock|bun\\.lock)$" },
+  # 501 KB and only slips past because this hook checks newly-added files by default. Vendored
+  # upstream CRDs are the same kind of file: generated, applied as shipped, and two of the External
+  # Secrets Operator's are ~700 KB each on their own.
+  { id = "check-added-large-files", exclude = "(^|/)(uv\\.lock|bun\\.lock)$|^chart/crds-bootstrap/" },
   { id = "check-merge-conflict" },
 ]
 

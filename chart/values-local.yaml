@@ -180,6 +180,9 @@ minio:
 # alone was never sufficient.
 externalSecrets:
   enabled: true
+  # The operator that reconciles those CRs ships with the local estate; production uses its own.
+  operator:
+    enabled: true
 
 # THE CONTROL ROOT'S SCHEDULED BACKUP ([[LH-110]]), on here so the lane is exercised rather than only
 # rendered. `dest` is left empty deliberately for a dev estate: that writes `_backups/control/` inside

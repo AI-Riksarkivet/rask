@@ -146,6 +146,15 @@ spec:
                   {{- range ($openbaoClients | uniq) }}
                   - {{ . }}
                   {{- end }}
+        {{- if ((.Values.externalSecrets).operator).enabled }}
+        {{- /* The operator THIS release runs reads the infra bundle from OpenBao for the SecretStore
+             (templates/external-secrets.yaml). An operator installed elsewhere is admitted through
+             networkPolicy.openbaoExtraFrom instead, because only the deployer knows where it runs. */}}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: external-secrets
+              app.kubernetes.io/instance: {{ .Release.Name }}
+        {{- end }}
         {{- with .Values.networkPolicy.openbaoExtraFrom }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

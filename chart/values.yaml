@@ -3144,6 +3144,15 @@ externalSecrets:
   # binding is what stops any other pod in the cluster assuming the role and reading the bundle.
   serviceAccount: external-secrets
   namespace: external-secrets
+  # THE OPERATOR ITSELF, as a subchart (Chart.yaml condition). OFF by default and in values-prod.yaml:
+  # a production estate runs the cluster's own operator, which serves the same CRs (owner ruling
+  # 2026-09-23: ESO, OpenBao and OIDC may ship in the chart, production uses external ones). ON in
+  # values-local.yaml, because a fresh local cluster has none and `make k3s-up` would otherwise stop at
+  # "no matches for kind ExternalSecret". When on, the OpenBao role binds to the subchart's
+  # ServiceAccount (`external-secrets.serviceAccount.name`) in this release's namespace instead of the
+  # `serviceAccount`/`namespace` pair above. Its CRDs are vendored in crds-bootstrap/ (`make k3s-crds`).
+  operator:
+    enabled: false
 
 # CloudNativePG OPERATOR toggle (Chart.yaml condition cnpg.enabled). The rask app-DB
 # Cluster + its Alembic migration Job died at P7a (the batches table is gone — Lance +
@@ -3173,6 +3182,33 @@ cloudnative-pg:
       failurePolicy: Ignore
     mutating:
       failurePolicy: Ignore
+
+# External Secrets Operator subchart (Chart.yaml dep, gated by externalSecrets.operator.enabled).
+# Its CRDs are vendored in crds-bootstrap/ and applied by `make k3s-crds`, never by the release: rendered
+# in-release they would push the release Secret past its 1 MiB ceiling, and helm maps every kind before
+# it applies any, so the SecretStore/ExternalSecrets this same release creates could not be served.
+external-secrets:
+  installCRDs: false
+  # Named, so templates/openbao.yaml binds the Vault role to it without restating the subchart's
+  # fullname logic.
+  serviceAccount:
+    name: external-secrets
+  # Memory bound (#139). Measured 2026-09-23 on a live 2.11.0 operator serving this estate's three
+  # ExternalSecrets: controller 33Mi, cert-controller 58Mi, webhook 28Mi.
+  resources:
+    requests: { cpu: 10m, memory: 48Mi }
+    limits: { memory: 256Mi }
+  webhook:
+    # Ignore, as for cloudnative-pg: the SecretStore and ExternalSecrets are created in the SAME release
+    # as this webhook, and a Fail policy refuses them while the webhook is not yet Ready.
+    failurePolicy: Ignore
+    resources:
+      requests: { cpu: 10m, memory: 48Mi }
+      limits: { memory: 128Mi }
+  certController:
+    resources:
+      requests: { cpu: 10m, memory: 64Mi }
+      limits: { memory: 192Mi }
 
 
 # ---- allocator ------------------------------------------------------------

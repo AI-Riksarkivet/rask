@@ -315,9 +315,13 @@ spec:
                 capabilities = ["read"]
               }
               POLICY
+              {{- /* WHOSE ServiceAccount may assume the role: the operator THIS release runs when
+                   `externalSecrets.operator.enabled` (its SA, in this namespace — derived, so the two cannot
+                   drift), otherwise the cluster's own operator named by externalSecrets.serviceAccount/namespace. */}}
+              {{- $esoInRelease := (($.Values.externalSecrets).operator).enabled }}
               bao write auth/{{ $.Values.externalSecrets.kubernetesAuthPath }}/role/{{ $.Values.externalSecrets.role }} \
-                bound_service_account_names={{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }} \
-                bound_service_account_namespaces={{ $.Values.externalSecrets.namespace | default "external-secrets" }} \
+                bound_service_account_names={{ if $esoInRelease }}{{ dig "serviceAccount" "name" "external-secrets" (index $.Values "external-secrets" | default dict) }}{{ else }}{{ $.Values.externalSecrets.serviceAccount | default "external-secrets" }}{{ end }} \
+                bound_service_account_namespaces={{ if $esoInRelease }}{{ $.Release.Namespace }}{{ else }}{{ $.Values.externalSecrets.namespace | default "external-secrets" }}{{ end }} \
                 policies={{ $.Values.externalSecrets.role }} ttl=1h
               echo "provisioned kubernetes auth + role {{ $.Values.externalSecrets.role }} for ESO"
               {{- end }}
