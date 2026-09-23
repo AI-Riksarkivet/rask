@@ -233,4 +233,113 @@ spec:
             name: {{ include "rask.fullname" . }}-kueue-queues
         - name: tmp
           emptyDir: {}
+{{- /*
+The queues above are applied by a hook, so Helm never records them and `helm uninstall` never deletes
+them — while it DOES delete the Kueue controller and the Kueue CRDs. The ResourceFlavor and ClusterQueue
+carry `kueue.x-k8s.io/resource-in-use`, a finalizer only that controller removes; orphaned, they hold
+their CRDs in Terminating until a later install adopts the dying CRDs and fails when they vanish under it
+(measured 2026-09-23: `customresourcedefinitions "clusterqueues.kueue.x-k8s.io" not found`). Pre-delete
+runs before Helm removes anything, the one moment the controller is still there to release them, so the
+delete WAITS for it. Its RBAC is its own: the setup hook's is deleted when that hook succeeds.
+Pinned by tests/unit/test_uninstall_releases_the_queues_the_hook_applied.py.
+*/}}
+{{- $weightCleanup := "-5" }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "rask.fullname" . }}-kueue-cleanup
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": {{ $weightCleanup | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rask.fullname" . }}-kueue-cleanup
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": {{ $weightCleanup | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["kueue.x-k8s.io"]
+    resources: ["resourceflavors", "clusterqueues", "localqueues"]
+    verbs: ["get", "list", "watch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rask.fullname" . }}-kueue-cleanup
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": {{ $weightCleanup | quote }}
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "rask.fullname" . }}-kueue-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "rask.fullname" . }}-kueue-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "rask.fullname" . }}-kueue-cleanup
+  labels: {{- include "rask.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "rask.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: kueue-cleanup
+    spec:
+      serviceAccountName: {{ include "rask.fullname" . }}-kueue-cleanup
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: delete-queues
+          image: {{ .Values.kueue.queues.kubectlImage | quote }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests: {cpu: "10m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+          {{- /* One call, dependents first: the ResourceFlavor's finalizer holds until no ClusterQueue
+               names it, and the ClusterQueue's until no workload is admitted through it. `-n` scopes
+               the LocalQueue; kubectl ignores it for the two cluster-scoped kinds. */}}
+          args:
+            - delete
+            - -n
+            - {{ .Release.Namespace }}
+            - localqueues.kueue.x-k8s.io/{{ .Values.kueue.queues.localQueueName }}
+            - clusterqueues.kueue.x-k8s.io/{{ .Values.kueue.queues.clusterQueueName }}
+            - resourceflavors.kueue.x-k8s.io/{{ .Values.kueue.queues.flavorName }}
+            - --ignore-not-found
+            - --timeout=120s
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}
