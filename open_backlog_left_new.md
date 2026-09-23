@@ -2473,6 +2473,31 @@ silent→firing against a real dura
 
 **XC-074 · The authorization model in OpenFGA is 23 days stale — `estate` does not exist, so every estate-admin check ERRORS instead of deciding**
 `chart, service-kit, catalog, lineage` · **HIGH**
+- **THE SYMPTOM IS REPAIRED ON THIS ESTATE, THE CAUSE IS NOT. Do not read the green checks below as a
+  close.** I ran the hook's own entrypoint by hand against the live store —
+  `FGA_API_URL=… python -m service_kit.governed.auth.write_model` — and it wrote immediately:
+  `wrote authorization model 01M381P724AFX0KSTQ3R06V38Y`. The store now holds 2 models, the newest
+  with **12 types**. So the WRITER is correct and `model.json` is current (12 types, same commit
+  `967c487d` as `model.fga`); what has never run to completion in-cluster is the HOOK.
+  Read back against thresholds fixed before the change, with a control:
+  ```
+  check can_observe_events estate:rask   validation_error  ->  {"allowed":false}   (a DECISION)
+  check can_write_data acme-silver$dummy       False       ->  True
+  check writer namespace:acme-silver           False       ->  True
+  CONTROL alice owner warehouse:lance_catalog  True        ->  True  (unchanged)
+  ```
+  With the model current, `seed_medallion_fga.sh acme acme-wh` **succeeds** where it had aborted on
+  `relation 'namespace#publisher' not found` — confirming every [[LH-196]] seed failure was downstream
+  of this one thing.
+- **AND THE DUMMY LANE MOVED, WHICH IS HOW I KNOW THE FIX REACHED THE DOOR.** `ingest_denied …
+  can_write_data … acme-silver$dummy` had fired on every run all session and does not fire any more.
+  The e2e is still red, now on a DIFFERENT and narrower refusal from the same door that I have not yet
+  pinned — so [[LH-196]] is not closed either, but its stated cause is gone.
+- *Still to do, and it is the whole row:* find why the post-upgrade hook never completes the write that
+  the same command performs in one second by hand. Helm reports 235 and 236 `deployed`, the Job renders
+  at defaults, and `hook-delete-policy: before-hook-creation,hook-succeeded` removes the evidence — an
+  absent hook pod is ambiguous between succeeded-and-deleted and never-ran, which is exactly the
+  condition under which this drifted for 23 days.
 - **MEASURED LIVE 2026-09-23, and it overturns my own closure of [[XC-073]] the same day.**
   ```
   live model  : 10 types  [annotation_project materialized_view namespace project role
