@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**202 open items**, of which **101 are blocked on a decision** and **101 can be picked up today**.
+**202 open items**, of which **100 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 35 | 2 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 35 | 3 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -632,10 +632,23 @@ still the owner's. Note the row's own analysis make
   assertion, exception, early return — which is the population that actually occurs.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: Rework the FGA leg so its revoke does not delete the warehouse-level `owner` tuple the live
-stage runners share (unblocked, startable today). The maintenance leg's `errors == {}` assertion still waits
-on ruling (b) — whether unreadable registry entries belong in an exclusion set, building on the reconciler's
-existing `excluded_datasets`.
-- **blocked:** (b) whether `errors == {}` is the right assertion for a long-lived estate, or whether unreadable registry entries belong in an exclusion set the way the reconciler already reports `excluded_datasets` — gates the maintenance leg only
+stage runners share (unblocked, startable today). The maintenance leg's `errors == {}` assertion is settled: measured
+2026-09-23, the live estate reports zero errors across 3,308 outcomes while refusals land in their own
+keys, so the assertion is correct and no exclusion set is needed.
+- **RULING (b) IS ANSWERED BY MEASUREMENT, NOT BY PREFERENCE — 2026-09-23.** The question was whether
+  `errors == {}` is the right assertion for a long-lived estate, or whether unreadable registry
+  entries belong in an exclusion set. They do not, because they never reach `errors`.
+- *The code already separates them, deliberately:* `summarize` builds `"errors": {r.uri: r.error for r
+  in results if r.error}` and its own comment states the rule — *"#64 — a REFUSAL is its own line,
+  never folded into `errors` or `skipped`. It is neither."* `refused`, `refusals`, `refused_by`,
+  `skipped` and `trashed` are each their own key.
+- *And the live estate agrees, over months of residue:* **3,308 dataset outcomes in 30 minutes, every
+  one `error_type=None`** — zero errors — while 369 of them were non-clean and landed where they
+  should: 346 `another dataset resolves its files through…`, 20 `unsupported manifest feature flags`,
+  the rest branch-prefix refusals. The population the ruling worried about exists and is already
+  routed away from `errors`.
+- *So the assertion stands as written*, and an exclusion set would be machinery for a case that does
+  not occur. What remains on this row is the FGA leg alone, which was never blocked.
 - *What is left:* Ruling (a) is decided — probes write to a REAL governed table created through the catalog and stamp the creating subject as author — and applied to `test_outbox_e2e` via the `probe_author` fixture (tests/e2e-py/test_outbox_e2e.py:107). Apply the same fixture to tests/e2e-py/test_outbox_crash_e2e.py:189-204, which still stages `author="e2e"` against the unregistered `bronze$e2e_crash_ds`. Rework `test_fga_deny_drops_promotion_and_regrant_restores` (tests/e2e-py/test_governed_union_e2e.py:566) so its revoke does not delete the warehouse-level owner tuple (`_owner_tuples`, :130-136) that the live stage runners share — a failure between revoke and regrant strips a grant the cascade needs. The maintenance leg (tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} ...`) waits on (b); the reconciler already exposes `excluded_datasets` (maintenance reconcile.py:271, 966) to build on.
 - *Closes when:* The crash and FGA legs pass against the governed estate without touching shared grants, and the maintenance leg's assertion matches the (b) ruling.
 - *Evidence:* `git log 91d183cc `test(e2e,LH-152): the outbox probe's output table is a real governed table, authored by its owner`; tests/e2e-py/test_outbox_e2e.py:107-121 `probe_author` docstring records the 2026-09-15 ruling` · `tests/e2e-py/test_outbox_crash_e2e.py:197 `author="e2e"`, :201 `output_name="e2e_crash_ds"`` · `tests/e2e-py/test_governed_union_e2e.py:130-136 `_owner_tuples` — deletes warehouse, namespace and table owner tuples` · `tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} or body["errors"] == []`; services/maintenance/src/maintenance/services/reconcile.py:271,966 `excluded_datasets``
