@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **88 are blocked on a decision** and **107 can be picked up today**.
+**195 open items**, of which **89 are blocked on a decision** and **106 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 10 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 30 | 9 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -792,6 +792,23 @@ FROM opentelemetry_logs` returns exa
 
 **LH-076 · `can_observe_events` is the estate-admin bar under a name that says 'read the feed'**
 `catalog, service-kit` · **MED** · PARTIAL
+- **blocked:** the NAME is the whole row, and only the owner can rule on it. This row carried no
+  marker and was therefore counted WORKABLE, while its own *What is left* says "Do nothing until the
+  ruling lands" — the inverse of a stale blocker, and it overstates the workable count rather than
+  understating it.
+  **RE-MEASURED 2026-09-23 and both premises hold.** `can_administer_estate` exists nowhere
+  (`grep -rn can_administer_estate services packages chart` → no hits), and `can_observe_events`
+  compiles to `{"computedUserset": {"relation": "owner"}}` with `metadata: {}` — read out of the
+  compiled `model.json`, not inferred — so OpenFGA can carry no tuple on it and the rename migrates
+  NOTHING. The cost this row was once feared for is genuinely zero.
+  **WHAT IS NOT ZERO is the blast radius of the name.** `define can_observe_events: owner` is
+  `model.fga:168`, and it is checked at the root object by at least four services — lineage
+  (`fga_deps.py:167`), the catalog's store and project doors, controlplane and viewer all reference it
+  as THE estate-admin rung. Renaming is mechanical but touches every one of them plus the seeded
+  tuples; keeping it means accepting that the estate's admin bar is spelled "read the feed" forever.
+  Either answer is defensible and neither is mine to pick.
+  *(The row cited `model.fga:236-244` for the rewritten comment; that range now holds `publisher` and
+  the staging-event rationale. The definition is at :168 and the estate-rung note at :254.)*
 - **NOT BLOCKED — the stated COST is false, measured in the compiled model.** `estate.can_observe_events` compiles to `{"computedUserset": {"relation": "owner"}}` with metadata `{}` and no `directly_related_user_types` (`model.json`), and OpenFGA refuses a Write naming a relation with no direct user types — so **no tuple can carry this rung** and the rename migrates nothing. `model.fga:168` is a pure computed userset. The change is additive (`define can_administer_estate: owner` beside it) plus repointing the ADMIN call sites, and it reverts cleanly.
 - *What is left:* The comment half is shipped: `model.fga:236-244` now states it IS the admin rung and the consumer list is derived from code by `tests/unit/test_the_estate_rung_documents_everything_it_gates.py`. Only the rename half remains: no `can_administer_estate` exists anywhere, and `stores.py:105,135,197`, lineage `fga_deps.py:144`, tenant minting and the raw-tuple routes all still gate on `can_observe_events` at the root object. Do nothing until the ruling lands; if it says rename, repoint those checks and reseed the tuples in one change with `fga model test` green.
 - *Closes when:* Either the owner rules the name stays, or a `can_administer_estate` relation exists and every estate-admin call site checks it.
