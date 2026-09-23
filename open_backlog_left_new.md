@@ -631,8 +631,10 @@ still the owner's. Note the row's own analysis make
   strips the estate and no in-process construct prevents that. What is closed is every ORDINARY exit —
   assertion, exception, early return — which is the population that actually occurs.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
-STILL UNMET: Rework the FGA leg so its revoke does not delete the warehouse-level `owner` tuple the live
-stage runners share (unblocked, startable today). The maintenance leg's `errors == {}` assertion is settled: measured
+STILL UNMET: nothing. The FGA leg is done (2026-09-23): `refuse_shared_warehouse()` refuses to start a
+leg whose revoke would strip `warehouse:lance_catalog`, so the same legs prove the same property against
+a probe tenant (`LANCE_E2E_WAREHOUSE` / `LANCE_E2E_PROJECT`) where the crash window costs a throwaway.
+Gated statically AND behaviourally, both mutation-checked. The maintenance leg's `errors == {}` assertion is settled: measured
 2026-09-23, the live estate reports zero errors across 3,308 outcomes while refusals land in their own
 keys, so the assertion is correct and no exclusion set is needed.
 - **RULING (b) IS ANSWERED BY MEASUREMENT, NOT BY PREFERENCE — 2026-09-23.** The question was whether
@@ -650,6 +652,12 @@ keys, so the assertion is correct and no exclusion set is needed.
 - *So the assertion stands as written*, and an exclusion set would be machinery for a case that does
   not occur. What remains on this row is the FGA leg alone, which was never blocked.
 - *What is left:* Ruling (a) is decided — probes write to a REAL governed table created through the catalog and stamp the creating subject as author — and applied to `test_outbox_e2e` via the `probe_author` fixture (tests/e2e-py/test_outbox_e2e.py:107). Apply the same fixture to tests/e2e-py/test_outbox_crash_e2e.py:189-204, which still stages `author="e2e"` against the unregistered `bronze$e2e_crash_ds`. Rework `test_fga_deny_drops_promotion_and_regrant_restores` (tests/e2e-py/test_governed_union_e2e.py:566) so its revoke does not delete the warehouse-level owner tuple (`_owner_tuples`, :130-136) that the live stage runners share — a failure between revoke and regrant strips a grant the cascade needs. The maintenance leg (tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} ...`) waits on (b); the reconciler already exposes `excluded_datasets` (maintenance reconcile.py:271, 966) to build on.
+- **ALL THREE CODE CLAUSES ARE DONE (2026-09-23); WHAT IS LEFT IS A RUN.** The FGA leg can no longer
+  touch a shared grant, ruling (b) is answered and the assertion already matches it, and the crash
+  leg's probe writes a real governed table. The bar's remaining words are "pass against the governed
+  estate", and that needs the suite actually driven with `-m e2e` against a deployed stack — plus, now,
+  a provisioned probe tenant for `LANCE_E2E_WAREHOUSE`, since the guard refuses the platform warehouse
+  by design. Nothing in the repo is owed; a run is.
 - *Closes when:* The crash and FGA legs pass against the governed estate without touching shared grants, and the maintenance leg's assertion matches the (b) ruling.
 - *Evidence:* `git log 91d183cc `test(e2e,LH-152): the outbox probe's output table is a real governed table, authored by its owner`; tests/e2e-py/test_outbox_e2e.py:107-121 `probe_author` docstring records the 2026-09-15 ruling` · `tests/e2e-py/test_outbox_crash_e2e.py:197 `author="e2e"`, :201 `output_name="e2e_crash_ds"`` · `tests/e2e-py/test_governed_union_e2e.py:130-136 `_owner_tuples` — deletes warehouse, namespace and table owner tuples` · `tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} or body["errors"] == []`; services/maintenance/src/maintenance/services/reconcile.py:271,966 `excluded_datasets``
 
