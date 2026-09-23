@@ -38,6 +38,7 @@ from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
 from service_kit.control_emit import make_control_emitter
+from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
@@ -103,6 +104,11 @@ def _make_s3_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN40
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.startup_complete = False
     app.state.shutting_down = False
+    # ARMED ON THE SIGNAL, not on lifespan unwind. The `finally` below flips the same flag, but that
+    # runs after uvicorn has stopped serving — so `retry_when_draining` on `on_unit` could never refuse
+    # a delivery, and `rewrite_slot.retire_this_worker` documented a mechanism this service did not
+    # have. A retiring worker must answer RETRY to the next unit rather than start one it will abandon.
+    _disarm_drain = arm_drain_on_sigterm(app)
     settings = get_settings()
     instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
     # APPLY THE EXECUTION CEILING, because the broker's delivery bound is derived from it. `execute_unit`
@@ -176,6 +182,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        _disarm_drain()
         app.state.shutting_down = True
         # Same disposal as every sibling. Maintenance stores it as `app.state.fga_client` rather than
         # `fga`; the shared disposer covers both names so the difference stops mattering.

@@ -31,6 +31,7 @@ from maintenance.core.lineage_emit import CREATE_INDEX, MaintenanceEmitter
 from maintenance.services import credentials
 from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.index_build import UnknownIndexKindError, build_index
+from maintenance.services.rewrite_slot import passes_committed, retire_this_worker, should_retire
 from maintenance.services.work_queue import SUCCESS
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -94,6 +95,14 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
     if item.table_id:
         namespace = item.table_id.split(settings.delimiter, 1)[0]
         await emitter.emit_maintenance(table_id=item.table_id, namespace=namespace, operation=CREATE_INDEX)
+    # THE BUDGET IS A PROPERTY OF THE PROCESS, so both lanes must ask ([[LH-183]]). This one does not
+    # COUNT a pass — it builds indices, not rewrites — but a worker that spent its budget on
+    # compactions and then receives only index units would run past its ceiling with nothing checking.
+    # Asked after the emit, for the reason the work lane asks after the ack: the signal starts a
+    # graceful shutdown that finishes this response first.
+    passes = passes_committed()
+    if should_retire(passes, after=settings.recycle_after_passes):
+        retire_this_worker(passes=passes)
     return {"status": SUCCESS}
 
 
