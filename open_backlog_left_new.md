@@ -199,6 +199,19 @@ have no `uv.lock` and so cannot be built to emit anything.
 | **FRONTEND** | 10 | 9 | 0 |
 | **LOW PRIORITY** | 25 | 20 | 0 |
 
+**THE BLOCKED COUNT IS NOW WORTH MORE THAN IT WAS THIS MORNING (2026-09-24).** It began the day as a
+tally of unaudited stopping points: re-deriving 11 lakehouse markers against the code freed 8. The
+remaining 15 untouched lakehouse blockers were then read end-to-end, and every one names an actual
+CHOICE rather than a stale belief — a rebase's acceptability ([[LH-178]]), drop-or-relocate
+([[LH-016]]), what vending means off-cluster ([[LH-177]]), a usage source ([[LH-074]]), a disposition
+([[LH-171]], [[LH-148]]), a principal-id design ([[LH-063]]), and an outward-facing filing on a third
+party's repo ([[LH-048]]). One was spot-checked against the code rather than taken from its marker:
+LH-171's cited mechanism is real (`service_kit/lakehouse/transform_specs.py` warns and skips), so its
+blocker is the disposition and nothing else.
+**The day also moved SIX rows the other way** — LH-076, LH-141, LH-164, LH-099, LH-075 and LH-196 read
+as workable while being gated, or asked for work already done. The count moves in both directions and
+only reading moves it.
+
 **THOSE FOUR COLUMNS ARE MECHANICAL — they count rows and `blocked:` markers, which is what makes them
 checkable (`tests/unit/test_the_backlog_counts_itself.py` re-derives every one). The numbers below are
 a JUDGEMENT and deliberately do not live in that table: no gate can re-derive them, so putting them
