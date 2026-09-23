@@ -868,10 +868,12 @@ k3s-down: ## Uninstall the rask release (keep PVCs)
 	$(HELM) uninstall rask || true
 
 k3s-purge: k3s-down ## Uninstall + delete PVCs (clean slate)
-	# The release's volumes live in its namespace, which $(KUBECTL) names; adding -A makes kubectl refuse
-	# every object. No `|| true`: --ignore-not-found covers an empty estate, and a refused delete must
-	# fail the purge rather than leave the old volumes under the next "greenfield" install.
+	# The release's volumes live in its namespace, which KUBECTL already names; adding -A makes kubectl
+	# refuse every object. No `|| true`: --ignore-not-found covers an empty estate, and a refused delete
+	# must fail the purge rather than leave the old volumes under the next "greenfield" install. The Dapr
+	# scheduler's claims carry only its own `app` label, so they are named separately.
 	$(KUBECTL) delete pvc -l app.kubernetes.io/instance=rask --ignore-not-found
+	$(KUBECTL) delete pvc -l app=dapr-scheduler-server --ignore-not-found
 	# Stale PVCs left in old per-component namespaces (dapr/nats now run in the
 	# release namespace) that the label-scoped delete above misses — reclaim the
 	# storage without removing the namespaces themselves. Idempotent.

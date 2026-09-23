@@ -11,12 +11,14 @@ acts on the answer.
 
 from __future__ import annotations
 
+import itertools
 import os
 import pathlib
 import re
 import shlex
 import subprocess
 
+from tests.unit import chart_render
 from tests.unit.k3s_recipe import K3S_UP_PREREQUISITES, REPO, captured_upgrade_call, logical_commands, make_value
 
 
@@ -101,6 +103,37 @@ def test_the_purge_deletes_the_releases_volumes_where_they_live() -> None:
         named, everywhere = _scope(args)
         assert named[-1:] == ["rask"] and not everywhere, f"the release's PVCs live in `rask`; the purge deletes them in {named or 'every namespace'}"
         assert "|| true" not in command, f"a refused delete must fail the purge, not report success: {command!r}"
+
+
+def _release_volumes() -> list[tuple[str, dict[str, str]]]:
+    """(name, labels) of every PVC the local estate creates: its PersistentVolumeClaims, and each
+    StatefulSet claim template, whose PVCs carry the template's labels plus the set's selector labels."""
+    docs = chart_render.render(*chart_render.DEFAULT_ARGS, "-f", str(REPO / "chart" / "values-local.yaml"))
+    volumes = [(d["metadata"]["name"], d["metadata"].get("labels") or {}) for d in docs if d.get("kind") == "PersistentVolumeClaim"]
+    for sts in (d for d in docs if d.get("kind") == "StatefulSet"):
+        selector = sts["spec"]["selector"].get("matchLabels") or {}
+        for template in sts["spec"].get("volumeClaimTemplates") or []:
+            volumes.append((f"{template['metadata']['name']}-{sts['metadata']['name']}-N", {**(template["metadata"].get("labels") or {}), **selector}))
+    return volumes
+
+
+def test_the_purge_deletes_every_volume_the_release_creates() -> None:
+    """A clean slate is every volume, not the ones that happen to carry the instance label. Measured
+    2026-09-23: the Dapr scheduler's three PVCs (`app=dapr-scheduler-server`, no instance label) survived
+    a purge that deleted the other eleven, carrying the old estate's scheduled jobs into the next one."""
+    selectors = [
+        [v for k, v in itertools.pairwise(args) if k in ("-l", "--selector")]
+        for _, args in _kubectl_calls("k3s-purge")
+        if "delete" in args and "pvc" in args and _scope(args)[0][-1:] == ["rask"]
+    ]
+
+    def selected(labels: dict[str, str]) -> bool:
+        return any(all(labels.get(k) == v for k, _, v in (term.partition("=") for term in s.split(","))) for group in selectors for s in group)
+
+    volumes = _release_volumes()
+    assert volumes, "the local estate renders no volume — this gate is looking at the wrong render"
+    missed = [name for name, labels in volumes if not selected(labels)]
+    assert not missed, f"`make k3s-purge` leaves these volumes of the release behind: {missed}"
 
 
 def test_k3s_pins_captures_the_releases_namespace(tmp_path: pathlib.Path) -> None:
