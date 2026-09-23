@@ -1,0 +1,15 @@
+{{- /*
+RETIRED RAY IMAGE KEYS — renders no object; it makes a release that still carries them a LOUD render
+failure instead of a silent re-point of the Ray head.
+
+The head renders through `rask.image` from `ray.image.name` ([[CP-050]]), so `ray.image.repository` /
+`ray.image.tag` no longer reach it. A release that carries them was deployed with the head image they
+named; ignoring them would move the RayCluster to `<image.repository>/<name>:<image.tag>`, a tag no build
+pushed, and the head would ImagePullBackOff the next time KubeRay recreated its pod. `make k3s-up` and
+`make k3s-converge` migrate a live release's copy themselves (scripts/k3s-image-args.sh); this catches
+every other path to helm. Pinned by tests/unit/test_the_deploy_reads_the_release_it_upgrades.py.
+*/}}
+{{- $rayImage := (.Values.ray).image | default dict }}
+{{- if or $rayImage.repository $rayImage.tag }}
+{{- fail (printf "ray.image.repository (%v) / ray.image.tag (%v) are retired: the Ray head renders through rask.image. Set ray.image.name to the head image's name and pin its tag with image.tags.<name>; the registry is image.repository. `make k3s-up` migrates a live release's values itself." $rayImage.repository $rayImage.tag) }}
+{{- end }}

@@ -226,6 +226,7 @@ spec:
                   - minio-backup
                   - backup-pg # the pg-backup CronJob uploads its dumps to the lakehouse (_backups/pg/)
                   - minio-mkbucket # the bucket-provisioning hook Job — blocked, no install ever gets buckets
+                  - minio-scoped-users # provisions every scoped identity the fleet boots with — blocked, the install waits on it forever
                   # The media-plane viewer serves the S3 object browser (ported from the retired
                   # volumes-api in the R6/R20 wave) — it reads s3://images-batch* from its pod, so
                   # blocking it here kills the lakehouse storage browser under prod default-deny

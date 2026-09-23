@@ -46,8 +46,16 @@ kind: Job
 metadata:
   name: {{ include "rask.fullname" . }}-minio-scoped-users-{{ include "rask.bootstrapRev" . }}
   labels: {{- include "lance.labels" . | nindent 4 }}
+  {{- /* A FRESH INSTALL IS NOT A HOOK AT ALL. helm runs `post-install` hooks only after `--wait`, and
+       `--wait` waits on pods that present these identities at boot — the catalog fails fast when the
+       store refuses its key — so a post-install provisioning pass is queued behind a wait that cannot
+       end without it. On install this Job is therefore part of the manifest (see "BOOTSTRAP JOBS" in
+       _helpers.tpl), applied in the same wave as the pods and waited for concurrently with them; it
+       waits for the buckets itself (below), which is the ordering the hook weight gave it.
+       tests/unit/test_a_fresh_install_provisions_the_identities_its_pods_boot_with.py pins it. */}}
+  {{- if not .Release.IsInstall }}
   annotations:
-    {{- /* THREE PHASES, AND EACH ANSWERS A DIFFERENT FAILURE.
+    {{- /* TWO PHASES ON UPGRADE, AND EACH ANSWERS A DIFFERENT FAILURE.
 
          `pre-upgrade` is what lets the identities be NAMED by default. With only `post-upgrade` the
          MinIO user is created after the Deployments have been updated, so pods restart holding a
@@ -60,9 +68,6 @@ metadata:
          which the store accepts and then silently governs nothing. The post pass rewrites the same
          policies once the bucket is there — sound only because `mc admin policy create` overwrites,
          which is probed and recorded above.
-
-         `post-install` covers the fresh install, where there is no upgrade phase to run in and no
-         running pod to strand.
 
          A PRE-UPGRADE HOOK MAY ONLY CONSUME A SECRET KEY THE PREVIOUS RELEASE ALREADY PUBLISHED —
          a permanent property of the phase, and a CONSTRAINT ON RENAMES rather than a reason to drop
@@ -81,12 +86,13 @@ metadata:
          fails on it by design. RENAMING an ESO-delivered key takes TWO releases — publish the new
          name alongside the old in release N, move the consumers in N+1 — because one release cannot
          both introduce a key and consume it before it exists. */}}
-    "helm.sh/hook": post-install,pre-upgrade,post-upgrade
+    "helm.sh/hook": pre-upgrade,post-upgrade
     {{- /*
        Ordering WITHIN a phase: after any hook that provisions buckets.
     */}}
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation
+  {{- end }}
 spec:
   {{- /*
      Reap the finished pod, exactly as `openfga-migrate.yaml` does and for the identical reason: this
@@ -111,9 +117,14 @@ spec:
       containers:
         - name: mc
           image: {{ .Values.minio.mcImage }}
+          {{- /* 256Mi, NOT the bucket Job's 128Mi: `mc admin` encrypts its request bodies with Argon2id,
+               which `mc mb`/`mc ls` never pay. Measured 2026-09-23 against MinIO (memory.peak of one
+               container): `user add` 78 MB, `policy attach` 145 MB — at 128Mi this Job was OOMKilled
+               mid-way through provisioning on a fresh install. Pinned by
+               test_a_fresh_install_provisions_the_identities_its_pods_boot_with.py. */}}
           resources:
             requests: { cpu: "10m", memory: "32Mi" }
-            limits: { cpu: "200m", memory: "128Mi" }
+            limits: { cpu: "200m", memory: "256Mi" }
           {{- /*
              Every secret arrives as an env var read by `mc`, never interpolated into the rendered
              command — the same rule the bucket-init Job follows, so a `kubectl get job -o yaml` never
@@ -153,6 +164,14 @@ spec:
             - |
               set -e
               until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"; do echo wait-minio; sleep 3; done
+              {{- if .Release.IsInstall }}
+              {{- /* In the install wave `minio-mkbucket` runs concurrently with this Job, so wait for what it
+                   creates before writing a policy: one written before its bucket exists is accepted and
+                   governs nothing. */}}
+              {{- range (include "rask.minioCreatedBuckets" . | splitList " ") }}
+              until mc ls rfs/{{ . }} >/dev/null 2>&1; do echo wait-bucket-{{ . }}; sleep 3; done
+              {{- end }}
+              {{- end }}
 
               {{- /*
                 THE BUCKET SET IS NOT KNOWABLE AT RENDER TIME, so neither policy enumerates one.

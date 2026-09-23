@@ -18,6 +18,7 @@ which is where a prerequisite is most likely to be dropped by someone shortening
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -90,7 +91,7 @@ def test_a_split_stem_is_refused_with_both_tags_named() -> None:
             ["bash", str(PINS), "--check-only"],
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
+            env={"PATH": os.environ["PATH"], "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
             cwd=REPO,
             timeout=60,
         )
@@ -122,7 +123,7 @@ def test_a_converged_estate_passes_and_says_so() -> None:
             ["bash", str(PINS), "--check-only"],
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
+            env={"PATH": os.environ["PATH"], "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
             cwd=REPO,
             timeout=60,
         )

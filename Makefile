@@ -624,10 +624,9 @@ medallion-demo: ## Live medallion walkthrough — watch the DAG build at http://
 # behind it.
 # `notifications` joins for exactly that reason, in the same commit as its dockerfile and its chart
 # Deployment — the three are one act, and any two of them without the third is the ErrImagePull above.
-# (`flows` is STILL absent and has been since it landed: `.docker/flows.dockerfile` and a `rask-flows`
-# Deployment both exist, so an in-cluster flows is unverifiable today for the identical reason. Named
-# rather than fixed here — it is another plane's diff.)
-COMPOSE_IMAGES = gateway compute controlplane ingest notifications
+# `flows` belongs here by the same rule; tests/unit/test_a_fresh_host_deploys_only_what_the_local_build_made.py
+# fails whenever the chart renders a first-party image this set does not build.
+COMPOSE_IMAGES = gateway compute controlplane ingest notifications flows
 # SvelteKit SSR microfrontend zone images — one web-<zone> image per $(ZONES) entry,
 # all built from the one parametrized .docker/frontend.dockerfile via --build-arg
 # APP=<name>. (R22: the web- prefix keeps the zone image namespace disjoint from the
@@ -644,6 +643,15 @@ KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl
 # media trio — chart `image.catalog`); the default render runs 8 containers from it, so the
 # build/import set must carry it or kind/k3s deploys ImagePullBackOff on every lakehouse pod.
 K3S_IMAGES = $(COMPOSE_IMAGES) $(ZONES:%=web-%) ray-cluster lance-rest-catalog
+# THE ONE TAG of the side-loaded path: `k3s-build` stamps it, `k3s-import` / `kind-load` side-load it,
+# and `k3s-up` renders every first-party image at it when no release exists yet
+# (scripts/k3s-image-args.sh). Declared once because the three had drifted apart — the build wrote
+# `:dev` while the chart defaulted the zones to a commit tag — and a fresh install asked for images no
+# host had built. It overrides the chart's zone default ONLY on that side-loaded path; the chart's own
+# default, and every registry deploy, keep their immutable tags.
+# `dev` is a MOVING name: re-importing it changes no pod spec, so under IfNotPresent a rebuilt image is
+# not rolled. Pass a fresh `K3S_TAG=<name>` to build+import+up, or restart the rollout.
+K3S_TAG ?= dev
 
 # Subchart repos (Chart.yaml dependencies). OCI deps (kueue) need no repo add.
 K3S_DEP_REPOS = nvdp=https://nvidia.github.io/k8s-device-plugin \
@@ -663,22 +671,22 @@ k3s-deps: ## Add subchart repos + vendor chart dependencies into chart/charts/
 	@helm repo update >/dev/null
 	helm dependency build ./chart
 
-k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :dev (via Dagger)
+k3s-build: ## Build all fleet + frontend zone + ray-cluster images as :$(K3S_TAG) (via Dagger)
 	@for s in $(COMPOSE_IMAGES); do \
-	  bash scripts/dagger-image.sh --name $$s --tag $$s:dev || exit 1; \
+	  bash scripts/dagger-image.sh --name $$s --tag $$s:$(K3S_TAG) || exit 1; \
 	done
 	@for a in $(ZONES); do \
-	  bash scripts/dagger-image.sh --zone $$a --tag web-$$a:dev || exit 1; \
+	  bash scripts/dagger-image.sh --zone $$a --tag web-$$a:$(K3S_TAG) || exit 1; \
 	done
-	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:dev
+	bash scripts/dagger-image.sh --name ray-cluster --tag ray-cluster:$(K3S_TAG)
 	# The lakehouse fleet image — dockerfile name (rest-catalog) != image name, so it can't
 	# ride the COMPOSE_IMAGES loop. Same build scripts/e2e_stack.sh does.
-	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
+	bash scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:$(K3S_TAG)
 
-k3s-import: ## Side-load :dev images into k3s containerd
+k3s-import: ## Side-load the :$(K3S_TAG) images into k3s containerd
 	@for s in $(K3S_IMAGES); do \
-	  echo ">> importing $$s:dev"; \
-	  docker save $$s:dev | sudo k3s ctr images import - || exit 1; \
+	  echo ">> importing $$s:$(K3S_TAG)"; \
+	  docker save $$s:$(K3S_TAG) | sudo k3s ctr images import - || exit 1; \
 	done
 
 # The MEDIA PLANE is on by default here, and it has to be: `frontend.apps` always includes the
@@ -747,24 +755,9 @@ k3s-up: k3s-deps k3s-crds k3s-stem-check ## Vendor deps, apply CRDs, then instal
 	  HF_TOKEN="$$(cat "$${HF_HOME:-$$HOME/.cache/huggingface}/token")"; \
 	  echo ">> HF_TOKEN from $${HF_HOME:-$$HOME/.cache/huggingface}/token (hf auth login)"; \
 	fi; \
-	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — htrflow Serve will 401 on the gated TrOCR model"; fi; \
-	: # THE PINS FILE CARRIES TAGS AND NOTHING ELSE, so it LAYERS over the registry rather than replacing
-	: # it. `k3s-pins.sh` strips the registry on purpose ("the chart supplies it from image.repository"),
-	: # so selecting the pins file INSTEAD of the live values left `image.repository` unset and the chart
-	: # refused the render outright — "must be set to a registry ... or set image.localImages=true".
-	: # Measured 2026-09-09: every `make k3s-up` failed for as long as a non-empty pins file existed,
-	: # which is the state a pin is FOR. Base first (the live release's image settings, else side-loaded),
-	: # pins second, so the tags win and the registry survives.
-	IMGARGS="--set image.localImages=true"; \
+	if [ -z "$$HF_TOKEN" ]; then echo "WARN: no HF token (env, .env, or 'hf auth login') — a Serve application that pulls a gated Hugging Face model will 401"; fi; \
 	LIVE=$$(mktemp); \
-	if $(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null && grep -q 'repository:' "$$LIVE"; then \
-	  IMGARGS="-f $$LIVE"; \
-	  echo ">> reusing the LIVE release's image settings ($$(grep -c . "$$LIVE") values) — not imposing localImages"; \
-	fi; \
-	if [ -s chart/values-live-pins.yaml ]; then \
-	  IMGARGS="$$IMGARGS -f chart/values-live-pins.yaml"; \
-	  echo ">> image TAGS pinned from chart/values-live-pins.yaml (make k3s-pins to refresh)"; \
-	fi; \
+	IMGARGS=$$(KUBECONFIG=$(KUBECONFIG) K3S_TAG=$(K3S_TAG) ./scripts/k3s-image-args.sh "$$LIVE" chart/values-live-pins.yaml) || exit 1; \
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m \
 	  --take-ownership \
 	  $$IMGARGS \
@@ -829,8 +822,9 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# leaves the release agreeing with the cluster. It deliberately does NOT depend on k3s-stem-check:
 	@# this target is what RESOLVES the split the check refuses to proceed through.
 	@#
-	@# Image settings come from the LIVE release, exactly as k3s-up derives them, so a stem this call
-	@# does not name keeps the tag it is running rather than falling back to the chart default.
+	@# Image settings come from scripts/k3s-image-args.sh, the one decision k3s-up also makes: a registry
+	@# estate keeps its live settings, so a stem this call does not name keeps the tag it is running; a
+	@# side-loaded estate renders at K3S_TAG. No pins file — this call names the one tag that changes.
 	@# THE UPGRADE'S STATUS, NOT THE CLEANUP'S. A shell reports its LAST command's exit code, so
 	@# `helm upgrade ...; rm -f "$$LIVE"` hands make the `rm`'s status and a FAILED upgrade reports
 	@# success. Measured here: a post-upgrade hook timed out, helm printed `UPGRADE FAILED`, and the
@@ -838,7 +832,27 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# clean, which is the worst direction for this failure to go. Gated by
 	@# tests/unit/test_a_deploy_cannot_report_success_when_helm_failed.py.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
-	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN}; 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	STEM="$${STEM:-lance-rest-catalog}"; \
+	$(HELM) status rask >/dev/null 2>&1 || { echo "!! no live release to converge — make k3s-up installs one"; exit 1; }; \
+	LIVE=$$(mktemp); \
+	IMGARGS=$$(KUBECONFIG=$(KUBECONFIG) K3S_TAG=$(K3S_TAG) ./scripts/k3s-image-args.sh "$$LIVE" /dev/null) || { rm -f "$$LIVE"; exit 1; }; \
+	echo ">> converging stem $$STEM -> $(TAG)"; \
+	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership \
+	  $$IMGARGS \
+	  -f chart/values-local.yaml \
+	  --set image.tags.$$STEM=$(TAG) \
+	  --set explorer.enabled=$(EXPLORER) \
+	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) \
+	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) \
+	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) \
+	  --set-string dex.issuer=$(DEV_ISSUER) \
+	  --set explorer.corpus.mode=$(CORPUS) \
+	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) \
+	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN}; \
+	rc=$$?; \
+	rm -f "$$LIVE"; \
+	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is
 	@# COMMAND SUBSTITUTION, so `>> ... `make k3s-up` ...` RAN a full k3s-up as a side effect of
 	@# printing advice. Observed 2026-09-22 in this target's own output — "every stem converged —
@@ -907,8 +921,8 @@ kind-up: bootstrap ## Create the rask kind cluster (idempotent; deploy/kind/kind
 
 kind-images: k3s-build ## Build the full :dev image set (same builds k3s uses — fleet + zones + ray-cluster)
 
-kind-load: ## Side-load the :dev image set into the kind cluster
-	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):dev) --name $(KIND_CLUSTER)
+kind-load: ## Side-load the :$(K3S_TAG) image set into the kind cluster
+	$(KIND) load docker-image $(foreach i,$(KIND_IMAGES),$(i):$(K3S_TAG)) --name $(KIND_CLUSTER)
 
 # Third-party images the chart pulls (dapr x5, nats, openfga, cnpg, greptimedb, perses, kuberay,
 # kueue, dex, openbao, otel-collector, …). kind's containerd is a SEPARATE image store from the

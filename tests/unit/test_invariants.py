@@ -1278,13 +1278,24 @@ def test_every_helm_set_key_in_our_scripts_exists_in_values() -> None:
             node = node[part]
         return True
 
+    # A `--set <key>=null` DELETES a key. Of a defined key it clears the default; of a key values.yaml no
+    # longer has, it is how a retired key is migrated out of a live release — admitted only when a chart
+    # template REFUSES that key with `fail`, so a pointless or mistyped deletion still fails here.
+    guards = [t.read_text() for t in (CHART / "templates").glob("*.yaml")]
+
+    def retired(dotted: str) -> bool:
+        return any(dotted in text and "fail" in text for text in guards)
+
     # `--set a.b=c` / `--set-json a.b=[...]` / `--set a.b=c,d.e=f` across every script we ship.
-    pattern = re.compile(r"--set(?:-json|-string)?[= ]\"?([A-Za-z0-9_.\[\]-]+)=")
+    pattern = re.compile(r"--set(?:-json|-string)?[= ]\"?([A-Za-z0-9_.\[\]-]+)=(null\b)?")
     unknown: list[str] = []
     for script in sorted((REPO / "scripts").glob("*.sh")):
-        for key in pattern.findall(script.read_text()):
+        for key, deletion in pattern.findall(script.read_text()):
             base = key.split("[")[0]  # list index: catalog.multibase.dataBases[0] -> ...dataBases
-            if not defined(base):
+            if deletion:
+                if not (defined(base) or retired(base)):
+                    unknown.append(f"{script.name}: --set {key}=null (deletes a key no chart guard retires)")
+            elif not defined(base):
                 unknown.append(f"{script.name}: --set {key} (no such key in values.yaml)")
     assert not unknown, "helm --set keys that silently do nothing:\n  " + "\n  ".join(unknown)
 
@@ -4669,8 +4680,8 @@ def test_the_ray_HEAD_image_can_answer_the_operator_about_SERVE() -> None:
     if not (ray.get("serveApplications") or []):
         return  # no Serve applications declared -> the operator never polls for their status
 
-    dockerfile_path = REPO / f".docker/{ray['image']['repository']}.dockerfile"
-    assert dockerfile_path.exists(), f"ray.image.repository names no dockerfile: {dockerfile_path}"
+    dockerfile_path = REPO / f".docker/{ray['image']['name']}.dockerfile"
+    assert dockerfile_path.exists(), f"ray.image.name names no dockerfile: {dockerfile_path}"
     dockerfile = _uncommented(dockerfile_path.read_text(encoding="utf-8"))
 
     packages = re.findall(r"uv sync --package (\S+)", dockerfile)
@@ -4709,12 +4720,10 @@ def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -
     never becomes healthy. The failure surfaces as a RayService stuck reconciling, not as anything
     naming the image.
 
-    Measured 2026-08-25 on the shipped values: `ray.image.repository` is `ray-cluster` while
-    `ray.serveApplications[0].importPath` is `runner.htrflow_service:htrflow_app`. `fd7dd7e0`
-    (2026-08-18) deliberately emptied `ray-cluster` of every workload dependency — it builds
-    `packages/ratch` from the ROOT lock and installs no runner at all — and moved the workload to
-    `.docker/ray-htr.dockerfile`. The image half of that split landed; the chart was never pointed at
-    the result, so the deployment declares an application the image it runs cannot import.
+    The head image carries NO workload by design — it builds the platform environment from the root
+    lock and installs no sealed runner — so an application's import path lives only in the image of
+    the runner that provides it. A chart that declares an application without pointing at that image
+    deploys something nothing can import.
 
     This gate is the coupling made explicit: ONE RayService runs ONE image, so the image named here
     must satisfy every application declared here. That is also why a second workload is a second
@@ -4732,9 +4741,9 @@ def test_the_deployed_ray_image_PROVIDES_every_serve_application_it_declares() -
     apps = ray.get("serveApplications") or []
     assert apps, "ray.serveApplications is empty — this gate is now blind; it exists to tie declared applications to the image that runs them"
 
-    repository = ray["image"]["repository"]
+    repository = ray["image"]["name"]
     dockerfile_path = REPO / f".docker/{repository}.dockerfile"
-    assert dockerfile_path.exists(), f"ray.image.repository is {repository!r} but .docker/{repository}.dockerfile does not exist"
+    assert dockerfile_path.exists(), f"ray.image.name is {repository!r} but .docker/{repository}.dockerfile does not exist"
     # `_uncommented`: `ray-cluster.dockerfile` explains in prose that it USED to build from
     # `runners/htr/uv.lock`, and a raw substring check reads that sentence as an install. A gate that
     # a comment can satisfy is a gate that passes exactly when the file documents its own violation.
@@ -4858,8 +4867,12 @@ def test_k3s_up_does_not_REWRITE_the_image_mode_of_a_live_release() -> None:
     recipe = MAKEFILE.read_text(encoding="utf-8")
     start = recipe.index("k3s-up:")
     body = recipe[start : recipe.index("\nseed-corpus:", start)]
+    # The decision lives in the script the recipe delegates to; follow it there rather than reading the
+    # recipe alone, which would pass vacuously once the logic moved.
+    image_args = (REPO / "scripts" / "k3s-image-args.sh").read_text(encoding="utf-8")
 
-    assert "get values" in body, (
+    assert "scripts/k3s-image-args.sh" in body, "make k3s-up no longer takes its image arguments from scripts/k3s-image-args.sh"
+    assert "get values" in image_args, (
         "make k3s-up does not read the live release's values before upgrading. Without that it imposes "
         "an image mode on an estate that may already use a different one — the #135 fleet-wide "
         "ImagePullBackOff. See this test's docstring."
@@ -5494,7 +5507,7 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
     Both name `service_kit.ray_tracing`, and that module's own docstring states the assumption it rests
     on: "installs ratch — so `service_kit` is importable in every Ray Python process on the cluster."
     That is a claim about ONE image, and nothing checked it. This does: the image named by
-    `ray.image.repository` must really provide the module, whether by installing a distribution that
+    `ray.image.name` must really provide the module, whether by installing a distribution that
     depends on it or by carrying the source outright.
 
     WHY THIS IS WORTH A TEST EVEN THOUGH IT PASSES TODAY. The chart and the dockerfile only contradict
@@ -5511,10 +5524,10 @@ def test_the_ray_head_image_the_CHART_CONFIGURES_ships_the_tracing_hook_module()
     all. Demanding the hook of it would be inventing a requirement.
     """
     values = yaml.safe_load((REPO / "chart" / "values.yaml").read_text())
-    configured = values["ray"]["image"]["repository"]
+    configured = values["ray"]["image"]["name"]
 
     dockerfile = REPO / ".docker" / f"{configured}.dockerfile"
-    assert dockerfile.exists(), f"chart ray.image.repository is {configured!r} but .docker/{configured}.dockerfile does not exist"
+    assert dockerfile.exists(), f"chart ray.image.name is {configured!r} but .docker/{configured}.dockerfile does not exist"
 
     # EVERY template, not `rayservice.yaml` by name. The hook names are chart CONFIG and may sit in
     # whichever template renders the cluster — they moved into `_ray-cluster-config.tpl` the moment that

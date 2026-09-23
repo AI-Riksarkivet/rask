@@ -103,8 +103,11 @@ def test_the_identity_exists_before_the_pods_that_present_it_roll() -> None:
     A `post-upgrade` hook creates the RustFS user AFTER the Deployments are updated, so pods restart
     holding a credential the object store has never heard of and 403 until the hook catches up. That
     window is why the keys shipped empty; closing it is what makes the default above safe.
+
+    Rendered as an UPGRADE: the hook phases only exist there. A fresh install provisions the users in
+    the install wave instead (test_a_fresh_install_provisions_the_identities_its_pods_boot_with.py).
     """
-    for doc in yaml.load_all(_render(), Loader=FAST_LOADER):
+    for doc in yaml.load_all(_render("--is-upgrade"), Loader=FAST_LOADER):
         if not doc or doc.get("kind") != "Job":
             continue
         if "scoped-users" not in doc["metadata"]["name"]:

@@ -113,9 +113,9 @@ maintenance:
 # RayCluster named `<release>-ray` gives KubeRay's own `<release>-ray-head-svc`, the exact name the
 # chart already derives and which resolved to nothing here.
 #
-# The image is spelled with its registry because the Ray templates do not go through `rask.image`
-# (that is [[CP-050]]), so `localImages` does not reach them and a bare `ray-cluster:dev` would resolve
-# to Docker Hub.
+# NO IMAGE HERE: the head renders through `rask.image`, so its registry and tag are the estate's image
+# settings like every other first-party image. A registry path and tag in this file are one host's
+# facts in a file every host reads — a fresh host has no `localhost:5000` and never built that tag.
 ray:
   # ONE RAY PLANE, NOT TWO ([[CP-041]]). `dashboardUrl` feeds `RAY_DASHBOARD_URL`, which is what
   # `compute` prunes job history against, serves its jobs board from and proxies `/api/serve` to —
@@ -125,9 +125,6 @@ ray:
   dashboardUrl: http://rask-ray-head-svc:8265
   cluster:
     enabled: true
-  image:
-    repository: localhost:5000/ray-cluster
-    tag: main-2cfe68f4
 
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #

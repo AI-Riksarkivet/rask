@@ -61,7 +61,7 @@
           {{- end }}
           containers:
             - name: ray-head
-              image: "{{ .Values.ray.image.repository }}:{{ .Values.ray.image.tag }}"
+              image: {{ include "rask.image" (list . .Values.ray.image.name) | quote }}
               imagePullPolicy: {{ .Values.ray.image.pullPolicy }}
               env:
                 {{- include "rask.rayOtelEnv" (list $ "ray") | nindent 16 }}

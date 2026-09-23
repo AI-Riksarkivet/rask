@@ -539,6 +539,21 @@ capacity would admit twice what can run.
      --------------------------------------------------------------------------------------------- */}}
 {{- define "rask.bootstrapRev" -}}r{{ .Release.Revision }}{{- end -}}
 
+{{/* The buckets `minio-mkbucket` CREATES, space-separated — what a Job that must run after it waits
+     for. Mirrors the CREATE lines of minio-buckets.yaml; tests/unit/
+     test_a_fresh_install_provisions_the_identities_its_pods_boot_with.py fails if the two disagree. */}}
+{{- define "rask.minioCreatedBuckets" -}}
+{{- $buckets := list .Values.minio.bucket -}}
+{{- if .Values.observability.enabled -}}{{- $buckets = append $buckets .Values.observability.bucket -}}{{- end -}}
+{{- range $ns, $bkt := .Values.medallion.buckets -}}
+{{- if and $bkt (ne $bkt $.Values.minio.bucket) -}}{{- $buckets = append $buckets $bkt -}}{{- end -}}
+{{- end -}}
+{{- if .Values.minio.externalEndpoint -}}
+{{- range .Values.minio.buckets -}}{{- $buckets = append $buckets . -}}{{- end -}}
+{{- end -}}
+{{- $buckets | uniq | join " " -}}
+{{- end -}}
+
 {{/*
 IS THIS A REAL DEPLOYMENT? One definition, because two are two chances to answer it too narrowly at
 once — the argument `prod-credentials.yaml` makes for itself and which now has a second consumer.
