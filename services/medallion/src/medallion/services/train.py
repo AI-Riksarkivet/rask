@@ -23,8 +23,8 @@ from dapr.aio.clients import DaprClient
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
-from medallion.core.config import MedallionSettings, shared_lance_session
-from medallion.services import ray_submit
+from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, shared_lance_session
+from medallion.services import catalog_register, ray_submit
 from service_kit import dapr_publish
 from service_kit.governed import fga
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
@@ -95,6 +95,46 @@ def stage_uri_for(settings: MedallionSettings, dataset: str) -> str:
     return f"{_stage_base(settings)}/{stage}"
 
 
+def feature_uri_for(settings: MedallionSettings, dataset: str) -> str:
+    """Where a feature table ACTUALLY lives: the catalog's answer, else the composed path.
+
+    ASK, DO NOT COMPOSE — `ensure_stage_output`'s lesson on the read side. `stage_uri_for` maps
+    `silver$features` to `<base>/medallion/silver`, which its own docstring calls a demo-tier
+    convention; against a governed estate the catalog vends an opaque per-table location and the
+    composed path names nothing. Measured on the deployed estate 2026-09-23: `POST /train` answered
+    `422 cannot resolve feature dataset 'silver$features'` while the catalog described that same table
+    at `s3://bind86-wh/90f…`. The table existed, was governed, and this door could not find it.
+
+    THE COMPOSED PATH REMAINS THE FALLBACK, for two cases that are not failures. With no catalog
+    configured there is nothing to ask — the demo shape — and the request is not made. With a catalog,
+    `describe_table_location` answers `None` for a dataset it does not govern, which is a supported
+    case (an external producer's unregistered table) and documented as such at that function.
+
+    AN OUTAGE FALLS BACK RATHER THAN REFUSING. The composed path is what this door used
+    unconditionally until now, so using it when the catalog is unreachable is strictly no worse than
+    the behaviour it replaces — while letting the error escape would render a transient catalog fault
+    as `422 cannot resolve`, an invalid-request answer to a valid request.
+    """
+    composed = stage_uri_for(settings, dataset)
+    if not settings.catalog_url:
+        return composed
+    try:
+        located = catalog_register.describe_table_location(
+            catalog_url=settings.catalog_url,
+            table_id=dataset,
+            token=settings.catalog_token,
+            app_token=outbound_app_token(settings),
+            service_identity=settings.catalog_service_identity,
+            dedicated_token=dedicated_token_for(settings),
+        )
+    except Exception as exc:  # noqa: BLE001 — an outage must not become an invalid-request answer
+        # TYPE AND MESSAGE, which is the shape `writing-python`'s batch pattern records: a connect
+        # error, a timeout and a 500 all read as one line without it, and they want different actions.
+        log.warning("train_feature_location_unavailable", extra={"dataset": dataset, "error": f"{type(exc).__name__}: {exc}"})
+        return composed
+    return located or composed
+
+
 def registry_uri_for(settings: MedallionSettings, model: str) -> str:
     """The model-REGISTRY Lance dataset URI (D4 step 2): ``…/medallion/models/<model>`` — one dataset
     per model under the medallion base, so the registry sits in the project bucket beside the stages it
@@ -119,7 +159,7 @@ def _resolve_version(settings: MedallionSettings, dataset: str) -> int:
     """The dataset's CURRENT Lance version (blocking read — call via threadpool)."""
     import lance
 
-    ds = lance.dataset(stage_uri_for(settings, dataset), storage_options=settings.storage_options(), session=shared_lance_session())
+    ds = lance.dataset(feature_uri_for(settings, dataset), storage_options=settings.storage_options(), session=shared_lance_session())
     return int(ds.version)
 
 
