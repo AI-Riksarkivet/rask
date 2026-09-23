@@ -62,7 +62,24 @@ def _clean_bundle_cache() -> Iterator[None]:
 
 
 def _seed_store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: bundle)
+    """Seed the store the way it HOLDS the credentials: one secret per identity, plus the shared bundle.
+
+    The argument keeps the shared-bundle spelling (`service-token-<identity>` -> credential) because that
+    is what a reader of these tests already knows; this renders it into the two secrets the resolver
+    actually addresses.
+
+    KEY-AWARE ON PURPOSE ([[XC-072]]). The previous double answered ONE dict whatever secret was asked
+    for, and a split expressed entirely in the secret NAME is invisible to such a double: when the
+    credential moved from a field of `lance` to its own `service-token-<identity>` secret, this kept
+    handing back the old shape and the door answered "no dedicated credential provisioned" -- a
+    stand-in that cannot see the change it exists to catch.
+
+    The shared bundle is seeded too because the resolver reads it as a REACHABILITY control: an
+    identity with no secret must still be distinguishable from a store that is down.
+    """
+    secrets = {name: {"token": value} for name, value in bundle.items()}
+    secrets[dapr_auth.SHARED_BUNDLE_NAME] = dict(bundle)
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda _store, key, **_k: secrets.get(key, {}))
 
 
 def test_THE_ESCALATION_the_shared_token_cannot_claim_a_privileged_subject(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -76,7 +76,24 @@ def _app_token(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _seed_store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda *_a, **_k: bundle)
+    """Seed the store the way it HOLDS the credentials: one secret per identity, plus the shared bundle.
+
+    The argument keeps the shared-bundle spelling (`service-token-<identity>` -> credential) because that
+    is what a reader of these tests already knows; this renders it into the two secrets the resolver
+    actually addresses.
+
+    KEY-AWARE ON PURPOSE ([[XC-072]]). The previous double answered ONE dict whatever secret was asked
+    for, and a split expressed entirely in the secret NAME is invisible to such a double: when the
+    credential moved from a field of `lance` to its own `service-token-<identity>` secret, this kept
+    handing back the old shape and the door answered "no dedicated credential provisioned" -- a
+    stand-in that cannot see the change it exists to catch.
+
+    The shared bundle is seeded too because the resolver reads it as a REACHABILITY control: an
+    identity with no secret must still be distinguishable from a store that is down.
+    """
+    secrets = {name: {"token": value} for name, value in bundle.items()}
+    secrets[dapr_auth.SHARED_BUNDLE_NAME] = dict(bundle)
+    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", lambda _store, key, **_k: secrets.get(key, {}))
 
 
 def _authenticate(settings: LineageSettings, *, token: str | None, identity: str | None, caller: str | None = "medallion") -> security.Principal | None:
@@ -127,7 +144,7 @@ def test_the_resolver_reads_the_store_the_operator_actually_configured(monkeypat
 
     def _fetch(store: str, key: str, **_kwargs: object) -> dict[str, str]:
         asked.append((store, key))
-        return {"service-token-service-trainer": TRAINER_OWN}
+        return {"token": TRAINER_OWN}
 
     monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
     settings = _settings(privileged="service-trainer").model_copy(update={"dapr_secret_store": "prod-secrets", "dapr_secret_key": "rask"})
@@ -135,7 +152,13 @@ def test_the_resolver_reads_the_store_the_operator_actually_configured(monkeypat
     principal = _authenticate(settings, token=TRAINER_OWN, identity="service-trainer")
 
     assert principal is not None and principal.sub == "service-trainer"
-    assert asked == [("prod-secrets", "rask")]
+    # THE STORE IS THE OPERATOR'S, THE KEY IS THE IDENTITY'S ([[XC-072]]). `dapr_secret_key` ("rask"
+    # here) still names the shared bundle every service reads for its S3 material
+    # (`governed/secrets.py:191`), but it no longer names a CREDENTIAL: each privileged identity holds
+    # its own `service-token-<identity>` secret, because Dapr scopes by secret name and never by field
+    # within one. So the misconfiguration this test was written for -- the door querying the wrong
+    # STORE -- is still exactly what it pins.
+    assert asked == [("prod-secrets", "service-token-service-trainer")]
 
 
 # --------------------------------------------------------------------------- #
