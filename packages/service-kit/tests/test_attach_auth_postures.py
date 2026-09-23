@@ -130,6 +130,7 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(monkeypatch: p
 
     assert getattr(app.state, "fga", None) is None
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
+    await fga_mod.dispose(app)  # the background resolver `attach_fga` starts for a missing store
 
 
 @pytest.mark.asyncio

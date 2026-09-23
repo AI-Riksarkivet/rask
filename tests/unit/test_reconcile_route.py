@@ -152,6 +152,22 @@ def test_an_overlapping_tick_skips_rather_than_stacking(monkeypatch: pytest.Monk
     assert out["status"] == "skipped"
 
 
+def _attached_fga_client(settings: Any) -> Any:  # noqa: ANN401 — the settings stub / OpenFgaClient | None
+    """Maintenance's FGA client exactly as its lifespan attaches it (`app.state.fga_client`), with any
+    background resolver disposed afterwards so no task outlives the test's loop."""
+    from maintenance import service
+    from service_kit.governed import fga
+
+    async def _run() -> Any:  # noqa: ANN401
+        app = FastAPI()
+        await service._attach_fga_client(app, settings)
+        client = app.state.fga_client
+        await fga.dispose(app)
+        return client
+
+    return asyncio.run(_run())
+
+
 def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """A maintenance job that provisioned its own store would read an EMPTY one and then report every
     real tenant as a ghost — a false report is worse than an absent one.
@@ -174,8 +190,8 @@ def test_the_service_never_provisions_an_fga_store(monkeypatch: pytest.MonkeyPat
     from service_kit.governed import fga
 
     monkeypatch.setattr(fga, "resolve", _no_store)
-    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=False))) is None
-    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None, "no store to resolve → still None, never a new one"
+    assert _attached_fga_client(_settings(fga_enabled=False)) is None
+    assert _attached_fga_client(_settings(fga_enabled=True)) is None, "no store to resolve → still None, never a new one"
 
     # The CALL is what creates a store; prose about not provisioning is fine and is in fact the point.
     # Matched as `fga.provision(` — the bare name matched documentation too, so a docstring explaining
@@ -198,7 +214,6 @@ def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch
     estate is not bootstrapped. So this still fails closed — it just stops failing closed against an
     estate that is sitting right there. Same fix, same reasoning, as `ingest.__init__`'s.
     """
-    from maintenance import service
 
     seen: list[str] = []
 
@@ -212,7 +227,7 @@ def test_an_UNPINNED_store_is_RESOLVED_by_name_rather_than_abandoned(monkeypatch
     monkeypatch.setattr(fga, "resolve", _resolve)
     monkeypatch.setattr(fga, "make_client", lambda url, store, model, **_kw: made.append((url, store, model)) or "CLIENT")
 
-    client = asyncio.run(service._make_fga_client(_settings(fga_enabled=True)))
+    client = _attached_fga_client(_settings(fga_enabled=True))
 
     assert client == "CLIENT", "an unpinned service with a resolvable store must get a client, not None"
     assert seen, "resolve was never attempted — unpinned fell straight through to None again"
@@ -225,7 +240,6 @@ def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatc
     The sweep is this service's primary job and needs no FGA at all, so an unreachable authz endpoint
     must cost the authz CATEGORIES and nothing else.
     """
-    from maintenance import service
 
     async def _boom(*_a: Any, **_kw: Any) -> Any:
         raise ConnectionRefusedError("openfga not up yet")
@@ -233,7 +247,7 @@ def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatc
     from service_kit.governed import fga
 
     monkeypatch.setattr(fga, "resolve", _boom)
-    assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None
+    assert _attached_fga_client(_settings(fga_enabled=True)) is None
 
 
 def test_the_reconcile_client_is_read_only_by_construction() -> None:

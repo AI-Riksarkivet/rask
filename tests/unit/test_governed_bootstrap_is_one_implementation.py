@@ -45,7 +45,11 @@ SERVICES = REPO / "services"
 #: OIDCVerifier`, a function-local import, `fga.provision`).
 _HAND_ROLLED = re.compile(r"OIDCVerifier\(|fga\.provision\(|fga\.resolve\(|fga\.make_client\(")
 
-#: service -> the flag its `attach_auth` / `build_fga_client` call MUST carry, and why.
+#: A call into the shared kernel: `attach_auth` (both halves), `attach_fga` (the FGA half, for a caller whose
+#: client lives outside `attach_auth`'s reach) or `build_fga_client` (a one-shot job).
+_SHARED_BOOTSTRAP = re.compile(r"\b(attach_auth|attach_fga|build_fga_client)\(")
+
+#: service -> the flag its `attach_auth` / `attach_fga` / `build_fga_client` call MUST carry, and why.
 _REQUIRED_POSTURE = {
     "catalog": ("fatal=True", "catalog raises on a failed build today — a 503 posture would hide a broken authz plane behind a healthy-looking pod"),
     "lineage": ("fatal=True", "lineage raises on a failed build today — same posture, same reason"),
@@ -70,7 +74,10 @@ def _governed_services() -> list[Path]:
     for service in sorted(SERVICES.iterdir()):
         if not service.is_dir():
             continue
-        if any(("attach_auth" in p.read_text() or "build_fga_client" in p.read_text() or _HAND_ROLLED.search(p.read_text())) for p in _sources(service)):
+        if any(
+            (any(name in p.read_text() for name in ("attach_auth", "attach_fga", "build_fga_client")) or _HAND_ROLLED.search(p.read_text()))
+            for p in _sources(service)
+        ):
             out.append(service)
     return out
 
@@ -103,7 +110,7 @@ def test_a_divergent_posture_is_declared_at_the_call_site(service: str, flag_and
     default for a stated reason, and the difference has to be visible where the call is made."""
     flag, why = flag_and_why
     sources = _sources(SERVICES / service)
-    callers = [p for p in sources if "attach_auth(" in p.read_text() or "build_fga_client(" in p.read_text()]
+    callers = [p for p in sources if _SHARED_BOOTSTRAP.search(p.read_text())]
 
     assert callers, f"{service} does not call the shared bootstrap at all"
     for path in callers:

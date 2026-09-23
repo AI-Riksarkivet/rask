@@ -32,8 +32,9 @@ from medallion.services.ray_submit import close_ray_client
 from service_kit.activity_loop import run_activity, stop_worker_loop
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.actor_state_store import probe_actor_state_store
-from service_kit.governed.auth_lifespan import build_fga_client
+from service_kit.governed.auth_lifespan import attach_fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
 from service_kit.lance_app import build_lance_service_app
@@ -79,7 +80,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # crashed the pod. A stage runner that cannot authorize must not sit in the subscription quietly
     # refusing every stage — nothing downstream would report it.
     settings = get_settings()
-    app.state.fga = await build_fga_client(settings, service="medallion-stage runner", fatal=True)
+    app.state.fga = None
+    await attach_fga(app, settings, service="medallion-stage runner", fatal=True)
     # THE WORKFLOW WORKER (S1). Without this the stage runner can SCHEDULE `stage_run` and nothing will ever
     # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
     # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still
@@ -152,9 +154,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         with suppress(Exception):
             await asyncio.to_thread(run_activity, close_ray_client())
         stop_worker_loop()
-        if app.state.fga is not None:
-            with suppress(Exception):
-                await app.state.fga.close()
+        await fga_dispose(app)
 
 
 # THE SHARED LANCE-PLANE ASSEMBLY (docs/DECISIONS.md "The Python estate audit" DUP-12). Logging before the app exists, the docs

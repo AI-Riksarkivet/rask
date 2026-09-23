@@ -924,7 +924,15 @@ async def dispose(app: object) -> None:
     silent too: FGA-off stacks never build one, and a lifespan that failed before it got that far must
     still be able to unwind.
     """
-    client = getattr(getattr(app, "state", None), "fga", None) or getattr(getattr(app, "state", None), "fga_client", None)
+    state = getattr(app, "state", None)
+    # A resolver still waiting for the store (`auth_lifespan.attach_fga`) goes first: left running, it
+    # would retry against a loop that is shutting down, and could assign a client after it was closed.
+    resolver = getattr(state, "fga_resolver", None)
+    if resolver is not None and not resolver.done():
+        resolver.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await resolver
+    client = getattr(state, "fga", None) or getattr(state, "fga_client", None)
     if client is None:
         return
     with suppress(Exception):

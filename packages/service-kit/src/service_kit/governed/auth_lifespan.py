@@ -44,6 +44,7 @@ exactly as it did before it had a door.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Protocol
 
@@ -100,6 +101,13 @@ class _GovernedSettings(_FgaSettings, Protocol):
     def oidc_leeway(self) -> int: ...
     @property
     def oidc_allow_insecure(self) -> bool: ...
+
+
+#: The background re-resolution cadence for a store that did not exist at boot (see `attach_fga`): the
+#: first retry soon, because on a fresh install the catalog provisions within seconds of its siblings,
+#: then a capped doubling, so an estate that is genuinely unbootstrapped is asked once a minute, not in a loop.
+FGA_RESOLVE_RETRY_INITIAL_SECONDS = 2.0
+FGA_RESOLVE_RETRY_MAX_SECONDS = 60.0
 
 
 async def build_fga_client(
@@ -233,6 +241,52 @@ async def attach_auth(
                 raise
             log.exception("%s: OIDC verifier failed to build — governed routes will 503", service)
 
+    await attach_fga(app, settings, service=service, provision=provision, fatal=fatal)
+
+
+async def attach_fga(
+    app: FastAPI,
+    settings: _FgaSettings,
+    *,
+    service: str,
+    provision: bool = False,
+    fatal: bool = False,
+    attr: str = "fga",
+) -> None:
+    """Put this service's FGA client on `app.state.<attr>` — now if it can be built, else as soon as it can.
+
+    RESOLVING ONCE MADE A LOST RACE PERMANENT. On a fresh estate the catalog is the one service that
+    provisions the store, and its siblings boot concurrently with it: `fga.resolve` answered None (or
+    OpenFGA was not answering yet), the attribute stayed None for the pod's lifetime, and every governed
+    route answered 503 until someone restarted the pod. Measured 2026-09-23 on a fresh install: fourteen
+    Deployments latched that way. So a build that comes back empty keeps resolving in the background —
+    with the caller's own posture, so a read-only door never provisions — and assigns the client the
+    moment one exists. Consumers still read `OpenFgaClient | None`; the None just stops being permanent.
+
+    `fatal` applies to the BOOT build only: a service that crashes on a failed build keeps crashing (the
+    signal an operator watches), while a store that is merely absent is a state the estate grows out of.
+    The resolver is held on `app.state.fga_resolver` (a strong reference) and cancelled by
+    `fga.dispose`. Pinned by tests/test_an_authorization_store_that_appears_after_boot_is_adopted.py.
+    """
     client = await build_fga_client(settings, service=service, provision=provision, fatal=fatal)
     if client is not None:
-        app.state.fga = client
+        setattr(app.state, attr, client)
+        return
+    if not settings.fga_enabled:
+        return
+    app.state.fga_resolver = asyncio.create_task(
+        _resolve_until_built(app, settings, service=service, provision=provision, attr=attr),
+        name=f"fga-resolver:{service}",
+    )
+
+
+async def _resolve_until_built(app: FastAPI, settings: _FgaSettings, *, service: str, provision: bool, attr: str) -> None:
+    delay = FGA_RESOLVE_RETRY_INITIAL_SECONDS
+    while True:
+        await asyncio.sleep(delay)
+        client = await build_fga_client(settings, service=service, provision=provision, fatal=False)
+        if client is not None:
+            setattr(app.state, attr, client)
+            log.info("openfga_adopted_after_boot", extra={"service": service})
+            return
+        delay = min(delay * 2, FGA_RESOLVE_RETRY_MAX_SECONDS)

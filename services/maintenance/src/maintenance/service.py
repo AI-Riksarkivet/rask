@@ -39,7 +39,7 @@ from maintenance.core.config import MaintenanceSettings, get_settings
 from maintenance.core.lineage_emit import make_emitter
 from service_kit.control_emit import make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
-from service_kit.governed.auth_lifespan import build_fga_client
+from service_kit.governed.auth_lifespan import attach_fga
 from service_kit.governed.dapr_auth import assert_app_token_configured
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
@@ -54,7 +54,7 @@ configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-
 log = logging.getLogger(__name__)
 
 
-async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — OpenFgaClient, no protocol
+async def _attach_fga_client(app: FastAPI, settings: MaintenanceSettings) -> None:
     """The OpenFGA client this service reads with — and, since #79, REVOKES with. Or ``None``.
 
     Two consumers with different rights, and the difference is the whole point:
@@ -77,10 +77,12 @@ async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa
 
     NEVER RAISES, which is why ``fatal`` stays at its default. A misconfigured or unreachable authz
     endpoint degrades the authz categories; it must not stop the sweep, which is this service's
-    primary job and needs no FGA at all. It also returns the client rather than assigning it: the
-    sweep runs from a cron route and holds it as ``app.state.fga_client``.
+    primary job and needs no FGA at all. The sweep runs from a cron route and reads the client as
+    ``app.state.fga_client``; when the store does not exist yet it is adopted there as soon as it does
+    (`attach_fga`), instead of the authz categories reporting unavailable until the pod restarts.
     """
-    return await build_fga_client(settings, service="maintenance", provision=False)
+    app.state.fga_client = None
+    await attach_fga(app, settings, service="maintenance", provision=False, attr="fga_client")
 
 
 def _make_s3_client(settings: MaintenanceSettings) -> Any | None:  # noqa: ANN401 — boto3 client has no stub
@@ -176,7 +178,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # categories to UNAVAILABLE-with-a-reason, and the other five still report. Boot must NOT fail on
     # them — the sweep is this service's primary job and does not need either.
     app.state.dapr_client = dapr_client
-    app.state.fga_client = await _make_fga_client(settings)
+    await _attach_fga_client(app, settings)
     app.state.s3_client = _make_s3_client(settings)
     app.state.startup_complete = True
     try:
