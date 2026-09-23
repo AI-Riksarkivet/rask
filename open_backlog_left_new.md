@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**195 open items**, of which **91 are blocked on a decision** and **104 can be picked up today**.
+**195 open items**, of which **92 are blocked on a decision** and **103 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 30 | 7 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 30 | 6 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -890,6 +890,25 @@ FROM opentelemetry_logs` returns exa
 
 **LH-097 · Silver re-materialises managed blob bytes copied from bronze instead of being a shallow clone of bronze@N plus `add_columns`**
 `medallion, maintenance, catalog` · **MED**
+- **blocked:** the clone shape COLLIDES WITH R26, and the row does not mention it. Found by reading
+  the code the change would replace, after the measurement was done.
+  R26 puts the `lineage` JSONB INSIDE the output dataset, and `compute.py` states why in the line that
+  would have to go: *"In the SAME commit as the data (R26): a governed row must never be readable
+  without its provenance, so the JSONB is a column of the table being written, **not an add_columns
+  after it**."* A shallow clone is exactly that forbidden shape — `shallow_clone(bronze@N)` is commit
+  one and `add_columns(lineage, stage, source_rowid)` is commit two, and between them silver rows exist
+  carrying no provenance. The measured 100% byte saving is real; it is bought with the property R26
+  exists to guarantee.
+  **THE QUESTION IS WHETHER R26 MEANS THE COMMIT OR THE VISIBILITY.** If it means the physical Lance
+  commit, the clone shape is refused outright and this row closes as won't-do on its stated form. If it
+  means "no consumer may read a governed row without provenance", then a clone whose table is not
+  REGISTERED until both commits land satisfies it — governance precedes visibility, which is the rule
+  `produce.py` already follows ("GOVERNANCE PRECEDES THE FIRST ROW"). That is an owner reading of R26,
+  not a fact I can measure.
+  *Not a blocker for the derivers, which I checked separately:* `derive_artifacts(out, blob_payloads)`
+  needs the payload BYTES, so the clone saves the WRITE and not the read. That is still the whole
+  measured saving — the copy's 20 MB is all write — but it means `_carry_forward` keeps its scan and
+  only its `write_dataset` changes.
 - **THE MEASUREMENT IS SHIPPED AND THE TRADE IS NOT CLOSE (2026-09-23) —
   `scripts/measure_clone_vs_copy_for_silver.py`, the comparison the row asked for and the one the
   existing probes did not cover.** On a 300-row corpus with mixed payload sizes (20 MB of managed
