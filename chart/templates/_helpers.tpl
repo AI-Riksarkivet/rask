@@ -208,6 +208,16 @@ dapr.io/log-as-json: "true"
 dapr.io/max-body-size: {{ . | quote }}
 {{- end }}
 dapr.io/app-token-secret: {{ $root.Release.Name }}-dapr-app-token
+{{- /* AND ITS CHECKSUM, IN THE SAME PLACE THE TOKEN IS HANDED OVER. The injector reads that
+       Secret at POD CREATION, so a rotated token leaves the sidecar presenting a dead credential
+       while the render, the reference and every probe stay green. This annotation is what turns a
+       rotation into a new pod template, and therefore a restart.
+
+       HERE RATHER THAN PER TEMPLATE, because the two ways to lose it look nothing alike: four
+       lakehouse Deployments lost it to a DUPLICATE `annotations:` key (valid YAML, last key wins)
+       and two more simply never had it. Written beside the annotation it guards, neither is
+       possible — a pod given the token carries the checksum by construction. */}}
+checksum/dapr-app-token: {{ include (print $root.Template.BasePath "/dapr-app-token.yaml") $root | sha256sum }}
 {{- /* THE SIDECAR MUST OUTLIVE THE APP'S DRAIN, not race it. This block emitted nothing about
        shutdown, so daprd took its 5s default while the app was still inside its own preStop sleep —
        and since the kubelet SIGTERMs every container simultaneously, the sidecar was gone before the
