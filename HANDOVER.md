@@ -96,16 +96,34 @@ no-Co-Authored-By gates are silently dead.
 `KUBECONFIG=/etc/rancher/k3s/k3s.yaml`. On the new machine it is a fresh build:
 
 ```bash
-make k3s-install    # once
-make dev-registry   # once per host — registry on :5000, points k3s at it (sudo, restarts k3s)
-make dagger-engine  # once per host — the engine allowed to push to a plain-HTTP registry
-make k3s-build && make k3s-import && make k3s-up
+make k3s-install    # once — k3s + helm
+make dagger-engine  # once per host, and after a Dagger CLI upgrade — the engine every build goes through
+make k3s-build      # every first-party image at :$(K3S_TAG) (default `dev`), via Dagger
+make k3s-import     # side-load them into k3s containerd (sudo — run it in a real terminal)
+make k3s-up         # install/upgrade the release into namespace `rask`
 ```
 
-Two traps that bite and do not announce themselves: the registry is addressed as `localhost:5000` by
-k3s and `172.17.0.1:5000` by Dagger (same container, different vantage point), and Dagger always
-speaks HTTPS with no `--insecure`, which is why `make dagger-engine` exists. Re-run it after a Dagger
-CLI upgrade.
+Verified end to end on the DGX Spark (arm64) on 2026-09-23. On a fresh host `make k3s-up` needs nothing
+installed by hand:
+
+* **The External Secrets Operator ships in the chart** for a local estate (`externalSecrets.operator` on
+  in `values-local.yaml`; off by default and in `values-prod.yaml`, where the cluster's own operator
+  serves). Its CRDs are vendored in `chart/crds-bootstrap/` and applied by `make k3s-crds`.
+* **The release lives in namespace `rask`** (`NAMESPACE ?= rask` in the Makefile). In k9s: `:ns rask`.
+* **Images match what the build made**: one `K3S_TAG` for build, import and install, and
+  `chart/values-live-pins.yaml` is applied only to the cluster it was captured on (it records the
+  `kube-system` UID).
+* **A local admin exists**: sign in as `alice@example.com` / `password`; `values-local.yaml` makes that
+  dex user the bootstrap admin.
+* **Starting over is `make k3s-purge && make k3s-up`**: the purge deletes every volume in `rask` (the
+  Dapr scheduler's included), pre-delete hooks release the Kueue queues and the ExternalSecrets while
+  their controllers still run, and a pre-install hook sweeps any bootstrap Job an earlier install left
+  behind, so the next install runs its own.
+
+`make dev-registry` is only needed to PUSH images to a registry instead of side-loading them. When you
+use it, the registry is addressed as `localhost:5000` by k3s and `172.17.0.1:5000` by Dagger (same
+container, different vantage point), and Dagger always speaks HTTPS with no `--insecure`, which is why
+`make dagger-engine` writes the engine's own config.
 
 The estate's data does not travel either — the Lance datasets, the FGA store and the lineage graph are
 all in-cluster. A new estate starts empty, which is fine: it is all test data.
