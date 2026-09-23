@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**202 open items**, of which **99 are blocked on a decision** and **103 can be picked up today**.
+**202 open items**, of which **100 are blocked on a decision** and **102 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 35 | 4 | 7 |
+| **PHASE 1 · LAKEHOUSE** | 35 | 3 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -1375,38 +1375,52 @@ measured (~10-14 MiB per commit pas
   fail-safe) · [[LH-188]] for the bounds this volume sizes, [[LH-190]] for the recovery it lengthens
 
 
-**LH-194 · A service-credentialed `register` creates an UNGOVERNED table, silently — and the catalog's own comment says no door can repair it**
-`catalog, medallion` · **HIGH**
-- **FOUND BY A MUST-FAIL PROBE 2026-09-23, and reproduced deterministically in one call.** Driving
-  `POST /produce` with a fresh table id registered `bronze$lh164probe` and left it carrying **exactly
-  one tuple — `namespace:bronze -> parent`, and no owner**. `can_deregister: owner` therefore denied
-  every principal including the producer that had just created it, and the unwind came back **403
-  `can_deregister required on table:bronze$lh164probe`**.
-- *The cause is a documented no-op:* `fga_deps.py:1186` reads
-  `if not (settings.fga_enabled and token is not None and client is not None): return`, described as
-  "No-op when FGA is off, **the request is unauthenticated**, or the client is unwired". A service
-  credential resolves no `IDToken`, so the seed returns success having written nothing — and
-  `seed_ownership_or_compensate` only compensates on a FAILURE, which a silent no-op is not.
-- *Confirmed by repair rather than by reading:* writing `user:service-medallion-producer -> owner`
-  directly to the store and re-driving the same probe changed the answer from "could not be unwound
-  (403)" to the clean `bronze write failed: <IO error>`, and the record was removed. The missing owner
-  tuple is the whole cause.
-- **THE ESTATE ALREADY KNOWS, AND THE COMMENT IS EXACT.** `tables.py:776-781`: *"A table registered
-  whose seed never ran carries NO tuples at all, and every `table` relation resolves through a direct
-  tuple or `X from parent` — so it denies every principal, including the identity that registered it,
-  and no door can repair it because re-registering is exactly what lands here. Measured 2026-09-15:
-  five of the estate's own tiers in that state."* That measurement is eight days old and the door that
-  produces the state is unchanged.
-- *And the cascade head is in it:* `namespace:bronze` carries **no owner tuple at all**, so
-  `owner from parent` resolves to nothing for every table beneath it. `bronze$events` survives only
-  because it holds a direct `service-medallion-producer -> owner`.
-- *What is left:* decide which way it fails. Either the register REFUSES when it cannot seed ownership
-  (fail closed, and the caller is told), or a service credential resolves to a seedable subject so the
-  registrar owns what it registered. The silent third option — an ungoverned object nobody can remove
-  — is the one shipping today.
-- *Closes when:* A register that cannot seed ownership leaves no object behind, pinned by a test that
-  drives the door with a service credential and asserts the table is either governed or absent.
-- *Evidence:* `services/catalog/src/catalog/api/fga_deps.py:1186` · `services/catalog/src/catalog/api/v1/endpoints/tables.py:776-781,809` · live probe 2026-09-23 (403 unwind, then clean unwind after granting owner) · `namespace:bronze` owner tuples: none
+**LH-194 · A service cannot unwind its own failed registration, so a seed that fails leaves a record only a human can remove**
+`catalog, medallion` · **MED**
+- **blocked:** how a failed seed's registration is removed, given the 2026-09-10 ruling that a machine
+  does not own what it registers — and therefore cannot deregister it. Three shapes below, differing in
+  who holds the authority: the catalog compensating internally for the object it just created, a
+  maintenance repair pass over `absent_datasets`, or accepting the residue with a loud log line. The
+  unwind shipped in [[LH-164]] is the third today: it reports and cannot clean up.
+- **THIS ROW'S FIRST VERSION WAS WRONG AND IS REWRITTEN.** It claimed a service-credentialed
+  `register` creates an UNGOVERNED table. It does not. `fga_deps.py:1189` carries an owner ruling —
+  *"A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust)"* — and
+  `grant_owner=may_grant_owner and token.iss != SERVICE_DOOR_ISSUER` implements it deliberately, with
+  the guarantee stated beside it: *"THE TABLE IS NOT LEFT UNOWNED … the project's admin already owns
+  it transitively."*
+- *Measured, and the guarantee holds:* `warehouse:lance_catalog` carries
+  `owner: [alice, root_admin]`, and `namespace:bronze` carries `parent: warehouse:lance_catalog`. So
+  `table.owner … or owner from parent` resolves through the chain and the probe's table WAS owned —
+  by a human, which is the point of the ruling.
+- **THE REAL DEFECT IS THE ONE THE RULING IMPLIES AND NOTHING HANDLES.** If a machine may not own what
+  it registers, a machine may not `can_deregister` it either — so [[LH-164]]'s unwind, which the
+  producer runs after a failed seed, is **403 by policy on every real occurrence**. Driven live
+  2026-09-23: `403 can_deregister required on table:bronze$lh164probe`, and the record stayed until a
+  human-equivalent grant was written by hand.
+- *What the unwind still buys, and it is not nothing:* it reports the residue in the same breath as
+  the write failure (`"bronze write failed (…) and the catalog registration could not be unwound (…);
+  <table> now governs no bytes"`), and [[LH-192]]'s `absent_datasets` names it every tick. The operator
+  learns immediately instead of by archaeology. What it does not do is clean up.
+- **AND MY OWN "CONFIRMED BY REPAIR" STEP CONFIRMED THE WRONG THING.** Writing
+  `service-medallion-producer -> owner` by hand made the unwind succeed, which I read as proving the
+  seed had failed to run. It proves only that the producer lacked `owner` — which the ruling says it
+  must. A repair that grants the thing under test cannot distinguish "the grant was missing by
+  accident" from "the grant is withheld on purpose".
+- *What is left, and it is a ruling rather than code:* how should a failed seed's registration be
+  removed, given a machine may not deregister? Three shapes, and they differ in who holds the
+  authority: **(a)** the catalog compensates internally — it already does exactly this for its own
+  seed failure (`_undo_register` calls `native.call(ns, "deregister_table", …)` with no FGA check,
+  `tables.py:802-806`), so the door could expose a short-lived unwind the registrar may call for the
+  object it just created; **(b)** a repair pass owns it — `absent_datasets` already names them, and a
+  maintenance door reaps a record whose location holds no bytes; **(c)** accept the residue and let a
+  human clear it, which is today's behaviour plus a loud log line.
+- *Not (d):* register AFTER the seed. "Governance precedes the first row" is deliberate and is why the
+  head is registered at all — the tier was previously the one the catalog had never heard of.
+- *Closes when:* A failed seed leaves no catalog record, by whichever of (a)/(b)/(c) is ruled, pinned
+  by a test that drives the producer's real service identity rather than a granted stand-in.
+- *Evidence:* `services/catalog/src/catalog/api/fga_deps.py:1188-1213` (the ruling and its transitive
+  guarantee) · `services/catalog/src/catalog/api/v1/endpoints/tables.py:802-806` (`_undo_register`,
+  FGA-free) · live 2026-09-23: warehouse owners present, probe unwind 403, clean after a hand grant
 
 ## PHASE 1 · CROSS-CUTTING
 
