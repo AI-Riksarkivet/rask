@@ -318,10 +318,30 @@ of mine in this same session.**
 
 **LIN-004 · Every DDL change is emitted as a RunEvent, so half the Job nodes in the graph are jobs that never ran**
 `catalog, lineage` · **MED**
-- **THE BLOCKER IS ANSWERED — this row is workable today (2026-09-22 re-audit, adversarially confirmed).**
-WHAT IS LEFT: All of the engineering: a `DatasetEvent` emit path in `lineage_emit.py` for the 11 DDL
-operations, and the consumer side to receive it. Plus a disposition for the existing phantom Job nodes
-(migrate or age out) and the `/jobs` access-surface consequence.
+- **THE RECEIVING SIDE IS SHIPPED AND PROVEN LIVE (2026-09-23). WHAT IS LEFT IS THE PRODUCER AND THE
+  PHANTOMS ALREADY IN THE GRAPH.** Three commits: the `DatasetEvent` model and the authorization rule
+  for its author; the notifications plane; lineage's routing, graph write and feed row.
+- **OBSERVED ON THE DEPLOYED ESTATE**, driving a real `DatasetEvent` through the running lineage door
+  (`main-2dfa7523`): the door answers 200, the event lands in the feed at `seq=396195` with `job=None`
+  and a STORED event carrying no `eventType`, no `run` and no `job`; `/jobs` shows **zero**
+  `add_columns` jobs and `GET /runs/<derived id>` answers **404** — no Run node and no Job node was
+  minted. Three identical deliveries produce **one** feed row, which is the derived identity working:
+  both dedup indexes key on `run_id` and SQL NULL never equals NULL, so a run-less row would have been
+  appended three times. The authorization leg refuses for real — an earlier probe naming an ungoverned
+  output was denied `can_write_data required on outputs: silver`.
+- **IT WAS ALSO A NOTIFICATIONS CHANGE, AND NOTHING IN THIS ROW SAID SO.** `LineageRunEvent` requires
+  `runId` and `eventType` with `min_length=1` and `ingest.py` DROPS what will not validate, while a DDL
+  event today is terminal, authored and has an output. Measured against the live feed: **all four DDL
+  events project to a deliverable pointer**, three of them naming a real Dex sub. Shipping the producer
+  first would have silently stopped telling a person about their own table.
+- **TWO CORRECTIONS TO THIS ROW, from re-measuring it.** It says 11 DDL operations;
+  `_LIFECYCLE_BY_OPERATION` maps **13**. And its live figures (500 events, 168 DDL, 144 phantom Job
+  nodes against 146 real) no longer reproduce — the estate has been rebuilt and the whole durable feed
+  now holds 25 events, 4 of them DDL, against **4 DDL-named Job nodes** still in the graph. The defect
+  is structural in `build_write_event`, which is where it was re-confirmed; the population is too small
+  today to restate "half the Job nodes".
+- *What is left:* the catalog's emit (`build_write_event` routing its 13 DDL operations onto
+  `build_dataset_event`), and the disposition of the 4 phantom Job nodes already in the graph.
 - **blocked:** Owner call — the fix changes the graph's node population and the `/jobs` ACCESS surface, which is bigger than it looks. Either DDL moves to `DatasetEvent` (and the phantom Jobs stop being created, leaving the existing ones to migrate or age out), or emitting DDL as a run is recorded as deliberate with its reason.
 - *What is left:* The OpenLineage spec defines FOUR event types — `BaseEvent`, `RunEvent`, `DatasetEvent`, `JobEvent` (verified in `OpenLineage/OpenLineage/spec/OpenLineage.json`, 2026-09-19). rask emits only `RunEvent`, so `build_write_event` wraps a DDL change in a synthetic run: `eventType: COMPLETE` with a Run that never executed and a Job that never ran. `DatasetEvent` exists for exactly this — "a dataset change outside any job (e.g. a DDL schema change)". **MEASURED on the live feed over 500 events: 168 DDL events producing 144 Job nodes, against 146 from real runs — half the Job population represents no job.** It scales with the TABLE count rather than with work, because the job name is per-table-per-operation (`lance-catalog/add_columns.lh019before299c33ns$t1`). It is not only tidiness: the `/jobs` governance fold makes a Job's output set its access handle, so each phantom is an access-control object for an operation nobody performed.
 - *Closes when:* A DDL change emits `DatasetEvent` (or the RunEvent choice is recorded with its reason), and the phantom Job count stops growing with the table count.
