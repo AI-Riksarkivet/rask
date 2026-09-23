@@ -1367,6 +1367,30 @@ measured (~10-14 MiB per commit pas
   tick's injection and gets 120. Either the cadence lengthens, the planner stops re-planning datasets
   already at target, or `max_ack_pending` rises — and the third is the one that trades memory for
   throughput, so it cannot be chosen without [[LH-183]]'s per-unit figure.
+- **THE PLANNER HALF SHIPPED AND IS PROVEN LIVE 2026-09-23 — the tick reports a cadence skip.**
+  `plan_sweep` built a work item for every discovered dataset and let the cadence land in
+  `plan.skipped`, so the whole estate was enqueued regardless of any policy and the skip happened a
+  queue hop later. A policy skip is now DECIDED at the planner and its reason travels into `decided`
+  beside the trash exclusions, which is what `skipped_by` is built from.
+- *Proven with a value that MUST produce a skip* — `compact_enabled: false` on one table, then the
+  next tick, read off the deployed planner (`main-7ddfc4e1`):
+
+  ```
+  before   planned=570 published=570 skipped=14 skipped_by={'trashed': 14}
+  after    planned=569 published=569 skipped=15 skipped_by={'trashed': 14, 'policy_disabled': 1}
+  ```
+
+  `published` fell 570 -> 569, so the dataset was WITHHELD rather than enqueued-and-skipped, and the
+  reason is reported rather than lost. The policy was deleted afterwards and the table is unpoliced
+  again.
+- *Withholding loses nothing, and the code already said so:* `_stamp_policy_state` returns early on
+  `plan.skipped is not None`, because re-stamping a paced dataset "would push the next maintenance out
+  by another full interval on every tick". A skipped unit's only effect at the worker was the round
+  trip.
+- **WHAT IS LEFT IS YOURS, AND IT IS THE NUMBERS.** All 27 policies carry
+  `compact_interval_hours: null`, so nothing is skipped for CADENCE today — only the opt-out above
+  exercises the path. The per-tier intervals, plus whether the ~543 datasets no policy covers get a
+  global default or their own records, are the ruling this row is really waiting on.
 - *Closes when:* A tick reports a non-zero cadence skip count, or this row records the ruling that
   re-planning the whole estate every 120s is deliberate.
 - *Evidence:* live planner 2026-09-22 `planned=570 skipped=7` on every tick · `policies=27` ·
