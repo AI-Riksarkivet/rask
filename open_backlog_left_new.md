@@ -1800,6 +1800,18 @@ measured (~10-14 MiB per commit pas
 
 **LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
 `medallion, tests` · **MED**
+- **AND THE SIBLING BRANCH WAS DEAD TOO — measured, not guessed, and now fixed.** I had flagged
+  `:539`'s `refused` as *possibly* unreachable; it provably was. It read
+  `"lineage-emit-failed" in log and "status=403" in log`, and **nothing in the estate produces either
+  string**: `lineage_kit/emitter.py:96` logs `lineage_emit_failed` with UNDERSCORES and no `status=`
+  field, and on this lane it never logs at all because the 403 RAISES out of `emit`. So the most
+  useful message in the file — the one naming the seed script and the missing link — could not fire.
+  A gate that cannot fail, guarding the exact confusion it was written for.
+  **NOT MUTATION-PROVEN, and the reason matters:** its test
+  (`test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service`) SKIPS without
+  `LANCE_E2E_ADMIN_TOKEN` — `/events` answers 401 — so deleting the tuple produced `1 skipped`, not a
+  refusal. The string mismatch is objective (read both sides); the firing is not verified here. **A
+  dead branch inside a test that skips is invisible twice over**, which is how it survived.
 - **THE RECURRENCE GUARD IS SHIPPED (2026-09-23) and it is mutation-proven against the live estate.**
   When this lane loses its grant the test used to fail `assert 'Traceback' not in log` — "the baked
   entrypoint raised" plus 800 truncated characters — which is what sent me through four wrong theories

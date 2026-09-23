@@ -536,7 +536,15 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
         # emitting NOTHING is a defect in the lane. The lane emitting and being REFUSED is a missing
         # deployment grant — the FGA prerequisite every new lineage producer has to ship. Only the
         # job's own stderr can tell them apart, which is why `emit()` prints the HTTP status.
-        refused = "lineage-emit-failed" in driven["first_log"] and "status=403" in driven["first_log"]
+        #
+        # THIS CONDITION COULD NOT FIRE, measured 2026-09-23. It read
+        # `"lineage-emit-failed" in log and "status=403" in log` — two strings nothing produces. The
+        # emitter logs `lineage_emit_failed` with UNDERSCORES (`lineage_kit/emitter.py:96`) and no
+        # `status=` field, and on this lane it does not log at all: the 403 RAISES out of `emit`, so the
+        # log carries a requests traceback and the endpoint. `refused` was therefore always False and
+        # the most useful message in this file was unreachable — a gate that cannot fail, guarding the
+        # exact confusion it was written for.
+        refused = "403" in driven["first_log"] and "/api/v1/lineage" in driven["first_log"]
         assert not refused, (
             "the lane EMITTED and the ingest REFUSED it (403 can_write_data on the output).\n\n"
             "This is a missing GRANT, not a broken lane, and the estate already ships the fix:\n"
