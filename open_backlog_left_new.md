@@ -188,13 +188,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**198 open items**, of which **97 are blocked on a decision** and **101 can be picked up today**.
+**196 open items**, of which **97 are blocked on a decision** and **99 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 31 | 2 | 5 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
+| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -241,6 +241,18 @@ the request's metadata KEYS, and `replace: true` un-labels a column without nami
 finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
+
+**[[XC-016]] AND [[XC-057]] CLOSED 2026-09-23 — their bars were met by the day's commits and the rows
+had not caught up.** XC-016 asked that the chart carry measured `datastore.maxOpenConns`/`maxIdleConns`
+with the measurement cited: `chart/values.yaml` now does (30/10, with the 12-sample reading beside
+them). XC-057 asked that a mutating target refuse a cluster whose identity it cannot confirm, proven by
+a test: `tests/unit/test_a_mutating_script_declares_the_cluster_it_mutates.py` exists, passes, and was
+mutation-checked the same day.
+**[[XC-071]] STAYS OPEN, and the distinction is the point.** Its bar is "no test in the OFFLINE SUITE
+constructs a real `ActorProxyFactory`, proven by a gate that fails when one does". What shipped today
+is the annotator package's own refusal fixture, and `test_the_suite_never_waits_a_minute_for_a_sidecar`
+bounds the handshake TIMEOUT — which the row itself already calls defence in depth rather than the
+root fix. The suite-wide gate is still missing, so the row is not closed on a near-miss.
 
 **CLAUSE 1 OF THIS ROW'S BAR IS MET, AND CLAUSE 2 AS WRITTEN CANNOT BE MET WITHOUT DESTROYING
 PROVENANCE — measured 2026-09-23.** The bar is *"Each tier has exactly one home, and the sweep reports
@@ -1765,13 +1777,6 @@ path before migrating its ref.
 - *Closes when:* Either `_control/bootstrap.json` exists after a fresh install with 409-on-exists treated as success, or the row is closed on the shipped content gate.
 - *Evidence:* `packages/service-kit/src/service_kit/governed/fga.py:508, :574-575` · `chart/templates/bootstrap-admin.yaml:21, :251` · ``grep -n 'bootstrap.json|create_json' chart/templates/bootstrap-admin.yaml` → none`
 
-**XC-016 · OpenFGA's pgxpool defaults (MaxOpenConns 30 / MaxIdleConns 10) are untuned against the shared AGE Postgres at `max_connections=100`**
-`openfga, chart, lineage` · **MED**
-- **MEASURED ON THE DEPLOYED ESTATE 2026-09-21, and the default is BINDING rather than theoretical.** `SHOW max_connections` on `rask-age-0` is **100**; `pg_stat_activity` holds **47** connections, of which **openfga=30**, `lineage=6` and `daprstate=6`. Thirty is exactly pgxpool's default `MaxOpenConns`, so OpenFGA is sitting AT its ceiling — it holds **64% of every in-use connection and 30% of the whole budget**, while the lineage graph this Postgres primarily exists for uses six. The risk this row describes is therefore live: the authz store is the largest consumer by a factor of five, and every governed read and write blocks on a Check against it.
-- *What is left:* No `datastore.maxOpenConns` / `maxIdleConns` is set anywhere in `chart/` and OpenFGA v1.18.3 (`chart/values.yaml:2683`) runs pgxpool defaults against the Postgres that also carries AGE, `lance-statestore` and the backup Job; `values.yaml:2695` explicitly defers `datastore_throttling` to a measurement. Measure observed connections per consumer on the AGE Postgres (`pg_stat_activity`, or OpenFGA's own metrics once XC-047 exports them — the estate scrapes no OpenFGA endpoint today), then set both pool values and decide `datastore_throttling` from the numbers rather than blind.
-- *Closes when:* The chart carries measured `datastore.maxOpenConns` / `maxIdleConns` values with the measurement cited beside them.
-- *Evidence:* ``grep -n 'maxOpenConns\|maxIdleConns' chart/values.yaml chart/templates/*.yaml` → 0 hits` · `chart/values.yaml:2683 (image.tag v1.18.3), 2695 (datastore_throttling deferred)` · ``grep -in openfga chart/templates/otel-collector.yaml` → no scrape target`
-
 **XC-017 · The zero-trust posture is asserted per control, not re-derived as one checked list of the 19 §F controls**
 `catalog, lineage, maintenance, medallion` · **MED** · PARTIAL
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
@@ -1965,12 +1970,6 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 - *What is left:* `make helm-history` and `make helm-rollback` do not exist, so the recovery instruction routes around the project's own helm seam and its values handling — the same class of mistake that lands a fleet on chart-default images. Add both targets through `scripts/helm.sh`.
 - *Closes when:* Both targets exist, go through the seam, and the runbook names them instead of bare `helm`.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
-
-**XC-057 · Destructive cluster targets guard on "a cluster answered", not on cluster IDENTITY — `make e2e-ci` can helm-upgrade the live k3s release**
-`scripts, ci, chart` · **HIGH**
-- *What is left:* A target that mutates a cluster checks reachability rather than which cluster it reached, so a stale or wrong kubeconfig is indistinguishable from the intended one. The estate already carries two kubeconfigs, one of them a dead kind cluster that still answers. Guard on a cluster-identity assertion (context name plus a marker object the release owns) before any mutating target runs.
-- *Closes when:* A mutating target refuses a cluster whose identity it cannot confirm, proven by a test that points it at the wrong context.
-- *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20 — upstream guards identity before mutation
 
 **XC-058 · The audit tier is keyed on the log MESSAGE, and nothing stops a message being an f-string**
 `service-kit, catalog, lineage` · **HIGH**
