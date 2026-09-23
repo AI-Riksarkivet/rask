@@ -41,6 +41,36 @@ log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 
+def _unwind_registration(settings: MedallionSettings, *, table_id: str, token: str, cause: BaseException) -> str:
+    """Detach the registration a failed seed left behind, and say which of the two failures happened.
+
+    BEST-EFFORT AND LOUD. If the deregister fails too the record is genuinely orphaned, so the caller
+    is told that rather than only the write error — and the drift report keeps naming it, which is the
+    safety net rather than the fix. Swallowing this would hide exactly the state the pair exists to
+    prevent.
+    """
+    if not (settings.catalog_url and settings.compute_enabled):
+        return f"bronze write failed: {cause}"
+    try:
+        catalog_register.deregister_dataset(
+            catalog_url=settings.catalog_url,
+            table_id=table_id,
+            delimiter=settings.delimiter,
+            token=settings.catalog_token,
+            app_token=outbound_app_token(settings),
+            service_identity=settings.catalog_service_identity,
+            dedicated_token=dedicated_token_for(settings),
+        )
+    except Exception as unwind:  # noqa: BLE001 — the write error is the cause; this names the residue
+        log.error(
+            "medallion_produce_registration_orphaned",
+            extra={"token": token, "dataset": table_id, "error": str(cause), "unwind_error": str(unwind)},
+        )
+        return f"bronze write failed ({cause}) and the catalog registration could not be unwound ({unwind}); {table_id} now governs no bytes"
+    log.warning("medallion_produce_seed_failed", extra={"token": token, "dataset": table_id, "error": str(cause)})
+    return f"bronze write failed: {cause}"
+
+
 async def produce(
     dapr: DaprClient,
     settings: MedallionSettings,
@@ -192,7 +222,16 @@ async def produce(
             seed_kwargs: dict[str, object] = {"dataset_id": bronze_dataset_id}
             if rows is not None:
                 seed_kwargs["rows"] = rows
-            result = await run_in_threadpool(partial(seed_bronze, bronze_uri, settings.storage_options(), **seed_kwargs))
+            # GUARDED, AND THE UNWIND IS THE POINT. The register above runs BEFORE this write so the
+            # tier is governed from its first row; unguarded, a seed that raises left the record behind
+            # governing a location holding nothing — measured live 2026-09-23 as `bronze$events` at
+            # `s3://lance-catalog/medallion/bronze`, reported by the drift report's `absent_datasets`.
+            try:
+                result = await run_in_threadpool(partial(seed_bronze, bronze_uri, settings.storage_options(), **seed_kwargs))
+            except Exception as exc:  # noqa: BLE001 — ANY write failure must take its registration with it
+                span.set_status(Status(StatusCode.ERROR, "seed_failed"))
+                detail = _unwind_registration(settings, table_id=bronze_dataset_id, token=token, cause=exc)
+                return {"status": "seed_failed", "token": token, "detail": detail}
             span.set_attribute("lance.write.version", result.version)
             span.set_attribute("lance.write.row_count", result.row_count)
             span.set_attribute("lance.write.size_bytes", result.size_bytes)

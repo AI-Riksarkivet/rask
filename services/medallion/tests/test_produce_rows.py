@@ -45,7 +45,12 @@ def test_the_row_count_is_optional_and_defaults_to_the_seeders_own() -> None:
 
 
 class _Stop(Exception):
-    """Ends `produce` at the seeder, so the assertion is about the CALL and not about lineage, Dapr or S3."""
+    """Ends `produce` at the seeder, so the assertion is about the CALL and not about lineage, Dapr or S3.
+
+    It no longer propagates: a seed failure unwinds its registration and answers `seed_failed`, so the
+    door reports rather than raises. The property these tests assert — what `seed_bronze` RECEIVES — is
+    untouched by that, and the status is checked below so the stop is still proven to have happened.
+    """
 
 
 def _capturing_seeder(seen: dict[str, object]):
@@ -67,8 +72,8 @@ async def test_produce_forwards_the_row_count_to_the_seeder(monkeypatch: pytest.
     seen: dict[str, object] = {}
     monkeypatch.setattr(produce_module, "seed_bronze", _capturing_seeder(seen))
     settings = MedallionSettings.model_validate({"MEDALLION_COMPUTE_ENABLED": "true", "MEDALLION_BRONZE_URI": "memory://bronze"})
-    with pytest.raises(_Stop):
-        await produce_module.produce(cast("Any", None), settings, token="idem-test", rows=137)
+    result = await produce_module.produce(cast("Any", None), settings, token="idem-test", rows=137)
+    assert result.get("status") == "seed_failed", result
     assert seen.get("rows") == 137, f"seed_bronze saw {seen!r}"
 
 
@@ -78,6 +83,6 @@ async def test_absent_rows_lets_the_seeder_choose(monkeypatch: pytest.MonkeyPatc
     seen: dict[str, object] = {}
     monkeypatch.setattr(produce_module, "seed_bronze", _capturing_seeder(seen))
     settings = MedallionSettings.model_validate({"MEDALLION_COMPUTE_ENABLED": "true", "MEDALLION_BRONZE_URI": "memory://bronze"})
-    with pytest.raises(_Stop):
-        await produce_module.produce(cast("Any", None), settings, token="idem-test")
+    result = await produce_module.produce(cast("Any", None), settings, token="idem-test")
+    assert result.get("status") == "seed_failed", result
     assert "rows" not in seen, f"produce restated a default the seeder owns: {seen!r}"

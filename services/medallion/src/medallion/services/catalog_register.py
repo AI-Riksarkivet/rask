@@ -495,6 +495,53 @@ def register_written_dataset(
     log.info("written_dataset_registered", extra={"table_id": table_id, "location": location})
 
 
+def deregister_dataset(
+    *,
+    catalog_url: str,
+    table_id: str,
+    delimiter: str = CATALOG_DELIMITER,
+    token: str | None = None,
+    app_token: str | None = None,
+    service_identity: str | None = None,
+    dedicated_token: Callable[[str], str | None] | None = None,
+    timeout_seconds: float = 30.0,
+    client: httpx.Client | None = None,
+) -> None:
+    """Detach ``table_id`` from the catalog, leaving whatever bytes exist where they are.
+
+    THE UNWIND FOR A REGISTRATION WHOSE WRITE NEVER LANDED. `produce` registers the cascade head
+    before seeding it — "governance precedes the first row", because the head was the one tier the
+    catalog had never heard of — and an unguarded seed failure used to leave the record behind
+    governing a location that holds nothing. Measured on the live estate 2026-09-23: `bronze$events`
+    registered at `s3://lance-catalog/medallion/bronze`, reported by the drift report's
+    `absent_datasets`, with no bytes at that path.
+
+    DEREGISTER AND NOT DROP: the two doors answer different questions. A drop destroys, and destroying
+    is exactly wrong here — the seed may have written some bytes before it raised, and this call must
+    never be the thing that removes them. Deregister detaches the record and is the reverse of the
+    `register` that created it.
+
+    A 404 IS SUCCESS. The unwind runs on a failure path, so it must converge whether or not the
+    registration ever landed: the state it is asked to produce is "no record", and a table the catalog
+    does not know is already in that state.
+    """
+    if not catalog_url:
+        raise RegisterError("MEDALLION_CATALOG_URL is not set — this writer cannot deregister the dataset it registered")
+    segments = table_id.split(delimiter)
+    headers = credential(token=token, app_token=app_token, service_identity=service_identity, dedicated_token=dedicated_token)
+    with _catalog_client(catalog_url, timeout_seconds, client) as client:
+        try:
+            response = client.post(f"/v1/table/{table_id}/deregister", json={"id": segments}, headers=headers)
+        except httpx.HTTPError as exc:
+            raise RegisterError(f"catalog unreachable deregistering {table_id!r}: {exc}") from exc
+        if response.status_code == 404:
+            log.info("written_dataset_already_absent", extra={"table_id": table_id})
+            return
+        if response.status_code >= 400:
+            raise RegisterError(f"catalog refused to deregister {table_id!r}: HTTP {response.status_code} — {response.text[:300]}")
+    log.info("written_dataset_deregistered", extra={"table_id": table_id})
+
+
 def _require_same_location(client: httpx.Client, table_id: str, location: str, catalog_root: str, headers: dict[str, str]) -> None:
     """Refuse a 409 whose registration points somewhere other than where this writer writes.
 
