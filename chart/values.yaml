@@ -3153,6 +3153,9 @@ externalSecrets:
   # `serviceAccount`/`namespace` pair above. Its CRDs are vendored in crds-bootstrap/ (`make k3s-crds`).
   operator:
     enabled: false
+    # The pre-delete hook that deletes this release's ExternalSecrets while the in-release operator can
+    # still release their finalizers (templates/external-secrets.yaml).
+    kubectlImage: "registry.k8s.io/kubectl:v1.31.3"
 
 # CloudNativePG OPERATOR toggle (Chart.yaml condition cnpg.enabled). The rask app-DB
 # Cluster + its Alembic migration Job died at P7a (the batches table is gone — Lance +

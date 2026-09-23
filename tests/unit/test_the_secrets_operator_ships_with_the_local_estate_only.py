@@ -15,6 +15,7 @@ applies any, so CRs of a kind created in the same release could not be served.
 
 from __future__ import annotations
 
+import itertools
 import re
 
 import yaml
@@ -101,6 +102,88 @@ def test_production_uses_its_own_operator() -> None:
 
     assert any(d.get("kind") == "ExternalSecret" for d in docs)
     assert not _operator_deployments(docs), "the production overlay ships the External Secrets Operator — production must use the cluster's own"
+
+
+def _pre_delete(doc: dict) -> bool:
+    return "pre-delete" in (doc.get("metadata", {}).get("annotations") or {}).get("helm.sh/hook", "")
+
+
+def _weight(doc: dict) -> int:
+    return int((doc["metadata"].get("annotations") or {}).get("helm.sh/hook-weight", "0"))
+
+
+def _secret_cleanup_deletes(docs: tuple[dict, ...]) -> list[tuple[dict, list[str]]]:
+    """(job, args) of every pre-delete container that deletes ExternalSecrets."""
+    found = []
+    for job in (d for d in docs if d.get("kind") == "Job" and _pre_delete(d)):
+        spec = job["spec"]["template"]["spec"]
+        for container in [*(spec.get("initContainers") or []), *spec["containers"]]:
+            args = [str(a) for a in container.get("args") or []]
+            if args[:1] == ["delete"] and any(a.split("/")[0].split(".")[0] == "externalsecrets" for a in args):
+                found.append((job, args))
+    return found
+
+
+def _deletes_it(args: list[str], secret: dict, namespace: str) -> bool:
+    pairs = list(itertools.pairwise(args))
+    if not (("-n", namespace) in pairs or ("--namespace", namespace) in pairs):
+        return False
+    if any(a.split("/", 1)[0].split(".")[0] == "externalsecrets" and a.endswith("/" + secret["metadata"]["name"]) for a in args):
+        return True
+    labels = secret["metadata"].get("labels") or {}
+    selectors = [v for k, v in pairs if k in ("-l", "--selector")] + [a.split("=", 1)[1] for a in args if a.startswith("--selector=")]
+    return any(all(labels.get(k) == v for k, _, v in (term.partition("=") for term in s.split(","))) for s in selectors)
+
+
+def test_uninstall_releases_every_ExternalSecret_while_the_operator_still_runs() -> None:
+    """The operator puts `externalsecrets.external-secrets.io/externalsecret-cleanup` on every
+    ExternalSecret (probed live 2026-09-23: present within a second of creation), and `helm uninstall`
+    deletes them in the same pass as the operator that must remove it. Measured 2026-09-23, `make
+    k3s-purge` then `make k3s-up`: the new release's manifest listed three ExternalSecrets and the
+    cluster held none, nor the `rask-infra-credentials` Secret they own; 22 workloads could not configure
+    their containers and the install was recorded failed with `context deadline exceeded` after 20
+    minutes. An install creates every object in its manifest, so these were adopted while Terminating
+    and finalized by the new operator, as the Kueue queues were. Pre-delete runs before Helm removes
+    anything, while the operator is still there."""
+    docs = chart_render.render(*LOCAL, "--namespace", "probe-ns")
+    secrets = [d for d in docs if d.get("kind") == "ExternalSecret"]
+    deletes = [args for _, args in _secret_cleanup_deletes(docs)]
+
+    assert secrets, "the local estate renders no ExternalSecret — this gate is looking at the wrong render"
+    missing = [s["metadata"]["name"] for s in secrets if not any(_deletes_it(args, s, "probe-ns") for args in deletes)]
+    assert not missing, f"no pre-delete hook deletes {missing} while the in-release operator can still release its finalizer"
+    assert not [args for args in deletes if "--wait=false" in args], f"a cleanup delete does not wait for the operator: {deletes}"
+
+
+def test_the_secret_cleanup_may_delete_what_it_selects() -> None:
+    docs = chart_render.render(*LOCAL, "--namespace", "probe-ns")
+    jobs = {id(job): job for job, _ in _secret_cleanup_deletes(docs)}
+    assert jobs, "no pre-delete hook deletes ExternalSecrets"
+
+    for job in jobs.values():
+        account = job["spec"]["template"]["spec"]["serviceAccountName"]
+
+        def earlier(doc: dict, job: dict = job) -> bool:
+            return _pre_delete(doc) and _weight(doc) < _weight(job)
+
+        assert any(d.get("kind") == "ServiceAccount" and d["metadata"]["name"] == account and earlier(d) for d in docs), (
+            f"the cleanup runs as {account!r}, which no earlier pre-delete hook creates"
+        )
+        roles = {
+            (d["roleRef"]["kind"], d["roleRef"]["name"])
+            for d in docs
+            if d.get("kind") in ("RoleBinding", "ClusterRoleBinding")
+            and earlier(d)
+            and any(s.get("name") == account and s.get("namespace") == "probe-ns" for s in d.get("subjects") or [])
+        }
+        rules = [r for d in docs if (d.get("kind"), d["metadata"].get("name")) in roles and earlier(d) for r in d.get("rules") or []]
+        verbs = {
+            v
+            for r in rules
+            if "external-secrets.io" in (r.get("apiGroups") or []) and "externalsecrets" in (r.get("resources") or [])
+            for v in r.get("verbs") or []
+        }
+        assert {"delete", "list", "get", "watch"} <= verbs, f"the cleanup may not select, delete and wait on externalsecrets; granted {sorted(verbs)}"
 
 
 def test_under_default_deny_the_in_release_operator_may_still_reach_openbao() -> None:
