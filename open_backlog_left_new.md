@@ -783,10 +783,15 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
   report says `unregistered_datasets: 0` over an estate holding 16 of them. So "zero UNGOVERNED
   medallion datasets" is unverifiable rather than met, and a genuinely unknown dataset in that shape
   would be equally invisible.
-- *What is left, and it is engineering rather than a ruling:* teach the reconciler the registry root so
-  a platform-owned store is reported as DECLARED rather than silently skipped, and reap the 15
-  `e2etrain*` datasets as the test residue they are. The `churn` dataset is the janitor script's own
-  documented example (`scripts/model_artifact_janitor.py:24`) and is not residue.
+- **THE COVERAGE HALF SHIPPED AND IS OBSERVED LIVE 2026-09-23.** `unreadable_locations` is a coverage
+  field on the drift report (beside `excluded_datasets`, deliberately NOT `incomplete` — that gates the
+  #79 purge and no operator action clears 163 branch prefixes). Driven on the deployed planner, image
+  `main-05d76da1`: **`unreadable_locations: 163`**, of which **142 are Lance branch prefixes
+  (`tree/<b>/`)**, 8 `medallion`, 5 `silver`. **The model registry contributes 0** because
+  `MAINTENANCE_DECLARED_PLATFORM_ROOTS` names it — a value that MUST change the output, and did.
+  `unregistered_datasets` stayed 0 and `absent_datasets` 9, so nothing else moved.
+- *What is left:* reap the 15 `e2etrain*` datasets under the registry. `churn` is the janitor script's
+  own documented example (`scripts/model_artifact_janitor.py:24`) and is not residue.
 - *Closes when:* Each tier has exactly one home, and the sweep reports zero UNGOVERNED medallion datasets.
 - *Evidence:* `services/maintenance/src/maintenance/services/compaction_executor.py:107` · `services/maintenance/src/maintenance/services/reconcile.py:95,127,261` · `chart/templates/medallion.yaml:293,523` · ``grep -i 'two homes\|bind86' docs/DECISIONS.md` → no ruling recorded`
 
