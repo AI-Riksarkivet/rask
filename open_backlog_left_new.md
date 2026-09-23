@@ -185,16 +185,15 @@ says owns lineage, and it is the plane rask has not wired. That was [[LIN-001]],
 with every clause of its own done; its remainder sits in [[CP-032]], where six of the nine runners still
 have no `uv.lock` and so cannot be built to emit anything.
 
-
 ## Counted
 
-**198 open items**, of which **89 are blocked on a decision** and **109 can be picked up today**.
+**196 open items**, of which **89 are blocked on a decision** and **107 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 31 | 10 | 5 |
-| **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 10 |
+| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -469,7 +468,6 @@ after it (0 of 5 derivable; the old credential 401s at lineage while the rotated
 executed from the Ray head that makes the real call).
 BLOCKER ANSWERED, workable today: [[CP-002]], [[CP-045]], [[CTL-004]], [[LH-082]], [[LH-092]], [[LH-160]], [[LIN-004]], [[LOW-028]], [[XC-002]], [[XC-003]], [[XC-004]], [[XC-014]], [[XC-046]], [[ZT-001]].
 
-
 ## PHASE 1 · LAKEHOUSE
 
 **CRITERION 5 (resilient) HELD THROUGH THREE DEPLOYS — measured 2026-09-22 after the day's converges**
@@ -513,7 +511,6 @@ of mine in this same session.**
 - **WHAT IS WORTH AUTOMATING is the cheap half, not the fan-out:** the done-marker scan above is nine
   lines of Python and found the one real case. Run it before proposing an audit, never instead of
   reading the rows it flags.
-
 
 **LH-177 · The catalog vends its own in-cluster address, so an off-cluster client gets a valid credential for a host it cannot resolve**
 `catalog` · **MED**
@@ -1468,7 +1465,6 @@ measured (~10-14 MiB per commit pas
 - *Closes when:* **ONLY THE SOAK REMAINS — a day of clock, not a decision and not an unknown.** Both halves of the original bar are met: what bounds the worker is named and measured (inline execution in a coordination-sized pod; ~1.7x `maxSourceBytes` transient, ~12 MiB retained per pass), and the remedy is proven where it runs. What has not happened is a full day of sweep AND reconcile ticks inside the limit, and it cannot be compressed. The pods restarted today for this very probe, so the clock starts from 2026-09-23.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
-
 **LH-194 · A service cannot unwind its own failed registration, so a seed that fails leaves a record only a human can remove**
 `catalog, medallion` · **MED**
 - **blocked:** how a failed seed's registration is removed, given the 2026-09-10 ruling that a machine
@@ -1737,7 +1733,6 @@ Plus the one tooling pin the row missed, below. Verification needs hardware nobo
 - *Evidence:* `apache/age:release_PG16_1.5.0` config blob -> `linux/amd64` · `.dagger/charts.go:37,66`
   · `Makefile:864,874` (arch detection already present) · registry digest probes for python/bun/cuda
   · PyPI `pylance` 12.0.0 manylinux aarch64 wheel
-
 
 **XC-001 · Helm-written Secrets carry no content checksum and ESO-written Secrets have no watcher, so a rotation never reaches running pods**
 `chart, frontend-zones, lineage` · **HIGH**
@@ -2022,7 +2017,6 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 - *Closes when:* docs/DECISIONS.md and chart/values.yaml both state the topology.
 - *Evidence:* `grep -n -i greptime docs/DECISIONS.md — none of the 8 hits is a sharing ruling` · `grep -n -i 'per-workload|one shared' chart/values.yaml — no observability match`
 
-
 **XC-055 · The chart version is inert: every release revision reads `rask-0.3.0`, so no revision can be identified or rolled back by what it deployed**
 `chart, ci` · **MED**
 - *What is left:* 193 revisions of the release carry one chart version, so `helm history` cannot distinguish them and `helm rollback <rev>` is chosen by ordinal rather than by content. Upstream bumps `version` and `appVersion` automatically on every release. Pair with a `make helm-history` / `make helm-rollback` seam — [[XC-056]] — because the documented recovery path currently says "run bare helm".
@@ -2046,156 +2040,6 @@ chart/templates/otel-collector.yaml, job_name at :119 dapr-sidecars, :152 dapr-c
 - *What is left:* A `pyproject.toml` dependency change that never reached `uv.lock` passes CI, so the lock and the declaration disagree until something fails at build time in an unrelated change. The JS plane already gates this; mirror it with `uv lock --check` over the root and each runner lock.
 - *Closes when:* CI fails on a dependency edit with no corresponding lock change, mutation-checked by making one.
 - *Evidence:* the `antoniocali/polaris-k8s` audit, 2026-09-20
-
-**XC-073 · The authorization model ships inside the catalog image, so a pinned tag silently deploys an OLD model and every upgrade fails its post-upgrade hooks**
-`chart, service-kit, openfga` · **HIGH**
-- **MEASURED LIVE 2026-09-23.** `rask-bootstrap-admin` is in **CrashLoopBackOff, 13 restarts**, failing on
-  `tuple write failed: HTTP 400 {"code":"validation_error","message":"Invalid tuple
-  'estate:rask#event_stager@user:service-ingest'. Reason: type 'estate' not found"}`. `helm history rask`
-  shows revision 234 `failed — post-upgrade hooks failed`.
-- **THE CAUSE IS A DATE, and it is checkable in one command.** `type estate` entered
-  `packages/service-kit/src/service_kit/governed/auth/model.fga:102` on **2026-09-22** (`752e2811`,
-  [[LH-055]]). The deployed and pinned catalog image is `main-c1b4d569`, built from a **2026-09-21**
-  commit: `git merge-base --is-ancestor 752e2811 c1b4d569` answers **no**. `openfga-model.yaml:18,78`
-  runs `python -m service_kit.governed.auth.write_model` and reads the model **from the catalog image**
-  — a deliberate choice ("so the hook reads the same bytes the catalog itself enforces"), which also
-  means the model deployed is whatever the pinned TAG carries.
-- **THE FAILURE IS NEARLY SILENT, which is why it has run for a day.** The model hook SUCCEEDS: it
-  writes the old model without complaint. Nothing compares what it wrote against the repo. The only
-  symptom is a DIFFERENT hook, `bootstrap-admin`, failing on the first tuple naming a type the store
-  has never heard of — and the upgrade reports "post-upgrade hooks failed" with no mention of a model.
-- **WHAT IS ACTUALLY BROKEN, not just noisy:** the LH-055 estate-root model is ABSENT from the store, so
-  `service-ingest` holds no `event_stager` on `estate:rask` and every `can_*` that resolves through the
-  estate root is being answered against a model that lacks it. That is lakehouse condition 2 — the
-  catalog correct for auth/authz/governance — failing live.
-- **IT ALSO CORRUPTS OTHER READINGS.** Two converges earlier on 2026-09-23 reported `failed` and were
-  attributed to the 20-minute wait timing out; revision 234 shows the post-upgrade hook is the real
-  cause. A pre-existing hook failure makes every later deploy's verdict ambiguous.
-- *What is left:* Rebuild and push the catalog image from a commit that carries the current model, refresh
-  `chart/values-live-pins.yaml`, converge, and confirm `bootstrap-admin` reaches Complete. Then the
-  durable half: nothing detects the pairing, so add a gate that refuses a render whose pinned catalog
-  image predates the current `model.fga` — or have `write_model` compare what it is about to write
-  against the repo's `model.json` and FAIL rather than quietly writing an older model.
-- *Closes when:* `bootstrap-admin` completes, `estate:rask#event_stager@user:service-ingest` exists, and a
-  gate fails when the pinned image and `model.fga` disagree — mutation-checked by pinning an older tag.
-- *Evidence:* live `kubectl logs rask-bootstrap-admin-w8c7v` · `helm history rask` rev 234 ·
-  `chart/templates/openfga-model.yaml:18,78` · `git merge-base --is-ancestor 752e2811 c1b4d569` → false
-
-**XC-072 · Every privileged service credential is readable by every other scoped service — Dapr secret scoping is absent**
-`chart, service-kit` · **HIGH**
-- **MEASURED LIVE 2026-09-23, from two pods in both directions.** `GET /v1.0/secrets/lance-secrets/lance`
-  against a pod's OWN sidecar needs no API token and returns the **whole 21-key bundle**. From
-  `rask-medallion-producer`: 8 `service-token-*` credentials, only one of which is its own
-  (`service-ingest`, `service-maintenance`, `service-medallion-producer`, `service-trainer`,
-  `service-web`, `service-bronze-to-silver`, `service-media-to-silver`, `service-silver-to-gold`).
-  From `rask-lineage`: the same 8. Key NAMES were read; values were not printed.
-- **THIS IS WHY [[ZT-001]]'s CLOSE IS NOT THE WHOLE OUTCOME.** ZT-001 made each dedicated token
-  INDEPENDENT of `dapr.appToken` (`lance.dedicatedServiceToken` → `randAlphaNum 40`), which is real and
-  shipped. But a credential only its owner can use needs two properties, and independence is one:
-  nothing stops a scoped app-id reading a neighbour's. The zero-trust bar is an OUTCOME — "a record
-  NAMES a secret; it never carries one" is satisfied, while "this credential identifies THIS producer"
-  is not.
-- **THE CONTROL IS PER-APP-ID, AND THE CHART HAS NONE.** Dapr scopes secrets in the **Configuration**
-  CRD (`spec.secrets.scopes[].storeName` + `defaultAccess: deny` + `allowedSecrets`), not on the
-  Component — `chart/templates/dapr-component.yaml:388` carries only `scopes:`, which decides who may
-  USE the store, never which keys they may read. `grep -rn 'allowedSecrets|deniedSecrets|defaultAccess'
-  chart/templates/` is **empty**, and the only `kind: Configuration` in the chart is observability's
-  tracing config.
-- **IT BLOCKS [[LH-064]].** A producer signature needs a key the other producers cannot read; until
-  then an HMAC refuses an unauthenticated forger and none of the eight pods.
-- **A `Configuration` ALONE DOES NOTHING HERE, and that is the trap worth writing down.** Dapr scopes
-  by SECRET NAME — the `{key}` in `GET /v1.0/secrets/{store}/{key}` — not by field inside one. Every
-  `service-token-*` is a FIELD of the single secret `lance`: `_secret_bundle(store, key)` fetches one
-  name and returns its whole field map (`dapr_auth.py:157,416-417`), and the seed writes them with one
-  `bao kv put secret/lance …` (`openbao.yaml:183,249`). Measured from the pod: `…/secrets/lance-secrets/lance`
-  → **200 with 21 fields**, `…/secrets/lance-secrets/service-token-service-ingest` → **HTTP 500**, i.e.
-  not an addressable secret. So `allowedSecrets: ["lance"]` grants the entire bundle and scoping cannot
-  reach inside it.
-- **THE ESTATE ALREADY HAS THE PATTERN, APPLIED ONCE.** `openbao.yaml:296` seeds `secret/viewer-s3` as
-  its OWN secret, and its comment states this row's rationale verbatim: "as their OWN secret rather than
-  two more keys on the `lance` bundle … so the store registry can point a store at a credential
-  **without every reader of the shared bundle gaining it**". The service tokens never got that
-  treatment.
-- *What is left:* Two halves, in order, because the second is inert without the first.
-  (1) SPLIT: seed each identity's credential as its own secret (`secret/service-token-<identity>`,
-  following the `viewer-s3` precedent) and move `dedicated_token_from_store` onto it — it is the
-  estate's ONE resolver (`dapr_auth.py:405-419`), so this is one read path, but it is the privileged
-  door for both catalog and lineage and a mistake there fails auth estate-wide.
-  (2) SCOPE: a Dapr `Configuration` per app-id, `defaultAccess: deny` plus an `allowedSecrets` naming
-  only that identity's own secret and whatever else it genuinely needs, referenced from each workload's
-  `dapr.io/config`. Then prove it the way this was found — read from a PEER pod and confirm the foreign
-  keys are GONE, not merely that the app still boots.
-- **BOTH HALVES SHIPPED (2026-09-23), RED-first.** The gate
-  `tests/unit/test_a_dedicated_credential_is_not_readable_by_its_peers.py` failed on both halves before
-  either landed, and was mutation-checked three ways — give every app the full identity set, flip
-  `defaultAccess` to allow, put the credentials back on the shared bundle — each failing exactly one
-  assertion and no other.
-  (1) SPLIT: the seed writes `secret/service-token-<identity>` per identity, and
-  `dedicated_token_from_store` addresses it. Its `key` parameter is gone rather than left dangling, and
-  **the grep found six services plus eight test sites, not the two expected** — `ty` caught the last
-  two after the grep was already clean.
-  (2) SCOPE: one `lance-config-<app-id>` Configuration per app-id in `lance.secretScopes`, each
-  carrying a `deniedSecrets` list naming every identity credential that app does not own.
-  `rask.daprAnnotations` points each scoped app at its own and leaves the rest on `lance-tracing`, so
-  the dangling-reference guard stays honest — verified in the render: 13 Configurations, **zero
-  dangling refs**, verifier doors denied 0, producers denied 7, the three identity-less apps denied 8.
-- **A DENY-LIST RATHER THAN DENY-BY-DEFAULT, and the first cut got this wrong.** `defaultAccess: deny`
-  rendered and passed its gate, and would have broken the estate on contact: **two readers fetch a
-  secret by a name known only at RUNTIME** — `viewer/api/v1/endpoints/objects.py:102` and
-  `ingest/objectstore.py:183` both resolve a per-STORE credential named by the store registry, so a
-  store added after deploy names a secret no rendered allowlist can contain. The object browser would
-  have 503'd on exactly the external stores that mechanism exists for. Caught by reading the consumers
-  before converging, not by a test. Deny-by-default stays the stronger posture and the goal; it needs
-  those readers enumerated first, which is a different change.
-  The Configuration spec body is INCLUDED, not copied: `lance.daprConfigSpecBody` holds the 176 lines
-  once, so HotReload, the tracing exporter and the cardinality bound cannot drift per app.
-- **IT ALSO CLOSES A LATENT STALENESS BUG, found while checking the deploy ordering.** The seed Job
-  carries no `helm.sh/hook`, so it rolls CONCURRENTLY with the pods — a pod can read the store before
-  its credential is written. Under the old shape that miss was a missing FIELD of a bundle that
-  fetched successfully, so `_secret_bundle`'s `lru_cache` cached the bundle WITHOUT it and that pod
-  401'd the identity until someone restarted it; the app-token path guards exactly this with
-  `_secret_bundle.cache_clear()` (`dapr_auth.py:158-167`) and the dedicated-token path never did.
-  Per-identity secrets make the miss an EXCEPTION, and `lru_cache` never caches those, so the next
-  call refetches and the window closes itself when the seed lands.
-- **THE VERIFIER DOORS KEEP THE WHOLE SET, and that is the scheme's ceiling rather than a gap.**
-  `catalog` and `lineage` resolve the CLAIMED identity's token and compare it, so a door that could not
-  read a producer's credential could not admit that producer. Rendered: those two hold all 8, every
-  producer holds exactly 1, and `annotator`/`flows`/`notifications` hold none (they present no dedicated
-  identity — notifications is deliberately unarmed because daprd overwrites the header on service
-  invocation).
-- **THAT EXEMPTION IS NOT INHERENT, and calling it a ceiling was wrong.** It exists because the
-  credential is stored in PLAINTEXT and the door compares plaintext. The house pattern for a
-  service-to-service key is hashed at rest with a constant-time compare (`fastapi/authn.md`, "API
-  keys"); this estate already does the second half (`secrets.compare_digest`, `dapr_auth.py:507`) and
-  not the first. Seed a HASH the doors read and a plaintext only its owner reads, and a door verifies
-  without being able to forge — the verifier exemption disappears and every app holds exactly one
-  usable credential. A signature over the bus event ([[LH-064]]) is the one case where the verifier
-  genuinely needs the key, because recomputing an HMAC requires it; that one does need asymmetric
-  material, and the bearer door does not.
-- **PROVED LIVE 2026-09-23 — all four PRE-REGISTERED thresholds, on the deployed estate.** The rule
-  and its control were written down BEFORE the converge, so the reading could not be chosen to fit the
-  result. Precondition first: `rask-openbao-seed-r235` **Complete 1/1** in 7s (a zero count before that
-  is an unwritten secret, not a working scope).
-  (1) `medallion-producer` reads its OWN `service-token-service-medallion-producer` → **200**.
-  (2) the same pod reads a FOREIGN `service-token-service-ingest` → **REFUSED, HTTP 403**.
-  (3) **THE CONTROL** — `lineage`, a verifier door, still reads that same foreign credential → **200**.
-      Without it, (2) cannot tell "the scope works" from "every door is blinded", and a blinded door
-      refuses every producer with a message about a missing credential rather than a missing grant.
-  (4) the shared bundle still answers and is down to **13 fields from 21** — exactly the 8
-      `service-token-*` entries that moved out to their own secrets.
-  **BEFORE → AFTER: `medallion-producer` read 8 identity credentials this morning and reads 1 now.**
-  Read back off the running pods; key NAMES only, no values printed.
-- **THE WIRING WAS GATED AT EVERY HOP, not just at the end:** the image is in the registry on the
-  address k3s PULLS from (`localhost:5000`, not the `172.17.0.1:5000` Dagger pushes to — the same
-  registry addressed twice), 13 `lance-config-*` Configurations applied, and the rolled
-  `rask-medallion-producer` pod carries `dapr.io/config: lance-config-medallion-producer`. Dapr's
-  HotReload is OFF in this chart, so a Configuration reaches a sidecar only on restart — the pod had
-  to roll for the scope to bind, and it did because the annotation value changed.
-- *Closes when:* A pod's own sidecar returns only that identity's `service-token-*`, proved live from at
-  least two different app-ids, and a render gate refuses a workload wired to the store without a scope.
-- *Evidence:* live `GET /v1.0/secrets/lance-secrets/lance` from `rask-medallion-producer` and
-  `rask-lineage` (21 keys, 8 service tokens, both pods) · `chart/templates/dapr-component.yaml:388`
-  (`scopes:` only) · `grep allowedSecrets chart/templates/` → empty
 
 **XC-061 · Container hardening is restated per template and applied unevenly — 7 first-party containers and 3 Jobs render with none of it, including OpenBao and Dex**
 `chart` · **HIGH**
@@ -2319,7 +2163,6 @@ silent→firing against a real dura
 - *Closes when:* A prototype run against bronze landing answers, with a recorded result, whether MemWAL server-id sharding fits coordinator-free ingest.
 - *Evidence:* `docs/audits/lakehouse-2026-09/lakehouse-analysis.md:230 (option C′, blob v2 reads None through MemWAL)` · `services/maintenance/src/maintenance/services/orphans.py:84-87,354-355 (only MemWAL awareness in code)` · `uv.lock:3276-3277 (pylance 11.0.0)`
 
-
 **XC-037 · `pytest-xdist` is not a dependency and ~20 test files roll their own `subprocess` helm render**
 `chart, service-kit` · **MED**
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
@@ -2334,7 +2177,6 @@ count even though a shared renderer now exists (tests/unit/chart_render.py, adde
 - *Closes when:* the WHOLE suite passes green in parallel (`make check-fast` already covers the pre-push half) and the only `subprocess` helm calls left are the named exceptions. The compute conftest's import-order dependency is the remaining blocker on the full run.
 - *Evidence:* `rg 'xdist' pyproject.toml uv.lock -> no hits` · `rg -l subprocess tests services packages | xargs rg -l '"helm"' -> 21 files` · `tests/unit/conftest.py:21 (nineteen files import _rendered_docs from test_invariants)`
 
-
 **XC-014 · The Ray head is a hand-applied `deploy/ray-lance-demo.yaml` the chart does not render**
 `chart, compute, medallion` · **MED** · PARTIAL
 - **THE BLOCKER IS ANSWERED — this row is workable today (2026-09-22 re-audit, adversarially confirmed).**
@@ -2346,14 +2188,12 @@ PHASE 2's HIGH count of 16 includes two rows that close on the same act.
 - *Closes when:* A fresh `make k3s-up` produces the Ray head from the chart and `deploy/ray-lance-demo.yaml` no longer exists.
 - *Evidence:* `chart/templates/openbao.yaml:137,174,310-318` · `deploy/ray-lance-demo.yaml (9,845 bytes at HEAD; last touched 85fe0830)` · `scripts/ray_e2e_stack.sh:121` · `chart/templates/rayservice.yaml:1 + chart/values.yaml:65-66 (singleTenant.enabled: false)`
 
-
 **LH-129 · The three Ray job scripts read `S3_KEY`/`S3_SECRET` from process env, `RASK_CREDENTIAL_REF` has no consumer, and nothing gates dead work-order fields**
 `medallion, ray-kit, service-kit, chart, scripts` · **HIGH**
 - **MOVED FROM PHASE 1 (2026-09-20): its own marker said so.** The row was blocked in phase 1 on "the row's own phase ruling — 'Phase 2, do not work ahead of the lakehouse'", which is a PHASE placement rather than a decision: it names where the work belongs, not something an owner must answer. Its subject is the three Ray job scripts' credential path, which is the Ray lane — phase 2 by the focus's own split, the same reading that moved [[LH-085]] and [[LH-010]]. Filed here it is workable rather than blocked, and phase 1's count stops claiming it.
 - *What is left:* Wire the trust chain: the catalog accepts the cluster's OIDC issuer for the Ray identity; that identity gets `can_write_data`/`can_maintain` tuples on the tables a write-tier vend checks; `scripts/ray_stage_job.py:87-88`, `ray_train_job.py:64-65` and `ray_lance_job.py:45-46` read `RASK_CREDENTIAL_REF` plus the projected service-account token FILE and vend a 900 s triple through the catalog's STS door (`lance_storage_options` already takes `session_token`, `objectfs.py:35`); `deploy/ray-lance-demo.yaml` drops `S3_KEY` (:64) and `S3_SECRET` (:83) and moves the five `RASK_LINEAGE_TOKEN_SERVICE_*` secretKeyRefs (:101-126) to a mounted file. A scoped static key in env is not an acceptable interim. Add a gate over `work_order.to_env` (`work_order.py:126`) asserting every emitted name has a consumer — `RASK_TASK`, `RASK_MERGE_KEY`, `RASK_WRITE_MODE`, `RASK_CODE_VERSION`, `RASK_CREDENTIAL_REF` have zero (`RASK_IDEMPOTENCY_KEY` has one at `ray_stage_job.py:832`); `test_the_submitter_and_the_job_agree_on_the_wire.py:107` covers only the reverse direction. The head is hand-applied, so a chart-only fix cannot reach it.
 - *Closes when:* The Ray job vends its storage credential keyed on RASK_CREDENTIAL_REF, no secret rides pod env, and the to_env consumer gate is green.
 - *Evidence:* `scripts/ray_stage_job.py:87-88; scripts/ray_train_job.py:64-65; scripts/ray_lance_job.py:45-46` · `grep -rn RASK_CREDENTIAL_REF services packages scripts runners --include=*.py — only work_order.py:159` · `tests/unit/test_the_submitter_and_the_job_agree_on_the_wire.py:107` · `deploy/ray-lance-demo.yaml:64,83,101-126`
-
 
 **LH-010 · The htr runner drives `build_source`/`build_sink` into ALTO writers, never reads bronze Lance or emits gold rows, and no geometry stage exists**
 `runners/htr, chart` · **MED** · PARTIAL
@@ -2365,7 +2205,6 @@ config rows (with the baked Ray entrypoint) rather than as a medallion module.
 - *What is left:* Re-cut the htr runner's stage job to read bronze Lance and emit gold rows: `runners/htr/src` imports no `lance` at all, `main.py:24,109,111` still drives `build_source`/`build_sink`, and `pipeline.py:8,114` still ends in `AltoExportActor` (line numbers re-measured 2026-09-20; the row's were stale). Add the bronze→silver geometry stages inside the sealed runner (its own Ray job/image), surfacing to the platform as stage-runner config rows beside the three at `chart/values.yaml:1472-1480` over the generic transform — never as a module under `services/medallion`, which the gate above now enforces rather than merely asks for. The owner-directed P7b shape is recorded nowhere in `docs/DECISIONS.md`.
 - *Closes when:* `runners/htr` opens a bronze Lance dataset and writes gold rows through the governed stamp, and the geometry stages run as stage-runner config rows with no workload-named module under `services/medallion`.
 - *Evidence:* `runners/htr/src/runner/main.py:22,107; runners/htr/src/runner/pipeline.py:8,180-186` · `grep -rln 'import lance\|from lance' runners/htr/src → empty` · `chart/values.yaml:1462-1480 (three stageRunners rows, no geometry)` · `scripts/ray_stage_job.py:450; packages/service-kit/src/service_kit/lakehouse/stage_stamp.py:146`
-
 
 **LH-085 · The media write lane is driver-only for its DERIVERS, not for blob typing — distributing it is untried**
 `medallion (RAY half), scripts` · **MED**
@@ -2771,7 +2610,6 @@ now possible — but I could not confirm a
 - *Closes when:* A Serve replica exception row is queryable in `opentelemetry_logs` with `severity_text` and deployment/replica fields populated.
 - *Evidence:* `chart/templates/_ray-cluster-config.tpl:107-110` · `chart/templates/rayservice.yaml:1 (`if and .Values.ray.enabled .Values.singleTenant.enabled`)` · `chart/values.yaml:65-66 (`singleTenant.enabled: false`), :2185-2190`
 
-
 **LH-189 · A failed kueue hook outlives its ServiceAccount, and every later `helm upgrade` fails on a 401 nobody can read**
 `deploy, kueue` · **MEDIUM** · OPEN
 - **MEASURED LIVE 2026-09-22**, found while diagnosing why a converge reported `UPGRADE FAILED:
@@ -2828,7 +2666,6 @@ now possible — but I could not confirm a
   `kubectl get sa rask-kueue-setup` -> NotFound, pod volume `kube-api-access-r56h5` present ·
   converge log `UPGRADE FAILED: post-upgrade hooks failed`
 
-
 **CP-051 · The stage runner's in-process lane full-materialises the whole upstream tier into the pod**
 `medallion` · **MED**
 - **SPLIT OUT OF [[LH-185]] 2026-09-22, and RE-VERIFIED against the code on the way out** — that row's
@@ -2875,7 +2712,6 @@ now possible — but I could not confirm a
 - *Closes when:* `helm template -f chart/values-prod.yaml` renders an Ingress with a `tls:` entry and an issuer annotation, and `scripts/prod_render_check.sh` fails without them.
 - *Evidence:* `chart/values-prod.yaml:221-224` · `chart/templates/ingress.yaml:44-45` · `scripts/prod_render_check.sh (exists)`
 
-
 **LH-082 · The gateway proxies the catalog's full all-method write surface to the public ingress and nothing says whether that is intended**
 `gateway, catalog` · **LOW**
 - **THE BLOCKER IS ANSWERED — this row is workable today (2026-09-22 re-audit, adversarially confirmed).**
@@ -2888,15 +2724,12 @@ so the next grep finds it. Nothing needs an owner.
 - *Closes when:* Either the Route row carries the rationale and docs/DECISIONS.md records the ruling, or the row forwards a narrowed method set.
 - *Evidence:* `services/gateway/src/gateway/__init__.py:225 `Route("/api/catalog", "", *catalog)` with no rationale comment (context :200-226)` · `grep -n -i 'api/catalog\|all-method\|write surface\|internet-facing' docs/DECISIONS.md → empty` · `chart/templates/ingress.yaml:66 `- path: /api``
 
-
-
 **XC-009 · No Dapr `accessControl` policy exists in any chart template and the actor/workflow invocation planes are uncharacterised**
 `chart, medallion, notifications, gateway, annotator, ingest` · **MED**
 - **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** `defaultAction: deny` is one Configuration every sidecar references unconditionally, and its closing condition needs a live drive of every GATEWAY route. The work is unchanged; only the label is, so phase 1 stops claiming it.
 - *What is left:* `accessControl`, `defaultAction`, `trustDomain` and `WorkflowAccessPolicy` appear in zero files under `chart/`; `networkPolicy.enabled` is false (`values.yaml:761`). Characterise actor-to-actor (ActorProxy) and Dapr Workflow invocation on the live estate first — Dapr excludes workflows from service-invocation access control — then write `policies:` plus `defaultAction: deny` and `trustDomain` into the shared `lance-tracing` Configuration (`chart/templates/observability.yaml:72`), add a `WorkflowAccessPolicy`, validate by driving every gateway route live, and add the missing test. NetworkPolicy stays a separate prod-hardening half (no-op on k3s flannel).
 - *Closes when:* The rendered Configuration carries `defaultAction: deny` with per-app policies and every gateway route and cascade hop still succeeds on a live drive.
 - *Evidence:* `grep -rn 'accessControl|defaultAction|WorkflowAccessPolicy|trustDomain' chart/: no hits` · `chart/values.yaml:761 (networkPolicy.enabled: false)` · `chart/templates/observability.yaml:72-76 (Configuration lance-tracing)`
-
 
 **LH-073 · Right to erasure is a Lance row delete only — it reaches no blob sidecar, clone/branch or version-pinning tag**
 `catalog, maintenance, notifications` · **HIGH**
@@ -3137,7 +2970,6 @@ flag and the Configuration must la
 - *Closes when:* C2 has run and the owner has named the MLflow capabilities the models plane must match.
 - *Evidence:* `frontend/microfrontends/models/src/lib/models/Experiments.svelte:4,88 (MLflow not used)` · `docs/RAY-TRAIN.md:206-215 (no MLflow anywhere in the code)`
 
-
 **CTL-025 · Every notification delivery read-modify-writes the recipient's WHOLE inbox partition**
 `notifications` · **MED**
 - **SPLIT OUT OF [[LH-185]] 2026-09-22. Re-verified — and the row's recorded path was WRONG**
@@ -3259,7 +3091,6 @@ and the row itself forbids a
 - *Closes when:* `docs/DECISIONS.md` carries the ruling and the chosen surface exists.
 - *Evidence:* `frontend/microfrontends/home/src/routes/settings/access/+page.svelte:4-6 (estate surface, ported from /lakehouse/governance/access)` · `git log --oneline -- frontend/microfrontends/lakehouse/src/routes/governance (857e9d5c, 4a2177c0, 5e942940, e59549b1)` · `grep -n -i governance docs/DECISIONS.md → no surface ruling`
 
-
 ## LOW PRIORITY
 
 **XC-043 · Ten docs still describe the orchestrator, `core_api`/`search_api`/`volumes_api`, `packages/htr` or `/default/<zone>` bases in their body, tombstone or not**
@@ -3274,7 +3105,6 @@ which have none. The closes-when grep must also be
 - *Closes when:* `grep -rl "core_api\|search_api\|volumes_api\|packages/htr\|/default/" docs/ --exclude-dir=superpowers --exclude=lance-ns-merge.md --exclude=OPEN-WORK.md` returns only files whose every hit is an explicit tombstone, with the nav gate green.
 - *Evidence:* `grep -rl … docs/ → 10 files (DECISIONS 1, frontend-microfrontends 26, layout 1, packages/htr 1, deployment 1, frontend-conventions 8, microservices 10, system-overview 10, progress 2, ui 2)` · `docs/architecture/microservices.md:59-60,185-200 (live prose for volumes-api/search-api/orchestrator, 'Auth: none')` · `docs/architecture/frontend-microfrontends.md:94-95; docs/components/ui.md:8` · `zensical.toml:22-59`
 
-
 **XC-040 · The dangling-locator gate checks pointers INTO a register but nothing gates a register's sidecar outliving it**
 `e2e` · **LOW**
 - **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** A gate over register sidecars with ZERO instances — measured, it would guard nothing. The work is unchanged; only the label is, so phase 1 stops claiming it.
@@ -3282,14 +3112,12 @@ which have none. The closes-when grep must also be
 - *Closes when:* A test fails on a root `open_*` sidecar whose register is gone, and it passes at HEAD with `open_stack.html` classified explicitly.
 - *Evidence:* `tests/unit/test_no_locator_names_a_deleted_register.py:52-53,64,85` · `find . -maxdepth 2 -name '*.findings.json' → none` · `git ls-files open_stack.html → tracked; no open_stack.md; grep -rn open_stack.html → uncited`
 
-
 **LH-168 · The live `lance-secrets` Dapr Component is two scopes short of the chart and nothing detects Component-scope drift**
 `chart, viewer, search` · **LOW**
 - **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** Its two missing scopes are VIEWER and SEARCH, both on the do-not-work list. The work is unchanged; only the label is, so phase 1 stops claiming it.
 - *What is left:* The chart's `lance.secretScopes` (`chart/templates/_helpers.tpl:1332-1357`) grants every `explorer.services` app-id (search, viewer) and the `lance-secrets` Component (`chart/templates/dapr-component.yaml:317`) renders them; helm does not re-patch an unchanged field, so out-of-band drift survives every upgrade. Re-apply the rendered Component so the live scopes match, then add a render-vs-live diff on Dapr Component scopes — `scripts/k3s-pins.sh --check-only` (`make k3s-stem-check`, `Makefile:766-776`) compares image stems only. Live drift (13 rendered vs 11 live) not re-verified (no cluster access).
 - *Closes when:* The live `lance-secrets` scopes equal the rendered set and a pre-upgrade check refuses on Component-scope drift.
 - *Evidence:* `chart/templates/_helpers.tpl:1332-1357` · `chart/templates/dapr-component.yaml:317-320` · `Makefile:766-776 (k3s-stem-check is image-stem only)` · ``grep -in 'component\|scopes' scripts/k3s-pins.sh` → image parsing only`
-
 
 **XC-041 · `make seed-dev` chmods the whole corpus root, hardcodes one release name, host path and ports, and seeds labeling doc ids with a literal `dataset_version`**
 `scripts` · **LOW**
@@ -3302,14 +3130,12 @@ fixture and the catalog's table version instead of the literals at seed_labeling
 - *Closes when:* A seed against a differently named release on another host, run twice, leaves only its own files readable and a labeling task whose keys and version match the fixture it read.
 - *Evidence:* `scripts/seed_demo_corpus.py:344-362` · `scripts/seed_dev_estate.sh:22,28,34,113-114,126,128` · `scripts/seed_labeling_task.sh:124-126` · `Makefile:527-528 (seed-dev → scripts/seed_dev_estate.sh)`
 
-
 **XC-019 · The Lance `TableWriter` seam has no create-if-absent verb, so the first annotation save on a fresh estate has no table to merge into**
 `service-kit, annotator` · **MED**
 - **MOVED FROM PHASE 1 (2026-09-20, backlog audit).** The seam is `service-kit`, but only the ANNOTATOR reaches it, and the annotator is on the do-not-work list. The work is unchanged; only the label is, so phase 1 stops claiming it.
 - *What is left:* Add a create-if-absent verb to the `TableWriter` Protocol and its three implementations in `service_kit/lancekit/writer.py` (today: `merge_upsert`, `merge_insert_only`, `delete` only). Call it from `annotator/annotations/save.py` before `reader.table_version()` at :86 and the merge; the annotator's only `create_table` is the publish saga's in `projects/lakehouse.py`, which does not create the annotations table. Pin with a RED test that saves into an estate where the annotations table does not exist. Do not widen an except clause instead.
 - *Closes when:* A save against a project with no annotations table creates it and commits, under a test.
 - *Evidence:* `packages/service-kit/src/service_kit/lancekit/writer.py:44-51 (Protocol: three verbs), :98-108, :118-120, :131-134 (implementations)` · `services/annotator/src/annotator/annotations/save.py:82-86 (`open_reader` then unguarded `reader.table_version()`)` · `grep -rn 'create_table' services/annotator/src → only projects/lakehouse.py:161-294`
-
 
 **LOW-002 · Consensus replicas mint `{gid}-r{k}` task ids that can exceed the 64-char task route bound, wedging that project's publish**
 `annotator` · **MED** · PARTIAL
@@ -3466,7 +3292,6 @@ governs a non-table artifact and either add the distinct type or record that the
 - *Closes when:* `model.fga` declares the asset type and `models.py` no longer queries `object_type="table"`.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/models.py:9,48,106,109` · `packages/service-kit/src/service_kit/governed/auth/model.fga:41-530` · `grep -i 'opaque|K-F9' docs/DECISIONS.md: no hits`
 
-
 ## Dropped as ALREADY DONE by the audit
 
 Re-measured at HEAD and found shipped. Listed so a reader who remembers the row can see where it went, not to keep a changelog.
@@ -3489,3 +3314,5 @@ Re-measured at HEAD and found shipped. Listed so a reader who remembers the row 
 - **LOW-015** — `GET /projects/{project_id}/tasks` honours `limit` and `cursor`
 - **LOW-025** — `GET /api/search` silently ignores `dataset` and `mode`
 - **XC-024** — With frontend.oidc.enabled false, locals.authEnabled is false and the serve-proxy 401 guard never fires, so anonymous callers reach GPU inference
+- **XC-072** — Every privileged service credential was readable by every other scoped service; split per-identity + per-app Dapr secret scopes, proved live (8 credentials -> 1, foreign 403, verifier door intact)
+- **XC-073** — A pinned catalog older than `model.fga` deployed a stale authorization model and failed every post-upgrade hook silently; rebuilt, and a gate now refuses the pairing
