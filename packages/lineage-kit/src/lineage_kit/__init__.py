@@ -78,7 +78,7 @@ from lineage_kit.schemas import (
     WireModel,
     custom_facet,
 )
-from lineage_kit.signing import sign_event, verify_event
+from lineage_kit.signing import Signature, attach_signature, author_of, sign_event, signature_of, verify_event, verify_signed_event
 from lineage_kit.stage import stage
 
 
@@ -123,9 +123,12 @@ __all__ = [
     "RunState",
     "SchemaDatasetFacet",
     "SchemaField",
+    "Signature",
     "WireModel",
     "ambient_emitter",
     "as_json_rows",
+    "attach_signature",
+    "author_of",
     "build_emitter",
     "coerce_context",
     "current_context",
@@ -137,8 +140,10 @@ __all__ = [
     "run_id_for",
     "set_default_emitter",
     "sign_event",
+    "signature_of",
     "stage",
     "use_context",
     "use_emitter",
     "verify_event",
+    "verify_signed_event",
 ]

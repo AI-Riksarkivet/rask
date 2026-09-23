@@ -661,6 +661,29 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **THE SEAM NOW CARRIES ITSELF, AND COVERING THE AUTHOR TURNED OUT NOT TO BE ENOUGH (2026-09-23).**
+  The signature rides IN the event as a `signature` run/dataset facet rather than in a header, which
+  is what makes it transport-independent as the row requires — a header belongs to whatever carries
+  the bytes today. That forces one subtlety: a signature cannot cover itself, so signing STRIPS any
+  existing signature facet first and is therefore idempotent under a relay republish or an outbox
+  drain. Without that, every re-emit produces a different value and producer and verifier disagree
+  about an event nobody tampered with.
+  **THE REAL HOLE WAS THE BINDING, and my own first implementation had it.** A signature made with
+  the bronze-to-silver key, naming bronze-to-silver as its signer, over a body stamped
+  `author.sub = "service-trainer"`, is a VALID signature — the verifier picks the key the signature
+  names, reproduces it exactly and agrees, while the event records provenance as somebody else. Every
+  individual check passes and the substitution survives; the signature would have proved only "some
+  authorised producer emitted this", which the shared app token already proved. `verify_signed_event`
+  now requires the signing identity to EQUAL the stamped author, and refuses an event carrying no
+  author at all (admitting it would make the binding optional and a forger would just omit the facet).
+  The verifier keys on the SIGNATURE's identity, never on `author.sub` — that is the field under
+  attack. Mutation-checked: dropping the binding reds it, and keying on the author instead reds it.
+  15 tests. Three mutations each caught by the assertion that should catch it; a fourth found an
+  UNTESTED safety (`sign_event`'s own strip, invisible because both callers stripped first) which is
+  now exercised directly rather than deleted.
+  *Still to do:* call `verify_signed_event` in `enforce_bus_authz` and refuse on false, and make the
+  producers attach. The verifier must READ the signer's credential — the one cross-identity read
+  [[XC-072]]'s scoping deliberately left open for verifier doors.
 - **THE SIGNING SEAM IS SHIPPED (2026-09-23) — `lineage_kit.signing`, exported as `sign_event` /
   `verify_event`. THE DOOR DOES NOT VERIFY YET AND NO PRODUCER SIGNS, so the row does not close.**
   HMAC-SHA256 over CANONICAL JSON (`sort_keys`, tight separators), keyed on the identity's own
