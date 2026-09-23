@@ -242,6 +242,29 @@ finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
 
+**CLAUSE 1 OF THIS ROW'S BAR IS MET, AND CLAUSE 2 AS WRITTEN CANNOT BE MET WITHOUT DESTROYING
+PROVENANCE — measured 2026-09-23.** The bar is *"Each tier has exactly one home, and the sweep reports
+zero UNGOVERNED medallion datasets."*
+- **ONE HOME IS TRUE NOW.** Asked of the deployed catalog with a tuple written so the answer is not a
+  403: `bronze$events` lives at `s3://lance-catalog/medallion/bronze`, which is byte-identical to the
+  producer's `MEDALLION_BRONZE_URI`. And the stage side no longer uses its env as a location at all —
+  `transform.py:1114` assigns `to_uri = ensure_stage_output(...)`, so the catalog's answer OVERWRITES
+  the rendered `MEDALLION_TO_URI` whenever a catalog and a declared tier exist, which is the deployed
+  configuration. `silver$features` and `gold$catalog` answer opaque vended paths (`s3://bind86-wh/90f…`),
+  not `medallion/` ones. The rendered values are a FALLBACK for the no-catalog path, not a second writer.
+- **THE SECOND-HOME BYTES THIS ROW MEASURED ARE ALREADY GONE.** `lakehouse$bronze`, `lakehouse$gold`
+  and `lakehouse$bronze-media` were 1.8–8.0 KiB on 2026-09-21; today all three list **zero objects**.
+- **CLAUSE 2 IS 19 DATASETS, AND THE CATEGORY IT COUNTS IS NOT A GOVERNANCE HOLE.** Of the 19
+  medallion-pathed ungoverned names: 8 have an empty prefix, 2 have no bucket, and 9 hold bytes —
+  `models$churn` (128.8 KiB), eight `models$e2etrain*` (2.9 KiB each) and `lakehouse-bronze$events`
+  (1.8 KiB). But `ungoverned` counts GRAPH nodes naming tables the catalog does not carry, and a
+  Dataset node for a dropped table is **correct provenance, not residue** — the graph is meant to
+  outlive the table, which is criterion 1. Driving this clause to zero by pruning those nodes would
+  erase the record that the write ever happened.
+- **SO THE CLAUSE NEEDS RESTATING, not satisfying.** The honest bar is "no medallion tier is written to
+  a path the catalog does not vend" — which clause 1 already measures — plus a disposition for ~154 KiB
+  of bytes, of which only `models$churn` is not obviously test residue.
+
 **AND THE DATA THE RULING IS ABOUT IS 159 KiB — measured object by object 2026-09-23, which dissolves
 this row's blocker.** The decision was framed as data disposition: *"roughly 524 rows of unregistered,
 ungoverned medallion data, to reap or to register."* Every one of the 75 ungoverned names was listed
