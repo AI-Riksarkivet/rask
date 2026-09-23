@@ -1656,6 +1656,7 @@ maintenance:
     # 0 disables it, and an estate that has not measured its own retention should say 0 rather than
     # inherit this number: it is a property of the tables, not of the code.
     recycleAfterPasses: 150
+
     # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
     # A reservation, not a measurement — an index build holds its token far longer than a compaction
     # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool
@@ -1972,6 +1973,22 @@ maintenance:
   # every discovered dataset in every bucket before one is compacted). MEASURE before moving it — the
   # report names the prefixes it stopped at, which is where that measurement starts.
   discoveryMaxDepth: 3
+
+  # Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). The medallion
+  # trainer writes `<root>/medallion/models/<model>` directly and the catalog's promote/describe doors
+  # open it by EXPLICIT URI, because native namespace resolution would drop the `/medallion/` prefix
+  # (`catalog/core/config.py:516-522`). So it is not unregistered — it is known and unresolvable.
+  #
+  # BESIDE `orphanScan`/`discoveryMaxDepth` AND NOT UNDER `dedicatedWorkers`, because the RECONCILE
+  # runs on the planner: `/maintenance-reconcile-cron` is registered on `rask-maintenance`, and the
+  # workers execute units. A setting on the wrong deployment is read by nobody and looks configured.
+  #
+  # NAMED RATHER THAN INFERRED. Left empty, the reconciler reports the registry's own datasets among
+  # `unreadable_locations` every tick — the fail-loud direction, but it buries the locations nobody has
+  # accounted for. Measured 2026-09-23: 163 of 564 discovered locations carry no recoverable table id,
+  # and 16 of them are this registry.
+  declaredPlatformRoots: "s3://lance-catalog/medallion/models"
+
   # LH-101: wall-clock ceiling for ONE sweep tick, checked BETWEEN datasets — never inside a compaction.
   # 0 = unlimited, which is today's behaviour and stays the default: the right value depends on the
   # estate's dataset count and the tick interval, and inferring one would be guessing. Set it and the

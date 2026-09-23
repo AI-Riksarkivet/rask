@@ -37,6 +37,13 @@ _MATCHES_BUT_NOT_GATED: dict[str, str] = {
     # A row is added here only with a sentence a reader can check, and every entry so far has left the
     # set the only way a row may: LH-034, LH-096, LH-159 and LH-164 by gaining a `**blocked:**` marker
     # or losing the incidental phrase, and LH-184 and LH-055 by closing.
+    #
+    # LH-164 MATCHES ON A SENTENCE ARGUING THE OPPOSITE, which is the one shape the regex cannot tell
+    # apart. Its body reads "Registering it as a namespace is not a decision someone has been putting
+    # off; the resolution path cannot do it" — the row says the marker it used to carry was WRONG,
+    # because `catalog/core/config.py:516-522` answers the question the marker was waiting on. A
+    # reader confirms that in one line; a phrase match cannot.
+    "LH-164": "says the remaining step is NOT a decision — the code already answered it (config.py:516-522)",
 }
 
 

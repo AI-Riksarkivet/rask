@@ -89,7 +89,7 @@ def test_a_DROPPED_table_whose_bytes_await_the_purge_is_not_drift() -> None:
 def _drift(registered: dict[str, tuple[str, str | None]], datasets: list[str], walked: list[str]) -> ReconcileReport:
     report = ReconcileReport(checked_at="now")
     sources = Sources(tables=[], table_locations=registered, trash=[])
-    _registration_drift(report, sources, [(uri, uri.removeprefix("s3://")) for uri in datasets], walked_buckets=walked)
+    _registration_drift(report, sources, [(uri, uri.removeprefix("s3://")) for uri in datasets], walked_buckets=walked, declared_roots=())
     return report
 
 

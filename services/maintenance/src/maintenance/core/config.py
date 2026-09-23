@@ -197,6 +197,22 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: must be able to say. Affordable only because a restart is cheap: measured on the live lane
     #: 2026-09-22 ([[LH-190]]), delivery resumes ~5s after readiness and the units redeliver at once.
     recycle_after_passes: int = Field(default=150, ge=0, alias="MAINTENANCE_RECYCLE_AFTER_PASSES")
+    #: Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). Today that is
+    #: the model registry: the medallion trainer writes `<root>/medallion/models/<model>` directly and
+    #: the catalog's promote/describe doors open it by EXPLICIT URI, because native namespace resolution
+    #: would drop the `/medallion/` prefix (`catalog/core/config.py:516-522`).
+    #:
+    #: NAMED RATHER THAN INFERRED, so the reconciler can tell "known and unresolvable" from "not looked
+    #: at". Empty means nothing is declared and every unreadable location is reported as a coverage gap,
+    #: which is the fail-loud direction for a report.
+    declared_platform_roots: str = Field(default="", alias="MAINTENANCE_DECLARED_PLATFORM_ROOTS")
+
+    @property
+    def declared_platform_root_list(self) -> tuple[str, ...]:
+        """The declared roots, split and trimmed. Comma-separated for the same reason every other
+        multi-value setting in this file is."""
+        return tuple(part.strip() for part in self.declared_platform_roots.split(",") if part.strip())
+
     #: Where an exhausted unit parks. A dataset that fails every redelivery must LEAVE the queue — it
     #: would otherwise be redelivered forever, and a poison unit that recirculates is the failure the
     #: per-dataset boundary was supposed to fix.

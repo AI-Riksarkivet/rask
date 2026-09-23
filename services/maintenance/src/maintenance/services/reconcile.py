@@ -372,6 +372,15 @@ class ReconcileReport(BaseModel):
     #: and "we scanned everything" are different facts. Deliberately not in `incomplete`, which gates
     #: the purge.
     excluded_datasets: list[str] = Field(default_factory=list)
+    #: Discovered locations whose table id could not be RECOVERED, so neither registration category
+    #: could read them ([[LH-164]]). Measured 2026-09-23: 163 of 564, while `unregistered_datasets`
+    #: answered 0 — the count was right about what it could read and silent about the 29% it could not.
+    #:
+    #: A COVERAGE FIELD, deliberately not `incomplete`, exactly like `excluded_datasets` beside it. No
+    #: operator action clears these — they are branch prefixes, the medallion cascade's own layout and
+    #: the model registry — so gating the #79 purge on them would make the gate permanently
+    #: unsatisfiable, which `NON_GATING_CATEGORIES` argues at length is not a safety property.
+    unreadable_locations: list[str] = Field(default_factory=list)
     unavailable: list[CategoryUnavailable] = Field(default_factory=list)
     skipped: list[CategorySkipped] = Field(default_factory=list)
     incomplete: list[IncompleteScan] = Field(default_factory=list)
@@ -695,6 +704,32 @@ def _unregistered_datasets(*, discovered: Iterable[str], registered: set[str], t
             continue
         seen[table_id] = UnregisteredDataset(table_id=table_id, location=uri.rstrip("/"))
     return [seen[key] for key in sorted(seen)]
+
+
+def _unreadable_locations(*, discovered: Iterable[str], declared_roots: tuple[str, ...]) -> list[str]:
+    """Discovered dataset locations whose table id cannot be recovered, minus the declared platform ones.
+
+    THE SKIP `_unregistered_datasets` MAKES, SAID OUT LOUD. That function must recover an id before its
+    comparison means anything, and a location it cannot answer for is dropped — correctly per location,
+    silently per REPORT. Measured 2026-09-23: 163 of the estate's 564 dataset locations (29%) fall
+    through it while the category answered 0.
+
+    NOT A FINDING — an INCOMPLETE SCAN. These are not known to be ungoverned; they are not known. The
+    three shapes behind the number are the model registry, Lance branch prefixes (`tree/<b>/`, where
+    the format puts branch isolation) and the medallion cascade's own `<bucket>/<tier>/<name>` layout,
+    and telling them apart is a reader's job once the report stops hiding them.
+
+    `declared_roots` carries the stores the platform OWNS and the catalog deliberately cannot resolve —
+    the model registry is one. Matched with the trailing delimiter, because a bare prefix match would
+    declare `medallion/models-scratch` platform-owned for sharing eight characters.
+    """
+    declared = tuple(f"{root.rstrip('/')}/" for root in declared_roots)
+    found = {
+        uri.rstrip("/")
+        for raw in discovered
+        if (uri := raw.rstrip("/")) and table_id_from_location(uri) is None and not any(uri.startswith(prefix) for prefix in declared)
+    }
+    return sorted(found)
 
 
 def _absent_datasets(*, registered: dict[str, tuple[str, str | None]], discovered: set[str], trashed: set[str]) -> list[AbsentDataset]:
@@ -1182,7 +1217,9 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceSettings, s
     return buckets
 
 
-def _registration_drift(report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]], *, walked_buckets: list[str]) -> None:
+def _registration_drift(
+    report: ReconcileReport, sources: Sources, datasets: list[tuple[str, str]], *, walked_buckets: list[str], declared_roots: tuple[str, ...]
+) -> None:
     """Both directions of catalog-vs-storage disagreement, from the walk's findings and the manifest.
 
     [[LH-176]] finds bytes no catalog record names; [[LH-192]] a record whose location holds no bytes.
@@ -1191,6 +1228,10 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
 
     GUARDED ON THE TABLE LISTING: both findings are an ABSENCE from one of the two sets, so a catalog
     read failure would otherwise report every dataset in the estate as unregistered.
+
+    `declared_roots` is REQUIRED rather than defaulted, for the reason `rewrite_slots` is: a defaulted
+    parameter makes an un-wired chain look clean. Measured here — removing the call site's
+    `declared_roots=settings.declared_platform_root_list` left all 377 tests green.
 
     Measured 2026-09-19: `orphan_files` counted an unknown dataset's files while no category said the
     dataset was unknown. Measured 2026-09-22: `bronze$events` answered `describe` 200 at a location
@@ -1225,6 +1266,11 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
         )
         report.absent_datasets = [f for f in candidates if any(f.location.startswith(f"{prefix}/") for prefix in walked)]
         report.counts["absent_datasets"] = len(report.absent_datasets)
+        # WHAT THE COMPARISON COULD NOT READ ([[LH-164]]). Both categories above need a table id
+        # recovered from a location, and one the recovery cannot answer for is dropped — per location
+        # correctly, per REPORT silently. Measured 2026-09-23: 163 of 564 (29%) fell through while
+        # `unregistered_datasets` answered 0.
+        report.unreadable_locations = _unreadable_locations(discovered=[uri for uri, _key in datasets], declared_roots=declared_roots)
         # Outside every walked bucket is UNKNOWN, not clean; dropping it is how a detector reports zero
         # for an estate it only partly saw.
         for finding in candidates:
@@ -1295,7 +1341,7 @@ def _orphan_category(report: ReconcileReport, settings: MaintenanceSettings, sou
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"depth limit reached at {prefix} — datasets under it were not scanned"))
     # Before the per-dataset scan and not gated on it: whether the catalog and storage agree a dataset
     # EXISTS is a different question from which files inside it are unreferenced.
-    _registration_drift(report, sources, datasets, walked_buckets=walked_buckets)
+    _registration_drift(report, sources, datasets, walked_buckets=walked_buckets, declared_roots=settings.declared_platform_root_list)
 
     try:
         scan = scan_datasets(fs, datasets, settings.storage_options())
