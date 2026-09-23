@@ -188,12 +188,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**199 open items**, of which **97 are blocked on a decision** and **102 can be picked up today**.
+**198 open items**, of which **97 are blocked on a decision** and **101 can be picked up today**.
 18 rows were dropped as already done — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 32 | 3 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 2 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 44 | 18 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -241,6 +241,20 @@ the request's metadata KEYS, and `replace: true` un-labels a column without nami
 finding of the audit, and no gate in this repo could have produced it.
 
 CLOSED BY THE AUDIT, droppable: [[CP-040]], [[LH-055]], [[XC-042]].
+
+**[[LH-152]] CLOSED 2026-09-23 — all three legs RUN against the governed live estate and passed.**
+The row's bar was a run, not code: the engineering had landed and nothing had executed it against a
+governed deployment. Run through `scripts/e2e_live.sh` against the deployed k3s release:
+`test_outbox_crash_e2e::test_sigkilled_producer_loses_nothing` PASSED (11.6s),
+`test_governed_union_e2e::test_fga_deny_drops_promotion_and_regrant_restores` PASSED (184.9s), and
+`test_maintenance_e2e::test_sweep_compacts_real_datasets_and_meters` PASSED (12.3s).
+**THE SHARED GRANTS SURVIVED, CHECKED RATHER THAN ASSUMED** — the whole reason the FGA leg was
+dangerous. OpenFGA checks for the deployed cascade's subjects taken immediately before and after that
+leg are identical: `service-bronze-to-silver can_write_data table:silver$features` and
+`service-silver-to-gold can_write_data table:gold$catalog` both still allowed. The revoke-inside-its-
+own-`try` fix and the `refuse_shared_warehouse` precondition held under a real run.
+One clause in the row was already stale: the crash leg had been given `owned_output_table` and no
+longer stages `author="e2e"` against an unregistered table.
 
 **[[LH-092]] CLOSED 2026-09-23 — the lane now asserts the DATA chain, not just the trigger chain.**
 `assert_cascade_landed` polls the catalog for a committed version on `<project>-silver$features` and
@@ -636,58 +650,6 @@ still the owner's. Note the row's own analysis make
 - *What is left:* Get the ruling. If 'refuse': at catalog boot read one governed (`table:`/`namespace:`) object id from OpenFGA and refuse to serve when its delimiter disagrees with `settings.delimiter`; no-op on an empty store so a fresh estate can boot; never compare a `user:` subject. The stored tuples are the record (715 of 1000 sampled ids carry `$`, 0 carry `.`), so no new estate state is needed. Do not hardcode `$` in FGA ids: `tests/unit/test_cross_axis_identity.py` holds the FGA object, lineage Dataset name and Lance-metadata id byte-identical under any delimiter. The prose half is done (`naming.py`, `config.py` both state the consequence).
 - *Closes when:* Either a boot-time delimiter/tuple check exists and is pinned by a test, or the knob is documented as bootstrap-only everywhere it is exposed and the ruling is recorded.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/naming.py:16 ('RENAMES every…')` · `services/catalog/src/catalog/core/config.py:84 ('BOOTSTRAP-ONLY. It spells every OpenFGA object id…')` · `grep -rn -i delimiter services/catalog/src/catalog/main.py services/catalog/src/catalog/core/lifespan.py → no boot check`
-
-**LH-152 · Three live e2e legs cannot pass against a governed estate: two stage provenance as an unregistered table, and one asserts zero errors against unreadable registry entries**
-`lineage, medallion, maintenance, catalog` · **MED** · PARTIAL
-- **THE FGA LEG'S REVOKE SAT OUTSIDE ITS OWN `try`, AND THE ASSERT BETWEEN THEM WAS THE ONE THAT COULD
-  STRIP THE LIVE ESTATE (fixed 2026-09-22).** Both deny sub-phases read
-  `_tuples(deletes=…)` / `assert not _check(…)` / `try: … finally: _tuples(writes=…)`. The subjects are
-  the DEPLOYED cascade's — `user:service-bronze-to-silver` and `user:service-silver-to-gold` — and the
-  objects include `owner` on the SHARED warehouse, so any exit between the delete and the restore
-  leaves the estate unable to run its own medallion. The precondition assert, which exists precisely to
-  catch a revoke that did not take, was such an exit: when it fired it returned with the tuples deleted
-  and no `finally` in scope. The revoke and the assert now sit INSIDE the `try`; restoring a tuple that
-  was never deleted is a no-op and `_tuples` tolerates delete-of-absent, so the wrap costs nothing.
-- **GATED STATICALLY, because the behavioural gate cannot run here:** the suite is `-m e2e`, needs a
-  deployed stack and is deselected from `make test`, so what a commit can get wrong is the file's
-  SHAPE. `tests/unit/test_an_e2e_revoke_is_always_inside_its_restore.py` walks the AST and requires
-  every `_tuples(deletes=…)` to sit inside a `try` whose `finally` writes tuples back. It exempts a
-  fixture's teardown of its OWN grant — recognised structurally (a function that both writes and
-  yields) rather than by name — because that shape removes something the suite ADDED, where a miss
-  widens access instead of stripping it. Mutation-checked against the exact shape it replaced.
-- **IT DOES NOT CLOSE THE CRASH WINDOW, and says so:** a SIGKILL between delete and restore still
-  strips the estate and no in-process construct prevents that. What is closed is every ORDINARY exit —
-  assertion, exception, early return — which is the population that actually occurs.
-- **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
-STILL UNMET: nothing. The FGA leg is done (2026-09-23): `refuse_shared_warehouse()` refuses to start a
-leg whose revoke would strip `warehouse:lance_catalog`, so the same legs prove the same property against
-a probe tenant (`LANCE_E2E_WAREHOUSE` / `LANCE_E2E_PROJECT`) where the crash window costs a throwaway.
-Gated statically AND behaviourally, both mutation-checked. The maintenance leg's `errors == {}` assertion is settled: measured
-2026-09-23, the live estate reports zero errors across 3,308 outcomes while refusals land in their own
-keys, so the assertion is correct and no exclusion set is needed.
-- **RULING (b) IS ANSWERED BY MEASUREMENT, NOT BY PREFERENCE — 2026-09-23.** The question was whether
-  `errors == {}` is the right assertion for a long-lived estate, or whether unreadable registry
-  entries belong in an exclusion set. They do not, because they never reach `errors`.
-- *The code already separates them, deliberately:* `summarize` builds `"errors": {r.uri: r.error for r
-  in results if r.error}` and its own comment states the rule — *"#64 — a REFUSAL is its own line,
-  never folded into `errors` or `skipped`. It is neither."* `refused`, `refusals`, `refused_by`,
-  `skipped` and `trashed` are each their own key.
-- *And the live estate agrees, over months of residue:* **3,308 dataset outcomes in 30 minutes, every
-  one `error_type=None`** — zero errors — while 369 of them were non-clean and landed where they
-  should: 346 `another dataset resolves its files through…`, 20 `unsupported manifest feature flags`,
-  the rest branch-prefix refusals. The population the ruling worried about exists and is already
-  routed away from `errors`.
-- *So the assertion stands as written*, and an exclusion set would be machinery for a case that does
-  not occur. What remains on this row is the FGA leg alone, which was never blocked.
-- *What is left:* Ruling (a) is decided — probes write to a REAL governed table created through the catalog and stamp the creating subject as author — and applied to `test_outbox_e2e` via the `probe_author` fixture (tests/e2e-py/test_outbox_e2e.py:107). Apply the same fixture to tests/e2e-py/test_outbox_crash_e2e.py:189-204, which still stages `author="e2e"` against the unregistered `bronze$e2e_crash_ds`. Rework `test_fga_deny_drops_promotion_and_regrant_restores` (tests/e2e-py/test_governed_union_e2e.py:566) so its revoke does not delete the warehouse-level owner tuple (`_owner_tuples`, :130-136) that the live stage runners share — a failure between revoke and regrant strips a grant the cascade needs. The maintenance leg (tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} ...`) waits on (b); the reconciler already exposes `excluded_datasets` (maintenance reconcile.py:271, 966) to build on.
-- **ALL THREE CODE CLAUSES ARE DONE (2026-09-23); WHAT IS LEFT IS A RUN.** The FGA leg can no longer
-  touch a shared grant, ruling (b) is answered and the assertion already matches it, and the crash
-  leg's probe writes a real governed table. The bar's remaining words are "pass against the governed
-  estate", and that needs the suite actually driven with `-m e2e` against a deployed stack — plus, now,
-  a provisioned probe tenant for `LANCE_E2E_WAREHOUSE`, since the guard refuses the platform warehouse
-  by design. Nothing in the repo is owed; a run is.
-- *Closes when:* The crash and FGA legs pass against the governed estate without touching shared grants, and the maintenance leg's assertion matches the (b) ruling.
-- *Evidence:* `git log 91d183cc `test(e2e,LH-152): the outbox probe's output table is a real governed table, authored by its owner`; tests/e2e-py/test_outbox_e2e.py:107-121 `probe_author` docstring records the 2026-09-15 ruling` · `tests/e2e-py/test_outbox_crash_e2e.py:197 `author="e2e"`, :201 `output_name="e2e_crash_ds"`` · `tests/e2e-py/test_governed_union_e2e.py:130-136 `_owner_tuples` — deletes warehouse, namespace and table owner tuples` · `tests/e2e-py/test_maintenance_e2e.py:105 `assert body["errors"] == {} or body["errors"] == []`; services/maintenance/src/maintenance/services/reconcile.py:271,966 `excluded_datasets``
 
 **LH-164 · Chart-path medallion datasets at `s3://<bucket>/medallion/<ns>` are unregistered and ungoverned, so each tier has two homes and only one is governed**
 `maintenance, medallion, chart` · **MED** · PARTIAL
