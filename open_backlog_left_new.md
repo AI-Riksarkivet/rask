@@ -1796,6 +1796,28 @@ measured (~10-14 MiB per commit pas
 
 **LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
 `medallion, tests` · **MED**
+- **AND THE TEST'S GUIDANCE IS RIGHT IN SPIRIT AFTER ALL — the script is stale against the estate's own
+  shape. Measured with `check`, not `read`, after a `read` filtered only by user misled me.**
+  `check user:service-bronze-to-silver writer warehouse:lance_catalog` -> **False**, and so is
+  `service-medallion-producer`. `can_write_data` on `table:silver$features` -> **False**. So no cascade
+  identity holds a rung anywhere on this estate.
+  **THE REASON IS THE WAREHOUSE ID.** `namespace:silver`'s tuples read:
+  ```
+  user:alice          -- owner  -> namespace:silver
+  warehouse:acme-wh   -- parent -> namespace:silver
+  table:silver$events -- child  -> namespace:silver
+  ```
+  The live parent is **`warehouse:acme-wh`**, while `seed_medallion_fga.sh` hardcodes
+  `WAREHOUSE="warehouse:lance_catalog"` and takes no argument. That is precisely the
+  `<zone-warehouse-id>` the failing test tells a reader to pass — so the test describes the script that
+  SHOULD exist, and the script is the thing that drifted. Running it as-is would write rungs on a
+  warehouse this estate's namespaces do not hang from, which is worse than not running it: tuples that
+  look like a grant and authorize nothing.
+  *So the actionable shape is now concrete and needs no ruling:* `seed_medallion_fga.sh` takes the
+  warehouse (and, for a tenant cascade, the project prefix) as parameters instead of hardcoding one
+  zone's id, and the e2e either calls it or drives the submitter. My earlier bullet said the script
+  "does not even claim" to cover this; the truth is narrower — it claims one warehouse and the estate
+  has moved to several.
 - **I FILED THIS AS A HIGH PLATFORM DEFECT AND IT IS NOT ONE. The correction is the row.** I measured a
   real refusal — `ingest_denied sub='service-bronze-to-silver' relation='can_write_data'
   outputs=['acme-silver$dummy']`, with `table:acme-silver$dummy`, `table:acme-silver$features` and
