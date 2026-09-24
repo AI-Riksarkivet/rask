@@ -65,6 +65,11 @@ const (
 	OsvScannerImage = "ghcr.io/google/osv-scanner:v2.4.0"
 	TrivyImage      = "ghcr.io/aquasecurity/trivy:0.73.0"
 	TruffleHogImage = "ghcr.io/trufflesecurity/trufflehog:3.96.0"
+	// Detectors whose verification cannot tell a credential from an ordinary identifier, so a
+	// "verified" hit from them measures this repo's vocabulary rather than its secrets. ONE
+	// constant because both passes must exclude the same set — a report that differs from the
+	// gate is how a finding gets seen and not acted on, or acted on and never seen.
+	ExcludedDetectors = "Lob"
 )
 
 // The `+ignore` set repeated on the source-scanning functions below is images.go's, and it is
@@ -222,6 +227,20 @@ func (m *Rask) ScanConfig(
 // commits a key that genuinely works, and then it is not a suggestion. Nothing to baseline, nothing to
 // suppress, no continue-on-error — so unlike the other two legs this one lands BLOCKING.
 //
+// ── And why "verified" is only as good as the provider that answers ──
+// Verification is an API call, so a provider that accepts ANY string of its key shape turns every
+// match into a "verified" credential. Measured 2026-09-24 on this repo's history: the gating pass
+// returned 620 findings and ALL 620 were Lob — whose test keys are `test_`-prefixed, which is the
+// name of every pytest function ever written here. Raw results included
+// `test_every_lineage_producer_uri_resolves`. Not one was a credential, and the gate had failed every
+// run since it landed on 2026-08-05: fifty days of a red build that gated nothing and taught everyone
+// to look past it. The 24 Postgres and 3 Stripe matches in the same scan stayed UNVERIFIED, which is
+// the mechanism working — those hostnames answer nobody.
+//
+// So a detector is excluded when its verification carries no information, and excluded from BOTH
+// passes: leaving it in the report-only pass buries the findings a reviewer needs under hundreds it
+// must ignore. The list is narrow and each entry earns its place by measurement, never by being noisy.
+//
 // The unverified findings are still PRINTED (the first pass below) so a reviewer can see them; they
 // just do not fail the build. Pass --fail-on-unverified=true to gate on those too.
 //
@@ -258,10 +277,10 @@ func (m *Rask) ScanSecrets(
 		// build for a reason that has nothing to do with the repo.
 		WithExec([]string{"sh", "-c", fmt.Sprintf(
 			"echo '=== all findings (verified + unverified) — REPORT ONLY ==='; "+
-				"trufflehog git file:///src --no-update --results=verified,unknown,unverified || true; "+
-				"echo '=== gate: %s — a hit here FAILS the build ==='; "+
-				"trufflehog git file:///src --no-update --results=%[1]s --fail",
-			gate,
+				"trufflehog git file:///src --no-update --exclude-detectors=%[2]s --results=verified,unknown,unverified || true; "+
+				"echo '=== gate: %[1]s — a hit here FAILS the build ==='; "+
+				"trufflehog git file:///src --no-update --exclude-detectors=%[2]s --results=%[1]s --fail",
+			gate, ExcludedDetectors,
 		)}).
 		Stdout(ctx)
 }
