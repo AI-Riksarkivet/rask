@@ -214,3 +214,21 @@ catalog:
     # one cluster is invisible to review and gone the next time the release is rebuilt.
     baseCredentialRefs:
       s3://lh067-second-store/data: lh067-second-store
+
+# ALERTING ON, because a proven rule nothing evaluates is a resilience claim with no mechanism.
+# Measured 2026-09-24: `chart/alerting/rules.yml` carries 52 rules across 13 groups, every one proven
+# to fire by `make alert-rules-check` and accepted by the real engine by `make alert-rules-drill` —
+# and `observability.alerting.enabled` defaults false, so neither vmalert nor Alertmanager is deployed
+# and NOTHING on this estate reads any of them. The Collector ships, GreptimeDB stores and Perses
+# draws; none of those can turn a series into a page.
+#
+# NO CREDENTIAL IS NEEDED TO TURN IT ON, which is why this is a dev-values line and not a request:
+# `observability.alerting.webhookUrl` is empty and the chart's own comment says what that means —
+# Alertmanager still receives, groups and holds the alert, and pages nowhere. A firing rule becomes
+# visible (`:9093`) instead of theoretical, and adding a real receiver later is a secret question this
+# estate does not have to answer first.
+#
+# LOCAL ONLY. `chart/values.yaml` keeps it false so an estate opts in deliberately.
+observability:
+  alerting:
+    enabled: true
