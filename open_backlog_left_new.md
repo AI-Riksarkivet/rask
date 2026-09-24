@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **94 are blocked on a decision** and **102 can be picked up today**.
+**196 open items**, of which **95 are blocked on a decision** and **101 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 5 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 4 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -794,7 +794,43 @@ of mine in this same session.**
   So the material this row needs now exists: a key per producer, that no other producer can read.
   *What has NOT changed:* `_StampedAuthor` still bounds the forgery — a forged subject must hold the
   rung on every output — so this closes a non-repudiation gap, not an authorization one.
-- *What is left:* Add a transport-independent producer signature over the CloudEvent and verify it in the bus door (`on_lineage_event` / `enforce_bus_authz`), with the signing seam in `packages/lineage-kit` so it survives a Dapr retreat; `_StampedAuthor` states the gap ("nothing proves the stamp"). Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
+- **THE DOOR VERIFIED A DOCUMENT NO PRODUCER EVER SIGNED, and it was found by writing the first
+  admit-path test (2026-09-24).** Every earlier door test was driven with a key that cannot verify, so
+  it passed whether or not the round-trip was lossless. Reproduced against the real emitter and the
+  real model: `ON THE WIRE verify: True`, `AT THE DOOR verify: False`, with `.job.facets` and
+  `.outputs[0].facets` ADDED by `model_dump` because `RunEvent`'s facet fields are
+  `Field(default_factory=dict)`. The arrived mapping is now a REQUIRED argument through every hop —
+  both outer ones were measured UNGATED, since replacing the arrived dict with a dump in
+  `services/consumer.py` and in the outbox relay left the whole estate green. The relay half was the
+  expensive one: a refusal there DELETES the staged object, which is the only durable copy a crashed
+  publish has.
+- **TWO OF THE THREE PRODUCERS SIGN (2026-09-24).** `maintenance` signs at its emitter's single
+  `_publish`; the `medallion` signs at `core/lineage_publish.emit_lineage`, which replaced nine direct
+  calls to the outbox seam across four modules and is now gated as the service's only exit. Signing in
+  the SHARED seam was rejected: it takes `event_json`, so it would parse-sign-reserialise (a second
+  serialisation of a signed document is the defect above), and it would start the catalog signing the
+  moment a key existed. Verified against the running estate rather than the chart: all four medallion
+  identities are in OpenBao's privileged list, each app's Dapr Configuration allows its own
+  `service-token-<identity>` and denies every peer's, and `lance-config-lineage` has
+  `defaultAccess: allow` so the door can resolve any producer's key.
+- **blocked:** Owner ruling on WHAT A SIGNATURE MEANS FOR A HUMAN-AUTHORED EVENT — the catalog is the
+  third producer and it cannot sign under the current binding. Measured: all eight catalog emit sites
+  pass `author=token.sub`, the signed-in person's OIDC subject, and `lineage_emit.py:319` stamps it as
+  both `author.name` and `author.sub`; `verify_signed_event` requires the signer to EQUAL the stamped
+  subject, and the catalog holds a service credential, not that person's. Three answers, and each
+  gives something up. **(a) Stamp the service in `author.sub`** and keep the person in `author.name`:
+  signing works, and the graph stops answering "which person dropped this table" — which is the
+  question the audit reads. **(b) Relax the binding** to "the signer is a known producer vouching for
+  the stamped author": the catalog signs, `enforce_output_authz` still bounds a forged author to one
+  holding `can_write_data`, and the non-repudiation this row exists to close stays OPEN for human
+  events, because any producer could then vouch for any person. **(c) The catalog never signs**, and
+  unsigned stays permitted on the one door humans use. There is no fourth: an HMAC held by a service
+  cannot attribute an act to a person non-repudiably, and only the person's own credential could.
+  **HMAC IS SYMMETRIC and that is a property of the whole row, not of this fork:** the verifier holds
+  every signer's key, so lineage can forge any producer's signature. This closes non-repudiation
+  BETWEEN producers, never against the verifier.
+- *What is left:* The catalog producer, which needs the ruling above, and then the flip from
+  verify-if-present to require-a-signature. Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
 - **ITS STRENGTH IS CAPPED BY [[ZT-001]], and that should be settled first.** A producer signature needs
   a KEY, and every key a producer holds today is derivable from `dapr.appToken`: the shared app token
   itself, and the per-identity `service-token-<identity>` which `lance.dedicatedServiceToken` computes
