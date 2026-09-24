@@ -1823,3 +1823,23 @@ identity be seeded and then denied to its own owner, which boots fine and 401s l
 {{- join " " (compact $mine | uniq | sortAlpha) -}}
 {{- end -}}
 {{- end -}}
+
+{{- /* Buckets `orphan_buckets` must never report, as ONE expression both maintenance deployments read.
+
+       The category's contract is that a clean report certifies the estate, so a finding no operator can
+       action holds the total above zero forever and blocks the trash purge with it — the config's own
+       comment records `rask-observability` doing exactly that until `minio.buckets` was wired in.
+
+       A MULTIBASE DATA BASE IS THE SAME KIND OF THING and was missed: `catalog.multibase.dataBases` is an
+       estate DECLARATION that a bucket exists and may be addressed, and no warehouse record claims it, so
+       the reconcile called it an orphan. Measured live 2026-09-24: `orphan_buckets: 'lh067-second-store'`
+       — declared in this repo's own `values-local.yaml` — was one of the two findings holding
+       `trash_purge_blocked`. Declared here rather than in each template, because two copies of a bucket
+       list is how the first one drifted. */ -}}
+{{- define "lance.maintenancePlatformBuckets" -}}
+{{- $buckets := .Values.minio.buckets | default list -}}
+{{- range ((.Values.catalog).multibase).dataBases | default list -}}
+{{- $buckets = append $buckets (first (splitList "/" (trimPrefix "s3://" .))) -}}
+{{- end -}}
+{{- join "," (compact $buckets | uniq) -}}
+{{- end -}}

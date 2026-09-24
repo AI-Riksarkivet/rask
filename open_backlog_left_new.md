@@ -1237,6 +1237,23 @@ FROM opentelemetry_logs` returns exa
   not an unnamed defect — and the drift gauge showing it fall by 96% is the clearest evidence in this
   register that the reconcile plane does what it claims.
 - **THE ALERT EXISTS AND NOTHING ON THIS ESTATE EVALUATES IT — measured 2026-09-20, and it is true of all 50 rules, not just the new one.** `MaintenanceDriftRising` is written and PROVEN to fire by `promtool test rules` (a rise from the real 989 to 1010 fires naming `category="orphaned_trash"`; a flat 989 over 3.5 h does not; a category draining to zero does not). It cannot be OBSERVED firing here: `observability.alerting.enabled` defaults false (`values.yaml:2997`) and neither vmalert nor Alertmanager is deployed — confirmed on the live estate, where the Collector, GreptimeDB and Perses ARE running. So metrics flow and are queryable, dashboards render, and **no rule in the file is evaluated by anything**. That is a resilience posture worth stating rather than a gap in this row: the proving harness is what stands in for the engine, which is exactly why `make alert-rules-check` runs the rules against synthetic series instead of only checking their syntax.
+- **THE TRASH PURGE IS BLOCKED BY TWO FINDINGS, AND ONE OF THEM IS THIS REPO'S OWN DECLARATION
+  (2026-09-24; half fixed).** With the categories finally readable, the block has names:
+  `trash_purge_blocked ... 2 finding(s) across ['orphan_buckets', 'orphan_files']` where
+  **`orphan_buckets = 'lh067-second-store'`** and
+  **`orphan_files = 's3://lance-catalog/bronze/pages/_transactions/18-….txn'`**.
+  `lh067-second-store` is declared by `chart/values-local.yaml` itself — `catalog.multibase.dataBases:
+  - s3://lh067-second-store/data` — and `MAINTENANCE_S3_PLATFORM_BUCKETS` was fed only from
+  `minio.buckets`, so an opted-in second store was an orphan on every tick forever. That is precisely
+  the shape the setting's own comment records for `rask-observability`: "a finding no operator can ever
+  action, on a report whose whole contract is that a clean run certifies the estate". **Fixed**: one
+  helper both maintenance deployments read, gated by
+  `tests/unit/test_a_declared_bucket_is_never_reported_as_an_orphan.py` (including that the two
+  deployments agree and the default render gains nothing), mutation-checked twice.
+  *Still open, and it is the other half:* a single unreferenced `.txn` file gates the purge, and
+  nothing clears an orphan FILE — the same unsatisfiable-gate shape `NON_GATING_CATEGORIES` argues
+  against for four other categories. Whether `orphan_files` should gate at all is a ruling this row
+  does not carry.
 - **AND THREE OF ITS THIRTEEN CATEGORIES NEVER REACHED THE WIRE — found 2026-09-24, fixed the same
   day.** The recorder sat inside `build_report`, which compares three STORES; `_orphan_category` runs
   AFTER it and attaches the three that read STORAGE. So the pod logged thirteen categories and
