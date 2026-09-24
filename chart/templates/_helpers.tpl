@@ -1783,6 +1783,20 @@ identity be seeded and then denied to its own owner, which boots fine and 401s l
 {{- range ($root.Values.medallion.mediaStageRunners | default list) }}{{- $all = append $all .serviceIdentity }}{{- end -}}
 {{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}
 {{- with (get (($root.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}
+{{- /* NOTIFICATIONS, and it is the one identity here that reads a DEFAULT rather than a declaration.
+       `services.yaml` and `bootstrap-admin.yaml` both admit this subject as
+       `env.RASK_LINEAGE_SERVICE_IDENTITY | default "notifications"`, so the allowlist and the app's own
+       `IngressSettings.service_identity` agree with no values at all — deliberately, because
+       `helm upgrade --reuse-values` renders an old release's values and drops a key that did not exist
+       then. This list was the third half and it was missing: measured live 2026-09-24, the subject was
+       ALLOWED and had NO CREDENTIAL, so the cron reconciler called lineage's `/events` with no bearer
+       and took 401 (not 403) about ten times a minute, while `dlq.notifications` held 102 parked events
+       in a rolling 7-day window. Both of this service's ingresses were down at once, which is the exact
+       state its two-ingress design exists to prevent. Read through the SAME expression as the other two
+       consumers so a future declaration moves all three together. */ -}}
+{{- if $root.Values.services.notifications -}}
+{{- $all = append $all ((get ($root.Values.services.notifications.env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") -}}
+{{- end -}}
 {{- join " " (compact $all | uniq | sortAlpha) -}}
 {{- end -}}
 
@@ -1800,6 +1814,11 @@ identity be seeded and then denied to its own owner, which boots fine and 401s l
 {{- if eq $app (($root.Values.services.ingest).daprAppId | default "ingest") -}}
 {{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $mine = append $mine . }}{{- end -}}
 {{- with (get (($root.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $mine = append $mine . }}{{- end -}}
+{{- end -}}
+{{- /* Without this the app is minted a token it is then DENIED: `deniedSecrets` is `all - mine`, so an
+       app absent from this switch is scoped away from every `service-token-*` including its own. */ -}}
+{{- if eq $app (($root.Values.services.notifications).daprAppId | default "notifications") -}}
+{{- $mine = append $mine ((get (($root.Values.services.notifications).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") | default "notifications") -}}
 {{- end -}}
 {{- join " " (compact $mine | uniq | sortAlpha) -}}
 {{- end -}}

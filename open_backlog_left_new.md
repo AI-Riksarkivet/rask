@@ -1243,6 +1243,34 @@ FROM opentelemetry_logs` returns exa
 
 **LH-148 · Nothing re-ingests the JetStream `dlq.<appId>` stream, so a parked lineage event older than 7d retention is unrecoverable**
 `lineage, chart` · **MED** · PARTIAL
+- **THE DLQ IS NOT A BACKLOG, IT IS A ROLLING LOSS — and one of its four subjects is fed by a live
+  credential gap (2026-09-24).** Read off the broker rather than inferred: `DLQ` holds **412 messages**
+  over `dlq.>` with `Maximum Age: 7d`, `Allows Msg Delete: false` and `Allows Purge: false`, first
+  sequence dated exactly seven days back and last **70 minutes** ago. Nothing drains it and nothing can;
+  messages leave only by expiring. By subject: `dlq.lineage.events` **291**, `dlq.notifications` **102**,
+  `dlq.bronze-to-silver` **12**, `dlq.maintenance.work` **7**.
+- **AND THE NOTIFICATIONS SHARE IS STILL ARRIVING, because that service has no credential at all.**
+  `RASK_APP_TOKEN_FROM_STORE=true` makes it resolve `service-token-<identity>`, its identity is the
+  documented default `notifications`, and **`lance.allServiceIdentities` mints no token for it** — the
+  list carries the trainer, the frontend, maintenance's catalog identity, the catalog, the stage
+  runners and ingest, and nothing for notifications. Measured from the lineage pod with a control:
+  `service-token-service-bronze-to-silver` -> **200**, `service-token-notifications` -> **500**,
+  `service-token-service-notifications` -> **500**.
+  So the cron reconciler calls lineage's `/events` with NO BEARER and takes **401** — an authentication
+  failure, not the 403 a missing grant gives — about ten times a minute. **Both of this service's
+  ingresses are therefore down at once**, which is the exact state the two-ingress design exists to
+  prevent: `services.yaml` already made the ALLOWLIST and the app's CLAIM agree on the literal
+  `notifications`, and the third half, the token, was never minted.
+  *Fixed in the chart the same day* (`lance.allServiceIdentities` + `lance.identitiesForApp`, read
+  through the same expression the other two consumers use so a future declaration moves all three),
+  gated by `tests/unit/test_every_app_that_fetches_a_token_has_one_minted.py`. **Not yet deployed** —
+  it lands with the roll, and the 401 is the reading that says whether it worked.
+- **ONE PARKED LINEAGE EVENT, READ IN FULL, AND IT IS RESIDUE.** The newest on `dlq.lineage.events`
+  (2026-09-20) is a cascade `FAIL` whose `errorMessage` is *"catalog refused to create
+  'acme-silver$features': HTTP 403 — can_create_table required on namespace:acme-silver"*. Re-checked
+  today: `can_create_table` on that namespace and `can_write_data` on that table are both **True**, and
+  the table carries its parent and owner tuples. So that subject's population is the fixture residue
+  this row already argues for — which is what makes the `dlq.notifications` share the part that is not.
 - **PARTIAL (2026-09-22 re-audit): some closes-when clauses have shipped and others have not.**
 STILL UNMET: The replay mechanism itself is unblocked work and nobody has started it: re-present a parked
 `dlq.<appId>` delivery to the ingest handler, idempotent on run_id, without republishing to
