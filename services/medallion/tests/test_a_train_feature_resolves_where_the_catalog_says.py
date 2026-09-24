@@ -19,6 +19,8 @@ dataset; it stops being the FIRST answer.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -97,3 +99,48 @@ def test_a_CATALOG_OUTAGE_falls_back_rather_than_refusing_the_submission(monkeyp
     settings = _settings(MEDALLION_CATALOG_URL="http://catalog:2333")
 
     assert train.feature_uri_for(settings, "silver$features") == "s3://lake/medallion/silver"
+
+
+def test_the_ray_JOB_is_given_the_location_the_door_RESOLVED(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The hop the legs above cannot see: validation asks the catalog, the submission composed a path.
+
+    `feature_uri_for` is correct and was called in exactly one place — `_resolve_version`, which opens
+    the dataset locally to pin a version. The URI the Ray job actually reads is built separately, and it
+    was `stage_uri_for`. So the door validated against the governed location and then trained against
+    `<base>/medallion/<stage>`, a path the catalog never vended.
+
+    MEASURED ON THE DEPLOYED ESTATE 2026-09-24, through `tests/e2e-py/test_governed_union_e2e.py`: the
+    run lands attributed and FAILS with
+    `train: Dataset at path medallion/silver/_versions/5.manifest was not found` — and `medallion/silver`
+    holds ZERO keys on that estate while 27 paths matching `silver` exist under catalog-managed names.
+    A gate on the innermost call proves nothing about the hop that does the work.
+    """
+    monkeypatch.setattr(train.catalog_register, "describe_table_location", lambda **_kw: "s3://tenant-wh/90fabc")
+    seen: dict[str, Any] = {}
+
+    async def fake_submit(_settings_arg: Any, *, features_json: str, **_kw: Any) -> str:
+        seen["features"] = json.loads(features_json)
+        return "submitted"
+
+    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
+    event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
+
+    outcome = asyncio.run(train.handle_train_trigger(_settings(MEDALLION_CATALOG_URL="http://catalog:2333"), event))
+
+    assert outcome == {"status": "SUCCESS"}
+    assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": "s3://tenant-wh/90fabc"}]
+
+
+def test_an_unregistered_feature_still_reaches_the_job_by_its_composed_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The fallback has to survive the same hop — the demo shape trains from the composed layout."""
+    seen: dict[str, Any] = {}
+
+    async def fake_submit(_settings_arg: Any, *, features_json: str, **_kw: Any) -> str:
+        seen["features"] = json.loads(features_json)
+        return "submitted"
+
+    monkeypatch.setattr(train.ray_submit, "submit_train_job", fake_submit)
+    event = {"data": {"token": "t1", "model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}}
+
+    assert asyncio.run(train.handle_train_trigger(_settings(), event)) == {"status": "SUCCESS"}
+    assert seen["features"] == [{"dataset": "silver$features", "version": 7, "uri": "s3://lake/medallion/silver"}]

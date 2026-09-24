@@ -315,7 +315,14 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
     # ARTIFACT_BASE verbatim), so the storage-layout convention lives in exactly one service. Built
     # from the VALIDATED fields only — never `{**f, …}` — so unvalidated extra keys on a bus-forged
     # feature dict can't ride into the Ray job env.
-    enriched = [{"dataset": f["dataset"], "version": f["version"], "uri": stage_uri_for(settings, f["dataset"])} for f in features]
+    # ASKED, NOT COMPOSED — `feature_uri_for`, the same resolver `_resolve_version` opens the dataset
+    # with, so the URI this door VALIDATED against is the URI the job READS. Composing here instead
+    # made the two disagree on a governed estate, where the catalog vends an opaque per-table location:
+    # measured 2026-09-24, the run landed attributed and failed on `Dataset at path
+    # medallion/silver/_versions/5.manifest was not found` while that estate's `medallion/silver`
+    # prefix held zero keys. A threadpool hop because the resolver is a blocking catalog read, bounded
+    # by MAX_FEATURES; with no catalog configured it asks nothing and the composed path stands.
+    enriched = [{"dataset": f["dataset"], "version": f["version"], "uri": await run_in_threadpool(feature_uri_for, settings, f["dataset"])} for f in features]
     try:
         outcome = await ray_submit.submit_train_job(
             settings,
