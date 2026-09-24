@@ -958,11 +958,22 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     # run id is seeded the single-tenant way. `events.py` picks the seed shape from the RUN, not from
     # how this suite was invoked, and a NUL-bearing seed is unreachable from the `-`-joined one.
     train_rid = _run_id_for("train", token, project="")
+
+    # LANDING AND SUCCEEDING ARE TWO PROPERTIES, and this poll asks only the first. This suite exists
+    # for the credential: the Ray train job has no Dapr sidecar, so a 401 on the HTTP ingest loses the
+    # provenance entirely and the run never appears. A run in ANY terminal state has appeared, so the
+    # credential worked — whether the training itself succeeded is the next assertion's business.
+    #
+    # WAITING FOR COMPLETE CONFLATED THEM AND KILLED THE GUARD. Measured 2026-09-24 against the
+    # deployed estate: the run landed as FAIL, attributed to `service-trainer`, and this poll burned
+    # its whole 180s budget and failed — so the attribution assertion below, the one thing this test
+    # exists to make, never executed. Its message said "a 401 here means it regressed", which was the
+    # opposite of what had happened and cost two wrong diagnoses before the event facet was read.
     _poll(
-        lambda: _run_states(lineage, alice).get(train_rid) == "COMPLETE",
+        lambda: _run_states(lineage, alice).get(train_rid) in ("COMPLETE", "FAIL"),
         timeout=180.0,
         message=lambda: (
-            f"governed training lineage did not land for token {token} "
+            f"governed training lineage did not land at all for token {token} "
             f"(state={_run_states(lineage, alice).get(train_rid)!r}) — the service-door credential "
             f"is what makes this land; a 401 here means it regressed"
         ),
@@ -976,6 +987,17 @@ def test_train_lineage_lands_attributed_under_governance(stack: tuple[str, str],
     train_run = next((r for r in runs.json().get("runs", []) if r["run_id"] == train_rid), None)
     assert train_run is not None, f"train run {train_rid} not visible to alice"
     assert train_run.get("author") == "service-trainer", train_run
+
+    # ...and only NOW whether the training itself succeeded. Separated so a job that fails for its own
+    # reasons reports that, rather than wearing a credential regression's clothes. Measured 2026-09-24
+    # on the deployed estate, this is what it reports: the job fails resolving its feature dataset,
+    # because `stage_uri_for` maps `silver$features` to `<base>/medallion/silver` by CONVENTION while a
+    # governed estate keeps silver tables at catalog-managed locations — the demo-tier resolution that
+    # module's own docstring flags as future #115 work.
+    assert train_run.get("state") == "COMPLETE", (
+        f"training lineage landed and is correctly attributed, so the service-door credential is fine — "
+        f"the JOB failed: {train_run}. Read the run's errorMessage facet in the lineage feed for why."
+    )
 
     # The model node is governed like everything else: alice sees it (warehouse-reader cascades to
     # namespace:models via the seeded parent), an ungranted user does not.
