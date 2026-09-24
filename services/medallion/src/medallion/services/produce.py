@@ -19,7 +19,6 @@ call reports ``register_failed`` and the route answers 503, and nothing half-ran
 
 from __future__ import annotations
 
-import json
 import logging
 from functools import partial
 
@@ -29,10 +28,10 @@ from opentelemetry import trace
 from opentelemetry.trace import Status, StatusCode
 
 from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, project_namespace
+from medallion.core.lineage_publish import emit_lineage
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register
 from medallion.services.compute import seed_bronze
-from service_kit.lakehouse import outbox
 from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError, project_root
 
 
@@ -276,16 +275,7 @@ async def produce(
             # the reconcile relay to recover (author + source_uri the version+schema back-fill can't reconstruct).
             # Degrades to a plain publish when lineage_outbox_uri is unset (the default). This makes the feature
             # uniform ("every lineage publish is staged") and the values.yaml claim literally true.
-            await outbox.publish_lineage_with_outbox(
-                dapr,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=bronze_event["run"]["runId"],
-                event_json=json.dumps(bronze_event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
-            )
+            await emit_lineage(dapr, settings, bronze_event)
         except Exception as exc:
             # THE CONVENTION THIS SPAN WAS MISSING. `ingest/workflow.py`, `medallion/workflow.py`,
             # `flows/activities.py` and `maintenance/sweep.py` all call `set_status` here; the cascade

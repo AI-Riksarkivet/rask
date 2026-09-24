@@ -58,6 +58,7 @@ from pydantic import BaseModel, Field
 
 from medallion.core.best_effort import best_effort
 from medallion.core.config import outbound_app_token
+from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import record_promotion_outcome, record_stage_outcome, record_train_outcome
 from medallion.schemas.promotion import PromotionSpec
 from service_kit.activity_loop import run_activity
@@ -828,22 +829,12 @@ def _publish_fail_event(event: dict[str, Any], spec: StageJobSpec) -> None:
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
-    from service_kit.lakehouse import outbox
 
     settings = get_settings()
 
     async def _send() -> None:
         async with DaprClient() as client:
-            await outbox.publish_lineage_with_outbox(
-                client,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=event["run"]["runId"],
-                event_json=json.dumps(event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
-            )
+            await emit_lineage(client, settings, event)
 
     _run_async(_send())
 
@@ -1097,7 +1088,6 @@ def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
 
     from medallion.core.config import get_settings
     from medallion.schemas.events import _PRODUCER
-    from service_kit.lakehouse import outbox
     from service_kit.openlineage import custom_facet, run_id_for
 
     settings = get_settings()
@@ -1145,16 +1135,7 @@ def _publish_train_fail(spec: TrainJobSpec, reason: str) -> None:
 
     async def _send() -> None:
         async with DaprClient() as client:
-            await outbox.publish_lineage_with_outbox(
-                client,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=run_id,
-                event_json=json.dumps(event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
-            )
+            await emit_lineage(client, settings, event)
 
     _run_async(_send())
 
@@ -1489,7 +1470,6 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
 
     from medallion.core.config import get_settings
     from medallion.schemas.events import build_run_event
-    from service_kit.lakehouse import outbox
 
     spec = payload.spec
     outcome = payload.outcome
@@ -1528,16 +1508,7 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
 
     async def _publish() -> None:
         async with DaprClient() as client:
-            await outbox.publish_lineage_with_outbox(
-                client,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=event["run"]["runId"],
-                event_json=json.dumps(event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
-            )
+            await emit_lineage(client, settings, event)
 
     # emit_promotion_outcome logged NOTHING at all on this path, while its docstring calls workflow
     # history "a cache; lineage is the durable record" — a dropped publish silently emptied the record.

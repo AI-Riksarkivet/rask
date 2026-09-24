@@ -19,7 +19,6 @@ unauthorized stage runner returns ``DROP`` (redelivery won't grant the role), so
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from datetime import UTC, datetime
@@ -38,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from lineage_kit.consume import LineageDoc
 from medallion.core.best_effort import best_effort
 from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token, project_namespace
+from medallion.core.lineage_publish import emit_lineage
 from medallion.core.metrics import (
     record_denied,
     record_media_underivable,
@@ -60,7 +60,6 @@ from medallion.services.transform_spec import UndeclaredTransformError, resolve_
 from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, uri_within
 from service_kit import dapr_publish
 from service_kit.governed import fga
-from service_kit.lakehouse import outbox
 from service_kit.lakehouse.executor import Capability, RunState
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lakehouse.quality import Assertion, assert_quality
@@ -353,16 +352,7 @@ async def _emit_start_run(
     # The staged copy is what carries the durability. `publish_lineage_with_outbox` stages before it
     # publishes, so a swallowed publish still leaves an object for the relay to drain.
     try:
-        await outbox.publish_lineage_with_outbox(
-            dapr,
-            outbox_uri=settings.lineage_outbox_uri,
-            storage_options=settings.storage_options(),
-            run_id=start_event["run"]["runId"],
-            event_json=json.dumps(start_event),
-            pubsub_name=settings.pubsub,
-            topic_name=settings.lineage_topic,
-            timeout_seconds=settings.publish_timeout_seconds,
-        )
+        await emit_lineage(dapr, settings, start_event)
     except Exception as exc:  # noqa: BLE001 — a run must start even when its announcement cannot
         log.warning(
             "medallion_stage_start_emit_failed",
@@ -409,16 +399,7 @@ async def _emit_fail_run(
         error_message=error_message,
         promotion_status=promotion_status,
     )
-    await outbox.publish_lineage_with_outbox(
-        dapr,
-        outbox_uri=settings.lineage_outbox_uri,
-        storage_options=settings.storage_options(),
-        run_id=fail_event["run"]["runId"],
-        event_json=json.dumps(fail_event),
-        pubsub_name=settings.pubsub,
-        topic_name=settings.lineage_topic,
-        timeout_seconds=settings.publish_timeout_seconds,
-    )
+    await emit_lineage(dapr, settings, fail_event)
 
 
 class StagePreflight(BaseModel):
@@ -1294,16 +1275,7 @@ def _build_stage_event(
 
 async def _emit_complete(dapr: DaprClient, settings: MedallionSettings, run_event: dict[str, Any]) -> None:
     """Stage the COMPLETE in the object-store outbox, publish it, drop on ack."""
-    await outbox.publish_lineage_with_outbox(
-        dapr,
-        outbox_uri=settings.lineage_outbox_uri,
-        storage_options=settings.storage_options(),
-        run_id=run_event["run"]["runId"],
-        event_json=json.dumps(run_event),
-        pubsub_name=settings.pubsub,
-        topic_name=settings.lineage_topic,
-        timeout_seconds=settings.publish_timeout_seconds,
-    )
+    await emit_lineage(dapr, settings, run_event)
 
 
 async def _review_reasons(

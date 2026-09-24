@@ -87,7 +87,7 @@ async def test_the_head_span_goes_ERROR_when_the_cascade_never_fires(monkeypatch
     tracer, exporter = _recording_tracer()
     monkeypatch.setattr(produce_module, "tracer", tracer)
     monkeypatch.setattr(produce_module, "seed_bronze", _seeder())
-    monkeypatch.setattr(produce_module.outbox, "publish_lineage_with_outbox", _failing_publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", _failing_publish)
 
     result = await produce_module.produce(cast("Any", None), _settings(), token="idem-error")
     assert result["status"] == "publish_failed", f"the failure path did not run: {result}"
@@ -116,7 +116,7 @@ async def test_the_head_span_COVERS_the_publish_not_just_the_seed(monkeypatch: p
         with tracer.start_as_current_span("test.publish"):
             pass
 
-    monkeypatch.setattr(produce_module.outbox, "publish_lineage_with_outbox", publish_with_a_child)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", publish_with_a_child)
     await produce_module.produce(cast("Any", None), _settings(), token="idem-cover")
 
     head, child = _span(exporter, "medallion.produce"), _span(exporter, "test.publish")
@@ -132,7 +132,7 @@ async def test_the_head_span_EXISTS_when_compute_is_disabled(monkeypatch: pytest
     where the head emits a synthetic event and is most worth watching."""
     tracer, exporter = _recording_tracer()
     monkeypatch.setattr(produce_module, "tracer", tracer)
-    monkeypatch.setattr(produce_module.outbox, "publish_lineage_with_outbox", _ok_publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", _ok_publish)
 
     await produce_module.produce(cast("Any", None), _settings(MEDALLION_COMPUTE_ENABLED="false"), token="idem-nocompute")
 
@@ -147,7 +147,7 @@ async def test_a_successful_head_is_not_marked_ERROR(monkeypatch: pytest.MonkeyP
     tracer, exporter = _recording_tracer()
     monkeypatch.setattr(produce_module, "tracer", tracer)
     monkeypatch.setattr(produce_module, "seed_bronze", _seeder())
-    monkeypatch.setattr(produce_module.outbox, "publish_lineage_with_outbox", _ok_publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", _ok_publish)
 
     result = await produce_module.produce(cast("Any", None), _settings(), token="idem-ok")
     assert result["status"] == "produced", f"the happy path did not run: {result}"
@@ -199,7 +199,7 @@ async def test_the_media_head_span_goes_ERROR_when_its_emit_fails(monkeypatch: p
     tracer, exporter = _recording_tracer()
     monkeypatch.setattr(media_module, "tracer", tracer)
     monkeypatch.setattr(media_module, "_seed_and_ingest", lambda settings, bronze_uri: _SeedResult())
-    monkeypatch.setattr(media_module.outbox, "publish_lineage_with_outbox", _failing_publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", _failing_publish)
 
     result = await media_module.ingest_media(cast("Any", None), _media_settings(), token="idem-media")
     assert result["status"] == "publish_failed", f"the failure path did not run: {result}"

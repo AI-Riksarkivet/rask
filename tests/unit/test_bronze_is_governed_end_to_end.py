@@ -161,7 +161,7 @@ async def _produce_once(catalog: Any, monkeypatch: pytest.MonkeyPatch) -> tuple[
     async def publish(*_a: object, **kwargs: object) -> None:
         head.append(json.loads(cast("str", kwargs["event_json"])))
 
-    monkeypatch.setattr(produce_module.outbox, "publish_lineage_with_outbox", publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", publish)
     settings = MedallionSettings.model_validate(
         {
             "MEDALLION_COMPUTE_ENABLED": "true",
@@ -275,7 +275,7 @@ async def _ingest_media_once(catalog: Any, tmp_path: Path, monkeypatch: pytest.M
     async def publish(*_a: object, **_kw: object) -> None:
         return None
 
-    monkeypatch.setattr(media_module.outbox, "publish_lineage_with_outbox", publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", publish)
     settings = MedallionSettings.model_validate(
         {
             "MEDALLION_COMPUTE_ENABLED": "true",

@@ -108,16 +108,20 @@ def test_opening_the_run_cannot_FAIL_the_run() -> None:
 
     Every other emit in this module may propagate, and should: a terminal describes work that already
     happened, so losing it loses the only record. This one runs BEFORE the work, so it gets the
-    opposite rule. The staged copy still carries the durability — `publish_lineage_with_outbox` stages
-    before it publishes, so a swallowed publish leaves an object for the relay to drain.
+    opposite rule. The staged copy still carries the durability — `emit_lineage` stages before it
+    publishes, so a swallowed publish leaves an object for the relay to drain.
+
+    The emit is `emit_lineage`, the service's one signing door ([[LH-064]]), so the name this walks for
+    is that call rather than the outbox seam it wraps. A gate that walks for a name nothing calls any
+    more measures nothing, which is what this one said about itself when the seam moved.
     """
     import ast
     from pathlib import Path
 
     tree = ast.parse((Path(__file__).resolve().parents[1] / "src" / "medallion" / "services" / "transform.py").read_text())
     emitter = next(n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "_emit_start_run")
-    publishes = [c for c in ast.walk(emitter) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "publish_lineage_with_outbox"]
+    publishes = [c for c in ast.walk(emitter) if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "emit_lineage"]
 
-    assert publishes, "_emit_start_run no longer publishes — this gate is measuring something that moved"
+    assert publishes, "_emit_start_run no longer emits — this gate is measuring something that moved"
     guarded = [t for t in ast.walk(emitter) if isinstance(t, ast.Try) and any(p in ast.walk(t) for p in publishes)]
     assert guarded, "the START publish is unguarded, so a sidecar hiccup aborts a stage that has written nothing"

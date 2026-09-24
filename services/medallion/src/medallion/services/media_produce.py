@@ -20,7 +20,6 @@ route answers 503, and nothing half-ran.
 from __future__ import annotations
 
 import io
-import json
 import logging
 from functools import partial
 
@@ -33,11 +32,11 @@ from opentelemetry.trace import Status, StatusCode
 from PIL import Image
 
 from medallion.core.config import MedallionSettings, dedicated_token_for, outbound_app_token
+from medallion.core.lineage_publish import emit_lineage
 from medallion.schemas.events import build_run_event
 from medallion.services import catalog_register
 from medallion.services.ingest import IngestResult, ingest_schema_for, ingest_to_bronze
 from service_kit import dapr_publish
-from service_kit.lakehouse import outbox
 from service_kit.lakehouse.objectfs import s3_filesystem
 from service_kit.lakehouse.sources import S3FileSystemSource
 
@@ -242,16 +241,7 @@ async def ingest_media(dapr: DaprClient, settings: MedallionSettings, token: str
             # blob commit and the publish ack now leaves the FULL event staged for the reconcile relay. The
             # media-chain TRIGGER below stays a bare publish on purpose: the outbox re-ingests lineage, it never
             # re-fires triggers — trigger loss is the documented idempotency-token caller-retry contract.
-            await outbox.publish_lineage_with_outbox(
-                dapr,
-                outbox_uri=settings.lineage_outbox_uri,
-                storage_options=settings.storage_options(),
-                run_id=event["run"]["runId"],
-                event_json=json.dumps(event),
-                pubsub_name=settings.pubsub,
-                topic_name=settings.lineage_topic,
-                timeout_seconds=settings.publish_timeout_seconds,
-            )
+            await emit_lineage(dapr, settings, event)
         except Exception as exc:
             # The estate's convention, on the stage that failed — `stage` is already the log's own
             # discriminator, so the span description says which half of the chain broke.

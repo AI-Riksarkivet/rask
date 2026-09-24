@@ -81,7 +81,7 @@ def published(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     async def publish(*_a: object, **kwargs: object) -> None:
         events.append(json.loads(cast("str", kwargs["event_json"])))
 
-    monkeypatch.setattr(produce_module.outbox, "publish_lineage_with_outbox", publish)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", publish)
     return events
 
 

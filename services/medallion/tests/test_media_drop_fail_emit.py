@@ -118,7 +118,7 @@ def test_a_broken_compensating_control_is_logged_instead_of_swallowed(
     async def _boom(*_a: object, **_k: object) -> None:
         raise RuntimeError("outbox unreachable")
 
-    monkeypatch.setattr(tf.outbox, "publish_lineage_with_outbox", _boom)
+    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", _boom)
     dapr, settings = _FakeDapr(), _settings(tmp_path)
 
     with caplog.at_level(logging.ERROR):
