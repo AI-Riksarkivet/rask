@@ -8,7 +8,8 @@
 # static platform bucket set natively (spec.buckets = minio.buckets); this Job covers what a static
 # CR list cannot express — the values-driven medallion zone buckets (a map whose unset entries fall
 # back to minio.bucket) and the observability toggle — and it also runs against
-# minio.externalEndpoint (managed S3, where no Tenant exists). Idempotent: `mc mb --ignore-existing`.
+# minio.externalEndpoint (managed S3, where no Tenant exists). Idempotent by construction: the
+# script heads each bucket before creating it.
 #
 # It is ALSO the estate's only detector for a Tenant that silently refused to provision — see the
 # VERIFY step in the container script below (live-proof 2026-07-28, defect 3).
@@ -32,7 +33,7 @@ spec:
       # The explicit component label is the P4 landmine (see bootstrap-admin.yaml): pods without one
       # are invisible to any component-scoped NetworkPolicy `from` list. Here it is LOAD-BEARING, not just
       # hygiene — minio:9000's ingress admits an enumerated client list ONLY (network-policy.yaml 3d,
-      # which names minio-mkbucket), so an unlabeled pod's `mc alias set` loop waits forever under a
+      # which names minio-mkbucket), so an unlabeled pod's store-ready wait loops forever under a
       # policy-enforcing CNI and every prod install/upgrade wedges before a bucket exists.
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -42,94 +43,99 @@ spec:
       {{- if .Values.security.serviceAccounts.enabled }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       {{- end }}
+      {{- /* A FIRST-PARTY IMAGE NEEDS THE ESTATE'S PULL SECRETS, which `minio/mc` never did: it came
+             from a public registry, so this Job was the one pod spec that could skip them. Running the
+             rask image makes it an ordinary first-party workload and
+             `test_a_first_party_pod_can_pull_from_a_private_registry` holds it to the same rule. */}}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       volumes:
         {{- include "lance.tmpVolume" . | nindent 8 }}
       containers:
-        - name: mc
-          image: {{ .Values.minio.mcImage }}
-          {{- /* uid 65532 and the tmp pair are the SAME shape the scoped-users Job runs with, on the
-                 SAME mcImage — observed Complete 1/1 on the cluster 2026-09-23. `mc` writes its client
-                 config under $HOME, so a read-only rootfs needs HOME pointed at the emptyDir below. */}}
-          {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
+        - name: mkbucket
+          {{- /* THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses ANONYMOUS pulls
+                 on every registry this estate can reach — measured 2026-09-24 with the bearer
+                 decoded, Docker Hub answers `access: []` and quay.io `actions: []`, both 401 on the
+                 manifest — so on a node that pulls fresh this Job never starts and every bucket the
+                 lakehouse needs is simply absent ([[XC-075]]). `scripts/ensure_bucket.py` runs out
+                 of the rask image, exactly as the backup CronJob runs `control_root_backup.py`, and
+                 drives `packages/storage`'s `s3_client`: the same S3 client the fleet uses, in an
+                 image no registry can withdraw. Both halves below are plain S3 calls — `mb` is
+                 `create_bucket`, `ls` is `head_bucket`.
+
+                 `lance.catalogImage`, not a second name for the same artefact: the catalog family
+                 already runs one image under many entrypoints, and naming it again here would be
+                 the duplicate-specification defect `test_every_surface_names_the_same_image_for_
+                 the_same_component` exists to catch. It also means a side-loaded stack builds
+                 nothing extra for this Job. */}}
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
           resources:
-            requests: { cpu: "10m", memory: "32Mi" }
-            limits: { cpu: "200m", memory: "128Mi" }
-          # The S3 root secret from a k8s Secret (not interpolated plaintext into the shell command) —
-          # `mc alias set` reads it from "$MINIO_SECRET_KEY", so it never appears in the rendered Job
-          # command/args. Same credential pair the Tenant boots with (credsSecret, templates/secrets.yaml).
+            requests: { cpu: "10m", memory: "64Mi" }
+            limits: { cpu: "500m", memory: "256Mi" }
+          # THE SECRET IS NAMED, NEVER CARRIED — the same `secretKeyRef` the Tenant boots with
+          # (credsSecret, templates/secrets.yaml), so the credential never appears in the rendered
+          # Job. `packages/storage` reads the canonical `RASK_S3_ENDPOINT_URL` plus the standard AWS
+          # pair; `configured_endpoint` owns that resolution order, so nothing here restates it.
           env:
-            - name: MINIO_SECRET_KEY
+            - name: AWS_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
-            - { name: HOME, value: /tmp }
+            - { name: AWS_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
+            - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
+            - { name: AWS_REGION, value: {{ .Values.minio.region | default "us-east-1" | quote }} }
           command:
-            - sh
-            - -c
+            - python
+            - /srv/ensure_bucket.py
+            {{- /* CREATE: the values-driven buckets a static CR list cannot express. */}}
+            - {{ .Values.minio.bucket | quote }}
+            {{- if .Values.observability.enabled }}
+            - {{ .Values.observability.bucket | quote }}
+            {{- end }}
+            {{- range $ns, $bkt := .Values.medallion.buckets }}
+            {{- if and $bkt (ne $bkt $.Values.minio.bucket) }}
+            - {{ $bkt | quote }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.minio.externalEndpoint }}
+            {{- /* CREATE (external S3): with no Tenant, nothing else provisions the static set. */}}
+            {{- range .Values.minio.buckets }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- else }}
+            {{- /* VERIFY, never create: these are the operator's (minio.buckets -> the Tenant's
+                   spec.buckets). live-proof 2026-07-28 defect 3 — an operator refused to reconcile
+                   its Tenant and NOTHING said so, because this Job only ever created its OWN
+                   buckets and went green. Creating them here would paper over a Tenant that is
+                   still broken for everything else it owns. The script's own `_verify` carries the
+                   rest of that reasoning and the diagnosis it prints. */}}
+            - --verify
+            {{- range .Values.minio.buckets }}
+            - {{ . | quote }}
+            {{- end }}
+            - --verify-timeout
+            - {{ .Values.minio.bucketVerifyTimeoutSeconds | quote }}
+            {{- /* THE DIAGNOSIS TRAVELS WITH THE FAILURE. The script knows S3; only this chart knows
+                   which StatefulSet to describe and which value is the usual cause, so the guidance
+                   is passed in rather than taught to an S3 helper. It is the same text the shell
+                   version echoed, and `test_the_bucket_init_verifies_the_buckets_the_operator_owns`
+                   holds the Job to carrying it. */}}
+            - --missing-hint
             - |
-              set -e
-              until mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"; do echo wait-minio; sleep 3; done
-
-              # --- CREATE: the values-driven buckets a static CR list cannot express. -----------------
-              mc mb --ignore-existing rfs/{{ .Values.minio.bucket }}
-              {{- if .Values.observability.enabled }}
-              mc mb --ignore-existing rfs/{{ .Values.observability.bucket }}  # GreptimeDB object store
-              {{- end }}
-              {{- range $ns, $bkt := .Values.medallion.buckets }}
-              {{- if and $bkt (ne $bkt $.Values.minio.bucket) }}
-              mc mb --ignore-existing rfs/{{ $bkt }}  # medallion storage zone ({{ $ns }}: ingest-source / gold-sink)
-              {{- end }}
-              {{- end }}
-
-              {{- if .Values.minio.externalEndpoint }}
-              # --- CREATE (external S3): with no Tenant, nothing else provisions the static set. -------
-              {{- range .Values.minio.buckets }}
-              mc mb --ignore-existing rfs/{{ . }}
-              {{- end }}
-              {{- else }}
-              # --- VERIFY: the buckets the OPERATOR owns (minio.buckets → Tenant spec.buckets). -------
-              # live-proof 2026-07-28, defect 3 (under the previous store): its operator refused to reconcile the Tenant
-              # (StatefulSetUpdateValidationFailed, "Reconcile is blocked by user-fixable configuration"),
-              # so spec.buckets was never provisioned — and NOTHING said so. The store answered, this Job
-              # went green because it only ever created its OWN buckets, and the single symptom surfaced
-              # three layers up as an HTTP 500 in the storage browser. A provisioner that never checks
-              # what it did not provision is how a whole data plane goes missing quietly.
-              #
-              # So: poll (the Tenant provisions asynchronously — a fresh install legitimately needs a
-              # moment) and then FAIL LOUDLY, naming every missing bucket and the command that shows why.
-              # Deliberately NOT `mc mb` on these: creating them here would paper over a Tenant that is
-              # still broken for every OTHER thing it owns, and the next failure would be even further
-              # from its cause.
-              want="{{ join " " .Values.minio.buckets }}"
-              # A tick counter, not `date` arithmetic: the mc image is a micro base and carrying a
-              # dependency on coreutils' date would trade one silent failure for another.
-              tries={{ div (.Values.minio.bucketVerifyTimeoutSeconds | int) 5 | max 1 }}
-              i=0
-              while : ; do
-                missing=""
-                for b in $want; do
-                  mc ls "rfs/$b" >/dev/null 2>&1 || missing="$missing $b"
-                done
-                [ -z "$missing" ] && break
-                i=$((i + 1))
-                [ "$i" -ge "$tries" ] && break
-                echo "waiting for the MinIO StatefulSet to provision:$missing"
-                sleep 5
-              done
-              if [ -n "$missing" ]; then
-                echo "!! MISSING BUCKETS:$missing"
-                echo "!! These come from values minio.buckets, which render into the Tenant's spec.buckets —"
-                echo "!! this Job creates them with mc. A failure here is the store refusing the create, so"
-                echo "!! the operator did not reconcile the Tenant. Diagnose with:"
-                echo "!!   kubectl describe statefulset {{ include "lance.minioHost" . }}"
-                echo "!!   kubectl logs -l app.kubernetes.io/component=minio"
-                echo "!! The usual cause is a wedged StatefulSet update ('Reconcile is blocked by user-fixable"
-                echo "!! configuration') — e.g. a storageClass the cluster does not have (minio.storageClass"
-                echo "!! defaults to \"\" = the cluster default) or an immutable field changed under the operator."
-                echo "!! Raise minio.bucketVerifyTimeoutSeconds if this store is merely slow."
-                exit 1
-              fi
-              echo "verified the operator-owned bucket set:$want"
-              {{- end }}
+              !! These come from values minio.buckets, which render into the Tenant's spec.buckets.
+              !! This Job deliberately does NOT create them: a failure here means the operator did not
+              !! reconcile the Tenant, and creating them would hide that for everything else it owns.
+              !! Diagnose with:
+              !!   kubectl describe statefulset {{ include "lance.minioHost" . }}
+              !!   kubectl logs -l app.kubernetes.io/component=minio
+              !! The usual cause is a wedged StatefulSet update ('Reconcile is blocked by user-fixable
+              !! configuration') — e.g. a storageClass the cluster does not have (minio.storageClass
+              !! defaults to "" = the cluster default) or an immutable field changed under the operator.
+              !! Raise minio.bucketVerifyTimeoutSeconds if this store is merely slow.
+            {{- end }}
 {{- end }}

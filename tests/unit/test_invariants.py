@@ -2056,7 +2056,28 @@ def test_the_bucket_init_verifies_the_buckets_the_operator_owns() -> None:
     missing = [b for b in expected if b not in job]
     assert not missing, f"the bucket-init Job never mentions these operator-owned buckets, so it cannot notice they are absent: {missing}"
 
-    assert "exit 1" in job, "the bucket-init Job must FAIL when the operator-owned buckets are absent, not log and pass"
+    # BOTH HOPS, because the failure now crosses a seam. The Job asks for verification and the SCRIPT
+    # is what exits non-zero, so a check on either alone can be satisfied while the other quietly
+    # stops failing — the Job could drop `--verify` and still contain the word, or the script could
+    # start returning 0 and the Job would never notice.
+    # AN EXACT TOKEN IN THE PARSED COMMAND, not a substring of the document: `--verify-timeout` and
+    # any `--verify-anything` contain the flag's text, so a substring check is satisfied by a Job that
+    # no longer verifies. Measured while mutation-checking this gate — renaming the flag to
+    # `--verify-DISABLED` left it green.
+    command = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["command"]
+    assert "--verify" in command, f"the bucket-init Job must ask for VERIFICATION of the operator-owned set, not merely create its own: {command}"
+    verified = command[command.index("--verify") + 1 :]
+    unverified = [bucket for bucket in expected if bucket not in verified]
+    assert not unverified, f"these operator-owned buckets are not in the Job's --verify set: {unverified}"
+    verifier = (REPO / "scripts" / "ensure_bucket.py").read_text(encoding="utf-8")
+    assert "def _verify(" in verifier, "scripts/ensure_bucket.py no longer has the verify path the Job invokes"
+    assert "    return 1" in verifier.split("def _verify(", 1)[1].split("\ndef ", 1)[0], (
+        "the verify path must FAIL when the operator-owned buckets are absent, not log and pass"
+    )
+    assert "create_bucket" not in verifier.split("def _verify(", 1)[1].split("\ndef ", 1)[0], (
+        "the verify path must never CREATE a bucket the operator owns — that papers over a Tenant that is still broken"
+    )
+
     assert "kubectl describe statefulset" in job, "the failure message must carry the command that shows WHY the store did not come up"
     assert "minio.storageClass" in job, "the failure message must name the usual cause (a StorageClass the cluster does not have)"
     # The create/verify split: the operator's buckets must not be silently created behind its back.
