@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from lance_namespace import PermissionDeniedError
@@ -61,7 +61,7 @@ def _parse(data: object) -> RunEvent | DatasetEvent:
 
 
 async def handle_cloud_event(
-    repository: LineageRepository, body: Any, authorize: Callable[[RunEvent | DatasetEvent], Awaitable[None]] | None = None
+    repository: LineageRepository, body: Any, authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[None]] | None = None
 ) -> dict[str, str]:
     """Ingest one Dapr-delivered CloudEvent. ``body["data"]`` is the OpenLineage event (Dapr parses it
     since we publish with ``datacontenttype=application/json``). ``body`` is an untrusted external
@@ -116,7 +116,11 @@ async def handle_cloud_event(
         return _SUCCESS
     if authorize is not None:
         try:
-            await authorize(event)
+            # THE ARRIVED DICT RIDES ALONG, not just the parsed event. The door's signature check covers
+            # the bytes the producer signed, and a model is a reconstruction of them — it grows every
+            # field the schema defaults. `data` is what Dapr delivered; the parse above is for everything
+            # else.
+            await authorize(event, data if isinstance(data, dict) else {})
         except UnauthoredRunError as exc:
             # UNREPAIRABLE, so it is consumed rather than parked — see `UnauthoredRunError`. Measured on
             # the deployed estate 2026-09-18: 37 of 44 refusals in one hour, all one run id, one burst

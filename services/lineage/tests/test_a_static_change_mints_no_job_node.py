@@ -19,6 +19,7 @@ spec-correct and carries no `eventType` at all.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
@@ -91,7 +92,7 @@ async def test_a_static_event_is_AUTHORIZED_before_it_reaches_the_graph() -> Non
     repo = _Repo()
     seen: list[str | None] = []
 
-    async def authorize(event: RunEvent | DatasetEvent) -> None:
+    async def authorize(event: RunEvent | DatasetEvent, _arrived: Mapping[str, Any]) -> None:
         seen.append(event.run_id)
 
     assert await handle_cloud_event(cast(Any, repo), {"data": _static_payload()}, authorize=authorize) == {"status": "SUCCESS"}

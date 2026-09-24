@@ -13,6 +13,7 @@ after ``app`` exists (the import-order constraint the split must preserve).
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from dapr.ext.fastapi import DaprApp
@@ -49,8 +50,8 @@ async def on_lineage_event(event: dict[str, Any], request: Request, _: Annotated
     principal to resolve before the body is parsed, and the parse is the consumer's (it owns the
     malformed-payload ack contract)."""
 
-    async def authorize(parsed: RunEvent | DatasetEvent) -> None:
-        await enforce_bus_authz(parsed, request, get_settings())
+    async def authorize(parsed: RunEvent | DatasetEvent, arrived: Mapping[str, Any]) -> None:
+        await enforce_bus_authz(parsed, request, get_settings(), arrived)
 
     return await handle_cloud_event(request.app.state.repository, event, authorize)
 
@@ -104,7 +105,7 @@ async def _reingest_from_the_park(event: dict[str, Any], request: Request, run_i
     if repository is None or not run_id:
         return False
     try:
-        await handle_cloud_event(repository, event, lambda parsed: enforce_bus_authz(parsed, request, get_settings()))
+        await handle_cloud_event(repository, event, lambda parsed, arrived: enforce_bus_authz(parsed, request, get_settings(), arrived))
     except Exception as exc:  # noqa: BLE001 — a replay must never turn a park into a 500 or a retry loop
         log.info("dapr_dead_letter_replay_failed", extra={"run_id": run_id, "error": str(exc)})
         return False

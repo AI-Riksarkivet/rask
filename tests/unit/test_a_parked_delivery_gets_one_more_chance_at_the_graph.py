@@ -72,7 +72,11 @@ def _client(monkeypatch: pytest.MonkeyPatch, repo: _Repo, *, authorized: bool = 
 
     get_settings.cache_clear()
 
-    async def _authz(parsed: Any, request: Any, settings: Any) -> None:
+    # THE WHOLE SIGNATURE, including `arrived` — the door verifies a producer signature against the
+    # bytes that reached it, so the bytes are an argument. A three-parameter double raises TypeError
+    # inside the route's `except Exception`, which reads as an authz OUTAGE and answers RETRY: the
+    # replay then looks like an unreachable authorizer rather than a broken stand-in.
+    async def _authz(parsed: Any, request: Any, settings: Any, arrived: Any) -> None:
         if not authorized:
             from lineage.api.fga_deps import UnauthoredRunError
 

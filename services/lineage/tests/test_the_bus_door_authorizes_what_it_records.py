@@ -18,6 +18,7 @@ to the repository, which never pass through this door.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any, cast
 
 import pytest
@@ -91,7 +92,7 @@ def test_a_REFUSED_event_is_DROPPED_never_retried() -> None:
     operator reads it as infrastructure rather than policy."""
     repo = _Repo()
 
-    async def deny(_: RunEvent | DatasetEvent) -> None:
+    async def deny(_: RunEvent | DatasetEvent, _arrived: Mapping[str, Any]) -> None:
         raise PermissionDeniedError("can_write_data required on outputs: bronze$pages")
 
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": _event().model_dump(by_alias=True)}, deny))
@@ -105,7 +106,7 @@ def test_an_AUTHZ_OUTAGE_retries_and_never_drops() -> None:
     exact failure this whole durable lane exists to prevent."""
     repo = _Repo()
 
-    async def unavailable(_: RunEvent | DatasetEvent) -> None:
+    async def unavailable(_: RunEvent | DatasetEvent, _arrived: Mapping[str, Any]) -> None:
         raise RuntimeError("authorization service is not available")
 
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": _event().model_dump(by_alias=True)}, unavailable))
@@ -117,7 +118,7 @@ def test_an_AUTHORIZED_event_still_lands() -> None:
     """The guard is worthless if all it proves is that a raising callback raises."""
     repo = _Repo()
 
-    async def allow(_: RunEvent | DatasetEvent) -> None:
+    async def allow(_: RunEvent | DatasetEvent, _arrived: Mapping[str, Any]) -> None:
         return None
 
     status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": _event().model_dump(by_alias=True)}, allow))
@@ -151,7 +152,7 @@ def test_an_UNAUTHORED_bus_event_is_refused() -> None:
         app = _App()
 
     with pytest.raises(PermissionDeniedError, match="author"):
-        asyncio.run(fga_deps.enforce_bus_authz(_event(), cast(Any, _Request()), cast(Any, _Settings())))
+        asyncio.run(fga_deps.enforce_bus_authz(_event(), cast(Any, _Request()), cast(Any, _Settings()), _event().model_dump(by_alias=True)))
 
 
 def test_the_ROUTE_itself_refuses_an_unauthorized_delivery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +260,7 @@ def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.
     _deny_all(monkeypatch)
     event = _event(author={"name": "someone", "sub": "someone"})
     stored = event.model_dump(by_alias=True)
-    asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings())))
+    asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
 
 
 def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,7 +277,7 @@ def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest
     event = _event(author={"name": "mallory", "sub": "mallory"})
     stored = _event(author={"name": "the-real-author", "sub": "the-real-author"}).model_dump(by_alias=True)
     with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings())))
+        asyncio.run(fga_deps.enforce_bus_authz(event, _request(_Feed(stored)), cast(Any, _Settings()), event.model_dump(by_alias=True)))
 
 
 def test_an_event_the_feed_has_NEVER_seen_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -285,7 +286,7 @@ def test_an_event_the_feed_has_NEVER_seen_is_refused(monkeypatch: pytest.MonkeyP
 
     _deny_all(monkeypatch)
     with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.enforce_bus_authz(_event(author={"name": "x", "sub": "x"}), _request(_Feed(None)), cast(Any, _Settings())))
+        asyncio.run(fga_deps.enforce_bus_authz(_event(author={"name": "x", "sub": "x"}), _request(_Feed(None)), cast(Any, _Settings()), {}))
 
 
 def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -296,6 +297,10 @@ def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not
 
     _deny_all(monkeypatch)
     unauthored = _event()
-    asyncio.run(fga_deps.enforce_bus_authz(unauthored, _request(_Feed(unauthored.model_dump(by_alias=True))), cast(Any, _Settings())))
+    asyncio.run(
+        fga_deps.enforce_bus_authz(
+            unauthored, _request(_Feed(unauthored.model_dump(by_alias=True))), cast(Any, _Settings()), unauthored.model_dump(by_alias=True)
+        )
+    )
     with pytest.raises(PermissionDeniedError, match="author"):
-        asyncio.run(fga_deps.enforce_bus_authz(unauthored, _request(_Feed(None)), cast(Any, _Settings())))
+        asyncio.run(fga_deps.enforce_bus_authz(unauthored, _request(_Feed(None)), cast(Any, _Settings()), {}))

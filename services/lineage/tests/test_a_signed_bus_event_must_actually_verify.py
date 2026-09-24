@@ -131,4 +131,65 @@ async def test_the_BUS_DOOR_actually_runs_the_signature_gate(monkeypatch: pytest
     from lineage.core.config import LineageSettings
 
     with pytest.raises(PermissionDeniedError, match="signature"):
-        await fga_deps.enforce_bus_authz(event, cast("Request", SimpleNamespace()), cast("LineageSettings", settings))
+        await fga_deps.enforce_bus_authz(
+            event, cast("Request", SimpleNamespace()), cast("LineageSettings", settings), attach_signature(_payload(), key=KEY, identity=IDENT)
+        )
+
+
+@pytest.mark.asyncio
+async def test_the_BUS_DOOR_ADMITS_a_signature_that_IS_honest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The mirror of the test above, and the one that catches a door verifying the WRONG BYTES.
+
+    Every other case here is driven with a key that cannot verify, so it passes whether the door
+    checks the arrived event or some re-serialisation of it. Reproduced against the real models:
+    `RunEvent`'s facet fields are `Field(default_factory=dict)`, so a `model_dump` materialises
+    `job.facets = {}` and `outputs[0].facets = {}` that the producer never sent and never signed. The
+    HMAC is over the canonical body, so the honest producer is refused — and on the bus that is a
+    `_DROP` onto a `deadLetterTopic`, while on the outbox drain the staged copy is deleted outright.
+
+    A signature covers THE BYTES THAT WERE SIGNED. Anything reconstructed from them is a different
+    document, however faithfully it is rebuilt.
+    """
+    from lineage.models import RunEvent
+
+    reached: list[str] = []
+
+    async def _record(*_a: Any, **_k: Any) -> None:
+        reached.append("output-authz")
+
+    monkeypatch.setattr(fga_deps, "dedicated_token_from_store", lambda _store: keyed(**{IDENT: KEY}))
+    monkeypatch.setattr(fga_deps, "enforce_output_authz", _record)
+    settings = SimpleNamespace(fga_enabled=True, dapr_secret_store="lance-secrets")
+    arrived = attach_signature(_payload(), key=KEY, identity=IDENT)
+    event = RunEvent.model_validate({**arrived, "eventType": "COMPLETE"})
+
+    from fastapi import Request
+
+    from lineage.core.config import LineageSettings
+
+    await fga_deps.enforce_bus_authz(event, cast("Request", SimpleNamespace()), cast("LineageSettings", settings), arrived)
+    assert reached == ["output-authz"], "the signature gate refused an honest producer, or the door never reached the output check"
+
+
+@pytest.mark.asyncio
+async def test_a_BROKEN_signature_is_refused_even_when_FGA_IS_OFF(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A signature is AUTHENTICATION and must not be switchable off by an AUTHORIZATION toggle.
+
+    `fga_enabled` decides whether the estate consults OpenFGA about what a subject may write. It says
+    nothing about whether a producer is who it claims to be, and an estate running with auth on and FGA
+    off would otherwise verify nothing at all — the door's strongest guarantee disabled by a flag
+    describing a different system.
+    """
+    from lineage.models import RunEvent
+
+    monkeypatch.setattr(fga_deps, "dedicated_token_from_store", lambda _store: keyed(**{IDENT: OTHER}))
+    settings = SimpleNamespace(fga_enabled=False, dapr_secret_store="lance-secrets")
+    arrived = attach_signature(_payload(), key=KEY, identity=IDENT)
+    event = RunEvent.model_validate({**arrived, "eventType": "COMPLETE"})
+
+    from fastapi import Request
+
+    from lineage.core.config import LineageSettings
+
+    with pytest.raises(PermissionDeniedError, match="signature"):
+        await fga_deps.enforce_bus_authz(event, cast("Request", SimpleNamespace()), cast("LineageSettings", settings), arrived)

@@ -565,7 +565,11 @@ async def _drain_outbox(
             # THE SAME FUNCTION, never a second copy: it authorizes AS the subject the producer stamped,
             # which is the only principal a cron tick has. Two implementations of "may you record this" is
             # how the doors drifted apart in the first place.
-            await enforce_bus_authz(event, request, settings)
+            # THE STAGED BYTES, not a dump of the model parsed from them: the signature covers what the
+            # producer wrote into the outbox, and a re-serialisation grows the fields the schema
+            # defaults. Refusing here DELETES the event's only durable copy, so the wrong document
+            # would be the most expensive place in the estate to compare.
+            await enforce_bus_authz(event, request, settings, json.loads(event_json))
             # Graph AND durable feed, in one transaction — see `ingest_event`. The drained run reaching
             # /runs + /producers while SILENTLY absent from /events was the shape this relay exists to
             # prevent, and it is no longer expressible: there is one write.

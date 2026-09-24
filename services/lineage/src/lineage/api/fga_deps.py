@@ -27,7 +27,7 @@ Fail-closed when enabled-but-unwired (503, never silent allow).
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Annotated, Any, Final
 
 from fastapi import Depends, Request
@@ -276,7 +276,7 @@ class _StampedAuthor:
         self.sub = sub
 
 
-def enforce_signature_if_present(payload: dict[str, Any], resolver_for: Callable[[], Callable[[str], str | None]]) -> None:
+def enforce_signature_if_present(payload: Mapping[str, Any], resolver_for: Callable[[], Callable[[str], str | None]]) -> None:
     """Refuse a bus event whose carried signature does not check out ([[LH-064]]).
 
     VERIFY-IF-PRESENT, WHICH IS THE ROLLOUT AND NOT A COMPROMISE. An unsigned event passes exactly as
@@ -322,7 +322,7 @@ def enforce_signature_if_present(payload: dict[str, Any], resolver_for: Callable
         raise PermissionDeniedError(f"the event's signature does not verify for {found.identity!r}")
 
 
-async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings) -> None:
+async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, settings: LineageSettings, arrived: Mapping[str, Any]) -> None:
     """Output-scoped authz for a DAPR-DELIVERED event, as the subject the producer stamped (§ E2).
 
     The HTTP door proves WHO is ingesting (`enforce_author`) and then what they may write
@@ -345,13 +345,25 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     facets, because those are for attribution on a board and would let a producer authorize itself
     under someone else's display name.
     """
+    # OVER `arrived`, NEVER over a re-serialisation of the parsed model, and BEFORE `fga_enabled` is
+    # consulted. Two separate rules, both load-bearing:
+    #
+    # THE BYTES THAT WERE SIGNED are the only document a signature covers. `model_dump` materialises
+    # every field the model defaults — `RunEvent`'s three facet bags are `default_factory=dict`, so a
+    # dump grows `job.facets = {}` and `outputs[].facets = {}` the producer never sent. The canonical
+    # body then differs from the signed one and the honest producer is refused: a `_DROP` onto the
+    # dead-letter topic on the bus, and on the outbox drain the deletion of the event's only durable
+    # copy. Reproduced against the real emitter and the real model before this argument existed.
+    #
+    # A SIGNATURE IS AUTHENTICATION. `fga_enabled` decides whether OpenFGA is consulted about what a
+    # subject may write; it says nothing about whether the producer is who it claims to be, so gating
+    # the one on the other would let an estate with auth on and FGA off verify nothing at all.
+    enforce_signature_if_present(arrived, lambda: dedicated_token_from_store(settings.dapr_secret_store))
     if not settings.fga_enabled:
         return
+    # The DUMP, deliberately, for everything below: `_is_replay` compares byte-for-byte against the row
+    # the feed already holds, which was itself built from the model.
     payload = event.model_dump(by_alias=True)
-    # BEFORE the author is trusted for anything. A signature that does not verify makes the stamp
-    # worthless, so there is no point authorizing against it — and refusing here keeps the reason in
-    # the refusal rather than surfacing as an unrelated output denial.
-    enforce_signature_if_present(payload, lambda: dedicated_token_from_store(settings.dapr_secret_store))
     subject = author_sub_from_payload(payload)
     try:
         if not subject:

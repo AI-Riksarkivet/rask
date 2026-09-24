@@ -30,6 +30,7 @@ import copy
 import hashlib
 import hmac
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,11 +38,11 @@ from typing import Any
 #: Signed over CANONICAL JSON rather than the bytes that happened to arrive. A transport may re-encode
 #: the envelope — reorder keys, change separators — and a signature valid only for one encoder's output
 #: would start refusing honest producers the moment anything re-serialised it.
-def _canonical(payload: dict[str, Any]) -> bytes:
+def _canonical(payload: Mapping[str, Any]) -> bytes:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
-def sign_event(payload: dict[str, Any], *, key: str) -> str:
+def sign_event(payload: Mapping[str, Any], *, key: str) -> str:
     """HMAC-SHA256 over the whole event, hex-encoded.
 
     THE WHOLE EVENT, INCLUDING THE AUTHOR. Signing a subset that excludes `run.facets.author.sub`
@@ -56,7 +57,7 @@ def sign_event(payload: dict[str, Any], *, key: str) -> str:
     return hmac.new(key.encode("utf-8"), _canonical(_unsigned(payload)), hashlib.sha256).hexdigest()
 
 
-def verify_event(payload: dict[str, Any], signature: str, *, key: str) -> bool:
+def verify_event(payload: Mapping[str, Any], signature: str, *, key: str) -> bool:
     """True when `signature` was made over this exact event with this key.
 
     ANSWERS FALSE ON JUNK, never raises. This runs on the ingest path, so a verifier that threw on a
@@ -96,7 +97,7 @@ class Signature:
     value: str
 
 
-def _facets(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _facets(payload: Mapping[str, Any]) -> dict[str, Any] | None:
     """The facet bag a signature lives in — a run's for a RunEvent, the dataset's for a DatasetEvent."""
     for holder in ("run", "dataset"):
         section = payload.get(holder)
@@ -107,7 +108,7 @@ def _facets(payload: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _unsigned(payload: dict[str, Any]) -> dict[str, Any]:
+def _unsigned(payload: Mapping[str, Any]) -> dict[str, Any]:
     """The event as it was BEFORE a signature was attached.
 
     A SIGNATURE CANNOT COVER ITSELF, and getting this wrong is subtle rather than loud: signing a body
@@ -115,14 +116,17 @@ def _unsigned(payload: dict[str, Any]) -> dict[str, Any]:
     produce a different value, so the producer and the verifier disagree about an event neither has
     tampered with. Stripping first makes signing idempotent.
     """
-    stripped = copy.deepcopy(payload)
+    # `dict(...)` before the deepcopy, because the input is a read-only Mapping: the door hands over
+    # the arrived CloudEvent as it stands rather than copying it first, and the copy belongs here where
+    # it is about to be mutated.
+    stripped: dict[str, Any] = copy.deepcopy(dict(payload))
     facets = _facets(stripped)
     if facets is not None:
         facets.pop(SIGNATURE_FACET, None)
     return stripped
 
 
-def signature_of(payload: dict[str, Any]) -> Signature | None:
+def signature_of(payload: Mapping[str, Any]) -> Signature | None:
     """The signature an event carries, or None when it carries none."""
     facets = _facets(payload) or {}
     facet = facets.get(SIGNATURE_FACET)
@@ -134,7 +138,7 @@ def signature_of(payload: dict[str, Any]) -> Signature | None:
     return None
 
 
-def attach_signature(payload: dict[str, Any], *, key: str, identity: str) -> dict[str, Any]:
+def attach_signature(payload: Mapping[str, Any], *, key: str, identity: str) -> dict[str, Any]:
     """Return a copy of `payload` carrying its own signature.
 
     `identity` NAMES THE SIGNER so the verifier knows which key to try, and it is deliberately NOT read
@@ -158,7 +162,7 @@ def attach_signature(payload: dict[str, Any], *, key: str, identity: str) -> dic
     return signed
 
 
-def author_of(payload: dict[str, Any]) -> str | None:
+def author_of(payload: Mapping[str, Any]) -> str | None:
     """The subject the producer stamped on its own event, from the `author` facet."""
     facets = _facets(payload) or {}
     facet = facets.get("author")
@@ -166,7 +170,7 @@ def author_of(payload: dict[str, Any]) -> str | None:
     return sub if isinstance(sub, str) and sub else None
 
 
-def verify_signed_event(payload: dict[str, Any], *, key: str) -> bool:
+def verify_signed_event(payload: Mapping[str, Any], *, key: str) -> bool:
     """True when the event carries a signature that `key` reproduces AND the signer is the author.
 
     An event carrying NO signature answers False. Absence is a refusal, never a pass — a door that
