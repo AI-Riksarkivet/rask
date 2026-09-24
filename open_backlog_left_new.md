@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **94 are blocked on a decision** and **102 can be picked up today**.
+**196 open items**, of which **95 are blocked on a decision** and **101 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 5 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 4 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -570,7 +570,44 @@ of mine in this same session.**
 - **ALL FIVE EMITTERS PROVED LIVE 2026-09-23**, read off the bus rather than inferred from a log: each mutation was driven through the deployed catalog (`main-77dc8049`) and the resulting message fetched from the `CATALOG_CONTROL` JetStream stream on `catalog.control.v1`. The branch-create message reads `{"action":"table_branch_created", "object_id":"table:a72fcc0fns$t1", "extra":{"branch":"lh056-proof-…","from_branch":null,"from_version":null}, "actor":"user:CiQ…"}` — the TABLE as the object with the ref in `extra`, exactly as designed, and a populated `extra.branch` is also what proves the `body.name` fix (`body.branch` would have 500'd). Then `table_branch_deleted`, `table_tag_created` (version 4), `table_tag_updated` (the move) and `table_tag_deleted`. **THE REFUSAL RULE HELD TOO, unplanned:** two calls were refused 404 `TableVersionNotFoundError` for a reclaimed version and each emitted NOTHING — "a change that did not happen is never announced", observed in production rather than asserted. Every test ref was deleted afterwards; the table lists no tags and no branches.
 - **THE EVENT ARM IS SHIPPED (2026-09-23), and it lands UNTARGETED — which is a deliberate divergence from this row's own `Closes when`.** The row asks for a *targeted* control event; the estate's codified rule (`tests/unit/test_control_action_three_file_contract.py`) is that "a control event is targeted when it changes what a specific person may do or must do, not when it changes an object". A branch or tag is an object, so these five join the members that deliberately name nobody. Targeting them would have put five entries in `NAMED_ACTIONS` and five `NotificationReason`s behind them, delivering a personal notification every time anyone moved a tag. **The rule wins over the row's wording.** Five members added to `ControlAction` — `table_branch_created`/`_deleted`, `table_tag_created`/`_updated`/`_deleted` — each emitted AFTER its data-plane call (a change that did not happen is never announced), carrying the ref in `extra` and the TABLE as `object_id`, so they join a publication for the same table rather than inventing a per-ref object. The tag MOVE is the one worth the most: the name survives and the version under it changes, so a consumer holding "tag -> version" has stale state with no failing read to discover it by. Gated route-level against a real `dir` namespace by `services/catalog/tests/test_the_ref_plane_announces_itself.py`, mutation-checked twice (a mislabelled action reds it; naming the branch as `object_id` reds it). **THE ROW'S STATED COST WAS NOT REAL:** it warned that adding the token dependency would move `docs/catalog-openapi.json` and the TS client. Those operations already carried `security=[{HTTPBearer: []}]`, so the contract gates pass unchanged and nothing was regenerated. **THE ROW STAYS OPEN on its other two arms** — a `can_write_data` holder on main must not write another branch, and a vended credential must not reach a sibling branch prefix. Both need the branch-aware vended prefix (`<table>/tree/<b>/*`) that [[LH-055]]'s ruling describes, which the credentials door cannot express today because it takes no branch parameter.
 - **NOT BLOCKED — the targeting question has a codified answer, and the marker's premise is backwards.** It read "an event naming nobody is undeliverable", treating nobody as a failure; `_UNTARGETED_ACTIONS` holds **31 members that deliberately name nobody** (`tests/unit/test_control_action_three_file_contract.py`). The rule there is binary and enforced: "a control event is targeted when it changes what a specific person may do or must do, not when it changes an object." Creating a tag or a branch changes an OBJECT, so the answer is UNTARGETED. The branch half is separately RULED (2026-09-21, [[LH-055]]). What remains is ordinary work: five untargeted `ControlAction` members, listed in `_UNTARGETED_ACTIONS`, emitted from `branches.py`/`tags.py`, and kept OUT of notifications' `NAMED_ACTIONS`.
-- *What is left:* Add `type branch { parent: [table]; reader/writer; can_write_data }` to model.fga with .fga.yaml cases (today the only branch rung is can_create_branch: owner at model.fga:434). Make the FGA object chosen in authorize branch-aware, since canonical_object_id joins path segments only and the object is `table:<ns>$<table>` whatever branch the request names. Scope vended STS prefixes to `tree/<b>/` in catalog/core/vending.py, add per-branch protection and trash records, and emit parent_branch/parent_version as lineage facets (they exist only as list_branches response fields, dataplane.py:1892-1893). Add tag and branch values to ControlAction in service_kit/control_events.py:36 (45 values, none for tag or branch) and regenerate docs/catalog-openapi.json plus the TS client. The stats/index body clause and the branches/delete rung are shipped.
+- **blocked:** TWO RULINGS, and both arrived only as the rest of the row closed. **(1) Which branches a
+  table's writer may be vended for** — a branch that does not EXIST is now refused, which needed no
+  ruling; whether a `can_write_data` holder may be vended for a colleague's in-flight branch does.
+  Under the 2026-09-21 ruling there is no branch principal to gate it with, so the answer is either a
+  rule the door applies (only branches you created, say) or an explicit "every table writer may write
+  every branch" recorded in `docs/DECISIONS.md`. **(2) Per-branch trash/undrop**, which should not move
+  before [[LH-178]]: that row decides whether an erasure may delete a pinning branch, and its mechanism
+  — recreating the branch at the post-erasure head through `create_branch(reference=...)` — is the same
+  one a branch undrop would use. Building a trash record for branches first would commit this estate to
+  a recovery shape that ruling may not want.
+- **FIVE CLAUSES CLOSED 2026-09-24, and two of the original seven were VOIDED rather than done.**
+  * *No `type branch` in model.fga, and `canonical_object_id` stays branch-blind.* Both were struck by
+    the 2026-09-21 ruling: `lance_docs/ns_catalog/spec.yaml` defines three TABLE-scoped branch
+    operations and a `branch` FIELD, no branch resource, so the type would invent one. The boundary
+    lives in the vended prefix, and the blindness is correct rather than a defect.
+  * *The branch-aware vended prefix* shipped 2026-09-21 and is driven live.
+  * *The five ref-plane `ControlAction` members* shipped 2026-09-23. Regenerating the spec and the TS
+    client did NOT, and both CI legs that watch it were red until 2026-09-24 — the freshness gate had
+    been matching nothing since a flag was inserted into the codegen command on 2026-09-19.
+  * *Per-branch protection* landed as protection over the TABLE, covering the three doors that destroy
+    PART of it — `branches/delete`, `tags/delete`, `version/delete` — all of which clear the same
+    `can_drop` rung the whole-table drop clears and consulted no record. A per-branch RECORD was
+    rejected for the same reason the FGA type was: it mints a rung the spec does not define, and leaves
+    open which of two records wins when they disagree.
+  * *Branch ancestry on the wire* landed on the CONTROL event rather than as a lineage facet. The
+    branch-create announcement answered "branched from what" from the REQUEST, which is empty for the
+    common case — measured against pylance: a branch taken from main sends no `from_version` and
+    records main's current version. It now reads the parent the DATASET recorded, and is named
+    `parent_branch`/`parent_version` to match `list_branches`.
+  * *A vend names a branch the table has.* Caller-chosen input reached the policy builder unchecked, so
+    a 900 s write credential could be minted for a prefix no manifest references. Refused with the
+    spec's code 22, fail-closed on any lookup failure.
+- *What is left:* **Per-branch TRASH/UNDROP, and one owner question.** Nothing exists for the first:
+  `trash.make_record` names a table location, and a branch's recoverability is separately answerable
+  through `create_branch(reference=...)`, which is the mechanism [[LH-178]] turns on — so this clause
+  should not move before that row's ruling. The question is whether a caller holding `can_write_data`
+  on a table may be vended for ANY of its branches, including a colleague's in-flight one; a branch
+  that does not EXIST is now refused, which is the half that needed no ruling.
 - **THE BRANCH HALF IS RULED (2026-09-21) — see [[LH-055]].** lance-ns defines no branch resource (three
   table-scoped ops in `spec.yaml`), and the format brief puts branch isolation at the STORAGE PREFIX:
   "storage ACLs can be read-only on main and write-only on the branch". So no `branch` FGA type; the
