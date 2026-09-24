@@ -71,14 +71,20 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --con
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-for r in dapr https://dapr.github.io/helm-charts/ nats https://nats-io.github.io/k8s/helm/charts/ \
-         openfga https://openfga.github.io/helm-charts greptime https://greptimeteam.github.io/helm-charts/ \
-         perses https://perses.github.io/helm-charts; do :; done
-helm repo add dapr    https://dapr.github.io/helm-charts/            >/dev/null 2>&1 || true
-helm repo add nats    https://nats-io.github.io/k8s/helm/charts/     >/dev/null 2>&1 || true
-helm repo add openfga https://openfga.github.io/helm-charts          >/dev/null 2>&1 || true
-helm repo add greptime https://greptimeteam.github.io/helm-charts/   >/dev/null 2>&1 || true
-helm repo add perses  https://perses.github.io/helm-charts           >/dev/null 2>&1 || true
+# EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
+# build` needs each one even when the component is disabled, and a hand-written list is a second copy
+# of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
+# on `no repository definition for https://nvidia.github.io/k8s-device-plugin,
+# https://ray-project.github.io/kuberay-helm/` the first time it ran in five days. A tenth subchart
+# cannot break this now. `oci://` repositories are skipped — helm resolves those without a repo add.
+# Pinned by `tests/unit/test_the_e2e_stack_adds_every_chart_repository.py`.
+while read -r url; do
+  [ -n "$url" ] || continue
+  name="$(printf '%s' "$url" | sed -E 's#^https?://([^./]+).*#\1#')"
+  helm repo add "$name" "$url" >/dev/null 2>&1 || true
+done <<EOF
+$(grep -oE '^\s+repository:\s+https?://\S+' chart/Chart.yaml | awk '{print $2}' | sort -u)
+EOF
 helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 
 step "2/8 build + side-load the app image"
@@ -171,7 +177,12 @@ esac
 step "4/8 port-forward the services the suites talk to"
 kubectl port-forward "svc/$RELEASE-catalog" 2333:2333 >/tmp/pf-cat.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-lineage" 18000:8000 >/tmp/pf-lin.log 2>&1 & PF_PIDS+=($!)
-kubectl port-forward "svc/$RELEASE-rustfs"  9900:9000 >/tmp/pf-rfs.log 2>&1 & PF_PIDS+=($!)
+# `minio`, not `rustfs`. The chart has rendered the object store as StatefulSet + Service
+# `rask-minio` since 2026-09-11; nothing renders `-rustfs` any more, so this port-forward addressed an
+# object that does not exist and the chaos drill below scaled a Deployment that does not exist.
+# Verified against the running estate rather than the templates: `svc/rask-minio` and
+# `statefulset.apps/rask-minio`. Pinned by `tests/unit/test_the_e2e_stack_names_objects_the_chart_renders.py`.
+kubectl port-forward "svc/$RELEASE-minio"  9900:9000 >/tmp/pf-rfs.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex"     5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)
 # The AGE Postgres itself. The outbox-crash suite asserts RECOVERY at the source of truth (the run landed in
@@ -373,8 +384,11 @@ if [ "${E2E_CHAOS:-1}" = "1" ]; then
   # the $-delimited id makes chaos-$1 a CHILD of mbns (not a root namespace).
   gov_create() { curl -s -o /dev/null -w '%{http_code}' -m15 -H "authorization: Bearer $ALICE" \
     -X POST "$CAT/v1/namespace/mbns\$chaos-$1/create"; }
-  restore_dep() { kubectl scale "deploy/$1" --replicas=1 >/dev/null 2>&1 || true
-                  kubectl rollout status "deploy/$1" --timeout=180s >/dev/null 2>&1 || true; }
+  # A KIND, not an assumed Deployment. The object store is a StatefulSet (`rask-minio`) and OpenFGA is
+  # a Deployment, so a helper that hard-codes `deploy/` silently no-ops on half its callers — and a
+  # no-op restore leaves the estate scaled to zero for every test after it.
+  restore_dep() { kubectl scale "${2:-deploy}/$1" --replicas=1 >/dev/null 2>&1 || true
+                  kubectl rollout status "${2:-deploy}/$1" --timeout=180s >/dev/null 2>&1 || true; }
 
   b=$(gov_create base); [ "$b" = "200" ] || { echo "!! chaos baseline create expected 200, got $b"; exit 1; }
   echo "   baseline governed create = 200 ✓"
@@ -392,11 +406,11 @@ if [ "${E2E_CHAOS:-1}" = "1" ]; then
 
   # 2. RustFS (data plane) down → the S3 write fails CLOSED (a write with no object store would be data loss).
   echo "   -- RustFS outage --"
-  kubectl scale "deploy/$RELEASE-rustfs" --replicas=0 >/dev/null
+  kubectl scale "statefulset/$RELEASE-minio" --replicas=0 >/dev/null
   n=0; down=""; for _ in $(seq 1 40); do n=$((n+1)); down=$(gov_create "s$n"); [ "$down" != "200" ] && break; sleep 2; done
-  if [ "$down" = "200" ]; then restore_dep "$RELEASE-rustfs"; echo "!! RustFS down but create STILL 200 — a write with no object store is data loss"; exit 1; fi
+  if [ "$down" = "200" ]; then restore_dep "$RELEASE-minio" statefulset; echo "!! the object store is down but create STILL 200 — a write with no object store is data loss"; exit 1; fi
   echo "   RustFS down → governed create $down (fail-closed) ✓"
-  restore_dep "$RELEASE-rustfs"
+  restore_dep "$RELEASE-minio" statefulset
   up=""; for _ in $(seq 1 50); do up=$(gov_create "sr$RANDOM"); [ "$up" = "200" ] && break; sleep 3; done
   [ "$up" = "200" ] || { echo "!! create did not recover after RustFS restored (got $up)"; exit 1; }
   echo "   RustFS restored → governed create 200 (recovered) ✓"

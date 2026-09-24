@@ -86,13 +86,20 @@ kind get clusters 2>/dev/null | grep -qx "$CLUSTER" || kind create cluster --nam
 # anything later repoints it.
 kind export kubeconfig --name "$CLUSTER"
 export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
-# ALL declared chart dependencies' repos — `helm dependency build` needs every one even when the
-# component is disabled (greptime/perses are dependencies regardless of observability.enabled).
-helm repo add dapr    https://dapr.github.io/helm-charts/          >/dev/null 2>&1 || true
-helm repo add nats    https://nats-io.github.io/k8s/helm/charts/   >/dev/null 2>&1 || true
-helm repo add openfga https://openfga.github.io/helm-charts        >/dev/null 2>&1 || true
-helm repo add greptime https://greptimeteam.github.io/helm-charts/ >/dev/null 2>&1 || true
-helm repo add perses  https://perses.github.io/helm-charts         >/dev/null 2>&1 || true
+# EVERY https REPOSITORY `chart/Chart.yaml` DECLARES, derived rather than listed. `helm dependency
+# build` needs each one even when the component is disabled, and a hand-written list is a second copy
+# of the chart's own dependency set: measured 2026-09-24, it named five of the nine, so the lane died
+# on `no repository definition for https://nvidia.github.io/k8s-device-plugin,
+# https://ray-project.github.io/kuberay-helm/` the first time it ran in five days. A tenth subchart
+# cannot break this now. `oci://` repositories are skipped — helm resolves those without a repo add.
+# Pinned by `tests/unit/test_the_e2e_stack_adds_every_chart_repository.py`.
+while read -r url; do
+  [ -n "$url" ] || continue
+  name="$(printf '%s' "$url" | sed -E 's#^https?://([^./]+).*#\1#')"
+  helm repo add "$name" "$url" >/dev/null 2>&1 || true
+done <<EOF
+$(grep -oE '^\s+repository:\s+https?://\S+' chart/Chart.yaml | awk '{print $2}' | sort -u)
+EOF
 helm repo update >/dev/null && helm dependency build ./chart >/dev/null
 bash scripts/dagger-image.sh --name rest-catalog --tag "$CATALOG_IMG" >/dev/null
 bash scripts/dagger-image.sh --name ray-lance --tag "$RAY_IMG" >/dev/null
