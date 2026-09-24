@@ -1381,6 +1381,11 @@ only after completion). The Job runs forever. Observed on the live estate 2026-0
 `activeDeadlineSeconds` is the only one of the three that bounds a pod that is HEALTHY and stuck, so it
 is the backstop the other two cannot be. Thirty minutes is deliberately generous — a bootstrap that has
 not finished in that long is not slow, it is stuck — so it fails no deploy that was going to succeed.
+
+OBSERVED DOING IT, not assumed: a probe Job on this cluster carrying `until false; do echo wait-forever;
+sleep 3; done` — r229's exact shape — and a 20-second deadline was terminated by Kubernetes with
+`Failed=DeadlineExceeded` (2026-09-24). The three-bound reasoning above is only worth anything if the
+one bound that applies actually fires here.
 */}}
 {{- define "lance.bootstrapJobDeadline" -}}
 activeDeadlineSeconds: 1800
