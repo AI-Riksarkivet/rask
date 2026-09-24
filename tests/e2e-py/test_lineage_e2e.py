@@ -99,10 +99,11 @@ def dsn() -> str:
 
 
 def test_medallion_ingest_and_lineage_queries(dsn: str, sample: _Sample) -> None:
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
     from lineage.schemas import LineageGraph, Neighbors, Producers
-    from lineage.services.repository import LineageRepository
 
     events = [RunEvent.model_validate(e) for e in sample.events()]
 
@@ -110,7 +111,7 @@ def test_medallion_ingest_and_lineage_queries(dsn: str, sample: _Sample) -> None
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             for event in events:
                 await repo.ingest_event(event)
             upstream = await repo.upstream(sample.ds("gold$catalog"))
@@ -157,9 +158,10 @@ def test_run_inputs_pin_versions_against_age(dsn: str) -> None:
     Only unit-proven before (the endpoint test uses a fake repo); this drives the real Cypher
     (_LINK_READ + _SET_READ_VERSION on ingest, _RUN_INPUTS on read) so a graph quirk that dropped the pin
     — as the live graph once did (280 READ edges, zero versions) — fails HERE, not silently in prod."""
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
-    from lineage.services.repository import LineageRepository
 
     rid = "22222222-2222-5222-8222-222222222222"
     event = RunEvent.model_validate(
@@ -193,7 +195,7 @@ def test_run_inputs_pin_versions_against_age(dsn: str) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             await repo.ingest_event(event)
             return (await repo.run_inputs(rid)).inputs
         finally:
@@ -246,9 +248,10 @@ def test_discovery_lists_against_age(dsn: str, sample: _Sample) -> None:
     ``list_jobs`` (the job -> written-datasets fold) — the discovery reads a normal ``uv run pytest``
     otherwise never executes against a database.
     """
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
-    from lineage.services.repository import LineageRepository
 
     events = [RunEvent.model_validate(e) for e in sample.events()]
 
@@ -256,7 +259,7 @@ def test_discovery_lists_against_age(dsn: str, sample: _Sample) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             for event in events:
                 await repo.ingest_event(event)
             all_ds = await repo.list_datasets()
@@ -329,12 +332,12 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
 
     import lance
     import pyarrow as pa
+    from lineage_boot import booted_repository
 
     from lineage.core.age import make_pool, run_cypher
     from lineage.core.reconcile import read_storage_version, reconcile_all
     from lineage.models import RunEvent
     from lineage.schemas import ReconcileState
-    from lineage.services.repository import LineageRepository
     from service_kit.openlineage import run_id_for
 
     # The back-fill run id is now a deterministic UUID (spec fix), not the readable seed string.
@@ -368,8 +371,7 @@ def test_reconcile_backfills_a_dropped_write(dsn: str, tmp_path: Path) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
-            await repo.ensure_events_table()  # the back-fill now writes a feed row too
+            repo = await booted_repository(pool)
             # The AGE graph persists across runs — clear this test's dataset + runs so it starts clean
             # (else a prior back-fill leaves recon$t at v2 and the "graph behind storage" premise breaks).
             await _forget_recon(pool, backfill_rid)
@@ -419,10 +421,11 @@ def test_medallion_column_lineage(dsn: str, sample: _Sample) -> None:
     AND within one (the same-dataset caption←embedding edge), the typed HAS_COLUMN inventory, and the
     bool/scalar edge props round-tripping through AGE.
     """
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
     from lineage.schemas import ColumnGraph, ColumnNeighbors
-    from lineage.services.repository import LineageRepository
 
     events = [RunEvent.model_validate(e) for e in sample.events()]
 
@@ -430,7 +433,7 @@ def test_medallion_column_lineage(dsn: str, sample: _Sample) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             for event in events:
                 await repo.ingest_event(event)
             up = await repo.column_upstream(sample.ds("gold$catalog"), "caption")
@@ -477,9 +480,10 @@ def test_run_retention_prune_and_schema_at_version(dsn: str) -> None:
     import uuid
     from datetime import UTC, datetime
 
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
-    from lineage.services.repository import LineageRepository
 
     name = f"e2e$prune_{uuid.uuid4().hex[:8]}"
 
@@ -514,7 +518,7 @@ def test_run_retention_prune_and_schema_at_version(dsn: str) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             await repo.ensure_graph_constraints()  # exercises the new Column lookup-index DDL too
             # v1 long ago (prunable), v2 now (kept) — with DIFFERENT schemas per version.
             await repo.ingest_event(event(old_rid, 1, "2000-01-01T00:00:00+00:00", [{"name": "id", "type": "int64"}]))
@@ -686,9 +690,10 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
     HAS_COLUMN links executes on AGE), while a STALE redelivery of the old-schema event afterwards
     changes nothing (the recency gate consults the real WROTE version).
     """
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
-    from lineage.services.repository import LineageRepository
 
     # UNIQUE PER RUN, and this is the whole reason the test could only pass once. The name and the
     # three run ids were fixed literals, so a second run met its own `lc-3` recreate (09:10) already in
@@ -718,7 +723,7 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             # v1 with schema {a,b} → drop → dropped_at derives the drop
             await repo.ingest_event(event(f"lc-1-{unique}", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
             await repo.ingest_event(event(f"lc-2-{unique}", "drop_table", "2026-07-11T09:05:00Z", None, None))
@@ -774,9 +779,10 @@ def test_a_run_state_is_decided_by_event_time_not_by_delivery_order(dsn: str) ->
     seam — it drops a `$param` in a `SET` fused to a MERGE-on-edge, which is why four statements in
     `cypher.py` are split out. A string assertion would pass on a guard AGE silently ignores.
     """
+    from lineage_boot import booted_repository
+
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
-    from lineage.services.repository import LineageRepository
 
     run_id = str(uuid.uuid4())
     name = f"e2e-order-{uuid.uuid4().hex[:8]}"
@@ -796,7 +802,7 @@ def test_a_run_state_is_decided_by_event_time_not_by_delivery_order(dsn: str) ->
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
             seen: list[tuple[str | None, str | None, str | None]] = []
 
             async def state() -> tuple[str | None, str | None, str | None]:
@@ -864,6 +870,7 @@ def test_a_failed_feed_write_takes_the_graph_write_with_it(dsn: str) -> None:
     pre-fix body), `raised` is False; the fix makes both true.
     """
     import psycopg
+    from lineage_boot import booted_repository
 
     from lineage.core.age import make_pool
     from lineage.models import RunEvent
@@ -892,7 +899,7 @@ def test_a_failed_feed_write_takes_the_graph_write_with_it(dsn: str) -> None:
         pool = make_pool(dsn)
         await pool.open()
         try:
-            repo = LineageRepository(pool, "lineage")
+            repo = await booted_repository(pool)
 
             async def stored() -> bool:
                 return await repo.run_status(run_id) is not None
