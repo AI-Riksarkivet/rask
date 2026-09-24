@@ -1180,8 +1180,8 @@ FROM opentelemetry_logs` returns exa
   "storage ACLs can be read-only on main and write-only on the branch". So no `branch` FGA type; the
   work is a branch-aware vended prefix (`<table>/tree/<b>/*`), which the credentials door cannot express
   today because it takes no branch parameter.
-- *Closes when:* A sweep tick emits a bytes-reclaimed metric series, and the event question has a recorded answer with the emit landed or declined.
-- *Evidence:* `services/maintenance/src/maintenance/core/metrics.py:182-188 (`record_reclaimed` takes fragments/versions/indices, no bytes); :91,158,179 (trash bytes only)` · `services/maintenance/src/maintenance/services/sweep.py:699,1010,1159 (`bytes_removed` in per-dataset, audit and summary)` · `grep -rn table_maintained --include=*.py --include=*.ts . → nothing; ControlAction literal has 41 members` · `services/maintenance/src/maintenance/services/purge.py:712 (the only `emit_control` in maintenance)`
+- *Closes when:* THE EVENT QUESTION ONLY — a recorded answer with the emit landed or declined. The metric clause is met: re-verified independently 2026-09-24 against this estate's GreptimeDB, `compaction_bytes_reclaimed_total` answers `0` beside `compaction_runs_total = 427`, which is the always-emit rule working (nothing to reclaim is not nothing to report).
+- *Evidence:* `services/maintenance/src/maintenance/core/metrics.py:34 (`compaction.bytes.reclaimed` counter); :203 (`record_reclaimed` takes `bytes_removed`); :100 (`maintenance.trash.bytes_reclaimed`, the PURGE's separate question)` · `services/maintenance/src/maintenance/services/sweep.py:699,1010,1159 (`bytes_removed` in per-dataset, audit and summary)` · `grep -rn table_maintained --include=*.py --include=*.ts . → nothing; ControlAction literal has 41 members` · `services/maintenance/src/maintenance/services/purge.py:712 (the only `emit_control` in maintenance)`
 
 **LH-108 · The lineage + OpenFGA store is the hand-rolled `rask-age` StatefulSet; the CNPG cutover is built but off**
 `lineage, chart` · **LOW**
