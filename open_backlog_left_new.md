@@ -784,6 +784,20 @@ of mine in this same session.**
 
 **LH-064 · The lineage bus door trusts the producer-stamped `author.sub` with no signature over the CloudEvent**
 `lineage, lineage-kit, chart` · **MED** · PARTIAL
+- **THE SIGNING PAIR IS COMPLETE AND NARROW — verified in the render 2026-09-24, both halves and the
+  blast radius.** A signature only means something if the key is held by the signer and the verifier
+  and nobody else, so that was checked rather than assumed:
+  * `service-token-service-catalog` IS minted (the chart seeds ten service tokens; the catalog's is
+    one of them, added with `catalog.serviceIdentity`).
+  * Exactly **two** apps may read it — `catalog` (signer) and `lineage` (verifier, `defaultAccess:
+    allow`). **Eleven are denied**: annotator, bronze-to-silver, flows, ingest, maintenance,
+    medallion-producer, media-to-silver, notifications, search, silver-to-gold, viewer. A producer
+    that could read this key could forge a catalog signature, and none can.
+  * The transport is unaffected: `DaprEmitter` uses `service_identity` ONLY to resolve the signing key
+    and to stamp the facet — it sends no identity header — so `service-catalog`'s absence from
+    `LINEAGE_SERVICE_SUBJECTS` is correct rather than a missing allowlist entry. Checked because the
+    opposite would have made this change half-wired: a signature naming one subject over a transport
+    claiming another.
 - **PROVED LIVE IN THE DEPLOYED IMAGE (2026-09-24, `main-ef6e555a`, helm 238), by configuring it to a
   value that MUST fail and pairing it with a control:**
   ```
