@@ -14,9 +14,11 @@ resolves a different build of the authorization server than the cluster runs is 
 still measuring the wrong software.
 
 BOUNDED, AND THE BOUND IS STATED: this compares the three surfaces that declare images for
-themselves — the chart's values and templates, the compose side-stacks, and the Dagger module. Images
-this repo BUILDS are excluded by having no registry and a tag the chart never pins; they are the
-build's output, not a dependency being named twice.
+themselves — the chart's values files and templates, the compose side-stacks, and the Dagger module.
+Images this repo BUILDS are excluded by having no registry and a tag the chart never pins; they are
+the build's output, not a dependency being named twice. A chart entry that splits `repository:` and
+`tag:` across two keys is not read either — `apache/age` is named that way — so agreement there is
+still on nobody, which is a known limit rather than a claim of completeness.
 """
 
 from __future__ import annotations
@@ -67,7 +69,7 @@ def _refs(paths: list[Path], pattern: re.Pattern[str]) -> dict[str, set[tuple[st
 
 def _surfaces() -> dict[str, dict[str, set[tuple[str, str]]]]:
     return {
-        "chart": _refs([_ROOT / "chart" / "values.yaml", *sorted((_ROOT / "chart" / "templates").rglob("*.yaml"))], _YAML_IMAGE),
+        "chart": _refs([*sorted((_ROOT / "chart").glob("values*.yaml")), *sorted((_ROOT / "chart" / "templates").rglob("*.yaml"))], _YAML_IMAGE),
         "compose": _refs(sorted((_ROOT / ".docker").glob("docker-compose*.yml")), _YAML_IMAGE),
         "dagger": _refs(sorted((_ROOT / ".dagger").glob("*.go")), _GO_IMAGE),
     }
