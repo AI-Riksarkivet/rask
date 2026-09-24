@@ -37,7 +37,16 @@ _CATALOG_PIN = re.compile(r'lance-rest-catalog:\s*"[^"]*?-(?P<sha>[0-9a-f]{7,40}
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, check=False)
+    """Run git, or answer as a failed git would when there is no git to run.
+
+    The skips below already handle "this clone cannot see that commit" — a check that cannot see the
+    history must not answer. A missing BINARY is the same situation and was not the same code path:
+    it raised, and the exception reds a job rather than skipping a check.
+    """
+    try:
+        return subprocess.run(["git", *args], cwd=REPO, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return subprocess.CompletedProcess(args=["git", *args], returncode=127, stdout="", stderr="git: not found")
 
 
 def test_the_pinned_catalog_is_not_older_than_the_authorization_model() -> None:

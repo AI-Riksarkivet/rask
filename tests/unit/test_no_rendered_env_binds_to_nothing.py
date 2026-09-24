@@ -39,6 +39,7 @@ would have found it and passed. A mention inside a comment or a docstring theref
 from __future__ import annotations
 
 import ast
+import functools
 import importlib
 import pathlib
 import re
@@ -213,16 +214,42 @@ def _code_only(path: pathlib.Path) -> str:
 
 
 def _read_by_code(name: str) -> pathlib.Path | None:
-    """The first first-party file that names ``name`` in CODE rather than in prose, or ``None``."""
-    import subprocess
+    """The first first-party file that names ``name`` in CODE rather than in prose, or ``None``.
 
-    argv = ["git", "grep", "-lF", "--", name, "--", *_SOURCE_ROOTS]
-    out = subprocess.run(argv, capture_output=True, text=True, cwd=REPO, check=False).stdout  # noqa: S603
-    for line in out.split():
-        path = REPO / line
-        if path.is_file() and name in _code_only(path):
+    Scans the file list rather than shelling out to `git grep`: this gate runs in a container with no
+    git binary, where the bare call raised and took the whole job down. See `repo_tree`.
+    """
+    for path, code in _code_index():
+        if name in code:
             return path
     return None
+
+
+@functools.cache
+def _code_index() -> tuple[tuple[pathlib.Path, str], ...]:
+    """Every first-party source file, comment-stripped, read ONCE.
+
+    BUILT ONCE BECAUSE THE CALLER IS A LOOP. This gate asks the question for every rendered env name
+    in the estate — hundreds — and `git grep` answered each from an index. Re-walking and re-reading
+    the tree per name turned a two-second gate into one that had not finished after ten minutes;
+    measured while converting it off git. The index is the same trade `git grep` was already making,
+    made explicit.
+    """
+    from repo_tree import repo_files
+
+    index: list[tuple[pathlib.Path, str]] = []
+    for rel in repo_files(REPO):
+        if not rel.startswith(_SOURCE_ROOTS):
+            continue
+        path = REPO / rel
+        try:
+            if path.is_file():
+                index.append((path, _code_only(path)))
+        except (OSError, UnicodeDecodeError):
+            # A binary or unreadable file cannot NAME anything in code; skipping it is the same answer
+            # `git grep` gives and never a reason to fail the gate.
+            continue
+    return tuple(index)
 
 
 def _every_rendered_env() -> list[tuple[str, str]]:

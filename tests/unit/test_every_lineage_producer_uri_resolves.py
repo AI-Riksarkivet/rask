@@ -44,18 +44,35 @@ REPO = Path(__file__).resolve().parents[2]
 _GITHUB = "github.com/"
 
 
+def _chart_home() -> str:
+    """`home:` from `chart/Chart.yaml` — the repository as the estate's own published artefact names it."""
+    for line in (REPO / "chart" / "Chart.yaml").read_text(encoding="utf-8").splitlines():
+        if line.startswith("home:"):
+            return line.split(":", 1)[1].strip().removesuffix(".git")
+    raise AssertionError("chart/Chart.yaml declares no `home:` — this gate has no way left to name the repository")
+
+
 def _canonical_repo() -> str:
-    """`https://github.com/<org>/<repo>` from the checkout's own remote.
+    """`https://github.com/<org>/<repo>`, from the checkout's own remote where there is one.
 
     Derived rather than declared: the two literals this gate replaces were each correct when written
     and wrong within a release, and a third literal here would have the same shelf life.
+
+    THE CHART IS THE FALLBACK, not a second literal. `chart/Chart.yaml`'s `home:` is published with
+    every release, so it is a field the estate already has to keep correct — and where git IS
+    available the two are asserted to agree, so it cannot drift silently into the role of the answer.
+    This gate runs in a container with neither a git binary nor a `.git`, where the bare call raised
+    and took the whole job down.
     """
-    url = subprocess.run(  # noqa: S603
-        ["git", "-C", str(REPO), "remote", "get-url", "origin"],  # noqa: S607
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    try:
+        url = subprocess.run(  # noqa: S603
+            ["git", "-C", str(REPO), "remote", "get-url", "origin"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return _chart_home()
     return url.removesuffix(".git")
 
 
@@ -111,3 +128,27 @@ def test_each_producer_uri_names_this_repository_and_an_existing_path(case: tupl
     relative = uri.removeprefix(prefix)
     assert relative, f"{path.relative_to(REPO)}::{name} carries no path"
     assert (REPO / relative).exists(), f"{path.relative_to(REPO)}::{name} points at {relative!r}, which does not exist here — the link 404s"
+
+
+def test_the_CHART_names_the_same_repository_git_does() -> None:
+    """The fallback cannot drift silently into being the answer.
+
+    `_canonical_repo` prefers the checkout's remote and falls back to `chart/Chart.yaml`'s `home:`
+    where there is no git — the container CI runs this in. A fallback nobody compares is a second
+    literal with the same shelf life as the two this gate was written to replace, so where BOTH
+    answers exist they are required to agree.
+    """
+    try:
+        url = subprocess.run(  # noqa: S603
+            ["git", "-C", str(REPO), "remote", "get-url", "origin"],  # noqa: S607
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pytest.skip("no git remote here, so there is no second answer to compare against")
+
+    assert url.removesuffix(".git") == _chart_home(), (
+        f"git says {url.removesuffix('.git')!r} and chart/Chart.yaml says {_chart_home()!r} — "
+        "the fallback would name a different repository than the one this checkout is"
+    )
