@@ -49,6 +49,25 @@ export type RunStatusLike = {
 	 *  is the only thing separating a question for a person from an outage. `null` for the
 	 *  overwhelming majority of runs, which refused no promotion. */
 	promotion_status?: string | null;
+	/** How many times this run has FAILED. The emitter derives a DETERMINISTIC run id per dataset so a
+	 *  persistently failing one does not mint hundreds of nodes a day, and the counter rides that single
+	 *  node — so `attempts` is the only thing that can say "did it fail first, and how often".
+	 *
+	 *  `null` and `0` are different facts: null is a run that has never failed, or one recorded before
+	 *  the counter existed. A surface that renders `attempts ?? 0` asserts the second as the first. */
+	attempts?: number | null;
+	/** The BATCH this run belongs to. One `/produce` is one bronze write is one cascade, and the id is
+	 *  minted where that cascade begins so every tier below carries the same value. It is what answers
+	 *  "which runs belong to this batch"; without it the hops are unrelated rows sharing a dataset name. */
+	cascade_id?: string | null;
+	/** The source version this run's delta STARTED after — exclusive, matching the filter the stage
+	 *  applies. `null` on a first publication, where the meaning is "everything up to
+	 *  `consumed_to_version`"; rendering `0` there asserts a prior publication that did not happen. */
+	consumed_from_version?: number | null;
+	/** The source version this run's delta READ TO. The ceiling to `consumed_from_version`'s floor, and
+	 *  a lag detector needs both: a ceiling alone answers how far a run read, never whether it started
+	 *  where the last one stopped. A cascade's lost hop lives in exactly that difference. */
+	consumed_to_version?: number | null;
 };
 
 /** What a viewer needs to know at a glance. `unknown` keeps an unrecognised state honest — it is

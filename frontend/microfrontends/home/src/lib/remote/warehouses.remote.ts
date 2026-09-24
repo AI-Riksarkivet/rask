@@ -129,10 +129,19 @@ export const createWarehouse = command(
 		//
 		// SECOND COPY of this schema — `lakehouse/.../warehouses.remote.ts` carries the same one, and
 		// both broke identically. `query.live`/`command` must be declared inside an app to get its own
-		// endpoint, so the SHIM is legitimately per-zone; the SCHEMA is not, and this is the second
-		// time a catalog body change has had to be applied twice. Worth hoisting the valibot schemas
-		// into `@rask/api` next to the generated types they mirror.
+		// endpoint, so the SHIM is legitimately per-zone; the SCHEMA is not. Hoisting both into
+		// `@rask/api` beside the generated types they mirror is the right shape and is NOT what this
+		// does: `transport-contract.test.ts` compares INLINE field sets, and its anti-vacuity canary
+		// names `createWarehouse` specifically, so hoisting removes the pair the gate watches. That
+		// gate has to grow an import-side check first, which is its own change.
 		protected: v.optional(v.boolean(), false),
+		// `primary` is the operator's answer to an ambiguous project warehouse set. Defaulted for the
+		// same reason `protected` is — a warehouse is born non-primary and is designated deliberately
+		// afterwards, so asking at create time offers a choice that belongs to a project already
+		// holding several. It has to be PRESENT even so: without it this zone's create cannot express
+		// a field the wire accepts, so the same dialog designates a primary from the lakehouse and
+		// silently cannot from here.
+		primary: v.optional(v.boolean(), false),
 	}),
 	async (body: CreateWarehouseBody): Promise<ApiResult<WarehouseRecord>> =>
 		parsed(

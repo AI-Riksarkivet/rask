@@ -106,7 +106,13 @@ describe('nothing outside the frontend still points at a moved path', () => {
 	 * annotation would be truncated mid-value and the gate would stop seeing real references.
 	 */
 	const codeOnly = (src: string): string =>
+		// HELM'S COMMENT FORM FIRST, and it spans lines. Four of the nine files searched are chart
+		// templates, where a comment is `{{- /* … */ -}}` and only its FIRST line ever starts with a
+		// `#`. `chart/templates/frontends.yaml` explains why its body-size knob sits above the BFF's
+		// own guard and names `@rask/api/serve-proxy` on a continuation line, so the line-wise pass
+		// below saw a bare sentence and reported the chart as using a retired package.
 		src
+			.replace(/\{\{-?\s*\/\*[\s\S]*?\*\/\s*-?\}\}/g, '')
 			.split('\n')
 			.map((line) => line.replace(/#.*$/, '').replace(/(^|[^:])\/\/.*$/, '$1'))
 			.join('\n');
@@ -129,6 +135,16 @@ describe('nothing outside the frontend still points at a moved path', () => {
 
 		// A URL survives: stripping `//` after a colon would cut every annotation value in half.
 		expect(codeOnly('  url: https://example.com/x')).toContain('https://example.com/x');
+
+		// A HELM COMMENT, including the continuation lines a `#` pass cannot reach — the case that was
+		// failing this gate on a chart that names nothing.
+		const helm = codeOnly('image: @rask/ui\n{{- /* a note\n       mentioning @rask/api */ -}}\n');
+		expect(DEAD.filter((d) => helm.includes(d))).toEqual(['@rask/']);
+		expect(codeOnly('{{/* only a note mentioning @rask/api */}}\n').includes('@rask/')).toBe(false);
+
+		// And a real Helm ACTION is not a comment: stripping every `{{ … }}` would blind the gate to a
+		// template that genuinely renders a retired name.
+		expect(codeOnly('image: {{ .Values.x }}@rask/api')).toContain('@rask/api');
 	});
 
 	// The list above holds PACKAGE and DIRECTORY names, so a retired URL path walked straight through it —
