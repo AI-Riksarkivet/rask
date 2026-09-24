@@ -28,6 +28,12 @@ import yaml
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS = ("scripts/e2e_stack.sh", "scripts/ray_e2e_stack.sh")
+#: Manifests the stack scripts `kubectl apply`, checked for the same class of rot by a different
+#: shape: a plain YAML cannot reference chart values, so every cluster DNS name it hard-codes is a
+#: copy of something the chart already renders. `ray-lance-demo.yaml` pointed Ray's object store at
+#: `rask-rustfs-io`, which the chart has not rendered since the store moved to `rask-minio`.
+_APPLIED = ("deploy/ray-lance-demo.yaml",)
+_SERVICE_HOST = re.compile(r"https?://(rask-[a-z0-9-]+)[:/]")
 #: `kubectl`'s short names, mapped to the `kind:` a rendered manifest declares.
 _KINDS = {"svc": "Service", "service": "Service", "deploy": "Deployment", "deployment": "Deployment", "statefulset": "StatefulSet", "sts": "StatefulSet"}
 _REFERENCE = re.compile(r"\b(svc|service|deploy|deployment|statefulset|sts)/\$\{?RELEASE\}?-([a-z0-9-]+)")
@@ -91,3 +97,21 @@ def test_every_object_the_script_addresses_is_one_the_chart_renders(rel: str, re
         f"{rel} addresses objects the chart does not render: {missing}. A port-forward to a missing service "
         "carries on and a scale of a missing workload is a no-op, so the proof around them passes without proving."
     )
+
+
+@pytest.mark.parametrize("rel", _APPLIED)
+def test_a_manifest_the_stack_applies_names_services_the_chart_renders(rel: str, rendered: set[tuple[str, str]]) -> None:
+    """A hard-coded cluster DNS name in an applied manifest is a copy of the chart's own render.
+
+    It fails the way every name-rot in this estate fails: the pod starts, the endpoint does not
+    resolve, and the symptom appears somewhere else entirely — here, as Ray unable to reach its object
+    store part-way through a cascade.
+    """
+    path = _ROOT / rel
+    if not path.exists():
+        pytest.skip(f"{rel} is gone")
+    services = set(_SERVICE_HOST.findall(path.read_text(encoding="utf-8")))
+    assert services, f"{rel} names no in-cluster service — this gate is measuring something that moved"
+
+    missing = sorted(name for name in services if ("Service", name) not in rendered)
+    assert not missing, f"{rel} points at services the chart does not render: {missing}"

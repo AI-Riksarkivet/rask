@@ -50,11 +50,14 @@ spec:
             - --disable-usage-stats
             - --block
           env:
-            # In-cluster RustFS — the job reads/writes s3://lance-catalog against this endpoint.
-            # `lance-ns-rustfs` is a PRE-RENAME name and resolves to nothing — the chart's RustFS
-            # tenant Service is `rask-rustfs-io`. The live pod had been hand-patched to it; applying
-            # this file put the stale name back and broke Ray's object store.
-            - { name: S3_ENDPOINT, value: "http://rask-rustfs-io:9000" }
+            # THE IN-CLUSTER OBJECT STORE — the job reads/writes s3://lance-catalog against this
+            # endpoint. `rask-minio` is what the chart renders whenever `minio.enabled`
+            # (`chart/values.yaml:3306`), and it is what the running estate serves: measured
+            # 2026-09-24, `svc/rask-minio` answers on 9000 and no `rask-rustfs-io` exists at all.
+            # A name here is a THIRD copy of a fact the chart already states, so it is pinned by
+            # `tests/unit/test_the_e2e_stack_names_objects_the_chart_renders.py`, which renders the
+            # chart and requires every workload this file names to be an object that render produced.
+            - { name: S3_ENDPOINT, value: "http://rask-minio:9000" }
             # THE SCOPED COMPUTE CREDENTIAL, never the tenant root. This read "rustfsadmin" — the
             # RustFS root key — so re-applying this file silently reverted the credential scoping that
             # took the root key off the Ray plane, and the revert is invisible: the cascade keeps
