@@ -40,7 +40,30 @@ from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, Ungoverne
 router = APIRouter(tags=["ingest"])
 
 
-@router.post("/lineage", status_code=201)
+#: The published request-body schema for the ingest door.
+#:
+#: DECLARED RATHER THAN INFERRED, because the handler parses its own body (one discriminator shared
+#: with the bus door) and FastAPI would otherwise publish a bare object — losing the contract every
+#: external OpenLineage producer reads. Built from the models themselves, so the spec cannot drift
+#: from what the door accepts, and INLINE rather than by `$ref`: no route references either model as
+#: a parameter any more, so the component schemas they would point at are not emitted.
+_EVENT_BODY = {
+    "requestBody": {
+        "required": True,
+        "content": {
+            "application/json": {
+                "schema": {
+                    "oneOf": [RunEvent.model_json_schema(), DatasetEvent.model_json_schema()],
+                    "title": "OpenLineage event",
+                    "description": "A RunEvent, or a DatasetEvent for a dataset change no job performed.",
+                }
+            }
+        },
+    }
+}
+
+
+@router.post("/lineage", status_code=201, openapi_extra=_EVENT_BODY)
 async def ingest_event(
     body: Annotated[dict[str, Any], Body()], request: Request, repository: RepositoryDep, settings: SettingsDep, token: CurrentToken
 ) -> dict[str, str | None]:
