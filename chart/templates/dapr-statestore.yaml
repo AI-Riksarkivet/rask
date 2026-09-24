@@ -64,17 +64,24 @@ spec:
     # (a cache, say) from colliding in the same database if one is ever pointed here.
     - { name: tableName, value: {{ .Values.stateStore.tableName | quote }} }
     - { name: metadataTableName, value: {{ .Values.stateStore.metadataTableName | quote }} }
+{{- /* THE WHOLE BLOCK IS CONDITIONAL, not just its one child. `lance-secrets` is gated on
+     lance.secretsViaDapr (openbao.enabled or an external addr), so naming it unconditionally
+     pointed the state store at a component that need not exist — daprd then logs 'references a
+     secret store that isn't loaded', the state store silently does not load, and actor hosting
+     goes with it. Without a secret store Dapr falls back to Kubernetes Secrets, which is the
+     honest behaviour for an install that has no OpenBao.
+
+     Emitting the `auth:` key with its only child behind the guard renders YAML null, which the
+     Component CRD refuses outright:
+       Component.dapr.io "lance-statestore" is invalid:
+       auth: Invalid value: "null": auth in body must be of type object: "null"
+     Measured 2026-09-24 on `e2e-ray`, whose overlay sets `openbao.enabled=false` — so the apply
+     failed on the state store that hosts every actor, and the stack never came up. */}}
+{{- if include "lance.secretsViaDapr" . }}
 auth:
   # Which component resolves the secretKeyRef above. Without this Dapr looks in Kubernetes Secrets.
-  {{- /* Only when that component actually renders. `lance-secrets` is gated on
-       lance.secretsViaDapr (openbao.enabled or an external addr), so naming it unconditionally
-       pointed the state store at a component that need not exist — daprd then logs 'references a
-       secret store that isn't loaded', the state store silently does not load, and actor hosting
-       goes with it. Without a secret store Dapr falls back to Kubernetes Secrets, which is the
-       honest behaviour for an install that has no OpenBao. */}}
-  {{- if include "lance.secretsViaDapr" . }}
   secretStore: {{ .Values.stateStore.secretStore }}
-  {{- end }}
+{{- end }}
 {{- /* The STAGE RUNNERS' app-ids are DERIVED, not listed. S1's stage watcher (`medallion/workflow.py`) runs in
        `stage_runner.py`, and each stage runner has its own `daprAppId` from `medallion.stageRunners[]` — there is no
        `medallion` app-id anywhere in the estate, so a hand-written entry for one is inert. Deriving
