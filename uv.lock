@@ -1839,6 +1839,7 @@ source = { editable = "services/maintenance" }
 dependencies = [
     { name = "dapr" },
     { name = "fastapi" },
+    { name = "lineage-kit" },
     { name = "opentelemetry-api" },
     { name = "pyarrow" },
     { name = "pydantic" },
@@ -1852,6 +1853,7 @@ dependencies = [
 requires-dist = [
     { name = "dapr", specifier = ">=1.18.1" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "lineage-kit", editable = "packages/lineage-kit" },
     { name = "opentelemetry-api", specifier = ">=1.44.0" },
     { name = "pyarrow" },
     { name = "pydantic", specifier = ">=2.7" },

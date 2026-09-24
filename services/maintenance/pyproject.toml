@@ -5,6 +5,9 @@ description = "Lance table maintenance — compaction, index optimization, old-v
 requires-python = ">=3.13"
 license = "Apache-2.0"
 dependencies = [
+    # Signs the lineage events the sweep publishes ([[LH-064]]); the verifier in `services/lineage`
+    # uses the same module, so both sides share one definition of what was signed.
+    "lineage-kit",
     "service-kit[governed,lakehouse]",
     "fastapi>=0.115",
     "pydantic>=2.7",
@@ -24,4 +27,5 @@ build-backend = "hatchling.build"
 packages = ["src/maintenance"]
 
 [tool.uv.sources]
+lineage-kit = { workspace = true }
 service-kit = { workspace = true }

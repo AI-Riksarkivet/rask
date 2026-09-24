@@ -38,6 +38,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from dapr.aio.clients import DaprClient
 
+from lineage_kit.signing import attach_signature
 from service_kit.lakehouse import outbox
 
 # The key the medallion's stage stamp WRITES. Imported rather than restated: a reader and a writer
@@ -304,8 +305,13 @@ class DaprMaintenanceEmitter:
         outbox_uri: str = "",
         storage_options: dict[str, str] | None = None,
         author: str = "",
+        signing_key: str = "",
     ) -> None:
         self._client = client
+        #: This identity's OWN credential ([[LH-064]]). Empty emits UNSIGNED — the rollout state, and
+        #: never a placeholder signature: something that looks signed and verifies for nobody is worse
+        #: than nothing, because the door would refuse it.
+        self._signing_key = signing_key
         #: The service's OWN identity, stamped on every event it emits — the same string it presents at
         #: the catalog's service door, so the two stores agree about who did the work.
         self._author = author
@@ -351,6 +357,13 @@ class DaprMaintenanceEmitter:
         await self._publish(event, table_id)
 
     async def _publish(self, event: dict[str, Any], table_id: str) -> None:
+        # ONE SIGNING POINT for the whole service, because every lineage event it emits passes here.
+        # Signing in the builders instead would need it in each of them and in every one added later,
+        # and a builder that forgot would emit something indistinguishable from a signed event until
+        # someone checked. The identity is the one this emitter already stamps as `author`, so
+        # `verify_signed_event`'s signer-equals-author binding holds by construction.
+        if self._signing_key and self._author:
+            event = attach_signature(event, key=self._signing_key, identity=self._author)
         try:
             # STAGED, then published, then dropped on ack (#4) — the twin of the catalog's emit. A
             # sweep's lineage event describes a committed write, so losing one leaves the graph
@@ -382,6 +395,7 @@ def make_emitter(
     job_namespace: str,
     timeout_seconds: float = 5.0,
     author: str = "",
+    signing_key: str = "",
 ) -> MaintenanceEmitter:
     """Select the emitter: a Dapr pub/sub publisher when enabled + wired, else a no-op (never silently
     publish nowhere — a half-configured transport stays a no-op rather than pretending to emit)."""
@@ -395,5 +409,6 @@ def make_emitter(
             outbox_uri=outbox_uri,
             storage_options=storage_options,
             author=author,
+            signing_key=signing_key,
         )
     return NoopEmitter()

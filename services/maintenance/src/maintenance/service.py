@@ -40,7 +40,7 @@ from maintenance.core.lineage_emit import make_emitter
 from service_kit.control_emit import make_control_emitter
 from service_kit.draining import arm_drain_on_sigterm
 from service_kit.governed.auth_lifespan import build_fga_client
-from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.dapr_auth import SecretStoreUnreadable, assert_app_token_configured, dedicated_token_from_store
 from service_kit.governed.fga import dispose as fga_dispose
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.lakehouse.lance_metrics import instrument_lance_if_available
@@ -162,6 +162,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # The SAME identity this service presents at the catalog's service door, so the graph and the
         # catalog cannot disagree about who compacted a dataset.
         author=settings.catalog_service_identity,
+        # ITS OWN CREDENTIAL, resolved once at startup ([[LH-064]]). Read here rather than per-emit so
+        # a sweep tick never waits on the secret store, and ABSENT rather than fatal: an estate that has
+        # not provisioned this identity keeps emitting unsigned, which the bus door still accepts. An
+        # unreadable store is the same answer for the same reason — the sweep must not fail to start
+        # because a signature it is not yet required to produce cannot be made.
+        signing_key=_signing_key(settings),
     )
     # #79: the expired-trash purge announces each reclamation on the catalog's control topic. A no-op
     # when off — never a half-configured transport that looks like it publishes.
@@ -221,3 +227,18 @@ _work_app = register_arrival_route(app, get_settings(), _work_app) or _work_app
 # one ackWait cannot serve both a minutes-long compaction and a vector index over a large table —
 # but the SAME DaprApp, for the reason the line above states.
 register_index_route(app, get_settings(), _work_app)
+
+
+def _signing_key(settings: MaintenanceSettings) -> str:
+    """This identity's own credential, or empty when there is none to be had.
+
+    Empty is a real answer here and not a failure: the bus door accepts unsigned events for as long as
+    the rollout needs, so a missing or unreadable credential degrades to today's behaviour instead of
+    stopping a sweep. It never substitutes a placeholder — a signature that verifies for nobody is
+    worse than none, because the door refuses it.
+    """
+    try:
+        return dedicated_token_from_store(settings.dapr_secret_store)(settings.catalog_service_identity) or ""
+    except SecretStoreUnreadable:
+        log.warning("maintenance_signing_key_unreadable", extra={"identity": settings.catalog_service_identity})
+        return ""
