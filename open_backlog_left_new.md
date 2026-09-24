@@ -1250,10 +1250,22 @@ FROM opentelemetry_logs` returns exa
   helper both maintenance deployments read, gated by
   `tests/unit/test_a_declared_bucket_is_never_reported_as_an_orphan.py` (including that the two
   deployments agree and the default render gains nothing), mutation-checked twice.
-  *Still open, and it is the other half:* a single unreferenced `.txn` file gates the purge, and
-  nothing clears an orphan FILE — the same unsatisfiable-gate shape `NON_GATING_CATEGORIES` argues
-  against for four other categories. Whether `orphan_files` should gate at all is a ruling this row
-  does not carry.
+  *Still open, and the question is SHARPER than "needs a ruling" — both sides are already written down
+  in this service.* A single unreferenced `.txn` gates the purge, and nothing clears an orphan file
+  **by deliberate design**: `purge.py`'s own header says the orphan half "stays REPORT-ONLY", because
+  prefix subtraction has five documented false-positive classes (branches, multi-base clones, MemWAL
+  shards, data overlays, blob sidecars) and its first live run called **29 MB of real page images
+  reclaimable**.
+  So `orphan_files` meets ONE of the two legs `NON_GATING_CATEGORIES` uses to exclude a category and
+  not the other. It has NO DOOR — "an unreachable gate is not a safety property; it is a feature that
+  cannot be switched on, and it hides the categories that DO matter behind a total that never falls" —
+  which is the leg that excluded the other four. But it IS a storage fact, which is the leg that
+  excluded them and does not exclude this: an unreferenced file is exactly the kind of thing "the
+  estate's storage state is understood" is supposed to certify before bytes are deleted.
+  **The question is therefore: does an orphan file that nobody may ever clear make the trash purge
+  safer, or does it only make the purge unreachable?** The estate has been in the second state since
+  at least 2026-09-23. A third answer exists and is cheaper than either: make the orphan half
+  ACTIONABLE — a door, even a narrow one — which is what would make gating on it mean something.
 - **AND THREE OF ITS THIRTEEN CATEGORIES NEVER REACHED THE WIRE — found 2026-09-24, fixed the same
   day.** The recorder sat inside `build_report`, which compares three STORES; `_orphan_category` runs
   AFTER it and attaches the three that read STORAGE. So the pod logged thirteen categories and
