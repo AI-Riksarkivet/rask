@@ -341,8 +341,21 @@ def _first_party_source() -> str:
         parts += [p.read_text(errors="ignore") for p in runners.rglob("*.py")]
     fe = REPO / "frontend"
     if fe.exists():
+        # BUILD OUTPUT IS NOT SOURCE, and reading it made this gate pass for the wrong reason. `build/`
+        # holds the adapter's GENERATED server, which is untracked: present on a developer's machine
+        # and absent in CI, so `HOST_HEADER` and `PROTOCOL_HEADER` read as live here and dead there —
+        # the gate disagreeing with itself depending on whose tree it ran on. Measured 2026-09-24:
+        # those two names occur in `microfrontends/*/build/handler.js` and nowhere else that this
+        # walk reached.
+        _GENERATED = {"node_modules", ".svelte-kit", "build", "dist", ".turbo"}
         for ext in ("*.ts", "*.svelte", "*.js"):
-            parts += [p.read_text(errors="ignore") for p in fe.rglob(ext) if "node_modules" not in p.parts and ".svelte-kit" not in p.parts]
+            parts += [p.read_text(errors="ignore") for p in fe.rglob(ext) if not _GENERATED & set(p.parts)]
+        # THE PATCHES ARE FIRST-PARTY and are where the estate states what it needs from a vendored
+        # server. `svelte-adapter-bun` reads `HOST_HEADER`/`PROTOCOL_HEADER` in the server it
+        # generates; the patch is this repository's own tracked statement about that adapter, so it is
+        # the honest evidence that a chart-injected env has a reader — and it survives a clean
+        # checkout, which the generated output does not.
+        parts += [p.read_text(errors="ignore") for p in (fe / "patches").rglob("*.patch")]
     # Chart templates can EMBED a first-party script that reads an env — `bootstrap-admin.yaml` runs an
     # inline python bootstrap that does `os.environ.get("FGA_SERVICE_READERS", "")`. Without this the
     # guard called a genuinely-consumed var dead, which is a false positive on a test whose whole job is
