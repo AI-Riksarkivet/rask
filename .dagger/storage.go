@@ -52,8 +52,6 @@ func (m *Rask) SmokeRustfs(
 		Stdout(ctx)
 }
 
-// mcImage is the S3 client used to create the catalog's bucket before the server starts.
-const mcImage = "minio/mc:RELEASE.2025-08-13T08-35-41Z"
 
 // RustfsLifecycle runs the SAME catalog lifecycle e2e the MinIO stack runs, with the bytes on RustFS —
 // proving the catalog is genuinely S3-agnostic rather than MinIO-shaped.
@@ -110,10 +108,15 @@ func (m *Rask) RustfsLifecycle(
 		AsService()
 
 	// The bucket, before anything reads it. `Sync` is what orders this against the catalog below.
-	if _, err := dag.Container().
-		From(mcImage).
+	// THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses anonymous pulls on every
+	// registry ([[XC-075]]), so a lane that pulls fresh cannot bootstrap its store at all. `m.base`
+	// carries uv, python and this repo — `packages/storage` is the same client the fleet uses.
+	if _, err := m.base(src).
 		WithServiceBinding("rustfs", rustfs).
-		WithExec([]string{"sh", "-c", `until mc alias set rfs http://rustfs:9000 rustfsadmin rustfsadmin >/dev/null 2>&1; do sleep 2; done && mc mb --ignore-existing rfs/lance-catalog`}).
+		WithEnvVariable("RASK_S3_ENDPOINT_URL", "http://rustfs:9000").
+		WithEnvVariable("AWS_ACCESS_KEY_ID", "rustfsadmin").
+		WithEnvVariable("AWS_SECRET_ACCESS_KEY", "rustfsadmin").
+		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/ensure_bucket.py", "lance-catalog"}).
 		Sync(ctx); err != nil {
 		return "", err
 	}

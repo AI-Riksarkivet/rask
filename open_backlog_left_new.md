@@ -2168,11 +2168,17 @@ measured (~10-14 MiB per commit pas
   401. I reported that move as proved live because `dagger call auth-chain` passed locally; it passed
   because THIS host's Dagger engine had the image cached from before the change. The lane's first CI run
   said otherwise: `failed to resolve image "quay.io/minio/mc:…": 401 Unauthorized`.
-- *What is left:* STOP NEEDING `mc`. Three chart templates (`minio-buckets`, `minio-scoped-users`,
-  `backup-pg`), `.dagger/storage.go` and two compose files use it to create buckets, users and policies —
-  all plain S3 and admin calls. The estate already owns the seam (`packages/storage`'s `s3_client`) and a
-  first-party image that carries it, which no registry can withdraw. Mirroring into the dev registry is
-  the smaller alternative and buys only the dev estate.
+- **THE DAGGER HALF IS DONE (2026-09-24), which is the half that unblocks a lane.** Both module sites
+  did the same two things — wait for the store, create `lance-catalog` — and now do them through
+  `scripts/ensure_bucket.py` on `m.base(src)`: `packages/storage`'s `s3_client`, in a first-party image
+  no registry can withdraw. The retry `mc` needed rides along in the script, because a Dagger service
+  binding resolves BEFORE the store is listening and without it the create races the boot. `.dagger/`
+  now names no mc image at all.
+- *What is left:* the CHART half. Three templates (`minio-buckets`, `minio-scoped-users`, `backup-pg`)
+  still use `mc` for buckets, users and policies — all plain S3 and admin calls — and
+  `minio-scoped-users` is a `pre-upgrade` HOOK, so it is the one that can fail an upgrade on a fresh
+  node. Two compose files follow. Mirroring into the dev registry is the smaller alternative and buys
+  only the dev estate.
 - *Closes when:* No first-party manifest, Dagger function or compose file names an image the estate
   cannot pull anonymously, and a fresh node can complete `helm upgrade`.
 - *Evidence:* `anonymous token for minio/mc: docker.io access=[] / quay.io actions=[]` · `HEAD quay.io/v2/minio/mc/manifests/RELEASE.2025-08-13T08-35-41Z → 401` · `job rask-minio-scoped-users-r229: mc Running since 2026-09-23T13:57 on the docker.io reference` · `chart/templates/minio-scoped-users.yaml:84 (pre-upgrade hook)` · `CI e2e-auth 2026-09-24T14:29:02Z`

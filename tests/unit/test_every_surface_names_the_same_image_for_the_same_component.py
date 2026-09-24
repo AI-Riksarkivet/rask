@@ -82,7 +82,10 @@ def test_each_surface_declares_images_at_all() -> None:
 
     for name, refs in surfaces.items():
         assert len(refs) >= 3, f"only {len(refs)} images parsed out of the {name} surface: {sorted(refs)}"
-    assert "minio/mc" in surfaces["dagger"], "the Dagger module no longer names the object-store client — this gate moved"
+    # `rustfs/rustfs`, not `minio/mc`: the module stopped naming an mc image on 2026-09-24 because no
+    # registry serves it anonymously ([[XC-075]]), and the bucket bootstrap moved to this repo's own
+    # `packages/storage`. An anchor has to be an image the module genuinely still pulls.
+    assert "rustfs/rustfs" in surfaces["dagger"], "the Dagger module no longer names the object store — this gate moved"
 
 
 def test_a_component_named_twice_is_named_the_same_way() -> None:
