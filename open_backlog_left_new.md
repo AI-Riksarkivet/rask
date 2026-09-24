@@ -1249,6 +1249,11 @@ FROM opentelemetry_logs` returns exa
   sequence dated exactly seven days back and last **70 minutes** ago. Nothing drains it and nothing can;
   messages leave only by expiring. By subject: `dlq.lineage.events` **291**, `dlq.notifications` **102**,
   `dlq.bronze-to-silver` **12**, `dlq.maintenance.work` **7**.
+  *And only ONE of the four is still being fed*, which is what separates a live fault from residue:
+  newest per subject — `dlq.notifications` **70 minutes**, `dlq.maintenance.work` 18h57m,
+  `dlq.lineage.events` 3d17h, `dlq.bronze-to-silver` 4d18h. The three quiet ones are draining by
+  expiry and will be gone inside the 7-day window; the notifications one refills as fast as it
+  empties.
 - **AND THE NOTIFICATIONS SHARE IS STILL ARRIVING, because that service has no credential at all.**
   `RASK_APP_TOKEN_FROM_STORE=true` makes it resolve `service-token-<identity>`, its identity is the
   documented default `notifications`, and **`lance.allServiceIdentities` mints no token for it** — the

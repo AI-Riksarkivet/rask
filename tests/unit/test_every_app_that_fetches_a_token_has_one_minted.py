@@ -33,9 +33,12 @@ import yaml
 
 
 _ROOT = Path(__file__).resolve().parents[2]
-#: The env keys a service declares its identity through. More than one spelling exists because the
-#: planes grew separately; reading all of them is what keeps this gate from silently skipping a plane.
-_IDENTITY_KEYS = ("RASK_LINEAGE_SERVICE_IDENTITY", "RASK_CATALOG_SERVICE_IDENTITY", "LANCE_SERVICE_IDENTITY", "MEDALLION_FGA_SERVICE_IDENTITY")
+#: DERIVED FROM THE SUFFIX, not listed. The planes grew separately and spell the declaration five ways
+#: (`RASK_LINEAGE_`, `RASK_CATALOG_`, `LANCE_`, `MEDALLION_FGA_`, `MAINTENANCE_CATALOG_`), and a
+#: hand-written list of four silently skipped `rask-maintenance` on the first pass of this gate —
+#: reading one spelling of a mount is the trap this estate keeps meeting. The suffix is the convention;
+#: `LINEAGE_SERVICE_SUBJECTS` is an allowlist and correctly does not match it.
+_IDENTITY_SUFFIX = "_SERVICE_IDENTITY"
 _VALUES = [
     "--set",
     "image.localImages=true",
@@ -72,9 +75,10 @@ def _token_fetchers(docs: list[dict]) -> list[tuple[str, str]]:
             env = {e["name"]: e.get("value") for e in container.get("env") or []}
             if env.get("RASK_APP_TOKEN_FROM_STORE") != "true":
                 continue
-            identity = next((env[k] for k in _IDENTITY_KEYS if env.get(k)), None)
-            if app and identity:
-                out.append((app, identity))
+            declared = sorted({v for k, v in env.items() if k.endswith(_IDENTITY_SUFFIX) and v})
+            for identity in declared:
+                if app:
+                    out.append((app, identity))
     return out
 
 
@@ -84,6 +88,12 @@ def test_the_render_has_token_fetchers_to_check(rendered: list[dict]) -> None:
 
     assert len(fetchers) >= 5, f"only {len(fetchers)} declared token-fetching apps found: {fetchers}"
     assert any(app == "notifications" for app, _ in fetchers), "notifications no longer fetches a token — this gate is guarding something that moved"
+    # The suffix derivation earning its place: `rask-maintenance` declares through
+    # `MAINTENANCE_CATALOG_SERVICE_IDENTITY`, a fifth spelling a hand-written key list did not carry,
+    # so this gate skipped it entirely while reporting coverage.
+    assert any(identity == "service-maintenance" for _, identity in fetchers), (
+        "the scan no longer sees the maintenance identity — it is declared through a spelling the suffix rule should catch"
+    )
 
 
 def test_every_declared_identity_has_a_token_minted(rendered: list[dict]) -> None:
