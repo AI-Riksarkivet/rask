@@ -28,6 +28,7 @@ session instead of a static key at all.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -250,4 +251,80 @@ def test_the_pods_that_CANNOT_reach_the_store_are_named() -> None:
     assert sorted(unreachable) == sorted(_UNREACHABLE_STORE), (
         f"the set of sidecar pods that cannot reach `lance-secrets` changed.\n  found:    {sorted(unreachable)}\n  recorded: {sorted(_UNREACHABLE_STORE)}\n"
         "A new one needs its app-id in the Component's `scopes:`; a removed one means deleting its row here in the same commit."
+    )
+
+
+#: The two shapes this chart MINTS secret material in: `sha256sum | trunc 40` (hex) and
+#: `randAlphaNum 40`. Matching the VALUE rather than the variable's name is what makes this precise —
+#: `LANCE_DAPR_SECRET_S3_FIELD=catalog-s3-secret-key` and `LINEAGE_SERVICE_TOKEN_FILE=/etc/...` both
+#: read as secretish by name and are exactly the sanctioned paths, while `RASK_APP_TOKEN_FROM_STORE`
+#: is a flag. Measured 2026-09-24: the value shape finds six entries and no false positive.
+_MINTED_MATERIAL = re.compile(r"^(?:[0-9a-f]{40}|[A-Za-z0-9]{40})$")
+
+#: Entries carrying that material as a LITERAL env value, measured 2026-09-24. All six are
+#: `minio-scoped-users`' `mc admin user add` arguments.
+#:
+#: WORSE THAN A `secretKeyRef`, WHICH IS WHY IT NEEDS ITS OWN NUMBER. The ratchet above counts the
+#: banned DELIVERY path; this counts material that never reaches a Secret at all — it is in the
+#: rendered manifest, so it is in the Helm release Secret, in `helm get manifest`, and in any GitOps
+#: diff. The estate-wide ratchet could not see it: its whole detector is
+#: `"secretKeyRef" in env["valueFrom"]`, so it sat green at 23 == 23 while these six rendered beside
+#: the one `secretKeyRef` it counted.
+#:
+#: SIX AND NOT ZERO because the Job that carries them is the estate's only consumer of MinIO's ADMIN
+#: API (`policy create`, `user add`), which has no S3 equivalent and which RustFS does not implement —
+#: so its fate turns on the object-store ruling ([[XC-075]]) rather than on a rewrite here. A ratchet
+#: keeps the number from growing while that is decided; zero is the destination.
+PLAINTEXT_SECRET_BASELINE = 6
+
+
+def _plaintext_secret_entries(rendered: str | None = None) -> list[tuple[str, str]]:
+    """Every env entry whose literal VALUE is minted secret material, as (workload, var)."""
+    raw = rendered if rendered is not None else _helm_template("dapr.enabled=true", "medallion.enabled=true")
+    found: list[tuple[str, str]] = []
+    for doc in yaml.safe_load_all(raw):
+        if not doc or doc.get("kind") not in ("Deployment", "StatefulSet", "Job", "CronJob"):
+            continue
+        template = doc["spec"].get("template") or doc["spec"].get("jobTemplate", {}).get("spec", {}).get("template")
+        if not template:
+            continue
+        spec = template.get("spec") or {}
+        for container in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+            for env in container.get("env") or []:
+                value = env.get("value")
+                if isinstance(value, str) and _MINTED_MATERIAL.match(value):
+                    found.append((doc["metadata"]["name"], env["name"]))
+    return found
+
+
+def test_the_scan_catches_material_planted_in_a_value() -> None:
+    """Non-vacuity, proven rather than asserted: a scanner that matched nothing would pass forever.
+
+    This is the failure mode the estate-wide ratchet above actually had — a detector that could not
+    express the shape it was meant to catch, staying green at its own baseline.
+    """
+    planted = (
+        "apiVersion: batch/v1\nkind: Job\nmetadata:\n  name: planted\n"
+        "spec:\n  template:\n    spec:\n      containers:\n        - name: c\n"
+        '          env:\n            - { name: SOME_SECRET, value: "' + "a" * 40 + '" }\n'
+    )
+    assert _plaintext_secret_entries(planted) == [("planted", "SOME_SECRET")]
+
+
+def test_no_new_secret_material_is_written_into_a_manifest() -> None:
+    entries = _plaintext_secret_entries()
+    assert len(entries) <= PLAINTEXT_SECRET_BASELINE, (
+        f"{len(entries)} env entries carry minted secret material as a literal value, baseline "
+        f"{PLAINTEXT_SECRET_BASELINE}. That material is in the rendered manifest, so it is in the Helm "
+        f"release Secret and in every GitOps diff — worse than the `secretKeyRef` the ratchet above "
+        f"bans. Found: {sorted(set(entries))}"
+    )
+
+
+def test_the_plaintext_baseline_is_not_stale_upward() -> None:
+    """A baseline left above the truth is a budget nobody spends down."""
+    entries = _plaintext_secret_entries()
+    assert len(entries) == PLAINTEXT_SECRET_BASELINE, (
+        f"{len(entries)} plaintext secret entries, baseline {PLAINTEXT_SECRET_BASELINE} — if you REMOVED "
+        f"one, lower the baseline in the same commit. Found: {sorted(set(entries))}"
     )
