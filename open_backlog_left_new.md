@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **95 are blocked on a decision** and **101 can be picked up today**.
+**196 open items**, of which **94 are blocked on a decision** and **102 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 4 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 5 | 5 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -813,24 +813,41 @@ of mine in this same session.**
   identities are in OpenBao's privileged list, each app's Dapr Configuration allows its own
   `service-token-<identity>` and denies every peer's, and `lance-config-lineage` has
   `defaultAccess: allow` so the door can resolve any producer's key.
-- **blocked:** Owner ruling on WHAT A SIGNATURE MEANS FOR A HUMAN-AUTHORED EVENT — the catalog is the
-  third producer and it cannot sign under the current binding. Measured: all eight catalog emit sites
-  pass `author=token.sub`, the signed-in person's OIDC subject, and `lineage_emit.py:319` stamps it as
-  both `author.name` and `author.sub`; `verify_signed_event` requires the signer to EQUAL the stamped
-  subject, and the catalog holds a service credential, not that person's. Three answers, and each
-  gives something up. **(a) Stamp the service in `author.sub`** and keep the person in `author.name`:
-  signing works, and the graph stops answering "which person dropped this table" — which is the
-  question the audit reads. **(b) Relax the binding** to "the signer is a known producer vouching for
-  the stamped author": the catalog signs, `enforce_output_authz` still bounds a forged author to one
-  holding `can_write_data`, and the non-repudiation this row exists to close stays OPEN for human
-  events, because any producer could then vouch for any person. **(c) The catalog never signs**, and
-  unsigned stays permitted on the one door humans use. There is no fourth: an HMAC held by a service
-  cannot attribute an act to a person non-repudiably, and only the person's own credential could.
-  **HMAC IS SYMMETRIC and that is a property of the whole row, not of this fork:** the verifier holds
-  every signer's key, so lineage can forge any producer's signature. This closes non-repudiation
-  BETWEEN producers, never against the verifier.
-- *What is left:* The catalog producer, which needs the ruling above, and then the flip from
-  verify-if-present to require-a-signature. Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
+- **THE HUMAN-AUTHORED FORK IS ANSWERED (owner, 2026-09-24): A DELEGATION IS DECLARED, NEVER
+  INFERRED.** The question was what a signature means for an event a PERSON authors — all eight
+  catalog emit sites pass `author=token.sub` and the catalog holds a service credential, not that
+  person's. Relaxing the binding to "signer need not equal author" was rejected as the wrong repair:
+  it makes a producer that stamps the wrong author byte-identical to one deliberately acting for
+  somebody, so nothing downstream can separate a delegation from the substitution this row exists to
+  stop. Instead a delegation is a STATEMENT — *I, this service, am signing on behalf of that subject* —
+  and `verify_signed_event` accepts a signature whose signer IS the author, or one declaring an
+  `on_behalf_of` equal to it. Two claims, both checked. The declaration rides INSIDE what the HMAC
+  covers: `_unsigned` now strips only the signature VALUE, so the signer, the algorithm and the
+  delegation are all signed, which also closed a weakness nothing exercised — the signer name and the
+  algorithm were outside the digest and survived only because rewriting the signer makes the verifier
+  pick a key that then fails.
+  **WHAT IT DOES NOT GIVE, and the row must not close claiming it:** the person's own non-repudiation.
+  Only their credential could sign for them. This is verified attestation — the catalog authenticated
+  the bearer at its own door and says so under signature — not proof the person acted.
+  **HMAC IS SYMMETRIC, accepted (owner, 2026-09-24):** the verifier holds every signer's key, so
+  lineage can forge any producer's signature. The row closes non-repudiation BETWEEN producers, which
+  is the threat it named (a pod holding the shared app token stamping another producer's identity),
+  and never against the verifier. An asymmetric scheme is what would close the second.
+- **ALL THREE PRODUCERS SIGN (2026-09-24).** `maintenance` at its emitter's single `_publish`; the
+  `medallion` at `core/lineage_publish.emit_lineage`, which replaced nine direct outbox calls across
+  four modules and is gated as the service's only exit; the `catalog` at `DaprEmitter._signed`, which
+  delegates for a person, self-signs for the service and leaves an UNAUTHORED event alone — signing one
+  would take it off the graph, since the door refuses an event with no author.
+  **The catalog had no identity at all**, which is why it was last: `service-catalog` is minted here,
+  a name it PRESENTS and no door demands. Seeding it proved the seeding list was a second copy of
+  `lance.allServiceIdentities`, so every peer's deny-list stayed blind to the new secret — six app-ids
+  able to read a credential that was not theirs, caught by the gate that exists for it. The copy is
+  gone. One invariant widened with it: `seeded == privileged` was true while every credential existed
+  for a door to DEMAND, and a signing identity is demanded by nobody.
+- *What is left:* **THE FLIP ONLY** — verify-if-present to require-a-signature. It must come last and
+  only after the outbox is measured EMPTY: `reconcile_cron` re-runs the door on drain and DELETES a
+  refused staged event, so unsigned objects staged before the flip would be destroyed rather than
+  parked. Everything before it is committed and waits on the roll after 2026-09-24T22:53:38Z. Do NOT add a Dapr `accessControl` block — it governs service invocation and never sees pub/sub delivery. Do NOT extend `protectedTopics`/`publishingScopes`/`subscriptionScopes` to the seven producer components without first enumerating every topic each app uses in BOTH directions off `/v1.0/metadata`: `subscriptionScopes` is a complete allowlist, not additive, and a partial one stops delivery. Already shipped and not to redo: subject stamped through `enforce_output_authz`; the notifications-only scopes on `lineage-pubsub-notifications`; document-level `scopes:` closing each component to one app-id.
 - **ITS STRENGTH IS CAPPED BY [[ZT-001]], and that should be settled first.** A producer signature needs
   a KEY, and every key a producer holds today is derivable from `dapr.appToken`: the shared app token
   itself, and the per-identity `service-token-<identity>` which `lance.dedicatedServiceToken` computes
