@@ -1165,13 +1165,6 @@ def build_report(
     # `total` is the PURGE GATE, not the drift count — every category stays in `counts` and is still
     # reported. See `NON_GATING_CATEGORIES` for why these two are reported without gating.
     report.total = sum(count for name, count in report.counts.items() if name not in NON_GATING_CATEGORIES)
-    # ON THE WIRE, not just in a log line. This report gates the purge and answers whether the estate's
-    # storage state is understood; a number only a reader of pod logs can see is one no alert can fire
-    # on. Best-effort — a telemetry failure must never fail the reconcile that produced the finding.
-    try:
-        metrics.record_drift(report.counts)
-    except Exception as exc:  # noqa: BLE001 — reporting about a report must not outrank it
-        log.warning("drift_metric_not_recorded", extra={"error": f"{type(exc).__name__}: {exc}"})
     return report
 
 
@@ -1466,6 +1459,21 @@ async def reconcile(
     # every dataset rather than comparing three stores, so it is a different order of work. Blocking
     # Lance/S3 IO, so it goes to the threadpool like every other read here.
     await run_in_threadpool(_orphan_category, report, settings, sources)
+    # ON THE WIRE, not just in a log line. This report gates the purge and answers whether the estate's
+    # storage state is understood; a number only a reader of pod logs can see is one no alert can fire
+    # on. Best-effort — a telemetry failure must never fail the reconcile that produced the finding.
+    #
+    # AFTER THE ORPHAN PASS, which is the whole point of its position. `build_report` compares three
+    # STORES; `_orphan_category` then attaches the three categories that read STORAGE
+    # (`unregistered_datasets`, `absent_datasets`, `orphan_files`). Recording inside `build_report`
+    # meant the gauge carried ten categories while the log carried thirteen — measured live
+    # 2026-09-24, with `absent_datasets=9` and `orphan_files=1` BOTH non-zero and both blocking the
+    # trash purge, and neither reaching a series any alert could fire on. The log and the metric now
+    # read the same dict, one line apart, so they cannot disagree again.
+    try:
+        metrics.record_drift(report.counts)
+    except Exception as exc:  # noqa: BLE001 — reporting about a report must not outrank it
+        log.warning("drift_metric_not_recorded", extra={"error": f"{type(exc).__name__}: {exc}"})
     log.info(
         "reconcile_report",
         extra={
