@@ -48,6 +48,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
       - name: Tests — offline pytest suite, -m "not e2e and not slow" (Dagger)
         env:
           DAGGER_NO_NAG: "1"
@@ -93,6 +110,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
       - name: dagger call ${{ matrix.gate }}
         env:
           DAGGER_NO_NAG: "1"
@@ -135,6 +169,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
       - name: dagger call ${{ matrix.leg }}
         env:
           DAGGER_NO_NAG: "1"
@@ -161,6 +212,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
       - name: dagger call scan-secrets — trufflehog over the full git history
         env:
           DAGGER_NO_NAG: "1"
@@ -188,6 +256,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
       - name: Reclaim runner disk
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
@@ -257,6 +342,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
       - name: Frontend bun gate — svelte-check + tsgo + unit + lint + fmt (Dagger)
         env:
           DAGGER_NO_NAG: "1"
@@ -350,6 +452,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
 
       # The zone list is DERIVED, not restated here. A directory under microfrontends holding a
       # package.json is what makes a zone a bun workspace member and a turbo package — the same rule
@@ -455,6 +574,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
 
       - name: Lineage e2e (real AGE graph, hermetic via Dagger)
         env:
@@ -480,6 +616,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -524,6 +677,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -557,6 +727,23 @@ jobs:
       - name: Install Dagger CLI (pinned to the module's engineVersion)
         run: |
           curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+      # STARTING THE ENGINE IS A NETWORK CALL, and it was failing often enough to make this CI's verdict
+      # about the weather. Measured 2026-09-24: four Dagger jobs across two runs died on
+      # `start engine: failed to pull image ... read: connection reset by peer` from registry.dagger.io,
+      # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
+      # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
+      # work: a genuine failure still fails on the last attempt, with its own error, and a test that
+      # fails is never retried into passing.
+      - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
+        env:
+          DAGGER_NO_NAG: "1"
+        run: |
+          for attempt in 1 2 3; do
+            if dagger core version; then exit 0; fi
+            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
+            sleep $((attempt * 10))
+          done
+          dagger core version
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

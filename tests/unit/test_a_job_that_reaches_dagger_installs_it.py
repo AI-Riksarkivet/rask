@@ -87,6 +87,41 @@ def test_a_job_that_reaches_dagger_installs_the_cli(name: str) -> None:
     )
 
 
+def test_every_job_that_installs_the_cli_also_WARMS_the_engine() -> None:
+    """Installing the CLI is not starting the engine, and the second is a network call.
+
+    Measured 2026-09-24: four Dagger jobs across two runs died on `start engine: failed to pull image
+    ... read: connection reset by peer` from registry.dagger.io, while that manifest answered 200 from
+    outside CI. The image was fine; the runner's route to it was not, and every `dagger call` job is
+    exposed to that. A warm step keeps the retry on the PULL and off the work — retrying the call
+    itself would retry a failing TEST into passing, which is strictly worse than a flaky job.
+    """
+    jobs = _jobs()
+
+    missing = []
+    for name, job in jobs.items():
+        steps = job.get("steps", [])
+        if not any(_INSTALL in str(step.get("run", "")) for step in steps):
+            continue
+        if not any("dagger core version" in str(step.get("run", "")) for step in steps):
+            missing.append(name)
+
+    assert not missing, (
+        f"these jobs install the Dagger CLI and never warm the engine: {missing}. A transient registry "
+        "reset then fails the job on its first real call, and the verdict is about the network."
+    )
+
+
+def test_the_warm_step_RETRIES_and_still_fails_on_the_last_attempt() -> None:
+    """A retry that swallowed the final failure would turn a genuinely unreachable registry into a
+    green job — the opposite of the problem being fixed."""
+    body = _CI.read_text(encoding="utf-8")
+    warm = body[body.index("Warm the Dagger engine") : body.index("Warm the Dagger engine") + 900]
+
+    assert "for attempt in" in warm, "the warm step does not retry, so a single reset still fails the job"
+    assert warm.count("dagger core version") >= 2, "the warm step has no unguarded final attempt, so a real failure would be swallowed"
+
+
 def test_every_installer_pins_the_SAME_version() -> None:
     """Two lanes on different engine versions is a difference nobody set out to have, and it surfaces
     as a cache miss or a module that will not load rather than as a version complaint."""
