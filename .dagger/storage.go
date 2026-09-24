@@ -52,7 +52,6 @@ func (m *Rask) SmokeRustfs(
 		Stdout(ctx)
 }
 
-
 // RustfsLifecycle runs the SAME catalog lifecycle e2e the MinIO stack runs, with the bytes on RustFS —
 // proving the catalog is genuinely S3-agnostic rather than MinIO-shaped.
 //
@@ -123,6 +122,13 @@ func (m *Rask) RustfsLifecycle(
 
 	catalog := m.Image(src, "rest-catalog", "", "", "", nil).
 		WithServiceBinding("rustfs", rustfs).
+		// THE POSTURE, DECLARED. `assert_authentication_configured` refuses to boot on the AMBIGUITY
+		// between "open because I meant it" and "open because nothing set it", so a lane that names
+		// neither never comes up: measured 2026-09-24, this one died with
+		// `start ... (aliased as catalog): exit code: 3` and nothing but the container log naming why.
+		// Open is genuinely what this lane means — it drives the catalog with no tokens, because what
+		// is under test is the S3 layer underneath it.
+		WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true").
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
 		WithEnvVariable("LANCE_NS_DELIMITER", "$").

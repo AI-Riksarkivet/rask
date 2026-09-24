@@ -176,6 +176,12 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, auth 
 			WithEnvVariable("RASK_OIDC_ALLOW_INSECURE", "true").
 			WithEnvVariable("RASK_FGA_ENABLED", "true").
 			WithEnvVariable("RASK_FGA_API_URL", "http://openfga:8080")
+	} else {
+		// THE OTHER BRANCH NEEDS A POSTURE TOO, and having none made this parameter unusable:
+		// `assert_authentication_configured` refuses to boot on the ambiguity between "open because I
+		// meant it" and "open because nothing set it", so `auth == false` produced a catalog that
+		// exited 3 before serving anything. An unauthenticated lane must SAY that is what it meant.
+		c = c.WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
 	}
 	if lineage != nil {
 		// The governance stack turns catalog->lineage emission ON. Without this the catalog runs
@@ -236,6 +242,10 @@ func (m *Rask) lineageService(src *dagger.Directory) (*dagger.Service, error) {
 
 	api := m.Image(src, "rest-catalog", "", "", "", nil).
 		WithServiceBinding("lineage-postgres", pg).
+		// Lineage calls `assert_authentication_configured` exactly as the catalog does, and refuses to
+		// boot unless a posture is named. The authorization under test in these lanes is the CATALOG's;
+		// lineage is the store it emits to, reached over a service binding nothing else can address.
+		WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true").
 		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@lineage-postgres:5432/lineage").
 		WithEnvVariable("LINEAGE_GRAPH", "lineage").
 		WithExposedPort(8000).
@@ -353,6 +363,14 @@ func (m *Rask) GovernanceChain(
 		WithEnvVariable("LANCE_E2E_AUTH_SERVER", "http://catalog:2333").
 		WithEnvVariable("LANCE_E2E_LINEAGE_URL", "http://lineage-api:8000").
 		WithEnvVariable("LANCE_E2E_DEX", "http://dex:5556/dex").
+		// THE OUTSIDER IS THIS STACK'S, not the live estate's, and the default is not portable between
+		// them. `topology.OUTSIDER` names `publisher@rask.internal` because on k3s `team:eng` is bound
+		// to `project:acme`, which makes bob a project admin and therefore a dishonest 403 subject.
+		// Neither binding exists here — this stack seeds no teams and no projects, and its Dex
+		// (`.docker/dex.config.yaml`) knows exactly alice and bob. Measured 2026-09-24: the inherited
+		// default failed both outsider legs at the TOKEN GRANT (`access_denied: Invalid username or
+		// password`), so the lane reported an authorization result it had never reached.
+		WithEnvVariable("LANCE_E2E_OUTSIDER", "bob@example.com").
 		// Wait for BOTH, not just the ports: uvicorn accepts before either lifespan is built, and the
 		// lineage service additionally has to reach AGE. A racing first request reads as a wrong
 		// answer rather than as an unready service.
@@ -446,6 +464,9 @@ func (m *Rask) MedallionDemo(
 	return m.Image(src, "rest-catalog", "", "", "", nil).
 		WithServiceBinding("lineage-postgres", pg).
 		WithServiceBinding("rustfs", store).
+		// The demo is a walkthrough on a throwaway stack — open is what it means, and it has to say so
+		// or the service exits 3 before the UI it exists to show ever listens. See `lineageService`.
+		WithEnvVariable("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true").
 		WithEnvVariable("LINEAGE_DATABASE_URL", "postgresql://lineage:lineage@lineage-postgres:5432/lineage").
 		WithEnvVariable("LINEAGE_GRAPH", "lineage").
 		// The demo overlay's own settings: the lineage service reads the same store the driver writes.

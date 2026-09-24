@@ -50,6 +50,13 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 #:
 #: `scripts/e2e_live.sh` chooses the same way — it ASKS the store which candidate is non-admin rather
 #: than naming one — and `LANCE_E2E_OUTSIDER` overrides where an estate's outsider is someone else.
+#:
+#: THE DEFAULT IS THE CHART-DEPLOYED ESTATE'S, and one estate does not take it: the hermetic Dagger
+#: stack (`dagger call governance-chain`) mounts `.docker/dex.config.yaml`, which knows alice and bob
+#: and nobody else, and seeds neither `team:eng` nor `project:acme` — so bob is a genuine outsider
+#: there and `publisher@rask.internal` is not an identity at all. That lane sets the override, and
+#: `tests/unit/test_a_hermetic_lane_asks_its_dex_for_a_user_it_has.py` holds both halves of the
+#: pairing so neither side can be repointed alone.
 OUTSIDER = os.environ.get("LANCE_E2E_OUTSIDER", "publisher@rask.internal")
 
 
