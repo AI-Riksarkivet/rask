@@ -19,6 +19,7 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-rask}"
 RELEASE="${RELEASE:-rask}"
 CATALOG_IMG="${CATALOG_IMG:-lance-rest-catalog:dev}"
+TAG="${CATALOG_IMG##*:}"
 BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/.localbin"
 export PATH="$BIN:$PATH"
 
@@ -124,18 +125,23 @@ HELM_SET=(
 # seven rask images and this script built one. A hand-kept list is exactly what drifted, so the list
 # is the render's and a new service joins it by existing. `$HELM_SET` is the SAME array the upgrade
 # below uses, so the set built and the set deployed cannot disagree.
+# EXTRACTED BY PARSING THE RENDER, not by matching its text: every chart call site passes
+# `rask.image` through `quote`, so a reference arrives here as `image: "gateway:dev"` and a filter
+# anchored on the unquoted scalar matches none of them. `scripts/side_loaded_images.py` is that
+# parse, shared with the gate that pins it, and it emits the dockerfile stem beside each image so
+# this loop needs to know neither rule. `--tag` comes from $CATALOG_IMG so one variable decides the
+# tag this script builds and the tag it looks for.
 SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
-  | { grep -oE '^[[:space:]]+image: [a-z0-9][a-z0-9-]*:dev$' || true; } | awk '{print $2}' | sort -u)"
-# `|| true` ON THE GREP, THEN AN EXPLICIT CHECK. `set -o pipefail` is on, so a grep that matches
-# nothing exits 1 and kills the script at this line with no message at all — a filter that stopped
-# matching would read as an unexplained abort rather than as the thing it is.
+  | uv run python "$(dirname "$0")/side_loaded_images.py" --tag "$TAG")"
+# AN EXPLICIT CHECK, because an empty set is not an empty amount of work — it means this script is
+# about to deploy images it never built, and every pod that needs one sits in ImagePullBackOff.
 if [ -z "$SIDE_LOADED" ]; then
-  echo "!! the render named no side-loaded <component>:dev image — the filter or image.localImages has moved" >&2
+  echo "!! the render named no side-loaded <component>:$TAG image — image.localImages or image.tag has moved" >&2
   exit 1
 fi
-for img in $SIDE_LOADED; do
+while read -r img stem; do
+  [ -n "$img" ] || continue
   case " $ALREADY_BUILT " in *" $img "*) continue ;; esac
-  stem="${img%%:*}"; stem="${stem#lance-}"
   bash scripts/dagger-image.sh --name "$stem" --tag "$img" >/dev/null
   digest="$(docker image inspect --format '{{.Id}}' "$img")"
   kind load docker-image "$img" --name "$CLUSTER"
@@ -144,7 +150,9 @@ for img in $SIDE_LOADED; do
     exit 1
   fi
   echo "   node holds $img digest $digest"
-done
+done <<EOF
+$SIDE_LOADED
+EOF
 
 step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extras OFF)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
