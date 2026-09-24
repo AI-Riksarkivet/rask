@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Query
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateTableBranchRequest,
     CreateTableBranchResponse,
@@ -19,12 +20,15 @@ from lance_namespace import (
     ListTableBranchesResponse,
 )
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.lakehouse import protection
 
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -97,15 +101,24 @@ async def delete_table_branch(
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
+    force: RaskFlag = False,
     token: CurrentToken = None,
 ) -> DeleteTableBranchResponse:
     """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
 
     The disappearance is the half worth announcing: a console holding a branch list has no other way
     to learn the branch is gone, and a reader that polls discovers it by a failing read.
+
+    PROTECTION-GATED ([[LH-056]]). This is the heavier of the two deletions the table offers — it
+    destroys the branch's data and its own version sequence — so a protected table refuses it on the
+    same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
+    handler and runs identically either way.
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response = dataplane.delete_branch(ns, so, body)
     await emit_control(
         control,

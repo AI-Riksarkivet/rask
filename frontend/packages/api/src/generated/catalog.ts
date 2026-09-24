@@ -2578,6 +2578,11 @@ export interface paths {
          *
          *     The disappearance is the half worth announcing: a console holding a branch list has no other way
          *     to learn the branch is gone, and a reader that polls discovers it by a failing read.
+         *
+         *     PROTECTION-GATED ([[LH-056]]). This is the heavier of the two deletions the table offers — it
+         *     destroys the branch's data and its own version sequence — so a protected table refuses it on the
+         *     same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
+         *     handler and runs identically either way.
          */
         post: operations["delete_table_branch_v1_table__id__branches_delete_post"];
         delete?: never;
@@ -3260,6 +3265,11 @@ export interface paths {
         /**
          * Delete Table Tag
          * @description Delete a tag from the table — wraps lance_namespace DeleteTableTag.
+         *
+         *     PROTECTION-GATED ([[LH-056]]). A tag is the pin ``published`` is made of, and the publication
+         *     door's rollback guard rests on it: publication refuses to move ``published`` BACKWARDS and has
+         *     nothing to say about republishing after the tag is gone. So a protected table refuses this on the
+         *     same record its drop consults, and ``force`` turns that lock only.
          */
         post: operations["delete_table_tag_v1_table__id__tags_delete_post"];
         delete?: never;
@@ -3433,7 +3443,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Batch Delete Table Versions */
+        /**
+         * Batch Delete Table Versions
+         * @description Delete version ranges from the table — wraps the native ``batch_delete_table_versions`` op.
+         *
+         *     PROTECTION-GATED ([[LH-056]]). This is the most direct of the three partial deletions: it destroys
+         *     the VERSION rather than a ref to one, with nothing behind it, so a protected table refuses it on
+         *     the same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
+         *     handler and runs identically either way.
+         *
+         *     The store read is a plain call rather than a threadpool hop because FastAPI already runs a sync
+         *     handler off the event loop.
+         */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;
         options?: never;

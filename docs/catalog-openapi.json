@@ -25376,7 +25376,7 @@
     },
     "/v1/table/{id}/branches/delete": {
       "post": {
-        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read.",
+        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read.\n\nPROTECTION-GATED ([[LH-056]]). This is the heavier of the two deletions the table offers \u2014 it\ndestroys the branch's data and its own version sequence \u2014 so a protected table refuses it on the\nsame record its drop consults. ``force`` turns that lock only; the FGA gate ran before this\nhandler and runs identically either way.",
         "operationId": "delete_table_branch_v1_table__id__branches_delete_post",
         "parameters": [
           {
@@ -29876,7 +29876,7 @@
     },
     "/v1/table/{id}/tags/delete": {
       "post": {
-        "description": "Delete a tag from the table \u2014 wraps lance_namespace DeleteTableTag.",
+        "description": "Delete a tag from the table \u2014 wraps lance_namespace DeleteTableTag.\n\nPROTECTION-GATED ([[LH-056]]). A tag is the pin ``published`` is made of, and the publication\ndoor's rollback guard rests on it: publication refuses to move ``published`` BACKWARDS and has\nnothing to say about republishing after the tag is gone. So a protected table refuses this on the\nsame record its drop consults, and ``force`` turns that lock only.",
         "operationId": "delete_table_tag_v1_table__id__tags_delete_post",
         "parameters": [
           {
@@ -30942,6 +30942,7 @@
     },
     "/v1/table/{id}/version/delete": {
       "post": {
+        "description": "Delete version ranges from the table \u2014 wraps the native ``batch_delete_table_versions`` op.\n\nPROTECTION-GATED ([[LH-056]]). This is the most direct of the three partial deletions: it destroys\nthe VERSION rather than a ref to one, with nothing behind it, so a protected table refuses it on\nthe same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this\nhandler and runs identically either way.\n\nThe store read is a plain call rather than a threadpool hop because FastAPI already runs a sync\nhandler off the event loop.",
         "operationId": "batch_delete_table_versions_v1_table__id__version_delete_post",
         "parameters": [
           {

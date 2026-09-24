@@ -37,11 +37,13 @@ from catalog.api.dependencies import (
     assert_no_warehouse_bound_namespace,
 )
 from catalog.api.pagination import paginate_versions
+from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import CREATE_TABLE_VERSION
 from catalog.services import dataplane, native
 from service_kit.governed import fga
+from service_kit.lakehouse import protection
 
 
 # The native dir backend implements create / describe / batch-delete versions, but its bindings are typed
@@ -452,6 +454,22 @@ def describe_table_version(
 
 
 @router.post("/{id}/version/delete", response_model_exclude_none=True)
-def batch_delete_table_versions(id: str, body: BatchDeleteTableVersionsRequest, ns: NamespaceDep, settings: SettingsDep) -> BatchDeleteTableVersionsResponse:
-    body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
+def batch_delete_table_versions(
+    id: str, body: BatchDeleteTableVersionsRequest, ns: NamespaceDep, settings: SettingsDep, force: RaskFlag = False
+) -> BatchDeleteTableVersionsResponse:
+    """Delete version ranges from the table — wraps the native ``batch_delete_table_versions`` op.
+
+    PROTECTION-GATED ([[LH-056]]). This is the most direct of the three partial deletions: it destroys
+    the VERSION rather than a ref to one, with nothing behind it, so a protected table refuses it on
+    the same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
+    handler and runs identically either way.
+
+    The store read is a plain call rather than a threadpool hop because FastAPI already runs a sync
+    handler off the event loop.
+    """
+    segments = parse_identifier(id, settings.delimiter)
+    body.id = reconcile_body_id(segments, body.id)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = protection.get_protection(settings.registry_root, settings.storage_options(), "table", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     return native.call(ns, "batch_delete_table_versions", body)

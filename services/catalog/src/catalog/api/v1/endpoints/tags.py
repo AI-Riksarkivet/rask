@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter
+from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateTableTagRequest,
     CreateTableTagResponse,
@@ -16,12 +17,15 @@ from lance_namespace import (
     UpdateTableTagResponse,
 )
 
+from catalog.api import fga_deps
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
+from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
+from service_kit.lakehouse import protection
 
 
 router = APIRouter(prefix="/v1/table", tags=["tag"])
@@ -131,11 +135,21 @@ async def delete_table_tag(
     settings: SettingsDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
+    force: RaskFlag = False,
     token: CurrentToken = None,
 ) -> DeleteTableTagResponse:
-    """Delete a tag from the table — wraps lance_namespace DeleteTableTag."""
+    """Delete a tag from the table — wraps lance_namespace DeleteTableTag.
+
+    PROTECTION-GATED ([[LH-056]]). A tag is the pin ``published`` is made of, and the publication
+    door's rollback guard rests on it: publication refuses to move ``published`` BACKWARDS and has
+    nothing to say about republishing after the tag is gone. So a protected table refuses this on the
+    same record its drop consults, and ``force`` turns that lock only.
+    """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "table", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
     response = dataplane.delete_tag(ns, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
