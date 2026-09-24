@@ -104,16 +104,23 @@ typecheck:
 # `--all-packages` is load-bearing: the root pyproject has `dependencies = []`, so a plain
 # `uv run` installs no workspace member and `import catalog.main` fails. CI gets this via
 # .dagger/test.go's `uv sync --all-packages`; locally we do the same.
+#
+# THE SPEC HAS TWO READERS and the generator writes both: the JSON, and the TypeScript client
+# openapi-typescript derives from it. Regenerating only the JSON leaves the client naming a value set
+# the bus no longer sends — which is unobservable to every Python gate, so the target does both and
+# the check diffs all four files.
 openapi:
 	uv sync --all-packages
 	uv run --no-sync scripts/gen_openapi.py
+	bun --cwd=frontend run gen:types
 
 # Diffs against HEAD, not the index: `git diff` alone compares to the index, so a *staged*
 # drifted spec would pass falsely. CI's dagger function snapshots the committed files and
 # diffs the regenerated output back, which is what `git diff HEAD` reproduces.
 openapi-check: openapi
 	@git diff HEAD --exit-code -- docs/catalog-openapi.json docs/lineage-openapi.json \
-	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec. Commit the diff above."; exit 1; }
+	  frontend/packages/api/src/generated/catalog.ts frontend/packages/api/src/generated/lineage.ts \
+	  || { echo "!! OpenAPI drift: a route changed without refreshing the spec or its client. Commit the diff above."; exit 1; }
 	@echo "OpenAPI specs match the committed contract"
 
 # ---- zone images -----------------------------------------------------------

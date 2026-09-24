@@ -2707,6 +2707,11 @@
               "table_purged",
               "namespace_purged",
               "table_published",
+              "table_branch_created",
+              "table_branch_deleted",
+              "table_tag_created",
+              "table_tag_updated",
+              "table_tag_deleted",
               "task_assigned",
               "task_unassigned",
               "task_changes_requested",
@@ -16219,7 +16224,7 @@
     },
     "/management/v1/table/{id}/changes": {
       "post": {
-        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route\nshipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded\n`can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every\nreader who was not also a writer \u2014 the feed's whole audience \u2014 was refused. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.",
+        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find\nit. That `ControlAction` (`service_kit/control_events.py:101`) announces a version advance and\ncarries `{from_version, to_version}` \u2014 \"the RANGE (D-R3) the notification carries, so a consumer\nresolves the delta\" (`catalog/services/publication.py:245-254`) \u2014 which is exactly the window this\ndoor takes. Its emitter is a DIFFERENT `publication.py`, the route module\n`catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real\nadvance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and\ncalls here with it \u2014 no new `ControlAction` member, so no added control-buffer cost.\nIt is deliberately NOT in notifications' `NAMED_ACTIONS`: a version advance changes an OBJECT, not\nwhat any particular person may do, so it is an untargeted control event like the other 31 and\nreaches a feed rather than a person.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route\nshipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded\n`can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every\nreader who was not also a writer \u2014 the feed's whole audience \u2014 was refused. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.",
         "operationId": "table_changes_management_v1_table__id__changes_post",
         "parameters": [
           {
@@ -25247,7 +25252,7 @@
     },
     "/v1/table/{id}/branches/create": {
       "post": {
-        "description": "Create a branch from main (or a source branch/version) \u2014 wraps pylance ``create_branch``.",
+        "description": "Create a branch from main (or a source branch/version) \u2014 wraps pylance ``create_branch``.\n\nANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED. The rule the estate codified is that a\ncontrol event is targeted when it changes what a specific PERSON may do or must do, not when it\nchanges an object; a branch appearing changes an object, so it joins the 31 members that name\nnobody and stays out of notifications' `NAMED_ACTIONS`. A console invalidating a branch list is\nthe consumer this serves.",
         "operationId": "create_table_branch_v1_table__id__branches_create_post",
         "parameters": [
           {
@@ -25371,7 +25376,7 @@
     },
     "/v1/table/{id}/branches/delete": {
       "post": {
-        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.",
+        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read.",
         "operationId": "delete_table_branch_v1_table__id__branches_delete_post",
         "parameters": [
           {
@@ -29747,7 +29752,7 @@
     },
     "/v1/table/{id}/tags/create": {
       "post": {
-        "description": "Tag the given table version with a name \u2014 wraps lance_namespace CreateTableTag.",
+        "description": "Tag the given table version with a name \u2014 wraps lance_namespace CreateTableTag.\n\nANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED, by the rule the estate codified: a\ncontrol event is targeted when it changes what a specific PERSON may do or must do, not when it\nchanges an object. A tag is a ref, so this joins the members that name nobody.\n\nTHE REF PLANE IS WHERE `published` LIVES, which is why these three matter more than their size\nsuggests: `table_published` already announces the publication tag moving, and until now the OTHER\nref mutations moved in silence \u2014 a console could not tell a tag was gone.",
         "operationId": "create_table_tag_v1_table__id__tags_create_post",
         "parameters": [
           {
@@ -30221,7 +30226,7 @@
     },
     "/v1/table/{id}/tags/update": {
       "post": {
-        "description": "Move an existing tag to a new table version \u2014 wraps lance_namespace UpdateTableTag.",
+        "description": "Move an existing tag to a new table version \u2014 wraps lance_namespace UpdateTableTag.\n\nA MOVE IS NOT A CREATE. The name survives and the version under it changes, so a consumer holding\n\"tag -> version\" has stale state with no failing read to discover it by; `version` rides in `extra`\nso it can be corrected without a re-read.",
         "operationId": "update_table_tag_v1_table__id__tags_update_post",
         "parameters": [
           {

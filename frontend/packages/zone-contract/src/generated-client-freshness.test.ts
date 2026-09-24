@@ -34,16 +34,37 @@ import { REPO_ROOT } from './manifest';
 
 const FRONTEND = resolve(REPO_ROOT, 'frontend');
 
-/** `{ spec, out }` for every `openapi-typescript <spec> -o <out>` in the frontend's scripts. */
+/**
+ * `{ spec, out }` for every `openapi-typescript` invocation in the frontend's scripts.
+ *
+ * TOKENISED rather than matched positionally. A regex of the shape `openapi-typescript (\S+) -o
+ * (\S+)` reads the command as "spec, then immediately `-o`", which any flag added between the two
+ * silently breaks — and one was (`--default-non-nullable false`, 2026-09-19), after which this gate
+ * found no pairs at all and the loop below ran zero times. The vacuity guard is what announced it,
+ * so the failure was loud; the lesson is that the SHAPE of a command line is not a contract this
+ * file may assume. Walk the arguments: the first bare token is the spec, `-o`/`--output` names the
+ * destination, every other flag is somebody else's business.
+ */
 function generatedPairs(): { name: string; spec: string; out: string }[] {
 	const pkg = JSON.parse(readFileSync(resolve(FRONTEND, 'package.json'), 'utf8')) as {
 		scripts?: Record<string, string>;
 	};
 	const pairs: { name: string; spec: string; out: string }[] = [];
 	for (const [name, script] of Object.entries(pkg.scripts ?? {})) {
-		const m = /openapi-typescript\s+(\S+)\s+-o\s+(\S+)/.exec(script);
-		if (m?.[1] && m[2])
-			pairs.push({ name, spec: resolve(FRONTEND, m[1]), out: resolve(FRONTEND, m[2]) });
+		const argv = script.split(/\s+/).filter(Boolean);
+		const start = argv.indexOf('openapi-typescript');
+		if (start === -1) continue;
+
+		let spec = '';
+		let out = '';
+		for (let i = start + 1; i < argv.length; i++) {
+			const arg = argv[i]!;
+			if (arg === '-o' || arg === '--output') out = argv[++i] ?? '';
+			else if (arg.startsWith('-')) i += argv[i + 1]?.startsWith('-') === false ? 1 : 0;
+			else if (!spec) spec = arg;
+		}
+		if (spec && out)
+			pairs.push({ name, spec: resolve(FRONTEND, spec), out: resolve(FRONTEND, out) });
 	}
 	return pairs;
 }

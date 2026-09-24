@@ -38,6 +38,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/classification/{id}/access/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Grant Classification Access
+         * @description Delegate a classification label to a subject — gated per rung by ``can_grant_apply``.
+         *
+         *     THE DOOR THE RUNG WAS POINTLESS WITHOUT. `apply` exists so a data-protection officer may be trusted
+         *     with `pii` and not with `restricted`; without somewhere to confer it, the vocabulary is estate-admin
+         *     only and the separation is decorative. `model.fga` makes the same argument for `classifier` one
+         *     level along — "a person's grant belongs on the grant door rather than in a deploy".
+         */
+        post: operations["grant_classification_access_management_v1_classification__id__access_grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/classification/{id}/access/my-permissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * My Classification Permissions
+         * @description Which classification actions the caller holds on this label — the same self-service read the
+         *     data types carry, and the only way a holder can discover a delegation made to them.
+         */
+        post: operations["my_classification_permissions_management_v1_classification__id__access_my_permissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/management/v1/classification/{id}/access/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Classification Access
+         * @description Withdraw a classification delegation — ``can_revoke_grant``, stricter than the grant, exactly as
+         *     on table and namespace: taking a rung back is administration, never delegation.
+         */
+        post: operations["revoke_classification_access_management_v1_classification__id__access_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/namespace/{id}/access/check": {
         parameters: {
             query?: never;
@@ -687,6 +754,18 @@ export interface paths {
          *     one (§ J1), because following every row a table ever received is the most disclosing read
          *     available, not a metadata lookup.
          *
+         *     THE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find
+         *     it. That `ControlAction` (`service_kit/control_events.py:101`) announces a version advance and
+         *     carries `{from_version, to_version}` — "the RANGE (D-R3) the notification carries, so a consumer
+         *     resolves the delta" (`catalog/services/publication.py:245-254`) — which is exactly the window this
+         *     door takes. Its emitter is a DIFFERENT `publication.py`, the route module
+         *     `catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real
+         *     advance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and
+         *     calls here with it — no new `ControlAction` member, so no added control-buffer cost.
+         *     It is deliberately NOT in notifications' `NAMED_ACTIONS`: a version advance changes an OBJECT, not
+         *     what any particular person may do, so it is an untargeted control event like the other 31 and
+         *     reaches a feed rather than a person.
+         *
          *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
          *     shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
          *     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
@@ -1108,8 +1187,11 @@ export interface paths {
         /**
          * Set Table Protection
          * @description Set or clear deletion protection on the table at ``id`` (#73 — the warehouse contract on the
-         *     rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to ``can_drop``:
-         *     whoever may destroy the table decides whether destroying it needs a second thought). The flag is
+         *     rung where a drop deletes bytes). Owner-gated by the router (``protection`` maps to
+         *     ``can_set_protection``, a computed userset over ``owner``: whoever may destroy the table decides
+         *     whether destroying it needs a second thought). Its OWN relation at the drop's tier rather than
+         *     ``can_drop`` itself, because `#41` audits by the relation and the route suffix is not in the
+         *     record — sharing the name made arming the safety and destroying the table one audit line. The flag is
          *     a CONTROL-ROOT record, deliberately not schema metadata — control-plane state that emits a
          *     control event and never creates a table version, readable even when the dataset is corrupted,
          *     and unreachable from the future properties write door (#78).
@@ -2467,6 +2549,12 @@ export interface paths {
         /**
          * Create Table Branch
          * @description Create a branch from main (or a source branch/version) — wraps pylance ``create_branch``.
+         *
+         *     ANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED. The rule the estate codified is that a
+         *     control event is targeted when it changes what a specific PERSON may do or must do, not when it
+         *     changes an object; a branch appearing changes an object, so it joins the 31 members that name
+         *     nobody and stays out of notifications' `NAMED_ACTIONS`. A console invalidating a branch list is
+         *     the consumer this serves.
          */
         post: operations["create_table_branch_v1_table__id__branches_create_post"];
         delete?: never;
@@ -2487,6 +2575,9 @@ export interface paths {
         /**
          * Delete Table Branch
          * @description Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
+         *
+         *     The disappearance is the half worth announcing: a console holding a branch list has no other way
+         *     to learn the branch is gone, and a reader that polls discovers it by a failing read.
          */
         post: operations["delete_table_branch_v1_table__id__branches_delete_post"];
         delete?: never;
@@ -3141,6 +3232,14 @@ export interface paths {
         /**
          * Create Table Tag
          * @description Tag the given table version with a name — wraps lance_namespace CreateTableTag.
+         *
+         *     ANNOUNCED ON THE CONTROL LANE ([[LH-056]]) and UNTARGETED, by the rule the estate codified: a
+         *     control event is targeted when it changes what a specific PERSON may do or must do, not when it
+         *     changes an object. A tag is a ref, so this joins the members that name nobody.
+         *
+         *     THE REF PLANE IS WHERE `published` LIVES, which is why these three matter more than their size
+         *     suggests: `table_published` already announces the publication tag moving, and until now the OTHER
+         *     ref mutations moved in silence — a console could not tell a tag was gone.
          */
         post: operations["create_table_tag_v1_table__id__tags_create_post"];
         delete?: never;
@@ -3205,6 +3304,10 @@ export interface paths {
         /**
          * Update Table Tag
          * @description Move an existing tag to a new table version — wraps lance_namespace UpdateTableTag.
+         *
+         *     A MOVE IS NOT A CREATE. The name survives and the version under it changes, so a consumer holding
+         *     "tag -> version" has stale state with no failing read to discover it by; `version` rides in `extra`
+         *     so it can be corrected without a re-read.
          */
         post: operations["update_table_tag_v1_table__id__tags_update_post"];
         delete?: never;
@@ -5040,7 +5143,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
+            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_bound" | "warehouse_unbound" | "warehouse_deleted" | "policy_set" | "policy_deleted" | "transform_set" | "transform_deleted" | "gate_set" | "gate_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_published" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "task_assigned" | "task_unassigned" | "task_changes_requested" | "task_dropped" | "task_lease_expired" | "promotion_review_requested";
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -9478,6 +9581,128 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Liveness"];
+                };
+            };
+        };
+    };
+    grant_classification_access_management_v1_classification__id__access_grant_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_classification_permissions_management_v1_classification__id__access_my_permissions_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MyPermissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_classification_access_management_v1_classification__id__access_revoke_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: {
+                "dapr-api-token"?: string | null;
+                "x-lance-service-identity"?: string | null;
+                "dapr-caller-app-id"?: string | null;
+            };
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccessGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessGrantResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

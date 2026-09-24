@@ -31,7 +31,13 @@ const SECRETS_DELIVERED_AS_FILES = ['LINEAGE_SERVICE_TOKEN'];
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
 	for (const entry of readdirSync(dir)) {
-		if (entry === 'node_modules' || entry === '.svelte-kit' || entry === 'dist' || entry === 'build') continue;
+		if (
+			entry === 'node_modules' ||
+			entry === '.svelte-kit' ||
+			entry === 'dist' ||
+			entry === 'build'
+		)
+			continue;
 		const path = join(dir, entry);
 		if (statSync(path).isDirectory()) sourceFiles(path, out);
 		else if (entry.endsWith('.ts') || entry.endsWith('.svelte')) out.push(path);
@@ -40,7 +46,9 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 }
 
 describe('secrets reach a zone as a file, never as an env value', () => {
-	const files = sourceFiles(join(FRONTEND, 'microfrontends')).concat(sourceFiles(join(FRONTEND, 'packages')));
+	const files = sourceFiles(join(FRONTEND, 'microfrontends')).concat(
+		sourceFiles(join(FRONTEND, 'packages')),
+	);
 
 	it('finds sources to check', () => {
 		// Without this the whole suite passes by walking an empty tree.
