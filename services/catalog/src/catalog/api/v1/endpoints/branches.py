@@ -7,7 +7,8 @@ former spec-correct 501 into a real, working operation.
 
 from __future__ import annotations
 
-from typing import Annotated
+import logging
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
@@ -16,6 +17,7 @@ from lance_namespace import (
     CreateTableBranchResponse,
     DeleteTableBranchRequest,
     DeleteTableBranchResponse,
+    LanceNamespace,
     ListTableBranchesRequest,
     ListTableBranchesResponse,
 )
@@ -38,6 +40,8 @@ from service_kit.lakehouse import protection
 #: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
 #: dispatches on.
 _MAX_LIST_LIMIT = 1000
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/table", tags=["branch"])
 
@@ -85,12 +89,42 @@ async def create_table_branch(
         object_type="table",
         object_id=f"table:{fga.canonical_object_id(segments, delimiter=settings.delimiter)}",
         actor=f"user:{token.sub}" if token is not None else None,
-        # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. The source ref
-        # rides along because "branched from what" is the question a consumer asks next, and it is only
-        # answerable from the request.
-        extra={"branch": body.name, "from_branch": body.from_branch, "from_version": body.from_version},
+        # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. "Branched from
+        # what" is the question a consumer asks next, and it is answered from the DATASET rather than
+        # from the request: a branch taken from main sends no `from_version` and records main's current
+        # version, so announcing the request answered `null` for the case that happens most.
+        extra={"branch": body.name, **_recorded_parent(ns, so, body)},
     )
     return response
+
+
+def _recorded_parent(ns: LanceNamespace, so: dict[str, str], body: CreateTableBranchRequest) -> dict[str, Any]:
+    """The parent the dataset recorded for a just-created branch, or nothing.
+
+    ONE EXTRA READ PER CREATE, which is a rare operation and a permanent announcement: a console that
+    stored the wrong ancestor has no way to learn otherwise without going back to the catalog, which is
+    what the event exists to save it.
+
+    NOTHING, never the request, when the read fails. The request's values are what this replaces and
+    they are null exactly where the answer matters, so falling back to them would restore the defect
+    silently on the one path where the authoritative read is unavailable. An absent field is a consumer
+    that asks; a null one is a consumer that believes.
+
+    Named for what they carry, matching `list_branches`. `from_version` already means something else in
+    this estate — ingest's publish delta range — and `extra` has no schema to keep the two apart.
+    """
+    try:
+        listed = dataplane.list_branches(ns, so, ListTableBranchesRequest(id=body.id))
+        entry = (listed.branches or {}).get(body.name)
+    except Exception:  # noqa: BLE001 — an announcement must survive an unreadable parent
+        log.warning("branch_parent_unreadable", extra={"branch": body.name})
+        return {}
+    if entry is None:
+        return {}
+    # ATTRIBUTES, not `.get` — `ListTableBranchesResponse.branches` holds `BranchContents` models and a
+    # dict-shaped read raises. The data-plane builds them from plain dicts, which is what makes the
+    # mistake easy and silent right up to the AttributeError.
+    return {"parent_branch": entry.parent_branch, "parent_version": entry.parent_version}
 
 
 @router.post("/{id}/branches/delete", response_model_exclude_none=True)
