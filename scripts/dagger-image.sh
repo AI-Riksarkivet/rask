@@ -17,18 +17,24 @@
 # unchanged. Measured on the gateway image: the export dominates at ~78 s (it is the BUILD), and the
 # `docker load` adds ~5 s. --push publishes straight to a registry instead, skipping the daemon.
 #
-# THE ENGINE, AND WHY BOTH MODES NEED THE SAME ONE. Dagger always speaks HTTPS to a registry and
-# `publish` has no --insecure flag, so pushing to the plain-HTTP dev registry needs the engine
-# provisioned by `make dagger-engine`. --load does not touch a registry and so does not need that
-# CONFIG — but an engine owns its BuildKit cache, and letting --load auto-provision a second engine
-# splits the cache in two: a build warms one, the next build reads the other cold, and the layer cache
-# silently buys nothing. Measured 2026-09-20 on this host — two engines up at once,
-# `dagger-engine-rask` holding 5.2 GB against an auto-provisioned `dagger-engine-v0.21.7` with its own
-# anonymous volume, the split invisible because a cold build looks exactly like a slow one.
-# So: respect _EXPERIMENTAL_DAGGER_RUNNER_HOST when the operator exports it, otherwise require the
-# repo's engine for both modes. `make dagger-engine` is idempotent and once per host; it reuses the
-# NAMED state volume, so running it costs nothing and never discards the cache.
-# CI is unaffected — it calls `dagger call` directly and never this script.
+# THE ENGINE, AND WHAT EACH MODE ACTUALLY NEEDS OF IT. Dagger always speaks HTTPS to a registry and
+# `publish` has no --insecure flag, so pushing to the plain-HTTP dev registry needs the CONFIG that
+# `make dagger-engine` writes. --load touches no registry and needs none of that — what it needs is to
+# not split the BuildKit CACHE, because an engine owns its own: letting --load auto-provision a second
+# engine means a build warms one and the next reads the other cold, buying nothing. Measured
+# 2026-09-20 on this host — two engines up at once, `dagger-engine-rask` holding 5.2 GB against an
+# auto-provisioned `dagger-engine-v0.21.7` on its own anonymous volume, invisible because a cold build
+# looks exactly like a slow one.
+#
+# THOSE ARE TWO DIFFERENT REQUIREMENTS AND ONLY ONE IS UNIVERSAL. A cache can only be split where a
+# cache persists. CI is a fresh runner with no engine, no state volume and no `make dagger-engine`
+# step, so demanding the repo's engine there refuses a build to protect a cache that does not exist —
+# which is how `e2e-stack` and `e2e-ray` died on `!! dagger-engine-rask is not running` the first time
+# they reached this script. So the requirement is stated by its reason: --push always needs the
+# engine's config; --load needs it only when the NAMED state volume is there to be split, i.e. on a
+# host where `make dagger-engine` has run and the engine is merely stopped.
+# `make dagger-engine` is idempotent and once per host; it reuses that volume, so running it costs
+# nothing and never discards the cache.
 set -euo pipefail
 
 NAME="" ZONE="" RUNNER="" TAG="" MODE="load" ADDRESS=""
@@ -58,13 +64,18 @@ command -v dagger >/dev/null 2>&1 || { echo "!! dagger CLI not on PATH — https
 # Respect an operator's choice; otherwise prefer the repo's configured engine when it is up.
 if [[ -z "${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-}" ]]; then
   engine="${DAGGER_ENGINE_NAME:-dagger-engine-rask}"
+  state="${DAGGER_ENGINE_STATE:-dagger-engine-rask-state}"
   if [[ "$(docker inspect -f '{{.State.Running}}' "$engine" 2>/dev/null || echo false)" == "true" ]]; then
     export _EXPERIMENTAL_DAGGER_RUNNER_HOST="docker-container://$engine"
-  else
-    echo "!! $engine is not running: run 'make dagger-engine'" >&2
-    echo "!! (--push needs its insecure-registry config; --load needs its CACHE — auto-provisioning a" >&2
-    echo "!!  second engine builds cold against a separate one)" >&2
+  elif [[ "$MODE" == "push" ]]; then
+    echo "!! --push needs $engine's insecure-registry config and it is not running: run 'make dagger-engine'" >&2
     exit 1
+  elif docker volume inspect "$state" >/dev/null 2>&1; then
+    echo "!! $engine is not running but its cache volume $state is right here: run 'make dagger-engine'" >&2
+    echo "!! (auto-provisioning a second engine would build cold against a warm cache nothing would read)" >&2
+    exit 1
+  else
+    echo ">> no $engine and no $state volume — nothing to split, letting dagger provision its own engine" >&2
   fi
 fi
 
