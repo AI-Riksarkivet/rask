@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **95 are blocked on a decision** and **101 can be picked up today**.
+**197 open items**, of which **96 are blocked on a decision** and **101 can be picked up today**.
 21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 31 | 4 | 5 |
+| **PHASE 1 · LAKEHOUSE** | 32 | 4 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -524,6 +524,40 @@ of mine in this same session.**
 - **WHAT IS WORTH AUTOMATING is the cheap half, not the fan-out:** the done-marker scan above is nine
   lines of Python and found the one real case. Run it before proposing an audit, never instead of
   reading the rows it flags.
+
+**LH-197 · One image serves ELEVEN deployments, so a soak on maintenance freezes the catalog, lineage and the medallion**
+`catalog, lineage, medallion, maintenance` · **HIGH**
+- **blocked:** Owner call on splitting `.docker/rest-catalog.dockerfile` per service. It changes the
+  deploy topology of eleven workloads and the chart's pin machinery, `k3s-import` and the CI image
+  matrix all key on image STEMS — each grows from one row to seven. That is a decision about how the
+  estate ships, not a refactor.
+- **MEASURED 2026-09-24 on the running estate, and it is the only image in the fleet that does this.**
+  `kubectl get deploy` by image: `lance-rest-catalog` serves **11** deployments — catalog, lineage,
+  maintenance, maintenance-worker, medallion-producer, the three stage runners, viewer, search and
+  annotator. **Every other image serves exactly 1.** The eleven differ only in which ASGI app uvicorn
+  is pointed at: all run `opentelemetry-instrument uvicorn`.
+  `.docker/rest-catalog.dockerfile:39,50` syncs seven workspace packages into one venv
+  (`--package catalog --package lineage --package medallion --package maintenance --package viewer
+  --package search --package annotator --extra workflow`).
+- **WHAT IT COSTS, measured rather than argued.** LH-183's soak pins two maintenance pods for 24 h;
+  because those pods share an artifact with the catalog, lineage and the medallion, **21 commits
+  across four services were undeployable for a full day** — including all three LH-064 producers,
+  which therefore have no live observation. A roll is also always wider than the change: a lineage fix
+  redeploys the annotator.
+  **THREE OF THE SEVEN ARE LOW PRIORITY** (`viewer`, `search`, `annotator`), so the lakehouse's four
+  services share a build artifact with three nobody is meant to touch.
+- **THE ESTATE ALREADY HAS THE PATTERN, twice.** `.docker/frontend.dockerfile` builds all seven zones
+  from `ARG APP`; `.docker/ray-runner.dockerfile` builds N runners from `ARG RUNNER` and its own
+  comment cites the frontend as "the estate's own precedent for one definition, N images". Every
+  single-service dockerfile does `uv sync --package <name>` (`gateway.dockerfile:31,38`).
+  `rest-catalog` is the outlier.
+- *What is left:* The ruling, then `ARG SERVICE` + `--package ${SERVICE}` and the stem rows that key
+  off it. The win is NOT image size — a per-service sync installs fewer deps but the heavy ones
+  (pylance, pyarrow) are shared — it is that the four lakehouse services become independently
+  shippable, which is what a soak on one of them currently prevents.
+- *Closes when:* A change to one lakehouse service can be built and rolled without redeploying the
+  other ten, and the pin/import/CI rows are derived from the service list rather than restated.
+- *Evidence:* `kubectl -n default get deploy -o json` grouped by image, 2026-09-24 · `.docker/rest-catalog.dockerfile:39-53` · `.docker/frontend.dockerfile (ARG APP)` · `.docker/ray-runner.dockerfile:32-46` · this session's 21 undeployed commits
 
 **LH-177 · The catalog vends its own in-cluster address, so an off-cluster client gets a valid credential for a host it cannot resolve**
 `catalog` · **MED**
