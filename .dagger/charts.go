@@ -11,6 +11,17 @@ import (
 // busybox base would silently misbehave — Debian gives the same tools CI's ubuntu-latest runner has.
 const chartsBaseImage = "debian:trixie-slim"
 
+// greptimeImage is the SAME image the chart's greptimedb-standalone subchart deploys, because the
+// drill's whole claim is that the PRODUCTION ENGINE accepts an expression — promtool is Prometheus and
+// the two do not take the same PromQL. Replaying against a different GreptimeDB than the estate runs
+// would answer a question nobody asked.
+//
+// Pinned here and pinned there: `chart/charts/greptimedb-standalone-0.4.5.tgz` carries
+// `image.registry/repository/tag`, and `tests/unit/test_the_drill_replays_against_the_engine_the_estate_runs.py`
+// derives that from the vendored subchart rather than trusting this line. A bump on either side that
+// does not reach the other reds it.
+const greptimeImage = "docker.io/greptime/greptimedb:v1.1.1"
+
 // helmVersion pins Helm deliberately. The CI `test` job uses azure/setup-helm@v4 with no version input
 // (latest stable Helm 3, a moving target) — nothing in the repo pins one — so Dagger fixes it here for a
 // reproducible render. The render invariants are object-count / string greps, insensitive to the Helm
@@ -328,3 +339,42 @@ for governed in LINEAGE_DLQ_TOPIC MEDALLION_DLQ_TOPIC RASK_NOTIFICATIONS_DLQ_TOP
   ! grep -q "$governed" /tmp/legacy.yaml || { echo "FAIL: $governed survives dapr.resiliency.enabled=false, but the retry policy that gives it meaning does not"; exit 1; }
 done
 grep -q '30s,60s,120s,300s' /tmp/legacy.yaml`
+
+// AlertRulesDrill replays every shipped alert rule against a REAL GreptimeDB, hermetically.
+//
+// `make alert-rules-check` proves the LOGIC on synthetic series with promtool; this proves the
+// production ENGINE will accept the expression at all, and the two do not substitute for each other —
+// two rules once shipped that promtool called SUCCESS and GreptimeDB answered HTTP 400 and 500, so
+// they could never fire and nothing said so. Until now the only way to run this half needed a live
+// cluster, so CI ran `alert-rules-check` on every commit and the engine proof whenever someone
+// remembered.
+//
+// AN EMPTY STORE IS ENOUGH, which is what makes it hermetic: the drill asserts the endpoint answers
+// `status: success`, not that any series exists. A fresh standalone GreptimeDB evaluates every
+// expression to an empty vector and refuses the malformed ones exactly as a populated one would.
+//
+// The SCRIPT is called rather than `make alert-rules-drill`, on purpose: that target maps exit 2 (no
+// reachable datasource) to success so a laptop with no cluster is not a red build. Here the datasource
+// is bound as a service, so an unreachable one is a broken lane and must fail rather than skip.
+func (m *Rask) AlertRulesDrill(
+	ctx context.Context,
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+) (string, error) {
+	greptime := dag.Container().
+		From(greptimeImage).
+		WithExposedPort(4000).
+		// The BINARY is named here, not left to the image's entrypoint: this module's services all pass
+		// a full command (`/openfga run`, `dex serve …`) because Dagger does not apply an image
+		// ENTRYPOINT to a service's default args. Copying the chart's `args` alone exec'd `standalone`
+		// as the program and the service died before it listened.
+		WithDefaultArgs([]string{"greptime", "standalone", "start", "--http-addr", "0.0.0.0:4000"}).
+		AsService()
+
+	return m.base(src).
+		WithServiceBinding("greptimedb", greptime).
+		WithEnvVariable("RASK_GREPTIME_URL", "http://greptimedb:4000").
+		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/alert_rules_drill.py"}).
+		Stdout(ctx)
+}

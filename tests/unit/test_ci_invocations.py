@@ -67,12 +67,47 @@ def _pascal(kebab: str) -> str:
     return "".join(part.capitalize() for part in kebab.split("-"))
 
 
+#: `dagger call ${{ matrix.<key> }}` — the function name comes from the job's matrix, not the line.
+_MATRIX_CALL = re.compile(r"dagger call \$\{\{\s*matrix\.([A-Za-z0-9_]+)\s*\}\}")
+
+
+def _matrix_dagger_calls() -> set[str]:
+    """Function names a matrix job invokes, expanded from `strategy.matrix`.
+
+    THE LITERAL PATTERN CANNOT SEE THESE, and five of CI's Dagger invocations are of this shape.
+    `ms-gates` runs `dagger call ${{ matrix.gate }}` over [lint, typecheck, openapi, charts,
+    alert-rules-drill], and `${{` matches nothing in `dagger call ([a-z][a-z0-9-]*)`. So a typo in the
+    matrix list shipped a job that dies on "no such function" while the gate written to prevent exactly
+    that reported success.
+    """
+    import yaml  # noqa: PLC0415 — only this helper needs it, and the module is otherwise import-light
+
+    found: set[str] = set()
+    for path in _WORKFLOWS:
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for job in (workflow.get("jobs") or {}).values():
+            matrix = ((job.get("strategy") or {}).get("matrix")) or {}
+            for step in job.get("steps") or []:
+                for key in _MATRIX_CALL.findall(str(step.get("run", ""))):
+                    found |= {str(v) for v in matrix.get(key, [])}
+    return found
+
+
+def test_the_matrix_expansion_finds_the_calls_the_literal_pattern_cannot() -> None:
+    """Anti-vacuity for the expansion itself: it must find something, or the clause it adds below is
+    inert and the hole it closes is open again."""
+    expanded = _matrix_dagger_calls()
+
+    assert expanded, "no `dagger call ${{ matrix.* }}` expanded — either the matrix jobs moved or the parse is broken"
+    assert not _DAGGER_CALL.findall("dagger call ${{ matrix.gate }}"), "the literal pattern now matches a matrix call — this helper is redundant"
+
+
 def test_every_dagger_call_resolves_to_a_function() -> None:
     assert _DAGGER_GO, "no .dagger/*.go found — the gate would pass vacuously"
     defined = set(_DAGGER_FUNC.findall(_text(_DAGGER_GO)))
     assert defined, "no `func (m *Rask) X(` matched — the pattern no longer fits the module"
 
-    called = set(_DAGGER_CALL.findall(_text(_WORKFLOWS + [REPO_ROOT / "Makefile"])))
+    called = set(_DAGGER_CALL.findall(_text(_WORKFLOWS + [REPO_ROOT / "Makefile"]))) | _matrix_dagger_calls()
     assert called, "no `dagger call` found in CI — the gate would pass vacuously"
 
     missing = sorted(name for name in called if _pascal(name) not in defined)

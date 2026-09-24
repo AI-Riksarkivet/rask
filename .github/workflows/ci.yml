@@ -73,13 +73,21 @@ jobs:
   #   charts    helm lint + full render, the networkPolicy / security-hardening / Dapr-resiliency
   #             `--set` render-and-grep invariants, the prod-overlay HA/security render, and the
   #             promtool alert-rules validate-and-fire proof. `dagger call charts` == `make charts`.
+  #   alert-rules-drill
+  #             the OTHER half of the alert proof, and it is not a duplicate of the one above.
+  #             promtool is PROMETHEUS; vmalert queries GreptimeDB, and the two do not accept the same
+  #             PromQL — two rules once shipped that promtool called SUCCESS and GreptimeDB answered
+  #             400 and 500, so they could never fire and nothing said so. This boots the SAME
+  #             GreptimeDB the chart deploys as a Dagger service and replays every expression against
+  #             it. An empty store is enough: the drill asserts the endpoint ACCEPTS the query, not
+  #             that any series exists.
   ms-gates:
     name: ms-${{ matrix.gate }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        gate: [lint, typecheck, openapi, charts]
+        gate: [lint, typecheck, openapi, charts, alert-rules-drill]
     steps:
       - uses: actions/checkout@v4
       - name: Install Dagger CLI (pinned to the module's engineVersion)
