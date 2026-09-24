@@ -47,6 +47,8 @@ lance_namespace = pytest.importorskip("lance_namespace")
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex").rstrip("/")
 USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
+#: `LANCE_E2E_DEX_SECRET=""` for a public-client Dex — the default keeps the deployed estate unchanged.
+DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 
 #: A namespace and table the deployed estate already holds. Overridable because an estate seeded
 #: differently has different names, and a suite that hardcodes one reports a seeding difference as a
@@ -67,7 +69,13 @@ def _token(user: str) -> str:
         data={
             "grant_type": "password",
             "client_id": "lance-catalog",
-            "client_secret": "lance-catalog-secret",
+            # READ FROM THE ENV, like `test_governance_e2e.py`'s `DEX_SECRET`, because the estate has
+            # TWO Dex configurations and a hardcoded secret only works against one. The chart's client
+            # declares `secret:` AND `public: true`, so it accepts one; `.docker/dex.config.yaml`
+            # declares `public: true` with NO secret, so presenting one is `401 invalid_client`.
+            # Measured 2026-09-24: this suite is green against the deployed estate and could not run
+            # against the hermetic stack at all — which is why it ran in no lane.
+            "client_secret": DEX_SECRET,
             "username": user,
             "password": "password",
             "scope": "openid",

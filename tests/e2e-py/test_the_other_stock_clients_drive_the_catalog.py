@@ -31,6 +31,8 @@ import requests
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex").rstrip("/")
 USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
+#: `LANCE_E2E_DEX_SECRET=""` for a public-client Dex — the default keeps the deployed estate unchanged.
+DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 NAMESPACE = os.environ.get("LANCE_E2E_STOCK_NAMESPACE", "acme-bronze")
 TABLE = os.environ.get("LANCE_E2E_STOCK_TABLE", "agnostic")
 
@@ -48,7 +50,10 @@ def _token(user: str) -> str:
         data={
             "grant_type": "password",
             "client_id": "lance-catalog",
-            "client_secret": "lance-catalog-secret",
+            # From the env, like its sibling and `test_governance_e2e.py`: the estate has two Dex
+            # configurations and only the chart's declares a client secret. See that sibling for the
+            # measurement.
+            "client_secret": DEX_SECRET,
             "username": user,
             "password": "password",
             "scope": "openid",

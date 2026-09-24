@@ -765,6 +765,30 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         await _authorize_transaction(client, settings, segments, suffix, user=token.sub)
         return
 
+    # THE ROOT NAMES NO OBJECT, and composing one is a 500 rather than a decision. lance-ns encodes
+    # the root namespace as the delimiter alone, so the stock client's `list_namespaces(id=[])` issues
+    # `GET /v1/namespace/%24/list` and `parse_identifier` returns ZERO segments — `_object` then builds
+    # `namespace:` with an empty id, which OpenFGA refuses outright:
+    #   ValidationException: [check] HTTP 400 invalid relation: invalid 'object' field format
+    # and the exception leaves this guard as a 500 on a spec-legal request. No tuple could ever name
+    # that object, so the check was never a permission question. Measured 2026-09-24 by driving the
+    # STOCK `lance_namespace` client at a governed catalog: `ServiceUnavailableError: Internal Server
+    # Error`.
+    #
+    # RETURNING OPENS NOTHING. `list_namespaces` filters every NAME it returns through
+    # `fga.list_objects` on `can_get_metadata` — the route's documented design is that the ROUTE opens
+    # and the ITEMS are checked, because narrowing it to 403 breaks the breadcrumb a grantee needs to
+    # reach their own table. Authentication was enforced above.
+    #
+    # ANY OTHER RESOURCE WITH NO SEGMENTS IS MALFORMED, not a root: a table or transaction id has to
+    # name something. That earns the spec's own typed 400 rather than an empty object or a silent
+    # open, which is the estate's rule — raise a `lance_namespace` error and let
+    # `install_problem_handlers` choose the status.
+    if not segments:
+        if resource != "namespace":
+            raise InvalidInputError(f"{resource} id is empty: {object_id!r} names no {resource}")
+        return
+
     fga_type = _FGA_TYPE[resource]
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
     # batch routes above, this one cannot be answered from the path alone.
