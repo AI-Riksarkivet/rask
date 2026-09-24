@@ -185,12 +185,18 @@ def test_AN_EVENT_WITH_NO_AUTHOR_AT_ALL_DOES_NOT_VERIFY() -> None:
 
 
 def test_THE_PRIMITIVE_ITSELF_IGNORES_AN_ALREADY_ATTACHED_SIGNATURE() -> None:
-    """`sign_event` strips before hashing, so it is safe for a caller that did not.
+    """`sign_event` drops the signature VALUE before hashing, so it is safe for a caller that did not.
 
-    Both callers inside this module strip first, which made the strip in `sign_event` invisible to
-    every test — mutation-checking found removing it changed no outcome. That is untested safety, and
-    the fix is to exercise it rather than delete it: a verifier or a relay handed a signed event must
-    get the same digest the producer computed, not one over a body containing the old signature.
+    Both callers inside this module drop it first, which made the drop invisible to every test —
+    mutation-checking found removing it changed no outcome. That is untested safety, and the fix is to
+    exercise it rather than delete it: a verifier or a relay handed a signed event must get the same
+    digest the producer computed, not one over a body containing the old value.
+
+    The digest over a BARE event is a different number, and deliberately so: the facet's own claims —
+    who signed, with which algorithm, on whose behalf — are inside what the HMAC covers, because a
+    claim left outside it can be rewritten by any hop. So the equality that matters is
+    `sign_event(signed) == found.value`, and a body that carries no facet at all is simply a different
+    document.
     """
     from lineage_kit.signing import attach_signature, sign_event, signature_of
 
@@ -198,4 +204,5 @@ def test_THE_PRIMITIVE_ITSELF_IGNORES_AN_ALREADY_ATTACHED_SIGNATURE() -> None:
     signed = attach_signature(unsigned, key=KEY, identity="service-bronze-to-silver")
     found = signature_of(signed)
     assert found is not None
-    assert sign_event(signed, key=KEY) == sign_event(unsigned, key=KEY) == found.value
+    assert sign_event(signed, key=KEY) == found.value
+    assert sign_event(unsigned, key=KEY) != found.value, "the signature's own claims are outside what it covers"

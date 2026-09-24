@@ -85,16 +85,27 @@ def verify_event(payload: Mapping[str, Any], signature: str, *, key: str) -> boo
 #: would have to be re-agreed when that changes. A self-carrying event needs no side channel.
 SIGNATURE_FACET = "signature"
 
+#: The facet field naming the subject a producer is acting for. camelCase like every other OpenLineage
+#: facet field, so a standard consumer reading this bag is not the one surprised.
+_ON_BEHALF_OF = "onBehalfOf"
+
 #: rask's own facet, so it is namespaced like `author` and `lance` rather than claiming a spec slot.
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lineage-kit/src/lineage_kit/signing.py"
 
 
 @dataclass(frozen=True)
 class Signature:
-    """A signature read off an event, with the identity whose key is supposed to verify it."""
+    """A signature read off an event, with the identity whose key is supposed to verify it.
+
+    ``on_behalf_of`` is a DECLARATION, not an observation: a producer that signs for somebody else has
+    to say whom, and the saying is inside what the HMAC covers. Without it a producer stamping the
+    wrong author would be byte-identical to one acting for a person, so a reader could not tell a
+    delegation from a substitution.
+    """
 
     identity: str
     value: str
+    on_behalf_of: str | None = None
 
 
 def _facets(payload: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -109,20 +120,27 @@ def _facets(payload: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _unsigned(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """The event as it was BEFORE a signature was attached.
+    """The event as the HMAC covers it: everything except the signature's own VALUE.
 
     A SIGNATURE CANNOT COVER ITSELF, and getting this wrong is subtle rather than loud: signing a body
     that already holds a previous signature makes every re-emit — a relay republish, an outbox drain —
     produce a different value, so the producer and the verifier disagree about an event neither has
-    tampered with. Stripping first makes signing idempotent.
+    tampered with. Removing the value makes signing idempotent.
+
+    ONLY THE VALUE, and that is the part worth stating. The rest of the facet — who signed, with which
+    algorithm, and on whose behalf — is a set of CLAIMS, and a claim outside what the signature covers
+    can be rewritten by any hop that handles the event. The delegation is the one that makes this
+    load-bearing: left uncovered, "I am signing for this person" would be an assertion anyone could
+    edit in flight, which is the same defect one layer down from the one this module exists to close.
     """
     # `dict(...)` before the deepcopy, because the input is a read-only Mapping: the door hands over
     # the arrived CloudEvent as it stands rather than copying it first, and the copy belongs here where
     # it is about to be mutated.
     stripped: dict[str, Any] = copy.deepcopy(dict(payload))
     facets = _facets(stripped)
-    if facets is not None:
-        facets.pop(SIGNATURE_FACET, None)
+    facet = (facets or {}).get(SIGNATURE_FACET)
+    if isinstance(facet, dict):
+        facet.pop("signature", None)
     return stripped
 
 
@@ -133,32 +151,44 @@ def signature_of(payload: Mapping[str, Any]) -> Signature | None:
     if not isinstance(facet, dict):
         return None
     identity, value = facet.get("identity"), facet.get("signature")
+    delegate = facet.get(_ON_BEHALF_OF)
     if isinstance(identity, str) and isinstance(value, str) and identity and value:
-        return Signature(identity=identity, value=value)
+        return Signature(identity=identity, value=value, on_behalf_of=delegate if isinstance(delegate, str) and delegate else None)
     return None
 
 
-def attach_signature(payload: Mapping[str, Any], *, key: str, identity: str) -> dict[str, Any]:
+def attach_signature(payload: Mapping[str, Any], *, key: str, identity: str, on_behalf_of: str | None = None) -> dict[str, Any]:
     """Return a copy of `payload` carrying its own signature.
 
     `identity` NAMES THE SIGNER so the verifier knows which key to try, and it is deliberately NOT read
     off the author facet — that is the field under attack. A verifier that keyed on `author.sub` would
     ask "does the key belonging to whoever this claims to be verify it?", which any producer holding
     its own key can satisfy for a stamp it has no right to. Keying on the signature's own `identity`
-    and then requiring it to match the author is what makes the substitution fail.
+    is what makes the substitution fail.
+
+    `on_behalf_of` DECLARES A DELEGATION, for the producer that authenticated a PERSON and is emitting
+    on their behalf — the catalog's case, where `author.sub` is the signed-in subject and the service
+    holds no credential of theirs. Stating it is what separates that from a producer stamping the
+    wrong author: without the declaration the two are byte-identical, so relaxing the signer-equals-
+    author rule without it would buy nothing. Omitted, the event is SELF-SIGNED and the signer must be
+    the author, which is every service-authored run.
+
+    THE FACET IS WRITTEN BEFORE THE VALUE IS COMPUTED, so the signer, the algorithm and the delegation
+    are all inside the HMAC — see :func:`_unsigned`, which removes only the value.
     """
     if not identity:
         raise ValueError("a signature must name the identity that made it, or a verifier cannot choose a key")
+    if on_behalf_of is not None and not on_behalf_of:
+        raise ValueError("an empty on_behalf_of is a caller error: pass the subject being acted for, or omit it entirely")
     signed = _unsigned(payload)
     facets = _facets(signed)
     if facets is None:
         raise ValueError("this event carries no run or dataset facet bag, so a signature has nowhere to ride")
-    facets[SIGNATURE_FACET] = {
-        "_producer": _PRODUCER,
-        "alg": "HMAC-SHA256",
-        "identity": identity,
-        "signature": sign_event(signed, key=key),
-    }
+    facet: dict[str, Any] = {"_producer": _PRODUCER, "alg": "HMAC-SHA256", "identity": identity}
+    if on_behalf_of:
+        facet[_ON_BEHALF_OF] = on_behalf_of
+    facets[SIGNATURE_FACET] = facet
+    facet["signature"] = sign_event(signed, key=key)
     return signed
 
 
@@ -186,11 +216,22 @@ def verify_signed_event(payload: Mapping[str, Any], *, key: str) -> bool:
 
     An event with no author does not verify either. Admitting it would make the binding optional, and a
     forger would simply omit the facet.
+
+    A DECLARED DELEGATION IS THE SECOND WAY TO SATISFY IT, and the only one. A producer that
+    authenticated a person and emits on their behalf signs with its own key and DECLARES the subject it
+    is acting for; the declaration must equal the stamped author. That is strictly narrower than
+    "signer need not equal author", which would make an honest delegation and a wrong stamp identical
+    bytes — and the declaration rides inside what the signature covers, so it cannot be edited in
+    flight. What it does not give is the person's own non-repudiation: only their credential could
+    sign for them, and a service holding an HMAC key cannot stand in for that.
     """
     found = signature_of(payload)
     if found is None:
         return False
     author = author_of(payload)
-    if author is None or author != found.identity:
+    if author is None:
+        return False
+    vouched = found.on_behalf_of == author if found.on_behalf_of else found.identity == author
+    if not vouched:
         return False
     return verify_event(_unsigned(payload), found.value, key=key)
