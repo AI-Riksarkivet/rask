@@ -14,10 +14,20 @@ empty id. OpenFGA refuses that outright:
 which leaves `authorize` as a 500 on a spec-legal request. No tuple can name that object either, so
 the check could never have succeeded — it is not a permission question, it is a malformed one.
 
-MEASURED 2026-09-24 by driving the STOCK `lance_namespace` client against a governed catalog:
-`list_namespaces` answered `ServiceUnavailableError: Internal Server Error`. It passes against the
-deployed estate only because warehouses are enabled there, so nothing exercised this path — and the
-conformance suite that would have caught it runs in no lane.
+MEASURED 2026-09-24 on BOTH estates, and they did not agree — which is the sharper reason this
+needs fixing rather than tolerating. Same catalog code, same `openfga/openfga:v1.18.3`:
+
+  * hermetic store — `check` on `namespace:` is REFUSED `400 invalid 'object' field format`, the
+    exception escapes `authorize`, and the stock client sees
+    `ServiceUnavailableError: Internal Server Error`.
+  * deployed store — the same `check` is ACCEPTED and answered from tuples. The live audit line reads
+    `audit.action='can_get_metadata' audit.outcome='allow' audit.resource='namespace:'`, and asking
+    that store directly for a subject with no grants returns `allowed: false`.
+
+So one estate 500s and the other renders a permission verdict about an object that cannot exist. It
+is not fail-open — the ungranted subject is refused — but a decision keyed on an empty id is not a
+decision, and which of the two an operator meets depends on their store rather than on their code.
+The conformance suite that drives this path runs in no lane, so neither behaviour was ever seen.
 
 SKIPPING THE CHECK OPENS NOTHING. `list_namespaces` filters every NAME it returns through
 `fga.list_objects` on `can_get_metadata` — the route's documented design is that the route opens and
