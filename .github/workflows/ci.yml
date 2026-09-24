@@ -411,8 +411,17 @@ jobs:
         working-directory: frontend
         run: bun install --frozen-lockfile
 
+      # INSTALLED BY THE PLAYWRIGHT THE ZONES ACTUALLY RUN, which is why this is not `frontend/`.
+      # `@playwright/test` is declared by each zone and by nothing at the workspace root, so `bunx` in
+      # `frontend/` finds no local binary and fetches the latest from npm instead. Measured 2026-09-24:
+      # that resolved 1.63.0 and installed its browsers (chromium-1243), while every suite runs the
+      # pinned 1.62.0 and launches chromium_headless_shell-1234 — `Executable doesn't exist`, in the
+      # warmup, for all five zones, so 100 specs did not run and the report named a missing browser
+      # rather than the version split that caused it. From a zone directory the pin resolves, and
+      # `install chromium` there brings the headless shell with it (verified with --dry-run).
+      # Pinned by `frontend/packages/zone-contract/src/deploy-path.test.ts`.
       - name: Install Playwright chromium
-        working-directory: frontend
+        working-directory: frontend/microfrontends/home
         run: bunx playwright install --with-deps chromium
 
       # e2e for the FIVE zones that define `test:e2e` — home, lakehouse, explorer, annotator, models —

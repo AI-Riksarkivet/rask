@@ -179,3 +179,56 @@ describe('nothing outside the frontend still points at a moved path', () => {
 		expect(offences).toEqual([]);
 	});
 });
+
+describe('the e2e browsers are installed by the playwright the zones actually run', () => {
+	// `@playwright/test` is declared by each zone and by NOTHING at the workspace root, so `bunx
+	// playwright` in `frontend/` finds no local binary and fetches the latest from npm. Measured
+	// 2026-09-24: the install step resolved 1.63.0 and downloaded its browsers (chromium-1243) while
+	// every suite runs the pinned 1.62.0 and launches chromium_headless_shell-1234 — `Executable
+	// doesn't exist`, in the warmup, for all five zones, so 100 specs did not run and the report named
+	// a missing browser rather than the version split behind it. Nothing type-checks a workflow.
+	const ci = readFileSync(resolve(REPO_ROOT, '.github/workflows/ci.yml'), 'utf8');
+	// Steps are `- name:` at a fixed indent; a step owns everything up to the next one.
+	const step = ci
+		.split(/\n      - (?=name:|uses:)/)
+		.find((chunk) => /run:[^\n]*playwright install/.test(chunk));
+
+	function pinOf(dir: string): string | undefined {
+		const manifest = resolve(dir, 'package.json');
+		if (!existsSync(manifest)) return undefined;
+		const pkg = JSON.parse(readFileSync(manifest, 'utf8'));
+		return pkg.devDependencies?.['@playwright/test'] ?? pkg.dependencies?.['@playwright/test'];
+	}
+
+	it('has a step that installs them at all', () => {
+		expect(step).toBeDefined();
+	});
+
+	it('runs that step where the workspace pin resolves', () => {
+		const dir = /working-directory:\s*(\S+)/.exec(step ?? '')?.[1];
+		expect(dir, 'the install step declares no working-directory').toBeDefined();
+		expect(
+			pinOf(resolve(REPO_ROOT, dir!)),
+			`${dir} declares no @playwright/test, so \`bunx playwright\` there fetches the latest from npm and installs browsers no suite will launch`,
+		).toBeDefined();
+	});
+
+	it('is one pin across every zone that runs a suite, so installing from one covers all of them', () => {
+		const pins = new Map<string, string>();
+		for (const zone of zones) {
+			const dir = resolve(FRONTEND_ROOT, 'microfrontends', zone);
+			const pkg = JSON.parse(readFileSync(resolve(dir, 'package.json'), 'utf8'));
+			if (!pkg.scripts?.['test:e2e']) continue;
+			const pin = pinOf(dir);
+			if (pin) pins.set(zone, pin);
+		}
+		expect(
+			pins.size,
+			'no zone declares a playwright suite — this gate lost its subject',
+		).toBeGreaterThan(0);
+		expect(
+			new Set(pins.values()).size,
+			`the zones pin different playwright versions (${[...pins].map(([z, v]) => `${z}=${v}`).join(', ')}), so one install cannot serve them all`,
+		).toBe(1);
+	});
+});
