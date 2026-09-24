@@ -79,6 +79,10 @@ BAKED_COMMAND = "python /home/ray/jobs/ray_dummy_job.py"
 BAKED_TASK = os.environ.get("LANCE_E2E_TASK", "dummy-lane")
 
 LANE = "dummy"
+#: The identity the lane EMITS as, matching what the live bronze-to-silver runner sends
+#: (`MEDALLION_FGA_SERVICE_IDENTITY`). Named once: the fixture puts it in the job env and the
+#: refusal message below tells a reader whose rung to grant, and those must be the same string.
+LANE_IDENTITY = "service-bronze-to-silver"
 
 
 def _subject_of(bearer: str) -> str:
@@ -226,6 +230,43 @@ def _submit_on_head(submission_id: str, env_vars: dict[str, str], *, timeout: in
     return result.stdout
 
 
+def _govern_the_declared_output(catalog: str) -> None:
+    """Register the lane's declared output through the catalog, the way a stage runner does.
+
+    PRODUCTION NEVER NEEDS A SEED HERE, and that is why this belongs in the fixture rather than in a
+    script someone has to remember. A stage runner asks the catalog where to write
+    (`catalog_register.ensure_stage_output`, taken by `transform.py:1113` whenever `MEDALLION_CATALOG_URL`
+    is set — the live `rask-bronze-to-silver` carries it), and the create door seeds the ownership
+    tuples and the structural `parent` edge as a side effect of answering. This suite submits to the
+    Ray Jobs API directly, so it reaches the baked image without ever reaching that door, and its
+    output stays an FGA object nobody has written a tuple for. The lane then emits lineage naming that
+    object and the ingest door refuses it `403 can_write_data` — a red pair that says nothing about
+    production and masks everything that does.
+
+    So the fixture takes the SAME door with the SAME mode. `exist_ok` because reaching it a second
+    time is the ordinary case and because `describe` refuses an absent table and an ungoverned one
+    identically; the edge alone is written, never `owner`, so a rerun cannot seize the table. The
+    schema only has to BE a schema — the lane writes its own output elsewhere and this table exists so
+    the catalog mints and governs an id.
+    """
+    import pyarrow as pa
+
+    from service_kit.lancekit.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+
+    table_id = f"{PROJECT}-silver${LANE}"
+    response = requests.post(
+        f"{catalog}/v1/table/{table_id}/create?mode=exist_ok",
+        data=encode_arrow_stream(pa.schema([("id", pa.string())]).empty_table()),
+        headers={**_headers(), "Content-Type": ARROW_STREAM_MEDIA_TYPE, "x-lance-table-id": table_id},
+        timeout=60,
+    )
+    if response.status_code in (401, 403):
+        pytest.skip(f"LANCE_E2E_ADMIN_TOKEN cannot create {table_id} ({response.status_code}); the door is working, the fixture is not")
+    assert response.status_code < 400, (
+        f"the catalog refused to govern the lane's declared output {table_id}: HTTP {response.status_code} — {response.text[:300]}"
+    )
+
+
 def _job_logs(submission_id: str, *, timeout: int = 300) -> str:
     return subprocess.run(
         [_kubectl(), "exec", _head_pod(), "--", "ray", "job", "logs", submission_id],
@@ -359,7 +400,7 @@ print("cleanup-ok")
 
 
 @pytest.fixture(scope="module")
-def driven() -> Iterator[dict[str, Any]]:
+def driven(catalog: str) -> Iterator[dict[str, Any]]:
     """Seed bronze, submit the lane TWICE through the Ray Jobs API, and measure both tiers.
 
     Twice on purpose: the second submission is the replay Dapr is entitled to deliver, and
@@ -374,6 +415,7 @@ def driven() -> Iterator[dict[str, Any]]:
     base = f"/tmp/e2e-dummy-{run}"
     bronze, silver = f"{base}/bronze.lance", f"{base}/silver.lance"
 
+    _govern_the_declared_output(catalog)
     _exec_on_head(_SEED.format(bronze=bronze))
     # THE PLATFORM'S VOCABULARY — `WorkOrder.to_env()`'s names, because this fixture submits to the
     # Jobs API DIRECTLY and is therefore a fourth author of the contract the medallion's submitter and
@@ -387,7 +429,7 @@ def driven() -> Iterator[dict[str, Any]]:
         "RASK_SOURCE_URI": bronze,
         "RASK_DEST_URI": silver,
         "RASK_RUN_ID": run_id,
-        "RASK_DEST_TABLE": f"{PROJECT}-silver$dummy",
+        "RASK_DEST_TABLE": f"{PROJECT}-silver${LANE}",
         "RASK_SOURCE_TABLE": f"{PROJECT}-bronze$events",
         "RASK_PROJECT": PROJECT,
         "RASK_ORIGINATOR": _subject_of(ADMIN_TOKEN),
@@ -410,7 +452,7 @@ def driven() -> Iterator[dict[str, Any]]:
         #
         # `RASK_ORIGINATOR` above is unchanged and unrelated: it names WHO the run is for, which is
         # still the admin subject. Attribution and authentication are different questions.
-        "LINEAGE_SERVICE_ID": "service-bronze-to-silver",
+        "LINEAGE_SERVICE_ID": LANE_IDENTITY,
     }
     logs = []
     for attempt in ("first", "replay"):
@@ -462,14 +504,13 @@ def test_the_BAKED_command_exists_in_the_deployed_image_and_runs(driven: dict[st
         pytest.fail(
             "the lane RAN and the lineage door REFUSED its emit (403). This is a missing GRANT, not a "
             "broken entrypoint.\n\n"
-            f"    scripts/seed_medallion_fga.sh {PROJECT} <zone-warehouse-id>\n\n"
-            "It writes the table->namespace parent links the stage runners need, including "
-            f"`namespace:{PROJECT}-silver -> table:{PROJECT}-silver$dummy` (`SILVER_TABLES` names the "
-            "lanes). Production does not need it — `ensure_stage_output` creates the table through the "
-            "catalog, whose register door seeds ownership — but this test submits to Ray DIRECTLY to "
-            "exercise the baked image, so nothing governs its output for it.\n\n"
-            "Find the zone warehouse with the namespace's own parent tuple, NOT by guessing:\n"
-            '    kubectl exec deploy/rask-catalog -c catalog -- python -c "...read namespace:<p>-silver"\n'
+            "The fixture registers this lane's output through the catalog before submitting, and that create "
+            "is where the table->namespace edge comes from. So the grant that is missing sits UPSTREAM of the "
+            "edge: the rung — `writer` on the qualified stage — held by the identity that emits.\n\n"
+            f"    OPENFGA_API_URL=<forwarded> scripts/seed_medallion_fga.sh {PROJECT} <zone-warehouse-id>\n\n"
+            f"The identity is {LANE_IDENTITY}. The zone warehouse is whatever namespace:{PROJECT}-silver's own "
+            "parent tuple names — read it, never guess it: a rung on the wrong warehouse is a tuple that looks "
+            "like a grant and authorizes nothing.\n\n"
             f"{log[-600:]}"
         )
 
@@ -529,7 +570,10 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
     assert response.status_code == 200, response.text
 
     events = response.json().get("events", [])
-    mine = [e for e in events if e.get("job", "").endswith(f"{PROJECT}-silver$dummy") or driven["run_id"] in json.dumps(e)]
+    # `or ""`, not a `get` default: the feed's `job` column is NULLABLE and a row that carries it as
+    # null has the key, so the default never applies and the match crashes AttributeError before any
+    # assertion runs. A crash here reports the shape of the feed, never whether this lane emitted.
+    mine = [e for e in events if (e.get("job") or "").endswith(f"{PROJECT}-silver${LANE}") or driven["run_id"] in json.dumps(e)]
 
     if not mine:
         # TWO different failures wear one symptom here, and they need opposite answers. The lane
@@ -547,15 +591,17 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
         refused = "403" in driven["first_log"] and "/api/v1/lineage" in driven["first_log"]
         assert not refused, (
             "the lane EMITTED and the ingest REFUSED it (403 can_write_data on the output).\n\n"
-            "This is a missing GRANT, not a broken lane, and the estate already ships the fix:\n"
-            f"    scripts/seed_medallion_fga.sh {PROJECT} <zone-warehouse-id>\n\n"
+            "This is a missing GRANT, not a broken lane, and the fixture has already written the part it "
+            f"owns: it registers table:{PROJECT}-silver${LANE} through the catalog's create door, which is "
+            "where the structural namespace->table edge comes from. So what is missing is UPSTREAM of that "
+            "edge — the rung the emitting identity holds on the qualified stage:\n\n"
+            f"    OPENFGA_API_URL=<forwarded> scripts/seed_medallion_fga.sh {PROJECT} <zone-warehouse-id>\n\n"
             "A tenant cascade targets the project-QUALIFIED namespaces, which inherit NOTHING from the "
             "estate seed — the stage runners are correctly denied and the trigger dead-letters (fail-closed). "
-            "That script writes the three groups: the `<p>-<stage>` namespaces parented under the "
-            "tenant's zone warehouse, the stage runner rungs on the qualified stages, and the table->namespace "
-            "parent links.\n\n"
-            f"This lane needs one link the script does not know about: namespace:{PROJECT}-silver -> "
-            f"table:{PROJECT}-silver$dummy (it seeds $features, the HTR lane's output)."
+            "Pass the zone warehouse the project's namespaces actually hang from, which is not that script's "
+            f"estate-level default: read namespace:{PROJECT}-silver's parent before running it.\n\n"
+            f"The refused identity is the one this fixture sends as LINEAGE_SERVICE_ID ({LANE_IDENTITY}); the "
+            f"tenant block of that script grants it `writer` on namespace:{PROJECT}-silver."
         )
         pytest.fail(f"the run emitted nothing readable: {driven['run_id']} absent from {len(events)} events")
 
@@ -565,4 +611,4 @@ def test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service
     row = terminal[-1]
     assert row["event_type"] == "COMPLETE", f"the run did not complete: {row}"
     assert row.get("outputs"), "an output-less run names no object and is refused by the plane"
-    assert f"{PROJECT}-silver$dummy" in row["outputs"], f"the output must be named as the FGA object is: {row['outputs']}"
+    assert f"{PROJECT}-silver${LANE}" in row["outputs"], f"the output must be named as the FGA object is: {row['outputs']}"

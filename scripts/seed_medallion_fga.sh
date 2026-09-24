@@ -15,7 +15,14 @@ set -euo pipefail
 
 BIN="$(cd "$(dirname "$0")/.." && pwd)/.localbin"
 API="${OPENFGA_API_URL:-http://localhost:8081}"
-WAREHOUSE="warehouse:lance_catalog"
+# The ESTATE-level warehouse the unqualified `bronze|silver|gold` namespaces hang from.
+# Overridable because an estate has more than one: measured on the k3s estate 2026-09-24,
+# `namespace:silver` parents under BOTH `warehouse:lance_catalog` and `warehouse:bind86-wh`,
+# and a tenant's `namespace:acme-silver` under `warehouse:acme-bucket`. Seeding rungs on a
+# warehouse the target namespaces do not hang from writes tuples that look like a grant and
+# authorize nothing, which is worse than not running the script. (The per-TENANT block below
+# takes its zone warehouse as an argument for the same reason.)
+WAREHOUSE="${WAREHOUSE:-warehouse:lance_catalog}"
 
 SID="$("$BIN/fga" store list --api-url "$API" \
   | python3 -c "import sys,json;print([s['id'] for s in json.load(sys.stdin)['stores'] if s['name']=='lance-catalog'][0])")"

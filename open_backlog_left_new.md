@@ -2079,13 +2079,36 @@ measured (~10-14 MiB per commit pas
   have** (it takes no arguments and links the UNQUALIFIED `namespace:bronze|silver|gold` only) — and it
   says the gap is the single link `namespace:acme-silver -> table:acme-silver$dummy` because the script
   "seeds $features". `$features` is equally ungoverned here; the whole `acme` branch is.
-- *What is left:* Make the e2e exercise the path production runs — drive the medallion's submitter so
-  `ensure_stage_output` governs the output — or, if direct submission is deliberate (it tests the BAKED
-  image, which is a real thing to test), have the test seed its own project-qualified grants in setup
-  and stop printing advice that names a script signature that does not exist. No ruling needed either
-  way; this is test fidelity, not platform policy.
-- *Closes when:* `tests/e2e-py/test_dummy_lane_e2e.py` passes on the live estate without a manual seed,
-  and its failure message names a command that exists.
+- **CLOSED ON THE LIVE ESTATE 2026-09-24, and the seed step this row is named after had already
+  half-fixed itself.** `seed_medallion_fga.sh` DOES take `<project> <zone-warehouse-id>` — its tenant
+  block reads `$1` and `$2` — and its `SILVER_TABLES` default already names `dummy`, so the link the
+  test called unknown to the script was one the script writes. The message was the thing still lying,
+  not the script.
+- **THE FIX IS THAT THE FIXTURE GOVERNS ITS OWN OUTPUT**, through the door production takes rather than
+  through the `fga` CLI: `POST /v1/table/<p>-silver$dummy/create?mode=exist_ok`, which is what
+  `catalog_register.ensure_stage_output` does and what seeds the structural namespace→table edge. The
+  suite goes on submitting to Ray directly — proving the BAKED image is a real thing to test — and
+  stops depending on anyone having run a script first.
+- **PROVED BY DELETING THE SEED ON THE LIVE STORE, not by reasoning.** Removed
+  `namespace:acme-silver parent table:acme-silver$dummy` from store `01KYPGG8F8…`, measured
+  `can_write_data` for `service-bronze-to-silver` = **False**, then ran
+  `pytest -m dummy_lane --require-live`: **7 passed**, and the store afterwards held the parent edge
+  plus an `owner` tuple for the creating subject, `can_write_data` = **True**. Done three times, from a
+  freshly unseeded store each time.
+- **AND TEST 5 COULD NOT REPORT ITS OWN RESULT.** `e.get("job", "")` over the feed's NULLABLE `job`
+  column returns `None` when the key is present and null, so the match raised `AttributeError` before
+  any assertion ran and the first live drive failed on the SHAPE OF THE FEED rather than on the lane.
+  A `get` default covers an absent key, never a null value.
+- *What is left:* nothing here. The one question the code cannot answer for itself — which zone
+  warehouse a project's namespaces hang from — is now read rather than guessed, and `WAREHOUSE` in the
+  seed script is overridable for the same reason (measured live: `namespace:silver` parents under BOTH
+  `warehouse:lance_catalog` and `warehouse:bind86-wh`, `namespace:acme-silver` under
+  `warehouse:acme-bucket`).
+- *Closes when:* CLOSED. The suite passes on the live estate with no manual seed, and both failure
+  messages name `scripts/seed_medallion_fga.sh <project> <zone-warehouse-id>` — a signature
+  `tests/unit/test_a_test_that_prints_a_command_names_one_that_exists.py` now holds for every command
+  an e2e prints. That gate needed a shell-function-body strip before it could fail at all: `link()`'s
+  own `$2` made a script reading no arguments look like one reading two.
 - *Evidence:* `transform.py:1113 (to_uri = ensure_stage_output when catalog_url set)` · `live deploy rask-bronze-to-silver: MEDALLION_CATALOG_URL=http://rask-catalog:2333` · `test_dummy_lane_e2e.py:225 (ray job submit, direct)` · `scripts/ray_dummy_job.py (126 lines, no catalog call; TO_URI from env)` · `OpenFGA read: acme-silver$dummy / $features / namespace:acme-silver -> 0 tuples` · `lineage log: ingest_denied ... can_write_data ... acme-silver$dummy`
 
 ## PHASE 1 · CROSS-CUTTING
