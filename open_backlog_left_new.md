@@ -187,12 +187,12 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**197 open items**, of which **96 are blocked on a decision** and **101 can be picked up today**.
-21 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 3 closed by work since — listed at the foot so nothing vanishes silently.
+**196 open items**, of which **96 are blocked on a decision** and **100 can be picked up today**.
+22 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 4 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 32 | 4 | 6 |
+| **PHASE 1 · LAKEHOUSE** | 31 | 3 | 6 |
 | **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
@@ -208,8 +208,9 @@ CHOICE rather than a stale belief — a rebase's acceptability ([[LH-178]]), dro
 party's repo ([[LH-048]]). One was spot-checked against the code rather than taken from its marker:
 LH-171's cited mechanism is real (`service_kit/lakehouse/transform_specs.py` warns and skips), so its
 blocker is the disposition and nothing else.
-**The day also moved SIX rows the other way** — LH-076, LH-141, LH-164, LH-099, LH-075 and LH-196 read
-as workable while being gated, or asked for work already done. The count moves in both directions and
+**The day also moved FIVE rows the other way** — LH-076, LH-141, LH-164, LH-099 and LH-075 read
+as workable while being gated, or asked for work already done. (LH-196 moved a third way: read against
+the code it was smaller than its own text, and it closed.) The count moves in both directions and
 only reading moves it.
 
 **THOSE FOUR COLUMNS ARE MECHANICAL — they count rows and `blocked:` markers, which is what makes them
@@ -1950,166 +1951,6 @@ measured (~10-14 MiB per commit pas
 - *Evidence:* live planner 2026-09-23 `planned=570 published=570`, `policies=27` all null ·
   `services/maintenance/src/maintenance/services/sweep.py:90-118` (`_policy_skip_reason`) ·
   [[LH-188]] for the bounds this volume sizes
-
-**LH-196 · The dummy-lane e2e bypasses `ensure_stage_output` by submitting to Ray directly, so it fails on a grant production never needs**
-`medallion, tests` · **MED**
-- **SWEPT FOR THE CLASS, AND IT IS NOT WIDESPREAD — a negative result, measured.** A dead diagnostic
-  keyed on a marker nothing emits could plausibly exist all over an estate this size, so I checked:
-  collected the **323 distinct log event names** the source actually emits
-  (`log.<level>("<name>"`), then looked for hyphenated string literals in every test file whose
-  UNDERSCORED form is a real event — i.e. a comparison that can never be true. **Exactly one hit, and
-  it is the one already fixed here.** The two remaining occurrences in the file are comments
-  documenting the fix, not conditions.
-  So the estate does not have a hyphen/underscore marker problem; this file did, twice, and both are
-  closed.
-- **AND THE SIBLING BRANCH WAS DEAD TOO — measured, not guessed, and now fixed.** I had flagged
-  `:539`'s `refused` as *possibly* unreachable; it provably was. It read
-  `"lineage-emit-failed" in log and "status=403" in log`, and **nothing in the estate produces either
-  string**: `lineage_kit/emitter.py:96` logs `lineage_emit_failed` with UNDERSCORES and no `status=`
-  field, and on this lane it never logs at all because the 403 RAISES out of `emit`. So the most
-  useful message in the file — the one naming the seed script and the missing link — could not fire.
-  A gate that cannot fail, guarding the exact confusion it was written for.
-  **NOT MUTATION-PROVEN, and the reason matters:** its test
-  (`test_the_run_emits_a_TERMINAL_event_that_READS_BACK_from_the_lineage_service`) SKIPS without
-  `LANCE_E2E_ADMIN_TOKEN` — `/events` answers 401 — so deleting the tuple produced `1 skipped`, not a
-  refusal. The string mismatch is objective (read both sides); the firing is not verified here. **A
-  dead branch inside a test that skips is invisible twice over**, which is how it survived.
-- **THE RECURRENCE GUARD IS SHIPPED (2026-09-23) and it is mutation-proven against the live estate.**
-  When this lane loses its grant the test used to fail `assert 'Traceback' not in log` — "the baked
-  entrypoint raised" plus 800 truncated characters — which is what sent me through four wrong theories
-  today. It now reads the refusal first and says so: *"the lane RAN and the lineage door REFUSED its
-  emit (403). This is a missing GRANT, not a broken entrypoint"*, names
-  `seed_medallion_fga.sh <project> <zone-warehouse-id>`, names the exact link
-  `namespace:<p>-silver -> table:<p>-silver$dummy`, and says why production does not need it.
-  **PROVED BY DELETING THE TUPLE ON THE LIVE STORE**, not by reasoning: `can_write_data` True -> False,
-  run the test, read the message, write the tuple back, True again and 3 passed.
-  **AND THE FIRST VERSION OF THE GUARD DID NOT FIRE.** I keyed it on `lineage-emit-failed`, copied from
-  the `refused` branch further down — a string this path never produces, because it RAISES out of
-  `lineage_kit.emitter.emit` instead of being caught and logged. The mutation is what exposed it; the
-  condition now matches what the log carries (`403` plus `/api/v1/lineage`).
-  *Worth a look, not measured:* the sibling `refused` branch at :534 keys on the same
-  `lineage-emit-failed` AND `status=403`, so it may be unreachable for the same reason.
-- **RESOLVED ON THE LIVE ESTATE 2026-09-23, and the failing test had been right from the first line.**
-  Measured from INSIDE a pod against the real store (`01KYPGG8F8…`), never a forward:
-  ```
-  table:acme-silver$dummy     0 tuples
-  table:acme-silver$features  2 tuples  (namespace:acme-silver parent, service-bronze-to-silver owner)
-  check writer namespace:acme-silver -> True
-  ```
-  So `$features` WAS seeded and `$dummy` was not — exactly what `test_dummy_lane_e2e.py:515` says, and
-  exactly what I dismissed twice. The service already held `writer` on the namespace, so the one
-  missing thing was the inheritance edge.
-  Wrote the pair the seed script's `link` writes (`parent` plus the inverse `child`):
-  `can_write_data table:acme-silver$dummy` **False -> True**, control `…$features` unchanged True.
-  **`tests/e2e-py/test_dummy_lane_e2e.py` now passes: 3 passed, 4 skipped.** Red on every run this
-  session.
-- **SO THERE WAS NO PLATFORM DEFECT, AND NO STALE SCRIPT.** `seed_medallion_fga.sh` already writes this
-  link — `for silver_table in ${SILVER_TABLES:-features dummy}` — with a comment recording the same
-  symptom: "the dummy lane's e2e could not reach its terminal-event assertion because
-  `namespace:<p>-silver -> table:<p>-silver$dummy` was never written". The estate had simply never had
-  that step run for `$dummy`. Production does not need it: `ensure_stage_output` creates the table
-  through the catalog, whose register door seeds ownership — which is why `$features` carries an
-  `owner` tuple and `$dummy` carried nothing.
-  *What is left:* the e2e depends on a documented seed step that nothing runs, so it will re-break on a
-  fresh estate or a new lane name. Either have the test seed its own project-qualified links in setup,
-  or make the direct-submit path ask the catalog the way the submitter does. That is the row now, and
-  it needs no ruling.
-- **EVERYTHING I WROTE HERE ABOUT A STALE AUTHORIZATION MODEL IS WITHDRAWN (2026-09-23).** The seed
-  failure (`relation 'namespace#publisher' not found`), the zero-tuple reads, the `estate` type
-  "missing", the `can_write_data` denials I reproduced by hand — every one of those was measured
-  against a **Dagger scratch `openfga/openfga:v1.18.3` container** that held port 18081. My
-  `kubectl port-forward` had failed with `address already in use`; the log said so and I did not read
-  it, having hit and fixed that exact failure on port 18080 earlier the same session.
-  The LIVE store (`01KYPGG8F8…`, reached from inside the cluster) holds **50 models, newest with 12
-  types** including `estate`, and `check estate:rask` answers `{"allowed":false}` — a decision. The
-  model was never stale.
-  **SO THE `ingest_denied … can_write_data … acme-silver$dummy` REFUSAL IS STILL UNEXPLAINED.** It is a
-  real log line from the real lineage pod and it is the only measurement in this row taken against the
-  estate. Everything I built on top of it — the governance-producer theory, the stale-script theory,
-  the stale-model theory — came from a container that is not part of this system.
-  *Next measurement, and it must be in-cluster:* read `table:acme-silver$dummy`'s tuples and
-  `can_write_data` for `service-bronze-to-silver` from a pod, via `rask-openfga:8080`, never a forward.
-- **AND THE TEST'S GUIDANCE IS RIGHT IN SPIRIT AFTER ALL — the script is stale against the estate's own
-  shape. Measured with `check`, not `read`, after a `read` filtered only by user misled me.**
-  `check user:service-bronze-to-silver writer warehouse:lance_catalog` -> **False**, and so is
-  `service-medallion-producer`. `can_write_data` on `table:silver$features` -> **False**. So no cascade
-  identity holds a rung anywhere on this estate.
-  **THE REASON IS THE WAREHOUSE ID.** `namespace:silver`'s tuples read:
-  ```
-  user:alice          -- owner  -> namespace:silver
-  warehouse:acme-wh   -- parent -> namespace:silver
-  table:silver$events -- child  -> namespace:silver
-  ```
-  The live parent is **`warehouse:acme-wh`**, while `seed_medallion_fga.sh` hardcodes
-  `WAREHOUSE="warehouse:lance_catalog"` and takes no argument. That is precisely the
-  `<zone-warehouse-id>` the failing test tells a reader to pass — so the test describes the script that
-  SHOULD exist, and the script is the thing that drifted. Running it as-is would write rungs on a
-  warehouse this estate's namespaces do not hang from, which is worse than not running it: tuples that
-  look like a grant and authorize nothing.
-  *So the actionable shape is now concrete and needs no ruling:* `seed_medallion_fga.sh` takes the
-  warehouse (and, for a tenant cascade, the project prefix) as parameters instead of hardcoding one
-  zone's id, and the e2e either calls it or drives the submitter. My earlier bullet said the script
-  "does not even claim" to cover this; the truth is narrower — it claims one warehouse and the estate
-  has moved to several.
-- **I FILED THIS AS A HIGH PLATFORM DEFECT AND IT IS NOT ONE. The correction is the row.** I measured a
-  real refusal — `ingest_denied sub='service-bronze-to-silver' relation='can_write_data'
-  outputs=['acme-silver$dummy']`, with `table:acme-silver$dummy`, `table:acme-silver$features` and
-  `namespace:acme-silver` all holding ZERO tuples in OpenFGA — and concluded the cascade births
-  ungoverned tables. It does not.
-- **PRODUCTION TAKES ITS OUTPUT LOCATION FROM THE CATALOG, measured on the running estate.**
-  `transform.py:1113` — *"if settings.catalog_url and to_dataset: to_uri = ensure_stage_output(...)"* —
-  and `catalog_register.py`'s header states what that buys: the stage runner ASKS the catalog before
-  writing, "the catalog's register door seeds ownership tuples". The live `rask-bronze-to-silver`
-  deployment carries **`MEDALLION_CATALOG_URL = http://rask-catalog:2333`**, so that branch is the one
-  production takes. The comment names the other branch too — *"No catalog URL is the ungoverned dev
-  shape"* — and this estate is not in it.
-- **THE E2E IS A FOURTH AUTHOR OF THE SUBMIT CONTRACT, and its own comment already says so.** It calls
-  `ray job submit` directly (`_submit_on_head`, `test_dummy_lane_e2e.py:225`) with `TO_URI` from its own
-  env, so it never reaches the medallion's submitter and therefore never reaches `ensure_stage_output`.
-  `scripts/ray_dummy_job.py` is a thin shim that writes wherever `TO_URI` points and registers nothing —
-  correctly, because registration is the submitter's job. The test file already warns that direct
-  submission makes it "a fourth author of the contract ... exactly how a contract with several authors
-  drifts". This is that drift, observed.
-- **SO THE FAILURE SAYS NOTHING ABOUT PRODUCTION**, which is the whole defect: a permanently-red pair
-  that looks like a governance hole and is a test-fidelity gap. It also masks real breakage — it was red
-  through every run this session and I twice reported it as "pre-existing, not mine" rather than reading
-  it.
-- **AND THE GUIDANCE IT PRINTS CANNOT BE FOLLOWED.** On failure it tells a reader to run
-  `scripts/seed_medallion_fga.sh <project> <zone-warehouse-id>` — **a signature that script does not
-  have** (it takes no arguments and links the UNQUALIFIED `namespace:bronze|silver|gold` only) — and it
-  says the gap is the single link `namespace:acme-silver -> table:acme-silver$dummy` because the script
-  "seeds $features". `$features` is equally ungoverned here; the whole `acme` branch is.
-- **CLOSED ON THE LIVE ESTATE 2026-09-24, and the seed step this row is named after had already
-  half-fixed itself.** `seed_medallion_fga.sh` DOES take `<project> <zone-warehouse-id>` — its tenant
-  block reads `$1` and `$2` — and its `SILVER_TABLES` default already names `dummy`, so the link the
-  test called unknown to the script was one the script writes. The message was the thing still lying,
-  not the script.
-- **THE FIX IS THAT THE FIXTURE GOVERNS ITS OWN OUTPUT**, through the door production takes rather than
-  through the `fga` CLI: `POST /v1/table/<p>-silver$dummy/create?mode=exist_ok`, which is what
-  `catalog_register.ensure_stage_output` does and what seeds the structural namespace→table edge. The
-  suite goes on submitting to Ray directly — proving the BAKED image is a real thing to test — and
-  stops depending on anyone having run a script first.
-- **PROVED BY DELETING THE SEED ON THE LIVE STORE, not by reasoning.** Removed
-  `namespace:acme-silver parent table:acme-silver$dummy` from store `01KYPGG8F8…`, measured
-  `can_write_data` for `service-bronze-to-silver` = **False**, then ran
-  `pytest -m dummy_lane --require-live`: **7 passed**, and the store afterwards held the parent edge
-  plus an `owner` tuple for the creating subject, `can_write_data` = **True**. Done three times, from a
-  freshly unseeded store each time.
-- **AND TEST 5 COULD NOT REPORT ITS OWN RESULT.** `e.get("job", "")` over the feed's NULLABLE `job`
-  column returns `None` when the key is present and null, so the match raised `AttributeError` before
-  any assertion ran and the first live drive failed on the SHAPE OF THE FEED rather than on the lane.
-  A `get` default covers an absent key, never a null value.
-- *What is left:* nothing here. The one question the code cannot answer for itself — which zone
-  warehouse a project's namespaces hang from — is now read rather than guessed, and `WAREHOUSE` in the
-  seed script is overridable for the same reason (measured live: `namespace:silver` parents under BOTH
-  `warehouse:lance_catalog` and `warehouse:bind86-wh`, `namespace:acme-silver` under
-  `warehouse:acme-bucket`).
-- *Closes when:* CLOSED. The suite passes on the live estate with no manual seed, and both failure
-  messages name `scripts/seed_medallion_fga.sh <project> <zone-warehouse-id>` — a signature
-  `tests/unit/test_a_test_that_prints_a_command_names_one_that_exists.py` now holds for every command
-  an e2e prints. That gate needed a shell-function-body strip before it could fail at all: `link()`'s
-  own `$2` made a script reading no arguments look like one reading two.
-- *Evidence:* `transform.py:1113 (to_uri = ensure_stage_output when catalog_url set)` · `live deploy rask-bronze-to-silver: MEDALLION_CATALOG_URL=http://rask-catalog:2333` · `test_dummy_lane_e2e.py:225 (ray job submit, direct)` · `scripts/ray_dummy_job.py (126 lines, no catalog call; TO_URI from env)` · `OpenFGA read: acme-silver$dummy / $features / namespace:acme-silver -> 0 tuples` · `lineage log: ingest_denied ... can_write_data ... acme-silver$dummy`
 
 ## PHASE 1 · CROSS-CUTTING
 
@@ -3892,3 +3733,4 @@ Re-measured at HEAD and found shipped, or closed by work since. Listed so a read
 - **XC-073** — A pinned catalog older than `model.fga` deployed a stale authorization model and failed every post-upgrade hook silently; rebuilt, and a gate now refuses the pairing
 - **XC-074** — WITHDRAWN the day it was filed, not fixed: every measurement behind it was taken against a Dagger scratch `openfga/openfga:v1.18.3` container holding port 18081, not the estate. The live store has **50 models, newest with 12 types** including `estate`, and `check estate:rask` returns a decision. The authorization model was never stale and [[XC-073]]'s closure was right. **`make fga-store-check` answers this in one command** — "the store's model matches the repo (158 relations over 11 types)" — and the Makefile comment beside it already warns why I could not see that: it pipes into the CATALOG'S OWN POD because "the address the code reads (`RASK_FGA_API_URL`) is the one that matters, and a port-forward answers for a different one". The tool and the warning both existed; I used neither. **AND THE TEN-TYPE READING WAS A REAL HISTORICAL STATE, which is why it was so believable:** the Makefile records "Measured 2026-09-22: with both repo files declaring `type estate`, `make fga-test` green and `ms-authz` green in CI, the store held ten types and no `estate`" — [[XC-073]]'s defect exactly, since fixed. The scratch container was seeded from that era, so I reproduced a true description of the estate as it was the previous day and read it as the present. The repo has also already reasoned about the gap I proposed: `fga-store-check` is the fourth-copy check and is deliberately NOT in `check` because it needs a live cluster and `check` is offline
 - **LH-091** — A version advance had no control-lane push trigger for a BYO change-feed consumer; `table_published` already was one, and `POST /v1/table/{id}/changes` now names it, its range and its emitter
+- **LH-196** — The dummy-lane e2e depended on a manual FGA seed and printed a script signature that had since changed; the fixture now registers its declared output through the catalog's own `create?mode=exist_ok` door, proved by deleting the seed on the live store and re-running
