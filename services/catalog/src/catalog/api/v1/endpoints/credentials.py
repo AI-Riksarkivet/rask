@@ -25,13 +25,14 @@ from lance_namespace import (
     DescribeTableResponse,
     PermissionDeniedError,
     ServiceUnavailableError,
+    TableBranchNotFoundError,
     UnauthenticatedError,
 )
 
 from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, VendorDep
 from catalog.api.security import CurrentToken, RawBearerToken
 from catalog.core.identifiers import parse_identifier
-from catalog.core.vending import Tier, dataset_facts, unsanctioned_bases
+from catalog.core.vending import Tier, dataset_facts, table_has_branch, unsanctioned_bases
 from catalog.schemas import CredentialResponse
 from catalog.services import native
 from service_kit.governed import fga
@@ -109,6 +110,14 @@ async def vend_credentials(
         return CredentialResponse(mode="server_mediated")
     # The client-direct write target + optimistic-commit base version (a declared-only/new table reads as 0).
     # A tiny ROOT-cred manifest read to learn the version — not the byte-proxy (no data bytes move).
+    # THE BRANCH MUST BE ONE THE TABLE HAS ([[LH-056]]), checked before anything is minted. `branch` is
+    # caller-chosen and `build_session_policy` guards only `*`, `?` and `..` — the format allows `/`
+    # inside a branch name, so a shape rule cannot answer this and a lookup has to. Unchecked, the grant
+    # is a 900 s write credential for a prefix no manifest references: storage charged to a table for
+    # objects nothing will read, under a name somebody may create later. Creating a branch needs no
+    # credential, so there is no flow that must vend for one before it exists.
+    if branch and not await run_in_threadpool(table_has_branch, described.location, settings.storage_options(), branch):
+        raise TableBranchNotFoundError(f"branch {branch!r} not found on this table")
     read_version, declared_bases, classified = await run_in_threadpool(dataset_facts, described.location, settings.storage_options())
     # [[LH-058]] A CLASSIFIED COLUMN MAKES A TABLE UNVENDABLE RAW, and it is a property of the TABLE
     # rather than of the caller — the same shape as the unsanctioned base below, for a reason that was

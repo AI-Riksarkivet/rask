@@ -338,6 +338,33 @@ def dataset_facts(location: str, storage_options: dict[str, str]) -> tuple[int, 
     return int(ds.version), tuple(bases), classified_columns(ds)
 
 
+def table_has_branch(location: str, storage_options: dict[str, str], branch: str) -> bool:
+    """Does this table have that branch? ([[LH-056]])
+
+    A SEPARATE OPEN, and deliberately not a fourth fact on :func:`dataset_facts`. That function's own
+    rule is that a fact needed on EVERY vend rides the one handle; a branch check is needed only when
+    a caller names a branch, which is the rare path, so folding it in would add a read to every vend
+    that names none.
+
+    A TABLE WITH NO READABLE DATASET HAS NO BRANCHES, which is the right answer rather than a gap: a
+    declared-only table has no versions, and a branch is taken from a version. So the unreadable case
+    refuses rather than waving the name through — the same fail-closed direction the classification
+    and base checks take.
+    """
+    import lance  # lazy, matching this module's STS-client style: pylance loads only where vending runs
+
+    try:
+        return branch in lance.dataset(location, storage_options=storage_options, session=shared_lance_session()).branches.list()
+    except Exception:
+        # ONE ARM, CATCHING ANYTHING, because every way of failing has the same right answer. A branch
+        # set this cannot determine must not read as "this branch exists": refusing costs a caller one
+        # retry, admitting hands out a 900 s grant on an unverified prefix. Narrower than
+        # :func:`dataset_facts`'s `(ValueError, OSError)` on purpose — that one degrades to a narrower
+        # credential, and this one decides whether a credential is minted at all.
+        log.warning("vend_branch_unreadable", extra={"location": location, "branch": branch}, exc_info=True)
+        return False
+
+
 def build_session_policy(
     bucket: str,
     prefix: str,
