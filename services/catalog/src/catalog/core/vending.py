@@ -8,11 +8,24 @@ MinIO, AWS S3, Ceph RGW, GCS via S3 interop. The design is
 **vending-first**; each deployment picks the strongest plug it wants:
 
 * :class:`WebIdentityVendor` — STS ``AssumeRoleWithWebIdentity`` + an inline session policy: the caller's
-  OIDC id_token is exchanged BY THE STORE for short-TTL, per-table, read/write-scoped creds. The path for
-  **RustFS** (it trusts the OIDC issuer but does NOT support plain ``AssumeRole``). Token-authenticated.
+  OIDC id_token is exchanged BY THE STORE for short-TTL, per-table, read/write-scoped creds.
+  Token-authenticated. For stores that implement web identity; **RustFS does not** (see below).
 * :class:`StsVendor` — STS ``AssumeRole`` + an inline session policy: short-TTL,
-  per-table, read/write-scoped tokens. For backends that implement plain ``AssumeRole``
-  (AWS, MinIO, Ceph RGW) — NOT RustFS.
+  per-table, read/write-scoped tokens. For backends that implement plain ``AssumeRole`` — AWS, MinIO,
+  Ceph RGW, **and RustFS**, which is why `chart/values.yaml` ships ``vending.mode: sts``.
+
+WHICH ACTION RUSTFS ANSWERS IS MEASURED, not inferred, because getting it backwards costs the whole
+data plane: the wrong vendor returns no usable credential and every direct-to-store read fails with a
+signature error that names the client. Probed against ``rustfs/rustfs:1.0.0-alpha.60`` — the tag this
+repo pins — on 2026-09-24, with SigV4 signing proven working by a 200 on ``GET /``:
+
+    POST / Action=AssumeRole                  -> 200, real temporary credentials
+    POST / Action=AssumeRoleWithWebIdentity   -> 400 InvalidArgument "not support action"
+    POST / Action=NotARealAction  (control)   -> 400 InvalidArgument "not support action"
+
+The control is what makes the second line readable: RustFS answers an unknown action and web identity
+identically, so web identity is absent rather than misconfigured. It also requires a signature on the
+STS call, which AWS web identity deliberately does not.
 * :class:`ModeBVendor` — ``vend`` returns ``None``: no credential ever leaves the
   catalog; the client uses the server-mediated (Arrow-IPC) data endpoints. The
   simplest, backend-agnostic default — nothing is delegated.
