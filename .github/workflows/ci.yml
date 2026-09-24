@@ -764,27 +764,29 @@ jobs:
       - name: Auth e2e (Dex + OpenFGA, app-side seeding)
         run: dagger call auth-chain
 
-  # THE TWO GOVERNED LANES NOBODY RAN. `auth-chain` above has been in CI since it landed; its two
-  # siblings were make targets only, and a lane nobody runs reports nothing when it rots. Measured
-  # 2026-09-24: both had been dead for 17 days. `2c69c270` made catalog/lineage/medallion refuse to
-  # boot unless an operator declares whether the service authenticates anyone, and only the lane
-  # wired into CI got the declaration — `dagger call rustfs-lifecycle` died with
-  # `start ... (aliased as catalog): exit code: 3`, and `governance-chain`'s lineage service the same
-  # way. Being in CI is what makes the fix stay fixed; `tests/unit/test_a_lane_that_boots_a_governed
-  # _image_says_what_it_authenticates.py` is the cheap gate that catches the next one before a build.
+  # THE LAKEHOUSE LANES NOBODY RAN. `auth-chain` above has been in CI since it landed and stayed
+  # green; its siblings were make targets only, and a lane nobody runs reports nothing when it rots.
+  # Measured 2026-09-24: `rustfs-lifecycle` and `governance-chain` had been broken for 17 and 18 days
+  # by three unrelated estate-wide changes that each reached only the CI-wired lane — a fail-closed
+  # auth assert (`start ... (aliased as catalog): exit code: 3`), a shared identity default repointed
+  # at the chart estate, and an event shape one of two ingest doors never learned. Being in CI is
+  # what makes those fixes stay fixed; the unit gates that ship with them catch the next one before
+  # a build, and this catches what a unit gate cannot see.
   #
-  # `rustfs-lifecycle` is the S3-AGNOSTICISM proof (the same catalog lifecycle with the bytes on
-  # RustFS instead of MinIO) and `governance-chain` is the catalog->lineage provenance proof. Both
-  # are pure `dagger call`, so `make rustfs-lifecycle` / `make governance-chain` and this job are the
-  # same code — the ms-gates contract every other leg here holds.
-  e2e-governed-lanes:
+  # THREE PROOFS, one per seam: `smoke-rustfs` that `packages/storage` works against a real S3
+  # backend rather than moto, `rustfs-lifecycle` that the catalog is S3-AGNOSTIC (the same lifecycle
+  # with the bytes on RustFS instead of MinIO), and `governance-chain` that authorization and
+  # catalog->lineage provenance hold together with real Dex tokens and no hand-written tuple. All
+  # three are pure `dagger call`, so `make <lane>` and this job are the same code — the ms-gates
+  # contract every other leg here holds.
+  e2e-lakehouse-lanes:
     runs-on: ubuntu-latest
     needs: ms-test
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
-        lane: [governance-chain, rustfs-lifecycle]
+        lane: [governance-chain, rustfs-lifecycle, smoke-rustfs]
     steps:
       - uses: actions/checkout@v4
 
