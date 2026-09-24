@@ -106,7 +106,17 @@ bash scripts/dagger-image.sh --name ray-lance --tag "$RAY_IMG" >/dev/null
 kind load docker-image "$CATALOG_IMG" "$RAY_IMG" --name "$CLUSTER"
 
 step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, openbao/observability/web OFF)"
+# SIDE-LOADED, SO THE CHART HAS TO BE TOLD. The images above are built by Dagger and pushed into the
+# kind node with `kind load docker-image` at `:dev`, which is exactly what `image.localImages` means:
+# a bare `<component>:<tag>` reference that resolves on the NODE rather than at a registry. Without it
+# `rask.image` refuses the render outright — `image.repository must be set to a registry ... or set
+# image.localImages=true` — and the lane dies at `helm upgrade` having already built and loaded every
+# image it needs. Measured 2026-09-24 on `e2e-ray`, the first run that got past the kubeconfig guard
+# far enough to reach a deploy.
+# A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
+# the command and turns every following line into its own, which `bash -n` accepts.
 "$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s \
+  --set image.localImages=true \
   --set auth.enabled=true \
   --set medallion.fgaEnabled=true \
   --set medallion.compute=true \

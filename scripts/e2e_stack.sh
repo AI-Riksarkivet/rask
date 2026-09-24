@@ -115,7 +115,17 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 # sidecar-injector race below means the app pods that come up in the first wave are recreated anyway, so
 # waiting on them here would only buy a wait we then throw away. The explicit rollout waits are the ones that
 # matter. Do not re-read this as "the deadlock is still there".
+# SIDE-LOADED, SO THE CHART HAS TO BE TOLD. The images above are built by Dagger and pushed into the
+# kind node with `kind load docker-image` at `:dev`, which is exactly what `image.localImages` means:
+# a bare `<component>:<tag>` reference that resolves on the NODE rather than at a registry. Without it
+# `rask.image` refuses the render outright — `image.repository must be set to a registry ... or set
+# image.localImages=true` — and the lane dies at `helm upgrade` having already built and loaded every
+# image it needs. Measured 2026-09-24 on `e2e-ray`, the first run that got past the kubeconfig guard
+# far enough to reach a deploy.
+# A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
+# the command and turns every following line into its own, which `bash -n` accepts.
 "$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s \
+  --set image.localImages=true \
   --set auth.enabled=true \
   --set medallion.fgaEnabled=true \
   --set catalog.warehouses.enabled=true \
