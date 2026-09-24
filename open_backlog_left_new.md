@@ -740,6 +740,23 @@ of mine in this same session.**
   `catalog/core/lineage_emit.py` at `event_time 2026-09-06`, i.e. before the fix. So the 23 are a
   CLOSED, SHRINKING population of historical rows, not a leak — the ruling decides how to repair 23
   known nodes, not how to stop an ongoing one.
+- **RE-MEASURED ON THE LIVE GRAPH 2026-09-24, AND THE PRODUCER IS STOPPED — which shrinks this row to a
+  one-off.** Counted in AGE rather than taken from the row: **1,593 Dataset nodes, 1,491 carrying a
+  `source_uri`, of which 60 are RELATIVE.** So this row's "the population is 60 -> 23" is falsified —
+  it is 60, and the 23 was a narrower question (the subset the sweep also read as unreadable).
+- **A SAME-NAMESPACE CONTROL SETTLES WHETHER ANYTHING STILL PRODUCES THEM.** `register_table` resolves
+  the caller's relative claim through `absolute_table_location` before stamping
+  (`tables.py:810-812`, landed `cf040fff` 2026-09-11). Created TODAY through the catalog's create door,
+  `acme-silver$dummy` carries `s3://acme-bucket/4dd0f145_acme-silver$dummy`; the pre-fix
+  `acme-bronze$objects` beside it in the same namespace still carries the bare
+  `4750a5b9_acme-bronze$events`. One door, two eras, one namespace.
+  *Bounded honestly:* only 2 of the 60 names embed a datable timestamp (2026-08-03 and 2026-09-04), so
+  "nothing new since the fix" rests on that control and not on the cohort's own dates.
+- **SO THE COHORT IS CLOSED AND THE BLOCKER IS SMALLER THAN IT READS.** "WHERE the repair runs" does not
+  need a standing mechanism — nothing re-creates these, so a one-off restamp ends it. Every one of the
+  60 is a test fixture (`trackans*`, `advmode7ns$r1`, `csx1ns$r1..r3`, `regaudns$reg*`, `silver$loop-*`,
+  `silver$vasa-publish-*`), and one is literally named `probe-relative-loc` — a probe written to
+  exercise this defect.
 - *What is left:* The guard is shipped and pinned (9 tests pass in `tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py` + `services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py`). Only the repair remains. (a) Rewrite the relative `source_uri` on the 60 Dataset nodes: 58 are governed and resolvable through the catalog, 2 hold no tuple and are removals, 24 reach the sweep every tick as MISSING_ON_STORAGE. (b) Restamp the composed `medallion/<tier>` datasets the guard now refuses by name (`s3://bind86-wh/medallion/silver`→`bronze$events`, `s3://lance-catalog/medallion/gold`→`bronze$events`, `s3://lance-catalog/medallion/silver`→`silver$features`, and the flat `s3://acme-bucket/4750a5b9_acme-bronze$events`); `ensure_declared_dataset_id` runs only from compute.py write paths (251, 368, 392) and `table_id_from_location` and lineage's durable feed cannot supply the value. Implement option 1 or 3 per the ruling; lineage holds no catalog client today. Pin that a corrected dataset keeps its `_rowid`s (`update_schema_metadata` is metadata-only) and diagnose the 94-count `lakehouse-bronze$events` (names no catalog table) under LH-164, not here. Live counts are from the row, not re-measured this session.
 - *Closes when:* No Dataset node carries a relative `source_uri` except the two ungoverned removals, and the sweep's location-mismatch refusal fires zero times across a full tick.
 - *Evidence:* `uv run pytest tests/unit/test_the_sweep_vends_for_the_dataset_it_is_holding.py services/maintenance/tests/test_a_vended_credential_must_cover_the_dataset_it_signs.py -q → 9 passed` · `services/medallion/src/medallion/services/compute.py:251,368,392` · `services/lineage/src/lineage/services/cypher.py:212 + repository.py:410` · `rg -n 'describe_table|catalog_url' services/lineage/src → no hits`
