@@ -55,6 +55,16 @@ spec:
     # value — there is no way to splice in just the password — so the seed writes it whole to
     # secret/lance (openbao.yaml), beside postgres-password.
     - name: connectionString
+      {{- /* WITH NO DAPR SECRET STORE THIS RESOLVES AGAINST KUBERNETES SECRETS, and the chart declares
+           no `lance` Secret — so an install with `openbao.enabled=false` and no external address must
+           supply one itself. Nothing warns: daprd exits `Fatal error from runtime: failed to load
+           components: Secret "lance" not found`, which kills the SIDECAR, so every app in the release
+           fails its health check for a reason naming neither this component nor the flag behind it.
+           Measured 2026-09-24 on `e2e-ray`, which set `openbao.enabled=false` and supplied nothing:
+           medallion-producer and bronze-to-silver both died that way seven minutes into a deploy, and
+           the visible symptom was `TimeoutError: Dapr health check timed out`. The stack scripts now
+           keep the store on, and `tests/unit/test_a_dapr_component_names_a_secret_something_can_
+           resolve.py` holds every overlay they deploy to that rule. */}}
       secretKeyRef:
         name: lance # the secret at secret/data/lance; vaultKVUsePrefix=false drops Dapr's "dapr/" prefix
         key: dapr-state-connection-string

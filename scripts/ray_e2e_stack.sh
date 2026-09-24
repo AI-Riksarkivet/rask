@@ -123,7 +123,6 @@ step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, ope
   --set medallion.ray=true \
   --set medallion.quality=true \
   --set catalog.warehouses.enabled=true \
-  --set openbao.enabled=false \
   --set observability.enabled=false \
   --set maintenance.enabled=false \
   --set frontend.enabled=false
