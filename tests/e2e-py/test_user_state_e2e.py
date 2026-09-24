@@ -34,7 +34,13 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 RELEASE = os.environ.get("LANCE_E2E_RELEASE", "lance-ns")
 
-pytestmark = pytest.mark.user_state
+# BOTH MARKERS, like `test_medallion_e2e.py`. `user_state` is what `make e2e-user-state` selects;
+# `e2e` is what the broad live sweep (`scripts/e2e_live.sh`, `pytest tests/e2e-py -m e2e`) selects,
+# and without it this file was the ONE declared suite no entry point reached at all — measured
+# 2026-09-24, ten of the eleven suites no automation drives are at least reachable by that sweep and
+# this was not. It wants exactly what the sweep provides: a deployed catalog, its real Dapr sidecar
+# and the real state store.
+pytestmark = [pytest.mark.e2e, pytest.mark.user_state]
 
 
 @pytest.fixture(scope="module")
