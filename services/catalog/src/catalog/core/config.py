@@ -323,6 +323,11 @@ class CatalogAuthzSettings(BaseSettings):
     service_subjects: str = Field(default="", alias="LANCE_SERVICE_SUBJECTS")
     # Subjects that may NOT use the shared app token and need their own credential. Same contract as
     # lineage's — see `service_principal`.
+    #: THIS SERVICE'S OWN NAME on the estate, used to sign the lineage it emits ([[LH-064]]). Empty is
+    #: the unconfigured estate and emits unsigned, which the bus door still admits — never a placeholder
+    #: signature, which it would refuse. Distinct from `privileged_subjects`, which names OTHER services
+    #: this one accepts at its door; this is the one it presents.
+    service_identity: str = Field(default="", alias="LANCE_SERVICE_IDENTITY")
     privileged_subjects: str = Field(default="", alias="LANCE_PRIVILEGED_SUBJECTS")
     #: Service identities the CASCADE runs as, granted ``owner`` on every warehouse this catalog creates.
     #:

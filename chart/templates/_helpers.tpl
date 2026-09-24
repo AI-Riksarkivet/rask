@@ -1774,6 +1774,11 @@ identity be seeded and then denied to its own owner, which boots fine and 401s l
 {{- define "lance.allServiceIdentities" -}}
 {{- $root := . -}}
 {{- $all := list $root.Values.medallion.train.trainerIdentity $root.Values.medallion.producer.serviceIdentity $root.Values.frontend.serviceIdentity $root.Values.maintenance.catalogServiceIdentity -}}
+{{- /* The catalog's own name, used to sign the lineage it emits ([[LH-064]]). It belongs here and not
+       on `services.yaml`'s privileged-subjects list: that one names subjects the catalog's door DEMANDS
+       a credential from, and the catalog does not call itself. This list is who has a credential at
+       all, which is a different question. */ -}}
+{{- with $root.Values.catalog.serviceIdentity }}{{- $all = append $all . }}{{- end -}}
 {{- range $root.Values.medallion.stageRunners }}{{- $all = append $all .serviceIdentity }}{{- end -}}
 {{- range ($root.Values.medallion.mediaStageRunners | default list) }}{{- $all = append $all .serviceIdentity }}{{- end -}}
 {{- with (get (($root.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $all = append $all . }}{{- end -}}

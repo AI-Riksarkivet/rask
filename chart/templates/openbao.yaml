@@ -241,11 +241,15 @@ spec:
                        name it privileged, so one seeded token serves both. Read from the service's own
                        declarations rather than written out, and `uniq` below collapses them when they
                        agree (they do, and the render is what proves it). */}}
-                {{- $privileged := list .Values.medallion.train.trainerIdentity .Values.medallion.producer.serviceIdentity .Values.frontend.serviceIdentity .Values.maintenance.catalogServiceIdentity }}
-                {{- range .Values.medallion.stageRunners }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
-                {{- range (.Values.medallion.mediaStageRunners | default list) }}{{- $privileged = append $privileged .serviceIdentity }}{{- end }}
-                {{- with (get ((.Values.services.ingest).env | default dict) "RASK_CATALOG_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
-                {{- with (get ((.Values.services.ingest).env | default dict) "RASK_LINEAGE_SERVICE_IDENTITY") }}{{- $privileged = append $privileged . }}{{- end }}
+                {{- /* THE SHARED DERIVATION, not a second copy of it. `lance.allServiceIdentities` already
+                       feeds `lance.identitiesForApp` and the deny-list that subtracts from it, and its own
+                       comment says why a copy is dangerous: "an identity seeded but not allowed here is an
+                       app that boots and then 401s with nothing naming the cause". This list WAS that copy,
+                       and adding the catalog's identity to it alone seeded a credential every peer's
+                       deny-list stayed blind to — caught by
+                       `tests/unit/test_a_dedicated_credential_is_not_readable_by_its_peers.py`, which is
+                       the gate that exists for exactly this. */}}
+                {{- $privileged := include "lance.allServiceIdentities" . | splitList " " }}
                 {{- /* THE MAINTENANCE PLANE'S SCOPED S3 SECRET, when one is provisioned. Its own field
                        rather than a second value on `minio-secret-key`: that field IS the tenant root's
                        secret and other services read it, so overwriting it would repoint the whole

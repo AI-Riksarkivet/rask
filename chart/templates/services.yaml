@@ -147,6 +147,13 @@ spec:
             */}}
             - { name: LANCE_SECRETS_FROM_DAPR, value: "true" }
             {{- end }}
+            {{- /* WHO THE CATALOG IS when it signs the lineage it emits ([[LH-064]]). A NAME, not a
+                   credential — the token itself is fetched from the Dapr secret store at
+                   `service-token-<identity>`, which `openbao.yaml` seeds from this same value. Absent,
+                   the emitter signs nothing and the bus door admits the events unsigned. */}}
+            {{- with .Values.catalog.serviceIdentity }}
+            - { name: LANCE_SERVICE_IDENTITY, value: {{ . | quote }} }
+            {{- end }}
             - { name: LANCE_S3_REGION, value: "us-east-1" }
             - { name: LANCE_S3_VIRTUAL_HOSTED, value: "false" }
             {{- /*

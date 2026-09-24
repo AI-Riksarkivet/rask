@@ -6172,8 +6172,22 @@ def test_every_privileged_identity_has_a_dedicated_credential_seeded() -> None:
     missing_token = sorted(subjects - seeded)
     assert not missing_token, f"privileged identities with no dedicated credential seeded (each one is a fail-closed refusal): {missing_token}"
 
-    orphan_token = sorted(seeded - subjects)
-    assert not orphan_token, f"dedicated credentials seeded for identities that are not privileged, so they still take the shared-token path: {orphan_token}"
+    # A SEEDED CREDENTIAL MUST HAVE A USER, and there are now two kinds of user. A PRIVILEGED SUBJECT
+    # is demanded by a door; a SIGNING IDENTITY is presented by a producer on the lineage bus
+    # ([[LH-064]]) and no door ever asks for it — the catalog signs as `service-catalog` and nothing
+    # calls the catalog as `service-catalog`. Both are read off the render rather than listed, so a new
+    # identity of either kind moves this gate with it. What stays refused is a credential nothing uses:
+    # seeded, rotated, scoped, and reaching no workload.
+    presented: set[str] = set()
+    for match in re.finditer(r'name:\s*[A-Z_]*SERVICE_IDENTITY,\s*value:\s*"([a-z0-9-]+)"', rendered):
+        presented.add(match.group(1))
+    assert presented, "no *_SERVICE_IDENTITY is rendered at all — either the parse broke or nothing presents an identity"
+
+    orphan_token = sorted(seeded - subjects - presented)
+    assert not orphan_token, (
+        f"dedicated credentials seeded for identities nothing demands and nothing presents: {orphan_token}. "
+        "A credential with no reader is rotation and scoping spent on nobody."
+    )
 
 
 def test_the_scratch_emptyDir_is_BOUNDED() -> None:

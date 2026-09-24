@@ -32,7 +32,7 @@ from catalog.services import warehouses
 from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.control_emit import make_control_emitter
 from service_kit.governed.auth_lifespan import attach_auth
-from service_kit.governed.dapr_auth import assert_app_token_configured
+from service_kit.governed.dapr_auth import assert_app_token_configured, dedicated_token_from_store
 from service_kit.governed.secrets import apply_dapr_secrets
 from service_kit.governed.settings import assert_authentication_configured
 from service_kit.governed.user_state import UserStateStore
@@ -215,6 +215,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # describe a catalog other than the one answering.
         catalog_impl=settings.impl,
         warehouse_uri=settings.root,
+        # WHO THIS SERVICE IS, and how it gets its own credential ([[LH-064]]). The resolver is passed
+        # rather than called here: an estate that emits no lineage, or one with no identity configured,
+        # must never reach for a secret store for a signature it will not make.
+        service_identity=settings.service_identity,
+        token_resolver=dedicated_token_from_store(settings.dapr_secret_store) if settings.secrets_from_dapr else None,
     )
     # Control-plane change-events (opt-in, best-effort — the governance/metadata stream). Publishes through
     # the same local sidecar (reuse/lazily build the Dapr client). The per-replica ring buffer is ALWAYS

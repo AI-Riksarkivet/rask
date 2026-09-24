@@ -14,6 +14,9 @@ dependencies = [
     "pyarrow",
     "pylance[otel]>=11.0.0",
     "lance-namespace>=0.11.0,<0.12",
+    # Signs the lineage this service emits ([[LH-064]]); the verifier in `services/lineage` uses the
+    # same module, so both sides share one definition of what was signed.
+    "lineage-kit",
     # >=0.10.4 with service-kit: the shared FGA write path rides `on_duplicate_writes=IGNORE`.
     "openfga-sdk>=0.10.4",
     # The canonical S3 seam — warehouses.py builds its bucket client through storage.s3_client.
@@ -34,5 +37,6 @@ build-backend = "hatchling.build"
 packages = ["src/catalog"]
 
 [tool.uv.sources]
+lineage-kit = { workspace = true }
 service-kit = { workspace = true }
 storage = { workspace = true }

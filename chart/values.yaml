@@ -1038,6 +1038,16 @@ vending:
 
 # --- Catalog request limits -----------------------------------------------------------------------
 catalog:
+  # THE CATALOG'S OWN NAME ON THE ESTATE, used to sign the lineage it emits ([[LH-064]]). Every other
+  # emitting service already had one and this one did not, which is why it was the last producer that
+  # could not sign: an identity is what a credential is seeded against.
+  #
+  # It is the identity this service PRESENTS, never one it accepts — deliberately absent from the
+  # `LANCE_PRIVILEGED_SUBJECTS` allowlist in `services.yaml`, which names the subjects the catalog's
+  # own door demands a dedicated credential from. The catalog does not call itself.
+  #
+  # Empty disables signing and emits unsigned, which the lineage bus door still admits.
+  serviceIdentity: service-catalog
   # Max request-body bytes accepted on any catalog route. The Arrow-IPC write endpoints buffer the whole
   # body in memory, so an unbounded POST (e.g. a multi-GB media blob pushed through the catalog instead of
   # the direct storage/vending path) OOMs the worker. The body-limit middleware rejects oversized bodies
