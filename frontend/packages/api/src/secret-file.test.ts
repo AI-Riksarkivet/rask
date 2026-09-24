@@ -67,10 +67,22 @@ describe('readSecretFile', () => {
 		expect(readSecretFile(join(tmpdir(), 'rask-secret-does-not-exist', 'token'))).toBeUndefined();
 	});
 
-	it('is undefined when the file cannot be read', () => {
+	it('is undefined when the read itself fails', () => {
+		// A DIRECTORY, NOT A PERMISSION BIT. Unreadable is the same answer as absent — the zone must
+		// not crash when its mount is not a file it can read — but permission is not a property of the
+		// file alone. Measured 2026-09-24: this leg read a `chmod 000` file back as its own plaintext
+		// and took `web-gate` red, because the bun gate runs as uid 0 in its container and root
+		// bypasses the DAC check entirely. `EISDIR` is a read that fails for every uid there is.
+		const dir = mkdtempSync(join(tmpdir(), 'rask-secret-'));
+		dirs.push(dir);
+		expect(readSecretFile(dir)).toBeUndefined();
+	});
+
+	it.skipIf(process.getuid?.() === 0)('is undefined when the process may not read the file', () => {
+		// The permission case still holds wherever it MEANS anything, which is any uid but root: for
+		// root the syscall simply succeeds, so asserting it there measures the runner, not the module.
 		const path = tempSecret('s3cr3t');
 		chmodSync(path, 0o000);
-		// Unreadable is the same answer as absent: the zone must not crash on a permission change.
 		expect(readSecretFile(path)).toBeUndefined();
 		chmodSync(path, 0o600);
 	});
