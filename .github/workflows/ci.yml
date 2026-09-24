@@ -16,8 +16,17 @@ on:
 # main is deliberately NOT cancelled. Per-commit green/red on main is the audit trail the whole
 # "evidence, not assertion" rule leans on; a cancelled run leaves a commit with no verdict. Runner
 # minutes are free on a public repo, the signal is not.
+#
+# ONE GROUP PER COMMIT ON MAIN, because `cancel-in-progress: false` does not buy that on its own. A
+# concurrency group holds at most ONE pending run: when a second run is queued behind a running one,
+# the newcomer does not wait its turn, it CANCELS the pending one. Measured 2026-09-24 — five pushes
+# to main inside 40 minutes produced `57a53f83` cancelled 4m44s after creation with ZERO jobs ever
+# created, and four more like it earlier the same day. The setting was honoured exactly as written and
+# the commits still had no verdict, which is the one thing this block exists to prevent. Keying main's
+# group by SHA gives every commit a group of its own, so nothing of main's can cancel anything of
+# main's; every other ref keeps one group and cancels its own superseded runs.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.sha) || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
