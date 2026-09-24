@@ -275,6 +275,13 @@ _MINTED_MATERIAL = re.compile(r"^(?:[0-9a-f]{40}|[A-Za-z0-9]{40})$")
 #: API (`policy create`, `user add`), which has no S3 equivalent and which RustFS does not implement —
 #: so its fate turns on the object-store ruling ([[XC-075]]) rather than on a rewrite here. A ratchet
 #: keeps the number from growing while that is decided; zero is the destination.
+#:
+#: LOWERING THIS BREAKS A SIBLING GATE ON PURPOSE. `test_one_secret_string_reaches_every_site` asserts
+#: the provisioning Job carries each plane's secret as a literal `value: "<secret>"` — it is checking
+#: that the Job MINTS what the pods PRESENT, and a literal is merely how it reads that today. Whoever
+#: removes these six must replace that hop with a comparison against whatever the Job then reads the
+#: secret from, in the same commit. Deleting it instead would leave the pair unchecked at the one hop
+#: that creates it.
 PLAINTEXT_SECRET_BASELINE = 6
 
 

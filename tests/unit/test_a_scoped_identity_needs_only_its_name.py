@@ -93,6 +93,14 @@ def test_one_secret_string_reaches_every_site(plane: str) -> None:
     )
     # ...and the `mc` Job that CREATES the RustFS user must mint it with that same secret, or the
     # credential the pods present belongs to a user whose secret is something else.
+    #
+    # THIS HOP PINS A SHAPE THAT IS SCHEDULED TO GO AWAY, and the distinction matters when it does.
+    # The PROPERTY is "the Job mints what the pods present" — a credential is a pair, and half a swap
+    # signs nothing. The EXPRESSION is a literal `value: "<secret>"`, which is the plaintext delivery
+    # `PLAINTEXT_SECRET_BASELINE` in `test_secret_env_delivery_only_shrinks` is ratcheting to zero.
+    # So this assertion is expected to fail one day for a GOOD reason. When it does, replace it with a
+    # comparison against whatever the Job then reads the secret FROM — do not delete it, or the pair
+    # stops being checked at the only hop that mints it.
     assert re.search(rf"value:\s*\"{re.escape(secret)}\"", rendered), f"the scoped-users provisioning Job does not carry the {plane} secret the pods present"
 
 
