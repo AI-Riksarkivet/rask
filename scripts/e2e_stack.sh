@@ -102,6 +102,50 @@ if ! docker exec "${CLUSTER}-control-plane" crictl images -o json 2>/dev/null \
 fi
 echo "   node holds catalog digest ${CATALOG_DIGEST}"
 
+ALREADY_BUILT="$CATALOG_IMG"
+HELM_SET=(
+  --set image.localImages=true
+  --set auth.enabled=true
+  --set medallion.fgaEnabled=true
+  --set catalog.warehouses.enabled=true
+  --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]"
+  --set services.lineage.outbox.enabled=true
+  --set services.lineage.reconcile.enabled=true
+  --set observability.enabled=false
+  --set maintenance.enabled=false
+  --set frontend.enabled=false
+)
+
+# EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
+# `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
+# script does not build cannot be pulled from anywhere: containerd asks Docker Hub for
+# `docker.io/library/notifications:dev`, is told `pull access denied, repository does not exist`, and
+# the pod sits in ImagePullBackOff forever. Measured 2026-09-24 on `e2e-stack`: the overlay schedules
+# seven rask images and this script built one. A hand-kept list is exactly what drifted, so the list
+# is the render's and a new service joins it by existing. `$HELM_SET` is the SAME array the upgrade
+# below uses, so the set built and the set deployed cannot disagree.
+SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
+  | { grep -oE '^[[:space:]]+image: [a-z0-9][a-z0-9-]*:dev$' || true; } | awk '{print $2}' | sort -u)"
+# `|| true` ON THE GREP, THEN AN EXPLICIT CHECK. `set -o pipefail` is on, so a grep that matches
+# nothing exits 1 and kills the script at this line with no message at all — a filter that stopped
+# matching would read as an unexplained abort rather than as the thing it is.
+if [ -z "$SIDE_LOADED" ]; then
+  echo "!! the render named no side-loaded <component>:dev image — the filter or image.localImages has moved" >&2
+  exit 1
+fi
+for img in $SIDE_LOADED; do
+  case " $ALREADY_BUILT " in *" $img "*) continue ;; esac
+  stem="${img%%:*}"; stem="${stem#lance-}"
+  bash scripts/dagger-image.sh --name "$stem" --tag "$img" >/dev/null
+  digest="$(docker image inspect --format '{{.Id}}' "$img")"
+  kind load docker-image "$img" --name "$CLUSTER"
+  if ! docker exec "${CLUSTER}-control-plane" crictl images -o json 2>/dev/null | grep -q "${digest#sha256:}"; then
+    echo "!! kind node does not hold the freshly-built $img digest $digest after load — aborting" >&2
+    exit 1
+  fi
+  echo "   node holds $img digest $digest"
+done
+
 step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extras OFF)"
 # HISTORY: `--wait` used to DEADLOCK on a fresh cluster, which is why this job never once passed in CI.
 # helm's order is: apply manifests → (--wait) block until every resource is Ready → run post-install hooks.
@@ -124,17 +168,7 @@ step "3/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, heavy extra
 # far enough to reach a deploy.
 # A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
 # the command and turns every following line into its own, which `bash -n` accepts.
-"$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s \
-  --set image.localImages=true \
-  --set auth.enabled=true \
-  --set medallion.fgaEnabled=true \
-  --set catalog.warehouses.enabled=true \
-  --set-json "catalog.multibase.dataBases=[\"$BASE_A\",\"$BASE_B\"]" \
-  --set services.lineage.outbox.enabled=true \
-  --set services.lineage.reconcile.enabled=true \
-  --set observability.enabled=false \
-  --set maintenance.enabled=false \
-  --set frontend.enabled=false
+"$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s "${HELM_SET[@]}"
 
 # Dapr's sidecar injector is a MUTATING WEBHOOK: it injects daprd only into pods created AFTER it is Ready.
 # The Dapr control plane is a SUBCHART of this same release, so on a fresh cluster the app pods are created

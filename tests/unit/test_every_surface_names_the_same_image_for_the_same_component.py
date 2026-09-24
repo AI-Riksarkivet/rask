@@ -2,11 +2,21 @@
 
 `.dagger/storage.go` reached for `minio/mc:latest` while `chart/values.yaml` pinned
 `minio/mc:RELEASE.2025-08-13T08-35-41Z` — a second, undeclared specification of the same component,
-correct on the day it was typed. It stopped being correct when MinIO closed anonymous pulls on Docker
-Hub: measured 2026-09-24, an anonymous token for `minio/mc` comes back with `"access":[]` and the
-manifest answers 401 for EVERY tag, while `quay.io/minio/mc` serves the same releases at 200. The
-chart could be moved to quay.io and the Dagger module would still be pointing at a registry that no
-longer answers — which is how `e2e-auth` died on `pull access denied ... insufficient_scope`.
+correct on the day it was typed. It stopped being correct when MinIO closed anonymous pulls, which is
+how `e2e-auth` died on `pull access denied ... insufficient_scope`.
+
+MEASURED 2026-09-24, with the bearer DECODED rather than inferred from a status code, because the
+first reading of this was wrong in a way that a 200 on some other probe shape hid. The whole `minio`
+namespace is closed on BOTH registries an anonymous puller can reach:
+
+    docker.io  minio/minio -> 401, access: []          quay.io  minio/mc -> 401, actions: []
+    docker.io  minio/mc    -> 401, access: []
+    docker.io  rustfs/rustfs, library/postgres -> 200, pull granted
+
+So moving the pin to quay.io is NOT the fix and was reverted once already ([[XC-075]]); and the
+blocker is the SERVER image, not the client — no amount of replacing `mc` makes `minio/minio`
+pullable. This gate is about the second copy, not the registry: a pin repeated in three files is a
+pin only until someone adds the fourth.
 
 THE DEFECT IS THE SECOND COPY, not the tag. A pin that has to be repeated in three files is a pin
 only until someone adds the fourth, and the symptom always arrives somewhere else: a lane that

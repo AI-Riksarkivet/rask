@@ -105,6 +105,50 @@ bash scripts/dagger-image.sh --name rest-catalog --tag "$CATALOG_IMG" >/dev/null
 bash scripts/dagger-image.sh --name ray-lance --tag "$RAY_IMG" >/dev/null
 kind load docker-image "$CATALOG_IMG" "$RAY_IMG" --name "$CLUSTER"
 
+ALREADY_BUILT="$CATALOG_IMG $RAY_IMG"
+HELM_SET=(
+  --set image.localImages=true
+  --set auth.enabled=true
+  --set medallion.fgaEnabled=true
+  --set medallion.compute=true
+  --set medallion.ray=true
+  --set medallion.quality=true
+  --set catalog.warehouses.enabled=true
+  --set observability.enabled=false
+  --set maintenance.enabled=false
+  --set frontend.enabled=false
+)
+
+# EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
+# `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this
+# script does not build cannot be pulled from anywhere: containerd asks Docker Hub for
+# `docker.io/library/notifications:dev`, is told `pull access denied, repository does not exist`, and
+# the pod sits in ImagePullBackOff forever. Measured 2026-09-24 on `e2e-stack`: the overlay schedules
+# seven rask images and this script built one. A hand-kept list is exactly what drifted, so the list
+# is the render's and a new service joins it by existing. `$HELM_SET` is the SAME array the upgrade
+# below uses, so the set built and the set deployed cannot disagree.
+SIDE_LOADED="$("$(dirname "$0")/helm.sh" template "$RELEASE" ./chart "${HELM_SET[@]}" \
+  | { grep -oE '^[[:space:]]+image: [a-z0-9][a-z0-9-]*:dev$' || true; } | awk '{print $2}' | sort -u)"
+# `|| true` ON THE GREP, THEN AN EXPLICIT CHECK. `set -o pipefail` is on, so a grep that matches
+# nothing exits 1 and kills the script at this line with no message at all — a filter that stopped
+# matching would read as an unexplained abort rather than as the thing it is.
+if [ -z "$SIDE_LOADED" ]; then
+  echo "!! the render named no side-loaded <component>:dev image — the filter or image.localImages has moved" >&2
+  exit 1
+fi
+for img in $SIDE_LOADED; do
+  case " $ALREADY_BUILT " in *" $img "*) continue ;; esac
+  stem="${img%%:*}"; stem="${stem#lance-}"
+  bash scripts/dagger-image.sh --name "$stem" --tag "$img" >/dev/null
+  digest="$(docker image inspect --format '{{.Id}}' "$img")"
+  kind load docker-image "$img" --name "$CLUSTER"
+  if ! docker exec "${CLUSTER}-control-plane" crictl images -o json 2>/dev/null | grep -q "${digest#sha256:}"; then
+    echo "!! kind node does not hold the freshly-built $img digest $digest after load — aborting" >&2
+    exit 1
+  fi
+  echo "   node holds $img digest $digest"
+done
+
 step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, openbao/observability/web OFF)"
 # SIDE-LOADED, SO THE CHART HAS TO BE TOLD. The images above are built by Dagger and pushed into the
 # kind node with `kind load docker-image` at `:dev`, which is exactly what `image.localImages` means:
@@ -115,17 +159,7 @@ step "2/6 deploy the governed Ray-ON stack (auth+fga+compute+ray+quality ON, ope
 # far enough to reach a deploy.
 # A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
 # the command and turns every following line into its own, which `bash -n` accepts.
-"$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s \
-  --set image.localImages=true \
-  --set auth.enabled=true \
-  --set medallion.fgaEnabled=true \
-  --set medallion.compute=true \
-  --set medallion.ray=true \
-  --set medallion.quality=true \
-  --set catalog.warehouses.enabled=true \
-  --set observability.enabled=false \
-  --set maintenance.enabled=false \
-  --set frontend.enabled=false
+"$(dirname "$0")/helm.sh" upgrade --install "$RELEASE" ./chart --timeout 600s "${HELM_SET[@]}"
 # Dapr sidecar-injector race + fresh-cluster recreate (see e2e_stack.sh for the full rationale).
 kubectl rollout status deploy/dapr-sidecar-injector --timeout=300s
 for d in catalog lineage medallion-producer bronze-to-silver silver-to-gold media-to-silver gateway; do

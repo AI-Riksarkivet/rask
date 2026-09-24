@@ -63,6 +63,17 @@ def test_the_flag_reaches_the_upgrade_that_deploys(script: str) -> None:
         if not line.rstrip().endswith("\\"):
             break
 
+    # FOLLOW ONE LEVEL OF INDIRECTION. Both stacks now hoist their flags into a `HELM_SET` array so the
+    # side-load RENDER and the upgrade cannot disagree about what is deployed, and a check that reads
+    # only the invocation's own lines would call that a regression. Resolving the array keeps the
+    # property this test is about — the flag reaches THIS deploy, not some other helm call — and makes
+    # it stronger, because the array it resolves is the one the build loop reads too.
+    text = "\n".join(invocation)
+    for array in re.findall(r'"\$\{(\w+)\[@\]\}"', text):
+        block = re.search(rf"^{array}=\((.*?)^\)", body, re.DOTALL | re.MULTILINE)
+        assert block, f"{script} expands ${array}[@] on its upgrade but defines no such array"
+        invocation.extend(block.group(1).splitlines())
+
     assert any("image.localImages=true" in line for line in invocation), (
         f"{script} sets image.localImages somewhere, but not on the `upgrade --install` that deploys: {invocation[:3]}"
     )
