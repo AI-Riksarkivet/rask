@@ -610,16 +610,13 @@
 										<div class="flex flex-wrap items-center gap-1">
 											<span class="text-muted-foreground w-14 shrink-0 text-[10px]">fields</span>
 											{#each row.fields as field (field.name)}
+												{@const detail = `${field.options.length ? field.options.join(' | ') : field.type}${field.required ? ' · required' : ''}`}
 												<span
 													class="border-border bg-background inline-flex items-center gap-1 rounded border px-1 py-0.5 text-[10px]"
 													title="A typed per-region field — edit in the YAML view"
 												>
 													{field.name}
-													<span class="text-muted-foreground">
-														{field.options.length
-															? field.options.join(' | ')
-															: field.type}{field.required ? ' · required' : ''}
-													</span>
+													<span class="text-muted-foreground">{detail}</span>
 												</span>
 											{/each}
 										</div>
