@@ -54,15 +54,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
       - name: Tests — offline pytest suite, -m "not e2e and not slow" (Dagger)
@@ -116,15 +121,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
       - name: dagger call ${{ matrix.gate }}
@@ -175,15 +185,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
       - name: dagger call ${{ matrix.leg }}
@@ -218,15 +233,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
       - name: dagger call scan-secrets — trufflehog over the full git history
@@ -262,15 +282,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
       - name: Reclaim runner disk
@@ -348,15 +373,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
       - name: Frontend bun gate — svelte-check + tsgo + unit + lint + fmt (Dagger)
@@ -458,15 +488,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
 
@@ -580,15 +615,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
 
@@ -622,15 +662,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
 
@@ -683,15 +728,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
 
@@ -733,15 +783,20 @@ jobs:
       # while that same manifest answered 200 from elsewhere — so the image is fine and the runner's
       # route to it is not. Warming the engine in its own step keeps the retry on the PULL and off the
       # work: a genuine failure still fails on the last attempt, with its own error, and a test that
-      # fails is never retried into passing.
+      # fails is never retried into passing — `ms-charts` proved that half, skipping `dagger call
+      # charts` rather than running it against a half-started engine.
+      #
+      # FIVE ATTEMPTS OVER ~150s, because three over ~30s was measured too short the same day: the
+      # same registry answered `504 Gateway Timeout` for longer than that window and took the job
+      # with it. The backoff is linear rather than exponential so the ceiling stays legible.
       - name: Warm the Dagger engine (a transient registry pull is retried, the work is not)
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
 
@@ -800,10 +855,10 @@ jobs:
         env:
           DAGGER_NO_NAG: "1"
         run: |
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if dagger core version; then exit 0; fi
-            echo "!! engine start failed (attempt $attempt/3) — retrying" >&2
-            sleep $((attempt * 10))
+            echo "!! engine start failed (attempt $attempt/5) — retrying" >&2
+            sleep $((attempt * 15))
           done
           dagger core version
 
