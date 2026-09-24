@@ -37,6 +37,7 @@ import re
 from typing import Any
 
 import pyarrow.fs as pafs
+from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from service_kit.lakehouse.objectfs import StorageOptions, fs_and_base
@@ -160,9 +161,17 @@ def list_specs(control_root: str, storage_options: StorageOptions, project: str 
     One corrupt or unreadable record is SKIPPED with a warning rather than voiding the rest: a
     listing that silently emptied would read as "this project declares no transforms" while they
     keep running.
+
+    THE SKIPPED ONES REACH A SERIES, not only a log line. A WARN is emitted on the listing path, so it
+    exists only while someone is looking and is attributed to whoever happened to look — measured on
+    the deployed catalog 2026-09-24, two listings produced eighteen warnings for the same NINE records.
+    Nothing could answer "how many stored records does the current model reject" without grepping a
+    pod's logs, which is why nine of them have sat unmigrated.
     """
     fs, base = fs_and_base(control_root, storage_options)
     out: list[TransformSpec] = []
+    unreadable = 0
+    rejected = 0
     selector = pafs.FileSelector(f"{base}/{SPECS_PREFIX}", allow_not_found=True, recursive=False)
     for info in fs.get_file_info(selector):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
@@ -172,11 +181,39 @@ def list_specs(control_root: str, storage_options: StorageOptions, project: str 
                 raw = stream.readall().decode("utf-8")
         except Exception as exc:
             log.warning("transform_spec_unreadable", extra={"path": info.path, "error": str(exc)})
+            unreadable += 1
             continue
         spec = _parse(raw, path=info.path)
-        if spec is not None and (project is None or spec.project == project):
+        if spec is None:
+            rejected += 1
+            continue
+        if project is None or spec.project == project:
             out.append(spec)
+    # SET UNCONDITIONALLY, including zero. A gauge that is only written when something is wrong cannot
+    # distinguish a clean estate from one nobody has listed, and the zero is the reading a migration
+    # has to produce to be believed. The scan is estate-wide whatever `project` filters, so these two
+    # answer for the whole control root and carry no project label that would double-count.
+    _malformed.set(rejected)
+    _unreadable.set(unreadable)
     return out
+
+
+_meter = metrics.get_meter("lance.transform_specs")
+#: A LEVEL, not a rate — the same reasoning as `maintenance.drift.items`. Migrating the rejected
+#: records should take this to zero, and `delta()` over a counter would read a repaired estate as no
+#: change at all. Both series are set on every listing, so a stale value cannot outlive a fixed record.
+_malformed = _meter.create_gauge(
+    "transform.specs.malformed",
+    unit="{record}",
+    description="Stored transform records the CURRENT model rejects, as of the last listing. Non-zero means a lane "
+    "that was declared is invisible to `list_specs` and to everything downstream of it.",
+)
+_unreadable = _meter.create_gauge(
+    "transform.specs.unreadable",
+    unit="{record}",
+    description="Transform records the last listing could not read at all (IO, not shape). Kept separate from "
+    "`malformed`: one is a storage fault and the other is a model that moved, and they are fixed by different people.",
+)
 
 
 def _parse(raw: str, *, path: str) -> TransformSpec | None:

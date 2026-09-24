@@ -1482,6 +1482,26 @@ enumerate/dispose of the eight tier-shaped prefixes in the seven warehouse bucke
 `medallion, service-kit` · **MED**
 - **blocked:** The DISPOSITION only — migrate the nine records or delete them. **Both mapping questions are answered by `TransformSpec` itself** (`packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84`): the model is `extra="forbid"` with no successor for `lane`, so `lane` is DROPPED with nothing to choose between; and `entrypoint` does NOT become `task` verbatim, because `task` is "a registered TASK KEY, resolved against `<control_root>/_tasks/` ... opaque to this library and to the catalog, which is what keeps an engine's name out of the published OpenAPI" — a literal entrypoint is an engine name in the one field designed not to carry one. Each old record's entrypoint must resolve to a registered `_tasks/` key or it does not migrate. The row's other half needs no ruling at all: nine records fail validation behind a WARN and nothing asserts on `transform_spec_malformed`.
 - *What is left:* `_transforms/` holds 10 records in three shapes — one current, one with `name`+`entrypoint`, eight with `lane`+`entrypoint` — and `TransformSpec` (`extra="forbid"`, requires `name`, `task`) rejects nine of them; `_parse` at `transform_specs.py:182-193` logs `transform_spec_malformed` and skips. `cardinality` already defaults to `ONE_TO_ONE` in the model, so only the two mappings above need ruling. Once ruled: migrate or delete the nine (10 records total, 9 sharing one shape), then make an unparseable control record louder than a WARN or gate the set empty — no test asserts on `transform_spec_malformed` today. The live count is not re-measured this session.
+- **HALF OF THE CLOSING CONDITION IS SHIPPED (2026-09-24): the rejected records now reach a SERIES.**
+  `list_specs` sets `transform.specs.malformed` and `transform.specs.unreadable` on every listing —
+  gauges, not counters, for the reason `maintenance.drift.items` is one: this is a LEVEL that a
+  migration takes to zero, and `delta()` over a counter would read a repaired estate as no change at
+  all. Set UNCONDITIONALLY including zero, so a clean estate is distinguishable from one nobody has
+  listed. The two faults stay separate series because a model that moved and a storage failure are
+  fixed by different people.
+  *Bounded:* `list_specs` runs ON DEMAND (the catalog's admin endpoint; the stage runner per trigger),
+  so an idle estate emits nothing and the gauge is ABSENT rather than zero. Better than a WARN nobody
+  greps, worse than a level something drives — the obvious driver is maintenance's reconcile, which
+  already computes per-category drift on a schedule, and adding a category there is its own change.
+- **RE-MEASURED LIVE 2026-09-24 AND THE COUNT HOLDS: exactly NINE.** Read off the deployed catalog by
+  listing twice and de-duplicating the warnings — 18 WARN lines, 9 distinct paths: seven `acme-*`, one
+  `bind86-*`, one `lakehouse-*`. The failure is the same on all nine (`name` missing, `task` missing,
+  `lane` extra-forbidden). That doubling is the defect this metric closes: the WARN is attributed to
+  whoever happened to LOOK, so the estate's answer depended on how many people had listed.
+- **NO ALERT YET, AND THAT IS THE SEQUENCING NOT AN OMISSION.** A rule on `malformed > 0` is TRUE
+  today for all nine, so it would be red on arrival with a 100% true-positive rate and nothing to do
+  about it — the exact shape `chart/alerting/rules.yml` already records as having neutralised
+  `LineageOutboxNotDraining`. The alert lands with the disposition, not before it.
 - *Closes when:* Every record under `<control_root>/_transforms/` validates against `TransformSpec`, and a record that does not is surfaced by more than a listing-path WARN.
 - *Evidence:* `packages/service-kit/src/service_kit/lakehouse/transform_specs.py:62-84 (fields, extra=forbid, cardinality default), :182-193 (_parse warns and skips)` · `grep -rn transform_spec_malformed tests services/*/tests packages/*/tests → none` · `grep -rln 'migrate.*transform' scripts → none`
 
