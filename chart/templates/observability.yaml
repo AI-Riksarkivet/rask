@@ -121,13 +121,28 @@ spec:
                stronger posture and stays the goal; it needs the registry-driven readers enumerated
                first, which is a different change from this one. */}}
         defaultAccess: allow
+        {{- /* BUILT FIRST, EMITTED ONLY IF NON-EMPTY. An app that owns every identity in the estate
+               denies nothing, and a bare `deniedSecrets:` over an empty range is YAML null, not an
+               empty list -- which the Dapr CRD refuses outright:
+                 Configuration.dapr.io "lance-config-catalog" is invalid:
+                 spec.secrets.scopes[0].deniedSecrets: Invalid value: "null": must be of type array
+               Measured 2026-09-24: that refusal failed `e2e-stack` on the server-side apply, for
+               BOTH verifiers at once, so no chart change landed in CI at all while it stood. An
+               absent deny-list and an empty one mean the same thing to Dapr; only one of them
+               parses. */}}
+        {{- $mine := include "lance.identitiesForApp" (list $cfgRoot $app) | splitList " " }}
+        {{- $denied := list }}
+        {{- range (include "lance.allServiceIdentities" $cfgRoot | splitList " ") }}
+        {{- if and . (not (has . $mine)) }}
+        {{- $denied = append $denied (printf "service-token-%s" .) }}
+        {{- end }}
+        {{- end }}
+        {{- if $denied }}
         deniedSecrets:
-          {{- $mine := include "lance.identitiesForApp" (list $cfgRoot $app) | splitList " " }}
-          {{- range (include "lance.allServiceIdentities" $cfgRoot | splitList " ") }}
-          {{- if and . (not (has . $mine)) }}
-          - service-token-{{ . }}
+          {{- range $denied }}
+          - {{ . }}
           {{- end }}
-          {{- end }}
+        {{- end }}
 {{- end }}
 {{- end }}
 ---
