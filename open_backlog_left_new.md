@@ -1541,6 +1541,33 @@ Reached through an explicitly `Any`-typed handle in `services/catalog/tests/`, n
 
 **LH-183 · The maintenance worker is OOMKilled by NATIVE allocation — the Python heap and the Lance session cache are both measured flat**
 `maintenance` · **HIGH**
+- **THE DISCRIMINATION IS IN, AND IT DID NOT NEED THE ROLL — the growth is NOT a cache filling.**
+  The soak was left open on the question of whether +19 Mi/h is an LRU still filling or a ratchet, with
+  `lance_session_bytes` named as the instrument. GreptimeDB already answers the half that decides it:
+  the workers' WORKING SET IS FIXED.
+  * `compaction_datasets_swept_total` is emitted by `rask-maintenance-worker` (the planner emits only
+    `compaction_runs_total`, one run per 120 s — attributed by `k8s_deployment_name`, not assumed).
+  * Datasets per tick across the whole soak: **536–626, no trend** — 613 at 23:52, 604 at 12:42, 548
+    now, drifting DOWN if anything. 85 samples at a 10-minute step.
+  * Nothing is being reclaimed: `compaction_versions_removed_total` = **0** and
+    `compaction_bytes_reclaimed_total` = **0**, so the datasets are static and versions do not advance.
+    The working set is fixed under a dataset keying AND under a `(dataset, version)` keying.
+  **A cache bounded by that working set saturates in ONE tick — two minutes — not fifteen hours.** So
+  whatever holds this memory is not bounded by the work, which is the property that separates the two
+  hypotheses the row was holding open.
+- **THE PER-OPERATION COST IS DERIVED, AND TWO PODS AGREE TO 1%.** 15.00 h, 0 restarts:
+  `9nd4l` 274.5 -> 555.1 MiB (+18.71 Mi/h), `pq6tr` 275.2 -> 552.0 MiB (+18.46 Mi/h). Against ~450
+  ticks x ~600 datasets = ~270,000 dataset-operations each, that is **1.06 and 1.05 KiB per
+  dataset-operation**. Two independently-scheduled pods landing within 1% of each other on a derived
+  figure is what a deterministic per-operation mechanism looks like, and is not what noise looks like.
+- **AND IT REFRAMES THE SEVERITY: 7.9 and 8.0 DAYS to the 4Gi limit** at the current rate. The urgent
+  half of this row was the 512Mi PLANNER doing 4Gi-sized work inline, and that is fixed; what remains
+  is a slow ratchet on pods sized for the job. It will still OOM — a worker restarting weekly is not a
+  resting state — but it is a week, not a night.
+  *What this does NOT do is name the holder.* `lance_session_bytes` on `maintenance_unit_done` still
+  says whether the Lance session is where it sits, and that arrives with the roll. Note also that if
+  that session caches per OPERATION rather than per dataset, "cache" and "leak" are the same behaviour
+  here: an allocation the working set does not bound is a leak whatever it is called.
 - **SOAK, FIRST 90 MINUTES (2026-09-23): FLAT, AND SLIGHTLY FALLING.** 19 samples at 300s off the
   planner's own tick line, under CONSTANT load (`planned=577` on every single tick, so this is not a
   quiet window):
