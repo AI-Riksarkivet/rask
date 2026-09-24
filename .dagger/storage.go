@@ -53,7 +53,7 @@ func (m *Rask) SmokeRustfs(
 }
 
 // mcImage is the S3 client used to create the catalog's bucket before the server starts.
-const mcImage = "minio/mc:latest"
+const mcImage = "quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z"
 
 // RustfsLifecycle runs the SAME catalog lifecycle e2e the MinIO stack runs, with the bytes on RustFS —
 // proving the catalog is genuinely S3-agnostic rather than MinIO-shaped.

@@ -35,7 +35,7 @@ services:
 
   # One-shot: create the OpenFGA schema in the shared SQLite file, then exit.
   openfga-sqlite-migrate:
-    image: openfga/openfga:v1.8.4
+    image: openfga/openfga:v1.18.3
     container_name: lance-openfga-sqlite-migrate
     # Dev stack: run as root so the SQLite file can be created in the root-owned
     # named volume (the image's non-root user otherwise hits "unable to open
@@ -51,7 +51,7 @@ services:
   # Override the base `openfga` service to run on the SQLite datastore. Depends
   # on the SQLite migrate one-shot (NOT the base Postgres migrate).
   openfga:
-    image: openfga/openfga:v1.8.4
+    image: openfga/openfga:v1.18.3
     container_name: lance-openfga
     user: "0:0"  # see openfga-sqlite-migrate — same volume, same writer
     command: run
@@ -78,7 +78,7 @@ services:
   # Dex OIDC provider (static, in-memory) with TWO dev users (alice + bob) so the
   # e2e can prove a 403 for a second principal that holds no grant.
   dex:
-    image: dexidp/dex:latest
+    image: ghcr.io/dexidp/dex:v2.42.0
     container_name: lance-dex
     command: dex serve /etc/dex/config.yaml
     volumes:

@@ -2,7 +2,7 @@
 # Build context is the repo root (..), so .dockerignore and pyproject/uv.lock apply.
 services:
   minio:
-    image: minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
     container_name: lance-minio
     command: server /data --console-address ":9001"
     environment:
@@ -20,7 +20,7 @@ services:
       retries: 20
 
   createbuckets:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z
     container_name: lance-minio-init
     depends_on:
       minio:
@@ -83,7 +83,7 @@ services:
       retries: 20
 
   openfga-migrate:
-    image: openfga/openfga:latest
+    image: openfga/openfga:v1.18.3
     container_name: lance-openfga-migrate
     command: migrate
     depends_on:
@@ -94,7 +94,7 @@ services:
       OPENFGA_DATASTORE_URI: postgres://openfga:openfga@fga-postgres:5432/openfga?sslmode=disable
 
   openfga:
-    image: openfga/openfga:latest
+    image: openfga/openfga:v1.18.3
     container_name: lance-openfga
     command: run
     depends_on:
@@ -110,7 +110,7 @@ services:
 
   # --- Dex OIDC provider (static config; dev IdP) ---
   dex:
-    image: dexidp/dex:latest
+    image: ghcr.io/dexidp/dex:v2.42.0
     container_name: lance-dex
     command: dex serve /etc/dex/config.yaml
     volumes:

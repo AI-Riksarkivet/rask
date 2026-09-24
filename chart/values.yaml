@@ -2298,7 +2298,7 @@ minio:
   enabled: true
   # PINNED, never `latest`: a moving tag on a running data store changes the server under its own
   # on-disk format with no diff anywhere.
-  image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+  image: quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z
   servers: 1
   volumesPerServer: 4
   # (No distinct-disk escape hatch here, and that is a property of the store rather than an omission:
@@ -2449,7 +2449,7 @@ minio:
   # (minio.persistence is GONE with the first-party Deployment — durability is the Tenant's
   # volumeClaimTemplate above: StatefulSet-owned PVCs survive pod rolls AND `helm uninstall`, the
   # keep-PVC posture the P4 ruling pins to the Tenant spec. `storageClass` sizes/classes them.)
-  mcImage: minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (multi-arch); `mc` speaks plain S3 and admin → buckets, users and policies
+  mcImage: quay.io/minio/mc:RELEASE.2025-08-13T08-35-41Z # pinned (multi-arch); `mc` speaks plain S3 and admin → buckets, users and policies
   # OIDC identity provider for STS AssumeRoleWithWebIdentity (Track B). When on, the store trusts Dex id_tokens
   # → a client can mint short-TTL creds it scopes per-table via the catalog's vending endpoint (vending.mode=
   # web_identity). Off by default (plain dev needs no STS). Enabling it rolls the store (the env lands in the

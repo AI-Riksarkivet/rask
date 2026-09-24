@@ -9,8 +9,8 @@ import (
 )
 
 const (
-	openfgaImage  = "openfga/openfga:latest"
-	dexImage      = "dexidp/dex:latest"
+	openfgaImage  = "openfga/openfga:v1.18.3"
+	dexImage      = "ghcr.io/dexidp/dex:v2.42.0"
 	fgaPostgresIm = "postgres:16-alpine"
 )
 
