@@ -92,9 +92,9 @@ def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
 def _reachable(so: dict[str, str]) -> dict[str, str]:
     """The vended storage options, with the ENDPOINT rewritten to one this process can reach.
 
-    The catalog vends the IN-CLUSTER endpoint (`http://rask-rustfs-io:9000`) and is right to: that is
+    The catalog vends the IN-CLUSTER endpoint (`http://rask-minio:9000`) and is right to: that is
     the address its in-cluster clients need. This suite runs on the HOST, where that name does not
-    resolve — measured: `getent hosts rask-rustfs-io` finds nothing, while the ClusterIP answers. Left
+    resolve — measured: `getent hosts rask-minio` finds nothing, while the ClusterIP answers. Left
     alone, `write_fragments` dies in object_store's own retry loop ("Error performing list request …
     after 3 retries") before a byte is written, and the failure reads as a broken store.
 

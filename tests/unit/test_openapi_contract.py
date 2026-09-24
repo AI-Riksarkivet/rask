@@ -19,7 +19,10 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -36,14 +39,49 @@ _DOCS = Path(__file__).resolve().parents[2] / "docs"
 _TS_CLIENT = Path(__file__).resolve().parents[2] / "frontend" / "packages" / "api" / "src" / "generated"
 
 
+#: The env `scripts/gen_openapi.py` dumps the committed spec under. Repeated here rather than imported
+#: because the point is to pin the app's CONFIGURATION, and a helper that inherited this process's
+#: environment would pin nothing.
+_SPEC_ENV = {"LANCE_S3_ACCESS_KEY_ID": "spec", "LANCE_S3_SECRET_ACCESS_KEY": "spec", "LINEAGE_DEMO_DATA_ENABLED": "true"}
+
+
+def _live_surface(module: str) -> dict[str, Any]:
+    """`{"paths": …, "components": …}` for the app, built in a FRESH interpreter.
+
+    IN A SUBPROCESS BECAUSE THE APP IS BUILT ONCE PER PROCESS AND THE ENV DECIDES ITS SHAPE. Importing
+    it here gives whatever configuration the first importer in this worker happened to set — and under
+    `-n 16` that is a different test every run. Measured: two of three full runs failed with
+    `missing paths ['/lineage-events']`, the Dapr subscription route that
+    `test_a_parked_delivery_gets_one_more_chance_at_the_graph.py` enables with
+    `LINEAGE_DAPR_ENABLED=true`. Serially that file happened to run after this one and the leak never
+    showed; the parallel scheduler has no such habit.
+
+    THE ENV IS THE GENERATOR'S, so "live" here means the same thing it means in `make openapi`. A
+    guard comparing against a differently-configured app is comparing two things neither of which is
+    the contract.
+    """
+    source = (
+        f"import json, {module} as m; print(json.dumps({{'paths': m.app.openapi().get('paths', {{}}), 'components': m.app.openapi().get('components', {{}})}}))"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", source],
+        cwd=_DOCS.parent,
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", ""), **_SPEC_ENV},
+        check=False,
+    )
+    assert done.returncode == 0, f"could not build {module} in a clean interpreter: {done.stderr.strip()[-600:]}"
+    return cast("dict[str, Any]", json.loads(done.stdout))
+
+
 @pytest.mark.parametrize(
     ("module", "spec"),
     [("catalog.main", "catalog-openapi.json"), ("lineage.main", "lineage-openapi.json")],
 )
 def test_committed_openapi_contract_covers_the_live_app(module: str, spec: str) -> None:
-    app = importlib.import_module(module).app
     committed = json.loads((_DOCS / spec).read_text())
-    live = app.openapi()
+    live = _live_surface(module)
 
     # The committed snapshot is a superset (dumped with any demo router enabled), so the live app — demo on
     # or off — must be a SUBSET. A live path/schema absent from the committed spec means it went stale.

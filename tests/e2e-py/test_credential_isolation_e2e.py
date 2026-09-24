@@ -134,7 +134,7 @@ def _client(creds: dict[str, str]) -> Any:
 
     BUT THE VENDED ADDRESS IS REACHABLE ONLY FROM INSIDE THE CLUSTER, and these suites run from the
     host. The catalog vends its own `LANCE_S3_ENDPOINT`, which on this estate is
-    `http://rask-rustfs-io:9000` — a Service DNS name — so every leg died on
+    `http://rask-minio:9000` — a Service DNS name — so every leg died on
     `Temporary failure in name resolution` before it could assert anything (measured 2026-09-10: 8
     failed in 59s, the first drive after these legs stopped skipping).
 
