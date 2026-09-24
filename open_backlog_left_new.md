@@ -2029,6 +2029,22 @@ measured (~10-14 MiB per commit pas
 
 **LH-195 · Nothing sets a compaction cadence, so the sweep re-plans every dataset every 120s**
 `maintenance` · **MED**
+- **THE COST IS MEASURED NOW, AND HALF OF IT IS PROVABLY WASTED (2026-09-24).** The numbers this row's
+  cadence decision needs, read off GreptimeDB rather than estimated: the sweep runs **one tick per
+  120 s** (`compaction_runs_total`, 0.0083/s, from the PLANNER) and the workers evaluate
+  **~600 datasets per tick** (`compaction_datasets_swept_total` at 4.745/s, from
+  `rask-maintenance-worker`) — about **409,000 dataset evaluations a day**. Across the whole 14-hour
+  window that per-tick count is FLAT at 536-626 with no trend, so this is a standing load and not a
+  backlog draining.
+- **AND 45.3-46.5% OF EVERY TICK IS REFUSED — steady, all fourteen hours.** 123,257 refusals against
+  268,374 sweeps cumulative. A refused dataset is one the pass declines to touch, so re-planning it
+  every 120 s buys nothing at all and will buy nothing on the next tick either: `protected_base` is
+  someone else's clone and true forever, and `vend_denied` is a missing grant that a cadence cannot
+  fix. **That is ~188,000 evaluations a day spent on datasets that cannot be acted on**, which is the
+  strongest argument this row has for a cadence and it was not in it.
+  *Now attributable:* `compaction.datasets.refused` carries `refused_by` as of 2026-09-24
+  (`protected_base` / `manifest_flags` / `invalid_ref` / `vend_denied`), so the next reading says which
+  of the four the 46% is — the breakdown existed on `DatasetResult` and reached only a WARNING.
 - **blocked:** the per-tier `compact_interval_hours` numbers, plus whether the ~543 datasets no policy
   covers get a global default or their own records. The MECHANISM is done and proven ([[LH-191]],
   closed 2026-09-23); what is missing is the values, and they are a judgement about how often each

@@ -228,12 +228,34 @@ def record_trashed_skipped(datasets: int) -> None:
     _trashed_skipped.add(datasets)
 
 
-def record_refused(datasets: int) -> None:
-    """Record how many datasets this tick REFUSED on an unsupported manifest feature flag (#64).
+def record_refused(datasets: int, refused_by: str | None = None) -> None:
+    """Record how many datasets this tick REFUSED, by WHICH GATE refused them.
 
     Always emits, for the :func:`record_reclaimed` reason and one sharper one: a whitelist that
     silently starts refusing the whole estate must be visible from the FIRST tick after the upgrade
-    that caused it, not from whenever someone reads a cron response body."""
+    that caused it, not from whenever someone reads a cron response body.
+
+    THE GATE IS A LABEL BECAUSE THE MERGED NUMBER IS NOT ACTIONABLE, and the estate proved it:
+    measured 2026-09-24, **45.3-46.5% of every sweep is refused**, steady across fourteen hours and
+    ~600 datasets a tick. A number that large and that flat is a standing condition, and the
+    unlabelled series could not say whether it was somebody else's clone (`protected_base`, true
+    forever), a manifest feature a pylance upgrade would support (`manifest_flags`), an unparseable
+    branch directory (`invalid_ref`) or a missing grant (`vend_denied`). `DatasetResult.refused_by`
+    already carried the answer and `summarize_refusals` already counted by it — it reached the sweep's
+    WARNING and the response body and stopped there, which is the same shape as
+    `compaction.bytes.reclaimed` before [[LH-099]].
+
+    CARDINALITY IS BOUNDED BY CONSTRUCTION: the gates are a closed set named in `DatasetResult`, not a
+    message and never the dataset — the same rule `record_failed` states for `error_type`.
+
+    The ZERO stays UNLABELLED. Emitting it against a gate would require knowing which gates exist this
+    tick, which the caller cannot know (`record_failed` documents the same limit), and inventing a
+    `refused_by="none"` would put a value in the label set that names no gate. `sum(rate(...))` is
+    unaffected; `sum by (refused_by)` reads the breakdown with the zeros in the empty-label series.
+    """
+    if datasets and refused_by:
+        _refused.add(datasets, {"refused_by": refused_by})
+        return
     _refused.add(datasets)
 
 

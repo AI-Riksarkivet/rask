@@ -77,8 +77,10 @@ class DatasetResult(BaseModel):
     #: into either is what made a shallow clone's silent full materialization invisible.
     refused: str | None = None
     #: WHICH GATE refused it: ``protected_base`` (another dataset resolves its files through this
-    #: location), ``manifest_flags`` (this manifest sets a feature this pass cannot correctly rewrite)
-    #: or ``invalid_ref`` (a branch directory whose NAME Lance will not parse). A count that merges
+    #: location), ``manifest_flags`` (this manifest sets a feature this pass cannot correctly rewrite),
+    #: ``invalid_ref`` (a branch directory whose NAME Lance will not parse) or ``vend_denied`` (the
+    #: catalog refused this identity a write credential, so the dataset is left alone rather than
+    #: maintained under the ambient key). A count that merges
     #: them is not actionable — the first is someone else's clone and stays true forever, the second is
     #: a pylance upgrade away from being supported, and the third clears when somebody removes a
     #: directory — and the sweep's one WARNING carries this breakdown in place of a line per dataset.

@@ -387,7 +387,10 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
         # estate — so the refusal has to stop the dataset, not just the vend. Refused rather than
         # errored: nothing is broken, a grant is missing, and the two must not read alike.
         log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        return DatasetResult(uri=item.uri, refused=str(exc))
+        # NAMED, like every other gate. Without `refused_by` this refusal reached the counter in the
+        # unlabelled bucket, so a missing GRANT and an unsupported manifest FLAG — a permissions fix
+        # and a dependency upgrade — were one number.
+        return DatasetResult(uri=item.uri, refused=str(exc), refused_by="vend_denied")
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected, table_id=table_id)
 
 
@@ -763,7 +766,7 @@ def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, option
         indices_optimized=result.indices_optimized,
         bytes_removed=result.bytes_removed,
     )
-    record_refused(1 if result.refused else 0)
+    record_refused(1 if result.refused else 0, result.refused_by)
     if result.error is not None:
         record_failed({result.error_type or "Unknown": 1})
     return result
