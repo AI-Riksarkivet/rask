@@ -17,6 +17,23 @@
 # refusal now stands in front of the destructive operation rather than beside it.
 set -euo pipefail
 
+# THE INTERPRETER IS RESOLVED, NOT NAMED. This script parses the cluster's JSON in python, and a bare
+# `python3` is a name rather than a guarantee: the Dagger test container that drives the divergence
+# guard has uv's python and no `python3` on PATH, so line 47 died `python3: command not found` and the
+# gate reported rc=127 — which its own assertion read as "a split stem was accepted". A gate that
+# cannot RUN is worse than one that cannot fail, and `ms-test` was red on this for days while three
+# e2e lanes declaring `needs: ms-test` executed not once.
+PY_BIN="${PY_BIN:-}"
+if [ -z "$PY_BIN" ]; then
+  for candidate in python3 python; do
+    command -v "$candidate" >/dev/null 2>&1 && { PY_BIN="$candidate"; break; }
+  done
+fi
+# `uv run python` last: it is the slowest of the three and the only one that can install, so it is the
+# answer for an environment that has uv and no interpreter on PATH rather than the first thing tried.
+[ -n "$PY_BIN" ] || { command -v uv >/dev/null 2>&1 && PY_BIN="uv run python"; }
+[ -n "$PY_BIN" ] || { echo "!! k3s-pins needs a python interpreter (tried python3, python, uv run python)" >&2; exit 1; }
+
 # THE CLUSTER THIS SCRIPT MEANS ([[XC-057]]). This one targets the deployed estate on purpose, and
 # saying so is the point: an absent declaration and a deliberate one used to look identical, so
 # "I meant the live cluster" was indistinguishable from "I never thought about it". Overridable, so a
@@ -44,7 +61,7 @@ trap 'rm -f "$OUT.tmp"' EXIT
 # `|| true`: an estate with `ray.enabled=false` has no such CRD, and a pin run must not fail there.
 KINDS="deploy,statefulset"
 "$KUBECTL" get raycluster -o name >/dev/null 2>&1 && KINDS="$KINDS,raycluster"
-"$KUBECTL" get "$KINDS" -o json | python3 -c '
+"$KUBECTL" get "$KINDS" -o json | $PY_BIN -c '
 import json, os, sys
 
 tags, digests = {}, {}

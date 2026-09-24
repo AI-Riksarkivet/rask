@@ -161,10 +161,11 @@ def test_the_retired_names_are_gone_from_the_repository() -> None:
 
 
 def _tracked_files() -> list[pathlib.Path]:
-    import subprocess
+    # `repo_files`, not `git ls-files` directly: this gate runs in a container with no git and no
+    # `.git`, where the bare call raised and took the whole job down. See `repo_tree`.
+    from repo_tree import repo_files
 
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True).stdout
-    return [pathlib.Path(p) for p in out.split("\0") if p]
+    return [pathlib.Path(name) for name in repo_files(REPO)]
 
 
 class _Probe(FgaSettings, BaseSettings):

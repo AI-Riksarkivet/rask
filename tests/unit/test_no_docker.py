@@ -37,10 +37,10 @@ from __future__ import annotations
 
 import ast
 import re
-import subprocess
 from pathlib import Path
 
 import pytest
+from repo_tree import repo_files
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,9 +63,10 @@ _EXCLUDED_SUFFIXES = (".md",)
 
 
 def _tracked_files() -> list[Path]:
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+    # `repo_files`, not `git ls-files` directly: this gate runs in a container with no git and no
+    # `.git`, where the bare call raised and took the whole job down. See `repo_tree`.
     files: list[Path] = []
-    for rel in out.stdout.split("\0"):
+    for rel in repo_files(REPO_ROOT):
         if not rel or rel.startswith(_EXCLUDED_TREES) or rel.endswith(_EXCLUDED_SUFFIXES):
             continue
         # A `docker-compose*.yml` DESCRIBES containers; it does not invoke docker.

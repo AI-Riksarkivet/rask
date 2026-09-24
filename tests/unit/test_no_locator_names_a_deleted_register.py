@@ -19,8 +19,9 @@ that dangled were the ones no list included.
 from __future__ import annotations
 
 import re
-import subprocess
 from pathlib import Path
+
+from repo_tree import repo_files
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -45,8 +46,9 @@ _TEXT = {".py", ".md", ".yaml", ".yml", ".toml", ".tpl", ".sh", ".json", ".ts", 
 
 
 def _tracked() -> list[Path]:
-    out = subprocess.run(["git", "ls-files", "-z"], cwd=REPO, capture_output=True, text=True, check=True)
-    return [REPO / name for name in out.stdout.split("\0") if name and Path(name).suffix in _TEXT]
+    # `repo_files`, not `git ls-files` directly: this gate runs in a container with no git and no
+    # `.git`, where the bare call raised and took the whole job down. See `repo_tree`.
+    return [REPO / name for name in repo_files(REPO) if Path(name).suffix in _TEXT]
 
 
 def _register_exists(stem: str) -> bool:
