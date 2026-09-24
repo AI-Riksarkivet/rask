@@ -339,6 +339,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+
       # The zone list is DERIVED, not restated here. A directory under microfrontends holding a
       # package.json is what makes a zone a bun workspace member and a turbo package — the same rule
       # @repo/zone-contract's zoneDirs() resolves by, and the reason it does not use bare isDirectory()
@@ -465,6 +469,9 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -505,6 +512,11 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
@@ -534,6 +546,9 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
+      - name: Install Dagger CLI (pinned to the module's engineVersion)
+        run: |
+          curl -fsSL https://dl.dagger.io/dagger/install.sh | DAGGER_VERSION=0.21.7 BIN_DIR=/usr/local/bin sh
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
