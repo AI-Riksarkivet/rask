@@ -187,18 +187,13 @@ def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: A
     backups identically on purpose: an operator reading one and reasoning about the other must not meet
     two different answers to "which is the newest".
     """
+    from storage import prune_timestamped_prefixes
+
+    # ONE IMPLEMENTATION FOR BOTH BACKUP LANES. The retention walk used to live here and, in shell,
+    # in the Postgres dump's CronJob — two answers to "which is the newest" held together by a
+    # comment. `storage.prune_timestamped_prefixes` is now the only one, so they cannot drift.
     bucket, prefix = split_uri(dest)
-    # `_join` DROPS EMPTY PARTS, so `_join(prefix, "")` returns the base with no trailing slash and every
-    # key would slice to "" — one phantom stamp instead of N. The separator is added here deliberately.
-    base = _join(prefix)
-    listed = list_objects(client, bucket, base)
-    stamps = sorted({stamp for key in listed if not is_directory_marker(key) and (stamp := key[len(base) :].lstrip("/").split("/", 1)[0])}, reverse=True)
-    kept, pruned = stamps[:keep] if keep > 0 else stamps, stamps[keep:] if keep > 0 else []
-
-    for stamp in pruned:
-        for key in list_objects(client, bucket, _join(prefix, stamp)):
-            client.delete_object(Bucket=bucket, Key=key)
-
+    kept, pruned = prune_timestamped_prefixes(client, bucket=bucket, base=_join(prefix), keep=keep)
     return {"dest": dest, "keep": keep, "kept": [{"stamp": s} for s in kept], "pruned": pruned}
 
 

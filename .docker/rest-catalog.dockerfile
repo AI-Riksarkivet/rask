@@ -83,7 +83,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
 WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
 COPY --from=builder --link /opt/venv /opt/venv
-# TWO FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
+# THREE FILES OUT OF `scripts/`, NAMED ONE BY ONE. Each is run by a chart workload, so each has to
 # exist in an image; copying the whole directory would put every dev and ops script into a
 # request-serving image for the sake of two. Both import stdlib plus `storage`, which the venv above
 # already carries, so neither adds a dependency.
@@ -97,8 +97,11 @@ COPY --from=builder --link /opt/venv /opt/venv
 #                            2026-09-24: `access: []` on Docker Hub, `actions: []` on quay.io, 401
 #                            on both manifests), so on a node that pulls fresh the Job never started
 #                            and the lakehouse's buckets were simply absent ([[XC-075]]).
+#   pg_dump_upload.py      — the `backups.pgDump` CronJob, off the same unpullable image. What it
+#                            uploads is the lineage graph and the authorization store.
 COPY --link scripts/control_root_backup.py /srv/control_root_backup.py
 COPY --link scripts/ensure_bucket.py /srv/ensure_bucket.py
+COPY --link scripts/pg_dump_upload.py /srv/pg_dump_upload.py
 
 # ── the import gate ──────────────────────────────────────────────────────────
 # Import every module this image serves, against the venv the runtime stage ships. A missing

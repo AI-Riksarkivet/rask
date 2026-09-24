@@ -23,6 +23,7 @@ from storage.protocol import Source as Source
 from storage.s3 import S3Sink as S3Sink
 from storage.s3 import S3Source as S3Source
 from storage.s3 import iter_keys as iter_keys
+from storage.s3 import prune_timestamped_prefixes as prune_timestamped_prefixes
 from storage.sts import STSClient as STSClient
 from storage.sts import sts_client as sts_client
 from storage.uri import build_sink as build_sink

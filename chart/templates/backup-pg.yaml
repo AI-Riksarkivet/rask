@@ -23,6 +23,13 @@ spec:
             app.kubernetes.io/component: backup-pg
         spec:
           restartPolicy: OnFailure
+          {{- /* A FIRST-PARTY IMAGE NEEDS THE ESTATE'S PULL SECRETS, which `minio/mc` never did:
+                 it came from a public registry, so this pod spec was one of the few that could skip
+                 them. Running the rask image makes it an ordinary first-party workload. */}}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           volumes:
             - { name: dump, emptyDir: {} }
           initContainers:
@@ -72,27 +79,44 @@ spec:
           {{- end }}
           containers:
             - name: upload
-              image: {{ .Values.minio.mcImage }}
+              {{- /* THE ESTATE'S OWN S3 SEAM, not a third-party CLI. `minio/mc` refuses ANONYMOUS
+                     pulls on every registry this estate can reach — measured 2026-09-24 with the
+                     bearer decoded, Docker Hub answers `access: []` and quay.io `actions: []`, both
+                     401 ([[XC-075]]). What this uploads is the lineage graph (AGE) and the
+                     authorization store (OpenFGA), so on a node that pulls fresh the estate's two
+                     most irreplaceable databases back up NOWHERE, and a CronJob that cannot start
+                     says so once in an event nobody reads. Every verb was plain S3: `cp` is
+                     `put_object`, `ls` + `rm` are the retention walk that
+                     `storage.prune_timestamped_prefixes` now owns for both backup lanes. */}}
+              image: "{{ include "lance.catalogImage" . }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              {{- include "lance.rootlessSecurityContext" 10001 | nindent 14 }}
               resources:
                 requests: { cpu: "50m", memory: "64Mi" }
-                limits: { cpu: "500m", memory: "256Mi" }
+                limits: { cpu: "500m", memory: "512Mi" }
+              # THE SECRET IS NAMED, NEVER CARRIED. `packages/storage` reads the canonical
+              # `RASK_S3_ENDPOINT_URL` plus the standard AWS pair; `configured_endpoint` owns that
+              # resolution order, so nothing here restates it.
               env:
-                - name: MINIO_SECRET_KEY
+                - name: AWS_SECRET_ACCESS_KEY
                   valueFrom:
                     secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
+                - { name: AWS_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
+                - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
+                {{- /* THE LITERAL, matching `services.yaml`, both maintenance templates and
+                       `_ray-cluster-config.tpl`. A `minio.region` value would be another spelling of
+                       one constant nothing in this estate varies, and that template already refuses
+                       to introduce one. */}}
+                - { name: AWS_REGION, value: "us-east-1" }
               command:
-                - sh
-                - -c
-                - |
-                  set -e
-                  mc alias set rfs {{ include "lance.s3Endpoint" . }} {{ .Values.minio.accessKey }} "$MINIO_SECRET_KEY"
-                  mc cp --recursive /dump/ rfs/{{ .Values.minio.bucket }}/_backups/pg/$(date +%Y-%m-%dT%H-%M-%SZ)/
-                  {{- if gt (int .Values.backups.pgDump.keep) 0 }}
-                  # Retention (P4): keep the newest {{ .Values.backups.pgDump.keep }} dumps, prune older ones
-                  # so the backup prefix doesn't grow unbounded. Dir names are ISO timestamps → sort lexically.
-                  mc ls rfs/{{ .Values.minio.bucket }}/_backups/pg/ | awk '{print $NF}' | sort -r \
-                    | tail -n +{{ add (int .Values.backups.pgDump.keep) 1 }} \
-                    | while read -r d; do mc rm --recursive --force "rfs/{{ .Values.minio.bucket }}/_backups/pg/$d"; done
-                  {{- end }}
+                - python
+                - /srv/pg_dump_upload.py
+                - /dump
+                - {{ printf "s3://%s/_backups/pg" .Values.minio.bucket | quote }}
+                {{- /* `--keep 0` means UNBOUNDED in the script, which is the same meaning this
+                       template's `gt 0` gate always had — so an operator who sets keep to 0 gets
+                       growth rather than a surprise deletion. */}}
+                - --keep
+                - {{ .Values.backups.pgDump.keep | quote }}
               volumeMounts: [{ name: dump, mountPath: /dump }]
 {{- end }}
