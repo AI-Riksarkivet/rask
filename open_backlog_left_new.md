@@ -1836,6 +1836,28 @@ measured (~10-14 MiB per commit pas
   exactly that cap, while a 4Gi worker is under budget and keeps the full 402,653,184. An LRU filling
   to 384 MB is a monotone climb that plateaus late and never OOMs. **Do not carry a nine-day projection
   as fact until `lance_session_bytes` on a worker line says which.**
+- **INTERIM READING AT 13.3 h, AND THE WORKER CLAUSE IS ALREADY FAILED ON A FULLY-POPULATED WINDOW.**
+  786-788 samples per pod, 0 restarts, empty `lastState`:
+
+  | pod | limit | whole window | last 6 h | now |
+  | --- | --- | --- | --- | --- |
+  | `rask-maintenance` (planner) | 512Mi | −0.44 Mi/h | **−0.03 Mi/h** | 299.6 MiB |
+  | `rask-maintenance-worker` 9nd4l | 4Gi | +19.23 Mi/h | **+20.25 Mi/h** | 525.4 MiB |
+  | `rask-maintenance-worker` pq6tr | 4Gi | +19.15 Mi/h | **+19.87 Mi/h** | 522.4 MiB |
+
+  The PLANNER passes its clause outright — the last-6 h slope is −0.03 Mi/h against a ±2 Mi/h bar, and
+  the whole 13 h sit in a band narrower than the pre-registered sd bound. The WORKERS miss theirs by a
+  factor of ten, on a window the rule says to read and with the slope still not decaying at 13 h.
+  **The 22:53:38Z reading will record a worker FAILURE**, and the rule was written before the numbers
+  were in, which is what makes that readable now rather than arguable then.
+  **WHAT THE REMAINING CLOCK STILL BUYS** is the planner's "a full day of sweep AND reconcile ticks"
+  clause, which is a separate question from the slope and is the one this row was opened on.
+- **THE TWO SHAPES ARE STILL BOTH ALIVE, and 525 MiB does not separate them.** The worker started at
+  ~278 MiB, so the growth is ~247 MiB against a session cache that may hold 402,653,184 bytes (~384 MB)
+  on a 4Gi pod — an LRU still filling would plateau near 644 MiB and never OOM, and a ratcheting
+  retention would not. Nothing in an external VmRSS series can tell them apart, which is exactly why
+  `maintenance_unit_done` now carries `lance_session_bytes`: the answer arrives with the roll, not with
+  more clock.
 - *What is left:* **THE SOAK, AND ONE INSTRUMENT THAT SHIPPED 2026-09-24.** The allocator question is
   closed: the standing constraints record `ARROW_DEFAULT_MEMORY_POOL=system` as tried and FALSIFIED,
   `MALLOC_ARENA_MAX` as glibc-only against pyarrow's mimalloc and duckdb's jemalloc, and the cause as a
