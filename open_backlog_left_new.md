@@ -596,6 +596,27 @@ of mine in this same session.**
 - **THREE ROWS, ONE SHAPE — and it is the shape of the phase-1 remainder.** [[LH-102]]'s 869 orphaned trash records came from warehouse deletes (fixed at source 2026-09-20), [[LH-148]]'s 121-of-126 provenance gaps are the same e2e fixtures but NOT the same mechanism — corrected below — and this row's duplicates came from the naming divergence above (fixed earlier). All three producers are closed; all three residues remain; and all three need the same thing to clear — a write-capable reconcile, which is [[LH-061]]. The lakehouse is not accumulating these, it is carrying them.
 - **THE DOUBLE-SPELLING IS BROADER THAN THIS ROW NAMES — measured on the live sweep 2026-09-20.** The row names `silver-media$features` under two spellings and both are there (`silver-media$features`, `lakehouse$silver-media$features`). But `lakehouse-wh` also holds **`lakehouse$silver$features` AND `lakehouse-silver$features`** — distinct datasets with distinct hash prefixes (`dd923b95_` against `03505f8f_`), so it is two logical tables each duplicated rather than one. `lakehouse-gold$catalog` carries only the project-prefix form, which is what a consistent estate looks like. **The two conventions are NESTED-NAMESPACE (`lakehouse$silver$features`) against PROJECT-PREFIX (`lakehouse-silver$features`), and the medallion's own `<project>-<tier>` naming is the second** — so the nested copies are the odd ones out. This also surfaced through [[LH-148]]: `lakehouse$bronze$pages` and `lakehouse-bronze$pages` BOTH appear in `unknown_to_graph`, which is the same pair seen from the lineage side. Worth knowing before the drop-or-relocate call, because it doubles what that call covers.
 - **blocked:** No principal in this estate may perform the delete, and the drop-or-relocate call is the owner's. **The "destructive on a real table" half is NOT a blocker** — current state is test data, a recorded rule. The real half is broader than this marker said: `chart/values.yaml:975` is `bootstrapAdmin: ""` and the live bootstrap Job grants only SERVICE principals (`notifications`, `service-medallion-producer`, `service-maintenance`, `service-ingest`), so **no HUMAN principal holds anything here** — there is no bearer with `project:lakehouse#can_administer` to run the `DELETE`. Granting one in order to run it would be proving the diagnosis by changing the thing under test.
+- **RE-MEASURED THROUGH THE CATALOG 2026-09-24, AND THE BLOCKER'S FIRST HALF IS FALSIFIED.** "No
+  principal in this estate may perform the delete" was true when written and is not now: the Dex
+  subject `CiQwOGE4Njg0Yi1k…` holds **`admin` on `project:lakehouse`** and **`owner` on
+  `warehouse:lakehouse-wh`** in the live store. `bootstrapAdmin` is still `""`, and the chart's own
+  comment says what that means — "the human grants stay out-of-band (seed scripts / the UI)" — so the
+  empty default was never the obstacle. What remains blocked is the drop-or-relocate CALL, and only it.
+- **AND THE DECISION IS SAFER THAN THE ROW MAKES IT LOOK, because the spellings are not aliases.**
+  Each `features` resolves to its OWN prefix, so dropping one cannot take another's bytes:
+  ```
+  silver-media$features              s3://lakehouse-wh/a76d1ca5_silver-media$features
+  lakehouse$silver-media$features    s3://lakehouse-wh/fa8bff0d_lakehouse$silver-media$features
+  lakehouse$silver$features          s3://lakehouse-wh/dd923b95_lakehouse$silver$features
+  lakehouse-silver$features          s3://lakehouse-wh/03505f8f_lakehouse-silver$features
+  silver$features                    s3://bind86-wh/37523719_silver$features   <- a DIFFERENT warehouse
+  ```
+- **THE FULL INVENTORY, so the call is made once rather than per discovery.** `lakehouse` lists five
+  children (`bronze`, `silver`, `gold`, `bronze-media`, `silver-media`) and the project-qualified
+  `lakehouse-<stage>` set is five more. Non-empty: `lakehouse$silver` and `lakehouse$silver-media`
+  (one `features` each), `lakehouse-silver` (`features`) and `lakehouse-gold` (`catalog`). The other
+  six are EMPTY, so the unbind door answers 200 for them today without any decision at all — the
+  409 `NamespaceNotEmptyError` this row is named after applies to four namespaces, not ten.
 - *What is left:* Take the drop-or-relocate decision for `silver-media$features` in `lakehouse-wh`. Then a human bearer holding `project:lakehouse#can_administer` calls `DELETE /v1/warehouses/{id}/namespaces/silver-media`, which answers 409 `NamespaceNotEmptyError` until the table is gone. `bronze-media` has no object left in the bucket and needs no decision. The live store is not re-measured this session (no cluster access); the register's 2026-09-16 conditions table still lists `lakehouse$silver-media` among live composed paths.
 - *Closes when:* `lakehouse-wh` lists no `silver-media` namespace and the unbind door answers 200 for it.
 - *Evidence:* `services/catalog/src/catalog/api/v1/endpoints/warehouses.py:624-685 (unbind door, `NamespaceNotEmptyError` refusal)` · `open_backlog_left.md:222 (2026-09-16 live measurement names `lakehouse$silver-media`)`
