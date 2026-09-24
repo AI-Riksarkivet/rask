@@ -1669,18 +1669,68 @@ measured (~10-14 MiB per commit pas
   workload-independent driver. Sampling it properly showed **oscillation, not growth**: 98 -> 107 -> 98
   across ninety seconds, with `lance_backgroun` going 12 -> 1 as a work cycle ended. Thread count is a
   work signal here, not a leak.
-- *What is left:* **THE SOAK, AND ONLY THE SOAK.** The allocator question is closed: the standing
-  constraints record `ARROW_DEFAULT_MEMORY_POOL=system` as tried and FALSIFIED, `MALLOC_ARENA_MAX` as
-  glibc-only against pyarrow's mimalloc and duckdb's jemalloc, and the cause as a SIZING/DESIGN one —
-  the planner running the sweep inline when `workTopic` is unset, with BYO WORKERS as the shape. Both
-  env vars are nonetheless still DEPLOYED (measured 2026-09-24 on `rask-maintenance` and
-  `rask-maintenance-worker`, chart-managed as `allocator.arrowMemoryPool` / `arenaMax`), so there is
-  nothing to deploy and no clock to run.
-  What the clause needs is a QUIET WINDOW. Fifteen hours of `scripts/soak_maintenance.sh`
-  (`.soak/maintenance.csv`, 2,269 rows, 30 pods) show zero OOMKills, zero restarts and nothing above
-  338.8 MiB against 512Mi — but a longest continuous observation of **2.73 h**, because every pod ended
-  in a DEPLOY. Use the repo's sampler, which appends; do not write a second one.
-- *Closes when:* **ONLY THE SOAK REMAINS — a day of clock, not a decision and not an unknown.** Both halves of the original bar are met: what bounds the worker is named and measured (inline execution in a coordination-sized pod; ~1.7x `maxSourceBytes` transient, ~12 MiB retained per pass), and the remedy is proven where it runs. What has not happened is a full day of sweep AND reconcile ticks inside the limit, and it cannot be compressed. The pods restarted today for this very probe, so the clock starts from 2026-09-23.
+- **THE TWO POD CLASSES HAVE OPPOSITE SHAPES, MEASURED 2026-09-24 OVER ONE 6.8 h WINDOW.**
+  `.soak/maintenance.csv` holds 3,630 rows across 33 pods and 20.28 h; the three current pods
+  contribute 400/402/402 samples with 0 restarts and an empty `lastState`:
+
+  | pod | limit | whole window | last 6 h | now |
+  | --- | --- | --- | --- | --- |
+  | `rask-maintenance` (planner) | 512Mi | −0.77 Mi/h | **−1.49 Mi/h** | 299.5 MiB |
+  | `rask-maintenance-worker` 9nd4l | 4Gi | +18.16 Mi/h | **+18.32 Mi/h** | 396.2 MiB |
+  | `rask-maintenance-worker` pq6tr | 4Gi | +18.23 Mi/h | **+18.52 Mi/h** | 394.8 MiB |
+
+  The PLANNER — the pod this row is titled on — has done what the row asks: the last 3.5 h sit in a
+  299.5–304.4 MiB band against 512Mi. The WORKERS have not, and their slope is STEEPER in the recent
+  window than over the whole one, so it is not a warm-up decaying. Two independent pods agreeing to 1%
+  is a mechanism, not noise.
+- **THE NAMED CAUSE CANNOT BE THE LIVE ONE, AND THE SHIPPED MITIGATION CANNOT ARM.** Over thirty
+  minutes across both workers: **374 `compaction_distributed_nothing_to_do`, ZERO
+  `compaction_distributed_committed`, 802 `maintenance_unit_done`, ZERO
+  `maintenance_worker_retiring`** — while each worker gained ~18 MiB. So the climb is on the NO-OP unit
+  path, which per-pass rewrite retention cannot explain. The same zero explains the recycle: the
+  `should_retire(passes_committed(), …)` guard on both lanes advances only through
+  `record_committed_rewrite()`, whose only callers are the two commit paths, so a worker that never
+  commits never reaches its ceiling. **"0 restarts" is the mitigation never firing, not health.**
+- **THE READING RULE, PRE-REGISTERED BEFORE THE READING (2026-09-24), because deciding a threshold
+  after seeing the number is not a measurement.** Two clauses, per pod class, because one threshold
+  scores the two shapes above identically:
+  * **PLANNER — a plateau.** `|slope| ≤ 2 Mi/h` over the LAST 3.5 h of the 24, with sd ≤ 4 Mi so a
+    decay tail is not scored as a baseline. Six hours is deliberately NOT the window: the current
+    planner reads −1.49 Mi/h over six and would fail a 1 Mi/h bar while sitting in a 5 MiB band.
+  * **WORKER — a slope, never a fraction of its limit.** `|slope| ≤ 2 Mi/h` over the last 6 h.
+    "Inside its limit" is the bar to reject: at 22:53Z a worker on the measured line reads ~700 MiB of
+    4Gi — 17%, a clean pass — while arriving at the ceiling in about nine days.
+  * **INSTRUMENT: `VmRSS` from `/proc/1/status`, never `kubectl top`** (this row measured them 120 MiB
+    apart on one pod), and the kubelet kills on cgroup `memory.current`, which is neither. Series must
+    not be mixed across the 24 h boundary. The sampler `kubectl exec`s into the cgroup it measures;
+    the planner, under identical exec pressure and flat, is the control that keeps the worker's slope
+    readable.
+- **TWO SHAPES FIT THE WORKER AND THE INSTRUMENT DISCRIMINATES THEM.** (a) a ratcheting retention —
+  a straight line that arrives; (b) the Lance session LRU filling toward a cap it has never reached on
+  this pod class. `affordable_cache_bytes` clamps the requested 128 MB + 256 MB only when the container
+  cannot afford it: on the 512Mi planner the budget is 214,748,364 bytes and the live tick line reports
+  exactly that cap, while a 4Gi worker is under budget and keeps the full 402,653,184. An LRU filling
+  to 384 MB is a monotone climb that plateaus late and never OOMs. **Do not carry a nine-day projection
+  as fact until `lance_session_bytes` on a worker line says which.**
+- *What is left:* **THE SOAK, AND ONE INSTRUMENT THAT SHIPPED 2026-09-24.** The allocator question is
+  closed: the standing constraints record `ARROW_DEFAULT_MEMORY_POOL=system` as tried and FALSIFIED,
+  `MALLOC_ARENA_MAX` as glibc-only against pyarrow's mimalloc and duckdb's jemalloc, and the cause as a
+  SIZING/DESIGN one — the planner running the sweep inline when `workTopic` is unset, with BYO WORKERS
+  as the shape. Both env vars are still DEPLOYED (measured 2026-09-24 on `rask-maintenance` and
+  `rask-maintenance-worker`, chart-managed as `allocator.arrowMemoryPool` / `arenaMax`).
+  What was NOT closed is that the climbing lane reported nothing: `memory_readings()` had two call
+  sites, the planner's tick line and `summarize`, and no deployed pod runs the second. `handle_unit`
+  and `handle_index_unit` now carry the readings on EVERY unit — gating them on a rewrite is what made
+  this invisible. That code is committed and rides the single post-soak roll.
+  **NOTHING MAY DEPLOY TO THE `lance-rest-catalog` STEM BEFORE 2026-09-24T22:53:38Z.** One image serves
+  eleven deployments and two of them are the soak's subjects; `make k3s-up` renders
+  `image.localImages=true` and replaces every one. Use the repo's sampler, which appends; do not write
+  a second one, and note `.soak/` is gitignored, so a `git clean -xdf` destroys the record.
+- *Closes when:* **The 24 h reading is taken against the rule above and recorded — planner plateau AND
+  worker slope, both inside 2 Mi/h.** The clock runs from the container starts, `2026-09-23T22:51:44Z`
+  for the workers and `22:53:38Z` for the planner. A worker that fails the slope clause does not close
+  this row: it names the next one, and the instrumented `maintenance_unit_done` line is what will say
+  whether the growth is the session cache, the Python heap, or neither.
 - *Evidence:* arena counts from `/proc/1/maps` on all seven lakehouse pods (table above), parsed outside the containers · `nproc` 64 vs `cpu.max` `100000 100000` measured in-container · the lever measured in-image, Debian glibc 2.41, 65 arenas -> 1 · live 2026-09-21 — `Reason: OOMKilled, Exit Code: 137, Restart Count: 6`, limit 512Mi · the three-tick table above, under `lance-rest-catalog:heap-blocks@sha256:44f4513a8be6` · a prior nine-tick series on the same estate: RSS 192 -> 267Mi with the session pinned at 14.6 MB for seven consecutive ticks · `config.py::shared_lance_session` ("the caps are LRU SOFT bounds") · `docs/DECISIONS.md` § *`compaction_mode` is not a measure of where bytes moved*
 
 **LH-194 · A service cannot unwind its own failed registration, so a seed that fails leaves a record only a human can remove**

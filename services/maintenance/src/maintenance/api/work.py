@@ -25,7 +25,7 @@ from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.services.rewrite_slot import passes_committed, retire_this_worker, should_retire
-from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, execute_unit
+from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, execute_unit, memory_readings
 from maintenance.services.work_queue import SUCCESS, ack_for
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -92,6 +92,13 @@ async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emit
             # NAMED even when absent, so a `maintenance_unit_done` line is a complete record on its own
             # and the slow failures can be told from the slow successes without a second lookup.
             "error_type": result.error_type,
+            # ON EVERY UNIT, and never gated on a rewrite ([[LH-183]]). The existing worker-side reading
+            # rides `compaction_distributed_committed`, and measured on the deployed estate over thirty
+            # minutes both workers logged 374 no-op plans and ZERO commits while each gained ~18 MiB —
+            # so the one lane that grows is the one lane the instrument could not reach. The readings
+            # are three `/proc` and allocator lookups; at the measured 802 units per worker per thirty
+            # minutes they are far below the per-unit object-store listing already on this path.
+            **memory_readings(),
         },
     )
     # AFTER the log and before the return, so the unit that tripped the mark is still acked: the

@@ -32,6 +32,7 @@ from maintenance.services import credentials
 from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.index_build import UnknownIndexKindError, build_index
 from maintenance.services.rewrite_slot import passes_committed, retire_this_worker, should_retire
+from maintenance.services.sweep import memory_readings
 from maintenance.services.work_queue import SUCCESS
 from service_kit.draining import retry_when_draining
 from service_kit.governed.dapr_auth import require_dapr_token
@@ -83,7 +84,10 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
     except Exception:
         log.exception("index_build_failed", extra={"uri": item.uri, "column": item.column, "index_type": item.index_type})
         return {"status": RETRY}
-    log.info("index_unit_done", extra={"uri": item.uri, "index": outcome.name, "version": outcome.version})
+    # THE SAME READINGS AS THE REWRITE LANE ([[LH-183]]), because they share a process: a series that
+    # covers only compaction units cannot say which of the two grew it, and an index build over a large
+    # table can hold the worker for an hour.
+    log.info("index_unit_done", extra={"uri": item.uri, "index": outcome.name, "version": outcome.version, **memory_readings()})
     # THE RUN REACHES THE GRAPH HERE, because this is where the build happened. The catalog door
     # emits when it builds in-process and deliberately does not when it queues — "a queued unit has
     # produced no version to measure" — so moving builds off the request path made them invisible
