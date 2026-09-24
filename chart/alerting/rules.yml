@@ -292,6 +292,38 @@ groups:
             catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers
             up to 256MiB). Runbook: docs/runbooks/RUNBOOK-oncall.md
 
+      # THE TRIPWIRE FOR [[LH-050]], so the threshold re-reads itself. That row parks a query store on a
+      # NUMBER rather than a ruling: no listing cache exists because listing load is nowhere near
+      # interactive. Measured 2026-09-24 against this estate's GreptimeDB over a 1h window —
+      # `/v1/namespace/{id}/list` and `/v1/namespace/{id}/table/list` do not appear among the catalog's
+      # top eight routes at all, and `/v1/warehouses` read 0.000627 req/s on 2026-09-20, one request
+      # every 27 minutes and three to four orders below the trigger. A threshold nobody re-reads is a row
+      # that sits forever, so the wire trips itself instead of waiting to be re-run by hand.
+      #
+      # THE ROUTE LABEL IS `http_target`, NOT `http_route`, and it carries the TEMPLATED path
+      # (`/v1/namespace/{id}/list`). A rule written against `http_route` selects nothing on this estate
+      # and can never fire — the same class of defect this file already records for the bare `outbox_*`
+      # counter names.
+      #
+      # `/v1/table/{id}/tags/list` IS EXCLUDED THOUGH IT IS A LISTING ROUTE, and the exclusion is
+      # measured rather than tidy: at 0.265 req/s it is the maintenance sweep polling tags, not a person
+      # browsing. Folding it in would park this alert a quarter of the way to its threshold on machine
+      # traffic alone, and the trigger being asked about is INTERACTIVE frequency.
+      - alert: CatalogListingLoadReachedInteractiveFrequency
+        expr: >-
+          sum(rate(http_server_duration_milliseconds_count{service_name="catalog", http_target=~"/v1/namespace/.*list|/v1/warehouses"}[30m])) > 1
+        for: 30m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "Catalog listing load reached interactive frequency — LH-050's query-store trigger"
+          description: >-
+            Namespace/table/warehouse listing has been served above 1 req/s for 30m, which is the order
+            of magnitude LH-050 parked its query-store design on. Nothing is broken; the assumption the
+            row rests on has expired. Re-read the per-route rates and take the row off the shelf.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md
+
   - name: lance-medallion
     rules:
       - alert: MedallionCascadeDeadLettering

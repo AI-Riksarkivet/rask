@@ -1590,3 +1590,47 @@ tests:
                 p95 sweep duration is above the 120s cron interval, so ticks overlap and two sweeps share
                 one container's memory budget. Expect RSS to climb and the worker to be OOMKilled.
                 Runbook: docs/runbooks/RUNBOOK-oncall.md#readyz-degraded--pool-or-graph
+
+  # LH-050'S TRIPWIRE, both directions. The row is parked on a NUMBER, so the rule that re-reads it has
+  # to be proven at the threshold rather than merely valid: a tripwire that cannot trip re-creates the
+  # very problem it was added for — a threshold nobody re-reads.
+  #
+  # 120/min is 2 req/s, comfortably over the 1 req/s trigger, spread across the two routes the rule
+  # selects. The `{id}` in the label value is the TEMPLATED path the instrumentation emits, which is
+  # what makes a single series per route possible at all.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/namespace/{id}/list"}'
+        values: "0+60x90"
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/namespace/{id}/table/list"}'
+        values: "0+60x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: CatalogListingLoadReachedInteractiveFrequency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+            exp_annotations:
+              summary: "Catalog listing load reached interactive frequency — LH-050's query-store trigger"
+              description: >-
+                Namespace/table/warehouse listing has been served above 1 req/s for 30m, which is the order
+                of magnitude LH-050 parked its query-store design on. Nothing is broken; the assumption the
+                row rests on has expired. Re-read the per-route rates and take the row off the shelf.
+                Runbook: docs/runbooks/RUNBOOK-oncall.md
+
+  # AND IT STAYS QUIET BELOW THE LINE. 30/min is 0.5 req/s — busier than anything measured on this
+  # estate and still not interactive. Without this leg the rule could be satisfied by any traffic at all
+  # and the threshold would be decorative.
+  - interval: 1m
+    input_series:
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/namespace/{id}/list"}'
+        values: "0+30x90"
+      # The sweep's own tag polling, at the rate it was measured running. It is a `/list` route and the
+      # rule must not select it: folding machine traffic in is how the wire trips on nobody browsing.
+      - series: 'http_server_duration_milliseconds_count{service_name="catalog", http_target="/v1/table/{id}/tags/list"}'
+        values: "0+120x90"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: CatalogListingLoadReachedInteractiveFrequency
+        exp_alerts: []
