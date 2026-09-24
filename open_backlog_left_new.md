@@ -187,13 +187,13 @@ have no `uv.lock` and so cannot be built to emit anything.
 
 ## Counted
 
-**196 open items**, of which **96 are blocked on a decision** and **100 can be picked up today**.
+**197 open items**, of which **96 are blocked on a decision** and **101 can be picked up today**.
 22 rows have left this register — 18 dropped as already done by the 2026-09-22 audit, 4 closed by work since — listed at the foot so nothing vanishes silently.
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 31 | 3 | 6 |
-| **PHASE 1 · CROSS-CUTTING** | 42 | 16 | 8 |
+| **PHASE 1 · CROSS-CUTTING** | 43 | 17 | 9 |
 | **PHASE 2 · COMPUTE** | 57 | 38 | 16 |
 | **PHASE 3 · CONTROLPLANE** | 31 | 14 | 6 |
 | **FRONTEND** | 10 | 9 | 0 |
@@ -2147,7 +2147,35 @@ measured (~10-14 MiB per commit pas
   `services/maintenance/src/maintenance/services/sweep.py:90-118` (`_policy_skip_reason`) ·
   [[LH-188]] for the bounds this volume sizes
 
+
 ## PHASE 1 · CROSS-CUTTING
+
+**XC-075 · `mc` cannot be pulled from any registry, so a fresh node and every Dagger lane are one 401 from a failed upgrade**
+`chart, dagger` · **HIGH**
+- **MEASURED 2026-09-24 ON BOTH REGISTRIES, with the token decoded rather than the status guessed.**
+  `minio/mc` refuses ANONYMOUS pulls everywhere the estate could get it: Docker Hub issues a token whose
+  `access` is `[]`, and quay.io issues one with `actions: []` and answers the manifest
+  `401 UNAUTHORIZED`. Same for `minio/minio`.
+- **THE ESTATE RUNS ONLY BECAUSE THE BYTES ARE ALREADY ON THE NODE.** `imagePullPolicy: IfNotPresent`
+  and a container from an earlier pull: `rask-minio-scoped-users-r229`'s `mc` has been Running since
+  2026-09-23T13:57 on `minio/mc:RELEASE.2025-08-13T08-35-41Z`. A fresh node has nothing to fall back on,
+  and `minio-scoped-users.yaml` is a `post-install,pre-upgrade,post-upgrade` HOOK — so the first upgrade
+  on a clean node fails the hook and leaves the release in `pending-upgrade`.
+- **AND IT IS WHY `e2e-auth` FAILS**, on a resolve rather than on anything it tests: Dagger pulls fresh,
+  so the lane cannot start its object store at all.
+- **POINTING IT AT QUAY WAS TRIED AND IS STRICTLY WORSE — my own change, reverted the same day.** A
+  different image NAME is not the cached one, so `IfNotPresent` turns into a pull and the hook takes the
+  401. I reported that move as proved live because `dagger call auth-chain` passed locally; it passed
+  because THIS host's Dagger engine had the image cached from before the change. The lane's first CI run
+  said otherwise: `failed to resolve image "quay.io/minio/mc:…": 401 Unauthorized`.
+- *What is left:* STOP NEEDING `mc`. Three chart templates (`minio-buckets`, `minio-scoped-users`,
+  `backup-pg`), `.dagger/storage.go` and two compose files use it to create buckets, users and policies —
+  all plain S3 and admin calls. The estate already owns the seam (`packages/storage`'s `s3_client`) and a
+  first-party image that carries it, which no registry can withdraw. Mirroring into the dev registry is
+  the smaller alternative and buys only the dev estate.
+- *Closes when:* No first-party manifest, Dagger function or compose file names an image the estate
+  cannot pull anonymously, and a fresh node can complete `helm upgrade`.
+- *Evidence:* `anonymous token for minio/mc: docker.io access=[] / quay.io actions=[]` · `HEAD quay.io/v2/minio/mc/manifests/RELEASE.2025-08-13T08-35-41Z → 401` · `job rask-minio-scoped-users-r229: mc Running since 2026-09-23T13:57 on the docker.io reference` · `chart/templates/minio-scoped-users.yaml:84 (pre-upgrade hook)` · `CI e2e-auth 2026-09-24T14:29:02Z`
 
 **XC-071 · An unstubbed Dapr actor call costs the offline suite a MINUTE, and it took CI down with four e2e lanes**
 `service-kit, notifications, annotator` · **MED** · OPEN
