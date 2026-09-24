@@ -259,7 +259,10 @@ knip:
 coverage: ## The coverage report, computed on request against a correct denominator
 	uv run pytest -m "not e2e and not slow" --cov --cov-report=term-missing:skip-covered
 
-check: fmt lint typecheck knip fga-test
+# `go-fmt` IS IN HERE because a gate that runs nowhere is not a gate. It gated the Go plane from no
+# caller at all: not this target, not the CI gate matrix, only a `make go-fmt` nobody types — and
+# `.dagger/storage.go` was sitting unformatted in a pushed commit when that was measured (2026-09-24).
+check: fmt lint typecheck knip fga-test go-fmt
 
 # The authorization model's OWN suite, plus the drift check between its three copies. Both halves lived
 # ONLY in `.github/workflows/ci.yml`, so `make ci` could be fully green on a machine where the model's
