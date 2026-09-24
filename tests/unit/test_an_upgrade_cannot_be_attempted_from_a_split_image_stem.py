@@ -18,13 +18,23 @@ which is where a prerequisite is most likely to be dropped by someone shortening
 
 from __future__ import annotations
 
+import pathlib
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[2]
 MAKEFILE = REPO / "Makefile"
+#: A SCRUBBED path, but not one missing the interpreter the script legitimately needs. `/usr/bin:/bin`
+#: alone is a dev host's answer: the uv image CI runs this in has no `/usr/bin/python3`, so the script
+#: could not parse the cluster JSON and exited non-zero — which the assertions below read as "a split
+#: stem was accepted". The point of scrubbing is that `KUBECTL` is the fake and nothing else reaches a
+#: real cluster, not that the script must run without a language runtime. Derived from the interpreter
+#: running this test, so it is correct on any host and in the container.
+_MINIMAL_PATH = f"{pathlib.Path(sys.executable).parent}:/usr/bin:/bin"
+
 PINS = REPO / "scripts" / "k3s-pins.sh"
 
 
@@ -90,7 +100,7 @@ def test_a_split_stem_is_refused_with_both_tags_named() -> None:
             ["bash", str(PINS), "--check-only"],
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
+            env={"PATH": _MINIMAL_PATH, "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
             cwd=REPO,
             timeout=60,
         )
@@ -122,7 +132,7 @@ def test_a_converged_estate_passes_and_says_so() -> None:
             ["bash", str(PINS), "--check-only"],
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin", "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
+            env={"PATH": _MINIMAL_PATH, "KUBECTL": str(fake), "KUBECONFIG": "/dev/null"},
             cwd=REPO,
             timeout=60,
         )
