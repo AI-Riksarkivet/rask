@@ -42,8 +42,30 @@ case "${1:-}" in
     ;;
 esac
 
-: "${KUBECONFIG:=/etc/rancher/k3s/k3s.yaml}"
-export KUBECONFIG
+# THE DEFAULT APPLIES ONLY WHERE IT CAN BE RIGHT, which is narrower than "always" and wider than
+# "only when nobody declared".
+#
+# A caller that DECLARES a cluster the default does not serve has already pointed its own kubeconfig
+# there — kind writes `~/.kube/config` — so imposing the live estate's path on it replaces a correct
+# invocation with a wrong one. And the path has to EXIST: a KUBECONFIG naming an absent file resolves to no
+# context at all, which the guard below then reports as a context mismatch against `<none>` rather
+# than as the missing file it is. Measured 2026-09-24 on the `e2e-stack` CI lane, where the runner has
+# no k3s and `/etc/rancher/k3s/k3s.yaml` is not there to read: the lane declared `kind-rask`, got the
+# live estate's path imposed over kind's kubeconfig, and died on a mismatch naming a cluster nobody
+# had asked for.
+#
+# THE DISCRIMINATOR IS WHETHER THE DEFAULT CAN SERVE WHAT THE CALLER ASKED FOR, not a list of script
+# names. Seven scripts declare `RASK_EXPECT_CONTEXT=default` and MEAN this estate, and they set no
+# KUBECONFIG of their own — dropping the default for every declared caller would break all of them.
+# The kind lanes declare `kind-<cluster>` and rely on `kind export kubeconfig` having written the
+# default location. Asking the k3s kubeconfig which context it carries separates the two exactly.
+_k3s="/etc/rancher/k3s/k3s.yaml"
+if [[ -z "${KUBECONFIG:-}" && -r "$_k3s" ]]; then
+  if [[ -z "${RASK_EXPECT_CONTEXT:-}" ]] \
+     || [[ "$(KUBECONFIG="$_k3s" kubectl config current-context 2>/dev/null || true)" == "${RASK_EXPECT_CONTEXT}" ]]; then
+    export KUBECONFIG="$_k3s"
+  fi
+fi
 
 # WHICH CLUSTER IS ABOUT TO CHANGE ([[XC-057]]). The default above is right for `make k3s-up`, whose
 # job IS the live estate, and wrong for every caller that meant another one — and the difference is
@@ -63,7 +85,13 @@ if [[ -n "${RASK_EXPECT_CONTEXT:-}" ]]; then
   actual="$(kubectl config current-context 2>/dev/null || echo '<none>')"
   if [[ "$actual" != "$RASK_EXPECT_CONTEXT" ]]; then
     echo "!! refusing to '$1' against context '$actual' — this caller declared RASK_EXPECT_CONTEXT='$RASK_EXPECT_CONTEXT'" >&2
-    echo "   KUBECONFIG=$KUBECONFIG" >&2
+    # Name the kubeconfig AND whether it is readable. `<none>` has two causes that need opposite
+    # answers — the wrong cluster is selected, or the file naming any cluster is not there — and a
+    # message that cannot tell them apart sends a reader to check contexts that do not exist.
+    echo "   KUBECONFIG=${KUBECONFIG:-<unset, kubectl default>}" >&2
+    if [[ -n "${KUBECONFIG:-}" && ! -r "${KUBECONFIG}" ]]; then
+      echo "   (that kubeconfig is not readable, so NO context can resolve — this is a missing file, not a wrong cluster)" >&2
+    fi
     exit 1
   fi
 fi

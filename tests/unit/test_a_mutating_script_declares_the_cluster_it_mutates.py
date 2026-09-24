@@ -77,10 +77,23 @@ def test_the_helm_seam_refuses_a_cluster_it_was_not_promised() -> None:
 
     Asserted on the seam's source rather than by running it: executing it needs a cluster, and what a
     commit can get wrong is whether the comparison is there at all.
+
+    THE GUARD IS LOCATED BY ITS `if`, NOT BY A CHARACTER WINDOW. This read `seam[i:i+1200]` from the
+    FIRST mention of the variable, so a paragraph of prose naming `RASK_EXPECT_CONTEXT` pushed the
+    refusal past the window and reddened a healthy seam — and the same window would have passed a
+    DELETED guard as long as some comment within 1200 characters said `exit 1`. Both directions wrong,
+    from the same cause: the offset was standing in for the block.
     """
     seam = (SCRIPTS / "helm.sh").read_text(encoding="utf-8")
-    assert "RASK_EXPECT_CONTEXT" in seam, "scripts/helm.sh does not read RASK_EXPECT_CONTEXT — the declaration is enforced by nothing"
     assert "current-context" in seam, "scripts/helm.sh never asks which cluster it is pointed at"
+
+    lines = seam.splitlines()
+    opens = [i for i, line in enumerate(lines) if re.match(r'^\s*if \[\[ -n "\$\{RASK_EXPECT_CONTEXT:?-?\}" \]\]', line)]
+    assert opens, "scripts/helm.sh has no `if [[ -n RASK_EXPECT_CONTEXT ]]` block — the declaration is enforced by nothing"
+
+    start = opens[0]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].rstrip() == "fi"), len(lines))
+    body = "\n".join(lines[start:end])
     # The refusal must be a hard exit, not a warning: CI reads exit codes, not prose.
-    guard = seam[seam.index("RASK_EXPECT_CONTEXT") : seam.index("RASK_EXPECT_CONTEXT") + 1200]
-    assert "exit 1" in guard, "the context mismatch must EXIT, not warn — a warning is read by nobody"
+    assert "exit 1" in body, "the context mismatch must EXIT, not warn — a warning is read by nobody"
+    assert "current-context" in body, "the guard compares against something other than the cluster actually selected"
