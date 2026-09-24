@@ -88,8 +88,9 @@ spec:
                 secretKeyRef: { name: {{ include "lance.fullname" . }}-infra-credentials, key: minio-secret-key }
             - { name: AWS_ACCESS_KEY_ID, value: {{ .Values.minio.accessKey | quote }} }
             - { name: RASK_S3_ENDPOINT_URL, value: {{ include "lance.s3Endpoint" . | quote }} }
-            {{- /* THE LITERAL, for the reason `_ray-cluster-config.tpl` states: a `minio.region`
-                   value would be another spelling of one constant nothing in this estate varies. */}}
+            {{- /* THE LITERAL, as `services.yaml`, both maintenance templates and
+                   `_ray-cluster-config.tpl` already spell it. A `minio.region` value would be a fifth
+                   spelling of one constant nothing in this estate varies. */}}
             - { name: AWS_REGION, value: "us-east-1" }
           command:
             - python

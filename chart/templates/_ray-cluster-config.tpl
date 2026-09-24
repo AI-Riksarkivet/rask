@@ -163,8 +163,11 @@
                   value: {{ include "lance.s3Endpoint" . | quote }}
                 {{- /* The literal, matching `services.yaml:121` and both maintenance templates. A new
                      `minio.region` value would be a fourth spelling of one constant that nothing in
-                     this estate varies, and `test_every_chart_value_a_template_names_actually_exists`
-                     refuses a key values.yaml does not declare. Inert today —
+                     this estate varies. `test_every_chart_value_a_template_names_actually_exists`
+                     does NOT catch such a key on its own: it refuses an UNGUARDED undeclared path,
+                     and a `| default` supplies a value so nothing nil reaches the manifest — measured
+                     2026-09-24 by rendering `.Values.minio.region | default "us-east-1"` past it.
+                     The convention is what keeps the spelling from multiplying, not that gate. Inert today —
                      `scripts/ray_stage_job.py:89` defaults to the same string — and here so the pod
                      owns the whole pair rather than half of it. */}}
                 - name: S3_REGION
