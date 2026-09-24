@@ -2174,11 +2174,22 @@ measured (~10-14 MiB per commit pas
   no registry can withdraw. The retry `mc` needed rides along in the script, because a Dagger service
   binding resolves BEFORE the store is listening and without it the create races the boot. `.dagger/`
   now names no mc image at all.
-- *What is left:* the CHART half. Three templates (`minio-buckets`, `minio-scoped-users`, `backup-pg`)
-  still use `mc` for buckets, users and policies — all plain S3 and admin calls — and
-  `minio-scoped-users` is a `pre-upgrade` HOOK, so it is the one that can fail an upgrade on a fresh
-  node. Two compose files follow. Mirroring into the dev registry is the smaller alternative and buys
-  only the dev estate.
+- **THE CHART HALF SPLITS IN TWO, AND ONLY ONE HALF IS S3 — read this before costing the row.**
+  * `minio-buckets.yaml` runs `mc mb --ignore-existing` and nothing else: **plain S3**, the same
+    `create_bucket` the Dagger half now does.
+  * `backup-pg.yaml` runs `mc cp --recursive`, `mc ls` and `mc rm --recursive`: **plain S3** too
+    (put/list/delete), though the prune is a listing plus a bounded delete rather than one call, and
+    `rm --recursive` is the operation this estate has already been bitten by — an unanchored prefix
+    delete takes its siblings.
+  * `minio-scoped-users.yaml` runs `mc admin policy create`, `mc admin user add`, `mc admin policy
+    attach`: **the MinIO ADMIN API, which boto3 cannot speak at all.** It is also the
+    `post-install,pre-upgrade,post-upgrade` HOOK — so the one template that can fail an upgrade is
+    the one `packages/storage` does not cover.
+- *What is left:* a DECISION on the admin third, because the other two are mechanical. Either teach the
+  estate's own client the MinIO admin REST calls `mc admin` makes (three of them, and they are the
+  estate's credential plane, so it is not a trivial place to be approximate), or mirror `mc` into a
+  registry the estate controls — which buys the dev estate only, unless prod mirrors too. Converting
+  the two S3 templates first buys nothing operationally: the chart still pulls `mc` for the hook.
 - *Closes when:* No first-party manifest, Dagger function or compose file names an image the estate
   cannot pull anonymously, and a fresh node can complete `helm upgrade`.
 - *Evidence:* `anonymous token for minio/mc: docker.io access=[] / quay.io actions=[]` · `HEAD quay.io/v2/minio/mc/manifests/RELEASE.2025-08-13T08-35-41Z → 401` · `job rask-minio-scoped-users-r229: mc Running since 2026-09-23T13:57 on the docker.io reference` · `chart/templates/minio-scoped-users.yaml:84 (pre-upgrade hook)` · `CI e2e-auth 2026-09-24T14:29:02Z`
