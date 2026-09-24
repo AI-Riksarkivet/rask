@@ -92,6 +92,18 @@ def _eventually(fn: Callable[[], Any], *, timeout: float = 60.0, interval: float
     pytest.fail(f"condition not met within {timeout}s (last={last!r})")
 
 
+#: The window every log assertion asks about. A time-series table answers a bounded question in
+#: milliseconds and an unbounded one not at all once it is large enough — measured 2026-09-24, the
+#: same count is 18 ms bounded and HTTP 500 unbounded at 180 million rows. Fifteen minutes is far
+#: longer than the poll budget below, so a slow collector still passes; a dead one does not.
+_RECENT = "timestamp > now() - INTERVAL '15 minutes'"
+
+#: The positive form. Its De Morgan twin and `NOT (...)` both fail the engine outright on an indexed
+#: `trace_id` — measured 2026-09-14 — which is why the infra half is a subtraction rather than a
+#: predicate.
+_HAS_TRACE = "trace_id IS NOT NULL AND trace_id != ''"
+
+
 def _gt_sql(query: str) -> list[list[Any]]:
     """Run SQL against GreptimeDB and return the result rows."""
     r = requests.get(f"{GREPTIME}/v1/sql", params={"db": "public", "sql": query}, timeout=10)
@@ -237,9 +249,23 @@ def test_logs_populated() -> None:
         # `trace_id IS NULL OR trace_id = ''` answer HTTP 500, while the positive form returns in 75 ms.
         # So this leg reported "logs not populated" about a table holding a hundred million rows. Total
         # minus the trace-carrying count is the same number and both halves are supported queries.
-        has_trace = "trace_id IS NOT NULL AND trace_id != ''"
-        app = int(_gt_sql(f"SELECT count(*) FROM opentelemetry_logs WHERE {has_trace}")[0][0])
-        total = int(_gt_sql("SELECT count(*) FROM opentelemetry_logs")[0][0])
+        # BOUNDED BY TIME, and the same window on BOTH halves. The subtraction below is only
+        # meaningful if `app` and `total` cover the same rows, so the window is one constant applied
+        # to each rather than a filter on one of them.
+        #
+        # The note above fixed the NULL-matching predicate and left the query unbounded, which held
+        # while the table did. It no longer does: measured live 2026-09-24 the positive form ALSO
+        # answers HTTP 500 —
+        #   Exceeded memory limit: 352.0KiB requested, 1024.0MiB used globally (99%), hard limit 1.0GiB
+        # — against 180,141,239 rows, up from the 101,385,870 that returned in 75 ms ten days earlier.
+        # The table is not broken and retention is working (`ttl = '14days'` on the table itself); the
+        # QUESTION was wrong. Bounded to this window the same count answers in 18 ms over 130,961 rows.
+        #
+        # It is also the question this leg actually asks. "Logs are populated" means arriving NOW, not
+        # that the table has ever held a row — an estate whose collector died an hour ago would pass
+        # the unbounded form for another fourteen days.
+        app = int(_gt_sql(f"SELECT count(*) FROM opentelemetry_logs WHERE {_RECENT} AND {_HAS_TRACE}")[0][0])
+        total = int(_gt_sql(f"SELECT count(*) FROM opentelemetry_logs WHERE {_RECENT}")[0][0])
         infra = total - app
         return (app > 0 and infra > 0) or None
 
@@ -249,7 +275,7 @@ def test_logs_populated() -> None:
     # active span carries trace_id"): if the logging auto-instrumentation env flag were dropped,
     # the table would still fill and the suite would pass while correlation silently died.
     def correlated_log_exists() -> bool | None:
-        rows = _gt_sql("SELECT count(*) FROM opentelemetry_logs WHERE trace_id IS NOT NULL AND trace_id != ''")
+        rows = _gt_sql(f"SELECT count(*) FROM opentelemetry_logs WHERE {_RECENT} AND {_HAS_TRACE}")
         return int(rows[0][0]) > 0 or None
 
     assert _eventually(correlated_log_exists)
