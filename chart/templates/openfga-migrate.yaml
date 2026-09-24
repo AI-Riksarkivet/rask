@@ -18,6 +18,7 @@ spec:
   # before-hook-creation delete policy never matches the previous one — without a TTL every
   # `helm upgrade` left another Completed husk behind (14 were sitting in `kubectl get pods`).
   ttlSecondsAfterFinished: 3600
+  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
   backoffLimit: 30
   template:
     metadata:

@@ -97,6 +97,7 @@ spec:
      durables and a split image stem both stayed invisible.
   */}}
   ttlSecondsAfterFinished: 3600
+  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
   backoffLimit: 3
   template:
     metadata:

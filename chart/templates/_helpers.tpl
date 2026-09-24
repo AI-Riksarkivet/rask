@@ -1369,6 +1369,24 @@ can never drift into a profile that sets neither.
 {{- end -}}
 
 {{/*
+lance.bootstrapJobDeadline — the wall-clock ceiling on a bootstrap Job.
+
+WHY EVERY WAITING JOB NEEDS ONE, measured rather than argued. `backoffLimit` counts POD failures, and
+these Jobs wait on a dependency with a shell loop — `until mc alias set …; do echo wait-minio; sleep 3;
+done`. If the dependency never answers, the loop never exits, so the container never exits, so the pod
+never fails, so `backoffLimit` never counts and `ttlSecondsAfterFinished` never fires (a TTL applies
+only after completion). The Job runs forever. Observed on the live estate 2026-09-24:
+`rask-minio-scoped-users-r229` Running 27h, its pod still printing `wait-minio`, provisioning nothing.
+
+`activeDeadlineSeconds` is the only one of the three that bounds a pod that is HEALTHY and stuck, so it
+is the backstop the other two cannot be. Thirty minutes is deliberately generous — a bootstrap that has
+not finished in that long is not slow, it is stuck — so it fails no deploy that was going to succeed.
+*/}}
+{{- define "lance.bootstrapJobDeadline" -}}
+activeDeadlineSeconds: 1800
+{{- end -}}
+
+{{/*
 The secret half of a SCOPED STORAGE IDENTITY, derived rather than stored.
 
 Usage: {{ include "lance.scopedStorageSecret" (list . "rask-medallion" .Values.minio.medallionSecretKey) }}

@@ -26,6 +26,7 @@ metadata:
 spec:
   backoffLimit: 20
   ttlSecondsAfterFinished: 300
+  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
   template:
     metadata:
       labels:
