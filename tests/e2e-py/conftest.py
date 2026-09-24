@@ -36,6 +36,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.e2e)
 
 
+# `--require-live` lives in its own module so it can be exercised without this file's live-estate
+# cleanup fixture; re-exported here because pytest collects hooks from the conftest it loads.
+from require_live import pytest_addoption, pytest_sessionfinish  # noqa: E402 — after the sys.path insert above
+
+
+__all__ = ["pytest_addoption", "pytest_sessionfinish"]
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _unbind_what_this_run_bound() -> Iterator[None]:
     """Remove the namespaces this run BOUND, and say plainly what it could not.

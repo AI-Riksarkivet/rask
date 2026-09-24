@@ -42,8 +42,21 @@ build:
 # `not e2e`: tests/e2e-py is collectable (so the collection gate in
 # tests/unit/test_e2e_collection_gate.py can see it) but its suites need a LIVE deployed
 # stack — run them via `make e2e-ci` / `make e2e-ray-ci` / the per-suite targets.
+# PARALLEL BY DEFAULT, and it is the difference between a loop someone runs and a loop someone skips.
+# Measured 2026-09-24 on this host (nproc 64): the default testpaths take **854 s** in one process and
+# **102 s** at `-n 16` — 8.4x, with identical results (10,357 passed / 161 skipped / 2 xfailed both
+# ways). `pytest-xdist` was already a dependency and nothing used it.
+#
+# NOT IN `addopts`, deliberately. That would also bound the model-loading `slow` suites and every
+# in-container run, where `nproc` reads the HOST's core count while `cpu.max` grants one — the same
+# mismatch `chart/values.yaml` records for the maintenance pod. A target-level default an operator can
+# override is the honest shape: `make test PYTEST_WORKERS=4`, or `PYTEST_WORKERS=0` for one process
+# when a failure needs a readable traceback.
+PYTEST_WORKERS ?= 16
+PYTEST_PARALLEL = $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS))
+
 test:
-	uv run pytest -m "not slow and not e2e"
+	uv run pytest -m "not slow and not e2e" $(PYTEST_PARALLEL)
 	# The HTR runner is sealed OUT of the root workspace (own lock, own venv): the root
 	# pytest can neither import nor collect its tests, so without this second line the
 	# runner suite silently never runs. cd first — from the repo root, pytest would read
@@ -62,7 +75,7 @@ test:
 # the second line AFTER a two-minute green suite, which reads as "no GPU on this box".
 # `runners/dummy` was simply missing. Pinned by tests/unit/test_runner_suites_are_invoked.py.
 test-slow:
-	uv run pytest -m "not e2e"
+	uv run pytest -m "not e2e" $(PYTEST_PARALLEL)
 	# No `-m` filter, unlike `make test` above: dropping the `not slow` deselection is the entire
 	# difference between the two targets, and the sealed runners are where the slow marks are.
 	cd runners/htr && uv run --frozen pytest
@@ -1075,9 +1088,17 @@ e2e-spec-conformance-incluster: ## The same suite as an in-cluster Job — prove
 check-fast: ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/integration -q -n 16 --dist loadfile
 
-e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL)
-	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m dummy_lane -v
+# THREE VARIABLES, NOT ONE, and `--require-live` behind them. This target guarded only the catalog URL
+# while the suite also reads an admin token and a lineage URL, so an operator with one port-forward
+# drove the estate's only GPU-free cascade prover and got `3 passed, 4 skipped` with a zero exit. The
+# guards name what is missing early; the flag catches the skips no variable explains — a token that is
+# not a project admin, an estate with no Ray head. Pinned by
+# `tests/unit/test_a_live_drive_cannot_report_success_on_skips.py` ([[LH-196]]).
+e2e-dummy-lane:     ## The GPU-free dummy medallion lane, end to end (needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL)
+	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_ADMIN_TOKEN)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-dummy-lane needs LANCE_E2E_CATALOG_URL, LANCE_E2E_ADMIN_TOKEN, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
+	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_ADMIN_TOKEN=$(LANCE_E2E_ADMIN_TOKEN) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m dummy_lane -v --require-live
 # REQUIRES its target, rather than skipping into a green. Every test in this suite is guarded on
 # LANCE_E2E_GATEWAY_URL, so without it the target collected 3 tests, skipped all 3 and exited 0 — a
 # routing proof that reported success having proved nothing, which is exactly what its docstring
