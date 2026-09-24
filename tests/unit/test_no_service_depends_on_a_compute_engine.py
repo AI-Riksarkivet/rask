@@ -85,8 +85,16 @@ def test_no_service_DECLARES_a_compute_engine() -> None:
 
 def test_the_lakehouse_services_import_no_engine() -> None:
     """The narrower property that already holds, kept so a regression is caught where it happens
-    rather than at the next audit. Measured 2026-09-07: 0 in all four."""
-    for service in ("catalog", "lineage", "maintenance", "notifications"):
+    rather than at the next audit. Measured 2026-09-07: 0 in the four named then; re-measured
+    2026-09-24 with `medallion` added: still 0.
+
+    MEDALLION WAS MISSING AND IS THE ONE THAT MATTERS. The owner's lakehouse is catalog, lineage,
+    medallion and maintenance; this list named `notifications` (phase 3) instead, so the service the
+    exemption comment below explicitly calls out — "`medallion` is a CONSUMER … it must reach compute
+    through `service_kit.lakehouse.executor`" — was the only one nothing checked. `notifications`
+    stays: it has no business importing an engine either.
+    """
+    for service in ("catalog", "lineage", "medallion", "maintenance", "notifications"):
         src = REPO / "services" / service / "src"
         if not src.exists():
             continue
