@@ -21,15 +21,18 @@ what ``services/ingest`` does, and why it publishes no lineage event of its own.
 from __future__ import annotations
 
 import time
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Body, Request
+from fastapi.exceptions import RequestValidationError
 from lance_namespace import PermissionDeniedError
+from pydantic import ValidationError
 
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import RunEvent, UnauthoredRunError, UngovernedOutputError
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event
 
 
 # Unversioned like every sibling router — the composition layer (api/v1/router.py) mounts this one
@@ -38,8 +41,20 @@ router = APIRouter(tags=["ingest"])
 
 
 @router.post("/lineage", status_code=201)
-async def ingest_event(event: RunEvent, request: Request, repository: RepositoryDep, settings: SettingsDep, token: CurrentToken) -> dict[str, str]:
-    """Ingest one OpenLineage ``RunEvent`` into the lineage graph.
+async def ingest_event(
+    body: Annotated[dict[str, Any], Body()], request: Request, repository: RepositoryDep, settings: SettingsDep, token: CurrentToken
+) -> dict[str, str | None]:
+    """Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
+
+    PARSED HERE RATHER THAN BY THE SIGNATURE, so this door and the bus door share ONE discriminator
+    (`models.parse_event`). Declaring the body as `RunEvent` is what made a static event 422 before
+    any handler ran: [[LIN-004]] moved catalog DDL onto `DatasetEvent` and taught only the bus. The
+    catalog's HTTP emitter is best-effort, so every create it sent lost its provenance in silence —
+    measured 2026-09-24, three creates, `{"events":[]}` in the durable feed, and a governance
+    assertion reading `expected lineage creator=..., got None`.
+
+    A body that is neither shape raises `RequestValidationError`, which `install_problem_handlers`
+    renders exactly as FastAPI's own 422 — the wire answer for a malformed payload is unchanged.
 
     This is the OpenLineage HTTP-transport default path, so any OpenLineage producer
     (our emitter, Airflow, Spark, dbt, …) configured with ``OPENLINEAGE_URL`` pointed
@@ -67,6 +82,10 @@ async def ingest_event(event: RunEvent, request: Request, repository: Repository
     # writing a tuple, while an ungoverned output and an unauthored run are repairable by nothing. Two
     # doors that disagreed about which is which would make the alert mean different things by route.
     try:
+        event: RunEvent | DatasetEvent = parse_event(body)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+    try:
         enforce_author(event, token)
         await enforce_output_authz(event, request, settings, token)
     except (UnauthoredRunError, UngovernedOutputError):
@@ -78,11 +97,20 @@ async def ingest_event(event: RunEvent, request: Request, repository: Repository
     started = time.perf_counter()
     # ONE transaction: the AGE graph and the durable /events row. A feed write that fails takes the
     # ingest down with it, so the caller retries and the two can never disagree (see `ingest_event`).
-    await repository.ingest_event(event)
+    # TWO DOORS, exactly as `services/consumer.py` routes them, because a static metadata change has
+    # no run and no job to record. Routing it through the run door is what mints a `(:Job)` for an
+    # operation nobody performed, one per table per operation — and the `/jobs` fold makes that Job's
+    # output set an access handle, so a phantom is an access-control object, not merely untidy.
+    if isinstance(event, DatasetEvent):
+        await repository.ingest_dataset_event(event)
+    else:
+        await repository.ingest_event(event)
     # Domain metrics for the HTTP transport too — the trainer's whole lifecycle and every external
     # producer land here, so counting only the Dapr subscriber undercounted real ingest (audit 2026-07-15).
     # A 401 or a 422 still never reaches this point and needs no domain outcome: neither names a run the
     # graph should have held. An authorization refusal does, and is counted above.
     record_ingest_duration(time.perf_counter() - started)
     record_outcome(Outcome.INGESTED, door=Door.HTTP)
-    return {"status": "ingested", "run": event.run.run_id}
+    # `run` is null for a static change rather than an invented id: there was no run, and the
+    # OpenLineage HTTP transport reads the status, not this field.
+    return {"status": "ingested", "run": event.run_id}

@@ -256,7 +256,7 @@ Layered like the catalog (`api/` · `core/` · `services/` + a thin entrypoint),
 
 | Method / path | Purpose |
 |---|---|
-| `POST /api/v1/lineage` | Ingest one OpenLineage `RunEvent` (OpenLineage HTTP-transport default path) |
+| `POST /api/v1/lineage` | Ingest one OpenLineage event — a `RunEvent`, or a `DatasetEvent` for a change no job performed (OpenLineage HTTP-transport default path) |
 | `GET /datasets` | **Browse** every dataset the caller may see (governed), `?namespace=` / `?tag=` filters + pagination — the discovery entry point, so you no longer need a name in advance |
 | `GET /jobs` | The jobs that have run (governed by the datasets each wrote) |
 | `GET /namespaces` | The namespaces containing ≥1 visible dataset |

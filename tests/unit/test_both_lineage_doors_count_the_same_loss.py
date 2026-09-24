@@ -34,6 +34,21 @@ from lineage.core.metrics import Door, Outcome
 from lineage.models import UnauthoredRunError, UngovernedOutputError
 
 
+#: A minimal spec-valid ``RunEvent``. The HTTP door PARSES its own body now — one discriminator
+#: shared with the bus (`models.parse_event`), because declaring the body as `RunEvent` is what made
+#: a static `DatasetEvent` 422 before any handler ran. A stand-in object can therefore no longer
+#: stand in: what reaches the handler is whatever this payload validates into.
+_RUN_BODY: dict[str, Any] = {
+    "eventType": "COMPLETE",
+    "eventTime": "2026-09-24T12:00:00Z",
+    "producer": "https://github.com/AI-Riksarkivet/rask",
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent",
+    "run": {"runId": "b1b2c3d4-0000-4000-8000-000000000001"},
+    "job": {"namespace": "lance", "name": "acme-silver$dummy.insert"},
+    "outputs": [{"namespace": "lance", "name": "acme-silver$dummy"}],
+}
+
+
 #: The subscriber's classification, which is the REFERENCE this door must match
 #: (`services/lineage/src/lineage/services/consumer.py:101-120`).
 SUBSCRIBER_CLASSIFICATION = [
@@ -68,7 +83,7 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
     monkeypatch.setattr(ingest, "record_outcome", _record)
 
     with pytest.raises(type(error)):
-        await ingest.ingest_event(event=object(), request=object(), repository=object(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
+        await ingest.ingest_event(body=_RUN_BODY, request=object(), repository=object(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
 
     assert recorded == [(expected, Door.HTTP)], (
         f"the HTTP door recorded {recorded or 'nothing'} for {type(error).__name__}; the subscriber records {expected.value}"
@@ -85,12 +100,6 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     def _record(outcome: Outcome, *, door: Door) -> None:
         recorded.append((outcome, door))
 
-    class _Run:
-        run_id = "run-1"
-
-    class _Event:
-        run = _Run()
-
     class _Repo:
         async def ingest_event(self, _event: Any) -> None:
             return None
@@ -103,7 +112,7 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     monkeypatch.setattr(ingest, "enforce_output_authz", _allow)
     monkeypatch.setattr(ingest, "record_outcome", _record)
 
-    answer = await ingest.ingest_event(event=_Event(), request=object(), repository=_Repo(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
+    answer = await ingest.ingest_event(body=_RUN_BODY, request=object(), repository=_Repo(), settings=object(), token=object())  # ty: ignore[invalid-argument-type]
 
     assert recorded == [(Outcome.INGESTED, Door.HTTP)]
     assert answer["status"] == "ingested"

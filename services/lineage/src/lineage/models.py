@@ -464,6 +464,26 @@ class DatasetEvent(BaseModel):
         return None
 
 
+def parse_event(data: object) -> RunEvent | DatasetEvent:
+    """One payload as whichever OpenLineage event it is — a run, or a change no job performed.
+
+    DISCRIMINATED ON `dataset` WITHOUT A `run`. A `DatasetEvent` requires `dataset`, and while the
+    schema only refuses `run` and `job` TOGETHER, this estate treats either as malformed: one of them
+    is enough to make a static change look like something that ran. `DatasetEvent` refuses it
+    explicitly and the caller reports it as malformed — the same answer a payload that is neither gets.
+
+    The order matters only for the malformed case: anything carrying `run` goes to `RunEvent`, so a
+    real run cannot be diverted here by a stray `dataset` key.
+
+    IT LIVES IN `models` BECAUSE BOTH DOORS NEED IT. The bus door had the only copy while the HTTP
+    door declared its body as `RunEvent` outright, so a static event 422'd there — and a producer
+    whose provenance is dropped by one door and kept by the other has no way to tell which it hit.
+    """
+    if isinstance(data, dict) and "dataset" in data and "run" not in data:
+        return DatasetEvent.model_validate(data)
+    return RunEvent.model_validate(data)
+
+
 def author_sub_from_payload(raw: object) -> str | None:
     """The VERIFIED author sub inside a run-event payload, or ``None`` — tolerant of a payload that
     does not parse.

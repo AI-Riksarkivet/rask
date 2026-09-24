@@ -26,8 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from lineage.models import DatasetEvent
-from lineage.services.consumer import _parse
+from lineage.models import DatasetEvent, parse_event
 from maintenance.core.lineage_emit import build_restamp_event
 
 
@@ -57,7 +56,7 @@ def test_the_restamp_PARSES_as_a_DatasetEvent_on_the_lineage_side() -> None:
     `_parse` is the function the bus door actually calls, so this is the hop that decides whether the
     repair lands as a static change or is re-admitted as a run.
     """
-    parsed = _parse(_event())
+    parsed = parse_event(_event())
     assert isinstance(parsed, DatasetEvent), f"the lineage consumer did not read this as a static change: {type(parsed).__name__}"
 
 
@@ -67,7 +66,7 @@ def test_the_restamp_CARRIES_the_absolute_location_where_the_repository_reads_it
     A builder that put the URI anywhere else would satisfy every other assertion here and correct
     nothing, because the SET would never run.
     """
-    parsed = _parse(_event())
+    parsed = parse_event(_event())
     # NARROWED, not cast: `_parse` answers `RunEvent | DatasetEvent`, and a restamp that came back as a
     # run would fail here for the RIGHT reason rather than on a missing attribute.
     assert isinstance(parsed, DatasetEvent), f"the restamp did not parse as a static change: {type(parsed).__name__}"

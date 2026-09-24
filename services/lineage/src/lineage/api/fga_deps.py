@@ -200,15 +200,26 @@ async def audit_read(name: str, settings: SettingsDep, token: CurrentToken, repo
         log.warning("read_audit_failed", extra={"reader": token.sub, "dataset": name, "error": str(exc)})
 
 
-def enforce_author(event: RunEvent, token: Principal | None) -> None:
-    """Bind the run author to the *verified* principal — never trust the request body.
+def enforce_author(event: RunEvent | DatasetEvent, token: Principal | None) -> None:
+    """Bind the author to the *verified* principal — never trust the request body.
 
-    When the request is authenticated, overwrite the ``author`` run facet with the token
-    subject so a producer cannot self-assert someone else's identity (provenance forgery).
-    When OIDC is off (dev/tests) the body-supplied author is left as-is.
+    When the request is authenticated, overwrite the ``author`` facet with the token subject so a
+    producer cannot self-assert someone else's identity (provenance forgery). When OIDC is off
+    (dev/tests) the body-supplied author is left as-is.
+
+    THE FACET LIVES SOMEWHERE ELSE ON A STATIC EVENT, and stamping the wrong place is silent: a
+    `DatasetEvent` has no run, so its author rides the DATASET's `author` facet — which is exactly
+    where :attr:`DatasetEvent.author` reads it and where the repository takes the
+    ``(:User)-[:CREATED]->(:Dataset)`` edge from. Writing a run facet onto it would leave the
+    verified subject unread and the create attributed to whatever the body claimed.
     """
-    if token is not None:
-        event.run.facets["author"] = {"name": token.sub, "sub": token.sub}
+    if token is None:
+        return
+    stamp = {"name": token.sub, "sub": token.sub}
+    if isinstance(event, DatasetEvent):
+        event.dataset.facets["author"] = stamp
+    else:
+        event.run.facets["author"] = stamp
 
 
 def is_external_source(namespace: str, name: str) -> bool:

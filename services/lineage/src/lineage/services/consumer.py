@@ -32,7 +32,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome
-from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError
+from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, parse_event
 from lineage.services.repository import LineageRepository
 
 
@@ -42,22 +42,6 @@ log = logging.getLogger(__name__)
 _SUCCESS = {"status": "SUCCESS"}
 _RETRY = {"status": "RETRY"}
 _DROP = {"status": "DROP"}
-
-
-def _parse(data: object) -> RunEvent | DatasetEvent:
-    """One payload as whichever OpenLineage event it is — a run, or a change no job performed.
-
-    DISCRIMINATED ON `dataset` WITHOUT A `run`. A `DatasetEvent` requires `dataset`, and while the
-    schema only refuses `run` and `job` TOGETHER, this estate treats either as malformed: one of them
-    is enough to make a static change look like something that ran. `DatasetEvent` refuses it explicitly and this
-    lands in the malformed arm below — the same answer a payload that is neither gets.
-
-    The order matters only for the malformed case: anything carrying `run` goes to `RunEvent`, so a
-    real run cannot be diverted here by a stray `dataset` key.
-    """
-    if isinstance(data, dict) and "dataset" in data and "run" not in data:
-        return DatasetEvent.model_validate(data)
-    return RunEvent.model_validate(data)
 
 
 async def handle_cloud_event(
@@ -105,7 +89,7 @@ async def handle_cloud_event(
     """
     data = body.get("data") if isinstance(body, dict) else None
     try:
-        event: RunEvent | DatasetEvent = _parse(data)
+        event: RunEvent | DatasetEvent = parse_event(data)
     except (ValidationError, TypeError, ValueError) as exc:
         log.error("lineage_event_invalid", extra={"error": str(exc)})
         record_outcome(Outcome.UNREPAIRABLE, door=Door.SUBSCRIBER)
