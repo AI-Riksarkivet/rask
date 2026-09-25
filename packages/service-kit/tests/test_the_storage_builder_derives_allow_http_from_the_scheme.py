@@ -1,6 +1,6 @@
 """`lance_storage_options` derives `allow_http` from the endpoint's scheme, and nothing else can set it.
 
-[[LH-096]]. A parameter here would be a second source for one fact, and a defaulted one is worse: a
+[[LH-238]]. A parameter here would be a second source for one fact, and a defaulted one is worse: a
 default of `True` that no caller overrides hands `allow_http=true` beside an `https://` endpoint to
 every credential the catalog VENDS and to every service opening Lance through this builder (lineage,
 medallion, maintenance, ingest, the Ray jobs).

@@ -10,7 +10,7 @@ workflow, `continue_as_new`, the automatic quality split, and the human approval
 band are implemented and pinned by tests under `services/medallion/tests`. S5 and S6 were audited and
 owe no code — S5's defect was closed by reordering rather than by a saga, and S6 is a `stageRunners[]`
 declaration rather than a feature; both properties are pinned by
-`test_no_rows_without_a_catalog_record.py` and `test_a_same_tier_lane_is_legal.py`, which carry the
+`test_no_rows_without_a_catalog_record.py` and `test_a_same_tier_transform_is_legal.py`, which carry the
 full reasoning. §9.2's `lance-ray` rename is an ops scheduling item with no design work owed: it needs
 one coordinated rollout because the actor state store cannot hot-reload, and that cost is the same
 whenever it happens.

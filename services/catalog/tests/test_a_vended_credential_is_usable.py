@@ -14,7 +14,7 @@ instead of going through `lance_storage_options`, whose own docstring says it ex
 omitted key in a hand-rolled copy is exactly the drift this builder exists to prevent". Two omitted
 keys, in the copy that ships credentials to clients.
 
-`allow_http` IS A PERMIT, NOT A REQUEST, and it follows the endpoint's scheme ([[LH-096]]). The
+`allow_http` IS A PERMIT, NOT A REQUEST, and it follows the endpoint's scheme ([[LH-238]]). The
 catalog's own connection derives it that way; a vend is the same rule on the options that LEAVE the
 catalog, so an `https://` store must never be handed a credential that also permits plaintext. Measured
 on pylance 12.0.0 against a closed port: `http://` with `allow_http=false` dies at construction

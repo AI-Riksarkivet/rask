@@ -1,6 +1,6 @@
 """`allow_http` is DERIVED from the endpoint scheme, so it cannot be configured into a downgrade.
 
-[[LH-096]]. It was a settings bool (`LANCE_S3_ALLOW_HTTP`, default True) that the chart pinned to
+[[LH-238]]. It was a settings bool (`LANCE_S3_ALLOW_HTTP`, default True) that the chart pinned to
 `"true"` for every deployment, so the catalog permitted plain-HTTP object-store traffic regardless of
 what `LANCE_S3_ENDPOINT` actually named. A TLS endpoint with `allow_http` still on is not a typo the
 reader can see: object_store only consults the flag when a request would otherwise be refused, so the

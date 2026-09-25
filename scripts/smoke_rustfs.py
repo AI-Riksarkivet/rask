@@ -26,6 +26,8 @@ from collections.abc import Callable
 
 from dotenv import load_dotenv
 
+from service_kit.lakehouse.endpoint_scheme import allow_http_for
+
 
 def _check(label: str, fn: Callable[[], object]) -> bool:
     try:
@@ -96,7 +98,7 @@ def main() -> int:
             "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
             "aws_region": os.getenv("AWS_REGION", "us-east-1"),
             "aws_virtual_hosted_style_request": "false",
-            "allow_http": "true" if endpoint.startswith("http://") else "false",
+            "allow_http": allow_http_for(endpoint),
         }
         if os.getenv("RASK_S3_INSECURE", "").lower() in ("1", "true", "yes"):
             storage_opts["allow_invalid_certificates"] = "true"

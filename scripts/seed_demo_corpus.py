@@ -41,6 +41,8 @@ import lancedb.index
 import pyarrow as pa
 from PIL import Image, ImageDraw
 
+from service_kit.lakehouse.endpoint_scheme import allow_http_for
+
 
 #: The dataset the fixture is written as. It must MATCH what the deployment asks for — the chart
 #: points `MEDIA_DB` at `<root>/transcripts_v2.lance`, so a fixture named anything else makes every
@@ -161,7 +163,7 @@ def _s3_options() -> dict[str, str]:
         "access_key_id": os.environ.get("SEED_S3_KEY", ""),
         "secret_access_key": os.environ.get("SEED_S3_SECRET", ""),
         "region": os.environ.get("SEED_S3_REGION", "us-east-1"),
-        "allow_http": "true" if endpoint.startswith("http://") else "false",
+        "allow_http": allow_http_for(endpoint),
     }
 
 
