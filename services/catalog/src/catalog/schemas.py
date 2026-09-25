@@ -963,7 +963,7 @@ class PublishRequest(BaseModel):
     #: — the notifications plane re-derives every recipient's visibility at delivery — so carrying it
     #: across the bus needs no new trust. It is a TARGETING hint, and the reason it must be a hint is
     #: that the truthful actor cannot serve: a stage runner authenticates to this door as itself, so a cascade
-    #: publish names `service-<stage runner>` and a failed stage five minutes later addressed an inbox actor
+    #: publish names `service-<daprAppId>`, and a stage that fails later would address an inbox actor
     #: named after a stage runner.
     #:
     #: Resolved, never echoed blindly — see `publication_originator`, which prefers this over the actor

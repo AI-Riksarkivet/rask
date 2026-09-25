@@ -2,8 +2,8 @@
 
 `build_fga_client(service=...)` stamps the label onto the structured `openfga_*` events, which
 `service_kit.obs` raises to OTLP as the audit tier, so an operator filters boot diagnostics on it. It
-is a value, not prose: every governed service passes a hyphenated name (`medallion-producer`,
-`cascade-backfill`, ...), and the stage runner's is `medallion-stage-runner`.
+is a value, not prose: every governed service passes a space-free name (`medallion-producer`,
+`cascade-backfill`, `maintenance`, ...), and the stage runner's is `medallion-stage-runner`.
 
 Driven through the real lifespan, because the label that matters is the one on the emitted record.
 """
@@ -46,8 +46,10 @@ def _boot() -> None:
 
 
 def test_the_stage_runners_fga_events_name_the_service(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    # Unpinned, so the bootstrap resolves by name and emits `openfga_resolved_by_name`.
-    settings = MedallionSettings.model_validate({"fga_enabled": True})
+    # Unpinned, so the bootstrap resolves by name and emits `openfga_resolved_by_name`. Explicit values beat
+    # the environment: a set RASK_FGA_STORE_ID/RASK_FGA_MODEL_ID takes the pinned path, which emits no such
+    # event, and MEDALLION_RAY_ENABLED starts a real workflow runtime.
+    settings = MedallionSettings.model_validate({"fga_enabled": True, "fga_store_id": None, "fga_model_id": None, "ray_enabled": False})
     monkeypatch.setattr(stage_runner, "get_settings", lambda: settings)
     monkeypatch.setattr(stage_runner, "DaprClient", _Sidecar)
     monkeypatch.setattr(stage_runner, "instrument_lance_if_available", lambda: None)

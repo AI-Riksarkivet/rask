@@ -84,7 +84,7 @@ def publication_originator(claimed: str, token: IDToken | None) -> str:
 
     Precedence, and both halves are load-bearing:
 
-    * A SERVICE caller's `claimed` wins. A stage runner publishes as `service-<stage runner>`, so the actor is a
+    * A SERVICE caller's `claimed` wins. A stage runner publishes as `service-<daprAppId>`, so the actor is a
       role, not an address; the human is only on the request body, carried there from the cascade head
       by `catalog_register.publish_stage_output`.
     * A PERSON's own sub wins over anything they claimed. Someone publishing by hand IS the

@@ -195,7 +195,7 @@ def publish_stage_output(
         "cascade_id": cascade_id,
         # THE HUMAN THE BATCH IS FOR, across the same lost hop and for the same reason. A stage runner
         # authenticates to this door AS ITSELF (`_credential` above), so the control event's actor is
-        # `service-<stage runner>` — an inbox actor named after a stage runner, which is worse than silence because
+        # `service-<daprAppId>` — an inbox actor named after a stage runner, which is worse than silence because
         # it looks delivered. The person is only in this body, and the catalog decides what to do with
         # the claim (`publication_originator`): it authorizes nothing here and the notifications plane
         # re-derives every recipient's visibility at delivery.

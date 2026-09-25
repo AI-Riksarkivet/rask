@@ -28,8 +28,9 @@ AGNOSTIC BY CONSTRUCTION. The namespaces are read out of ``chart/values.yaml`` �
 ``bronzeNamespace`` plus the ``fromNamespace``/``toNamespace`` of every ``stageRunners[]`` and
 ``mediaStageRunners[]`` row, the two lists the chart ranges over — so this names no lane and no
 workload. Add a stage runner to the chart and this seeds its namespaces; there is nothing here to edit.
-A values file with no ``medallion.stageRunners`` key is refused: a renamed key would otherwise seed
-the head tier alone and report success.
+A values set with no ``medallion.stageRunners`` key is refused: a renamed key would otherwise seed
+the head tier alone and report success. ``--values`` repeats the way ``helm -f`` does, so an overlay
+that adds a lane is read over the base it extends.
 
 THE WAREHOUSE IS REQUIRED, AND IT IS NOT THE BUCKET. Measured 2026-08-25, after this script was
 first written with ``--warehouse`` defaulting to ``lance-catalog``: that string is the S3 BUCKET and
@@ -71,10 +72,12 @@ import argparse
 import os
 import pathlib
 import sys
+from collections.abc import Sequence
+from typing import Any
 
 import httpx
 import yaml
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -118,27 +121,59 @@ class _Medallion(BaseModel):
 
     ``stageRunners`` has no default, so an absent or null key is a ``ValidationError`` (Helm drops a
     null key before a template reads it). ``[]`` is legal: the chart then renders the producer and no
-    stage runner, and the head is the whole cascade. ``mediaStageRunners`` is optional, as the chart's
-    ``| default list`` makes it.
+    stage runner, and the head is the whole cascade. ``mediaStageRunners`` is optional, and null reads
+    as ``[]``, as the chart's ``| default list`` renders it.
     """
 
     producer: _Producer = Field(default_factory=_Producer)
     stage_runners: list[_Lane] = Field(alias="stageRunners")
     media_stage_runners: list[_Lane] = Field(default_factory=list, alias="mediaStageRunners")
 
+    @field_validator("media_stage_runners", mode="before")
+    @classmethod
+    def _null_is_no_media_lane(cls, value: object) -> object:
+        return [] if value is None else value
 
-def declared_namespaces(values_path: pathlib.Path, project: str = "") -> list[str]:
-    """Every top-level namespace the cascade will write into, read from the chart.
 
-    The producer's bronze namespace is the head; each stage runner names the two it runs between. Ordered
-    and de-duplicated so the output reads the way the cascade runs. With ``project`` set, each is
-    qualified the way the runtime will ask for it — see :func:`qualified`.
+def _merged(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """``overlay`` over ``base`` by Helm's rule for repeated ``-f``: maps merge key by key, anything else replaces."""
+    merged = dict(base)
+    for key, value in overlay.items():
+        below = merged.get(key)
+        merged[key] = _merged(below, value) if isinstance(below, dict) and isinstance(value, dict) else value
+    return merged
+
+
+def load_values(values_files: Sequence[pathlib.Path]) -> dict[str, Any]:
+    """The values a template sees for ``helm -f <first> -f <second> ...``: each file merged over the ones before it.
 
     Raises:
-        ValidationError: the values file has no ``medallion.stageRunners`` list, or a row lacks a namespace.
+        TypeError: a file's top level is not a mapping, which Helm refuses too.
     """
-    values = yaml.safe_load(values_path.read_text(encoding="utf-8")) or {}
-    medallion = _Medallion.model_validate(values.get("medallion") or {})
+    values: dict[str, Any] = {}
+    for path in values_files:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if document is None:
+            continue
+        if not isinstance(document, dict):
+            raise TypeError(f"{path}: the top level is a {type(document).__name__}, not a mapping of chart values")
+        values = _merged(values, document)
+    return values
+
+
+def declared_namespaces(values_files: Sequence[pathlib.Path], project: str = "") -> list[str]:
+    """Every top-level namespace the cascade will write into, read from the chart's values files.
+
+    The producer's bronze namespace is the head; each stage runner names the two it runs between. Ordered
+    and de-duplicated so the output reads the way the cascade runs. An empty name is no namespace and
+    is never seeded. With ``project`` set, each is qualified the way the runtime will ask for it — see
+    :func:`qualified`.
+
+    Raises:
+        TypeError: a values file's top level is not a mapping.
+        ValidationError: the values have no ``medallion.stageRunners`` list, or a row lacks a namespace.
+    """
+    medallion = _Medallion.model_validate(load_values(values_files).get("medallion") or {})
     lanes = [*medallion.stage_runners, *medallion.media_stage_runners]
     names = [medallion.producer.bronze_namespace, *(name for lane in lanes for name in (lane.from_namespace, lane.to_namespace))]
     return [qualified(project, name) for name in dict.fromkeys(name for name in names if name)]
@@ -165,7 +200,12 @@ def main() -> int:
     # Requiring it makes the caller name a real registry warehouse, and the preflight below proves it.
     parser.add_argument("--warehouse", default=os.environ.get("SEED_WAREHOUSE", ""), help="registry warehouse id the namespaces belong to (REQUIRED)")
     parser.add_argument("--token", default=os.environ.get("SEED_CATALOG_TOKEN", ""), help="OIDC bearer; empty = an auth-off stack")
-    parser.add_argument("--values", default=str(REPO / "chart/values.yaml"))
+    parser.add_argument(
+        "--values",
+        action="append",
+        type=pathlib.Path,
+        help="a chart values file; repeat it as for `helm -f`, later files over earlier ones (default: chart/values.yaml)",
+    )
     parser.add_argument(
         "--project",
         default=os.environ.get("SEED_PROJECT", ""),
@@ -177,12 +217,18 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--dry-run", action="store_true", help="print what would be created and exit 0")
     args = parser.parse_args()
+    # Not an argparse default: `append` extends a default list instead of replacing it.
+    values_files: list[pathlib.Path] = args.values or [REPO / "chart/values.yaml"]
+    sources = " + ".join(str(path) for path in values_files)
 
     try:
-        namespaces = declared_namespaces(pathlib.Path(args.values), args.project)
+        namespaces = declared_namespaces(values_files, args.project)
+    except TypeError as exc:
+        print(f"!! {exc}", file=sys.stderr)
+        return 2
     except ValidationError as exc:
-        problems = "; ".join(f"medallion.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors(include_input=False))
-        print(f"!! {args.values} does not declare the cascade's lanes — {problems}", file=sys.stderr)
+        problems = "; ".join(f"{'.'.join(('medallion', *(str(part) for part in error['loc'])))}: {error['msg']}" for error in exc.errors(include_input=False))
+        print(f"!! {sources} does not declare the cascade's lanes — {problems}", file=sys.stderr)
         return 2
     if not namespaces:
         print("!! the chart declares no medallion namespaces — nothing to seed, which is itself suspicious", file=sys.stderr)
@@ -199,6 +245,7 @@ def main() -> int:
         return 2
 
     base = args.catalog_url.rstrip("/")
+    print(f"values:    {sources}")
     print(f"catalog:   {base}")
     print(f"warehouse: {args.warehouse}")
     print(f"bearer:    {'yes' if args.token else 'NO — assuming an auth-off stack'}")

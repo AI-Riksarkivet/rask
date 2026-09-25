@@ -86,12 +86,12 @@ def _source_namespace(object_id: str, delimiter: str, project: str) -> str | Non
 def _originator(extra: dict[str, Any]) -> str:
     """The PERSON this publication is for — ``extra.originator``, or ``""`` when it is for nobody.
 
-    READ, NEVER DERIVED, and this used to derive it from the event's ``actor``. That was wrong for the
-    only path that matters: under one door a stage runner does not publish the next stage's trigger, it
-    publishes its output to the catalog — authenticating AS ITSELF — so the actor of a cascade
-    publication is ``user:service-<stage runner>``. The head carried that verbatim, and a gold stage that
-    failed an hour later addressed an inbox actor named after a stage runner: role-shaped, unread by anyone,
-    and indistinguishable from a delivery.
+    READ, NEVER DERIVED from the event's ``actor``, because the actor is wrong for the only path that
+    matters: under one door a stage runner does not publish the next stage's trigger, it publishes its
+    output to the catalog — authenticating AS ITSELF — so the actor of a cascade publication is
+    ``user:service-<daprAppId>``. Carried verbatim, a gold stage that fails an hour later addresses an
+    inbox actor named after a stage runner: role-shaped, unread by anyone, and indistinguishable from a
+    delivery.
 
     The catalog resolves it instead (`publication_originator`), because it is the only component that
     knows whether its caller was a person or a service, and resolving it once at the choke point is

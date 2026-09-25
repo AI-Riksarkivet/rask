@@ -4645,14 +4645,16 @@ def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
     projects_on = bool(medallion.get("projectsEnabled"))
     delimiter = (values.get("catalog") or {}).get("delimiter") or "$"
 
-    declared: list[str] = []
-    head = (medallion.get("producer") or {}).get("bronzeNamespace")
-    if head:
-        declared.append(head)
-    for stage_runner in medallion.get("stageRunners") or []:
-        for key in ("fromNamespace", "toNamespace"):
-            if stage_runner.get(key) and stage_runner[key] not in declared:
-                declared.append(stage_runner[key])
+    # The namespaces are the seeder's own derivation, so the gate and the seed cannot read the chart two
+    # ways. It indexes `stageRunners` strictly and reads `mediaStageRunners[]` too: a renamed key fails here.
+    import sys
+
+    spec = importlib.util.spec_from_file_location("seed_medallion_namespaces_under_test", REPO / "scripts" / "seed_medallion_namespaces.py")
+    assert spec is not None and spec.loader is not None
+    seeder = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = seeder
+    spec.loader.exec_module(seeder)
+    declared: list[str] = seeder.declared_namespaces([CHART / "values.yaml"])
     assert declared, "no medallion namespaces declared — this gate is now blind"
 
     if projects_on:

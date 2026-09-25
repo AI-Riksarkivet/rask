@@ -656,7 +656,7 @@ on its own component, so its group must be live on the DLQ stream whenever resil
 {{- $expected = append $expected (printf "TRAINING:%s" .Values.medallion.producer.daprAppId) }}
 {{- if .Values.dapr.resiliency.enabled }}
 {{/* DLQ parking subscriptions (medallion.yaml MEDALLION_DLQ_TOPIC, same resiliency gate): the producer
-parks on dlq.medallion-producer, each stage runner on dlq.<subTopic> — all queue-grouped by app-id on the DLQ stream. */}}
+parks on dlq.medallion-producer, each stage runner on dlq.<daprAppId> — all queue-grouped by app-id on the DLQ stream. */}}
 {{- $expected = append $expected (printf "DLQ:%s" .Values.medallion.producer.daprAppId) }}
 {{- range .Values.medallion.stageRunners }}
 {{- $expected = append $expected (printf "DLQ:%s" .daprAppId) }}
