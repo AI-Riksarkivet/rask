@@ -15,6 +15,7 @@ Two things are being pinned, and they fail differently on purpose:
 from __future__ import annotations
 
 import pathlib
+import re
 from collections.abc import Callable
 
 import lance
@@ -170,7 +171,9 @@ def test_a_data_overlay_makes_pylance_refuse_the_open_and_we_classify_it(tmp_pat
 
     with pytest.raises(ValueError) as caught:
         lance.dataset(uri)
-    assert "Flags: 64" in str(caught.value), "fixture must really commit a flag-64 overlay"
+    # A bit test, not a string match: pylance 12 commits an overlay as 64 | 256 (mixed data file versions).
+    flags = re.search(r"Flags: (\d+)", str(caught.value))
+    assert flags is not None and int(flags.group(1)) & features.FLAG_DATA_OVERLAYS, "fixture must really commit a flag-64 overlay"
 
     reason = features.unsupported_features_from_open_error(caught.value)
     assert reason is not None, "pylance's own feature refusal must not read as an ordinary open failure"

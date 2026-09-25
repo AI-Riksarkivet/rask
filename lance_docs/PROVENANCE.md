@@ -97,6 +97,22 @@ not name are `disable_transaction_file`, `unstable_data_overlay_files`, `covered
 why `service_kit.lakehouse.features` reads the Rust source rather than this bundle, and is pinned by
 `packages/service-kit/tests/test_a_refused_flag_is_refused_BY_NAME.py`.
 
+**`guide.md:229` (and `:894`) holds for the manifest's version under every commit except
+`write_dataset(mode="overwrite", data_storage_version=X)`; it does not bind each data file's version.**
+Measured on pylance 12.0.0, 2026-09-25, on local tables at 2.1 and 2.2 with stable row ids:
+
+- An append (`write_dataset(mode="append")` or a committed `LanceOperation.Append`), or a committed
+  `LanceOperation.Overwrite`, whose files were written at ANOTHER version keeps the manifest's
+  version, writes the files at the named one, and sets reader and writer flag 256
+  (`mixed_data_file_versions`), which the vendored flag table (`file_format.md:5452-5474`) does not
+  list. The flag is sticky: it survived deleting the foreign rows, a `write_dataset` overwrite and
+  `compact_files` back to a single file version.
+- `merge_insert`, `delete`, `add_columns`, `update`, `compact_files` and an overwrite that names no
+  version keep the manifest's version. `write_dataset(mode="overwrite", data_storage_version=X)` moves
+  it to X; it does not set flag 256, and on a table that already carries the flag it does not clear it.
+
+`service_kit.lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
+
 ## Re-vendoring
 
 ```bash

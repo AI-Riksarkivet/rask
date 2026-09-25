@@ -3,11 +3,15 @@
 docs/DECISIONS.md "The compute plane is decoupled" The obligations below are what `scripts/ray_stage_job.py` enforces
 on itself and what nothing enforces on anyone else: a second engine can write a governed tier today
 and satisfy none of them, and every status will read SUCCESS. That gap is the whole difference
-between a contract and a convention, and it is closed by deriving the answer from the WRITTEN DATASET
+between a contract and a convention, and closing it means deriving the answer from the WRITTEN DATASET
 rather than from anything the engine says about itself.
 
+**Nothing calls this outside its test** (checked by grep 2026-09-25), so it gates nothing today. Of
+the obligations below, the catalog's publish door checks only O1, O2 and O7b, through
+`quality.tier_contract_violations`.
+
 **NO WORKFLOW, and no scheduling.** This is a pure function over a dataset — no timers, no durable
-state, no retries, no outbound calls. It runs at the acceptance door (§2.5 W2: the catalog's
+state, no retries, no outbound calls. It belongs at the acceptance door (§2.5 W2: the catalog's
 `publish`), because an assertion evaluated after promotion gates nothing: the tier is already the
 tenant's by then.
 

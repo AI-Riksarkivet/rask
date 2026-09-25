@@ -12,7 +12,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "httpx>=0.27",
     "pyarrow",
-    "pylance[otel]>=11.0.0",
+    "pylance[otel]>=12.0.0",
     "lance-namespace>=0.11.0,<0.12",
     # Signs the lineage this service emits ([[LH-064]]); the verifier in `services/lineage` uses the
     # same module, so both sides share one definition of what was signed.

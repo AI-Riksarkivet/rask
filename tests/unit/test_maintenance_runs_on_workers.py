@@ -350,3 +350,26 @@ def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_
         raise AssertionError("the distributed commit door accepted a rewrite the button refuses")
     except Exception as exc:  # noqa: BLE001
         assert str(exc) == button_reason, f"the two doors give different reasons:\n  button: {button_reason}\n  commit: {exc}"
+
+
+def test_a_rewrite_at_another_file_version_is_refused_before_it_commits(tmp_path: Path) -> None:
+    """The results are client-supplied; one re-stamped to 2.2 on a 2.1 table would commit and set flag 256."""
+    from service_kit.lakehouse.features import unsupported_features
+
+    uri = str(tmp_path / "t.lance")
+    for i in range(3):
+        lance.write_dataset(_table_of(10), uri, mode="append" if i else "create", data_storage_version="2.1", enable_stable_row_ids=True)
+    before = lance.dataset(uri).version
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    forged = []
+    for task in plan.tasks:
+        result = json.loads(_worker_executes(uri, task))
+        for fragment in result["new_fragments"]:
+            for data_file in fragment["files"]:
+                data_file["file_major_version"], data_file["file_minor_version"] = 2, 2
+        forged.append(json.dumps(result))
+
+    with pytest.raises(InvalidInputError, match="2.2"):
+        commit_compaction(uri, {}, forged)
+    assert lance.dataset(uri).version == before
+    assert unsupported_features(lance.dataset(uri)) is None

@@ -27,10 +27,11 @@ location against whatever root the table actually belongs to, including a wareho
 the part a caller-side join against a configured root would get wrong for exactly the tables that
 matter.
 
-FAILING TO RESOLVE MUST NOT FAIL THE REGISTER. The door's own comment already sets that rule — "a
-reopen failure must never fail an already-committed register" — so an unresolvable describe leaves
-today's value rather than raising. That is a narrower degradation than it looks: `describe_table` is a
-metadata read, not a dataset open, so it does not reintroduce the reopen the comment refuses.
+THE SUCCESS PATH TAKES ITS LOCATION FROM THE FLAG JUDGEMENT (`refuse_mixed_file_versions`), which
+describes the table before the seed and fails closed. `absolute_table_location`, tested here, is what
+the 409 branch uses, and it never fails: an unresolvable describe leaves the registered value. The
+emitted location is pinned by behaviour in
+`tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
 """
 
 from __future__ import annotations
@@ -85,17 +86,3 @@ def test_a_describe_without_a_location_keeps_the_registered_value(monkeypatch: A
     monkeypatch.setattr(tables_endpoint.native, "call", lambda _ns, _op, _req: _describe(None))
 
     assert tables_endpoint.absolute_table_location(cast(Any, _Namespace(None)), ["ns", "t"], "t.lance") == "t.lance"
-
-
-def test_the_register_door_emits_the_resolved_location() -> None:
-    """Pinned by source: a helper nothing calls is the control that cannot fire, one more time."""
-    import inspect
-
-    body = inspect.getsource(tables_endpoint.register_table)
-
-    # The NAME, not `name(` — the resolver is handed to `run_in_threadpool` as a callable, so the call
-    # parenthesis never appears at the site. Asserting the call syntax failed against correct code.
-    assert "absolute_table_location" in body, "the door must resolve before it emits"
-    resolved_at = body.index("absolute_table_location")
-    assert resolved_at < body.index("emit_write_event("), "the CREATED edge must carry the resolved URI"
-    assert resolved_at < body.index("emit_control("), "the control event's `location` extra must carry it too"

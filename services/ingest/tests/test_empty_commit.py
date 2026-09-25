@@ -17,7 +17,6 @@ every unit failed validation.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -141,14 +140,14 @@ def test_a_NON_empty_commit_still_goes_to_the_catalog(dataset_uri: str, monkeypa
     # Built through the plane's OWN row builder: `payload` is a blob_field — a struct of
     # uri/data/position/size — and a hand-rolled binary column is refused by Lance with a schema
     # mismatch, which is a test bug dressed as a product failure.
-    # Through the lander's OWN writer and creation flags: blob-v2 needs data_storage_version 2.2,
-    # and `write_fragments` is the one sanctioned way this plane produces a fragment.
-    from ingest.lander import CREATION_FLAGS
+    # Through the lander's OWN writer: blob-v2 needs file format 2.2, which the fixture created the
+    # dataset at and the writer inherits.
+    from ingest.lander import write_unit_fragments
 
-    written = lance.fragment.write_fragments(_bronze_batch(), dataset_uri, **CREATION_FLAGS)
+    written = write_unit_fragments(dataset_uri, _bronze_batch())
 
     monkeypatch.setattr(runtime, "_catalog", lambda: catalog)
-    outcome = finalize_run(spec, [json.dumps(f.to_json()) for f in written], {})
+    outcome = finalize_run(spec, written, {})
 
     assert len(catalog.commit_calls) == 1, "a real fragment must still reach the catalog"
     assert outcome["committed_version"] == 2

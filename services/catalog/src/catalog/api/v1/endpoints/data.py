@@ -26,6 +26,7 @@ from lance_namespace import (
     MergeInsertIntoTableRequest,
     MergeInsertIntoTableResponse,
     QueryTableRequest,
+    QueryTableResponse,
     UpdateTableRequest,
     UpdateTableResponse,
 )
@@ -651,7 +652,9 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
-    data = native.call(ns, "query_table", body)
+    response = native.call(ns, "query_table", body)
+    if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
+        raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
     # AFTER the read, not before: an audit line for rows nobody received is a false record, and this
     # door's refusals (branch, identifier) raise above. § J1 — the estate authorized every read and then
     # forgot it happened.
@@ -659,7 +662,7 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
     # normalised here rather than typed loosely at the helper: the audit record is flat by contract,
     # and a wrapper object would land differently in every sink.
     audit_read(subject=_reader(token), resource=id, version=body.version, columns=_column_names(body.columns))
-    return Response(content=data, media_type=ARROW_FILE)
+    return Response(content=response.data, media_type=ARROW_FILE)
 
 
 # DUAL-MOUNTED, and the reason is upstream disagreeing with itself. The spec says POST at every

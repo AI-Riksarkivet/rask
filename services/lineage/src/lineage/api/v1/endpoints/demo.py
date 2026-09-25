@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 import lance
@@ -25,6 +26,7 @@ from lineage.api.fga_deps import FilterDep
 from lineage.core.config import get_settings, shared_lance_session, storage_options
 from lineage.schemas import DemoDataset, DemoDatasets, DemoField, DemoVersion
 from service_kit.lakehouse import schema
+from service_kit.lancekit.versions import committed_at
 
 
 log = logging.getLogger(__name__)
@@ -102,9 +104,8 @@ def get_peek_cache(request: Request) -> PeekCache:
 PeekCacheDep = Annotated[PeekCache, Depends(get_peek_cache)]
 
 
-def _stamp(entry: dict[str, Any]) -> str | None:
-    timestamp = entry.get("timestamp")
-    return timestamp.isoformat() if hasattr(timestamp, "isoformat") else None
+def _stamp(entry: Mapping[str, object]) -> str:
+    return committed_at(entry).isoformat()
 
 
 def _read_dataset(cache: PeekCache, name: str, uri: str, opts: dict[str, str], max_versions: int) -> DemoDataset:

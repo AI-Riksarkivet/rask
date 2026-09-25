@@ -187,8 +187,8 @@ def seed(root: Path | str) -> str:
 
     # The page image must be a Lance **blob-v2** column or the registry refuses the dataset
     # ("document.media_blob is not a lance.blob.v2 column"). Blob-v2 is a STRUCT — raw
-    # large_binary is rejected outright — and it cannot be written at the default 2.1 file
-    # format, hence data_storage_version="2.2".
+    # large_binary is rejected outright — and it needs file format >= 2.2, which is named here
+    # rather than left to the pylance default.
     # speech_id/chunk_id are INTEGERS: the viewer builds its frame filter as
     # `speech_id = 0 AND chunk_id = 19` with unquoted numeric literals, so string columns
     # fail with "Received literal Int64(0) and could not convert to literal of type Utf8".

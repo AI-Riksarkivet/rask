@@ -703,6 +703,25 @@ groups:
             running without maintaining. Usually a pylance upgrade introducing a flag the guard does not
             know. Check the refusal reasons in the maintenance_sweep log line.
 
+      # One mixed table is an incident the ratio rule above cannot see (45.3-46.5% of every sweep is refused,
+      # measured 2026-09-24). No `for:`: the flag cannot be removed, so waiting buys nothing. The window sets how
+      # long the alert HOLDS between counts: a table is counted only on ticks that open it (a worker restart
+      # can pause delivery for ackWait, 720s), and a policy-skipped table is never opened, so it is not counted.
+      - alert: LanceMixedDataFileVersions
+        expr: sum(increase(compaction_datasets_mixed_file_versions_total[30m])) > 0
+        labels:
+          severity: critical
+          service: maintenance
+        annotations:
+          summary: "A Lance table's data files are at more than one file version"
+          description: >-
+            The sweep found a table whose manifest carries reader flag 256 (mixed data file versions).
+            The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8)
+            cannot open the table, and maintenance refuses it on every tick. The only measured heal is
+            recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and
+            indices. Find the table in the maintenance_dataset_outcome records where
+            mixed_data_file_versions is true, and the writer that appended at another data_storage_version.
+
       # A rewrite signs with a table-scoped vended credential or with the ambient process credential,
       # and until this series existed the only signal was an `info` line per dataset. Measured
       # 2026-09-11: 600 records in one window, 300 vend 401s and 300 ambient fallbacks, ZERO scoped —

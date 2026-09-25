@@ -22,6 +22,8 @@ from lance_namespace import (
 )
 
 from catalog.core.config import Settings, shared_lance_session
+from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
+from service_kit.lancekit.absence import reads_as_absent
 
 
 log = logging.getLogger(__name__)
@@ -181,3 +183,38 @@ def open_dataset(
         if error is exc:
             raise
         raise error from exc
+
+
+def mixes_file_versions_at(location: str, storage_options: dict[str, str]) -> bool | None:
+    """Whether the dataset at ``location`` carries reader flag 256 (mixed data file versions).
+
+    ``None`` when no dataset is there. A pylance that refuses the open over flag 256 answers ``True``,
+    because 11 and older cannot open such a table and 12 opens it; either way the fact is the same. Any
+    other failed open raises unchanged, so a caller that has to fail closed can.
+    """
+    try:
+        dataset = lance.dataset(location, storage_options=storage_options, session=shared_lance_session())
+    except (ValueError, OSError) as exc:
+        refused = flags_from_open_error(exc)
+        if refused is not None and mixes_data_file_versions(refused):
+            return True
+        if refused is None and reads_as_absent(exc):
+            return None
+        raise
+    reader, _writer = manifest_feature_flags(dataset)
+    return mixes_data_file_versions(reader)
+
+
+def warn_if_mixed_file_versions(location: str, storage_options: dict[str, str], *, table: str) -> None:
+    """Log a WARN when a table the catalog re-registers carries reader flag 256. Never raises.
+
+    An undrop restores a table the catalog already governed, so refusing it would strand the table in
+    the trash with its bytes intact. The public register door refuses the same dataset instead.
+    """
+    try:
+        mixed = mixes_file_versions_at(location, storage_options)
+    except Exception as exc:  # noqa: BLE001 — a restore is never failed over a flag read
+        log.warning("restored_table_flags_unreadable", extra={"table": table, "location": location, "error": str(exc)[:300]})
+        return
+    if mixed:
+        log.warning("restored_mixed_file_versions", extra={"table": table, "location": location})

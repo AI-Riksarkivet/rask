@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
 from service_kit.lakehouse.features import unsupported_features, unsupported_features_from_open_error
+from service_kit.lancekit.versions import committed_at
 
 
 log = logging.getLogger(__name__)
@@ -458,7 +459,7 @@ def _classify_against_floor(orphans: list[OrphanFile], ds: lance.LanceDataset, d
     if not orphans:
         return
     try:
-        floor = min(v["timestamp"].timestamp() for v in ds.versions())
+        floor = min(committed_at(v).timestamp() for v in ds.versions())
     except Exception as exc:  # noqa: BLE001 — an unreadable floor leaves the class UNKNOWN, never guessed
         log.warning("orphan_floor_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
         return

@@ -28,7 +28,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import ListTableTagsResponse, MergeInsertIntoTableResponse
+from lance_namespace import CountTableRowsResponse, ListTableTagsResponse, MergeInsertIntoTableResponse
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -38,7 +38,7 @@ ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 
 
 def test_count_rows_is_reachable_by_GET(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.count_table_rows.return_value = 3
+    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=3)
     resp = client.get("/v1/table/db$t/count_rows")
     assert resp.status_code == 200, f"the bundled client sends GET; got {resp.status_code} {resp.text[:120]}"
     assert resp.json() == 3
@@ -59,7 +59,7 @@ def test_the_POST_form_still_works(client: TestClient, fake_ns: MagicMock, monke
     """The spec's own method must keep working — dual-mount, not a move."""
     from catalog.api.v1.endpoints import tags as tags_module
 
-    fake_ns.count_table_rows.return_value = 3
+    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=3)
     monkeypatch.setattr(tags_module.dataplane, "list_tags", lambda *a, **k: ListTableTagsResponse(tags={}))
     assert client.post(path, json={}).status_code == 200
 

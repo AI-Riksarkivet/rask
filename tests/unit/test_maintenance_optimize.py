@@ -701,6 +701,7 @@ class _RecordingDataset:
         self.optimize = _RecordingOptimize(calls)
         self.schema = SimpleNamespace(metadata={})
         self._ds = SimpleNamespace(serialized_manifest=lambda: b"")  # no feature flags set
+        self.data_storage_version = "2.2"
 
     def describe_indices(self) -> list[object]:
         return []

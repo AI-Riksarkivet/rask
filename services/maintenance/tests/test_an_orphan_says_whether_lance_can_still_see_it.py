@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 import lance
@@ -36,6 +37,7 @@ import pyarrow as pa
 import pyarrow.fs as pafs
 
 from maintenance.services.orphans import scan_dataset
+from service_kit.lancekit.versions import committed_at
 
 
 def _dataset_with_orphan(offset_s: float) -> tuple[str, str]:
@@ -43,7 +45,7 @@ def _dataset_with_orphan(offset_s: float) -> tuple[str, str]:
     tmp = Path(tempfile.mkdtemp())
     uri = tmp / "t.lance"
     lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}), str(uri), mode="create")
-    floor = lance.dataset(str(uri)).versions()[0]["timestamp"].timestamp()
+    floor = committed_at(lance.dataset(str(uri)).versions()[0]).timestamp()
     orphan = uri / "_transactions" / "99-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.txn"
     orphan.write_bytes(b"leftover from a commit that never landed")
     os.utime(orphan, (floor + offset_s, floor + offset_s))
@@ -83,6 +85,7 @@ def test_the_classification_survives_a_host_that_is_not_UTC() -> None:
     version_ts = lance.dataset(uri).versions()[0]["timestamp"]
     info = pafs.LocalFileSystem().get_file_info(f"{prefix}/_transactions")
 
+    assert isinstance(version_ts, datetime)
     assert version_ts.tzinfo is None, "the manifest timestamp gained a tzinfo — re-derive the comparison"
     assert info.mtime.tzinfo is not None, "FileInfo.mtime lost its tzinfo — re-derive the comparison"
     assert scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix).orphans[0].reclaimable_by_lance is True

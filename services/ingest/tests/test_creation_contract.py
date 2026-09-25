@@ -23,9 +23,15 @@ import pyarrow as pa
 import pytest
 
 from ingest.catalog import CreationContractError, LocalCatalog, assert_creation_contract
+from ingest.lander import create_empty
+from service_kit.lakehouse.features import manifest_feature_flags, mixes_data_file_versions, unsupported_features
 
 
 BRONZE = pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string()), pa.field("payload", pa.binary())])
+
+
+def _bronze_rows(ids: list[int]) -> pa.Table:
+    return pa.table({"id": ids, "source_uri": [f"file:///{i}" for i in ids], "payload": [b"x"] * len(ids)}, schema=BRONZE)
 
 
 def test_a_correctly_created_dataset_passes(tmp_path: Path) -> None:
@@ -128,3 +134,28 @@ def test_stable_row_ids_are_what_the_delta_read_depends_on(tmp_path: Path) -> No
 
     assert rows.num_rows == 1
     assert "_rowid" in rows.column_names
+
+
+def test_a14_refuses_a_table_that_already_mixes_file_versions(tmp_path: Path) -> None:
+    """Reader flag 256 is sticky: maintenance refuses the table and pylance 11 and lancedb 0.34 cannot open it.
+
+    A run into it only grows what the one measured remedy, recreating into a new dataset, has to copy.
+    """
+    uri = str(tmp_path / "mixed.lance")
+    lance.write_dataset(_bronze_rows([1]), uri, mode="create", data_storage_version="2.1", enable_stable_row_ids=True)
+    lance.write_dataset(_bronze_rows([2]), uri, mode="append", data_storage_version="2.2")
+    assert mixes_data_file_versions(manifest_feature_flags(lance.dataset(uri))[0]), "the fixture no longer builds a mixed table on this pylance"
+
+    with pytest.raises(CreationContractError, match="256"):
+        assert_creation_contract(uri)
+
+
+def test_a14_accepts_ingests_own_externally_based_create(tmp_path: Path) -> None:
+    """A14 asks for bit 256 alone, because the generic flag gate refuses this table on flag 16 (base_paths)."""
+    base = tmp_path / "source"
+    base.mkdir()
+    uri = str(tmp_path / "bronze.lance")
+    create_empty(uri, BRONZE, external_base=str(base))
+    assert unsupported_features(lance.dataset(uri)) is not None, "flag 16 no longer refused generically; this pin's premise moved"
+
+    assert_creation_contract(uri)  # must not raise

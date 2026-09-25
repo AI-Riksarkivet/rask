@@ -49,7 +49,8 @@ class CommitVerdict(Enum):
     #: compacted away. A CLIENT error: otherwise a client appending to a freshly-declared table
     #: (read_version=0) gets a 503 and retries the same version forever.
     NO_BASE = "no_base"
-    #: The caller's own data does not fit the table — wrong schema, unexpected fields, same version.
+    #: The caller's own data does not fit the table — wrong schema, unexpected fields, same version,
+    #: V1 and V2 data files mixed.
     CLIENT_ERROR = "client_error"
     #: NON-RETRYABLE per the format spec's conflict taxonomy (transaction.md: an *Incompatible*
     #: conflict "fails with a non-retryable error"). Re-committing is what corrupts the table.
@@ -64,7 +65,16 @@ class CommitVerdict(Enum):
 #: incompatible message too, so `_INCOMPATIBLE` MUST be tested before it — that ordering is the defect
 #: this module exists to make unrepeatable.
 _NO_BASE = ("must already exist unless", "manifest was not found", "no such file")
-_CLIENT_ERROR = ("different schema", "fields did not match", "same version", "invalid input")
+_CLIENT_ERROR = (
+    "different schema",
+    "fields did not match",
+    "same version",
+    "invalid input",
+    # pylance 12.0.0's file-version refusals at commit, pinned by `test_a_foreign_file_version_is_named.py`.
+    # Both read "Invalid user input", which "invalid input" misses.
+    "mixes v1 and v2 data files",
+    "unknown lance storage version",
+)
 _INCOMPATIBLE = ("incompatible transaction",)
 _CONFLICT = ("commit conflict", "concurrent")
 

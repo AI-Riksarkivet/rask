@@ -51,6 +51,7 @@ from catalog.core.lineage_emit import DROP_TABLE, emit_write_event
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
 # them drift apart again the moment one is tuned.
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
+from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import native, warehouses
 from service_kit.control_emit import emit_control
@@ -833,6 +834,7 @@ async def undrop_namespace(
                 await run_in_threadpool(native.call, ns, "register_table", body)
             except TableAlreadyExistsError:
                 log.info("undrop_table_already_registered", extra={"table": t_id})
+            await run_in_threadpool(warn_if_mixed_file_versions, location, so, table=t_id)
         else:
             skipped += 1
             log.warning("undrop_skipped_declared_only_table", extra={"table": t_id})

@@ -64,6 +64,7 @@ from maintenance.core.config import shared_lance_session
 from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.credentials import write_options_for
 from maintenance.services.orphans import OrphanFile
+from service_kit.lancekit.versions import committed_at
 
 
 if TYPE_CHECKING:
@@ -126,13 +127,12 @@ def _eligible(orphans: list[OrphanFile]) -> dict[str, list[OrphanFile]]:
 def _current_floor(uri: str, storage_options: dict[str, str]) -> float | None:
     """This dataset's earliest retained manifest timestamp, as an epoch, or ``None`` if unreadable.
 
-    ``.timestamp()`` rather than comparing datetimes, for the reason `orphans._classify_against_floor`
-    measured: ``versions()[i]["timestamp"]`` is NAIVE LOCAL while `FileInfo.mtime` is TZ-AWARE UTC, so
-    the two are the same instant written hours apart and comparing them raises on the mix.
+    An epoch because it is compared with `FileInfo.mtime` epochs; `committed_at` reads the naive-local
+    manifest time in the right zone (see `orphans._classify_against_floor`).
     """
     try:
         dataset = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session())
-        return min(version["timestamp"].timestamp() for version in dataset.versions())
+        return min(committed_at(version).timestamp() for version in dataset.versions())
     except Exception as exc:  # noqa: BLE001 — an unreadable dataset refuses this raise, never the tick
         log.warning("floor_read_failed", extra={"dataset": uri, "error": str(exc)})
         return None

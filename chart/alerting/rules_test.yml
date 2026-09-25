@@ -830,6 +830,49 @@ tests:
         alertname: MaintenanceRefusalsRising
         exp_alerts: []
 
+  # The first mixed table: the series sits at the per-tick zero, then steps to 1. No `for:`, so it pages
+  # on the evaluation that sees the step.
+  - interval: 1m
+    input_series:
+      - series: "compaction_datasets_mixed_file_versions_total"
+        values: "0+0x5 1+0x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LanceMixedDataFileVersions
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "maintenance"
+            exp_annotations:
+              summary: "A Lance table's data files are at more than one file version"
+              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table, and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
+
+  # The only count is 19 minutes old at evaluation (longer than ackWait, 720s): the 30m window must still hold.
+  - interval: 1m
+    input_series:
+      - series: "compaction_datasets_mixed_file_versions_total"
+        values: "0+0x5 1+0x10 1+0x15"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LanceMixedDataFileVersions
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "maintenance"
+            exp_annotations:
+              summary: "A Lance table's data files are at more than one file version"
+              description: "The sweep found a table whose manifest carries reader flag 256 (mixed data file versions). The flag is sticky: no Lance operation removes it. pylance 11 and lancedb 0.34 (lance core 8) cannot open the table, and maintenance refuses it on every tick. The only measured heal is recreating it into a new dataset, which re-mints _rowid and drops history, tags, branches and indices. Find the table in the maintenance_dataset_outcome records where mixed_data_file_versions is true, and the writer that appended at another data_storage_version."
+
+  # A flat zero is the healthy estate and must stay quiet.
+  - interval: 1m
+    input_series:
+      - series: "compaction_datasets_mixed_file_versions_total"
+        values: "0+0x15"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: LanceMixedDataFileVersions
+        exp_alerts: []
+
   # WORKFLOW ACTIVITY FAILURES. The one workflow family whose `status` label is TRUE — an activity that
   # exhausts its retries raises into the orchestrator, so the sidecar records a real failure.
   - interval: 1m

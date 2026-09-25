@@ -13,42 +13,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 bypass-selection = true
 
-[tool.uv]
-# pylance's metadata caps `lance-namespace>=0.8.5,<0.9` while the catalog requires >=0.11.0 —
-# mutually unsatisfiable, so `uv lock` fails outright without this. lance-ns carries the same
-# override at ITS root; overrides are honoured ONLY at the workspace root, so it has to live here.
-override-dependencies = [
-    # KEEP. Both pylance 10.0.0 and 11.0.0 declare `lance-namespace<0.9,>=0.8.5` (read off PyPI
-    # 2026-09-09, identical `requires_dist` on both), so without this override `uv lock` fails outright
-    # — the two halves of the same project ship incompatible pins. Floor moved to 0.11.0 with the
-    # 2026-08-16 upgrade so the generated client cannot skew from the spec model.
-    #
-    # THE CEILING IS AS LOAD-BEARING AS THE FLOOR, and it was measured rather than assumed (2026-09-07).
-    # `MergeInsertIntoTableRequest.on` is where this pin bites. The vendored spec
-    # (`lance_docs/ns_catalog/spec.yaml:3063`) defines it as a COMPOSITE key — "Multiple fields form a
-    # composite match key", carried as a query parameter repeated once per field path — while
-    # lance-namespace 0.11 types it `Optional[str]`. So a composite merge key is spec-legal and
-    # unreachable here, and this pin is the reason.
-    #
-    # WHERE THE REFUSAL ACTUALLY HAPPENS, measured on the pinned stack 2026-09-15 (lance-namespace
-    # 0.11.x + pylance 11.0.0, driven through `DirectoryNamespace.merge_insert_into_table`): a single
-    # string is ACCEPTED and merges; a list is refused by PYDANTIC — `ValidationError: Input should be
-    # a valid string` — inside the request model, before pylance or the Rust side sees it.
-    #
-    # That matters because it is not where this pin's older reasoning placed it. pylance 11.0.0's
-    # `merge_insert_into_table` (`lance/namespace.py:563-583`) now passes `request.model_dump()` straight
-    # to the Rust binding with no Python-side type handling of `on` at all, so the
-    # `TypeError: unexpected type: 'list' object is not an instance of 'str'` that this comment used to
-    # cite at `namespace.py:580` no longer exists — :580 is the `model_dump()` call.
-    #
-    # WHAT IS ACTUALLY UNKNOWN is therefore one experiment, not a design question: whether pylance
-    # 11.0.0's Rust side accepts a list once 0.12's model stops refusing one. 0.12 rejects a bare string,
-    # so bumping is all-or-nothing and cannot be probed from inside this resolution. Tracked as A10 /
-    # [[LH-022]].
-    "lance-namespace>=0.11.0,<0.12",
-    "lance-namespace-urllib3-client>=0.11.0,<0.12",
-]
-
 [tool.uv.workspace]
 # Language-pure directories, so globs are both possible and safe: every dir under packages/ and
 # services/ carries a pyproject.toml. The JS plane lives in frontend/ with its own bun workspace.
@@ -81,7 +45,7 @@ dev = [
     "ruff",
     "ty",
     "datasets>=4.8.4",
-    "pylance>=11.0.0",
+    "pylance>=12.0.0",
     "lancedb>=0.20",
     "validate",
     # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this

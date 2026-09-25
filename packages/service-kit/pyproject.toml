@@ -49,8 +49,12 @@ lakehouse = ["pyarrow", "lance-namespace>=0.11.0,<0.12"]
 media = ["pillow>=10"]
 lancekit = [
     "pyarrow",
-    "pylance[otel]>=11.0.0",
+    # Every Lance reader and writer moves together: pylance 8 could not read a 9-written blob-v2
+    # dataset (packages/ray-cluster-env). 11 does read a 12-written (file format 2.2) one, measured 2026-09-25.
+    "pylance[otel]>=12.0.0",
     "lancedb>=0.34.0",
+    # pylance 12 itself requires lance-namespace <0.12, and 0.12 rejects the bare-string
+    # `MergeInsertIntoTableRequest.on` that 0.11 sends (`lance_docs/ns_catalog/spec.yaml:3063`). [[LH-022]]
     "lance-namespace>=0.11.0,<0.12",
     "lance-namespace-urllib3-client>=0.11.0,<0.12",
 ]

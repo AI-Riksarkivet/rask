@@ -39,6 +39,7 @@ from lance_namespace import (
     AlterTableDropColumnsResponse,
     ConcurrentModificationError,
     CountTableRowsRequest,
+    CountTableRowsResponse,
     CreateTableBranchRequest,
     CreateTableBranchResponse,
     CreateTableIndexRequest,
@@ -94,11 +95,13 @@ from catalog.core.modes import CreateMode
 from catalog.core.namespace import open_dataset
 from catalog.services import changes, native, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
+from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
+from service_kit.lancekit.versions import committed_at
 
 
 log = logging.getLogger(__name__)
@@ -651,6 +654,9 @@ def _dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
     return resolved, path
 
 
+#: What an append with nothing to append onto is told, by the commit classifier and the file-version guard alike.
+_NO_BASE_DETAIL = "append target has no committed base version — create or overwrite the table first"
+
 #: The default non-retryable remedy — the client-direct append's. Its fragments describe data the table
 #: no longer accepts, so the data must be written again, not the metadata re-sent.
 _APPEND_REMEDY = "Discard them, re-read the current version, and re-WRITE the data"
@@ -673,7 +679,7 @@ def _classify_commit_error(exc: OSError, *, remedy: str = _APPEND_REMEDY) -> Exc
     """
     match classify_commit_failure(exc):
         case CommitVerdict.NO_BASE:
-            return InvalidInputError(f"append target has no committed base version — create or overwrite the table first: {exc}")
+            return InvalidInputError(f"{_NO_BASE_DETAIL}: {exc}")
         case CommitVerdict.CLIENT_ERROR:
             return InvalidInputError(f"fragments are incompatible with the table: {exc}")
         case CommitVerdict.INCOMPATIBLE:
@@ -781,10 +787,11 @@ def commit_appended_fragments(
     (``lance.fragment.write_fragments`` — the guide's distributed-write protocol); this folds the tiny
     serialized ``FragmentMetadata`` into a metadata-ONLY Lance commit under ROOT creds, so no data byte ever
     transits the catalog and the version + lineage emit stay atomic (the External Manifest Store pattern —
-    namespace.md). An Append INHERITS the dataset's ``data_storage_version`` + stable-row-id config from the
-    manifest (``write_fragments`` reads it) and Lance assigns/rebases stable row ids at commit
-    (row_id_lineage.md), so the 2.2 invariant needs no re-validation here — CREATE and OVERWRITE stay
-    server-side to centralize it and to owner-govern the destructive reset. Append auto-rebases against
+    namespace.md). ``write_fragments`` inherits the table's ``data_storage_version`` only when the client
+    names none; pylance 12 commits fragments at another version and stamps the sticky reader flag 256, so
+    :func:`_refuse_foreign_file_versions` judges the fragments' file versions before Lance sees them. Lance
+    assigns/rebases stable row ids at commit (row_id_lineage.md). CREATE and OVERWRITE stay server-side to
+    centralize the 2.2 invariant and to owner-govern the destructive reset. Append auto-rebases against
     concurrent appends and conflicts only with Overwrite/Restore (transaction.md); a stale/incompatible
     commit raises, mapped by :func:`_classify_commit_error`. Returns ``(version, row_count)``.
     """
@@ -812,6 +819,7 @@ def commit_appended_fragments(
         frags = [lance.FragmentMetadata.from_json(json.dumps(f)) for f in fragments]
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise InvalidInputError(f"malformed fragment metadata: {exc}") from exc
+    judged_version = _refuse_foreign_file_versions(location, so, frags, read_version)
     # HIGH (audit 2026-07-14): Lance's commit validates NEITHER data-file existence NOR the declared row
     # count, so a client whose direct write landed under a DIFFERENT prefix than the catalog-resolved
     # location (no malice required) could otherwise commit a 200-OK-but-UNREADABLE current version that
@@ -827,13 +835,61 @@ def commit_appended_fragments(
         dataset = lance.LanceDataset.commit(
             location,
             op,
-            read_version=read_version,
+            read_version=judged_version,
             storage_options=so,
             commit_message=(_RUN_MARKER_PREFIX + run_id) if run_id else None,
         )
     except OSError as exc:
         raise _classify_commit_error(exc) from exc
     return int(dataset.version), dataset.count_rows()
+
+
+def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequence[lance.FragmentMetadata], read_version: int) -> int:
+    """Refuse fragments whose data files would mix the table's file versions; return the version judged.
+
+    pylance 12.0.0 commits them and stamps reader flag 256, which no operation removes, so the refusal
+    has to come before the commit. The table is judged at ``read_version``, the version the caller built
+    against: an Overwrite since then is Lance's own non-retryable conflict, and judging at the latest
+    version would answer it with the wrong error. ``read_version`` 0 names no manifest, so the latest is
+    judged, and the caller commits at the version returned: a commit at 0 runs no conflict check at all,
+    so an Overwrite landing between this read and the commit would slip unjudged files onto another
+    version (measured on 12.0.0). A base that cannot be read fails closed. ``version/create`` and the
+    batch version doors publish a client-staged manifest without this judgement (see the
+    rask-lance-catalog skill).
+    """
+    try:
+        base = lance.dataset(location, version=read_version or None, storage_options=dict(so) if so else None, session=shared_lance_session())
+    except Exception as exc:
+        if reads_as_absent(exc):
+            raise InvalidInputError(f"{_NO_BASE_DETAIL}: {exc}") from exc
+        raise ServiceUnavailableError(f"cannot read the table to judge the fragments' file versions, so nothing was committed: {exc}") from exc
+    files = [data_file for frag in frags for data_file in frag.files]
+    reason = describe_foreign_data_file_versions(base.data_storage_version, files)
+    if reason is None:
+        return int(base.version)
+    if read_version and _matches_the_latest_version(location, so, files):
+        # Written after an Overwrite moved the table to their version: Lance's own non-retryable
+        # conflict is the true answer, and it refuses the commit without setting the flag.
+        return int(base.version)
+    log.warning(
+        "catalog_commit_refused_foreign_file_version",
+        extra={
+            "location": location,
+            "read_version": read_version,
+            "table_version": base.data_storage_version,
+            "fragment_versions": sorted({f"{d.file_major_version}.{d.file_minor_version}" for d in files}),
+        },
+    )
+    raise InvalidInputError(
+        f"{reason}. Re-read the table's current version and write the fragments against it without data_storage_version "
+        f"(write_fragments into an existing table inherits it). A committed mix cannot be undone"
+    )
+
+
+def _matches_the_latest_version(location: str, so: StorageOptions, files: Sequence[VersionedDataFile]) -> bool:
+    """Whether ``files`` are all at the table's LATEST version. Read only on the refusal path."""
+    latest = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
+    return describe_foreign_data_file_versions(latest.data_storage_version, files) is None
 
 
 def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
@@ -1035,6 +1091,13 @@ def commit_compaction(location: str, so: StorageOptions, results: Sequence[str],
     from catalog.services.maintenance import require_compactable
 
     require_compactable(dataset, so)
+    # The rewrites are client-supplied, so their files are judged like an append's: a forged or buggy
+    # result at another file version would commit and stamp flag 256 (measured on pylance 12.0.0).
+    foreign = describe_foreign_data_file_versions(
+        dataset.data_storage_version, [data_file for rewrite in rewrites for fragment in rewrite.new_fragments for data_file in fragment.files]
+    )
+    if foreign is not None:
+        raise InvalidInputError(f"compaction result refused: {foreign}")
     try:
         metrics = lance_optimize.Compaction.commit(dataset, rewrites)
     except OSError as exc:
@@ -1463,7 +1526,10 @@ def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsReques
     defect, and any divergence in predicate dialect or version resolution would be ours to own.
     """
     if req.branch is None:
-        return int(native.call(ns, "count_table_rows", req))
+        response = native.call(ns, "count_table_rows", req)
+        if not isinstance(response, CountTableRowsResponse) or response.count is None:
+            raise TypeError(f"count_table_rows must answer a CountTableRowsResponse with a count, got {type(response).__name__}: {response!r}")
+        return response.count
     dataset = open_dataset(ns, so, _table_id(req), version=req.version, branch=req.branch)
     with _user_sql("invalid count predicate"):
         return int(dataset.count_rows(filter=req.predicate) if req.predicate else dataset.count_rows())
@@ -1904,7 +1970,7 @@ def table_history(ns: LanceNamespace, so: StorageOptions, table_id: list[str], l
         version = int(entry["version"])
         row: dict[str, Any] = {
             "version": version,
-            "timestamp": entry.get("timestamp").isoformat() if entry.get("timestamp") else None,
+            "timestamp": committed_at(entry).isoformat(),
             "operation": None,
         }
         try:

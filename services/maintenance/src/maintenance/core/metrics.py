@@ -52,6 +52,15 @@ _refused = _meter.create_counter(
     description="Datasets refused by the maintenance pass because of an unsupported manifest feature flag.",
 )
 
+#: Datasets whose manifest carries reader flag 256 (mixed data file versions). Its own series because
+#: `_refused` cannot page on one table: measured 2026-09-24, 45.3-46.5% of every sweep is already refused.
+#: The flag is sticky and the table is unopenable by pylance 11 and lancedb 0.34, so one is an incident.
+_mixed_file_versions = _meter.create_counter(
+    "compaction.datasets.mixed_file_versions",
+    unit="{dataset}",
+    description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time the sweep opens one.",
+)
+
 
 #: THE FAILURE SERIES, and its absence was the gap. Seven instruments here counted what the sweep
 #: ACHIEVED and not one counted what it could not do, so a dataset failing every tick forever was
@@ -257,6 +266,15 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
         _refused.add(datasets, {"refused_by": refused_by})
         return
     _refused.add(datasets)
+
+
+def record_mixed_file_versions(datasets: int) -> None:
+    """Record how many datasets carry mixed data file versions (reader flag 256).
+
+    Always emits, including zero, so the series exists before the first mix and the alert's
+    `increase()` sees that mix as a step from 0 rather than as a series appearing.
+    """
+    _mixed_file_versions.add(datasets)
 
 
 def record_failed(errors_by_type: dict[str, int]) -> None:

@@ -16,7 +16,7 @@ dependencies = [
     # genuinely isolated env would already have failed on `import lance`. Declared now that the code
     # is local. Floors match the origin's (packages/ratch/pyproject.toml); both wheels are
     # `Requires-Python >=3.10`, so they fit this runner's `<3.13` ceiling.
-    "pylance>=10.0.0",   # _vendor/dataset.py — lance.write_dataset
+    "pylance>=12.0.0",   # _vendor/dataset.py — lance.write_dataset
     "pyarrow",           # _vendor/{dataset,schema}.py — the tables and their schemas
     "lancedb>=0.34.0",   # _vendor/engine.py — lancedb.index.IvfPq, and the Table handles passed in
     "pydantic>=2",       # _vendor/runners.py RunnerContext, and voiceprint.py's TurnSpan

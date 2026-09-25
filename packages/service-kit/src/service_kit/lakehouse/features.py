@@ -51,7 +51,7 @@ from pydantic import BaseModel, Field
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterable, Sequence
 
 
 log = logging.getLogger(__name__)
@@ -77,6 +77,16 @@ class _DataFileHandle(Protocol):
 
 class _FragmentHandle(Protocol):
     def data_files(self) -> Sequence[_DataFileHandle]: ...
+
+
+class VersionedDataFile(Protocol):
+    """A fragment data file's own format version — what ``lance.fragment.DataFile`` exposes."""
+
+    @property
+    def file_major_version(self) -> int: ...
+
+    @property
+    def file_minor_version(self) -> int: ...
 
 
 class FragmentCarrier(ManifestCarrier, Protocol):
@@ -393,6 +403,74 @@ def unsupported_read_flags(*, reader: int, writer: int) -> str | None:
     return describe_read_unsupported_flags(reader)
 
 
+def describe_foreign_data_file_versions(table_version: str, data_files: Iterable[VersionedDataFile]) -> str | None:
+    """Why committing ``data_files`` to a table at ``table_version`` would mix file versions, or ``None``.
+
+    pylance 12 commits such a set and stamps reader and writer flag 256, which no operation removes:
+    maintenance refuses the table, and pylance 11 and lancedb 0.34 (lance core 8) cannot open it.
+    pylance 11 refused the commit itself. Measured on 12.0.0 over 2.0/2.1/2.2 tables, with and without
+    stable row ids, and appends at every version: this refuses exactly when Lance's commit sets the flag.
+
+    Only V2 files on a V2 table are compared. A legacy table declares ``0.x`` while its files report
+    ``(0, 2)``, and Lance itself refuses to mix V1 and V2. A file stamped ``(0, 3)`` is compared as 2.0:
+    pylance 12.0.0 writes 2.0 files as ``(2, 0)`` but still reads ``(0, 3)`` as 2.0, and a forged
+    ``(0, 3)`` fragment committed onto a 2.1 table set flag 256 (measured).
+
+    Args:
+        table_version: The table's ``data_storage_version`` at the commit's read version.
+        data_files: Every data file the commit would add.
+
+    Returns:
+        The refusal reason naming the foreign versions, or ``None`` when the commit keeps one version.
+
+    Raises:
+        TypeError: If ``table_version`` is not a string.
+    """
+    if not isinstance(table_version, str):
+        raise TypeError(f"table_version must be a str, got {type(table_version).__name__}: {table_version!r}")
+    major, _, minor = table_version.partition(".")
+    if not (major.isdigit() and minor.isdigit()):
+        return f"the table's data_storage_version {table_version!r} is unreadable, so its data files cannot be judged"
+    declared = (int(major), int(minor))
+    if declared[0] < 2:
+        return None
+    versions = {_format_version(f.file_major_version, f.file_minor_version) for f in data_files}
+    foreign = sorted({v for v in versions if v[0] >= 2} - {declared})
+    if not foreign:
+        return None
+    named = ", ".join(f"{a}.{b}" for a, b in foreign)
+    unknown = [v for v in foreign if v not in _LANCE_V2_FILE_VERSIONS]
+    if unknown:
+        return f"data files at {', '.join(f'{a}.{b}' for a, b in unknown)}, which is not a Lance file format version (lance_docs/file_format.md, Versioning)"
+    return (
+        f"data files at {named} under a table whose data_storage_version is {table_version}: committing them would set "
+        f"reader flag {FLAG_MIXED_DATA_FILE_VERSIONS} (mixed data file versions), which no operation removes"
+    )
+
+
+#: The V2 file format versions Lance defines (lance_docs/file_format.md, Versioning; 2.3 is unstable).
+_LANCE_V2_FILE_VERSIONS: Final = frozenset({(2, 0), (2, 1), (2, 2), (2, 3)})
+
+
+def _format_version(major: int, minor: int) -> tuple[int, int]:
+    """A data file's format version as Lance reads it: ``(0, 3)`` is 2.0."""
+    return (2, 0) if (major, minor) == (0, 3) else (major, minor)
+
+
+def mixes_data_file_versions(reader: int) -> bool:
+    """Whether a manifest's reader flags carry the sticky mixed-data-file-versions bit (256)."""
+    return bool(reader & FLAG_MIXED_DATA_FILE_VERSIONS)
+
+
+def flags_from_open_error(exc: BaseException) -> int | None:
+    """The feature flags pylance named when it refused to open a dataset, or ``None`` if it named none."""
+    text = str(exc)
+    if not any(marker in text for marker in _OPEN_REFUSAL_MARKERS):
+        return None
+    match = _OPEN_REFUSAL_FLAGS.search(text)
+    return int(match.group(1)) if match else None
+
+
 class BaseEvidence(BaseModel):
     """One declared base, as the manifest states it AND as the object store answers for it."""
 
@@ -635,13 +713,11 @@ def unsupported_features_from_open_error(exc: BaseException) -> str | None:
     reports a Rust source path from a GitHub runner as a generic ``open:`` error, which the sweep's
     lineage selection classifies as transient non-dataset noise and drops entirely.
     """
-    text = str(exc)
-    if not any(marker in text for marker in _OPEN_REFUSAL_MARKERS):
+    if not any(marker in str(exc) for marker in _OPEN_REFUSAL_MARKERS):
         return None
-    match = _OPEN_REFUSAL_FLAGS.search(text)
-    if match is None:
+    flags = flags_from_open_error(exc)
+    if flags is None:
         return "pylance refused the open: unsupported manifest feature flags (the error named none)"
-    flags = int(match.group(1))
     # Describe the bits pylance named. They are unsupported by DEFINITION here (pylance would not
     # have refused otherwise), so mask against SUPPORTED only to drop the ones we do understand.
     return f"pylance refused the open: unsupported manifest feature flags: {_named(flags & ~SUPPORTED or flags)} (flags={flags})"

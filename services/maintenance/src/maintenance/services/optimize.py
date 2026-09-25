@@ -29,8 +29,10 @@ from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
     describe_compaction_unsupported_flags,
     describe_gc_unsupported_flags,
+    flags_from_open_error,
     gather_compaction_bases,
     manifest_feature_flags,
+    mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
 from service_kit.lakehouse.objectfs import dataset_root_probe
@@ -85,6 +87,13 @@ class DatasetResult(BaseModel):
     #: a pylance upgrade away from being supported, and the third clears when somebody removes a
     #: directory — and the sweep's one WARNING carries this breakdown in place of a line per dataset.
     refused_by: str | None = None
+    #: The table's ``data_storage_version`` as its manifest declares it; ``None`` when the manifest was
+    #: not read. Carried on every outcome so the per-dataset record is a census of the estate's versions.
+    data_storage_version: str | None = None
+    #: The manifest carries reader flag 256: its data files are at more than one file version. Its own
+    #: field because the refusal alone reads as one more ``manifest_flags``, while this flag is sticky
+    #: and makes the table unopenable by pylance 11 and lancedb 0.34 (lance core 8).
+    mixed_data_file_versions: bool = False
     #: #F6(d) — this dataset is in the TRASH: dropped with a grace window, recoverable until it expires,
     #: and therefore frozen. Names the record id and its deadline so a record stuck long past its
     #: deadline (one the purge keeps refusing) is visible as a permanent exclusion rather than a
@@ -698,13 +707,18 @@ def compact_one(
         # read, which is exactly what `open:` means. Refusing on it would be a lie (we know nothing
         # about its layout), and maintaining it would be the shallow-clone mistake again.
         reader_flags, writer_flags = manifest_feature_flags(ds)
+        # Read before any gate returns: on pylance 12 a mixed table exits at the gc gate below.
+        table_version = ds.data_storage_version
+        mixed = mixes_data_file_versions(reader_flags)
     except Exception as exc:
         # pylance refuses a manifest whose flags IT does not know before we can read them ourselves
         # (measured: a committed data overlay, flag 64). That is a REFUSAL, not an unopenable
         # directory — reported as `open:` it reads as transient noise and the lineage layer drops it.
         if (refusal := unsupported_features_from_open_error(exc)) is not None:
             log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": refusal})
-            return DatasetResult(uri=uri, refused=refusal, refused_by="manifest_flags")
+            # The flags pylance named are the only evidence a pod that cannot open the table has.
+            opened_as_mixed = mixes_data_file_versions(flags_from_open_error(exc) or 0)
+            return DatasetResult(uri=uri, refused=refusal, refused_by="manifest_flags", mixed_data_file_versions=opened_as_mixed)
         return DatasetResult(uri=uri, error=f"open: {exc}", error_type=type(exc).__name__)
     # TWO GATES, because the three operations do not share a hazard. This was ONE blanket refusal, and
     # the cost was measured: 17 of the estate's datasets were refused on flag 16 and they were exactly
@@ -745,7 +759,7 @@ def compact_one(
     gc_refusal = describe_gc_unsupported_flags(reader_flags, writer_flags)
     if gc_refusal is not None:
         log.warning("maintenance_refused_unsupported_features", extra={"uri": uri, "reason": gc_refusal})
-        return DatasetResult(uri=uri, refused=gc_refusal, refused_by="manifest_flags")
+        return DatasetResult(uri=uri, refused=gc_refusal, refused_by="manifest_flags", data_storage_version=table_version, mixed_data_file_versions=mixed)
     compact_refusal = describe_compaction_unsupported_flags(
         reader_flags,
         writer_flags,
@@ -800,12 +814,12 @@ def compact_one(
         # `refusals` map still names every dataset with its reason, and
         # `compaction_datasets_refused_total` still counts them.
         log.debug("maintenance_refused_protected_base", extra={"uri": uri, "reason": why, "relation": relation, "root": root})
-        return DatasetResult(uri=uri, refused=why, refused_by="protected_base")
+        return DatasetResult(uri=uri, refused=why, refused_by="protected_base", data_storage_version=table_version, mixed_data_file_versions=mixed)
     # Read the producer's DECLARED name while the dataset is open — the emit path downstream holds only
     # a URI, and for the cascade's own tiers a URI cannot be resolved to a name at all. Never fatal: a
     # dataset with no declared id simply falls back to the URI derivation, which is the common case
     # until producers stamp it and remains the case for every dataset already on disk.
-    result = DatasetResult(uri=uri, declared_table_id=declared_table_id(ds))
+    result = DatasetResult(uri=uri, declared_table_id=declared_table_id(ds), data_storage_version=table_version, mixed_data_file_versions=mixed)
     try:
         # THE ORDER IS FIXED, and it is the whole reason these three are separate functions rather than
         # a configurable list: compaction leaves its new fragments unindexed, so index optimization must

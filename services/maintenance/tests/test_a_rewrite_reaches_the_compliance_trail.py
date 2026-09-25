@@ -57,6 +57,8 @@ class _Result:
     trashed = False
     error = ""
     error_type = ""
+    data_storage_version = "2.2"
+    mixed_data_file_versions = False
 
 
 class _Idle(_Result):

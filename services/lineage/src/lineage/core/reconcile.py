@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from typing import Final, Protocol
 
@@ -23,6 +23,7 @@ from service_kit.lakehouse import blobs
 from service_kit.lakehouse.features import unsupported_features_from_open_error
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
+from service_kit.lancekit.versions import committed_at
 
 
 log = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ INERT_UNKNOWN: Final = "<inert>"
 _COUNTER_KEYS: Final = ("total_rows", "total_data_files", "total_deletion_files", "total_deletion_file_rows")
 
 
-def _version_counters(entry: dict[str, object]) -> tuple[str, ...] | None:
+def _version_counters(entry: Mapping[str, object]) -> tuple[str, ...] | None:
     """This version's data counters, or ``None`` when the manifest does not carry them."""
     metadata = entry.get("metadata")
     if not isinstance(metadata, dict):
@@ -218,16 +219,16 @@ def read_latest_write_age_hours(uri: str, storage_options: dict[str, str]) -> fl
     """Hours since the NEWEST version commit at ``uri`` — the freshness axis (data-contract gap #2).
 
     Read from STORAGE TRUTH (the version manifests' timestamps), not from the graph's event times —
-    a write that bypassed lineage still counts as fresh data. Manifest timestamps are naive UTC
-    (lance stamps commit time without a zone); clamped at 0 so clock skew can't yield negative age.
+    a write that bypassed lineage still counts as fresh data. Clamped at 0 so clock skew can't yield
+    a negative age.
     ``None`` when unreadable/empty — the version comparison already classifies those.
     """
     try:
         versions = lance.dataset(uri, storage_options=storage_options, session=shared_lance_session()).versions()
         if not versions:
             return None
-        latest = max(v["timestamp"] for v in versions)
-        return max((datetime.now(UTC) - latest.replace(tzinfo=UTC)).total_seconds() / 3600.0, 0.0)
+        latest = max(committed_at(v) for v in versions)
+        return max((datetime.now(UTC) - latest).total_seconds() / 3600.0, 0.0)
     except BaseException as exc:
         _swallow_dataset_error(exc)
         return None

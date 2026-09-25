@@ -29,6 +29,7 @@ import pytest
 from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_floors
 from maintenance.services.orphans import OrphanFile
+from service_kit.lancekit.versions import committed_at
 
 
 class _Settings:
@@ -63,7 +64,7 @@ def _stranded_dataset(root: Path) -> tuple[str, Path, float]:
     dataset = lance.write_dataset(pa.table({"i": pa.array([4])}), uri, mode="append")
     dataset.cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
     dataset = lance.dataset(uri)
-    floor = min(version["timestamp"].timestamp() for version in dataset.versions())
+    floor = min(committed_at(version).timestamp() for version in dataset.versions())
 
     orphan = Path(uri) / "data" / "stranded.lance"
     orphan.write_bytes(b"x" * 64)

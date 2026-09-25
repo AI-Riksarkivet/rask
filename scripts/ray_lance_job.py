@@ -146,7 +146,7 @@ def main() -> None:
     fragments_pre_compact = len(evolved.get_fragments())
     # CompactionOptions is a TypedDict; only target_rows_per_fragment matters here (the rest default at
     # runtime), so the static "missing keys" check is a false positive on this partial construction.
-    options = CompactionOptions(target_rows_per_fragment=32)  # ty: ignore[missing-typed-dict-key]
+    options = CompactionOptions(target_rows_per_fragment=32)
     lr.compact_files(dst, storage_options=so, num_workers=2, compaction_options=options)
     compacted = lance.dataset(dst, storage_options=so)
     fragments_after = len(compacted.get_fragments())

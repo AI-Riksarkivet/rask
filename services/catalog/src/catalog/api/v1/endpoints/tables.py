@@ -34,6 +34,7 @@ from lance_namespace import (
     RenameTableResponse,
     RestoreTableRequest,
     RestoreTableResponse,
+    ServiceUnavailableError,
     TableAlreadyExistsError,
     TableExistsRequest,
     TableNotFoundError,
@@ -66,13 +67,15 @@ from catalog.core.lineage_emit import (
     emit_write_event,
 )
 from catalog.core.modes import CreateMode
-from catalog.core.namespace import open_dataset
+from catalog.core.namespace import mixes_file_versions_at, open_dataset, warn_if_mixed_file_versions
 from catalog.core.vending import dataset_facts, unsanctioned_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import dataplane, native, warehouses
 from service_kit.control_emit import emit_control
 from service_kit.governed import fga
 from service_kit.lakehouse import maintenance_policies, protection, trash
+from service_kit.lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS
+from service_kit.lakehouse.ns_errors import PartiallyApplied
 
 
 log = logging.getLogger(__name__)
@@ -702,8 +705,8 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
 
     NEVER FAILS THE REGISTER. The registration is already committed, so an unreachable describe or an
     empty answer leaves the registered value — no worse than before, where raising would turn a
-    successful register into a 500 the caller cannot retry into a better state. This is a metadata read,
-    not the dataset reopen the emit site's own comment refuses.
+    successful register into a 500 the caller cannot retry into a better state. Its one caller is the
+    409 branch, which compares the resolved location against a claim and judges nothing.
     """
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
@@ -711,6 +714,42 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
         log.warning("register_location_unresolved", extra={"table": segments, "error": str(exc)})
         return registered
     return getattr(described, "location", None) or registered
+
+
+def refuse_mixed_file_versions(ns: LanceNamespace, so: dict[str, str], segments: list[str]) -> str:
+    """Refuse the dataset a registration just attached when it carries reader flag 256; return its location.
+
+    The backend registers a location without opening it, so this judges the dataset at the location the
+    backend RESOLVED, which is right for a warehouse-bound table too. Only bit 256 is read: flag 16 is what
+    an externally based ingest dataset carries, and it is no reason to refuse one. A location holding no
+    dataset has no data files to judge, and registers as the backend allows. Two stated bounds: only the
+    MAIN branch is judged (a mixed ``tree/<b>`` registers, and the maintenance alert pages on it), and the
+    open uses the estate's default storage options, so for a warehouse whose record names its own
+    endpoint ([[LH-067]]; none does today) a missing bucket is refused 503 while a same-named bucket
+    without the dataset reads as absent and registers unjudged.
+
+    Raises:
+        InvalidInputError: The dataset mixes data file versions, which no operation removes.
+        ServiceUnavailableError: The location could not be described or opened, so nothing was judged.
+    """
+    table = ".".join(segments)
+    try:
+        described: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
+        if not described.location:
+            raise TableNotFoundError(f"table {table} describes no location")
+        mixed = mixes_file_versions_at(described.location, so)
+    except Exception as exc:
+        log.warning("register_flags_unreadable", extra={"table": table, "error": str(exc)[:300]})
+        raise ServiceUnavailableError(f"the dataset registered at {table} could not be opened to read its feature flags") from exc
+    if mixed:
+        log.warning("register_refused_mixed_file_versions", extra={"table": table, "location": described.location})
+        raise InvalidInputError(
+            f"the dataset at {described.location!r} carries reader flag {FLAG_MIXED_DATA_FILE_VERSIONS} (mixed data file versions): its "
+            "data files sit at more than one Lance file version, and no operation removes the flag. Maintenance refuses such a table, "
+            "and pylance 11 and lancedb 0.34 cannot open it. Recreate it into a new dataset written at one data_storage_version, then "
+            "register that."
+        )
+    return described.location
 
 
 @router.post("/{id}/register", response_model_exclude_none=True)
@@ -727,8 +766,9 @@ async def register_table(
     authorization: Annotated[str | None, Header()] = None,
     idempotency_key: idem.IdempotencyKeyHeader = None,
 ) -> RegisterTableResponse:
-    """Register an existing table location at ``id`` via ``register_table``, then seed the caller's FGA
-    ownership and emit a REGISTER_TABLE marker (who attached it + where)."""
+    """Register an existing table location at ``id`` via ``register_table``, refuse it when the dataset
+    there carries reader flag 256, then seed the caller's FGA ownership and emit a REGISTER_TABLE marker
+    (who attached it + where)."""
     # `mode` WAS ACCEPTED AND NEVER READ. The generated model states two: "Create (default): the
     # operation fails with 409. Overwrite: the existing table registration is replaced with the new
     # registration." This door passes `body` straight to the backend, and the backend ignores the
@@ -796,6 +836,16 @@ async def register_table(
         registered = await run_in_threadpool(absolute_table_location, ns, segments, None)
         claimed = (body.location or "").strip("/")
         if registered and claimed and _registration_points_at(registered, claimed):
+            # A refused register whose detach failed also lands here on retry; a flag-256 dataset is
+            # never converged into governance, and a dataset that cannot be read is not judged clean.
+            try:
+                mixed = await run_in_threadpool(mixes_file_versions_at, registered, so)
+            except Exception as exc:
+                log.warning("register_converge_unjudged", extra={"table": id, "location": registered, "error": str(exc)[:300]})
+                raise
+            if mixed:
+                log.warning("register_converge_refused_mixed_file_versions", extra={"table": id, "location": registered})
+                raise
             await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments, may_grant_owner=False)
             log.info("register_converged_governance", extra={"table": id, "location": registered})
         raise
@@ -806,14 +856,33 @@ async def register_table(
         # catalog object this request created and leaves the data exactly where it was found.
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
 
+    # AFTER THE REGISTER, because only the backend knows which root a relative location resolves
+    # against; BEFORE THE SEED, so a refused dataset never gains an owner, a lineage node or an event.
+    try:
+        location = await run_in_threadpool(refuse_mixed_file_versions, ns, so, segments)
+    except Exception as refusal:
+        try:
+            await _undo_register()
+        except Exception as undo_exc:
+            log.error("register_refusal_compensation_failed", extra={"table": id, "error": str(undo_exc)})
+            raise PartiallyApplied(
+                f"the dataset at {id} was refused ({refusal}) but its registration could not be detached",
+                problem_extra={
+                    "table": id,
+                    "attached": True,
+                    "refused": "mixed_file_versions" if isinstance(refusal, InvalidInputError) else "unjudged",
+                    "remedy": "deregister it before retrying",
+                },
+            ) from undo_exc
+        raise
+
     await fga_deps.seed_ownership_or_compensate(client, settings, token, resource="table", segments=segments, undo=_undo_register)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path and a relative
-    # `source_uri` reports this table as storage loss on every sweep tick.
-    location = await run_in_threadpool(absolute_table_location, ns, segments, response.location)
+    # `source_uri` reports this table as storage loss on every sweep tick; the flag judgement above
+    # already resolved it.
     # Versionless + source_uri=the attached location, keying the CREATED edge (register_table ∈ _CREATE_OPS).
-    # The registered table already holds data at some version; we don't reopen a possibly-external location on
-    # the request path (a reopen failure must never fail an already-committed register) — #23 reconcile reads
-    # that source_uri and back-fills the real on-disk version (UNTRACKED → in-sync).
+    # The registered table already holds data at some version, and #23 reconcile reads that source_uri and
+    # back-fills the real on-disk version (UNTRACKED → in-sync).
     await emit_write_event(
         emitter,
         segments,
@@ -928,6 +997,7 @@ async def undrop_table(
         # and the table rejoins the sweep.
         log.info("undrop_table_already_registered", extra={"table": canonical})
         response = RegisterTableResponse(location=location)
+    await run_in_threadpool(warn_if_mixed_file_versions, location, so, table=canonical)
 
     # NO SEED — undrop is a PURE RESTORE (owner ruling, diff2 F10 item 4b).
     #

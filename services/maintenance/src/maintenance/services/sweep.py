@@ -17,7 +17,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter
@@ -33,6 +33,7 @@ from maintenance.core.lineage_emit import MaintenanceEmitter, declared_table_id,
 from maintenance.core.metrics import (
     record_dataset_swept,
     record_failed,
+    record_mixed_file_versions,
     record_reclaimed,
     record_refused,
     record_run,
@@ -45,6 +46,7 @@ from maintenance.services.tiers import target_rows_for
 from service_kit.governed import fga
 from service_kit.governed.audit import SUCCESS, audit
 from service_kit.lakehouse import base_refs, maintenance_policies, trash, warehouse_records
+from service_kit.lakehouse.features import flags_from_open_error, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.lance_session import affordable_cache_bytes
 from service_kit.lakehouse.objectfs import s3_filesystem
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
@@ -390,7 +392,13 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
         # NAMED, like every other gate. Without `refused_by` this refusal reached the counter in the
         # unlabelled bucket, so a missing GRANT and an unsupported manifest FLAG — a permissions fix
         # and a dependency upgrade — were one number.
-        return DatasetResult(uri=item.uri, refused=str(exc), refused_by="vend_denied")
+        return DatasetResult(
+            uri=item.uri,
+            refused=str(exc),
+            refused_by="vend_denied",
+            data_storage_version=probe.data_storage_version,
+            mixed_data_file_versions=probe.mixed_data_file_versions,
+        )
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected, table_id=table_id)
 
 
@@ -565,6 +573,9 @@ class WriteProbe:
     #: :class:`~service_kit.lakehouse.work_items.DatasetWorkItem` on why inventing one vends a
     #: credential for the wrong table rather than for none.
     declared_table_id: str | None = None
+    #: Read off the same open, so a unit stopped at the vend is still counted in the mixed-version census.
+    data_storage_version: str | None = None
+    mixed_data_file_versions: bool = False
 
 
 def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled: bool, optimize_indices_enabled: bool) -> WriteProbe:
@@ -598,13 +609,18 @@ def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled:
     """
     try:
         ds = lance.dataset(uri, storage_options=options, session=shared_lance_session())
-        stamp = declared_table_id(ds)
+        found = WriteProbe(
+            may_write=False,
+            declared_table_id=declared_table_id(ds),
+            data_storage_version=ds.data_storage_version,
+            mixed_data_file_versions=mixes_data_file_versions(manifest_feature_flags(ds)[0]),
+        )
         if len(ds.get_fragments()) > 1:
-            return WriteProbe(may_write=True, declared_table_id=stamp)  # compaction can merge them
+            return replace(found, may_write=True)  # compaction can merge them
         if cleanup_enabled and len(ds.versions()) > 1:
-            return WriteProbe(may_write=True, declared_table_id=stamp)  # a superseded version is something to reclaim
+            return replace(found, may_write=True)  # a superseded version is something to reclaim
         if optimize_indices_enabled and any(not str(ix.name).startswith("__") for ix in ds.describe_indices()):
-            return WriteProbe(may_write=True, declared_table_id=stamp)  # an index optimize commits
+            return replace(found, may_write=True)  # an index optimize commits
     except Exception as exc:
         # Unreadable, absent, or a pylance refusal: cannot tell, so do not decide. `compact_one` runs
         # its own refusal ladder over exactly these cases and reports them honestly; short-circuiting
@@ -615,8 +631,9 @@ def _probe_before_vending(uri: str, options: dict[str, str], *, cleanup_enabled:
         # hid one: `lance` was not imported in this module, so the probe raised NameError on every
         # dataset and the whole check reported "may write" while appearing to work.
         log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
-        return WriteProbe(may_write=True)
-    return WriteProbe(may_write=False, declared_table_id=stamp)
+        # A pylance that refuses the open over flag 256 still names it, the same rule compact_one applies.
+        return WriteProbe(may_write=True, mixed_data_file_versions=mixes_data_file_versions(flags_from_open_error(exc) or 0))
+    return found
 
 
 def _maintain_one(
@@ -728,6 +745,8 @@ def _record_dataset_outcome(result: DatasetResult, *, subject: str) -> None:
             "trashed": result.trashed,
             "error": result.error,
             "error_type": result.error_type,
+            "data_storage_version": result.data_storage_version,
+            "mixed_data_file_versions": result.mixed_data_file_versions,
         },
     )
     # AND ON THE COMPLIANCE STREAM, for the material ones. The record above is an app log — rich,
@@ -767,6 +786,7 @@ def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, option
         bytes_removed=result.bytes_removed,
     )
     record_refused(1 if result.refused else 0, result.refused_by)
+    record_mixed_file_versions(1 if result.mixed_data_file_versions else 0)
     if result.error is not None:
         record_failed({result.error_type or "Unknown": 1})
     return result
@@ -807,6 +827,7 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     # upgrade that caused it. Each unit then adds its own.
     record_reclaimed(fragments_removed=0, versions_removed=0, indices_optimized=0)
     record_refused(0)
+    record_mixed_file_versions(0)
     options = settings.storage_options()
     older_than = timedelta(days=settings.older_than_days)
     policy_records = _load_policies(settings, options)

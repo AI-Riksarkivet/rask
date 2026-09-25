@@ -11,14 +11,17 @@ format — the estate's `_FakeRayClient` pattern.
 
 from __future__ import annotations
 
+import json
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import lance
 import pyarrow as pa
 import pytest
 
-from ingest.lander import CREATION_FLAGS, Lander, create_empty, write_unit_fragments
+from ingest.lander import CREATION_FLAGS, ForeignFileVersionError, Lander, create_empty, write_unit_fragments
+from service_kit.lakehouse.features import manifest_feature_flags, mixes_data_file_versions, unsupported_features
 
 
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("source_uri", pa.string())])
@@ -195,15 +198,98 @@ def test_an_append_commutes_so_a_stale_version_is_NOT_refused(lander: tuple[Land
     assert sorted(lance.dataset(uri).to_table(columns=["id"]).column("id").to_pylist()) == [1, 2]
 
 
-def test_an_omitted_read_version_still_reads_the_current_one(lander: tuple[Lander, _FakeCatalog]) -> None:
-    """Backwards-compatible by default: every existing caller passes nothing and keeps the old
-    behaviour. `None` is the sentinel and not `0`, because 0 is a legal Lance version — a falsy
-    default would silently mean "re-read" for a caller that meant "the empty dataset"."""
+@pytest.mark.parametrize("read_version", [None, 0])
+def test_no_read_version_commits_onto_the_current_one(lander: tuple[Lander, _FakeCatalog], read_version: int | None) -> None:
+    """``LocalCatalog`` carries 0 (runtime.ensure_dataset_at); Lance has no version 0 to open, so both judge the latest."""
     land, _ = lander
     uri = land.ensure("p", "pages", SCHEMA)
     land.commit_fragments(uri, write_unit_fragments(uri, _batch([1])), run_id="run-A")
 
-    result = land.commit_fragments(uri, write_unit_fragments(uri, _batch([2])), run_id="run-B")
+    result = land.commit_fragments(uri, write_unit_fragments(uri, _batch([2])), run_id="run-B", read_version=read_version)
 
     assert sorted(lance.dataset(uri).to_table(columns=["id"]).column("id").to_pylist()) == [1, 2]
     assert result.version > 1
+
+
+# --------------------------------------------------------------------------- #
+# File versions — a run inherits the table's, and a foreign set is refused
+# --------------------------------------------------------------------------- #
+
+
+def _file_versions(uri: str) -> set[tuple[int, int]]:
+    return {(f.file_major_version, f.file_minor_version) for fragment in lance.dataset(uri).get_fragments() for f in fragment.metadata.files}
+
+
+def _precreate(tmp_path: Path, version: Literal["2.1", "2.2"]) -> None:
+    """At the path `_FakeCatalog` composes, so `ensure` finds it and skips `create_empty`."""
+    lance.write_dataset(SCHEMA.empty_table(), str(tmp_path / "p-pages.lance"), mode="create", data_storage_version=version, enable_stable_row_ids=True)
+
+
+@pytest.mark.parametrize("version", ["2.1", "2.2"])
+def test_a_run_into_an_existing_table_inherits_its_version(lander: tuple[Lander, _FakeCatalog], tmp_path: Path, version: Literal["2.1", "2.2"]) -> None:
+    """The writer names no version, so its files land at whatever the table holds and the flags stay clean."""
+    _precreate(tmp_path, version)
+    land, _ = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+
+    land.commit_fragments(uri, write_unit_fragments(uri, _batch([1, 2])), run_id="r")
+
+    assert _file_versions(uri) == {(2, int(version[-1]))}
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+def test_an_overwrite_between_the_judgement_and_the_commit_cannot_slip_unjudged_files_on(
+    lander: tuple[Lander, _FakeCatalog], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """read_version 0 is judged at the latest version and committed AT it; committed at 0, Lance checks nothing."""
+    import ingest.lander as lander_module
+
+    _precreate(tmp_path, "2.1")
+    land, _ = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+    fragments = write_unit_fragments(uri, _batch([1]))
+    judge = lander_module.describe_foreign_data_file_versions
+
+    def _overwrite_then_judge(table_version: str, files: Any) -> str | None:
+        lance.write_dataset(SCHEMA.empty_table(), uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
+        return judge(table_version, files)
+
+    monkeypatch.setattr(lander_module, "describe_foreign_data_file_versions", _overwrite_then_judge)
+
+    with pytest.raises(OSError):
+        land.commit_fragments(uri, fragments, run_id="r", read_version=0)
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+def test_a_run_into_a_fresh_table_lands_at_the_creation_version(lander: tuple[Lander, _FakeCatalog]) -> None:
+    land, _ = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+
+    land.commit_fragments(uri, write_unit_fragments(uri, _batch([1, 2])), run_id="r")
+
+    assert lance.dataset(uri).data_storage_version == CREATION_FLAGS["data_storage_version"]
+    assert _file_versions(uri) == {(2, 2)}
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+@pytest.mark.parametrize(("table_version", "fragment_version"), [("2.1", "2.2"), ("2.2", "2.1")])
+def test_the_lander_REFUSES_fragments_at_another_file_version(
+    lander: tuple[Lander, _FakeCatalog], tmp_path: Path, table_version: Literal["2.1", "2.2"], fragment_version: str
+) -> None:
+    """The LocalCatalog path never reaches the catalog's /commit door, so the lander judges the set itself.
+
+    Refused BEFORE the commit because flag 256 cannot be removed in place.
+    """
+    _precreate(tmp_path, table_version)
+    land, cat = lander
+    uri = land.ensure("p", "pages", SCHEMA)
+    base = lance.dataset(uri).version
+    foreign = [json.dumps(f.to_json()) for f in lance.fragment.write_fragments(_batch([1]), uri, data_storage_version=fragment_version)]
+
+    with pytest.raises(ForeignFileVersionError, match=rf"{re.escape(fragment_version)}.*{re.escape(table_version)}"):
+        land.commit_fragments(uri, foreign, run_id="r")
+
+    dataset = lance.dataset(uri)
+    assert dataset.version == base
+    assert not mixes_data_file_versions(manifest_feature_flags(dataset)[0])
+    assert cat.registered == []

@@ -17,6 +17,7 @@ import pyarrow as pa
 from fastapi.testclient import TestClient
 from lance_namespace import (
     BatchDeleteTableVersionsResponse,
+    CountTableRowsResponse,
     CreateNamespaceResponse,
     CreateTableResponse,
     CreateTableVersionResponse,
@@ -25,6 +26,7 @@ from lance_namespace import (
     ListNamespacesResponse,
     ListTableVersionsResponse,
     MergeInsertIntoTableResponse,
+    QueryTableResponse,
     TableAlreadyExistsError,
     TableNotFoundError,
     TableVersion,
@@ -46,7 +48,7 @@ def test_table_id_is_parsed_from_path(client: TestClient, fake_ns: MagicMock) ->
 
 def test_body_id_matching_the_path_passes(client: TestClient, fake_ns: MagicMock) -> None:
     # Spec (operations/index.md): a body-level id may restate the path id — identical is fine.
-    fake_ns.count_table_rows.return_value = 7
+    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=7)
     resp = client.post("/v1/table/db1$users/count_rows", json={"id": ["db1", "users"]})
     assert resp.status_code == 200, resp.text
     assert fake_ns.count_table_rows.call_args.args[0].id == ["db1", "users"]
@@ -266,14 +268,14 @@ def test_count_rows_returns_a_json_integer(client: TestClient, fake_ns: MagicMoc
     integer — "serialized transparently as a bare number for the REST namespace". This asserted
     `text/plain` until 2026-09-02 (blocker A2); the media type was the deviation, and the payload
     survived only because a bare number happens to parse as JSON either way."""
-    fake_ns.count_table_rows.return_value = 7
+    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=7)
     resp = client.post("/v1/table/db$t/count_rows", json={})
     assert resp.headers["content-type"].startswith("application/json")
     assert resp.json() == 7
 
 
 def test_query_returns_arrow_file_bytes(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.query_table.return_value = b"ARROWFILEBYTES"
+    fake_ns.query_table.return_value = QueryTableResponse(data=b"ARROWFILEBYTES")
     resp = client.post("/v1/table/db$t/query", json={"k": 5, "vector": {}})
     assert resp.headers["content-type"].startswith("application/vnd.apache.arrow.file")
     assert resp.content == b"ARROWFILEBYTES"
@@ -389,6 +391,15 @@ def _capture_emit(monkeypatch, module: str) -> dict[str, object]:
 
     monkeypatch.setattr(f"catalog.api.v1.endpoints.{module}.emit_write_event", _cap)
     return captured
+
+
+def _judge_as_single_version(monkeypatch) -> None:
+    """The register door opens the dataset it attached; a MagicMock backend attaches none.
+
+    Only the flag read is replaced, so the describe that resolves the location still runs. What the door
+    does with a real mixed dataset is pinned in `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
+    """
+    monkeypatch.setattr("catalog.api.v1.endpoints.tables.mixes_file_versions_at", lambda _location, _storage_options: False)
 
 
 def _capture_measured_emit(monkeypatch) -> dict[str, object]:
@@ -670,12 +681,13 @@ def test_register_emits_versionless_marker_with_source_uri(client: TestClient, f
     # path back and a relative `source_uri` reports the table as storage loss on every sweep tick. The
     # double has to answer the describe or it hands back a MagicMock.
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
+    _judge_as_single_version(monkeypatch)
     captured = _capture_emit(monkeypatch, "tables")
 
     resp = client.post("/v1/table/db$t/register", json={"location": "s3://bucket/t"})
     assert resp.status_code == 200
     assert captured["operation"] == "register_table"
-    assert captured["version"] is None  # versionless — no reopen of a possibly-external location on the path
+    assert captured["version"] is None  # versionless — reconcile back-fills the on-disk version
     assert captured["source_uri"] == "s3://bucket/t"
 
 
@@ -688,6 +700,7 @@ def test_register_emits_the_resolved_location_not_the_relative_one(client: TestC
 
     fake_ns.register_table.return_value = RegisterTableResponse(location="t.lance")
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/9f_db$t")
+    _judge_as_single_version(monkeypatch)
     captured = _capture_emit(monkeypatch, "tables")
 
     resp = client.post("/v1/table/db$t/register", json={"location": "t.lance"})

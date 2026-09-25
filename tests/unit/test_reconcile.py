@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -107,17 +108,26 @@ def test_read_dangling_blob_columns_empty_when_dataset_unreadable(tmp_path: Path
 # --- data-contract gap #2: freshness (arrival cadence as an asserted clause) ------------------ #
 
 
-def test_read_latest_write_age_uses_the_newest_version_commit(tmp_path: Path) -> None:
+# POSIX signs are inverted: Etc/GMT+5 is UTC-5. A zone WEST of UTC is the one that exposes a misread
+# manifest time, because east of it the error lands in the future and the clamp at 0 hides it.
+@pytest.mark.parametrize("zone", ["UTC", "Etc/GMT+5", "Etc/GMT-5"])
+def test_read_latest_write_age_uses_the_newest_version_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, zone: str) -> None:
     """Age comes from STORAGE TRUTH (the version manifests), so a write that bypassed lineage still
-    counts as fresh. A just-written dataset ages ≈0; missing dataset → None (the version check's
-    finding, never a phantom staleness)."""
-    uri = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": [1]}), uri)
-    lance.write_dataset(pa.table({"id": [2]}), uri, mode="append")
-    age = read_latest_write_age_hours(uri, {})
-    assert age is not None
-    assert 0 <= age < 1  # written seconds ago; clamped at 0 against clock skew
-    assert read_latest_write_age_hours(str(tmp_path / "missing.lance"), {}) is None
+    counts as fresh. A just-written dataset ages ≈0 whatever the host's zone; missing dataset → None
+    (the version check's finding, never a phantom staleness)."""
+    monkeypatch.setenv("TZ", zone)
+    time.tzset()
+    try:
+        uri = str(tmp_path / "t.lance")
+        lance.write_dataset(pa.table({"id": [1]}), uri)
+        lance.write_dataset(pa.table({"id": [2]}), uri, mode="append")
+        age = read_latest_write_age_hours(uri, {})
+        assert age is not None
+        assert 0 <= age < 1  # written seconds ago; clamped at 0 against clock skew
+        assert read_latest_write_age_hours(str(tmp_path / "missing.lance"), {}) is None
+    finally:
+        monkeypatch.undo()
+        time.tzset()
 
 
 def test_reconcile_all_flags_stale_only_with_a_budget_and_readable_storage() -> None:

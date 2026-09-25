@@ -17,7 +17,7 @@ dependencies = [
     # used to arrive from the shared driver venv, undeclared — with the seal
     # holding, this env declares everything it imports.
     "pyarrow",
-    "pylance>=4.0",
+    "pylance>=12.0.0",
     "pydantic",
 ]
 

@@ -3,27 +3,35 @@
 The client writes Lance fragments DIRECTLY to object storage (``write_fragments`` — the guide's
 distributed-write protocol); the catalog folds the serialized ``FragmentMetadata`` into a metadata-only
 ``LanceDataset.commit`` under root creds. These tests pin the dataplane commit primitive against real
-pylance (no S3, no cluster): the happy append, the empty-fragment guard, and — crucially — the conflict
-classification the design review flagged (a stale append after an Overwrite must be a 409, a schema
-mismatch a 400, never a blanket 409 that loops a doomed retry).
+pylance (no S3, no cluster): the happy append, the empty-fragment guard, the conflict classification the
+design review flagged (a stale append after an Overwrite is a non-retryable 400, a lost race a 409, a
+schema mismatch a 400, never a blanket 409 that loops a doomed retry), and the file-version guard that
+pylance 12 no longer applies at commit.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+import re
+from typing import Any, Literal
 
 import lance
 import pyarrow as pa
 import pytest
-from lance_namespace import ConcurrentModificationError, InvalidInputError
+from lance_namespace import ConcurrentModificationError, InvalidInputError, ServiceUnavailableError
 
+from catalog.services import dataplane
 from catalog.services.dataplane import commit_appended_fragments
+from service_kit.lakehouse.features import manifest_feature_flags, unsupported_features
 
 
-def _fragments(uri: str, table: pa.Table) -> list[dict[str, Any]]:
+def _fragments(uri: str, table: pa.Table, **write_kwargs: Any) -> list[dict[str, Any]]:
     """The client half: write fragments directly to storage, return their serialized metadata (dicts)."""
-    return [f.to_json() for f in lance.fragment.write_fragments(table, uri, schema=table.schema)]
+    return [f.to_json() for f in lance.fragment.write_fragments(table, uri, schema=table.schema, **write_kwargs)]
+
+
+def _ids(*values: int) -> pa.Table:
+    return pa.table({"id": pa.array(values, pa.int64())})
 
 
 def test_commit_appends_client_written_fragments(tmp_path: Any) -> None:
@@ -159,6 +167,147 @@ def test_commit_rejects_fragments_referencing_absent_data_files(tmp_path: Any) -
     with pytest.raises(InvalidInputError):
         commit_appended_fragments(uri, {}, bogus, base)
     assert lance.dataset(uri).version == base  # NOT poisoned — the current version is unchanged
+
+
+@pytest.mark.parametrize(
+    ("table_version", "stable", "fragment_version"),
+    [("2.1", True, "2.2"), ("2.2", True, "2.1"), ("2.0", False, "2.1")],
+)
+def test_commit_REFUSES_fragments_at_another_file_version(
+    tmp_path: Any, table_version: Literal["2.0", "2.1", "2.2"], stable: bool, fragment_version: str
+) -> None:
+    """pylance 12 commits these and stamps the sticky reader flag 256; the door must refuse before Lance sees them."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1, 2), uri, data_storage_version=table_version, enable_stable_row_ids=stable)
+    base = lance.dataset(uri).version
+    frags = _fragments(uri, _ids(3), data_storage_version=fragment_version)
+
+    with pytest.raises(InvalidInputError, match=rf"{re.escape(fragment_version)}.*{re.escape(table_version)}"):
+        commit_appended_fragments(uri, {}, frags, base)
+    assert lance.dataset(uri).version == base
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+def test_commit_at_read_version_0_judges_the_fragments_against_the_latest_version(tmp_path: Any) -> None:
+    """read_version=0 names no manifest; Lance commits the append onto the latest one, so that is the one judged."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version="2.1", enable_stable_row_ids=True)
+    base = lance.dataset(uri).version
+    frags = _fragments(uri, _ids(2), data_storage_version="2.2")
+
+    with pytest.raises(InvalidInputError, match=r"2\.2.*2\.1"):
+        commit_appended_fragments(uri, {}, frags, 0)
+    assert lance.dataset(uri).version == base
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+def test_an_overwrite_between_the_judgement_and_the_commit_cannot_slip_unjudged_files_on(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """read_version=0: the fragments are judged at the latest version, then committed AT that version.
+
+    Committed at 0 instead, Lance runs no conflict check, so an Overwrite that moves the table to 2.2 in
+    between lands the judged-clean 2.1 files on a 2.2 table and stamps flag 256 (measured on 12.0.0).
+    """
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version="2.1", enable_stable_row_ids=True)
+    frags = _fragments(uri, _ids(2))
+    verify = dataplane._verify_fragment_data_files
+
+    def overwrite_then_verify(location: str, so: Any, fragments: list[dict[str, Any]]) -> None:
+        lance.write_dataset(_ids(9), uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
+        verify(location, so, fragments)
+
+    monkeypatch.setattr(dataplane, "_verify_fragment_data_files", overwrite_then_verify)
+
+    with pytest.raises((InvalidInputError, ConcurrentModificationError)):
+        commit_appended_fragments(uri, {}, frags, 0)
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+@pytest.mark.parametrize("read_version", [0, 1])
+@pytest.mark.parametrize("table_version", ["2.1", "2.2"])
+def test_commit_ACCEPTS_fragments_that_inherit_the_table_version(tmp_path: Any, table_version: Literal["2.1", "2.2"], read_version: int) -> None:
+    """``write_fragments`` with no version inherits the table's; that append keeps the table's flags."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version=table_version, enable_stable_row_ids=True)
+    flags = manifest_feature_flags(lance.dataset(uri))
+
+    version, rows = commit_appended_fragments(uri, {}, _fragments(uri, _ids(2)), read_version)
+
+    assert (version, rows) == (2, 2)
+    assert manifest_feature_flags(lance.dataset(uri)) == flags
+
+
+def test_a_stale_read_version_after_an_overwrite_to_2_2_stays_the_NOT_retryable_400(tmp_path: Any) -> None:
+    """Judged at the read version the fragments match, so Lance's own verdict is the one the caller hears."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version="2.1", enable_stable_row_ids=True)
+    frags = _fragments(uri, _ids(2))
+    lance.write_dataset(_ids(9), uri, mode="overwrite", data_storage_version="2.2")
+
+    with pytest.raises(InvalidInputError, match="NOT retryable"):
+        commit_appended_fragments(uri, {}, frags, 1)
+    assert lance.dataset(uri).version == 2
+
+
+def test_fragments_written_after_an_overwrite_hear_lances_conflict_not_a_file_version_refusal(tmp_path: Any) -> None:
+    """They inherited the NEW version, so no writer mixed anything; the stale read_version is the whole story."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version="2.1", enable_stable_row_ids=True)
+    lance.write_dataset(_ids(9), uri, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
+    frags = _fragments(uri, _ids(2))
+
+    with pytest.raises(InvalidInputError, match="NOT retryable") as refused:
+        commit_appended_fragments(uri, {}, frags, 1)
+    assert "256" not in str(refused.value)
+    assert unsupported_features(lance.dataset(uri)) is None
+
+
+@pytest.mark.parametrize("read_version", [0, 9])
+def test_commit_without_a_committed_base_stays_the_no_base_400(tmp_path: Any, read_version: int) -> None:
+    """A declared-only table (read_version 0) and a read version past the latest have nothing to judge against."""
+    uri = str(tmp_path / "t")
+    if read_version:
+        lance.write_dataset(_ids(1), uri, data_storage_version="2.2", enable_stable_row_ids=True)
+    frags = _fragments(uri, _ids(2))
+
+    with pytest.raises(InvalidInputError, match="no committed base version"):
+        commit_appended_fragments(uri, {}, frags, read_version)
+
+
+def test_an_unreadable_base_refuses_the_commit_as_503(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A store that cannot be read has not shown the fragments fit, so nothing is committed."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version="2.2", enable_stable_row_ids=True)
+    frags = _fragments(uri, _ids(2))
+    real = lance.dataset
+
+    def _unreadable(*_a: Any, **_kw: Any) -> lance.LanceDataset:
+        raise OSError("connection reset by peer talking to the object store")
+
+    monkeypatch.setattr(dataplane.lance, "dataset", _unreadable)
+    with pytest.raises(ServiceUnavailableError):
+        commit_appended_fragments(uri, {}, frags, 1)
+    monkeypatch.undo()
+    assert real(uri).version == 1
+
+
+@pytest.mark.parametrize(
+    ("table_version", "file_version", "lance_says"),
+    [("2.2", None, "V1 and V2"), ("legacy", (2, 1), "same version")],
+)
+def test_a_V1_V2_mix_is_a_400_not_a_503(tmp_path: Any, table_version: Literal["2.2", "legacy"], file_version: tuple[int, int] | None, lance_says: str) -> None:
+    """The guard leaves V1/V2 to Lance, whose refusal is the caller's input. A file entry with no format version parses as (0, 0)."""
+    uri = str(tmp_path / "t")
+    lance.write_dataset(_ids(1), uri, data_storage_version=table_version)
+    frags = _fragments(uri, _ids(2))
+    for data_file in frags[0]["files"]:
+        del data_file["file_major_version"], data_file["file_minor_version"]
+        if file_version:
+            data_file["file_major_version"], data_file["file_minor_version"] = file_version
+
+    with pytest.raises(InvalidInputError, match=lance_says):
+        commit_appended_fragments(uri, {}, frags, 1)
+    assert lance.dataset(uri).version == 1
 
 
 def test_vending_mode_requires_sts_endpoint_fail_closed() -> None:

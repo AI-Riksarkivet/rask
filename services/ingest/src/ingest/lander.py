@@ -37,6 +37,7 @@ from lance import LanceOperation
 from pydantic import BaseModel
 
 from service_kit.lakehouse import blobs
+from service_kit.lakehouse.features import describe_foreign_data_file_versions
 
 
 logger = logging.getLogger(__name__)
@@ -64,15 +65,21 @@ class CreationFlags(TypedDict):
     enable_stable_row_ids: bool
 
 
-# Creation-time-only, and silent no-ops if set later (file_format.md:4011-4013 + guide.md:228-229) — which is
-# why gate A14 makes the catalog refuse a governed dataset created without them. CDF (D1) and every
-# `source_rowid` reference in silver/gold (D2) depend on stable row ids existing from version 1.
+# CREATE ONLY. Stable row ids named later are a silent no-op (file_format.md:4011-4013; measured again on
+# pylance 12.0.0), which is why gate A14 refuses a governed dataset created without them: CDF (D1) and every
+# `source_rowid` reference in silver/gold (D2) depend on them from version 1. The version is NOT a no-op
+# later: pylance 12 writes files at whatever version a write names and, when it differs from the table's, stamps
+# sticky reader flag 256, so no append in this module names one.
 CREATION_FLAGS: CreationFlags = {"data_storage_version": "2.2", "enable_stable_row_ids": True}
 
 #: The manifest name for the one external blob base a bronze dataset registers. A NAME, not a path:
 #: `DatasetBasePath(path, name)` takes both, and the name is what a later reader sees when it asks
 #: which bases a dataset may point at. One per dataset because one bronze dataset has one source.
 _EXTERNAL_BASE_NAME = "source"
+
+
+class ForeignFileVersionError(ValueError):
+    """A commit would add data files at another format version than the table's own."""
 
 
 class CommitResult(BaseModel):
@@ -148,13 +155,12 @@ class Lander:
         conflict detection from ``read_version``: appends COMMUTE, so Lance rebases them. Committing
         an Append against a deliberately stale version is accepted (verified against pylance in
         ``tests/test_lander.py``); only a version that does not exist yet fails, and it fails as a
-        manifest lookup, not as a conflict. So carrying it here buys three real things and not the
-        fourth one might assume:
+        manifest lookup, not as a conflict. So carrying it here buys two real things and not the
+        third one might assume:
 
           * ONE behaviour instead of two. ``runtime.py``'s catalog branch has carried it since F12a;
             this branch re-read it. Two commit paths that disagree about what version they are
             building on is a difference nobody can hold in their head.
-          * One less dataset open per ``finalize`` — an S3 round-trip on a path that is retried.
           * The correct SEMANTIC for the day the operation stops commuting. An Overwrite, a Delete or
             a schema change against a re-read version is a genuine lost update; the Append is the only
             reason today's re-read is survivable, and that is a property of the operation, not of this
@@ -163,16 +169,31 @@ class Lander:
         It does NOT buy conflict rejection today. Anything that claims it does is describing a
         different Lance operation.
 
-        ``None`` and not ``0`` as the "not supplied" sentinel: version 0 is a legal Lance version, so
-        a falsy default would silently mean "re-read" for a caller that meant "the empty dataset".
+        ``None`` and ``0`` both judge and commit against the latest manifest. Lance versions start at 1:
+        ``_versions/0.manifest`` does not exist, and an Append committed at 0 runs no conflict check and
+        lands on the latest version (measured on pylance 12.0.0), which is what ``LocalCatalog`` carries.
+
+        **The data files are judged before the commit, against the table's version at the base.**
+        pylance 12 commits files at another format version and stamps reader flag 256, which nothing
+        removes. The catalog's commit door never sees this path (``runtime.finalize_run``'s
+        ``LocalCatalog`` branch), so the lander refuses the set itself.
+
+        Raises:
+            ForeignFileVersionError: If any fragment's data files are at another version than the table's.
         """
         if not fragments_json:
             ds = lance.dataset(dataset_uri)
             return CommitResult(dataset_uri=dataset_uri, version=ds.version, rows=ds.count_rows())
 
         fragments = [lance.fragment.FragmentMetadata.from_json(f) for f in fragments_json]
-        base_version = read_version if read_version is not None else lance.dataset(dataset_uri).version
-        committed = lance.LanceDataset.commit(dataset_uri, LanceOperation.Append(fragments), read_version=base_version)
+        base = lance.dataset(dataset_uri, version=read_version) if read_version else lance.dataset(dataset_uri)
+        foreign = describe_foreign_data_file_versions(base.data_storage_version, (data_file for fragment in fragments for data_file in fragment.files))
+        if foreign is not None:
+            raise ForeignFileVersionError(
+                f"refusing to commit to {dataset_uri} at version {base.version}: {foreign}. "
+                f"Write the fragments without data_storage_version so they inherit the table's."
+            )
+        committed = lance.LanceDataset.commit(dataset_uri, LanceOperation.Append(fragments), read_version=base.version)
         self._catalog.register_version(dataset_uri, committed.version, run_id)
         _ensure_partition_index(committed)
         # Counted from the FRAGMENTS, not as a before/after difference against the dataset. A
@@ -284,18 +305,13 @@ def write_unit_fragments(dataset_uri: str, batch: pa.Table, storage_options: dic
     `(json_data: str)`. Pairing them directly raises "the JSON object must be str, bytes or
     bytearray, not dict" at COMMIT time, i.e. after every worker has already done its fetching.
 
-    **The creation flags are passed HERE too, and that is not redundancy.** `write_fragments`
-    defaults to `data_storage_version=None` (which resolves to 2.1) and, worse,
-    `enable_stable_row_ids=False`. A fragment written against a not-yet-existing dataset therefore
-    takes those defaults, and the first in-cluster run died at commit with
-
-        The operation added files with version 2.1. However, the data storage version is 2.2.
-
-    after every fixture had been fetched, validated and written. The stable-row-id half would not
-    even have failed loudly: the commit would have succeeded and D1's change-data-feed and every
-    `source_rowid` reference in silver would have been quietly built on fragments that carry no
-    stable ids — and the flag is creation-time-only, so there is no later point at which it could be
-    repaired. Passing the flags explicitly makes both impossible regardless of what exists yet.
+    **The writer names neither the file version nor stable row ids: both are the table's.** Left unset,
+    `write_fragments` writes at the target table's own version (measured on pylance 12.0.0 against 2.0,
+    2.1 and 2.2 tables). Naming one writes files at it whatever the table holds; when it differs from the
+    table's, pylance 12 commits that set and stamps reader flag 256, which nothing removes, so
+    `Lander.commit_fragments` refuses it. Stable row ids come from the table's manifest at commit: an
+    append into a stable-id table got the same `_rowid` sequence with `enable_stable_row_ids` unset, True
+    or False (measured on 12.0.0). The table itself is created with both by `create_empty`.
     """
     # `storage_options` is how a VENDED credential reaches the write. This is the client-direct flow
     # the vending door was built for (#2): the worker writes fragments straight to object storage and
@@ -307,7 +323,7 @@ def write_unit_fragments(dataset_uri: str, batch: pa.Table, storage_options: dic
     # ABSENT means the ambient credential chain, which is exactly the previous behaviour. `mode_b`
     # vends nothing by design, so a deployment on it must be untouched — this adds a capability
     # without removing one.
-    written = lance.fragment.write_fragments(batch, dataset_uri, **CREATION_FLAGS, **({"storage_options": storage_options} if storage_options else {}))
+    written = lance.fragment.write_fragments(batch, dataset_uri, **({"storage_options": storage_options} if storage_options else {}))
     return [json.dumps(f.to_json()) for f in written]
 
 

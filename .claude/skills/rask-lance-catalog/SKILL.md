@@ -249,6 +249,27 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `read_schema_metadata`, which excludes `lineage.*`, so a replace silently destroys the #21
   self-describing coordinates. `description` is the one RESERVED key (the lakehouse renders it under the
   table name); everything else in that map is opaque user data.
+- **`register` judges what it attaches, on reader flag 256 alone.** The `dir` backend registers a
+  location without opening it (measured on pylance 12.0.0: a mixed table, an absent location and a
+  nested path are all accepted), so `tables.refuse_mixed_file_versions` opens the dataset at the
+  location the backend RESOLVED — after the register, before the seed. Flag 256 (mixed data file
+  versions, sticky) is a 400 `InvalidInput` naming the recreate remedy; an open that fails is a 503;
+  both deregister what the call attached. An absent location still registers. Never gate this on
+  `unsupported_features()`: ingest's `initial_bases` sets flag 16 and would be refused. The catalog's
+  own re-registers (table and namespace undrop) log `restored_mixed_file_versions` instead of
+  refusing, so a governed table is never stranded in the trash. A re-register that lands on the 409
+  converge path never seeds governance onto a flag-256 dataset, and a refusal whose detach fails is a
+  503 `PartiallyApplied` naming `attached: true`. Only `main` is judged. Pinned by
+  `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
+- **Five doors commit client-produced data, and four judge its file versions.** `/commit`
+  (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
+  ingest's own `Lander.commit_fragments` refuse data files at another version than the table's
+  (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). **`version/create` and the batch
+  version doors do NOT**: they move a client-staged manifest into the version slot, and judging it needs a
+  manifest-file parser nothing here has yet. The dir backend reports `managed_versioning: None`, so stock
+  clients do not route commits through them, and a write-tier credential can already put
+  `_versions/` directly (the vend-scope row), so the gap adds no capability — but it is open work, not
+  covered ground.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
   `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens

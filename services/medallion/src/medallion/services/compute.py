@@ -223,10 +223,11 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
             _STAGE_COLUMN: pa.array(["bronze"] * rows, pa.string()),
         }
     )
-    # data_storage_version="2.2" — the current Lance format (blob v2 + Map need it; pylance 8 still
-    # defaults to 2.1). enable_stable_row_ids — `_rowid` stays constant across compaction, which rewrites
-    # fragments and invalidates row ADDRESSES. Both are CREATE-TIME-ONLY: neither can be turned on later
-    # (`lance_docs/file_format.md:4011-4013`), which is why `ingest/catalog.py::A14` REFUSES a governed
+    # data_storage_version="2.2" — the current Lance format (blob v2 + Map need it). pylance 12.0.0 defaults
+    # to it (measured 2026-09-25) and pylance <= 11 to 2.1, so it is named rather than left to whichever
+    # pylance the image carries. enable_stable_row_ids — `_rowid` stays constant across compaction, which rewrites
+    # fragments and invalidates row ADDRESSES. Stable row ids are CREATE-TIME-ONLY and cannot be turned on
+    # later (`lance_docs/file_format.md:4011-4013`), which is why `ingest/catalog.py::A14` REFUSES a governed
     # dataset that lacks them rather than repairing it.
     #
     # THE RE-SEED MERGES ON `id` AND DOES NOT OVERWRITE, because overwrite re-mints every `_rowid` and

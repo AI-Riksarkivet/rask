@@ -13,7 +13,7 @@ requires-python = ">=3.10,<3.13"
 dependencies = [
     "toponymy",
     "openai>=1.40",
-    "pylance>=4.0",
+    "pylance>=12.0.0",
     "numpy<3",
 ]
 

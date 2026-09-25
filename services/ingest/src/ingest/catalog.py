@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from ingest.lander import create_empty
+from service_kit.lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, manifest_feature_flags, mixes_data_file_versions
 from service_kit.lancekit.absence import reads_as_absent
 
 
@@ -154,8 +155,9 @@ class LocalCatalog:
         """Create the dataset EMPTY if absent.
 
         The creation-time flags (`enable_stable_row_ids`, `data_storage_version=2.2`) are set here or
-        never: they are silent no-ops afterwards (`file_format.md:4011-4013 + guide.md:228-229`), and CDF
-        plus every silver `source_rowid` reference depends on them existing from version 1.
+        never. Stable row ids named later are a silent no-op (`file_format.md:4011-4013`), and CDF plus
+        every silver `source_rowid` reference depends on them from version 1. A version named later is
+        not a no-op: pylance 12 writes files at it and stamps sticky reader flag 256, which A14 refuses.
 
         `external_base` joins them, and for the same reason: `initial_bases` is CREATE-MODE ONLY, so
         the root a dataset's blob descriptors may point at is registered here or never
@@ -217,7 +219,7 @@ class CreationContractError(ValueError):
 def assert_creation_contract(uri: str, storage_options: dict[str, str] | None = None) -> None:
     """A14 — REFUSE a governed dataset that is missing its creation-time guarantees.
 
-    Two things must hold from version 1, and neither can be repaired afterwards:
+    Three things must hold, and none can be repaired in place:
 
     * **stable row ids** (`enable_stable_row_ids`) — a silent no-op if set later
       (`lance_docs/file_format.md:4011-4013`). D1's change-data-feed reads `_row_created_at_version`,
@@ -231,6 +233,9 @@ def assert_creation_contract(uri: str, storage_options: dict[str, str] | None = 
       (`lance-schema:unenforced-primary-key`), which this plane sets nowhere — so `id` is an ordinary
       column the estate agrees to merge on, and Lance validates no uniqueness for us. Declaring it
       properly is open work; claiming it in a comment was not the same thing.
+    * **one data file version** — reader flag 256 is sticky: maintenance refuses the table, and
+      pylance 11 and lancedb 0.34 (lance core 8) cannot open it. Asked by that bit alone, because the
+      generic flag gate refuses ingest's own externally based create on flag 16.
 
     (The verb itself is deliberately not named here: I4's gate is a grep over these files, and
     prose naming a write verb is indistinguishable to it from a second writer. Bluntness is the
@@ -260,6 +265,14 @@ def assert_creation_contract(uri: str, storage_options: dict[str, str] | None = 
             f"{uri} was created without enable_stable_row_ids — CDF deltas and every source_rowid "
             f"reference above it would rest on ids that move under compaction, and setting the flag "
             f"now is a silent no-op (A14)"
+        )
+
+    reader, _writer = manifest_feature_flags(dataset)
+    if mixes_data_file_versions(reader):
+        raise CreationContractError(
+            f"{uri} carries reader flag {FLAG_MIXED_DATA_FILE_VERSIONS} (mixed data file versions) — maintenance refuses it, "
+            f"pylance 11 and lancedb 0.34 cannot open it, and no operation clears the flag; the only measured remedy is "
+            f"recreating it into a new dataset (A14)"
         )
 
 

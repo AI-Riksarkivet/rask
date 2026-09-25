@@ -28,7 +28,7 @@ import json
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
-from lance_namespace import UpdateTableSchemaMetadataResponse
+from lance_namespace import CountTableRowsResponse, UpdateTableSchemaMetadataResponse
 
 
 def _json_media(resp: object) -> str:
@@ -36,7 +36,7 @@ def _json_media(resp: object) -> str:
 
 
 def test_count_rows_answers_a_json_integer(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.count_table_rows.return_value = 7
+    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=7)
     resp = client.post("/v1/table/db$t/count_rows", json={})
     assert resp.status_code == 200, resp.text
     assert "application/json" in _json_media(resp), f"spec declares application/json; got {_json_media(resp)!r}"

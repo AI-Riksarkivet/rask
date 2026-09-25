@@ -2,11 +2,12 @@
 
 Lance blob-v2 columns require file format ``>= 2.2`` and are identified by the
 ``lance.blob.v2`` Arrow extension type (registered when ``lance`` is imported).
-These helpers let the catalog (create path) and the medallion compute (cascade)
-recognise a blob column from an Arrow schema without materialising the payloads.
+These helpers recognise a blob column from an Arrow schema without materialising
+the payloads; blob serving, the cascade's column map, the stage job's media lane
+(``scripts/ray_stage_job.py``) and the pointer-health probe use them.
 
-A blob-v2 column cannot be written at the default 2.1 format, so detecting one is
-what routes a write onto the ``data_storage_version="2.2"`` path.
+Detection picks no storage version: no writer chooses one from the schema, and every create in
+``services/``, ``packages/`` and ``scripts/`` names ``data_storage_version="2.2"`` (grep, 2026-09-25).
 
 :func:`read_aligned_table` is the READ counterpart: the one blob read path that keeps
 row alignment when a payload is null (the ``read_blobs``/``take_blobs`` landmine).
