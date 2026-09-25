@@ -1847,6 +1847,16 @@ identity be seeded and then denied to its own owner, which boots fine and 401s l
 {{- end -}}
 {{- end -}}
 
+{{- /* The PLATFORM buckets, comma-joined: `minio.buckets` plus each enabled feature's own. The bucket-init
+       Job creates them and `orphan_buckets` exempts them, both from here. */ -}}
+{{- define "lance.platformBuckets" -}}
+{{- $buckets := .Values.minio.buckets | default list -}}
+{{- if .Values.observability.enabled -}}
+{{- $buckets = append $buckets .Values.observability.bucket -}}
+{{- end -}}
+{{- join "," (compact $buckets | uniq) -}}
+{{- end -}}
+
 {{- /* Buckets `orphan_buckets` must never report, as ONE expression both maintenance deployments read.
 
        The category's contract is that a clean report certifies the estate, so a finding no operator can
@@ -1860,7 +1870,7 @@ identity be seeded and then denied to its own owner, which boots fine and 401s l
        `trash_purge_blocked`. Declared here rather than in each template, because two copies of a bucket
        list is how the first one drifted. */ -}}
 {{- define "lance.maintenancePlatformBuckets" -}}
-{{- $buckets := .Values.minio.buckets | default list -}}
+{{- $buckets := splitList "," (include "lance.platformBuckets" .) -}}
 {{- range ((.Values.catalog).multibase).dataBases | default list -}}
 {{- $buckets = append $buckets (first (splitList "/" (trimPrefix "s3://" .))) -}}
 {{- end -}}

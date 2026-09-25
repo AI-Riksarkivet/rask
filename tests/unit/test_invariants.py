@@ -2031,32 +2031,15 @@ def test_no_job_that_gates_readiness_is_a_post_install_hook() -> None:
         )
 
 
-@pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
-def test_the_bucket_init_creates_what_each_enabled_feature_needs_and_waits_for_nothing_else(
-    observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """The bucket-init Job, run against an EMPTY store, must exit 0 holding every platform bucket whose
-    owning feature is on, and must not name a bucket whose feature is off.
+def _run_bucket_init(rendered: str, monkeypatch: pytest.MonkeyPatch) -> tuple[int, set[str]]:
+    """Run the rendered bucket-init Job's own argv through `scripts/ensure_bucket.py`'s own `main` over an
+    EMPTY moto store; return its exit code and the buckets the store then holds.
 
-    The in-cluster store is a plain StatefulSet (templates/minio.yaml) that provisions no bucket, so this
-    Job is the only thing that ever makes one. A bucket it names without creating is a bucket it waits
-    for until its deadline: with `observability.enabled=false` the Job waited 300 s for
-    `rask-observability`, which nothing creates, then exited 1 with a hint about a Tenant that does not
-    exist.
-
-    BOTH HOPS IN ONE RUN. The render decides what the Job names and `scripts/ensure_bucket.py` decides
-    what happens to each name, so the Job's own argv goes to the script's own `main` over moto. A check
-    of either half alone passes while the other half waits on a bucket nobody makes.
+    BOTH HOPS IN ONE RUN: the render decides what the Job names and the script decides what happens to
+    each name, so a check of either half alone passes while the other half drops a bucket.
     """
     from moto import mock_aws
 
-    values = yaml.safe_load((CHART / "values.yaml").read_text())
-    platform = set(values["minio"]["buckets"])
-    gated = values["observability"]["bucket"]
-    assert gated in platform, f"{gated} is not in minio.buckets, so the observability-off case would prove nothing"
-    expected = platform if observability else platform - {gated}
-
-    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", f"observability.enabled={str(observability).lower()}")
     job = _job_by_component(rendered, "minio-mkbucket")
     assert job is not None, "the bucket-init Job does not render"
     command = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["command"]
@@ -2076,12 +2059,76 @@ def test_the_bucket_init_creates_what_each_enabled_feature_needs_and_waits_for_n
 
         exit_code = script.main(command[1:])
         present = {bucket["Name"] for bucket in boto3.client("s3", region_name="us-east-1").list_buckets()["Buckets"]}
+    return exit_code, present
+
+
+def _maintenance_platform_buckets(rendered: str) -> dict[str, set[str]]:
+    """`MAINTENANCE_S3_PLATFORM_BUCKETS`, split, per Deployment that carries it."""
+    out: dict[str, set[str]] = {}
+    for doc in yaml.safe_load_all(rendered):
+        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+            continue
+        for container in doc["spec"]["template"]["spec"].get("containers") or []:
+            for env in container.get("env") or []:
+                if env["name"] == "MAINTENANCE_S3_PLATFORM_BUCKETS":
+                    out[doc["metadata"]["name"]] = {b for b in (env.get("value") or "").split(",") if b}
+    return out
+
+
+@pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
+def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(
+    observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Every bucket a value hands the bucket-init Job must exist once it has run on an EMPTY store.
+
+    Each source is its own loop in the template, and the default values cannot see one dropped:
+    `minio.buckets` repeats `minio.bucket` and `medallion.buckets` is empty. So this render names a
+    platform bucket and a zone that no other value names, in both observability states.
+    """
+    rendered = _helm_template(
+        "singleTenant.enabled=true",
+        "explorer.enabled=true",
+        f"observability.enabled={str(observability).lower()}",
+        "minio.buckets={lance-catalog,extra-platform}",
+        "medallion.buckets.gold=acme-gold",
+    )
+    exit_code, present = _run_bucket_init(rendered, monkeypatch)
 
     assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
-    assert expected <= present, f"the Job left these platform buckets uncreated: {sorted(expected - present)}"
-    if not observability:
-        assert gated not in present, f"{gated} was created while observability.enabled=false"
-        assert gated not in command, f"the Job still names {gated} while observability.enabled=false: {command}"
+    missing = {"lance-catalog", "extra-platform", "acme-gold"} - present
+    assert not missing, f"the Job left these buckets uncreated: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
+def test_the_observability_bucket_is_made_and_exempt_only_while_observability_is_on(
+    observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`observability.bucket` is the one name for GreptimeDB's bucket. While the feature is on the Job
+    makes it and `orphan_buckets` exempts it; while it is off neither names any observability bucket.
+
+    Renamed to `obs-x`, so a second spelling of the default anywhere else shows up as a stray bucket the
+    Job makes, or a stray exemption, that nothing uses.
+    """
+    default = yaml.safe_load((CHART / "values.yaml").read_text())["observability"]["bucket"]
+    observability_buckets = {"obs-x", default}
+    wanted = {"obs-x"} if observability else set()
+    rendered = _helm_template(
+        "singleTenant.enabled=true",
+        "explorer.enabled=true",
+        f"observability.enabled={str(observability).lower()}",
+        "observability.bucket=obs-x",
+    )
+    exit_code, present = _run_bucket_init(rendered, monkeypatch)
+
+    assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
+    assert present & observability_buckets == wanted, (
+        f"observability.enabled={observability}: the Job made {sorted(present)}, wanted {sorted(wanted)} of {sorted(observability_buckets)}"
+    )
+
+    exempt = _maintenance_platform_buckets(rendered)
+    assert len(exempt) == 2, f"expected the planner and the worker to carry the platform-bucket env, found {sorted(exempt)}"
+    for name, buckets in exempt.items():
+        assert buckets & observability_buckets == wanted, f"observability.enabled={observability}: {name} exempts {sorted(buckets)} from orphan_buckets"
 
 
 def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:

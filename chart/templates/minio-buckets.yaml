@@ -1,8 +1,7 @@
 {{- if .Values.minio.enabled }}
-{{- /* Bucket-init: the ONLY thing that makes a bucket on the object store, in-cluster or
-       minio.externalEndpoint, so every bucket is CREATED and none is waited for (see `minio.buckets`
-       in values.yaml). NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl: the lakehouse apps need
-       these buckets at startup, and a post-install hook fails only after `--wait` blamed something else. */}}
+{{- /* Bucket-init: the ONLY provisioner of the platform buckets, in-cluster or minio.externalEndpoint,
+       so each is CREATED and none is waited for (see `minio.buckets` in values.yaml). NOT a hook — see
+       "BOOTSTRAP JOBS" in _helpers.tpl: the lakehouse apps need these buckets at startup, and a post-install hook fails only after `--wait` blamed something else. */}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -81,22 +80,13 @@ spec:
           command:
             - python
             - /srv/ensure_bucket.py
-            {{- /* A platform bucket whose feature is off is not made: nothing would use it. */}}
-            {{- $buckets := list .Values.minio.bucket }}
-            {{- if .Values.observability.enabled }}
-            {{- $buckets = append $buckets .Values.observability.bucket }}
-            {{- end }}
-            {{- range .Values.minio.buckets }}
-            {{- if or $.Values.observability.enabled (ne . $.Values.observability.bucket) }}
-            {{- $buckets = append $buckets . }}
-            {{- end }}
-            {{- end }}
+            {{- $buckets := concat (list .Values.minio.bucket) (splitList "," (include "lance.platformBuckets" .)) }}
             {{- range $ns, $bkt := .Values.medallion.buckets }}
             {{- if $bkt }}
             {{- $buckets = append $buckets $bkt }}
             {{- end }}
             {{- end }}
-            {{- range uniq $buckets }}
+            {{- range compact $buckets | uniq }}
             - {{ . | quote }}
             {{- end }}
 {{- end }}

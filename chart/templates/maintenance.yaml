@@ -347,8 +347,8 @@ spec:
                    every tick forever, and a report whose contract is "clean certifies the estate" can
                    then never be clean. Measured 2026-08-16: `rask-observability`, created by this
                    chart's own minio-mkbucket Job for GreptimeDB's object store, sat in that list.
-                   Sourced from `minio.buckets`, the set that same Job creates, so the two cannot drift
-                   apart. */}}
+                   Sourced from `lance.platformBuckets`, which that same Job creates, so the two cannot
+                   drift apart. */}}
             - { name: MAINTENANCE_S3_PLATFORM_BUCKETS, value: {{ include "lance.maintenancePlatformBuckets" . | quote }} }
             - { name: MAINTENANCE_S3_REGION, value: "us-east-1" }
             {{- /* The drift reconciler's inputs. It only ever READS: OpenFGA says who, the control-root

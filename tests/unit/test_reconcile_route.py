@@ -395,8 +395,8 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
     the observability store. `platform_buckets` defaulted to `sweep_buckets`, which is the set the sweep
     MAINTAINS and says nothing about infrastructure it does not.
 
-    The declared set comes from `minio.buckets`, the same values key the mkbucket Job creates, so the
-    exemption cannot drift away from what is actually provisioned.
+    The declared set comes from the chart's `lance.platformBuckets`, which the mkbucket Job creates, so
+    the exemption cannot drift away from what is actually provisioned.
     """
     from maintenance.core.config import MaintenanceSettings
 

@@ -300,8 +300,8 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #
     # Measured live 2026-08-16: `rask-observability` — the RustFS bucket the chart's OWN mkbucket job
     # creates for GreptimeDB's object storage — sat in orphan_buckets, so the drift total could not reach
-    # zero by any action short of deleting the observability store. The chart already names this set in
-    # `rustfs.buckets`; this is where it gets told.
+    # zero by any action short of deleting the observability store. The chart names this set in
+    # `lance.platformBuckets`; this is where it gets told.
     s3_platform_buckets: str = Field(default="", alias="MAINTENANCE_S3_PLATFORM_BUCKETS")
 
     @property

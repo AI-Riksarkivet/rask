@@ -2441,18 +2441,19 @@ minio:
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog
-  # The PLATFORM bucket set: buckets the estate makes for itself, which no warehouse record claims.
-  # The bucket-init Job (templates/minio-buckets.yaml) CREATES every one, together with minio.bucket,
-  # observability.bucket and the medallion.buckets zones, and it is the only thing that makes a bucket
-  # at all: the in-cluster store is a plain StatefulSet that provisions none, and an external S3 has
-  # nothing else either. So the Job creates rather than waits: with no other provisioner, a bucket it
-  # waited for would never appear. A bucket whose owning feature is off is not made:
-  # `observability.bucket` is skipped while `observability.enabled` is false.
-  # The maintenance reconcile reads this same list to exempt these from `orphan_buckets`.
+  # The PLATFORM buckets no feature owns: buckets the estate makes for itself, which no warehouse record
+  # claims. A feature's own bucket is not listed, so it has one spelling: `observability.bucket` joins
+  # the set only while `observability.enabled` is on (`lance.platformBuckets` in _helpers.tpl).
+  # The bucket-init Job (templates/minio-buckets.yaml) CREATES that set, with minio.bucket and the
+  # medallion.buckets zones, and is the only provisioner of platform buckets: the in-cluster store is a
+  # plain StatefulSet that provisions none, and an external S3 has nothing else either. (Warehouse
+  # buckets are the catalog's, made at runtime by `provision_bucket`.) So the Job creates rather than
+  # waits: a platform bucket it waited for would never appear. The maintenance reconcile exempts the
+  # same set from `orphan_buckets`.
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
-  buckets: ["rask-observability", "lance-catalog"]
+  buckets: ["lance-catalog"]
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
   # in-cluster MinIO — pair with minio.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.

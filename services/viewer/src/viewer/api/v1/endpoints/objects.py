@@ -15,9 +15,8 @@ must never run inline on the loop (docs/DECISIONS.md "The Python estate audit" V
 claimed sync ``def`` while all three routes were coroutines doing boto3 inline).
 
 **Failure posture (live-proof 2026-07-28, defect 2).** A bucket that does not exist
-on the S3 backend is an EXPECTED, diagnosable state — the chart provisions
-``minio.buckets`` through the chart's bucket-init hook, and a failed hook leaves them
-absent. It used to surface as an unhandled ``botocore`` ``NoSuchBucket`` → HTTP 500
+on the S3 backend is an EXPECTED, diagnosable state — the chart's bucket-init Job
+provisions the platform buckets, and a failed Job leaves them absent. It used to surface as an unhandled ``botocore`` ``NoSuchBucket`` → HTTP 500
 → the storage browser's "Storage service unreachable", which named neither the
 bucket nor the cause. Every route below now translates the S3 boundary through
 ``storage.s3_errors`` and answers **404 with the bucket (and key) in the detail**;
@@ -187,8 +186,8 @@ def _missing_bucket(bucket: str) -> NotFoundError:
     """
     return NotFoundError(
         f"bucket not found: {bucket} — the S3 backend has no such bucket. "
-        "The platform provisions it from the chart's minio.buckets; check that the "
-        "object store actually created it."
+        "The platform provisions it from the chart's minio.buckets or observability.bucket; "
+        "check that the object store actually created it."
     )
 
 

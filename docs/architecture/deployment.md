@@ -154,8 +154,9 @@ deployments. The Collector is the **single log shipper** (Vector retired, owner 
 
 **Storage:** GreptimeDB writes to the in-cluster MinIO S3 at `rask-minio:9000`,
 bucket `rask-observability`. The bucket-init Job (`chart/templates/minio-buckets.yaml`)
-creates it while `observability.enabled` is on; the store itself provisions no bucket, so
-that Job is the only thing that makes one, and no manual bucket creation is required.
+creates it from `observability.bucket` while `observability.enabled` is on; the store itself
+provisions no bucket, so that Job is the only provisioner of the platform buckets, and no manual
+bucket creation is required.
 
 **App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
 the services built on `make_service_app` call it automatically, and the gateway
