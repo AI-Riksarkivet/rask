@@ -187,6 +187,9 @@ def _dispatch_stage_workflow(
     from service_kit.lakehouse.saga import SagaStart
 
     stage = settings.to_namespace
+    # No id-shape check on this path: the SDK starts the instance over durabletask gRPC, which applies none
+    # (read at dapr v1.18.1 / durabletask-go v0.12.1). Dapr's own workflow API checks only when IT starts
+    # one (`validateInstanceID`: letters, digits, `-`, `_`, <= 64, for key-limited state stores).
     instance_id = f"stage-{stage_submission_id(stage, token, from_uri, to_uri)}"
     # R26: pass 1 OWNS the instant and hands it forward, so pass 2 reuses it rather than stamping its
     # own. Without this the in-dataset `lineage` document and the published COMPLETE disagree.

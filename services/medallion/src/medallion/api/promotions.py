@@ -126,6 +126,10 @@ def instance_for(token: str) -> str:
     Deterministic because it is the only handle either side has: the stage runner publishes a hold and moves
     on, and the door receives an id from a URL. A redelivered hold must re-attach to the review that
     is already open rather than asking the approver a second time.
+
+    The token rides unfolded, `.` and `:` included. The durabletask gRPC path the SDK starts it on
+    checks no id shape; Dapr's own workflow API would refuse to START it (letters, digits, `-`, `_`,
+    <= 64 only; `pkg/api/universal/workflow.go`, read at dapr v1.18.1) and manages any existing id.
     """
     return f"promotion-{token}"
 
