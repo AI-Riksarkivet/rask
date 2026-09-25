@@ -123,7 +123,7 @@ async def _authorized_run(
 ) -> Any:
     """Read the run from the stage runner that hosts it, then authorize the caller on ITS project."""
     state = await _forward(request, settings, stage_runner, f"/stages/{instance_id}", method="GET")
-    await require_project_admin(fga_client, caller, project=_run_project(settings, state))
+    await require_project_admin(fga_client, caller, project=_run_project(settings, state), resource=f"stage_run:{instance_id}")
     return state
 
 

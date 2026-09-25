@@ -597,6 +597,50 @@ def test_the_stalled_filter_audits_one_decision_per_project(producer: TestClient
     assert _decisions(audited) == [("deny", "alice", "project:acme"), ("allow", "alice", "project:mine"), ("deny", "alice", "project:other")]
 
 
+def _all_decisions(records: list[logging.LogRecord]) -> list[tuple[object, ...]]:
+    fields = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in records]
+    return [(f["audit.action"], f["audit.outcome"], f["audit.subject"], f["audit.resource"], f.get("audit.reason")) for f in fields if "audit.action" in f]
+
+
+def test_a_stage_whose_tenant_cannot_be_read_is_AUDITED_as_a_refusal(fga: _Fga, monkeypatch: pytest.MonkeyPatch, audited: list[logging.LogRecord]) -> None:
+    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
+    with TestClient(_producer(_stage_runner({"stage-x": _State("not json", name="stage_run")})), raise_server_exceptions=False) as client:
+        assert client.post(_stop("stage-x"), headers=_bearer("bob")).status_code == 503
+
+    assert _all_decisions(audited) == [("can_administer", "failure", "bob", "stage_run:stage-x", "resource_project_unreadable")]
+
+
+def test_a_SERVICE_stop_is_audited_on_the_RUNS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
+    """The shared token is decided whole, and the record names what it acted on, not the configured
+    project, which the action never touched."""
+    producer.post(_stop("stage-other"), headers=SERVICE)
+
+    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "project:other", None)]
+
+
+def test_a_SERVICE_read_of_a_training_watch_is_audited_on_the_WATCHS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
+    producer.get("/trains/train-other", headers=SERVICE)
+
+    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "project:other", None)]
+
+
+def test_a_SERVICE_read_of_the_stalled_cells_is_audited_per_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
+    producer.get("/cascade/stalled", headers=SERVICE)
+
+    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", f"project:{p}", None) for p in ("acme", "mine", "other")]
+
+
+def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(producer: TestClient, stage_runner: FastAPI, audited: list[logging.LogRecord]) -> None:
+    """Refused at the door, before any run is read, so the record names the request's target rather
+    than the configured project."""
+    stamped = {**SERVICE, "dapr-caller-app-id": "gateway"}
+    response = producer.post(_stop("stage-other"), headers=stamped)
+
+    assert response.status_code == 403, response.text
+    assert _terminated(stage_runner) == []
+    assert _all_decisions(audited) == [("produce_service_token", "deny", "service:gateway", _stop("stage-other"), "public_caller")]
+
+
 # ── which doors may take `?project=` at all ─────────────────────────────────────────────────────────
 
 #: The producer operations whose `?project=` names what the call WRITES, or a surface no tenant owns.

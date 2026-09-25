@@ -233,7 +233,7 @@ async def _authorized_watch(
     # `name` is the orchestration's registered name, which `workflow.register` leaves as `__name__`.
     if state is None or state.name != train_run.__name__:
         raise _no_watch(instance_id)
-    await require_project_admin(fga_client, caller, project=_watch_project(settings, state.serialized_input))
+    await require_project_admin(fga_client, caller, project=_watch_project(settings, state.serialized_input), resource=f"{train_run.__name__}:{instance_id}")
     return state
 
 
