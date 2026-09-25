@@ -224,6 +224,7 @@ def test_no_from_uri_still_uses_the_configured_upstream(tmp_path: Path, reads: _
         "a..b",
         "tok en",  # whitespace — no head can mint it, so its presence says the value was not minted
         "tok\nname: evil",  # a newline: harmless in the JSON sinks, and a log line it would forge
+        "tok\n",  # a TRAILING newline: an anchored `match` passes it, only `fullmatch` refuses it
         "a" * 65,  # past the Idempotency-Key ceiling (max_length=64)
         "",  # present-but-empty is a claim of "no token", made wrongly
         "bronze$events",  # `$` is the catalog's identifier delimiter, not a token character
@@ -467,7 +468,8 @@ def _head_accepts(module: str, path: str) -> Callable[[str], bool]:
     return lambda key: low <= len(key) <= high and re.fullmatch(pattern, key) is not None
 
 
-#: Keys either side of every edge the grammar has: length, the alphabet, one dot, two dots.
+#: Keys either side of every edge the grammar has: length, the alphabet, one dot, two dots, and the
+#: trailing newline an anchored pattern lets `match` through.
 _KEY_PROBES = [
     "",
     "a",
@@ -487,6 +489,7 @@ _KEY_PROBES = [
     "a/b",
     "a$b",
     "a\nb",
+    "a\n",
     "tok\t",
 ]
 
