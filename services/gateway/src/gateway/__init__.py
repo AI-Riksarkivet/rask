@@ -235,6 +235,9 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
         # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
         Route("/api/train", "/train", *medallion),
+        # The training watch's status and terminate. A sibling of `/api/train`, not nested under it: the
+        # producer serves `/trains/{id}`, and `_pick_route` never lets one of the two rows match the other.
+        Route("/api/trains", "/trains", *medallion),
         # The APPROVE door for a held promotion. It is on the producer rather than on the stage runner whose
         # quality gate held it, because `raise_workflow_event` resolves a workflow instance through the
         # CALLING app's app-id: route and instance must share a process, and a stage runner is bus-only — no
@@ -245,6 +248,9 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # stage runner that hosts the instance — a stage runner has no row of its own because it is bus-only, and
         # `terminate_workflow` must run under the stage runner's app-id, so neither end can do both halves.
         Route("/api/stage-runners", "/stage-runners", *medallion),
+        # The cascade's stalled-tier read (`GET /cascade/stalled`), gated by the producer like its
+        # `/stage-runners` sibling. `tests/test_lance_routes.py` derives every producer door from its OpenAPI.
+        Route("/api/cascade", "/cascade", *medallion),
         Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
         Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),
         # PREFIX-INTERPOLATED, not the literal "/api/flows", and that is the ingest row's lesson

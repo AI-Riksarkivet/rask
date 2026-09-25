@@ -8,10 +8,17 @@ httpx client for one on a MockTransport: no network, real ASGI path handling.
 """
 
 import importlib
+from types import ModuleType
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from starlette.types import ASGIApp, Receive, Scope, Send
+
+
+if TYPE_CHECKING:
+    from gateway import Route
 
 
 @pytest.fixture
@@ -167,36 +174,120 @@ def test_the_media_rewrites_land_on_paths_the_upstreams_ACTUALLY_serve(gw, publi
     )
 
 
-# ── The producer rows, checked against the producer's own OpenAPI ────────────────────────────────────
+# ── The producer's doors, derived from the producer's own OpenAPI ────────────────────────────────────
 #
-# Every operation the gateway publishes for the medallion producer, as (method, public template). The
-# rewrite must equal one of the producer's OpenAPI keys EXACTLY and that key must carry the method: the
-# producer mounts three routers under `/stage-runners`, so a near-miss spelling is a 404, not a match.
-_PRODUCER_OPERATIONS = [
-    ("post", "/api/produce"),
-    ("post", "/api/train"),
-    ("get", "/api/promotions/{instance_id}"),
-    ("post", "/api/promotions/{instance_id}/decision"),
-    ("get", "/api/stage-runners"),
-    ("get", "/api/stage-runners/{stage_runner}/stages/{instance_id}"),
-    ("post", "/api/stage-runners/{stage_runner}/stages/{instance_id}/terminate"),
-    ("post", "/api/stage-runners/stages/rerun"),
-]
+# Every operation the producer serves is either reachable through a gateway row or named below with the
+# reason it has none. A new producer route fails here until it gets one or the other, instead of
+# answering `404 no upstream` at the edge with nothing saying so.
+_PRODUCER_APP_ID = "medallion-producer"
+
+#: Producer operations with no gateway row, and why each has none.
+_NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
+    ("get", "/livez"): "kubelet probe at the pod root",
+    ("get", "/readyz"): "kubelet probe at the pod root",
+    ("get", "/dapr/subscribe"): "read by the sidecar to discover the three subscriptions below",
+    ("post", "/bronze-arrival"): "pub/sub delivery of the lineage topic, behind require_dapr_token",
+    ("post", "/train-trigger"): "pub/sub delivery of the training topic, behind require_dapr_token",
+    ("post", "/promotion-held"): "pub/sub delivery of a held promotion, behind require_dapr_token",
+    ("post", "/ingest-media"): "synchronous and capped; docs/DECISIONS.md keeps it a service seam, and /api/ingest is the edge's ingest door",
+    ("get", "/authorize"): "an admin probe nothing calls; owner ruling 2026-09-25 gives it no row",
+}
 
 
-@pytest.mark.parametrize(("method", "public"), _PRODUCER_OPERATIONS)
-def test_the_producer_rewrites_land_on_operations_the_producer_serves(gw, method: str, public: str) -> None:
+def _producer_operations() -> set[tuple[str, str]]:
+    """(method, path) for every operation the producer's OpenAPI declares."""
+    from medallion.core.config import get_settings
     from medallion.producer import app as producer
 
-    served: dict[str, dict[str, object]] = producer.openapi()["paths"]
-    route = gw._pick_route(public, gw._routes())
-    assert route is not None and route[2] == "medallion-producer", f"no producer row matches {public}"
-    upstream_path = route[1] + public[len(route[0]) :]
+    operations = {(method, path) for path, item in producer.openapi()["paths"].items() for method in item}
+    # The lag cron is an input binding the sidecar delivers to `POST /<binding name>`, mounted only when a
+    # deployment names one, so it is excluded by the setting that mounts it.
+    binding = get_settings().cascade_lag_binding_name
+    return operations - {("post", f"/{binding}")} if binding else operations
 
-    assert method in served.get(upstream_path, {}), (
-        f"the gateway forwards {method.upper()} {public} to {upstream_path}, which the producer does not serve; "
-        f"its stage-runner operations are {sorted(p for p in served if 'stage' in p)}"
+
+def _public_operations() -> set[tuple[str, str]]:
+    return {operation for operation in _producer_operations() if operation not in _NOT_PUBLISHED_AT_THE_EDGE}
+
+
+def _row_reaching(gw: ModuleType, upstream_path: str, routes: list["Route"]) -> "Route | None":
+    """The producer row that forwards some public path to ``upstream_path``.
+
+    Decided by the proxy's own `_pick_route`, so a row shadowed by an earlier one reaches nothing, and so
+    does a sibling prefix: `/train` + `/` does not start `/trains/...`.
+    """
+    for route in routes:
+        upstream = route.upstream_prefix
+        if route.app_id != _PRODUCER_APP_ID or (upstream_path != upstream and not upstream_path.startswith(upstream + "/")):
+            continue
+        if gw._pick_route(route.public_prefix + upstream_path[len(upstream) :], routes) is route:
+            return route
+    return None
+
+
+def test_every_public_producer_operation_has_a_gateway_row(gw) -> None:
+    routes = gw._routes()
+    unrouted = sorted((method.upper(), path) for method, path in _public_operations() if _row_reaching(gw, path, routes) is None)
+    assert not unrouted, (
+        f"the producer serves {unrouted} and no gateway row forwards to them, so each answers 404 at the edge; "
+        f"give each a row, or name it in _NOT_PUBLISHED_AT_THE_EDGE with the reason it has none"
     )
+
+
+def test_every_producer_row_reaches_a_producer_operation(gw) -> None:
+    routes = gw._routes()
+    reached = {_row_reaching(gw, path, routes) for _method, path in _public_operations()}
+    dangling = [route.public_prefix for route in routes if route.app_id == _PRODUCER_APP_ID and route not in reached]
+    assert not dangling, f"the gateway rows {dangling} reach no producer operation outside _NOT_PUBLISHED_AT_THE_EDGE"
+
+
+def test_every_exclusion_is_still_a_producer_operation() -> None:
+    served = _producer_operations()
+    stale = sorted(f"{method.upper()} {path}" for method, path in _NOT_PUBLISHED_AT_THE_EDGE if (method, path) not in served)
+    assert not stale, f"the producer no longer serves {stale}; delete those exclusions"
+
+
+def test_no_gateway_row_publishes_an_exclusion(gw) -> None:
+    routes = gw._routes()
+    published = sorted(f"{method.upper()} {path}" for method, path in _NOT_PUBLISHED_AT_THE_EDGE if _row_reaching(gw, path, routes) is not None)
+    assert not published, f"{published} are named as not published at the edge, and a gateway row publishes them"
+
+
+def _as_daprd_delivers(app: ASGIApp, *, app_token: str) -> ASGIApp:
+    """``app`` behind the stamp daprd adds to an invocation from the gateway: the estate's app token and the
+    caller's app-id. The gateway strips both from the client, so these are the only copies that arrive."""
+
+    async def stamped(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            scope = {**scope, "headers": [*scope["headers"], (b"dapr-api-token", app_token.encode()), (b"dapr-caller-app-id", b"gateway")]}
+        await app(scope, receive, send)
+
+    return stamped
+
+
+@pytest.mark.parametrize(
+    ("method", "public"),
+    [
+        ("get", "/api/trains/train-ray-train-tok-1"),
+        ("post", "/api/trains/train-ray-train-tok-1/terminate"),
+        ("get", "/api/cascade/stalled"),
+    ],
+)
+def test_a_public_caller_is_refused_by_the_door_behind_the_row(gw, monkeypatch: pytest.MonkeyPatch, method: str, public: str) -> None:
+    """The whole forward, as Dapr delivers it: the gateway's own proxy into the producer's own app.
+
+    The stamp carries a VALID app token, so a door that trusted it would serve an anonymous caller from the
+    internet. The refusal must come from the door, in its words; a row that reaches no route answers 404.
+    """
+    from medallion.producer import app as producer
+
+    monkeypatch.setenv("APP_API_TOKEN", "the-estate-app-token")
+    with TestClient(gw.app) as client:
+        gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=_as_daprd_delivers(producer, app_token="the-estate-app-token")))
+        response = client.request(method, public)
+
+    assert response.status_code == 403, response.text
+    assert "is a public front door" in response.text, response.text
 
 
 def test_a_rerun_sent_to_the_gateway_is_answered_by_the_rerun_verb(gw) -> None:
