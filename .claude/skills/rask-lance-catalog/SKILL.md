@@ -225,7 +225,12 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   every tier and lane, and the catalog vends the flat layout for top-level namespaces), so both are a
   hazard of the next layout change rather than a live miss — but nesting a namespace or landing a
   table under a lane is a config change, not a code change, which is exactly how the first three
-  layouts each arrived.
+  layouts each arrived. Both are pinned by
+  `tests/unit/test_tier_fragment_sizing.py::test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier`
+  as strict xfails asserting `bronze`, so the change that teaches `tier_of` either layout turns that
+  case red and takes its mark off. A fix for the flat one must read the tier from the NAMESPACE
+  segments only: the leaf's last `$` segment is the table (`lance_docs/ns_catalog/catalog/dir/index.md`
+  § Manifest Table Directory), and `deadbeef_acme$plain$gold` must stay untiered.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.

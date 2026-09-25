@@ -175,6 +175,7 @@ def test_a_TABLE_named_after_a_tier_never_sets_the_tier() -> None:
     assert target_rows_for("s3://wh/acme-silver/gold") == SILVER_TARGET_ROWS
     assert target_rows_for("s3://wh/plain/gold") is None
     assert target_rows_for("s3://wh/gold") is None
+    assert target_rows_for("s3://wh/deadbeef_acme$plain$gold") is None  # flat, nested: the LAST `$` segment is the table
 
 
 def test_the_tier_is_read_from_the_NAMESPACE_not_the_table_name() -> None:
@@ -239,3 +240,49 @@ def test_ALL_FIVE_layouts_the_estate_writes_resolve_to_a_tier() -> None:
         tier_of("s3://lance-catalog/medallion/acme$bronze"),  # 4 project-scoped cascade
         tier_of("s3://wh/abc12345_bronze-media$pages"),  # 5 flat cascade lane
     ] == ["bronze"] * 5
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        pytest.param(
+            "s3://lance-catalog/aa3bed10_acme$bronze$events",
+            "bronze",
+            id="nested-namespace-in-the-flat-layout",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="the flat branch cuts the leaf at its FIRST `$`, so the namespace `acme$bronze` reads as its parent `acme`",
+            ),
+        ),
+        pytest.param(
+            "s3://lance-catalog/medallion/bronze-media/pages",
+            "bronze",
+            id="table-under-a-cascade-lane",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="only the direct child of `medallion/` is read as a lane; one level down is layout 1, which reduces `bronze-media` to `media`",
+            ),
+        ),
+    ],
+)
+def test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier(uri: str, expected: str) -> None:
+    """Two layouts one config change away from the estate, which `tier_of` reads as untiered today.
+
+    Each case asserts the CORRECT tier, and the strict xfail is the tracker: the day `tier_of` learns
+    either layout, that case XPASSes, strict turns it red, and the mark comes off. `raises=AssertionError`
+    keeps a crash in `tier_of` from counting as the known gap.
+
+    * The `dir` backend names a table's directory `<hash>_<object_id>`, and a nested object id is the
+      namespace path joined by `$` (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest Table
+      Directory). So the TABLE is the leaf's LAST segment and every segment before it is namespace.
+      Measured on pylance 12.0.0 / lance-namespace 0.11.1: `create_table(id=["acme", "bronze",
+      "events"])` lands at `f69e5ed1_acme$bronze$events`, and `tier_of` returns None for it.
+    * `medallion/<tier>-<lane>` IS the namespace, so a table beneath it belongs to the lane's tier and
+      the lane reduces from the LEFT, exactly as when the lane is itself the dataset.
+
+    Neither is a live miss: `chart/templates/medallion.yaml` writes every tier and lane as the dataset
+    `s3://<bucket>/medallion/<ns>`, and the catalog vends the flat layout for top-level namespaces.
+    """
+    assert tier_of(uri) == expected

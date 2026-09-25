@@ -215,31 +215,6 @@ def test_the_catalog_skill_names_the_lineage_index_builder_that_exists() -> None
     assert _retracted(skill, "_ensure_lineage_index"), "SKILL.md attributes the index to `_ensure_lineage_index`; the function is `_index_lineage`."
 
 
-def test_the_catalog_skill_does_not_claim_every_tier_uri_layout_resolves() -> None:
-    """`tier_of` branches on FIVE layouts, and adjacent shapes still return None.
-
-    The skill said THREE. Two more (`medallion/<project>$<tier>` and the flat `<tier>-<lane>$<table>`)
-    landed in `tiers.py` while this correction was being written, so the count is read from the code
-    rather than restated here — and the residual `None` cases are asserted, because "five layouts"
-    read as "every layout" is the same failure one rung along.
-    """
-    sys.path.insert(0, str(REPO_ROOT / "services/maintenance/src"))
-    from maintenance.services.tiers import tier_of
-
-    assert tier_of("s3://lance-catalog/medallion/acme$bronze") == "bronze"  # layout 4
-    assert tier_of("s3://lance-catalog/ab12cd34_bronze-media$objects") == "bronze"  # layout 5
-    assert tier_of("s3://lance-catalog/aa3bed10_acme$bronze$events") is None  # nested namespace, flat layout
-    assert tier_of("s3://lance-catalog/medallion/bronze-media/pages") is None  # a table under a cascade lane
-
-    skill = _read(SKILL)
-    assert "A dataset URI encodes its TIER in FIVE different places" in skill, "SKILL.md still counts three layouts; `tiers.py` branches on five."
-    assert "`None` IS STILL REACHABLE" in skill, (
-        "SKILL.md presents the layout list as the whole story. Measured against `tier_of` at HEAD, a "
-        "nested-namespace flat id and a table nested under a cascade LANE both return None and fall "
-        "back to Lance's own sizing."
-    )
-
-
 # --------------------------------------------------------------------------------------------------
 # CLAUDE.md
 # --------------------------------------------------------------------------------------------------
