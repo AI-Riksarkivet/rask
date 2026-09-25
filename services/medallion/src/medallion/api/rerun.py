@@ -59,6 +59,7 @@ from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
 from medallion.services.trigger_guards import SAFE_TOKEN_MAX_LENGTH, SAFE_TOKEN_PATTERN
 from service_kit import dapr_publish
+from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH
 from service_kit.draining import refuse_when_draining
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
@@ -98,9 +99,10 @@ class RerunRequest(BaseModel):
     #: so it is held to the stage lane's token grammar: a token the lane drops is a 422, not a 202.
     token: str | None = Field(default=None, min_length=1, max_length=SAFE_TOKEN_MAX_LENGTH, pattern=SAFE_TOKEN_PATTERN)
     #: Carried through so a re-run of a person's cascade still reaches that person's inbox. The
-    #: notifications plane re-derives visibility per recipient, so this authorizes nothing.
-    originator: str | None = None
-    cascade_id: str | None = None
+    #: notifications plane re-derives visibility per recipient, so this authorizes nothing. Both claims
+    #: ride the trigger to the catalog's publish door, so each takes that door's cap.
+    originator: str | None = Field(default=None, max_length=ORIGINATOR_MAX_LENGTH)
+    cascade_id: str | None = Field(default=None, max_length=CASCADE_ID_MAX_LENGTH)
 
 
 class RerunAccepted(BaseModel):

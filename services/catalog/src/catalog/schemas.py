@@ -20,7 +20,7 @@ from pydantic.json_schema import JsonDict
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
-from service_kit.control_events import CatalogControlEvent
+from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from service_kit.governed.user_state import UserStateDocument
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
 
@@ -952,7 +952,7 @@ class PublishRequest(BaseModel):
     #: Carried through the catalog rather than stamped in the dataset because this is the ONLY hop
     #: where the identity would otherwise be lost: the stage runner knows it, the next stage runner needs it, and
     #: the tag move in between is what wakes the next tier.
-    cascade_id: str = Field(default="", max_length=128)
+    cascade_id: str = Field(default="", max_length=CASCADE_ID_MAX_LENGTH)
     #: THE PERSON THE BATCH IS FOR, when the caller is a service running on their behalf.
     #:
     #: An untrusted CLAIM, exactly like `cascade_id`: it authorizes nothing here and nothing downstream
@@ -964,7 +964,7 @@ class PublishRequest(BaseModel):
     #:
     #: Resolved, never echoed blindly — see `publication_originator`, which prefers this over the actor
     #: only when the actor is a SERVICE, and refuses anything that names no person.
-    originator: str = Field(default="", max_length=256)
+    originator: str = Field(default="", max_length=ORIGINATOR_MAX_LENGTH)
     #: Ask for the gate's VERDICT without publishing. The identical assertions on the identical
     #: version, with `published` false and the tag untouched — a question, never a write.
     #:

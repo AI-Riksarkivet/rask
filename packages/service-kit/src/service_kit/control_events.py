@@ -157,6 +157,12 @@ ControlAction = Literal[
 #: for an assignment that changed no data.
 ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "annotation_task", "transform", "gate"]
 
+#: The caps on the two cascade CLAIMS a publication echoes onto `table_published`'s `extra`: the batch
+#: id and the person the batch is for. The catalog's publish door enforces them, and a door that takes
+#: either from a caller declares the same cap, so a claim it accepts is never refused at that publish.
+CASCADE_ID_MAX_LENGTH = 128
+ORIGINATOR_MAX_LENGTH = 256
+
 
 class CatalogControlEvent(BaseModel):
     """One control-plane mutation notice. Published AFTER the backend/FGA mutation succeeds; the `actor` is
