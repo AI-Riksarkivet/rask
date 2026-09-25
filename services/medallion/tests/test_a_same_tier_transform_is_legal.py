@@ -65,6 +65,9 @@ def _same_tier_settings(tmp_path: Path) -> MedallionSettings:
         # needs a catalog. Every stage runner the chart renders has one; a lane without one is the ungoverned
         # mode, which writes and never promotes.
         "MEDALLION_CATALOG_URL": "http://catalog.invalid",
+        # Pinned, not inherited: with review on, a first promotion is a band reason and HOLDs, which
+        # would fail the promotion assertions below for a reason unrelated to tiers.
+        "MEDALLION_QUALITY_REVIEW_ENABLED": "false",
     }
     return MedallionSettings(**env)
 
@@ -111,7 +114,7 @@ def _stub_catalog(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[dict[
 
 class TestTheMoverImposesNoTierLadder:
     def test_a_silver_to_silver_lane_runs(self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, upstream: Path) -> None:
-        _stub_catalog(monkeypatch, upstream)
+        published = _stub_catalog(monkeypatch, upstream)
         dapr = _Dapr()
 
         result = asyncio.run(transform.handle_stage(cast("Any", dapr), _same_tier_settings(upstream), {"data": {"token": "t"}}))
@@ -119,7 +122,10 @@ class TestTheMoverImposesNoTierLadder:
         # The whole dict, not its status: a HOLD also acks SUCCESS, with `reason: quality_blocked`, and a
         # tier guard that withheld promotion from same-tier lanes would pass a status-only check. Review
         # is off in this lane, so a first promotion raises no band reason and publishes.
-        assert result == {"status": "SUCCESS"}, f"a same-tier derivation did not promote: {result}"
+        assert result == {"status": "SUCCESS"}, f"a same-tier derivation did not ack SUCCESS: {result}"
+        # And the SUCCESS is a promotion: a lane that acked without publishing would pass the line above.
+        promotions = [ask for ask in published if not ask.get("gate_only", False)]
+        assert [ask["table_id"] for ask in promotions] == ["silver$enriched"], f"a same-tier derivation did not promote: {published}"
         assert "medallion_stage_other_lane" not in caplog.text
 
     def test_it_really_derived_a_second_dataset(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:

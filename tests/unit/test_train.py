@@ -297,6 +297,10 @@ def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> No
     for data in (
         {"token": "t1", "model": "../etc", "features": [ok]},
         {"token": "a/b", "model": "churn", "features": [ok]},
+        # the keys `POST /train` refuses: a dot folds onto a dashed twin's Ray submission id
+        {"token": "my.retry.key", "model": "churn", "features": [ok]},
+        {"token": "..", "model": "churn", "features": [ok]},
+        {"token": "-leading-dash", "model": "churn", "features": [ok]},
         {"token": "t1", "model": "churn", "features": [{"dataset": "silver$../evil", "version": 1}]},
         {"token": "t1", "model": "churn", "features": [{"dataset": "a$b$c", "version": 1}]},
         # a BARE dataset name is rejected too: it would derive a wrong stage URI AND (in the job's
@@ -375,8 +379,9 @@ def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: py
 
     The door's `Idempotency-Key` becomes the trigger's `token`, and the consumer DROPs a token outside
     its shape. A door wider than its consumer therefore answers 202 to a run that never starts, and the
-    caller holding that 202 has no way to learn it. Both halves are driven for every row: the real door
-    over HTTP, and the real consumer over the trigger `submit_train_request` publishes for the same key.
+    caller holding that 202 has no way to learn it. The halves share one bus: the consumer is fed the
+    trigger the door itself published, so a door that alters the key on its way to the trigger fails
+    here too. A refused key must publish nothing.
     """
 
     async def submitted(*_a: Any, **_kw: Any) -> str:
@@ -384,20 +389,21 @@ def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: py
 
     monkeypatch.setattr(train.ray_submit, "submit_train_job", submitted)
     monkeypatch.setattr(train, "schedule_train_watch", lambda *_a, **_kw: None)
-    features = [{"dataset": "silver$features", "version": 7}]
+    bus = _FakeDapr()
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_dapr] = _FakeDapr
+    app.dependency_overrides[get_dapr] = lambda: bus
     app.dependency_overrides[get_settings] = lambda: _settings()
 
-    door = TestClient(app).post("/train", json={"model": "churn", "features": features}, headers={"Idempotency-Key": key})
-
-    bus = _FakeDapr()
-    asyncio.run(train.submit_train_request(cast(Any, bus), _settings(), token=key, model="churn", features=features))
-    consumer = asyncio.run(train.handle_train_trigger(_settings(), {"data": json.loads(bus.published[0]["data"])}))
+    door = TestClient(app).post("/train", json={"model": "churn", "features": [{"dataset": "silver$features", "version": 7}]}, headers={"Idempotency-Key": key})
 
     assert door.status_code == (202 if trains else 422), door.text
-    assert consumer["status"] == ("SUCCESS" if trains else "DROP")
+    if not trains:
+        assert bus.published == [], "a refused request published a training trigger"
+        return
+    assert door.json()["token"] == key
+    consumer = asyncio.run(train.handle_train_trigger(_settings(), {"data": json.loads(bus.published[0]["data"])}))
+    assert consumer["status"] == "SUCCESS"
 
 
 def test_head_rejects_an_oversized_config() -> None:

@@ -45,7 +45,7 @@ def hold_spec(
     to_dataset: str,
     reasons: list[str],
     originator: str,
-    version: int = 0,
+    version: int,
 ) -> PromotionSpec:
     """Everything the review needs to resume the cascade, resolved at DISPATCH.
 

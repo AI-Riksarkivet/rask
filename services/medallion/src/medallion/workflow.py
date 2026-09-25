@@ -1393,8 +1393,8 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
     just overruled. It publishes with the findings the review ACCEPTED, which is the door built for
     this — named findings only, and structural ones never.
 
-    Falls back to the trigger when the spec carries no version, which is a hold taken before the
-    cascade moved to publishing. That is a migration case with a real answer, not a silent fallback.
+    Falls back to the trigger when the spec names no written version (0): a hold on a run that wrote
+    nothing has no version to publish.
     """
     # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
     # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
@@ -1424,11 +1424,10 @@ def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None
         log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "version": spec.version, "accepted": spec.reasons})
         return
     if not spec.pub_topic:
-        # Neither a version to publish nor a topic to fire: a hold taken before the tag-driven cascade,
-        # on a tier that has no next lane. Reachable only since the caller stopped filtering on
-        # `pub_topic`. Publishing the trigger below would post to `topic_name=""` — not a promotion,
-        # just a malformed publish nothing subscribes to. Nothing to promote is a real answer, and it
-        # is recorded as one.
+        # Neither a version to publish nor a topic to fire: a hold on a run that wrote nothing, on a
+        # tier with no next lane. Publishing the trigger below would post to `topic_name=""` — not a
+        # promotion, just a malformed publish nothing subscribes to. Nothing to promote is a real
+        # answer, and it is recorded as one.
         log.warning(
             "medallion_promotion_has_no_resume_path",
             extra={"dataset": spec.to_dataset, "token": spec.token},
@@ -1480,21 +1479,17 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
     record_promotion_outcome(outcome.status)
     approved = outcome.status == "PROMOTED"
     event = build_run_event(
-        # THE STAGE'S identity, not this process's. `settings` here is the PRODUCER's — it hosts the
-        # review workflow and sets neither var, so reading it recorded every approved promotion as
-        # `embed_features`/`data_eng` and made `gold$catalog` claim the silver stage produced it. The
-        # fallback keeps a hold taken before `operation`/`author` existed emitting exactly as it did.
-        operation=spec.operation or settings.operation,
-        author=spec.author or settings.author,
+        # THE STAGE'S identity, off the spec: `settings` here is the PRODUCER's, which describes no stage.
+        operation=spec.operation,
+        author=spec.author,
         author_subject=settings.fga_service_identity,
         job_namespace=settings.job_namespace,
         inputs=[(spec.from_namespace, _qualified(spec.project, spec.from_dataset))],
         output_namespace=spec.to_namespace,
         output_name=_qualified(spec.project, spec.to_dataset),
-        # The version the approver actually ruled on. Omitting it took `build_run_event`'s `version: int
-        # = 1`, so a promotion into a table at v48 recorded v1 — a version that table never held at that
-        # point, in the record that is supposed to be the durable one.
-        version=spec.version or 1,
+        # The version the approver ruled on; `build_run_event`'s default of 1 would name a version the
+        # table may never have held, in the record that is supposed to be the durable one.
+        version=spec.version,
         token=f"{spec.token}:promotion-{outcome.status.lower()}",
         project=spec.project or None,
         originator=spec.originator or None,

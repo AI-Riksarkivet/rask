@@ -69,6 +69,8 @@ async def test_a_failed_promotion_hold_records_the_error_string(caplog: pytest.L
         pub_topic=settings.pub_topic,
         reasons=["row_count_zero"],
         version=3,
+        operation="embed_features",
+        author="data_eng",
     )
     with caplog.at_level(logging.WARNING):
         assert await publish_hold(_Broken(), settings, spec) is False

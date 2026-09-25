@@ -57,6 +57,7 @@ class TestWhatTheHoldCarries:
             to_dataset="gold$catalog",
             reasons=["row_count_positive"],
             originator="alice",
+            version=7,
         )
 
         assert spec.reasons == ["row_count_positive"]
@@ -74,6 +75,7 @@ class TestWhatTheHoldCarries:
             to_dataset="gold$catalog",
             reasons=["row_count_positive"],
             originator="",
+            version=7,
         )
 
         assert spec.approval_hours == 48
@@ -92,6 +94,7 @@ class TestWhatTheHoldCarries:
             to_dataset="gold$catalog",
             reasons=["row_count_positive"],
             originator="",
+            version=7,
         )
 
         assert spec.pub_topic == "medallion.gold"
@@ -109,6 +112,7 @@ class TestWhatTheHoldCarries:
             to_dataset="gold$catalog",
             reasons=["row_count_positive"],
             originator="",
+            version=7,
         )
 
         assert spec.pub_topic == ""
@@ -128,6 +132,7 @@ class TestPublishingTheHold:
             to_dataset="gold$catalog",
             reasons=["row_count_positive"],
             originator="",
+            version=7,
         )
 
         assert await publish_hold(dapr, settings, spec) is True
@@ -149,6 +154,7 @@ class TestPublishingTheHold:
             to_dataset="gold$catalog",
             reasons=["row_count_positive"],
             originator="",
+            version=7,
         )
 
         assert await publish_hold(dapr, settings, spec) is False

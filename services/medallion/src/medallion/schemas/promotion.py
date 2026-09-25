@@ -43,17 +43,10 @@ class PromotionSpec(BaseModel):
     approval_hours: int = 72
     #: The version the hold was taken on. The resume must publish THIS one — a later commit may have
     #: landed while the approver was deciding, and publishing that would ship a version nobody
-    #: reviewed. 0 means the hold predates a tag-driven cascade and can only resume by trigger.
-    version: int = 0
-    #: The HELD STAGE's own lineage identity, resolved at hold time in the stage runner. `emit_promotion_outcome`
-    #: runs in the PRODUCER — which hosts the review workflow and sets neither `MEDALLION_OPERATION` nor
-    #: `MEDALLION_AUTHOR` — so without these it recorded every approved promotion under the code defaults
-    #: (`embed_features`/`data_eng`). Those are the bronze→silver stage runner's real values, so a silver hold was
-    #: right by accident and a gold hold said the silver stage produced `gold$catalog`.
-    #:
-    #: Same carrier and same reasoning as `pub_topic` directly above: the producer has no idea which
-    #: stage runner held this, so anything the emit needs about the stage has to ride the spec. Empty means a
-    #: hold serialized before this field existed — the emit falls back to settings, which is the old
-    #: behaviour and better than an empty job name.
-    operation: str = ""
-    author: str = ""
+    #: reviewed. 0 names no written version, and `publish_promotion` then resumes by trigger.
+    version: int
+    #: The HELD STAGE's own lineage identity, resolved at hold time in the stage runner. The outcome is
+    #: emitted by the PRODUCER, whose settings describe no stage, so a hold that cannot name its stage
+    #: is refused at the hold topic rather than recorded under the producer's defaults.
+    operation: str = Field(min_length=1)
+    author: str = Field(min_length=1)

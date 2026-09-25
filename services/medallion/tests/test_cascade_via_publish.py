@@ -168,12 +168,21 @@ class TestTheDefaultIsUntouched:
         through the catalog or it does not promote.
         """
         called: list[Any] = []
+
+        def _publish(**kwargs: Any) -> PublishOutcome:
+            # The catalog's answer for a first publication: no prior version, the tag moved to the one asked about.
+            called.append(kwargs)
+            return PublishOutcome(published=True, from_version=None, to_version=kwargs["version"])
+
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
         monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
-        monkeypatch.setattr(transform.catalog_register, "publish_stage_output", lambda **k: called.append(k))
+        monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _publish)
         dapr = _Dapr()
+        # Review pinned off: a first promotion under review HOLDs, which acks with a `reason` this test is not about.
+        settings = _settings(upstream, MEDALLION_CASCADE_VIA_PUBLISH="false", MEDALLION_QUALITY_REVIEW_ENABLED="false")
 
-        asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream, MEDALLION_CASCADE_VIA_PUBLISH="false"), _event()))
+        status = asyncio.run(transform.handle_stage(cast(Any, dapr), settings, _event()))
 
         assert called, "the catalog must be asked to publish even with the retired flag set to false"
+        assert status == {"status": "SUCCESS"}, f"the published run did not ack: {status}"
         assert "medallion.silver" not in dapr.topics, "the stage runner must never fire the next stage itself"

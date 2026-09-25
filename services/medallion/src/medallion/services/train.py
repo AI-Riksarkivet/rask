@@ -51,14 +51,9 @@ MAX_FEATURES = 16
 _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}"
 MODEL_PATTERN = rf"^{_SEGMENT}$"
 DATASET_PATTERN = rf"^{_SEGMENT}\${_SEGMENT}$"
-#: The training token, which `POST /train` takes from `Idempotency-Key`. NARROWER than the key shape
-#: the other write doors accept (`^[A-Za-z0-9._-]+$`), because of where this token goes verbatim:
-#: `ray_submit.train_submission_id` folds every character outside `[A-Za-z0-9_-]` to `-`, so a dotted
-#: key would share its Ray job with its dashed twin (`my.retry.key` and `my-retry-key` both name
-#: `ray-train-my-retry-key`) and the second request would re-attach to the first run, or be DROPped
-#: as a replay of it when that run failed; and the job writes its artifacts under `<artifact_base>/<token>/`,
-#: where `.` or `..` is a path segment rather than a name (on a filesystem base, the base itself and
-#: its parent). On this alphabet the fold is the identity, so one key names one job.
+#: The training token `POST /train` takes from `Idempotency-Key`: it becomes the Ray submission id and
+#: the artifact directory `<artifact_base>/<token>/`. `train_submission_id` folds `.` to `-`, so a dotted
+#: key would collide with its dashed twin; on this alphabet the fold is the identity.
 TOKEN_PATTERN = rf"^{_SEGMENT}$"  # noqa: S105 — a shape regex; the training token is a correlation id, not a credential
 _SAFE_SEGMENT = re.compile(_SEGMENT)
 

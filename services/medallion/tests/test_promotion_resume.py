@@ -40,6 +40,8 @@ def _spec(**over: Any) -> PromotionSpec:
         "from_dataset": "silver$features",
         "to_namespace": "gold",
         "to_dataset": "gold$catalog",
+        "operation": "aggregate_gold",
+        "author": "analyst",
         "pub_topic": "",
         "reasons": ["row_count_positive"],
         "approver": "CiQwOGE4",
@@ -81,7 +83,7 @@ class TestTheSpecCarriesTheVersion:
     def test_a_hold_without_a_version_cannot_be_resumed(self) -> None:
         """The version is what makes the resume specific. A spec that never captured it would leave the
         approver's decision unattached to anything."""
-        assert PromotionSpec.model_fields["version"].is_required() is False
+        assert PromotionSpec.model_fields["version"].is_required() is True
         assert _spec().version == 7
 
 
@@ -89,8 +91,8 @@ class TestAHoldWithNeitherVersionNorTopicPublishesNothing:
     def test_it_does_not_fire_a_trigger_at_an_EMPTY_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The edge that removing `promotion_review`'s `if spec.pub_topic:` guard opens up.
 
-        With the caller's guard gone, `publish_promotion` is reached for every approval. A hold taken
-        BEFORE the tag-driven cascade carries `version == 0` and can only resume by trigger — and on a
+        With the caller's guard gone, `publish_promotion` is reached for every approval. A hold on a
+        run that wrote nothing carries `version == 0` and can only resume by trigger — and on a
         terminal tier there is no topic to fire. Left unguarded that publishes to `topic_name=""`,
         which is not a promotion, just a malformed publish nothing subscribes to.
 

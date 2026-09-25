@@ -41,13 +41,18 @@ right one's; it does not put a person in the author field.
 
 from __future__ import annotations
 
+import asyncio
+import json
 from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
 from dapr.ext.workflow import WorkflowActivityContext
+from dapr.ext.workflow._durabletask.internal.shared import from_json, to_json
 
+from medallion.api.promotions import handle_promotion_held
 from medallion.core.config import MedallionSettings, get_settings
+from medallion.schemas.promotion import PromotionSpec
 from medallion.services.promotion_hold import hold_spec
 from medallion.services.transform import StageIdentity, resolve_stage_identity
 from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
@@ -216,20 +221,68 @@ def test_a_silver_hold_still_names_the_silver_stage(captured: list[dict[str, Any
     assert event["version"] == 72
 
 
-def test_a_hold_taken_before_this_change_still_emits(captured: list[dict[str, Any]]) -> None:
-    """In-flight holds must not break, and the approval window is 72 HOURS.
-
-    A `PromotionSpec` serialized into a running workflow's history before this field existed replays
-    with `operation`/`author` empty. That is a real migration case -- the same one `publish_promotion`
-    already handles for `version` -- so the emit falls back to settings rather than emitting an empty
-    job name, which would be a worse record than the wrong one.
-    """
+def test_the_outcome_names_the_person_the_batch_is_for(captured: list[dict[str, Any]]) -> None:
+    """The author is a role literal and a service sub signs the event, so the ORIGINATOR is the only
+    field that reaches the person whose batch was held (`rask-notifications`, Q2). Without it the
+    decision reaches nobody, and the lineage lane acks that SUCCESS."""
     _, report = _gold_hold()
-    report.spec.operation, report.spec.author, report.spec.version = "", "", 0
 
     emit_promotion_outcome(_ctx(), report)
-    event = captured[-1]
 
-    assert event["operation"] == "embed_features", "an old spec must fall back to settings, not emit an empty job name"
-    assert event["author"] == "data_eng"
-    assert event["version"] == 1, "no recorded version falls back to build_run_event's own default"
+    assert captured[-1]["originator"] == "alice"
+
+
+class _Engine:
+    """The workflow client, recording what the hold ingress schedules."""
+
+    def __init__(self) -> None:
+        self.scheduled: list[Any] = []
+
+    def raise_workflow_event(self, instance_id: str, event_name: str, *, data: Any = None) -> None:
+        raise AssertionError("the hold ingress raises no event")
+
+    def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> str:  # noqa: A002
+        self.scheduled.append(input)
+        return instance_id
+
+    def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> Any:
+        return None
+
+
+#: A hold that cannot name the stage it was taken on: the field blank, or absent (`None`).
+_NAMELESS = [("operation", ""), ("author", ""), ("operation", None), ("author", None), ("version", None)]
+
+
+@pytest.mark.parametrize(("field", "value"), _NAMELESS)
+def test_a_hold_that_does_not_name_its_stage_is_refused(field: str, value: str | None) -> None:
+    """No fallback to the producer's settings, which describe no stage: the emit's only source for
+    the held stage's job, author and version is the spec. A hold missing one is refused at the hold
+    topic — DROP, because redelivery cannot add a field — and no review is scheduled."""
+    _, report = _gold_hold()
+    payload = report.spec.model_dump()
+    if value is None:
+        del payload[field]
+    else:
+        payload[field] = value
+    engine = _Engine()
+
+    assert asyncio.run(handle_promotion_held({"data": payload}, client=engine)) == {"status": "DROP"}
+    assert engine.scheduled == []
+
+
+def test_a_hold_the_stage_runner_builds_reaches_the_emit_intact(captured: list[dict[str, Any]]) -> None:
+    """The spec crosses three encodings between `hold_spec` and the emit: the hold topic's JSON, the
+    workflow input, and the activity input — the last two through the engine's own encoder."""
+    _, report = _gold_hold()
+    engine = _Engine()
+
+    held = asyncio.run(handle_promotion_held({"data": json.loads(json.dumps(report.spec.model_dump()))}, client=engine))
+    workflow_input = PromotionSpec.model_validate(from_json(to_json(engine.scheduled[0])))
+    activity_input = from_json(to_json(PromotionReport(spec=workflow_input, outcome=report.outcome)))
+    # The engine hands an activity the decoded JSON, which `emit_promotion_outcome` validates itself.
+    emit_promotion_outcome(_ctx(), cast(PromotionReport, activity_input))
+
+    assert held == {"status": "SUCCESS"}
+    assert workflow_input == report.spec
+    event = captured[-1]
+    assert (event["operation"], event["author"], event["version"]) == ("aggregate_gold", "analyst", 48)

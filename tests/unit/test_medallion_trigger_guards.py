@@ -25,12 +25,16 @@ DROP rather than a raise because a raising handler poisons the subscription (DAT
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
+import re
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from dapr.aio.clients import DaprClient
+from fastapi.routing import APIRoute
 
 import medallion.services.transform as stage_runner
 from medallion.core.config import MedallionSettings
@@ -320,14 +324,32 @@ def test_uri_within(base: str, candidate: str, expected: bool) -> None:
     assert uri_within(base, candidate) is expected
 
 
-def test_the_stage_token_grammar_is_its_heads_key_shape_without_traversal() -> None:
+def _head_accepts(module: str, path: str) -> Callable[[str], bool]:
+    """Whether the head serving `path` accepts a key, read off its declared `Idempotency-Key` header."""
+    route = next(r for r in importlib.import_module(module).router.routes if isinstance(r, APIRoute) and r.path == path)
+    field = next(f for f in route.dependant.header_params if f.alias == "Idempotency-Key")
+    limits = {type(c).__name__: c for c in field.field_info.metadata}
+    pattern = next(c.pattern for c in field.field_info.metadata if getattr(c, "pattern", None))
+    low, high = limits["MinLen"].min_length, limits["MaxLen"].max_length
+    return lambda key: low <= len(key) <= high and re.fullmatch(pattern, key) is not None
+
+
+#: Keys either side of every edge the two grammars could disagree on: length, the alphabet, the dot.
+_KEY_PROBES = ["", "a", "a" * 64, "a" * 65, "a.b", "..", "-lead", "_x", "8e1c9b7a-2f3d-4c5b", "a b", "a/b", "a$b", "a\nb", "tok\t"]
+
+
+@pytest.mark.parametrize(("module", "path"), [("medallion.api.produce", "/produce"), ("medallion.api.ingest_media", "/ingest-media")])
+def test_the_stage_token_grammar_is_its_heads_key_shape_without_traversal(module: str, path: str) -> None:
     """`safe_token` is the `Idempotency-Key` shape of `/produce` and `/ingest-media`, minus `..`.
 
-    Pinned as a literal so that a change to this grammar, or to the heads it is derived from, is made
-    on purpose. The training lane is fed by neither head: it reads its own, narrower token
+    Pinned as a literal and compared with each head's declared header, so a change to this grammar,
+    or to the heads it is derived from, is made on purpose. The `..` refusal is safe_token's own and
+    the heads admit it. The training lane is fed by neither head: it reads its own, narrower token
     (`medallion.services.train.TOKEN_PATTERN`), which `tests/unit/test_train.py` holds equal to what
     `POST /train` accepts.
     """
+    head_accepts = _head_accepts(module, path)
+    assert [k for k in _KEY_PROBES if head_accepts(k) != (re.fullmatch(SAFE_TOKEN_PATTERN, k) is not None)] == []
     dangerous = ["", "has space", "has/slash", "has$dollar", "..", "a/../b", "a\nb", "tok\t", "a" * 65]
     assert not any(safe_token(s) for s in dangerous)
     assert safe_token(1) is False

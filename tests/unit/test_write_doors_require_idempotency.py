@@ -33,6 +33,8 @@ import pathlib
 
 import pytest
 
+from medallion.services.train import TOKEN_PATTERN
+
 
 #: Doors whose key is REQUIRED. Each is a cascade head with no spec above it, so the estate is free to
 #: demand the one value only the caller can hold stable across attempts.
@@ -81,18 +83,27 @@ def test_the_write_door_REQUIRES_an_idempotency_key(module: str, path: str) -> N
     )
 
 
+#: The key alphabet `/produce`, `/ingest-media` and `/ingests` share. `/train` is the exception: its key
+#: becomes the training token verbatim, so it takes its consumer's narrower `TOKEN_PATTERN` (no dots —
+#: the Ray submission id folds `.` to `-`, and a dotted key would share a job with its dashed twin).
+_KEY_PATTERN = r"^[A-Za-z0-9._-]+$"
+_KEY_PATTERN_BY_PATH = {"/train": TOKEN_PATTERN}
+
+
 @pytest.mark.parametrize(("module", "path"), DOORS, ids=[m for m, _ in DOORS])
 def test_the_key_is_constrained_not_merely_present(module: str, path: str) -> None:
-    """An empty or unbounded key is not an idempotency key. All four doors must agree on the shape,
-    or a key that works against one head is refused by the next."""
+    """An empty or unbounded key is not an idempotency key. The four doors share the length bounds
+    (1..64); the key alphabet is `_KEY_PATTERN` except on `/train`, which takes its consumer's."""
     field = _header_param(module, path)
-    # Pydantic v2 keeps `Header(min_length=..., max_length=...)` in `field_info.metadata` as annotated
-    # -types constraint objects, NOT as attributes on the FieldInfo — reading them off the FieldInfo
+    # Pydantic v2 keeps `Header(min_length=..., max_length=..., pattern=...)` in `field_info.metadata`
+    # as constraint objects, NOT as attributes on the FieldInfo — reading them off the FieldInfo
     # returns None for a door that IS constrained, which would have made this gate pass by accident on
     # the day someone removed the constraint.
     limits = {type(c).__name__: c for c in field.field_info.metadata}
     assert "MaxLen" in limits and limits["MaxLen"].max_length == 64, f"{module} {path}: key is unbounded"
     assert "MinLen" in limits and limits["MinLen"].min_length >= 1, f"{module} {path}: an empty key is accepted"
+    pattern = next((c.pattern for c in field.field_info.metadata if getattr(c, "pattern", None)), None)
+    assert pattern == _KEY_PATTERN_BY_PATH.get(path, _KEY_PATTERN), f"{module} {path}: key shape {pattern!r}"
 
 
 #: App-ids whose routes include a cascade head. A 500 from one of these is NOT safe to replay
