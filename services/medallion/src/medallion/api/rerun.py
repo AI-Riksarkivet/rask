@@ -85,9 +85,10 @@ class RerunRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: The PUBLISHED table, as the control event names it: `table:<project>-<tier>$<table>`, e.g.
-    #: `table:acme-silver$features`. Anything else is a 400. Its namespace IS the edge's source, which is
-    #: why the verb needs no stage runner name.
+    #: The PUBLISHED table, as the control event names it: `table:<project>-<tier>$<table>`, qualified
+    #: by `project` below, e.g. `table:acme-silver$features`. An id not of that shape for this `project`
+    #: is a 400; a well-formed one whose tier drives no cascade edge is a 403. Its namespace IS the
+    #: edge's source, which is why the verb needs no stage runner name.
     object_id: str = Field(min_length=1)
     project: str = Field(min_length=1)
     #: The delta this hop should consume. `from_version` absent means "everything up to `to_version`",
@@ -138,6 +139,19 @@ async def _require_edge_rung(fga_client: OpenFgaClient, *, subject: str, project
     audit(gate.required_action, ALLOW if allowed else DENY, subject=subject, resource=obj)
     if not allowed:
         raise PermissionDeniedError(f"re-running this edge needs {gate.required_action} on {obj}")
+
+
+def _require_projects_table(object_id: str, project: str) -> None:
+    """400 unless ``object_id`` is one of ``project``'s table ids, before anything is asked or minted.
+
+    The parse is `build_stage_trigger`'s, the one rule for this shape; the id must then be the
+    project-qualified form of the dataset it yields. A string that is not a table id, or a table the
+    body's own ``project`` does not qualify, is the caller's bad input, and reading that says nothing
+    about which objects exist or who may drive them.
+    """
+    parsed = build_stage_trigger(object_id=object_id, event_id="", extra={"project": project})
+    if parsed is None or object_id != f"table:{project}-{parsed['dataset']}":
+        raise InvalidInputError(f"{object_id!r} is not one of project {project!r}'s tables; expected 'table:<project>-<tier>$<table>'")
 
 
 def _edge(settings: MedallionSettings, namespace: str) -> tuple[StageRunnerGate, str]:
@@ -214,6 +228,7 @@ async def rerun_stage(
     """
     if not subject:
         raise PermissionDeniedError("re-running a cascade edge needs a signed-in caller")
+    _require_projects_table(body.object_id, body.project)
     token = body.token or uuid4().hex
     extra: dict[str, Any] = {"project": body.project, "from_version": body.from_version, "to_version": body.to_version}
     # RESOLVED BEFORE THE TRIGGER IS MINTED, because `build_stage_trigger` reads it off `extra` as
@@ -229,11 +244,7 @@ async def rerun_stage(
     # `build_stage_trigger` owns the object_id -> (namespace, dataset) rule, and re-deriving it here
     # to authorize would be the second hand-maintained copy its docstring forbids.
     trigger = build_stage_trigger(object_id=body.object_id, event_id=token, extra=extra)
-    if trigger is None:
-        # The caller's bad INPUT, so a 400 naming the shape: `build_stage_trigger` answers None only for
-        # a string that is not a table id at all — no `table:` prefix, no `$`, or an empty namespace or
-        # table — and reading that says nothing about which objects exist or who may drive them. A
-        # well-formed id that names no cascade lane is `_edge`'s 403 below.
+    if trigger is None:  # `_require_projects_table` parsed this same id; the narrowing is for the type
         raise InvalidInputError(f"{body.object_id!r} is not a table id; expected 'table:<project>-<tier>$<table>'")
     namespace = str(trigger["namespace"])
     gate, topic = _edge(settings, namespace)
