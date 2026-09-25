@@ -10,10 +10,9 @@ store must remain revocable.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from lance_namespace import InvalidInputError
@@ -40,80 +39,82 @@ def _pinned() -> ClientTuple:
 
 
 class _Store:
-    """Records every request that reached the client."""
+    """Records every request that reached the client, with `OpenFgaClient`'s own `check`/`write` signatures."""
 
     def __init__(self) -> None:
         self.writes: list[ClientWriteRequest] = []
         self.checks: list[ClientCheckRequest] = []
 
-    async def write(self, request: ClientWriteRequest, options: dict[str, Any] | None = None) -> object:
-        self.writes.append(request)
+    async def write(self, body: ClientWriteRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> object:
+        self.writes.append(body)
         return SimpleNamespace()
 
-    async def check(self, request: ClientCheckRequest) -> object:
-        self.checks.append(request)
+    async def check(self, body: ClientCheckRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> object:
+        self.checks.append(body)
         return SimpleNamespace(allowed=True)
 
 
-def _write(store: _Store, tuples: list[ClientTuple]) -> None:
-    asyncio.run(fga.write_tuples(cast(OpenFgaClient, store), tuples, actor="test", origin="admin_api"))
+async def _write(store: _Store, tuples: list[ClientTuple]) -> None:
+    await fga.write_tuples(cast(OpenFgaClient, store), tuples, actor="test", origin="admin_api")
 
 
-def test_write_tuples_refuses_a_tuple_carrying_the_clock() -> None:
+@pytest.mark.asyncio
+async def test_write_tuples_refuses_a_tuple_carrying_the_clock() -> None:
     store = _Store()
     with pytest.raises(InvalidInputError, match=REFUSAL):
-        _write(store, [_pinned()])
+        await _write(store, [_pinned()])
     assert store.writes == [], "a clock-pinned grant reached OpenFGA"
 
 
-def test_write_tuples_refuses_the_whole_batch_not_only_the_pinned_tuple() -> None:
+@pytest.mark.asyncio
+async def test_write_tuples_refuses_the_whole_batch_not_only_the_pinned_tuple() -> None:
     """OpenFGA's Write is one transaction, so the refusal is too: a batch is written whole or not at all."""
     store = _Store()
     with pytest.raises(InvalidInputError, match=REFUSAL):
-        _write(store, [ClientTuple(user="user:bob", relation="reader", object="namespace:bronze"), _pinned()])
+        await _write(store, [ClientTuple(user="user:bob", relation="reader", object="namespace:bronze"), _pinned()])
     assert store.writes == []
 
 
-def test_write_tuples_still_writes_a_condition_that_carries_only_its_window() -> None:
+@pytest.mark.asyncio
+async def test_write_tuples_still_writes_a_condition_that_carries_only_its_window() -> None:
     """The control: the refusal is about the clock, not about conditions."""
     store = _Store()
-    _write(store, [_grant()])
+    await _write(store, [_grant()])
     assert len(store.writes) == 1
 
 
-def test_a_check_refuses_a_contextual_tuple_carrying_the_clock() -> None:
+@pytest.mark.asyncio
+async def test_a_check_refuses_a_contextual_tuple_carrying_the_clock() -> None:
     """A contextual tuple is evaluated exactly like a stored one, so a pinned clock would answer for a
     grant that `write_tuples` refuses to create."""
     store = _Store()
     with pytest.raises(InvalidInputError, match=REFUSAL):
-        asyncio.run(
-            fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False, contextual_tuples=[_pinned()])
-        )
+        await fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False, contextual_tuples=[_pinned()])
     assert store.checks == [], "a check ran with a clock-pinned contextual tuple"
 
 
-def test_a_check_may_still_name_its_own_clock_in_the_request_context() -> None:
+@pytest.mark.asyncio
+async def test_a_check_may_still_name_its_own_clock_in_the_request_context() -> None:
     """The clock belongs to the CHECK, so the request context is exactly where it may be named."""
     store = _Store()
-    asyncio.run(
-        fga.check(
-            cast(OpenFgaClient, store),
-            user="user:alice",
-            relation="writer",
-            obj="namespace:bronze",
-            qualify=False,
-            contextual_tuples=[_grant()],
-            context={fga.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"},
-        )
+    await fga.check(
+        cast(OpenFgaClient, store),
+        user="user:alice",
+        relation="writer",
+        obj="namespace:bronze",
+        qualify=False,
+        contextual_tuples=[_grant()],
+        context={fga.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"},
     )
     assert [c.context for c in store.checks] == [{fga.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"}]
 
 
-def test_a_check_that_names_no_clock_is_evaluated_at_the_servers_now() -> None:
+@pytest.mark.asyncio
+async def test_a_check_that_names_no_clock_is_evaluated_at_the_servers_now() -> None:
     """What the estate-admin `/v1/access/check` docstring promises: an omitted clock is not a DENY."""
     store = _Store()
     before = datetime.now(UTC)
-    asyncio.run(fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False))
+    await fga.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False)
     context = store.checks[0].context
     assert context is not None, "the check was sent with no context, so a time-boxed grant reads as expired"
     sent = context[fga.CLOCK_PARAMETER]
@@ -121,9 +122,10 @@ def test_a_check_that_names_no_clock_is_evaluated_at_the_servers_now() -> None:
     assert before <= datetime.fromisoformat(sent) <= datetime.now(UTC)
 
 
-def test_delete_tuples_still_removes_a_tuple_carrying_the_clock() -> None:
+@pytest.mark.asyncio
+async def test_delete_tuples_still_removes_a_tuple_carrying_the_clock() -> None:
     """A delete is by key and evaluates nothing; refusing it would make the one grant that never
     expires also the one grant that cannot be revoked."""
     store = _Store()
-    asyncio.run(fga.delete_tuples(cast(OpenFgaClient, store), [_pinned()], actor="test", origin="admin_api"))
+    await fga.delete_tuples(cast(OpenFgaClient, store), [_pinned()], actor="test", origin="admin_api")
     assert [(t.user, t.relation, t.object) for request in store.writes for t in request.deletes or []] == [("user:alice", "writer", "namespace:bronze")]

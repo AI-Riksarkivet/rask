@@ -144,6 +144,75 @@ async def test_a_relation_REDEFINED_in_place_is_reported_even_though_both_names_
     assert drift.absent_from_pin == () and drift.absent_from_image == (), "the names all match — only the body differs"
 
 
+_ANYONE: dict[str, Any] = {"type": "user", "wildcard": {}}
+_ROLE: dict[str, Any] = {"type": "role", "wildcard": {}}
+_TIMEBOXED: dict[str, Any] = {"type": "user", "condition": "non_expired_grant"}
+
+
+def _restricted_image(*restrictions: dict[str, Any]) -> dict[str, Any]:
+    """``warehouse#owner`` as `model.json` authors it: the type restrictions live in ``metadata``, beside the body."""
+    owner = {"directly_related_user_types": list(restrictions)}
+    warehouse = {"type": "warehouse", "relations": {"owner": {"this": {}}}, "metadata": {"relations": {"owner": owner}}}
+    return {"schema_version": "1.1", "type_definitions": [{"type": "user"}, {"type": "role"}, warehouse], "conditions": {}}
+
+
+def _restricted_pin(*restrictions: dict[str, Any]) -> Any:
+    """The same relation as the store serves it: real SDK objects, with its ``condition: ""`` and ``module: ""`` fills."""
+    from openfga_sdk.models.metadata import Metadata
+    from openfga_sdk.models.relation_metadata import RelationMetadata
+    from openfga_sdk.models.relation_reference import RelationReference
+    from openfga_sdk.models.type_definition import TypeDefinition
+    from openfga_sdk.models.userset import Userset
+
+    served = [RelationReference(type=r["type"], wildcard=r.get("wildcard"), condition=r.get("condition", "")) for r in restrictions]
+    warehouse = TypeDefinition(
+        type="warehouse",
+        relations={"owner": Userset(this={})},
+        metadata=Metadata(relations={"owner": RelationMetadata(directly_related_user_types=served, module="")}, module=""),
+    )
+    return _pinned(TypeDefinition(type="user"), TypeDefinition(type="role"), warehouse)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("image", "pin"),
+    [
+        pytest.param((_ANYONE, _ROLE), ({"type": "user"}, {"type": "role"}), id="pin-drops-[user:*]"),
+        pytest.param(({"type": "user"},), (_ANYONE,), id="pin-adds-[user:*]"),
+        pytest.param((_ANYONE, _ROLE), (_ANYONE,), id="pin-drops-[role:*]"),
+        pytest.param((_TIMEBOXED,), ({"type": "user"},), id="pin-drops-the-condition"),
+    ],
+)
+async def test_a_TYPE_RESTRICTION_changed_under_an_unchanged_body_is_reported(
+    monkeypatch: pytest.MonkeyPatch, image: tuple[dict[str, Any], ...], pin: tuple[dict[str, Any], ...]
+) -> None:
+    """``[user:*]`` against ``[user]`` is the same ``this`` body with a different restriction, and the
+    restriction decides who a tuple may name. A pin that differs only there is a pin that answers
+    differently, so it must drift and name the relation."""
+    monkeypatch.setattr(fga, "load_model", lambda: _restricted_image(*image))
+    _PinnedClient.model = _restricted_pin(*pin)
+
+    drift = await fga.audit_pinned_model(cast(OpenFgaClient, _PinnedClient()), store_id="store-1", model_id="model-PINNED")
+
+    assert drift.drifted, f"a pin differing only in a type restriction was reported as matching the image: {drift}"
+    assert drift.redefined == ("warehouse#owner",), drift
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restrictions", [(_ANYONE, _ROLE), ({"type": "user"},), (_TIMEBOXED,)], ids=["[user:*, role:*]", "[user]", "[user with condition]"])
+async def test_an_unchanged_TYPE_RESTRICTION_served_with_the_stores_fills_reports_no_drift(
+    monkeypatch: pytest.MonkeyPatch, restrictions: tuple[dict[str, Any], ...]
+) -> None:
+    """The control: the store's ``condition: ""``, ``module: ""`` and ``wildcard: None`` are fills, not edits."""
+    monkeypatch.setattr(fga, "load_model", lambda: _restricted_image(*restrictions))
+    _PinnedClient.model = _restricted_pin(*restrictions)
+
+    drift = await fga.audit_pinned_model(cast(OpenFgaClient, _PinnedClient()), store_id="store-1", model_id="model-PINNED")
+
+    assert drift.readable is True
+    assert not drift.drifted, f"an unchanged restriction read back with the store's fills was reported as drift: {drift}"
+
+
 @pytest.mark.asyncio
 async def test_an_unreadable_pinned_model_leaves_the_boot_SERVING() -> None:
     """The posture difference from `_current_model`, stated as a test because it is the whole reason

@@ -27,6 +27,8 @@ intact.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from typing import Any, ClassVar
 
 import pytest
@@ -173,6 +175,41 @@ async def test_a_WILDCARD_toggled_under_an_unchanged_name_is_written(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_a_WILDCARD_only_write_names_the_relation_it_changed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """The write log's ``changed`` is how an operator tells what a new model version is about; a write
+    caused only by a type restriction must name that relation rather than report ``changed=[]``."""
+    _install(monkeypatch, desired=_with_wildcard_assignee(MODEL), stored=MODEL)
+
+    with caplog.at_level(logging.INFO, logger=fga.__name__):
+        await fga.provision("http://fga:8080")
+
+    [written] = [record for record in caplog.records if record.getMessage() == "openfga_model_written"]
+    assert written.__dict__["changed"] == ["role#assignee"], "the write was logged without the relation whose restriction it changed"
+
+
+@pytest.mark.parametrize("name", sorted(fga._EMPTY_MESSAGES))
+def test_a_relation_NAMED_like_an_empty_message_is_not_kept_as_one(name: str) -> None:
+    """``this`` and ``wildcard`` are grammar fields only inside a message. As a relation name they are a
+    key the author chose, and the store's empty metadata fill under it is a default like any other: kept,
+    it makes the served model differ from the authored one on every boot."""
+    authored: dict[str, Any] = {
+        "schema_version": "1.1",
+        "type_definitions": [
+            {"type": "user"},
+            {
+                "type": "doc",
+                "relations": {"owner": {"this": {}}, name: {"computedUserset": {"relation": "owner"}}},
+                "metadata": {"relations": {"owner": {"directly_related_user_types": [{"type": "user"}]}}},
+            },
+        ],
+    }
+    served = _as_openfga_stores_it(authored)
+    served["type_definitions"][1]["metadata"]["relations"][name] = {"directly_related_user_types": [], "module": "", "source_info": None}
+
+    assert fga.canonical_model(served) == fga.canonical_model(authored), f"the empty metadata fill under a relation named {name!r} was kept"
+
+
+@pytest.mark.asyncio
 async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE GATE. 1,316 versions on the live store came from this write firing on every boot."""
     _install(monkeypatch, desired=MODEL, stored=MODEL)
@@ -314,8 +351,8 @@ def test_a_WILDCARD_toggle_survives_the_canonical_form_of_a_REAL_sdk_model(store
     assert fga.canonical_model(_sdk_assignee_model(wildcard=stored)) != fga.canonical_model(_authored_assignee_model(wildcard=desired))
 
 
-def _empty_message_fields() -> set[str]:
-    """Wire names of every field the SDK's authorization-model schema types as an empty message (``object``)."""
+def _schema_fields(matches: Callable[[str], bool]) -> set[str]:
+    """Wire names of every field in the SDK's authorization-model schema whose declared type ``matches``."""
     import re
 
     from openfga_sdk import models
@@ -326,14 +363,18 @@ def _empty_message_fields() -> set[str]:
     while pending:
         klass = getattr(models, pending.pop())
         for attr, kind in (getattr(klass, "openapi_types", None) or {}).items():
-            if kind == "object":
+            if matches(kind):
                 found.add(klass.attribute_map[attr])
-                continue
             inner = re.sub(r"^(?:list\[|dict\[str, )(.*)\]$", r"\1", kind)
             if hasattr(models, inner) and inner not in seen:
                 seen.add(inner)
                 pending.append(inner)
     return found
+
+
+def _empty_message_fields() -> set[str]:
+    """Every field the schema types as an empty message (``object``)."""
+    return _schema_fields(lambda kind: kind == "object")
 
 
 def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -> None:
@@ -346,6 +387,12 @@ def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -
     bare = fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t"}]})
     dropped = [f for f in sorted(fields) if fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t", f: {}}]}) == bare]
     assert not dropped, f"the canonical form strips these empty messages, so a model differing only by them reads as unchanged: {dropped}"
+
+
+def test_every_NAMED_MAP_in_the_model_schema_is_known_to_the_canonical_form() -> None:
+    """A map field's keys are names an author chose, so the empty-message rule must not read them as
+    grammar fields. Walked off the SDK's schema, so a map a later SDK adds cannot go unlisted."""
+    assert _schema_fields(lambda kind: kind.startswith("dict[")) == fga._NAMED_MAPS
 
 
 @pytest.mark.parametrize("wildcard", [True, False], ids=["[user:*]", "[user]"])

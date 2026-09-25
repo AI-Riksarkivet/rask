@@ -372,8 +372,12 @@ def _plain(value: Any) -> Any:
 #: `tests/test_an_unchanged_model_is_not_rewritten_on_every_boot.py`.
 _EMPTY_MESSAGES: Final = frozenset({"this", "wildcard"})
 
+#: The schema's MAP fields, whose keys are names an author chose (a relation, a condition, a parameter)
+#: rather than grammar fields. Walked off the SDK's schema in the same test module as the empty messages.
+_NAMED_MAPS: Final = frozenset({"conditions", "parameters", "relations"})
 
-def _without_defaults(value: Any) -> Any:
+
+def _without_defaults(value: Any, *, named: bool = False) -> Any:
     """Drop the empty values OpenFGA fills in — ``None``, ``""``, ``{}`` and ``[]`` — except an empty message.
 
     THIS IS WHAT MAKES THE COMPARISON POSSIBLE AT ALL. The store does not keep the model it was given.
@@ -384,14 +388,16 @@ def _without_defaults(value: Any) -> Any:
     answer "different" forever, so the skip built on it would be a branch that never runs.
 
     An empty value under an :data:`_EMPTY_MESSAGES` key is kept: stripping it would make a relation
-    widened to ``[user:*]``, or narrowed back, compare equal and never be written. A falsey SCALAR is
-    not a default either — `0` and `False` are values a condition may carry — so they survive.
+    widened to ``[user:*]``, or narrowed back, compare equal and never be written. ``named`` marks the
+    value of a :data:`_NAMED_MAPS` field, whose keys are an author's names, so a relation called
+    ``wildcard`` is not mistaken for the field. A falsey SCALAR is not a default either — `0` and
+    `False` are values a condition may carry — so they survive.
     """
     if isinstance(value, dict):
         kept = {}
         for key, item in value.items():
-            stripped = _without_defaults(item)
-            if key in _EMPTY_MESSAGES and stripped == {}:
+            stripped = _without_defaults(item, named=not named and key in _NAMED_MAPS)
+            if not named and key in _EMPTY_MESSAGES and stripped == {}:
                 kept[key] = stripped
                 continue
             if stripped is None or stripped == "" or stripped == {} or stripped == []:
@@ -430,19 +436,21 @@ def canonical_model(model: Any) -> str:
 
 
 def _relation_bodies(type_definitions: Iterable[Any] | None) -> dict[str, str]:
-    """``{type#relation: canonical body}`` from either shape a model arrives in.
+    """``{type#relation: canonical definition}`` from either shape a model arrives in.
 
-    The companion to :func:`_relation_index`, which keeps only the names. Bodies go through the same
-    canonicaliser the unchanged-model check uses, so the two agree about what "the same definition"
-    means and a wire-vs-python spelling cannot make an unchanged relation read as changed.
+    The companion to :func:`_relation_index`, which keeps only the names. A definition is the userset
+    body AND its ``metadata.relations`` entry, because the entry holds the type restrictions: ``[user]``
+    against ``[user:*]``, or a dropped ``with non_expired_grant``, changes who a tuple may name under an
+    identical body. Both go through the canonicaliser the unchanged-model check uses, so the two agree
+    about what "the same definition" means.
     """
     bodies: dict[str, str] = {}
     for definition in type_definitions or ():
-        is_mapping = isinstance(definition, dict)
-        type_name = definition["type"] if is_mapping else definition.type
-        relations = (definition.get("relations") if is_mapping else definition.relations) or {}
-        for relation, body in relations.items():
-            bodies[f"{type_name}#{relation}"] = json.dumps(_without_defaults(_plain(body)), sort_keys=True, separators=(",", ":"), default=repr)
+        type_name = _field(definition, "type")
+        restrictions = _field(_field(definition, "metadata"), "relations") or {}
+        for relation, body in (_field(definition, "relations") or {}).items():
+            entry = _without_defaults(_plain({"body": body, "metadata": restrictions.get(relation)}))
+            bodies[f"{type_name}#{relation}"] = json.dumps(entry, sort_keys=True, separators=(",", ":"), default=repr)
     return bodies
 
 
@@ -842,10 +850,9 @@ async def check(
 
     ``context`` supplies the runtime values a CONDITION evaluates against — for the model's
     ``non_expired_grant`` that is ``current_time``. The split is deliberate: the tuple carries the
-    window (``grant_time`` + ``grant_duration``, written once at grant time) and the caller carries the
-    clock. Omitting it against a conditional tuple is not "no opinion", it is a DENY — OpenFGA cannot
-    evaluate the CEL expression without its parameters — so a caller that forgets the context sees a
-    time-boxed grant as already expired.
+    window (``grant_time`` + ``grant_duration``, written once at grant time) and the check carries the
+    clock. It is sent through :func:`condition_context`, so an omitted ``current_time`` is evaluated at
+    the server's now and an explicit one wins.
 
     ``contextual_tuples`` evaluates the check AS IF those tuples existed, without writing anything.
     That is the whole of "assert before you grant": ask whether a proposed grant would actually produce
