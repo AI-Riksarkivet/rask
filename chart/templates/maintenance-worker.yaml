@@ -130,8 +130,14 @@ spec:
             {{- /* The MEMORY bound, held around the rewrite. Separate from the units ceiling above,
                  which is throughput: one knob for both throttled the whole lane. */}}
             - { name: MAINTENANCE_MAX_CONCURRENT_COMPACTIONS, value: {{ .Values.maintenance.dedicatedWorkers.maxConcurrentCompactions | quote }} }
-            - { name: MAINTENANCE_RECYCLE_AFTER_PASSES, value: {{ .Values.maintenance.dedicatedWorkers.recycleAfterPasses | quote }} }
-            - { name: MAINTENANCE_RECYCLE_AT_MEMORY_FRACTION, value: {{ .Values.maintenance.dedicatedWorkers.recycleAtMemoryFraction | quote }} }
+            {{- /* REQUIRED, NOT QUOTED-THROUGH. `helm upgrade --reuse-values` keeps the previous
+                 release's values and IGNORES this chart's defaults, so a key added after that release
+                 arrives nil and `| quote` renders it as `""` — which pydantic refuses at boot. Measured
+                 2026-09-25: the worker CrashLoopBackOff'd on exactly that for the fraction below. A
+                 missing value must fail the RENDER, where the operator sees it, never a pod. The correct
+                 upgrade flag is `--reset-then-reuse-values`, which applies chart defaults first. */}}
+            - { name: MAINTENANCE_RECYCLE_AFTER_PASSES, value: {{ required "maintenance.dedicatedWorkers.recycleAfterPasses is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.dedicatedWorkers.recycleAfterPasses | quote }} }
+            - { name: MAINTENANCE_RECYCLE_AT_MEMORY_FRACTION, value: {{ required "maintenance.dedicatedWorkers.recycleAtMemoryFraction is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.maintenance.dedicatedWorkers.recycleAtMemoryFraction | quote }} }
             - { name: MAINTENANCE_WORK_DLQ_TOPIC, value: {{ .Values.maintenance.workDlqTopic | quote }} }
             {{- if .Values.maintenance.indexTopic }}
             # The index-build lane. Its own topic beside the work queue: one ackWait cannot serve both a
