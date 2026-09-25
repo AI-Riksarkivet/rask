@@ -12,12 +12,14 @@ import pytest
 from catalog.services import maintenance
 
 
-class _Tags:
-    def __init__(self, tags: dict[str, dict[str, int]]) -> None:
-        self._tags = tags
+class _Index:
+    """``ds.tags`` / ``ds.branches`` — both answer a root-scoped ``{name: metadata}`` map."""
 
-    def list(self) -> dict[str, dict[str, int]]:
-        return self._tags
+    def __init__(self, entries: dict[str, dict[str, int | str | None]]) -> None:
+        self._entries = entries
+
+    def list(self) -> dict[str, dict[str, int | str | None]]:
+        return self._entries
 
 
 class _Manifest:
@@ -50,13 +52,14 @@ class _FakeDs:
         self,
         version: int,
         versions: list[dict[str, Any]],
-        tags: dict[str, dict[str, int]],
+        tags: dict[str, dict[str, int | str | None]],
         stats: Any = None,
         feature_flags: tuple[int, int] = (0, 0),
     ) -> None:
         self.version = version
         self._versions = versions
-        self.tags = _Tags(tags)
+        self.tags = _Index(tags)
+        self.branches = _Index({})
         self._stats = stats
         self.cleaned: dict[str, Any] | None = None
         self.optimize = _Optimize()
@@ -96,7 +99,7 @@ def _versions(n: int, *, age_days: int = 100) -> list[dict[str, Any]]:
 
 def test_preview_retains_current_tags_and_recent() -> None:
     ds = _FakeDs(version=5, versions=_versions(5), tags={"blessed": {"version": 2}})
-    out = maintenance.preview_gc(ds, retention_days=None, retain_versions=2)
+    out = maintenance.preview_gc(ds, branch=None, retention_days=None, retain_versions=2)
     # keep 5 (current) + 4 (retain-2 window) + 2 (tag) → reclaim {3, 1}
     assert set(out["eligible_versions"]) == {1, 3}
     assert out["protected_tags"] == {"blessed": 2}
@@ -111,7 +114,7 @@ def test_preview_age_cutoff_spares_recent_versions() -> None:
         {"version": 5, "timestamp": datetime.now(UTC)},
     ]
     ds = _FakeDs(version=5, versions=versions, tags={})
-    out = maintenance.preview_gc(ds, retention_days=1, retain_versions=None)
+    out = maintenance.preview_gc(ds, branch=None, retention_days=1, retain_versions=None)
     assert set(out["eligible_versions"]) == {1, 2, 3}  # 4 too new, 5 current
 
 

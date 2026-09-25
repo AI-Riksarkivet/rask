@@ -1,10 +1,11 @@
 """#75 on-demand garbage collection — the operator's per-table analog of the compaction sweep's GC.
 
 ``preview_gc`` is a DRY RUN: which old versions ``cleanup_old_versions`` would reclaim, honouring the
-current version, tag pins (a tagged version is NEVER collected), the retain-last-N window, and the age
-cutoff — it never mutates. ``run_gc`` performs the reclaim with the SAME tag exemption the sweep uses
-(``error_if_tagged_old_versions=False``), so a long-lived promotion tag can't stall GC. Pure over a Lance
-dataset handle, so both are unit-testable with a fake ``ds``.
+current version, the pins on THIS ref (a version tagged on this branch, or one a child branch was cut
+from, is NEVER collected), the retain-last-N window, and the age cutoff — it never mutates. ``run_gc``
+performs the reclaim with the SAME tag exemption the sweep uses (``error_if_tagged_old_versions=False``),
+so a long-lived promotion tag can't stall GC. Pure over a Lance dataset handle, so both are unit-testable
+with a fake ``ds``.
 
 The destructive verbs are gated by :func:`require_compactable` and :func:`require_reclaimable`, which
 ask the SWEEP's gates per verb rather than one stricter gate of their own — see either for why a button
@@ -71,19 +72,32 @@ COMPACTION_BOUND: Final[dict[str, int]] = {"batch_size": 64, "num_threads": 2, "
 
 
 class TagIndex(Protocol):
-    """``ds.tags`` — the pinned-version index. Values are pylance ``Tag`` TypedDicts at runtime."""
+    """``ds.tags`` — the pinned-version index. Values are pylance ``Tag`` TypedDicts at runtime.
 
-    def list(self) -> Mapping[str, object]: ...
+    ROOT-SCOPED: it lists every branch's tags from any handle, each naming its own ``branch``.
+    """
+
+    def list(self) -> Mapping[str, Mapping[str, object]]: ...
+
+
+class BranchIndex(Protocol):
+    """``ds.branches`` — every branch and its fork point. Values are pylance ``Branch`` TypedDicts at runtime."""
+
+    def list(self) -> Mapping[str, Mapping[str, object]]: ...
 
 
 class VersionedDataset(Protocol):
-    """What the GC PREVIEW reads: the current version, the version list, and the tag pins. Read-only."""
+    """What the GC PREVIEW reads: the current version, the version list, and the two pins — tags and
+    child branches — that exempt a version from cleanup. Read-only."""
 
     @property
     def version(self) -> int: ...
 
     @property
     def tags(self) -> TagIndex: ...
+
+    @property
+    def branches(self) -> BranchIndex: ...
 
     def versions(self) -> Sequence[Mapping[str, Any]]: ...
 
@@ -229,15 +243,54 @@ def _as_utc(ts: object) -> datetime:
     return datetime.now(UTC)
 
 
-def _tag_versions(ds: VersionedDataset) -> dict[str, int]:
-    """``{tag: version}`` — the pinned versions, exempt from GC (pylance's Tag is a TypedDict at runtime)."""
-    out: dict[str, int] = {}
-    for name, tag in ds.tags.list().items():
-        entry = tag if isinstance(tag, dict) else {"version": getattr(tag, "version", None)}
-        version = entry.get("version")
-        if version is not None:
-            out[name] = int(version)
-    return out
+#: The default ref's name. Lance RECORDS main as null — a tag's ``branch`` and a branch's
+#: ``parentBranch`` (``lance_docs/file_format.md`` "Tag File Format" / "Branch Metadata File Format") —
+#: and it stores a reference spelled ``("main", n)`` as null too (measured on pylance 12.0.0), so a
+#: request naming this is compared as null.
+MAIN_BRANCH: Final = "main"
+
+
+def _recorded_branch(branch: object) -> str | None:
+    """A ref as Lance records it: ``None`` for main, the branch name otherwise."""
+    if branch is None or branch == MAIN_BRANCH:
+        return None
+    if not isinstance(branch, str):
+        raise TypeError(f"a branch is named by a str or None, got {type(branch).__name__}")
+    return branch
+
+
+def _tag_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
+    """``{tag: version}`` for the tags pinning a version OF ``branch`` — the only tags its cleanup honours.
+
+    A tag names a version within ITS branch's history, and branch histories are numbered independently
+    (``lance_docs/guide.md`` Branches: "version numbers may overlap across branches"). Measured on
+    pylance 12.0.0: a tag on ``work`` v3 leaves main's v3 to ``cleanup_old_versions``, and a main tag on
+    v4 leaves the branch's v4, so honouring every listed tag here withholds versions the run deletes.
+    """
+    ref = _recorded_branch(branch)
+    return {
+        name: int(version)
+        for name, tag in ds.tags.list().items()
+        if _recorded_branch(tag.get("branch")) == ref and isinstance(version := tag.get("version"), int)
+    }
+
+
+def _fork_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
+    """``{child branch: version}`` for the branches cut from ``branch`` — each pins the version it forked at.
+
+    A branch resolves the files it inherits through its parent's history at ``parentVersion``, and
+    cleanup keeps that version ("Lance ensures that cleanup does not delete files still referenced by
+    any branch", ``lance_docs/guide.md``). Measured on pylance 12.0.0 at ``older_than=0``: main keeps the
+    v2 a branch was cut from and deletes its untagged neighbours, and a branch keeps the version a branch
+    of its own was cut from. Only DIRECT children are read: a grandchild stands on the same parent
+    version its ancestor does, and Lance refuses to delete a branch another branch is cut from.
+    """
+    ref = _recorded_branch(branch)
+    return {
+        name: int(version)
+        for name, meta in ds.branches.list().items()
+        if _recorded_branch(meta.get("parent_branch")) == ref and isinstance(version := meta.get("parent_version"), int)
+    }
 
 
 class GcPreviewData(TypedDict):
@@ -278,19 +331,24 @@ class CompactData(TypedDict):
     fragments_added: int
 
 
-def preview_gc(ds: VersionedDataset, *, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
-    """Dry-run the old-version cleanup — the versions GC would reclaim, and the tags protecting others."""
+def preview_gc(ds: VersionedDataset, *, branch: str | None, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
+    """Dry-run the old-version cleanup — the versions GC would reclaim, and the tags protecting others.
+
+    ``branch`` names the ref ``ds`` is checked out on, and it is REQUIRED because the handle cannot say:
+    pylance exposes no current-branch accessor, and ``tags.list()`` / ``branches.list()`` answer the
+    same root-scoped maps from every ref. Which of their pins protect a version depends on it.
+    """
     current = int(ds.version)
-    tags = _tag_versions(ds)
-    tagged = set(tags.values())
+    tags = _tag_versions(ds, branch)
+    pinned = set(tags.values()) | set(_fork_versions(ds, branch).values())
     versions = sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True)
     keep_recent = {int(v["version"]) for v in versions[:retain_versions]} if retain_versions else set()
     cutoff = datetime.now(UTC) - timedelta(days=retention_days) if retention_days else None
     eligible: list[int] = []
     for v in versions:
         ver = int(v["version"])
-        if ver == current or ver in tagged or ver in keep_recent:
-            continue  # never the current version, a tag-pinned one, or inside the retain window
+        if ver == current or ver in pinned or ver in keep_recent:
+            continue  # never the current version, one a tag or a child branch pins, or inside the retain window
         ts = v.get("timestamp")
         if cutoff is not None and ts is not None and _as_utc(ts) > cutoff:
             continue  # too new to reclaim under the age cutoff

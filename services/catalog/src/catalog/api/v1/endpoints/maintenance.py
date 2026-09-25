@@ -114,6 +114,7 @@ async def preview_maintenance(
     result = await run_in_threadpool(
         maintenance.preview_gc,
         ds,
+        branch=branch,
         retention_days=body.retention_days,
         retain_versions=body.retain_versions,
     )

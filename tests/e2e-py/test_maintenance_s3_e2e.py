@@ -113,8 +113,8 @@ class Estate(BaseModel):
         why: "a BRANCH is a full dataset the parent contains rather than part of it". So `branched` and
         `branched/tree/feature-a` are two datasets, both carry a `_versions/` marker, and both are
         maintained on their own merits — which is consistent with what main cleanup does, since the
-        version a branch stands on survives it (`tests/unit/test_main_cleanup_does_not_delete_a_version_
-        a_branch_stands_on.py`). Expecting only the parent asserted the opposite of the design.
+        version a branch stands on survives it (`services/catalog/tests/test_the_gc_preview_names_
+        exactly_what_the_run_deletes.py`). Expecting only the parent asserted the opposite of the design.
         """
         return {self.plain_uri, self.blob_uri, self.branch_uri, self.branch_child_uri, self.extra_uri, self.reg_uri}
 

@@ -137,9 +137,13 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
     #    destroying model provenance as a side effect of a request about one person. A tag whose version
     #    cannot be READ is dropped anyway: unreadable is not evidence of absence, and an erasure resolves
     #    that doubt against the tag.
-    for name, version in _tags(dataset).items():
-        if version is not None and _answers(dataset, version, predicate) is False:
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="retained", detail=f"version {version} does not answer the predicate"))
+    #
+    #    The probe reads the tag's OWN ref. A tag names a version of the branch it records, and branch
+    #    histories are numbered independently, so judging a `work` tag by main's same-numbered version
+    #    would keep a tag pinning the subject and drop a clean one.
+    for name, reference in _tags(dataset).items():
+        if reference is not None and _answers(dataset, reference, predicate) is False:
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="retained", detail=f"{_describe(reference)} does not answer the predicate"))
             continue
         try:
             dataset.tags.delete(name)
@@ -206,7 +210,9 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
         **{f"branch:{name}": v for name, v in branches.items() if v is not None and v in residual},
         # Re-listed AFTER step 2, so these are the survivors: a tag whose delete failed pins its version
         # exactly as hard as a branch does, and naming only branches would leave that operator guessing.
-        **{f"tag:{name}": v for name, v in _tags(dataset).items() if v is not None and v in residual},
+        # Only MAIN's tags: `residual` numbers main's versions, and a tag on another branch pins that
+        # branch's history however its number compares.
+        **{f"tag:{name}": ref[1] for name, ref in _tags(dataset).items() if ref is not None and ref[0] is None and ref[1] in residual},
     }
     if residual:
         failed = True
@@ -280,36 +286,52 @@ def _parent_version(meta: object) -> int | None:
     return int(value) if isinstance(value, int) else None
 
 
-def _tags(dataset: _Dataset) -> dict[str, int | None]:
-    """Every tag on this table mapped to the version it pins. `tags.list()` answers a mapping of
-    name -> metadata in pylance 11, carrying that version; `None` marks one this cannot read, which the
-    caller resolves against the tag rather than in its favour."""
+#: Lance's global version identifier, ``(branch, version)`` with ``None`` naming main — the form
+#: ``checkout_version`` takes ("Use `(branch_name, version_number)` tuples as global identifiers",
+#: ``lance_docs/guide.md`` Branches), because a bare version number means "on the handle's branch".
+type _Reference = tuple[str | None, int]
+
+
+def _tags(dataset: _Dataset) -> dict[str, _Reference | None]:
+    """Every tag on this table mapped to the version it pins, ON THE BRANCH IT NAMES.
+
+    `tags.list()` is root-scoped: from any handle it answers every branch's tags, each carrying the
+    `branch` it names (`null` for main — ``lance_docs/file_format.md`` "Tag File Format"). `None` marks
+    one this cannot read, which the caller resolves against the tag rather than in its favour.
+    """
     try:
         listed = dataset.tags.list()
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_tag_list_failed", extra={"error": str(exc)})
         return {}
     if isinstance(listed, Mapping):
-        return {str(name): _tag_version(meta) for name, meta in listed.items()}
+        return {str(name): _tag_reference(meta) for name, meta in listed.items()}
     return {str(name): None for name in (listed or [])}
 
 
-def _tag_version(meta: object) -> int | None:
-    """The version one tag pins, out of its metadata or out of a bare int."""
-    if isinstance(meta, Mapping):
-        value = meta.get("version")
-        return int(value) if isinstance(value, int) else None
-    return int(meta) if isinstance(meta, int) else None
+def _tag_reference(meta: object) -> _Reference | None:
+    """The ``(branch, version)`` one tag pins, or None when its metadata does not say."""
+    if not isinstance(meta, Mapping):
+        return None
+    branch, version = meta.get("branch"), meta.get("version")
+    if (branch is not None and not isinstance(branch, str)) or not isinstance(version, int):
+        return None
+    return (branch, version)
 
 
-def _answers(dataset: _Dataset, version: int, predicate: str) -> bool | None:
-    """Whether ``version`` still holds a row matching ``predicate`` — `None` when it cannot be read.
+def _describe(reference: _Reference) -> str:
+    branch, version = reference
+    return f"version {version}" if branch is None else f"version {version} of branch {branch!r}"
+
+
+def _answers(dataset: _Dataset, reference: _Reference, predicate: str) -> bool | None:
+    """Whether ``reference`` still holds a row matching ``predicate`` — `None` when it cannot be read.
 
     THREE-VALUED ON PURPOSE. A caller deciding whether to destroy something must distinguish "proved
     clean" from "could not tell", and only the first is a reason to keep it.
     """
     try:
-        return bool(dataset.checkout_version(version).count_rows(filter=predicate))
+        return bool(dataset.checkout_version(reference).count_rows(filter=predicate))
     except Exception as exc:  # noqa: BLE001
-        log.warning("erasure_tag_probe_failed", extra={"version": version, "error": str(exc)})
+        log.warning("erasure_tag_probe_failed", extra={"reference": _describe(reference), "error": str(exc)})
         return None
