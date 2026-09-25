@@ -841,8 +841,12 @@ def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:
     properties = schema["properties"]
     if not isinstance(properties, dict):
         raise TypeError(f"expected a properties mapping, got {type(properties).__name__}")
-    schema["required"] = ["batch_size", "num_threads"]
-    for name in ("batch_size", "num_threads"):
+    required = schema.get("required", [])
+    if not isinstance(required, list):
+        raise TypeError(f"expected a required list, got {type(required).__name__}")
+    bounds = ("batch_size", "num_threads")
+    schema["required"] = [*required, *(name for name in bounds if name not in required)]
+    for name in bounds:
         published = properties[name]
         alternatives = published.pop("anyOf") if isinstance(published, dict) else None
         if not isinstance(published, dict) or not isinstance(alternatives, list):

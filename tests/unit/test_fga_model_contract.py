@@ -355,7 +355,7 @@ def test_access_disclosure_routes_are_owner_tier() -> None:
         assert _action_relation("namespace", suffix) == "can_delete", suffix
 
 
-def test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough() -> None:
+def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
     """CONTRACT (security): a door that returns table DATA is authorized with ``can_read_data``.
 
     A read door is a read only when a read vocabulary names it: undeclared it is refused for every
@@ -382,7 +382,7 @@ def test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough()
         assert _action_relation("table", action) == "can_get_metadata", action
 
 
-def test_grant_routes_are_intercepted_before_the_suffix_fallthrough() -> None:
+def test_grant_routes_are_intercepted_before_the_resolver() -> None:
     """CONTRACT (security, #72 + the grant axis): ``access/grant`` / ``access/revoke`` are authorized
     PER RUNG from the request body by ``_authorize_grant``, not by the suffix map.
 

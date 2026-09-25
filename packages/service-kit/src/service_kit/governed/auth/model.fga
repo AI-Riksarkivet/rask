@@ -390,7 +390,7 @@ type warehouse
     # The same tier as its three neighbours, and at the SAME level as the rung it confers:
     # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
     # beneath it. Declaring the rung without its grant action is how it ended up ungated one
-    # level down — caught by `test_grant_routes_are_intercepted_before_the_suffix_fallthrough`.
+    # level down — caught by `test_grant_routes_are_intercepted_before_the_resolver`.
     define can_grant_classifier: manage_grants or (classifier and pass_grants)
     # Both meta-rungs are `manage_grants`-only. `can_grant_owner` is too: ownership is the authority to
     # hand out authority, so passing it through the grant option would let a delegate exceed the rung
@@ -496,7 +496,7 @@ type namespace
     # The same tier as its three neighbours, and at the SAME level as the rung it confers:
     # `classifier` cascades `... from parent`, so a tenant grant made here reaches every table
     # beneath it. Declaring the rung without its grant action is how it ended up ungated one
-    # level down — caught by `test_grant_routes_are_intercepted_before_the_suffix_fallthrough`.
+    # level down — caught by `test_grant_routes_are_intercepted_before_the_resolver`.
     define can_grant_classifier: manage_grants or (classifier and pass_grants)
     define can_grant_manage_grants: manage_grants
     define can_grant_pass_grants: manage_grants

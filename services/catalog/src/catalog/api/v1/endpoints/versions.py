@@ -111,7 +111,7 @@ async def table_history(
     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
     dependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever
     arrives to be metadata-checked. Pinned by
-    ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
+    ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
 
     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
     into 10k object-store round trips.

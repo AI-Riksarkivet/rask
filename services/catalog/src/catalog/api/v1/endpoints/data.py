@@ -725,7 +725,7 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
     and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
     ALLOW` beside the `read_data` record for the same call. Pinned by
-    `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
+    `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
     """
     segments = parse_identifier(id, settings.delimiter)
     if body.kind == "deleted":
