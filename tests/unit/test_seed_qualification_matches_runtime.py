@@ -34,6 +34,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 REPO = Path(__file__).resolve().parents[2]
@@ -113,3 +114,27 @@ def test_the_names_the_seeder_would_actually_create_are_qualified() -> None:
         f"the seeder would create {offenders} while the cascade asks for bind86-prefixed names, so those tiers will not exist when a stage runner reaches them"
     )
     assert len(for_tenant) == len(unqualified), "qualification changed how MANY namespaces are seeded, which it must not"
+
+
+def test_the_seeder_provisions_every_tier_a_stage_runner_moves_between() -> None:
+    """Every namespace a stage runner reads or writes is seeded, not only the producer's head.
+
+    The chart renders one stage runner per `medallion.stageRunners` entry, so that key is the list to
+    follow, read here with strict indexing so a rename fails this test instead of emptying it. Looked up
+    under any other spelling the list is absent, and `or []` turns the miss into a seed of the head tier
+    alone that reports success: the silver and gold a cascade then asks for do not exist, and the
+    refusal reads as a permissions error one hop from the end.
+    """
+    spec = importlib.util.spec_from_file_location("_seed_ns3", REPO / "scripts/seed_medallion_namespaces.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    values = REPO / "chart/values.yaml"
+    stage_runners = yaml.safe_load(values.read_text(encoding="utf-8"))["medallion"]["stageRunners"]
+    assert stage_runners, "the chart declares no stage runners, so this check would prove nothing"
+    moved_between = {runner[key] for runner in stage_runners for key in ("fromNamespace", "toNamespace")}
+
+    seeded = set(module.declared_namespaces(values))
+    assert moved_between <= seeded, f"the seeder would not provision {sorted(moved_between - seeded)}; it derives only {sorted(seeded)}"

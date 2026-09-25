@@ -111,7 +111,7 @@ def declared_namespaces(values_path: pathlib.Path, project: str = "") -> list[st
     head = (medallion.get("producer") or {}).get("bronzeNamespace")
     if head:
         seen[head] = None
-    for stage_runner in medallion.get("stage_runners") or []:
+    for stage_runner in medallion.get("stageRunners") or []:
         for key in ("fromNamespace", "toNamespace"):
             name = stage_runner.get(key)
             if name:
