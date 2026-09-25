@@ -235,6 +235,10 @@ async def plan_table_compaction(
     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
     ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
 
+    The body must state ``batch_size`` and ``num_threads``, the executor's memory bounds. Lance bakes
+    both into every task and the worker cannot set them afterwards, so a plan missing either is refused
+    400 (``InvalidInput``, code 13) with both named.
+
     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
     to queue.
     """
@@ -245,8 +249,11 @@ async def plan_table_compaction(
     described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
     if not described.location:
         raise InvalidInputError("table has no object-store location to compact")
-    policy = (body or CompactionPlanRequest()).model_dump(exclude_none=True)
-    plan = await run_in_threadpool(lambda: dataplane.plan_compaction(described.location or "", so, branch=branch, **policy))
+    request = body or CompactionPlanRequest()
+    policy = request.model_dump(exclude_none=True, exclude={"batch_size", "num_threads"})
+    plan = await run_in_threadpool(
+        lambda: dataplane.plan_compaction(described.location or "", so, batch_size=request.batch_size, num_threads=request.num_threads, branch=branch, **policy)
+    )
     return CompactionPlanResponse(read_version=plan.read_version, tasks=plan.tasks)
 
 

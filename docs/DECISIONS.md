@@ -1322,7 +1322,11 @@ before one is compacted, and the evidence lives only on the referring side — s
 metadata moves under the catalog key, bytes under a vended per-table one. Measured on pylance 10.0.0,
 the task JSON BAKES `batch_size`/`num_threads` at plan time and `execute(dataset)` takes no options —
 so the plan door must forward those knobs or an executor can never set them — and a PARTIAL result set
-commits cleanly, which is what makes a failed task a smaller commit rather than a lost tick.
+commits cleanly, which is what makes a failed task a smaller commit rather than a lost tick. Owner
+ruling 2026-09-25: forwarding is not enough, and the door REFUSES a plan that omits either bound (400
+`InvalidInput`, naming both). A plan without them bakes Lance's 8192-row, every-core defaults into a
+task no executor can re-bound, so every executor — rask's sweep or a bring-your-own one — states its
+own.
 `CompactionPlaneUnavailable` draws the fallback line at "did a byte move": before that, fall back to
 in-pod compaction; after it, fail, because retrying would rewrite bytes twice.
 

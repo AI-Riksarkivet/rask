@@ -925,27 +925,30 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
 #: that gap is absorbed — narrow enough that everything else in the two functions below stays checked.
 _RewriteResult: Any = lance_optimize.RewriteResult
 
-#: What the plan door accepts. Mostly POLICY — what shape the table should end up in — plus the two
-#: MEMORY BOUNDS the executor owns but cannot set later: measured on pylance 10.0.0 (2026-09-04), a
-#: planned task's JSON carries an ``options`` object holding ``batch_size`` and ``num_threads``, and
-#: ``CompactionTask.execute(dataset)`` takes no options, so a plan made without them condemns every
-#: distributed rewrite to Lance's defaults (8192 ROWS per batch, host-core thread count — ~15 GB per
-#: thread against 1.8 MB rows). Forwarded, never interpreted.
+#: The POLICY half of what the plan door accepts: what shape the table should end up in. Optional —
+#: an absent knob leaves Lance's own choice, which for these is a shape rather than a memory ceiling.
 #:
 #: The rest of ``CompactionOptions`` (buffer sizes, encoding modes, index-remap strategy) stays out:
-#: those describe how a machine should do the work and, unlike these two, the executor has other ways
-#: to reach them. Names are Lance's, verbatim, including ``materialize_deletions_threadhold``: it is
-#: spelled that way in ``lance.optimize`` and renaming it here would mean silently dropping whatever a
-#: caller sent.
+#: those describe how a machine should do the work and, unlike the two executor bounds, the executor
+#: has other ways to reach them. Names are Lance's, verbatim, including
+#: ``materialize_deletions_threadhold``: it is spelled that way in ``lance.optimize`` and renaming it
+#: here would mean silently dropping whatever a caller sent.
 _COMPACTION_POLICY_KNOBS = (
     "target_rows_per_fragment",
     "max_rows_per_group",
     "max_bytes_per_file",
     "materialize_deletions",
     "materialize_deletions_threadhold",
-    "batch_size",
-    "num_threads",
 )
+
+#: The executor's MEMORY BOUNDS, which every plan must carry. Measured on pylance 12.0.0 (2026-09-25):
+#: a planned task's JSON bakes both into its ``options`` and ``CompactionTask.execute`` takes only the
+#: dataset, so the plan is the executor's one chance to state them. Left null they become Lance's
+#: defaults: "The default `batch_size` is 8192 rows" and a compute pool "determined by the number of
+#: cores on the machine" (``lance_docs/guide.md`` § Scanning Data, § Threading Model) — against ~1.8 MB
+#: rows, ~15 GB per thread on the HOST's core count. Forwarded, never interpreted: the numbers are the
+#: executor's own.
+_COMPACTION_EXECUTOR_BOUNDS = ("batch_size", "num_threads")
 
 #: The compaction result's non-retryable remedy. A lost race voids the PLAN, not just the commit — the
 #: fragments the result names were chosen against a version that no longer exists.
@@ -977,7 +980,15 @@ class CompactionOutcome(BaseModel):
     files_removed: int
 
 
-def plan_compaction(location: str, so: StorageOptions, *, branch: str | None = None, **policy: Any) -> PlannedCompaction:
+def plan_compaction(
+    location: str,
+    so: StorageOptions,
+    *,
+    batch_size: int | None,
+    num_threads: int | None,
+    branch: str | None = None,
+    **policy: Any,
+) -> PlannedCompaction:
     """Plan a compaction WITHOUT executing it — the catalog's first half of the maintenance protocol.
 
     This is a metadata read: it opens the manifest, decides which fragments should merge, and returns
@@ -987,6 +998,11 @@ def plan_compaction(location: str, so: StorageOptions, *, branch: str | None = N
     every byte of the rewrite — the split that keeps the catalog's memory ceiling a function of its
     request rate rather than of the largest table anyone owns.
 
+    ``batch_size`` and ``num_threads`` are the executor's memory bounds (``_COMPACTION_EXECUTOR_BOUNDS``)
+    and both are REQUIRED: a ``None`` in either refuses the plan, naming both, before the manifest is
+    opened. They have no default because the default would be Lance's: a batch counted in rows, on
+    every core of the host.
+
     ``policy`` accepts only ``_COMPACTION_POLICY_KNOBS``; anything else is refused rather than dropped,
     so a caller tuning a knob this door does not honour learns it instead of watching the plan ignore it.
     An empty ``tasks`` list is the ANSWER for a table already at target, not an error — a scheduled sweep
@@ -994,8 +1010,19 @@ def plan_compaction(location: str, so: StorageOptions, *, branch: str | None = N
     """
     unknown = sorted(set(policy) - set(_COMPACTION_POLICY_KNOBS))
     if unknown:
-        raise InvalidInputError(f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS)}")
-    options = {k: v for k, v in policy.items() if v is not None}
+        raise InvalidInputError(
+            f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS + _COMPACTION_EXECUTOR_BOUNDS)}"
+        )
+    if batch_size is None or num_threads is None:
+        # BOTH NAMES, whichever is missing. Memory is their product, so they are one bound: a caller
+        # told only about the half it forgot would be refused again for the other.
+        missing = [name for name, bound in zip(_COMPACTION_EXECUTOR_BOUNDS, (batch_size, num_threads), strict=True) if bound is None]
+        raise InvalidInputError(
+            f"a compaction plan must state the executor's memory bounds, batch_size AND num_threads (missing: {missing}). "
+            "Lance bakes both into every task at plan time and CompactionTask.execute accepts no options, so a plan without them runs "
+            "every rewrite on Lance's defaults: the scanner's default batch on every core of the host. Send the bounds your executor runs under."
+        )
+    options = {k: v for k, v in policy.items() if v is not None} | {"batch_size": batch_size, "num_threads": num_threads}
     try:
         dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
         if branch is not None:

@@ -861,6 +861,10 @@ export interface paths {
          *     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
          *     ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
          *
+         *     The body must state ``batch_size`` and ``num_threads``, the executor's memory bounds. Lance bakes
+         *     both into every task and the worker cannot set them afterwards, so a plan missing either is refused
+         *     400 (``InvalidInput``, code 13) with both named.
+         *
          *     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
          *     to queue.
          */
@@ -3100,8 +3104,9 @@ export interface paths {
         put?: never;
         /**
          * Register Table
-         * @description Register an existing table location at ``id`` via ``register_table``, then seed the caller's FGA
-         *     ownership and emit a REGISTER_TABLE marker (who attached it + where).
+         * @description Register an existing table location at ``id`` via ``register_table``, refuse it when the dataset
+         *     there carries reader flag 256, then seed the caller's FGA ownership and emit a REGISTER_TABLE marker
+         *     (who attached it + where).
          */
         post: operations["register_table_v1_table__id__register_post"];
         delete?: never;
@@ -5300,25 +5305,28 @@ export interface components {
          * CompactionPlanRequest
          * @description Ask the catalog what compaction this table needs — a metadata read that mints nothing.
          *
-         *     Most knobs are POLICY: what shape the table should end up in. Two are MECHANICS — how much memory
-         *     the rewrite may use — and they are here because **Lance bakes them into the task at plan time**.
-         *     Measured on pylance 10.0.0 (2026-09-04): a planned task's JSON carries an ``options`` object
-         *     holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute(dataset)`` accepts no
-         *     options at all. So an executor that plans without them can never set them, and every distributed
-         *     rewrite runs on Lance's defaults.
+         *     Most knobs are POLICY: what shape the table should end up in, each optional. Two are MECHANICS —
+         *     how much memory the rewrite may use — and both are REQUIRED, because **Lance bakes them into the
+         *     task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
+         *     ``options`` object holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute``
+         *     takes only the dataset. So the plan is the executor's one chance to state them.
          *
-         *     That is not a preference. Lance's default batch is 8192 ROWS, and rows are not a unit of memory:
-         *     against ~1.8 MB bronze page-image rows it is ~15 GB *per compute thread*, times a thread count
-         *     defaulting to the HOST's cores rather than the pod's limit. The maintenance plane bounds both
-         *     (``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS``); refusing them here would make
-         *     the distributed path the one route that cannot be bounded.
+         *     Left out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch
+         *     is counted in ROWS, and rows are not a unit of memory — against the ~1.8 MB bronze rows measured
+         *     here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores rather
+         *     than the pod's limit. So the door refuses a plan missing either one with 400 ``InvalidInput``,
+         *     naming both.
+         *     rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE`` and ``MAINTENANCE_COMPACT_THREADS``; a
+         *     bring-your-own executor sends the bounds it runs under.
          *
-         *     The catalog still does not INTERPRET them — it forwards the executor's own numbers into the plan
-         *     because the format gives the executor no later chance to state them. An unrecognized field is
-         *     refused rather than dropped — see ``dataplane.plan_compaction``.
+         *     The catalog does not INTERPRET them — it forwards the executor's own numbers into the plan. An
+         *     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
          */
         CompactionPlanRequest: {
-            /** Batch Size */
+            /**
+             * Batch Size
+             * @description Required. Rows per scan batch in each rewrite task.
+             */
             batch_size?: number | null;
             /** Materialize Deletions */
             materialize_deletions?: boolean | null;
@@ -5328,7 +5336,10 @@ export interface components {
             max_bytes_per_file?: number | null;
             /** Max Rows Per Group */
             max_rows_per_group?: number | null;
-            /** Num Threads */
+            /**
+             * Num Threads
+             * @description Required. Compute threads per rewrite task.
+             */
             num_threads?: number | null;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;

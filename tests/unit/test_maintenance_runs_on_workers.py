@@ -67,7 +67,7 @@ def _worker_executes(uri: str, task_json: str) -> str:
 def test_the_catalog_plans_compaction_and_hands_back_queue_shippable_tasks(tmp_path: Path) -> None:
     uri = _seed(tmp_path, fragments=3)
 
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
 
     assert plan.read_version == lance.dataset(uri).version
     assert plan.tasks, "three 100-row fragments with a 1000-row target must plan at least one task"
@@ -84,7 +84,7 @@ def test_a_worker_executes_the_task_and_the_catalog_commits_the_result(tmp_path:
     before = lance.dataset(uri)
     assert len(before.get_fragments()) == 3
 
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     results = [_worker_executes(uri, task) for task in plan.tasks]
     outcome = commit_compaction(uri, {}, results)
 
@@ -113,7 +113,7 @@ def test_the_commit_opens_the_dataset_ONCE(tmp_path: Path, monkeypatch: pytest.M
     place, so the reopen was buying nothing at all.
     """
     uri = _seed(tmp_path, fragments=3)
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     results = [_worker_executes(uri, task) for task in plan.tasks]
 
     real_open = lance.dataset
@@ -147,7 +147,7 @@ def test_a_policy_knob_this_door_does_not_honour_is_refused_not_dropped(tmp_path
     """
     uri = _seed(tmp_path, fragments=2)
     with pytest.raises(InvalidInputError) as caught:
-        plan_compaction(uri, {}, io_buffer_size=8192)
+        plan_compaction(uri, {}, io_buffer_size=8192, batch_size=64, num_threads=2)
     assert "io_buffer_size" in str(caught.value)
 
 
@@ -155,7 +155,7 @@ def test_a_table_that_needs_no_compaction_plans_no_work(tmp_path: Path) -> None:
     # One fragment already at target: the plan is empty, and an empty plan must be an ANSWER (no work
     # to queue), not an error — otherwise a scheduled sweep pages an operator for a healthy table.
     uri = _seed(tmp_path, fragments=1)
-    assert plan_compaction(uri, {}, target_rows_per_fragment=1000).tasks == []
+    assert plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2).tasks == []
 
 
 def test_a_result_from_a_stale_plan_is_refused_as_non_retryable(tmp_path: Path) -> None:
@@ -166,7 +166,7 @@ def test_a_result_from_a_stale_plan_is_refused_as_non_retryable(tmp_path: Path) 
     resurrects overwritten data.
     """
     uri = _seed(tmp_path, fragments=3)
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     results = [_worker_executes(uri, task) for task in plan.tasks]
     # Someone overwrites the table while the worker was busy.
     lance.write_dataset(_table_of(5), uri, mode="overwrite", data_storage_version="2.2")
@@ -213,7 +213,7 @@ def test_the_worker_writes_the_bytes_before_the_catalog_is_asked_to_commit(tmp_p
     data_dir = Path(uri) / "data"
     before = {p.name for p in data_dir.iterdir()}
 
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     results = [_worker_executes(uri, task) for task in plan.tasks]
     written_by_the_worker = {p.name for p in data_dir.iterdir()} - before
     assert written_by_the_worker, "the worker's execute() is what writes the compacted data file"
@@ -223,39 +223,51 @@ def test_the_worker_writes_the_bytes_before_the_catalog_is_asked_to_commit(tmp_p
 
 
 def test_the_executors_MEMORY_BOUNDS_survive_the_plan_because_the_task_bakes_them(tmp_path: Path) -> None:
-    """The plan door must forward `batch_size`/`num_threads`, and the reason is a measured fact.
+    """The executor's `batch_size`/`num_threads` reach the task verbatim — the plan is where they live.
 
-    They read like machine knobs the executor should own, and the door refused them on exactly that
-    reasoning. Lance gives the executor no later chance to state them: measured on pylance 10.0.0
-    (2026-09-04), a planned task's JSON carries an `options` object holding both, and
-    `CompactionTask.execute(dataset)` accepts no options at all. A plan made without them condemns
-    every distributed rewrite to Lance's defaults — an 8192-ROW batch, which against ~1.8 MB bronze
-    page-image rows is ~15 GB per compute thread, times a thread count taken from the HOST's cores
-    rather than the pod's limit.
-
-    That is the unbounded read the maintenance plane already bounds for the in-pod path
-    (MAINTENANCE_SCAN_BATCH_SIZE=64, MAINTENANCE_COMPACT_THREADS=2). Refusing them here would make
-    the distributed path the one route in the estate that cannot be bounded at all.
+    They read like machine knobs the executor should own, but Lance gives the executor no later chance
+    to state them: measured on pylance 12.0.0 (2026-09-25), a planned task's JSON carries an `options`
+    object holding both, and `CompactionTask.execute` takes only the dataset. Distinctive numbers, so
+    neither can be satisfied by a default: this is the same pair the maintenance plane bounds its
+    in-pod rewrite with (MAINTENANCE_SCAN_BATCH_SIZE, MAINTENANCE_COMPACT_THREADS).
     """
     uri = _seed(tmp_path, fragments=3)
 
-    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2)
+    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=37, num_threads=3)
 
     assert planned.tasks, "the fixture must have something to compact or this proves nothing"
     baked = json.loads(planned.tasks[0])["options"]
-    assert baked["batch_size"] == 64, f"the executor's read bound did not reach the task: {baked}"
-    assert baked["num_threads"] == 2, f"the executor's thread bound did not reach the task: {baked}"
+    assert baked["batch_size"] == 37, f"the executor's read bound did not reach the task: {baked}"
+    assert baked["num_threads"] == 3, f"the executor's thread bound did not reach the task: {baked}"
 
 
-def test_a_plan_made_WITHOUT_the_bounds_runs_on_lances_defaults(tmp_path: Path) -> None:
-    """The other half of the same fact, stated so a future reader does not have to re-measure it: a
-    task planned without the bounds carries nulls, and nothing downstream can fill them in."""
+@pytest.mark.parametrize(
+    ("batch_size", "num_threads"),
+    [
+        pytest.param(None, None, id="neither bound"),
+        pytest.param(64, None, id="batch_size alone"),
+        pytest.param(None, 2, id="num_threads alone"),
+    ],
+)
+def test_a_plan_WITHOUT_both_bounds_is_refused_and_the_refusal_names_both(tmp_path: Path, batch_size: int | None, num_threads: int | None) -> None:
+    """A plan missing either bound is refused, because nothing downstream can fill the gap in.
+
+    Measured on pylance 12.0.0 (2026-09-25): a task planned without them bakes `"batch_size": null`
+    and `"num_threads": null` into its `options`, and `CompactionTask.execute` takes only the
+    dataset. `lance/optimize.py` documents what those nulls become: the scanner's default batch and
+    "the number of cores on the machine" — ~15 GB per thread against ~1.8 MB bronze rows, on the
+    HOST's core count. A plan like that is an OOM handed to whichever executor runs it.
+
+    Both names are in the refusal whichever one is missing: they are one bound (memory is their
+    product), and a caller told only about the half it forgot would be refused again for the other.
+    """
     uri = _seed(tmp_path, fragments=3)
 
-    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024)
+    with pytest.raises(InvalidInputError) as caught:
+        plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=batch_size, num_threads=num_threads)
 
-    baked = json.loads(planned.tasks[0])["options"]
-    assert baked["batch_size"] is None and baked["num_threads"] is None
+    message = str(caught.value)
+    assert "batch_size" in message and "num_threads" in message, f"the refusal must name both bounds: {message}"
 
 
 def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: Path) -> None:
@@ -273,7 +285,7 @@ def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: P
     that resolves to nothing — one client branch for one condition.
     """
     with pytest.raises(TableNotFoundError, match="never written"):
-        plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024)
+        plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2)
 
 
 # --------------------------------------------------------------------------- #
@@ -317,7 +329,7 @@ def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: P
     committed costs nothing.
     """
     clone = _clone_shaped(tmp_path)
-    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     results = [_worker_executes(clone, task) for task in plan.tasks]
 
     with pytest.raises(Exception) as caught:  # noqa: B017 — the TYPE is the subject of the sibling assertion below
@@ -343,7 +355,7 @@ def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_
         button_reason = str(exc)
     assert button_reason, "the button no longer refuses a shallow clone — re-point this gate"
 
-    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     results = [_worker_executes(clone, task) for task in plan.tasks]
     try:
         commit_compaction(clone, {}, results)
@@ -360,7 +372,7 @@ def test_a_rewrite_at_another_file_version_is_refused_before_it_commits(tmp_path
     for i in range(3):
         lance.write_dataset(_table_of(10), uri, mode="append" if i else "create", data_storage_version="2.1", enable_stable_row_ids=True)
     before = lance.dataset(uri).version
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
     forged = []
     for task in plan.tasks:
         result = json.loads(_worker_executes(uri, task))

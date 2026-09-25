@@ -527,17 +527,14 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
 
     def _rewrite(uri: str, *, table_id: str, options: Mapping[str, Any]) -> compaction_executor.DistributedOutcome:
         # The two memory bounds ride the PLAN, and that is not where they look like they belong.
-        # Measured on pylance 10.0.0 (2026-09-04): a planned task's JSON bakes `batch_size` and
-        # `num_threads`, and `CompactionTask.execute(dataset)` accepts no options — so a plan made
-        # without them condemns the rewrite to Lance's 8192-row default, which against ~1.8 MB bronze
-        # rows is ~15 GB per compute thread. The in-pod path bounds both; this must too.
+        # Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON bakes `batch_size` and
+        # `num_threads`, and `CompactionTask.execute` takes only the dataset — so the catalog refuses a
+        # plan without both. INDEXED, never `.get()`: `options` is `_compact_files`' `size_kw`, which
+        # always carries the floored settings, and a missing key must fail this dataset loudly rather
+        # than earn a 400 that `plan_via_catalog` reads as an outage and answers with an in-pod rewrite.
         policy: dict[str, Any] = {}
         if (target := options.get("target_rows_per_fragment")) is not None:
             policy["target_rows_per_fragment"] = target
-        if (batch := options.get("batch_size")) is not None:
-            policy["batch_size"] = batch
-        if (threads := options.get("num_threads")) is not None:
-            policy["num_threads"] = threads
         outcome = compaction_executor.compact_distributed(
             uri,
             table_id=table_id,
@@ -547,6 +544,8 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
             plan=lambda tid, pol: catalog_compaction.plan_via_catalog(tid, pol, settings=settings),
             commit=lambda tid, results: catalog_compaction.commit_via_catalog(tid, results, settings=settings),
             policy=policy,
+            batch_size=int(options["batch_size"]),
+            num_threads=int(options["num_threads"]),
             # The MEMORY bound, and deliberately not `max_concurrent_units`, which is the THROUGHPUT
             # one. Only the rewrite holds bytes; a no-op unit never reaches it.
             rewrite_slots=settings.max_concurrent_compactions,

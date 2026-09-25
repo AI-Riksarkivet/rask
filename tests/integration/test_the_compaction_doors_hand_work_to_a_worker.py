@@ -14,6 +14,7 @@ from typing import Any
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
+import pytest
 from fastapi.testclient import TestClient
 from lance.optimize import CompactionTask
 
@@ -47,7 +48,7 @@ def test_the_plan_door_hands_back_tasks_without_minting_a_version(real_ns_client
     location = _fragmented_table(real_ns_client)
     before = lance.dataset(location).version
 
-    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000, "batch_size": 64, "num_threads": 2})
 
     assert response.status_code == 200, response.text
     body: dict[str, Any] = response.json()
@@ -61,7 +62,9 @@ def test_a_worker_executes_the_plan_and_the_commit_door_lands_it(real_ns_client:
     location = _fragmented_table(real_ns_client)
     before = lance.dataset(location)
 
-    plan = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000}).json()
+    plan = real_ns_client.post(
+        "/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000, "batch_size": 64, "num_threads": 2}
+    ).json()
     # The WORKER half — a separate process in production, holding vended creds and the task string it
     # read off the queue. Nothing here touches the catalog.
     # pylance's ``optimize.pyi`` stops at ``execute``; ``from_json``/``json`` exist on the Rust class and
@@ -85,7 +88,7 @@ def test_a_worker_executes_the_plan_and_the_commit_door_lands_it(real_ns_client:
 
 def test_a_healthy_table_plans_no_work_and_is_not_an_error(real_ns_client: TestClient) -> None:
     _fragmented_table(real_ns_client, appends=0)
-    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 10_000, "batch_size": 64, "num_threads": 2})
     assert response.status_code == 200, response.text
     assert response.json()["tasks"] == []
 
@@ -119,6 +122,35 @@ def test_the_executors_own_MEMORY_BOUNDS_are_accepted_at_the_wire(real_ns_client
     assert response.status_code == 200, response.text
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(None, id="no body"),
+        pytest.param({"target_rows_per_fragment": 1024}, id="policy but no bounds"),
+        pytest.param({"target_rows_per_fragment": 1024, "batch_size": 64}, id="batch_size alone"),
+        pytest.param({"target_rows_per_fragment": 1024, "num_threads": 2}, id="num_threads alone"),
+    ],
+)
+def test_a_plan_WITHOUT_the_executors_bounds_is_refused_400_naming_both(real_ns_client: TestClient, body: dict[str, int] | None) -> None:
+    """The door refuses a plan that would bake Lance's defaults into every task.
+
+    400 with the spec's `InvalidInput` code (13) rather than FastAPI's 422: the request parsed, and
+    what is wrong with it is a domain rule `plan_compaction` owns, so the refusal is the same for an
+    HTTP caller and an in-process one. The detail names both bounds so a bring-your-own executor
+    learns the whole pair it has to state.
+    """
+    location = _fragmented_table(real_ns_client)
+    before = lance.dataset(location).version
+
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json=body)
+
+    assert response.status_code == 400, response.text
+    problem = response.json()
+    assert problem["code"] == 13, problem
+    assert "batch_size" in problem["detail"] and "num_threads" in problem["detail"], problem
+    assert lance.dataset(location).version == before
+
+
 def test_the_commit_door_refuses_an_empty_result_set(real_ns_client: TestClient) -> None:
     _fragmented_table(real_ns_client)
     response = real_ns_client.post("/management/v1/table/db$t/compaction_commit", json={"results": []})
@@ -138,7 +170,7 @@ def test_neither_door_silently_compacts_MAIN_when_a_BRANCH_is_named(real_ns_clie
     location = _fragmented_table(real_ns_client)
     before = lance.dataset(location).version
 
-    for door, payload in (("compaction_plan", {}), ("compaction_commit", {"results": ["{}"]})):
+    for door, payload in (("compaction_plan", {"batch_size": 64, "num_threads": 2}), ("compaction_commit", {"results": ["{}"]})):
         response = real_ns_client.post(f"/v1/table/db$t/{door}?branch=work", json=payload)
         assert response.status_code not in (200, 201), f"{door} answered a branch request from main"
     assert lance.dataset(location).version == before

@@ -206,9 +206,16 @@ def compact_distributed(
     plan: Planner,
     commit: Committer,
     policy: Mapping[str, Any],
+    batch_size: int,
+    num_threads: int,
     rewrite_slots: int,
 ) -> DistributedOutcome | None:
     """Plan elsewhere, rewrite here, commit elsewhere. ``None`` means this path is unavailable.
+
+    ``policy`` is the table's shape; ``batch_size`` and ``num_threads`` are THIS executor's memory
+    bounds and ride every plan request. Lance bakes them into each task, ``CompactionTask.execute``
+    takes no options, and the catalog refuses a plan without both — so they are required here rather
+    than left for a caller to remember inside ``policy``.
 
     **The failure policy is measured, not preferred.** When some tasks fail and some succeed, the
     successful ones' data files are ALREADY WRITTEN. Discarding them leaves bytes on the store for
@@ -226,7 +233,7 @@ def compact_distributed(
     An EMPTY PLAN is a successful no-op: the table is at target. Commit is not called, for the same
     reason as above.
     """
-    planned = plan(table_id, dict(policy))
+    planned = plan(table_id, {**policy, "batch_size": batch_size, "num_threads": num_threads})
     if not planned.tasks:
         log.info("compaction_distributed_nothing_to_do", extra={"uri": uri, "table_id": table_id, "read_version": planned.read_version})
         return DistributedOutcome(read_version=planned.read_version, tasks_planned=0, tasks_executed=0)
