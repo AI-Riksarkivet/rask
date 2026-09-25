@@ -38,7 +38,7 @@ _CLAIM = re.compile(r"neither\s+redelivers\s+nor\s+dead[- ]letters", re.IGNORECA
 #: defect and must keep quoting it to stay readable.
 _SEARCHED = ("services", "packages", "tests", "chart", "docs", "scripts")
 _SUFFIXES = {".py", ".md", ".yaml", ".yml"}
-_EXCLUDED_NAMES = {"open_backlog_left_new.md", "backlog_left.md", Path(__file__).name}
+_EXCLUDED_NAMES = {"open_backlog_left_new2.md", Path(__file__).name}
 
 
 def _prose_files() -> list[Path]:

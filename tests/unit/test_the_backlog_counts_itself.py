@@ -1,4 +1,4 @@
-"""`open_backlog_left_new.md` states counts, and this re-derives them from the rows.
+"""`open_backlog_left_new2.md` states counts, and this re-derives them from the rows.
 
 A register's header is the only part most readers read, and this estate has been bitten by headers that
 disagreed with their own rows: `open_estate-verification.md` carried a context sentence its own row 15
@@ -15,13 +15,8 @@ Four shapes only, and each has failed here before:
   `XC-`, `CP-`, `CTL-`, `FE-`, `LOW-`) and never renumbered, so closing `LH-005` leaves a gap and leaves
   every other id where it was. A gap is the correct residue of a closed item; a DUPLICATE is the real
   defect, because two rows answering to one id is how a closure silently removes the wrong one;
-* the FOCUS block must exist and stay small. **This one is load-bearing beyond tidiness**: the Stop hook
-  in `.claude/settings.local.json` slices exactly that block and injects it verbatim on every stop. Its
-  predecessor grew to 23,362 characters by hoarding the record of the work it caused.
-
-THE FOCUS BLOCK LIVES IN THE OLD FILE, not this one, and that is deliberate rather than an oversight: the
-hook reads `open_backlog_left.md` by path, so that file survives as a stub carrying the block plus a
-pointer here. Both are checked, because a stub that lost the block would silence the hook.
+* the FOCUS block must exist and stay small: it is what a reader acts on first, and its predecessor grew
+  to 23,362 characters by hoarding the record of the work it caused.
 
 Deliberately NOT a whole-file lint. Everything else about the prose is a reader's job.
 """
@@ -33,9 +28,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-BACKLOG = ROOT / "open_backlog_left_new.md"
-#: The superseded file. Retained ONLY because the Stop hook slices its FOCUS block by path.
-STUB = ROOT / "open_backlog_left.md"
+BACKLOG = ROOT / "open_backlog_left_new2.md"
 
 #: A rendered row: `**<PHASE>-<n> · <title>**` at the start of a line.
 _ITEM = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
@@ -102,20 +95,10 @@ def test_the_headline_total_matches_the_rows() -> None:
 
 
 def test_the_focus_block_exists_and_stays_small() -> None:
-    """Checked in BOTH files: the hook reads the stub, and a reader reads the register.
-
-    The cap is the point. Its predecessor reached 23,362 characters by hoarding the record of the work it
-    caused, and the hook injects this text verbatim on every stop.
-    """
-    for path in (STUB, BACKLOG):
-        block = re.search(r"<!-- FOCUS:START -->(.*?)<!-- FOCUS:END -->", path.read_text(), re.DOTALL)
-        assert block, f"{path.name} carries no FOCUS block — the Stop hook slices it from {STUB.name} by path"
-        assert len(block.group(1)) < 6000, f"{path.name}'s FOCUS block is {len(block.group(1))} chars; it is injected on every stop"
-
-
-def test_the_stub_points_at_the_register() -> None:
-    """A superseded file that does not say where the work went sends its next reader to 9,378 dead lines."""
-    assert BACKLOG.name in STUB.read_text(), f"{STUB.name} does not name {BACKLOG.name}"
+    """The cap is the point: its predecessor reached 23,362 characters by hoarding the record of the work it caused."""
+    block = re.search(r"<!-- FOCUS:START -->(.*?)<!-- FOCUS:END -->", BACKLOG.read_text(), re.DOTALL)
+    assert block, f"{BACKLOG.name} carries no FOCUS block"
+    assert len(block.group(1)) < 6000, f"{BACKLOG.name}'s FOCUS block is {len(block.group(1))} chars"
 
 
 def test_no_row_header_is_SWALLOWED_by_the_line_above_it() -> None:

@@ -54,7 +54,7 @@ If the new machine is x86_64, ignore this section.
 
 ## 1. What travels by itself
 
-`git pull` and you have it: all source, the Helm chart, every dockerfile, `open_backlog_left_new.md`,
+`git pull` and you have it: all source, the Helm chart, every dockerfile, `open_backlog_left_new2.md`, the dated audit reports under `docs/audits/2026-09-25/`,
 `docs/DECISIONS.md`, `.claude/settings.json` (team-shared), the vendored `.claude/skills/rask-*`.
 Working tree is clean and `origin/main` is current.
 
@@ -66,15 +66,14 @@ The doc **"Lakehouse — what is actually left"** lives in the cloud, not the re
 | File | Why it matters |
 | --- | --- |
 | `.env` | 28 lines: `HCP_*` credentials, `AWS_REGION`, bucket and IIIF endpoints. **Nothing else has these.** |
-| `.claude/settings.local.json` | Your `autoMode`, permissions, and the **Stop hook** that injects the FOCUS block every turn. Without it the focus discipline is gone. |
+| `.claude/settings.local.json` | Your `autoMode` and personal permissions. |
 | `~/.claude/projects/-home-gabriel-Desktop-rask/memory/` | 38 memory files, 164 KB — the accumulated traps (kubeconfig, ack_floor, prefix deletes, …). Copy to the same path on the new host, adjusting the directory name if the repo path changes. |
 
 Everything else gitignored (`.venv/`, `node_modules/`, `.localbin/`, `.svelte-kit/`, `build/`,
 `chart/charts/`, `.dagger/internal/`) is regenerated — do not copy it.
 
-**That is the whole list: three things by hand, everything else `git pull`.** The FOCUS block's TEXT
-travels in git (it lives in `open_backlog_left.md`, which is tracked); what does not travel is the
-Stop hook that injects it, which is why `.claude/settings.local.json` is on the list above.
+**That is the whole list: three things by hand, everything else `git pull`.** The FOCUS block travels
+in git, at the top of `open_backlog_left_new2.md`.
 
 ## 3. Install on the new machine
 

@@ -25,7 +25,7 @@ import pathlib
 import re
 
 
-REGISTER = pathlib.Path(__file__).resolve().parents[2] / "open_backlog_left_new.md"
+REGISTER = pathlib.Path(__file__).resolve().parents[2] / "open_backlog_left_new2.md"
 
 #: How the register says "this needs a ruling". Collected from rows that carry the marker correctly
 #: rather than invented, so a new row phrasing it a fourth way is a gap in this list, not a false pass.
@@ -42,6 +42,9 @@ _DECISION = re.compile(
 #: Rows that match the phrase set and are CORRECTLY unmarked, each with the reason. A row leaves this
 #: set by gaining a marker or by losing the phrase — never by being deleted to quiet the gate.
 _MATCHES_BUT_NOT_GATED: dict[str, str] = {
+    "LH-264": "cites the test audit's rulings section as evidence; every ruling it needs was made on 2026-09-25 and the batch is in flight",
+    "LH-141": "the whole row is startable (admit restamp at the lineage door, then the one-shot repair door); the match is prose, not a pending ruling",
+    "LH-262": "the kms statement and its unit test are startable after LH-177's split; the body says no owner ruling parks it",
     # A row is added here only with a sentence a reader can check, and every entry so far has left the
     # set the only way a row may: LH-034, LH-096, LH-159 and LH-164 by gaining a `**blocked:**` marker
     # or losing the incidental phrase, and LH-184 and LH-055 by closing.
@@ -137,6 +140,11 @@ _WHAT_IS_LEFT = re.compile(r"^- \*What is left:\*(.*?)(?=^- \*|\Z)", re.MULTILIN
 
 #: Rows whose *What is left* mentions a ruling and are CORRECTLY unmarked, each with a checkable reason.
 _RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE: dict[str, str] = {
+    "LH-099": "the 'decision record' is a DECISIONS.md entry written after observing one live compaction RunEvent; no owner ruling is pending",
+    "LH-177": "'Workable now, whatever D9 decides': split the STS-call endpoint from the client-facing endpoint",
+    "LH-204": "'decides' describes purge's code ('purge decides liveness by object id'), not a pending ruling; the register guard is startable",
+    "LH-228": "'Workable now': require_no_live_trash fails closed, undrop compares locations, a trashed drop answers its transaction; only the expiry half waits",
+    "LH-262": "'Workable now: the kms statement and its unit test'; the AWS proof waits for an AWS estate, not for a ruling",
     # The second row to match by DENYING it needs a ruling, which is now two of two — a phrase match
     # cannot read a negation, and rewording the row to dodge the gate would be worse than recording why
     # the gate does not apply.

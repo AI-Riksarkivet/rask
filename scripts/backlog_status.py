@@ -1,4 +1,4 @@
-"""What `open_backlog_left_new.md` says about itself, derived from the rows rather than asserted.
+"""What `open_backlog_left_new2.md` says about itself, derived from the rows rather than asserted.
 
 `make backlog`. The register states its own counts and
 `tests/unit/test_the_backlog_counts_itself.py` gates them; this is the same derivation in a form you
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 
-REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left_new.md"
+REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left_new2.md"
 
 _SECTION = re.compile(r"^## (PHASE [123] · [^\n]+|FRONTEND[^\n]*|LOW PRIORITY[^\n]*)$", re.MULTILINE)
 _GROUP = re.compile(r"^### (.+)$", re.MULTILINE)
