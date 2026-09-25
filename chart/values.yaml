@@ -2441,19 +2441,18 @@ minio:
   # The Lance lakehouse ROOT bucket (catalog LANCE_REST_ROOT + the warehouse registry). Referenced by
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog
-  # The STATIC platform bucket set, provisioned natively by the Tenant (spec.buckets). The
-  # values-driven extras — medallion.buckets zones + the observability toggle — are provisioned by
-  # the bucket-init hook (templates/minio-buckets.yaml), which a static CR list cannot express.
+  # The PLATFORM bucket set: buckets the estate makes for itself, which no warehouse record claims.
+  # The bucket-init Job (templates/minio-buckets.yaml) CREATES every one, together with minio.bucket,
+  # observability.bucket and the medallion.buckets zones, and it is the only thing that makes a bucket
+  # at all: the in-cluster store is a plain StatefulSet that provisions none, and an external S3 has
+  # nothing else either. So the Job creates rather than waits: with no other provisioner, a bucket it
+  # waited for would never appear. A bucket whose owning feature is off is not made:
+  # `observability.bucket` is skipped while `observability.enabled` is false.
+  # The maintenance reconcile reads this same list to exempt these from `orphan_buckets`.
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
   buckets: ["rask-observability", "lance-catalog"]
-  # How long the bucket-init Job waits for the OPERATOR to provision that set before failing loudly.
-  # It only VERIFIES them (the operator owns them) — live-proof 2026-07-28 defect 3: a Tenant that
-  # refused to reconcile left every one of these absent and NOTHING surfaced it, so the first symptom
-  # was an HTTP 500 in the storage browser three layers away. Raise it for a slow/large store; the Job
-  # exits 1 with the diagnosis and the kubectl commands when the deadline passes.
-  bucketVerifyTimeoutSeconds: 300
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
   # in-cluster MinIO — pair with minio.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.

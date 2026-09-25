@@ -41,8 +41,8 @@ activated. The Collector is the **single log shipper** (Vector retired, owner ru
 | Perses (`perses` 0.22.0) | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` pointing at `http://rask-greptimedb-standalone:4000/v1/prometheus` is pre-configured |
 
 **Storage:** GreptimeDB persists to the in-cluster MinIO S3 (`rask-minio:9000`,
-bucket `rask-observability`). The bucket is auto-provisioned by the bucket-init Job's
-`spec.buckets` — no manual setup required.
+bucket `rask-observability`). The bucket-init Job (`templates/minio-buckets.yaml`) creates it
+while `observability.enabled` is on — no manual setup required.
 
 **App instrumentation:** the FastAPI fleet (via `service_kit.setup_otel` — called
 automatically from `make_service_app`, and directly by the gateway proxy app) and the

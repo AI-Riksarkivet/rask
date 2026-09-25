@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import importlib.util
 import json
 import pathlib
 import re
@@ -2030,61 +2031,57 @@ def test_no_job_that_gates_readiness_is_a_post_install_hook() -> None:
         )
 
 
-def test_the_bucket_init_verifies_the_buckets_the_operator_owns() -> None:
-    """A provisioner that never checks what it did NOT provision is how a data plane goes missing.
+@pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
+def test_the_bucket_init_creates_what_each_enabled_feature_needs_and_waits_for_nothing_else(
+    observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The bucket-init Job, run against an EMPTY store, must exit 0 holding every platform bucket whose
+    owning feature is on, and must not name a bucket whose feature is off.
 
-    live-proof defect 3: the rustfs-operator refused to reconcile the Tenant
-    (StatefulSetUpdateValidationFailed, "Reconcile is blocked by user-fixable configuration"), so
-    `spec.buckets` — the whole static platform set — was never created. The bucket-init Job went green
-    because it only ever created its OWN values-driven buckets, every layer in between reported
-    healthy, and the single symptom was an HTTP 500 in the storage browser three services away.
+    The in-cluster store is a plain StatefulSet (templates/minio.yaml) that provisions no bucket, so this
+    Job is the only thing that ever makes one. A bucket it names without creating is a bucket it waits
+    for until its deadline: with `observability.enabled=false` the Job waited 300 s for
+    `rask-observability`, which nothing creates, then exited 1 with a hint about a Tenant that does not
+    exist.
 
-    So the Job must VERIFY the operator-owned set and fail loudly, with the diagnosis in the message.
-    It must NOT create them: `mc mb` here would paper over a Tenant that is still broken for
-    everything else it owns.
+    BOTH HOPS IN ONE RUN. The render decides what the Job names and `scripts/ensure_bucket.py` decides
+    what happens to each name, so the Job's own argv goes to the script's own `main` over moto. A check
+    of either half alone passes while the other half waits on a bucket nobody makes.
     """
-    import yaml
+    from moto import mock_aws
 
     values = yaml.safe_load((CHART / "values.yaml").read_text())
-    expected = values["minio"]["buckets"]
-    assert expected, "minio.buckets is empty — this guard would pass vacuously"
+    platform = set(values["minio"]["buckets"])
+    gated = values["observability"]["bucket"]
+    assert gated in platform, f"{gated} is not in minio.buckets, so the observability-off case would prove nothing"
+    expected = platform if observability else platform - {gated}
 
-    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true")
+    rendered = _helm_template("singleTenant.enabled=true", "explorer.enabled=true", f"observability.enabled={str(observability).lower()}")
     job = _job_by_component(rendered, "minio-mkbucket")
     assert job is not None, "the bucket-init Job does not render"
-
-    missing = [b for b in expected if b not in job]
-    assert not missing, f"the bucket-init Job never mentions these operator-owned buckets, so it cannot notice they are absent: {missing}"
-
-    # BOTH HOPS, because the failure now crosses a seam. The Job asks for verification and the SCRIPT
-    # is what exits non-zero, so a check on either alone can be satisfied while the other quietly
-    # stops failing — the Job could drop `--verify` and still contain the word, or the script could
-    # start returning 0 and the Job would never notice.
-    # AN EXACT TOKEN IN THE PARSED COMMAND, not a substring of the document: `--verify-timeout` and
-    # any `--verify-anything` contain the flag's text, so a substring check is satisfied by a Job that
-    # no longer verifies. Measured while mutation-checking this gate — renaming the flag to
-    # `--verify-DISABLED` left it green.
     command = yaml.safe_load(job)["spec"]["template"]["spec"]["containers"][0]["command"]
-    assert "--verify" in command, f"the bucket-init Job must ask for VERIFICATION of the operator-owned set, not merely create its own: {command}"
-    verified = command[command.index("--verify") + 1 :]
-    unverified = [bucket for bucket in expected if bucket not in verified]
-    assert not unverified, f"these operator-owned buckets are not in the Job's --verify set: {unverified}"
-    verifier = (REPO / "scripts" / "ensure_bucket.py").read_text(encoding="utf-8")
-    assert "def _verify(" in verifier, "scripts/ensure_bucket.py no longer has the verify path the Job invokes"
-    assert "    return 1" in verifier.split("def _verify(", 1)[1].split("\ndef ", 1)[0], (
-        "the verify path must FAIL when the operator-owned buckets are absent, not log and pass"
-    )
-    assert "create_bucket" not in verifier.split("def _verify(", 1)[1].split("\ndef ", 1)[0], (
-        "the verify path must never CREATE a bucket the operator owns — that papers over a Tenant that is still broken"
-    )
+    assert command[:2] == ["python", "/srv/ensure_bucket.py"], f"the Job no longer runs the bucket script this test drives: {command[:2]}"
 
-    assert "kubectl describe statefulset" in job, "the failure message must carry the command that shows WHY the store did not come up"
-    assert "minio.storageClass" in job, "the failure message must name the usual cause (a StorageClass the cluster does not have)"
-    # The create/verify split: the operator's buckets must not be silently created behind its back.
-    for bucket in expected:
-        assert f"mc mb --ignore-existing rfs/{bucket}\n" not in job or bucket == values["minio"]["bucket"], (
-            f"{bucket} is operator-owned (minio.buckets) — creating it here would mask a Tenant that never reconciled"
-        )
+    spec = importlib.util.spec_from_file_location("ensure_bucket_under_test", REPO / "scripts" / "ensure_bucket.py")
+    assert spec is not None and spec.loader is not None
+    script = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(script)
+    # The Job's endpoint is the in-cluster Service, so the env chain must not point anywhere but moto.
+    for name in ("RASK_S3_ENDPOINT_URL", "S3_ENDPOINT_URL", "HCP_ENDPOINT", "HCP_USERNAME", "HCP_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setattr(script.time, "sleep", lambda _seconds: None)
+    with mock_aws():
+        import boto3
+
+        exit_code = script.main(command[1:])
+        present = {bucket["Name"] for bucket in boto3.client("s3", region_name="us-east-1").list_buckets()["Buckets"]}
+
+    assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
+    assert expected <= present, f"the Job left these platform buckets uncreated: {sorted(expected - present)}"
+    if not observability:
+        assert gated not in present, f"{gated} was created while observability.enabled=false"
+        assert gated not in command, f"the Job still names {gated} while observability.enabled=false: {command}"
 
 
 def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:

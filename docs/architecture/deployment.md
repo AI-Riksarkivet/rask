@@ -152,10 +152,10 @@ deployments. The Collector is the **single log shipper** (Vector retired, owner 
 | **GreptimeDB** | `greptimedb-standalone` 0.4.5 (app 1.1.1) | `rask-greptimedb-standalone` | Unified metrics/logs/traces store; `:4000` HTTP (OTLP at `/v1/otlp`, Prometheus query/write, SQL), `:4001` gRPC |
 | **Perses** | 0.22.0 | `rask-perses:8080` | Dashboard UI; a GreptimeDB Prometheus `GlobalDatasource` (`http://rask-greptimedb-standalone:4000/v1/prometheus`) is pre-configured |
 
-**Storage:** GreptimeDB writes to the in-cluster RustFS S3 at `rask-rustfs-io:9000`,
-bucket `rask-observability`. The bucket is auto-provisioned by the RustFS Tenant's
-`spec.buckets` — no init Job or manual bucket creation is required (greenfield installs
-get it automatically).
+**Storage:** GreptimeDB writes to the in-cluster MinIO S3 at `rask-minio:9000`,
+bucket `rask-observability`. The bucket-init Job (`chart/templates/minio-buckets.yaml`)
+creates it while `observability.enabled` is on; the store itself provisions no bucket, so
+that Job is the only thing that makes one, and no manual bucket creation is required.
 
 **App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
 the services built on `make_service_app` call it automatically, and the gateway

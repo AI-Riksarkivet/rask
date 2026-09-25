@@ -1,22 +1,8 @@
 {{- if .Values.minio.enabled }}
-# Bucket-init — the provisioning Job for the ONE object store
-# (templates/minio.yaml, S3 Service `<tenant>-io:9000` = `lance.minioHost`). RESOLVED per
-# P4's store unification holds; LH-133 changed WHICH store. The buckets are created by this Job
-# rather than declared on a CR, because a StatefulSet has no `spec.buckets` field — which also removes
-# the operator-reconcile failure mode the timeout below was written for. The first-party Deployment and
-# its Service that used to live in this file are DELETED. The Tenant provisions the
-# static platform bucket set natively (spec.buckets = minio.buckets); this Job covers what a static
-# CR list cannot express — the values-driven medallion zone buckets (a map whose unset entries fall
-# back to minio.bucket) and the observability toggle — and it also runs against
-# minio.externalEndpoint (managed S3, where no Tenant exists). Idempotent by construction: the
-# script heads each bucket before creating it.
-#
-# It is ALSO the estate's only detector for a Tenant that silently refused to provision — see the
-# VERIFY step in the container script below (live-proof 2026-07-28, defect 3).
-#
-# NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl. Two reasons: the whole data plane's buckets are a
-# startup dependency of the lakehouse apps, and a post-install hook's failure arrives AFTER `--wait`
-# has already blamed something else, which is exactly how a blocked Tenant stayed invisible.
+{{- /* Bucket-init: the ONLY thing that makes a bucket on the object store, in-cluster or
+       minio.externalEndpoint, so every bucket is CREATED and none is waited for (see `minio.buckets`
+       in values.yaml). NOT a hook — see "BOOTSTRAP JOBS" in _helpers.tpl: the lakehouse apps need
+       these buckets at startup, and a post-install hook fails only after `--wait` blamed something else. */}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -95,50 +81,22 @@ spec:
           command:
             - python
             - /srv/ensure_bucket.py
-            {{- /* CREATE: the values-driven buckets a static CR list cannot express. */}}
-            - {{ .Values.minio.bucket | quote }}
+            {{- /* A platform bucket whose feature is off is not made: nothing would use it. */}}
+            {{- $buckets := list .Values.minio.bucket }}
             {{- if .Values.observability.enabled }}
-            - {{ .Values.observability.bucket | quote }}
+            {{- $buckets = append $buckets .Values.observability.bucket }}
+            {{- end }}
+            {{- range .Values.minio.buckets }}
+            {{- if or $.Values.observability.enabled (ne . $.Values.observability.bucket) }}
+            {{- $buckets = append $buckets . }}
+            {{- end }}
             {{- end }}
             {{- range $ns, $bkt := .Values.medallion.buckets }}
-            {{- if and $bkt (ne $bkt $.Values.minio.bucket) }}
-            - {{ $bkt | quote }}
+            {{- if $bkt }}
+            {{- $buckets = append $buckets $bkt }}
             {{- end }}
             {{- end }}
-            {{- if .Values.minio.externalEndpoint }}
-            {{- /* CREATE (external S3): with no Tenant, nothing else provisions the static set. */}}
-            {{- range .Values.minio.buckets }}
+            {{- range uniq $buckets }}
             - {{ . | quote }}
-            {{- end }}
-            {{- else }}
-            {{- /* VERIFY, never create: these are the operator's (minio.buckets -> the Tenant's
-                   spec.buckets). live-proof 2026-07-28 defect 3 — an operator refused to reconcile
-                   its Tenant and NOTHING said so, because this Job only ever created its OWN
-                   buckets and went green. Creating them here would paper over a Tenant that is
-                   still broken for everything else it owns. The script's own `_verify` carries the
-                   rest of that reasoning and the diagnosis it prints. */}}
-            - --verify
-            {{- range .Values.minio.buckets }}
-            - {{ . | quote }}
-            {{- end }}
-            - --verify-timeout
-            - {{ .Values.minio.bucketVerifyTimeoutSeconds | quote }}
-            {{- /* THE DIAGNOSIS TRAVELS WITH THE FAILURE. The script knows S3; only this chart knows
-                   which StatefulSet to describe and which value is the usual cause, so the guidance
-                   is passed in rather than taught to an S3 helper. It is the same text the shell
-                   version echoed, and `test_the_bucket_init_verifies_the_buckets_the_operator_owns`
-                   holds the Job to carrying it. */}}
-            - --missing-hint
-            - |
-              !! These come from values minio.buckets, which render into the Tenant's spec.buckets.
-              !! This Job deliberately does NOT create them: a failure here means the operator did not
-              !! reconcile the Tenant, and creating them would hide that for everything else it owns.
-              !! Diagnose with:
-              !!   kubectl describe statefulset {{ include "lance.minioHost" . }}
-              !!   kubectl logs -l app.kubernetes.io/component=minio
-              !! The usual cause is a wedged StatefulSet update ('Reconcile is blocked by user-fixable
-              !! configuration') — e.g. a storageClass the cluster does not have (minio.storageClass
-              !! defaults to "" = the cluster default) or an immutable field changed under the operator.
-              !! Raise minio.bucketVerifyTimeoutSeconds if this store is merely slow.
             {{- end }}
 {{- end }}
