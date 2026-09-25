@@ -6,13 +6,21 @@ from typing import Annotated
 
 import httpx
 from dapr.aio.clients import DaprClient
-from fastapi import Depends, Request
+from fastapi import Depends, Header, Request
 from openfga_sdk import OpenFgaClient
 
 from medallion.core.config import MedallionSettings, get_settings
+from medallion.services.trigger_guards import SAFE_TOKEN_MAX_LENGTH, SAFE_TOKEN_PATTERN
 
 
 SettingsDep = Annotated[MedallionSettings, Depends(get_settings)]
+
+#: A cascade head's REQUIRED ``Idempotency-Key``, in the stage lane's own token grammar: the key becomes
+#: every stage's trigger token, so a key the lane would DROP is refused 422 here instead of 202'd.
+CascadeKeyHeader = Annotated[
+    str,
+    Header(alias="Idempotency-Key", min_length=1, max_length=SAFE_TOKEN_MAX_LENGTH, pattern=SAFE_TOKEN_PATTERN),
+]
 
 
 def get_dapr(request: Request) -> DaprClient:

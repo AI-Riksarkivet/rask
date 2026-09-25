@@ -5,7 +5,43 @@ landed on ONE id, and ``submit_or_reattach`` read the duplicate as a successful 
 second transform's work silently never ran.
 """
 
+import pytest
+
 from medallion.services.ray_jobs_api import submission_id
+
+
+_WORK = "s3://wh/bronze$a\x00s3://wh/silver$a"
+
+
+@pytest.mark.parametrize(("first", "second"), [("a.b", "a-b"), ("run.1", "run-1"), (".", "-"), ("my.retry.key", "my-retry-key")])
+def test_two_tokens_that_fold_alike_get_two_ids(first: str, second: str) -> None:
+    """`.` is not an id character, and both spellings are keys the stage lane accepts — two cascades.
+
+    One id for both is one workflow instance: the second trigger is answered as a re-attach to the
+    first, and the job the second instance would have submitted never runs.
+    """
+    assert submission_id("silver", first, work=_WORK) != submission_id("silver", second, work=_WORK)
+
+
+def test_the_absent_marker_is_not_a_token_a_caller_can_send() -> None:
+    """`notoken` stands for "no token", and it is also a key every door accepts."""
+    assert submission_id("silver", "notoken", work=_WORK) != submission_id("silver", None, work=_WORK)
+
+
+def test_a_token_cannot_spell_another_tokens_disambiguated_id() -> None:
+    """The suffix that separates a folded token is itself spellable, so a verbatim token ending the
+    same way is disambiguated too — otherwise `a.b` could be reached by typing its id."""
+    dotted = submission_id("silver", "a.b", work=_WORK)
+    segment = dotted.removeprefix("ray-silver-")[: -len("-000000000000")]
+
+    assert submission_id("silver", segment, work=_WORK) != dotted
+
+
+@pytest.mark.parametrize("token", ["arrival-42", "8e1c9b7a-2f3d-4c5b-9a01-1234567890ab", "0f1c2d3e4f5a", "Ok_1", "ui-train-1k9x2p"])
+def test_a_token_no_other_can_spell_stays_verbatim(token: str) -> None:
+    """Disambiguation costs readability, so it is paid only where a spelling is shared: a hex or UUID
+    token and every training key the door accepts stay readable in the dashboard, verbatim."""
+    assert submission_id("train", token) == f"ray-train-{token}"
 
 
 def test_tokenless_submissions_of_DIFFERENT_work_get_DIFFERENT_ids() -> None:

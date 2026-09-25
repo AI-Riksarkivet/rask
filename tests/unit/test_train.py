@@ -297,7 +297,7 @@ def test_consumer_drops_path_unsafe_names(monkeypatch: pytest.MonkeyPatch) -> No
     for data in (
         {"token": "t1", "model": "../etc", "features": [ok]},
         {"token": "a/b", "model": "churn", "features": [ok]},
-        # the keys `POST /train` refuses: a dot folds onto a dashed twin's Ray submission id
+        # the keys `POST /train` refuses: the token is one path-safe segment, with no dot
         {"token": "my.retry.key", "model": "churn", "features": [ok]},
         {"token": "..", "model": "churn", "features": [ok]},
         {"token": "-leading-dash", "model": "churn", "features": [ok]},
@@ -361,7 +361,7 @@ _TRAINING_KEYS = [
     ("8e1c9b7a-2f3d-4c5b-9a01-1234567890ab", True),
     ("Ok_1", True),
     ("a" * 64, True),
-    ("my.retry.key", False),  # `.` folds to `-` in the Ray submission id, so `my-retry-key` names the same job
+    ("my.retry.key", False),  # the token is one path-safe segment (`TOKEN_PATTERN`), and a segment has no dot
     ("run.3", False),
     (".", False),  # as the artifact directory `<base>/<token>/` on a filesystem base, it IS the base
     ("..", False),

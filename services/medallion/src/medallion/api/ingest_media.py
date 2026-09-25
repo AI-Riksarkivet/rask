@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
-from medallion.api.dependencies import DaprClientDep, SettingsDep
+from medallion.api.dependencies import CascadeKeyHeader, DaprClientDep, SettingsDep
 from medallion.api.produce_auth import authorize_ingest_media
 from medallion.services.media_produce import ingest_media as run_ingest_media
 from service_kit.draining import refuse_when_draining
@@ -32,7 +32,7 @@ async def ingest_media(
     dapr: DaprClientDep,
     settings: SettingsDep,
     originator: Annotated[str | None, Depends(authorize_ingest_media)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
+    idempotency_key: CascadeKeyHeader,
 ) -> dict[str, str] | JSONResponse:
     """Land external media as bronze blobs and trigger the media chain — the multimodal cascade head (§9).
 

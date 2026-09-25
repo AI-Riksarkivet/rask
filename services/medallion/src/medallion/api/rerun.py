@@ -57,6 +57,7 @@ from medallion.api.stage_runner_ops import STAGE_RUNNERS_PREFIX
 from medallion.core.config import MedallionSettings, StageRunnerGate, dedicated_token_for, outbound_app_token
 from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
+from medallion.services.trigger_guards import SAFE_TOKEN_MAX_LENGTH, SAFE_TOKEN_PATTERN
 from service_kit import dapr_publish
 from service_kit.draining import refuse_when_draining
 from service_kit.governed import fga
@@ -93,8 +94,9 @@ class RerunRequest(BaseModel):
     to_version: int
     from_version: int | None = None
     #: The original `table_published` event id. Supplied → the cheap repair; absent → a full
-    #: recompute. See the module docstring; this is the whole of R1.
-    token: str | None = None
+    #: recompute. See the module docstring; this is the whole of R1. It rides the trigger verbatim,
+    #: so it is held to the stage lane's token grammar: a token the lane drops is a 422, not a 202.
+    token: str | None = Field(default=None, min_length=1, max_length=SAFE_TOKEN_MAX_LENGTH, pattern=SAFE_TOKEN_PATTERN)
     #: Carried through so a re-run of a person's cascade still reaches that person's inbox. The
     #: notifications plane re-derives visibility per recipient, so this authorizes nothing.
     originator: str | None = None

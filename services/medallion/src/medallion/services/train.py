@@ -52,8 +52,7 @@ _SEGMENT = r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}"
 MODEL_PATTERN = rf"^{_SEGMENT}$"
 DATASET_PATTERN = rf"^{_SEGMENT}\${_SEGMENT}$"
 #: The training token `POST /train` takes from `Idempotency-Key`: it becomes the Ray submission id and
-#: the artifact directory `<artifact_base>/<token>/`. `train_submission_id` folds `.` to `-`, so a dotted
-#: key would collide with its dashed twin; on this alphabet the fold is the identity.
+#: the artifact directory `<artifact_base>/<token>/`, so it is one path-safe segment like the names above.
 TOKEN_PATTERN = rf"^{_SEGMENT}$"  # noqa: S105 — a shape regex; the training token is a correlation id, not a credential
 _SAFE_SEGMENT = re.compile(_SEGMENT)
 

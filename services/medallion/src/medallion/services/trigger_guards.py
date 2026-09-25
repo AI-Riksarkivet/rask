@@ -8,12 +8,11 @@ deterministic garbage and a raising handler poisons the subscription (DATA-CONTR
 
 Two rules, and they are different kinds of thing:
 
-* :func:`safe_token` is a SHAPE rule, and it is deliberately the ``Idempotency-Key`` contract of the
-  heads that feed this lane (``^[A-Za-z0-9._-]+$``, max 64 — ``/produce``, ``/ingest-media``),
-  hardened by refusing ``..``. A consumer stricter than the head that feeds it does not add safety,
-  it silently DROPs cascades the head already 202'd. The training lane is fed by ``/train`` alone and
-  reads a narrower token (``services/train.py``'s ``TOKEN_PATTERN``), which that door applies to its
-  own key.
+* :func:`safe_token` is a SHAPE rule, and it is the ONE definition of the cascade token: ``/produce``
+  and ``/ingest-media`` declare their ``Idempotency-Key``, and the re-run verb its ``token``, from
+  :data:`SAFE_TOKEN_PATTERN` and :data:`SAFE_TOKEN_MAX_LENGTH`, so no door can 202 a token this lane
+  DROPs. The training lane is fed by ``/train`` alone and reads a narrower token
+  (``services/train.py``'s ``TOKEN_PATTERN``), which that door applies to its own key.
 * :func:`uri_within` is a SECURITY boundary. A trigger may NAME the upstream it wants read (I2 —
   resolve the location through the catalog, never compose a path), but the stage runner opens that name with
   its OWN object-store credentials, so it is honoured only inside the storage root the stage already
@@ -28,28 +27,26 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
-#: A correlation token, as every head that mints one already constrains it: ``Idempotency-Key``'s
-#: ``^[A-Za-z0-9._-]+$`` with its ``max_length=64``. It admits the two machine-minted shapes the
-#: cascade actually carries (a ``uuid4().hex`` and a dashed UUID) and excludes what matters — path
-#: separators, ``$``, whitespace, control characters, and anything unbounded. The token SEEDS the
-#: deterministic lineage run id (``schemas/events.build_run_event``), rides the ``lance`` run facet
-#: into the graph, and reaches ``ray_jobs_api.submission_id``. That last one is not an injection
-#: sink — it folds every character outside ``[A-Za-z0-9_-]`` to ``-`` and truncates at 200 — but
-#: folding is exactly why the shape matters: two different tokens can land on ONE submission id, and
-#: ``submit_or_reattach`` reads that collision as a successful re-attach, so the second stage's work
-#: silently never runs (the failure mode ``submission_id``'s own docstring exists to describe).
-SAFE_TOKEN_PATTERN = r"[A-Za-z0-9._-]{1,64}"  # noqa: S105 — a shape regex; the cascade token is a correlation id, not a credential
+#: The cascade token: ``[A-Za-z0-9._-]`` with no ``..`` anywhere, 1 to :data:`SAFE_TOKEN_MAX_LENGTH` long.
+#: It admits the machine-minted shapes the cascade carries (a ``uuid4().hex``, a dashed UUID) and
+#: excludes path separators, ``$``, whitespace, control characters and a traversal. The token seeds
+#: the lineage run id, rides the ``lance`` run facet, and names the stage's workflow instance.
+#:
+#: The no-``..`` rule is spelled as dot-separated runs rather than a lookahead because the doors hand
+#: this string to pydantic, whose default regex engine refuses look-around; the length lives beside it
+#: for the same reason.
+SAFE_TOKEN_PATTERN = r"^\.?(?:[A-Za-z0-9_-]+\.)*[A-Za-z0-9_-]*$"  # noqa: S105 — a shape regex; the cascade token is a correlation id, not a credential
+SAFE_TOKEN_MAX_LENGTH = 64
 _SAFE_TOKEN = re.compile(SAFE_TOKEN_PATTERN)
 
 
 def safe_token(value: object) -> bool:
     """True iff ``value`` is a well-shaped correlation token.
 
-    ``fullmatch`` (not ``search``) so there is no trailing-newline leniency, and ``..`` is refused
-    outright: it is the one dotted value that is a traversal rather than a name, and the estate's
-    header pattern admits it.
+    The length is checked before the pattern so an unbounded bus value never reaches the regex, and
+    ``fullmatch`` leaves no trailing-newline leniency.
     """
-    return isinstance(value, str) and _SAFE_TOKEN.fullmatch(value) is not None and ".." not in value
+    return isinstance(value, str) and 1 <= len(value) <= SAFE_TOKEN_MAX_LENGTH and _SAFE_TOKEN.fullmatch(value) is not None
 
 
 def uri_within(base: str, candidate: str) -> bool:

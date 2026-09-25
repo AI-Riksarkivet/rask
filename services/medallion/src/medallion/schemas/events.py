@@ -326,7 +326,7 @@ def build_run_event(
     # `\x00` and not `-`, because the separator has to be a character NO field can contain. Both
     # caller-supplied fields admit `-`: PROJECT_PATTERN (`service_kit.lakehouse.warehouse_registry`)
     # is `[A-Za-z0-9][A-Za-z0-9_-]{0,63}` and SAFE_TOKEN_PATTERN (`medallion.services.trigger_guards`)
-    # is `[A-Za-z0-9._-]{1,64}`, so a `-` join is FORGEABLE out of the fields it separates — and this
+    # admits `-` too, so a `-` join is FORGEABLE out of the fields it separates — and this
     # id is the MERGE key for the (:Run) node in AGE, so a forged one lands another tenant's run on
     # yours. It is reachable with a single `operation` (which is per-stage runner env config, not caller
     # input): ("acme", "embed_features", "evil-embed_features-tok1") and

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
 
-from medallion.api.dependencies import DaprClientDep, SettingsDep
+from medallion.api.dependencies import CascadeKeyHeader, DaprClientDep, SettingsDep
 from medallion.api.produce_auth import ProjectParam, authorize_produce
 from medallion.services.produce import produce as run_produce
 from service_kit.draining import refuse_when_draining
@@ -44,7 +44,7 @@ async def produce(
     dapr: DaprClientDep,
     settings: SettingsDep,
     originator: Annotated[str | None, Depends(authorize_produce)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
+    idempotency_key: CascadeKeyHeader,
     project: ProjectParam = None,
     # The bronze volume this call writes. Optional, and absent means the seeder's own default — the
     # cascade is byte-identical to before unless a caller asks for something else.

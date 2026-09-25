@@ -60,6 +60,46 @@ def test_the_dispatch_seam_derives_a_DETERMINISTIC_instance_id_from_the_work() -
     assert stage_submission_id("silver", "tok-1", "s3://a", "s3://z") != a
 
 
+def test_two_tokens_the_lane_accepts_are_two_instances_not_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`a.b` and `a-b` are two keys a head accepts for the same edge, so they are two cascades.
+
+    The job is submitted BY the instance, so two tokens on one instance id is one job: the second
+    dispatch is answered as a re-attach and its own hop never runs. Driven through the real seam and
+    the real saga port, against an engine that refuses a duplicate id the way Dapr does.
+    """
+    from medallion.core.config import get_settings
+    from medallion.services import transform
+
+    class _Engine:
+        def __init__(self) -> None:
+            self.instances: dict[str, dict[str, Any]] = {}
+
+        def schedule_new_workflow(self, *, workflow: object, input: dict[str, Any], instance_id: str) -> None:  # noqa: A002 — the SDK's own keyword
+            if instance_id in self.instances:
+                raise RuntimeError("instance already exists")
+            self.instances[instance_id] = input
+
+        def get_workflow_state(self, instance_id: str) -> object:
+            return self.instances.get(instance_id)
+
+    import dapr.ext.workflow as wf
+
+    engine = _Engine()
+    monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: engine)
+
+    for token in ("a.b", "a-b"):
+        transform._dispatch_stage_workflow(
+            get_settings(),
+            from_uri="s3://wh/p-bronze/pages.lance",
+            to_uri="s3://wh/p-silver/pages.lance",
+            token=token,
+            lineage_json="{}",
+            trigger=StageTrigger(token=token),
+        )
+
+    assert sorted(spec["token"] for spec in engine.instances.values()) == ["a-b", "a.b"]
+
+
 def test_the_dispatch_seam_reports_a_LIVE_INSTANCE_as_handled_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     """A duplicate schedule for an instance already watching this job is the correct outcome.
 

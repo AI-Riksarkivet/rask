@@ -3,7 +3,7 @@
 THE DEFECT. The project-qualified seed was ``f"{project}-{operation}-{token}"``, and `-` is a character
 BOTH caller-supplied fields may contain: ``PROJECT_PATTERN``
 (``service_kit.lakehouse.warehouse_registry``) is ``[A-Za-z0-9][A-Za-z0-9_-]{0,63}`` and
-``SAFE_TOKEN_PATTERN`` (``medallion.services.trigger_guards``) is ``[A-Za-z0-9._-]{1,64}``. A separator
+``SAFE_TOKEN_PATTERN`` (``medallion.services.trigger_guards``) admits ``-`` as well. A separator
 the fields can themselves contain does not separate anything — it can be forged out of them — and the
 consequence here is not cosmetic: the lineage service MERGEs on this id, so two tenants that render the
 same seed land on ONE ``(:Run)`` node and their lineage cross-wires.

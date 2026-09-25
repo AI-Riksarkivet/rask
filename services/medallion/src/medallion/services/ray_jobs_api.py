@@ -40,6 +40,33 @@ class RayJobError(RuntimeError):
     """A submitted Ray job failed, was stopped, or did not finish within the timeout."""
 
 
+#: Every character outside the id's alphabet, which folds to ``-``. Ray 2.58 checks only that a
+#: submission id is a string (``dashboard/modules/job/common.py``, ``JobSubmitRequest.__post_init__``)
+#: and then names the driver log FILE after it (``job-driver-{submission_id}.log``), so the id keeps a
+#: file-name-safe alphabet and the 200-character cap, well inside a 255-byte file name.
+_UNSAFE = re.compile(r"[^A-Za-z0-9_-]")
+#: What the id spells for an absent token.
+_ABSENT = "notoken"
+#: The tail of a disambiguated token segment: ``_`` and 12 hex of the raw token's sha256.
+_DISAMBIGUATED = re.compile(r"_[0-9a-f]{12}\Z")
+
+
+def _token_segment(token: str | None) -> str:
+    """The token as the id spells it: verbatim only when no other token spells the same.
+
+    Three spellings are shared: a folded one (``a.b`` and ``a-b`` both fold to ``a-b``), the absent
+    marker (``notoken`` is also a token a door accepts), and a verbatim token ending the way a
+    disambiguated segment does. Each of those carries its raw token's digest instead, so two tokens
+    share a segment only on a 48-bit digest collision.
+    """
+    if not token:
+        return _ABSENT
+    folded = _UNSAFE.sub("-", token)
+    if folded == token and token != _ABSENT and _DISAMBIGUATED.search(token) is None:
+        return token
+    return f"{folded}_{hashlib.sha256(token.encode()).hexdigest()[:12]}"
+
+
 def submission_id(stage: str, token: str | None, work: str = "", code: str = "") -> str:
     """A deterministic id per ``(stage, token, work, code)`` so redelivery re-attaches to the same job.
 
@@ -64,15 +91,16 @@ def submission_id(stage: str, token: str | None, work: str = "", code: str = "")
     Empty ``code`` reproduces the previous id byte-for-byte, so a deployment that does not set it is
     unchanged rather than silently re-attaching across builds under a new scheme.
 
-    The token stays visible in the id (operators grep the dashboard by it); ``work`` and ``code`` ride
-    as short digests so arbitrarily long URIs and tags cannot push the id past Ray's length limit.
+    The token stays visible in the id (operators grep the dashboard by it), and is INJECTIVE in it
+    (:func:`_token_segment`): two tokens the lane accepts are two jobs. ``work`` and ``code`` ride as
+    short digests so arbitrarily long URIs and tags cannot push the id past the length cap.
     """
-    raw = f"ray-{stage}-{token or 'notoken'}"
+    raw = f"ray-{stage}-{_token_segment(token)}"
     if work:
         raw = f"{raw}-{hashlib.sha256(work.encode()).hexdigest()[:12]}"
     if code:
         raw = f"{raw}-{hashlib.sha256(code.encode()).hexdigest()[:8]}"
-    return re.sub(r"[^A-Za-z0-9_-]", "-", raw)[:200]
+    return _UNSAFE.sub("-", raw)[:200]
 
 
 async def job_failure(client: httpx.AsyncClient, sub_id: str) -> RayJobFailure | None:

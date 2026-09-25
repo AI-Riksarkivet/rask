@@ -4,10 +4,9 @@
 Two of its fields used to be read straight off the wire with no shape check at all:
 
 * **`token`** — which seeds the deterministic lineage run id, rides the `lance` run facet into the
-  graph, and folds into a Ray submission id. `medallion.services.ray_jobs_api.submission_id` builds
-  `ray-<stage>-<token>-<digest>` and then replaces every character outside `[A-Za-z0-9_-]` with `-`,
-  so the hazard there is not injection but COLLISION: two different tokens land on one id, and
-  `submit_or_reattach` reads that as a successful re-attach — the second stage's work never runs;
+  graph, and names the stage's workflow instance. It is also the key a cascade head accepted, so the
+  lane and the doors that feed it read ONE grammar: a door wider than the lane answers 202 for a
+  cascade the lane then DROPs;
 * **`from_uri`** — which becomes the URI the stage runner OPENS with its own object-store credentials
   (`compute.read_upstream` → `lance.dataset(uri, storage_options=settings.storage_options())`), and
   which is also forwarded into a Ray job's `runtime_env` as `FROM_URI`.
@@ -34,14 +33,23 @@ from typing import Any, cast
 
 import pytest
 from dapr.aio.clients import DaprClient
+from fastapi import APIRouter, FastAPI
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 
 import medallion.services.transform as stage_runner
+from medallion.api import ingest_media as ingest_media_api
+from medallion.api import produce as produce_api
+from medallion.api import rerun as rerun_api
+from medallion.api.dependencies import get_dapr, get_fga_client, get_settings
+from medallion.api.produce_auth import authorize_ingest_media, authorize_produce
 from medallion.core.config import MedallionSettings
-from medallion.services import inprocess_executor
+from medallion.services import inprocess_executor, media_produce, trigger_guards
 from medallion.services.compute import UpstreamFacts, WriteResult
+from medallion.services.ingest import IngestResult
+from medallion.services.ingest_trigger import handle_bronze_arrival
 from medallion.services.transform import handle_stage
-from medallion.services.trigger_guards import SAFE_TOKEN_PATTERN, StageTrigger, parse_stage_trigger, safe_token, uri_within
+from medallion.services.trigger_guards import StageTrigger, parse_stage_trigger, safe_token, uri_within
 from service_kit.lakehouse import warehouse_registry
 
 
@@ -212,7 +220,8 @@ def test_no_from_uri_still_uses_the_configured_upstream(tmp_path: Path, reads: _
     "token",
     [
         "../../etc/passwd",  # traversal + separators
-        "..",  # the one dotted value the header pattern admits that is not a name
+        "..",  # a traversal, not a name
+        "a..b",
         "tok en",  # whitespace — no head can mint it, so its presence says the value was not minted
         "tok\nname: evil",  # a newline: harmless in the JSON sinks, and a log line it would forge
         "a" * 65,  # past the Idempotency-Key ceiling (max_length=64)
@@ -223,8 +232,7 @@ def test_no_from_uri_still_uses_the_configured_upstream(tmp_path: Path, reads: _
 )
 def test_a_token_outside_the_shape_is_dropped(tmp_path: Path, reads: _Reads, token: str) -> None:
     """The token is not decorative: it seeds the deterministic lineage run id, rides the `lance` facet
-    into the graph, and folds into the Ray submission id — where characters outside `[A-Za-z0-9_-]` are
-    replaced, so two unshaped tokens can COLLIDE onto one id and the second stage's work never runs."""
+    into the graph and names the stage's workflow instance, so a value no door can accept is refused."""
     dapr = _FakeDapr()
     settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
 
@@ -232,28 +240,153 @@ def test_a_token_outside_the_shape_is_dropped(tmp_path: Path, reads: _Reads, tok
     assert reads.opened == [] and dapr.published == []
 
 
-@pytest.mark.parametrize(
-    "token",
-    [
-        "0f1c2d3e4f5a",  # produce()'s own uuid4().hex[:12]
-        "8e1c9b7a-2f3d-4c5b-9a01-1234567890ab",  # _cascade_token's runId fallback
-        "my.retry.key",  # a dotted Idempotency-Key — `/produce` advertises `^[A-Za-z0-9._-]+$`
-        "-leading-dash",  # also inside that header pattern
-        "a" * 64,
-    ],
-)
-def test_every_token_the_estates_own_heads_can_mint_is_accepted(tmp_path: Path, reads: _Reads, token: str) -> None:
-    """A consumer stricter than the head that feeds it is not safety, it is a silent DROP of a cascade
-    the head already 202'd. `/produce` and `/ingest-media` pin `Idempotency-Key` to
-    `^[A-Za-z0-9._-]+$` (max 64) and thread it through as the cascade token, so the stage_runner honours
-    exactly that shape — nothing narrower.
-    """
-    dapr = _FakeDapr()
-    settings = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+#: `(key, whether the stage lane runs it)`. Each row is answered by a door AND by the stage lane that
+#: door feeds; a row on which they disagree is a 202 for a cascade that never runs.
+_CASCADE_KEYS = [
+    ("idem-test", True),
+    ("0f1c2d3e4f5a", True),  # a `uuid4().hex[:12]`
+    ("8e1c9b7a-2f3d-4c5b-9a01-1234567890ab", True),  # a dashed UUID, `_cascade_token`'s runId fallback
+    ("my.retry.key", True),
+    ("-leading-dash", True),
+    (".", True),
+    (".lead", True),
+    ("trail.", True),
+    ("a" * 64, True),
+    ("..", False),
+    ("a..b", False),
+    ("trail..", False),
+    ("a" * 65, False),
+    ("", False),
+    ("has space", False),
+    ("tok$en", False),
+    ("a/b", False),
+]
 
-    assert asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}})) == _SUCCESS
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic)
-    assert lineage["data"]["run"]["facets"]["lance"]["token"] == token
+
+def _door(router: APIRouter, settings: MedallionSettings, bus: _FakeDapr, overrides: dict[Callable[..., Any], Callable[[], object]]) -> TestClient:
+    """One door, served over HTTP, publishing onto ``bus`` — the same bus its consumer is fed from.
+
+    ``overrides`` replaces the door's authentication only; the grammar under test is not behind it.
+    """
+    app = FastAPI()
+    app.include_router(router)
+    app.state.dapr = bus
+    app.dependency_overrides[get_dapr] = lambda: bus
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides.update(overrides)
+    return TestClient(app)
+
+
+def _stage_run_token(bus: _FakeDapr, settings: MedallionSettings, since: int) -> str:
+    """The token on the COMPLETE the stage emitted — proof the lane RAN the key, not merely parsed it."""
+    run = next(p for p in bus.published[since:] if p["topic"] == settings.lineage_topic)
+    return run["data"]["run"]["facets"]["lance"]["token"]
+
+
+@pytest.mark.parametrize(("key", "runs"), _CASCADE_KEYS)
+def test_produce_202s_exactly_the_keys_its_stage_lane_runs(tmp_path: Path, reads: _Reads, key: str, runs: bool) -> None:
+    """`POST /produce` -> `/bronze-arrival` -> the bronze->silver stage, on ONE bus.
+
+    The key reaches the stage as the bronze write's `lance.token`, and each hop is fed exactly what the
+    hop before it published — so a door wider than the lane, a door that rewrites its key, or a head
+    that drops it fails here. A refused key publishes nothing.
+    """
+    bus = _FakeDapr()
+    head = MedallionSettings.model_validate({})  # compute off: the head emits its bronze write without seeding one
+
+    door = _door(produce_api.router, head, bus, {authorize_produce: lambda: None}).post("/produce", headers={"Idempotency-Key": key})
+
+    assert door.status_code == (202 if runs else 422), door.text
+    if not runs:
+        assert bus.published == [], "a refused key published a cascade head"
+        return
+    assert door.json()["token"] == key
+    (bronze_write,) = bus.published
+    assert asyncio.run(handle_bronze_arrival(cast(DaprClient, bus), head, {"data": bronze_write["data"]})) == _SUCCESS
+    trigger = bus.published[-1]
+    assert trigger["topic"] == head.bronze_topic
+    stage = _stage_runner(from_uri=str(tmp_path / "bronze"), to_uri=str(tmp_path / "silver"))
+    since = len(bus.published)
+    assert asyncio.run(handle_stage(cast(DaprClient, bus), stage, {"data": trigger["data"]})) == _SUCCESS
+    assert _stage_run_token(bus, stage, since) == key
+
+
+_MEDIA_BRONZE = "s3://lake/medallion/bronze-media"
+
+
+@pytest.mark.parametrize(("key", "runs"), _CASCADE_KEYS)
+def test_ingest_media_202s_exactly_the_keys_its_stage_lane_runs(tmp_path: Path, reads: _Reads, monkeypatch: pytest.MonkeyPatch, key: str, runs: bool) -> None:
+    """`POST /ingest-media` -> the bronze-media->silver-media stage, on ONE bus. The media head publishes
+    its own trigger, so the key reaches the lane in one hop."""
+    bus = _FakeDapr()
+    head = MedallionSettings.model_validate(
+        {
+            "compute_enabled": True,
+            "s3_endpoint": "http://rustfs:9000",
+            "s3_secret_access_key": "k",
+            "media_bronze_uri": _MEDIA_BRONZE,
+            "media_source_bucket": "media-src",
+        }
+    )
+    landed = IngestResult(version=1, row_count=1, source_uris=["s3://media-src/batch/a.png"], fields=[])
+    monkeypatch.setattr(media_produce, "_seed_and_ingest", lambda *_a: landed)
+
+    door = _door(ingest_media_api.router, head, bus, {authorize_ingest_media: lambda: None}).post("/ingest-media", headers={"Idempotency-Key": key})
+
+    assert door.status_code == (202 if runs else 422), door.text
+    if not runs:
+        assert bus.published == [], "a refused key published a media head"
+        return
+    assert door.json()["token"] == key
+    trigger = next(p for p in bus.published if p["topic"] == head.media_topic)
+    stage = _stage_runner(
+        from_namespace=head.media_bronze_namespace,
+        from_dataset=head.media_bronze_dataset,
+        to_namespace="silver-media",
+        to_dataset="silver-media$objects",
+        from_uri=_MEDIA_BRONZE,
+        to_uri=str(tmp_path / "silver-media"),
+    )
+    since = len(bus.published)
+    assert asyncio.run(handle_stage(cast(DaprClient, bus), stage, {"data": trigger["data"]})) == _SUCCESS
+    assert _stage_run_token(bus, stage, since) == key
+
+
+@pytest.mark.parametrize(("key", "runs"), _CASCADE_KEYS)
+def test_rerun_202s_exactly_the_tokens_its_stage_lane_runs(tmp_path: Path, reads: _Reads, monkeypatch: pytest.MonkeyPatch, key: str, runs: bool) -> None:
+    """The operator's re-run verb re-mints a stage trigger carrying the caller's `token` verbatim, so
+    its body field is a door onto the same lane and answers to the same grammar."""
+    control, wh = tmp_path / "control", tmp_path / "acme-wh"
+    _provision(control, "acme", wh)
+    bus = _FakeDapr()
+    verb = MedallionSettings.model_validate(
+        {"stage_runner_gates": {"silver": {"to_namespace": "gold", "required_action": "can_promote"}}, "transform_routes": {"silver": "medallion.silver"}}
+    )
+
+    async def _allowed(*_a: object, **_k: object) -> bool:
+        return True
+
+    monkeypatch.setattr(rerun_api.fga, "check", _allowed)
+    client = _door(rerun_api.router, verb, bus, {rerun_api.authenticate_subject: lambda: "alice", get_fga_client: object})
+    door = client.post("/stage-runners/stages/rerun", json={"object_id": "table:acme-silver$features", "project": "acme", "to_version": 2, "token": key})
+
+    assert door.status_code == (202 if runs else 422), door.text
+    if not runs:
+        assert bus.published == [], "a refused token published a stage trigger"
+        return
+    assert door.json()["token"] == key
+    (trigger,) = bus.published
+    stage = _stage_runner(
+        from_namespace="silver",
+        from_dataset="silver$features",
+        to_namespace="gold",
+        to_dataset="gold$features",
+        operation="aggregate_gold",
+        pub_topic="medallion.gold",
+        control_root=str(control),
+    )
+    assert asyncio.run(handle_stage(cast(DaprClient, bus), stage, {"data": trigger["data"]})) == _SUCCESS
+    assert _stage_run_token(bus, stage, 1) == key
 
 
 def test_an_absent_token_still_proceeds(tmp_path: Path, reads: _Reads) -> None:
@@ -334,26 +467,49 @@ def _head_accepts(module: str, path: str) -> Callable[[str], bool]:
     return lambda key: low <= len(key) <= high and re.fullmatch(pattern, key) is not None
 
 
-#: Keys either side of every edge the two grammars could disagree on: length, the alphabet, the dot.
-_KEY_PROBES = ["", "a", "a" * 64, "a" * 65, "a.b", "..", "-lead", "_x", "8e1c9b7a-2f3d-4c5b", "a b", "a/b", "a$b", "a\nb", "tok\t"]
+#: Keys either side of every edge the grammar has: length, the alphabet, one dot, two dots.
+_KEY_PROBES = [
+    "",
+    "a",
+    "a" * 64,
+    "a" * 65,
+    "a.b",
+    ".",
+    ".a",
+    "a.",
+    "..",
+    "a..b",
+    "a..",
+    "-lead",
+    "_x",
+    "8e1c9b7a-2f3d-4c5b",
+    "a b",
+    "a/b",
+    "a$b",
+    "a\nb",
+    "tok\t",
+]
 
 
 @pytest.mark.parametrize(("module", "path"), [("medallion.api.produce", "/produce"), ("medallion.api.ingest_media", "/ingest-media")])
-def test_the_stage_token_grammar_is_its_heads_key_shape_without_traversal(module: str, path: str) -> None:
-    """`safe_token` is the `Idempotency-Key` shape of `/produce` and `/ingest-media`, minus `..`.
+def test_each_head_declares_exactly_the_stage_token_grammar(module: str, path: str) -> None:
+    """A head's declared `Idempotency-Key` is the stage lane's `safe_token`, key for key.
 
-    Pinned as a literal and compared with each head's declared header, so a change to this grammar,
-    or to the heads it is derived from, is made on purpose. The `..` refusal is safe_token's own and
-    the heads admit it. The training lane is fed by neither head: it reads its own, narrower token
-    (`medallion.services.train.TOKEN_PATTERN`), which `tests/unit/test_train.py` holds equal to what
-    `POST /train` accepts.
+    Read off the declaration FastAPI resolved — the one its OpenAPI schema is rendered from — so a
+    head that admits a key the lane drops, or refuses one it runs, fails here. The training lane is fed
+    by neither head: `tests/unit/test_train.py` holds `POST /train` to its own `TOKEN_PATTERN`.
     """
     head_accepts = _head_accepts(module, path)
-    assert [k for k in _KEY_PROBES if head_accepts(k) != (re.fullmatch(SAFE_TOKEN_PATTERN, k) is not None)] == []
-    dangerous = ["", "has space", "has/slash", "has$dollar", "..", "a/../b", "a\nb", "tok\t", "a" * 65]
+    assert [k for k in _KEY_PROBES if head_accepts(k) != safe_token(k)] == []
+
+
+def test_the_stage_token_grammar_is_pinned() -> None:
+    """Three doors and one lane read this grammar, so a change to it is made on purpose."""
+    assert trigger_guards.SAFE_TOKEN_PATTERN == r"^\.?(?:[A-Za-z0-9_-]+\.)*[A-Za-z0-9_-]*$"
+    assert trigger_guards.SAFE_TOKEN_MAX_LENGTH == 64
+    dangerous = ["", "has space", "has/slash", "has$dollar", "..", "a..b", "a/../b", "a\nb", "tok\t", "a" * 65]
     assert not any(safe_token(s) for s in dangerous)
     assert safe_token(1) is False
-    assert SAFE_TOKEN_PATTERN == r"[A-Za-z0-9._-]{1,64}"
 
 
 def test_parse_stage_trigger_returns_none_rather_than_raising() -> None:
