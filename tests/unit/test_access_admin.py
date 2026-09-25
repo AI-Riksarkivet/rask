@@ -906,7 +906,7 @@ def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any]
         written.extend(tuples)
 
     monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
-    with pytest.raises(InvalidInputError, match="current_time"):
+    with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(ep.write_access_tuple(client=_fga_client(), control=NoopControlEmitter(), token=_token("root_admin"), body=_clock_pinned_grant()))
     assert written == []
 
@@ -922,7 +922,7 @@ def test_a_simulated_hypothesis_cannot_carry_a_clock_either(gate_seen: dict[str,
 
     monkeypatch.setattr(ep.fga, "check", _fake_check)
     body = AccessSimulateRequest(user="alice", relation="writer", object="namespace:bronze", hypothetical=[_clock_pinned_grant()])
-    with pytest.raises(InvalidInputError, match="current_time"):
+    with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(ep.simulate_access(client=_fga_client(), token=None, body=body))
     assert checks == []
 

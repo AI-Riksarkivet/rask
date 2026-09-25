@@ -15,9 +15,10 @@ authorization model actually says.
 THE COMPARISON HAD TO BE PROVEN REACHABLE BEFORE IT WAS WORTH WRITING. OpenFGA does not store the model
 it was given: it fills in defaults, so the stored form is ~48% larger (36,482 chars vs 24,579 for this
 estate's model) and a naive equality check would never fire — a control that cannot fire. The fills are
-`metadata: null`, `relations: {}`, `module: ""`, `condition: ""` and `source_info: null`. Dropping
-null/empty values makes the two byte-identical: verified against the live store's newest model and this
-repo's `model.json`, 20,310 characters each.
+empty values (`metadata: null`, `relations: {}`, `module: ""`, `condition: ""`, `source_info: null`,
+`object: ""`, `[]`). Dropping them, while keeping the grammar's empty messages (`this`, `wildcard`), makes
+the two identical: measured on OpenFGA v1.18.3 2026-09-25, 26,247 canonical characters each, over REST
+and over the SDK read.
 
 So the skip is conditioned on that canonical form, and a model that genuinely differs still writes —
 which is what keeps `provision`'s whole reason for existing ("a `model.json` edit takes effect on boot")
@@ -145,6 +146,32 @@ def test_a_genuinely_different_model_does_not_canonicalise_equal() -> None:
     assert fga.canonical_model(_as_openfga_stores_it(MODEL)) != fga.canonical_model(widened)
 
 
+def _with_wildcard_assignee(model: dict[str, Any]) -> dict[str, Any]:
+    """``model`` with ``role#assignee``'s ``[user]`` widened to ``[user:*]`` — only the ``wildcard: {}`` marker differs."""
+    role = {**model["type_definitions"][1]}
+    role["metadata"] = {"relations": {"assignee": {"directly_related_user_types": [{"type": "user", "wildcard": {}}, {"relation": "member", "type": "team"}]}}}
+    return {**model, "type_definitions": [model["type_definitions"][0], role]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stored", "desired"),
+    [
+        pytest.param(_with_wildcard_assignee(MODEL), MODEL, id="store-[user:*]-repo-[user]"),
+        pytest.param(MODEL, _with_wildcard_assignee(MODEL), id="store-[user]-repo-[user:*]"),
+    ],
+)
+async def test_a_WILDCARD_toggled_under_an_unchanged_name_is_written(monkeypatch: pytest.MonkeyPatch, stored: dict[str, Any], desired: dict[str, Any]) -> None:
+    """`[user:*]` and `[user]` differ only by an empty ``wildcard: {}``, the same shape as the fills the
+    canonical form drops — so the boot must see the change and write, not keep the store's rule."""
+    _install(monkeypatch, desired=desired, stored=stored)
+
+    _store_id, model_id = await fga.provision("http://fga:8080")
+
+    assert len(_FakeClient.requests) == 1, "a wildcard toggled under an unchanged relation name was treated as unchanged"
+    assert model_id == "model-NEWLY-WRITTEN"
+
+
 @pytest.mark.asyncio
 async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE GATE. 1,316 versions on the live store came from this write firing on every boot."""
@@ -241,3 +268,88 @@ def test_the_canonical_form_matches_a_REAL_sdk_model_not_just_a_double() -> None
         "the stored model and the authored one must canonicalise equal, or the unchanged-model skip is a "
         "branch that never runs and every boot mints another version"
     )
+
+
+def _sdk_assignee_model(*, wildcard: bool) -> Any:
+    """``role#assignee: [user]`` or ``[user:*]`` as `read_latest_authorization_model` yields it: real SDK
+    objects, whose ``wildcard`` is ``{}`` or ``None`` (measured on OpenFGA v1.18.3, 2026-09-25)."""
+    from openfga_sdk.models.metadata import Metadata
+    from openfga_sdk.models.relation_metadata import RelationMetadata
+    from openfga_sdk.models.relation_reference import RelationReference
+    from openfga_sdk.models.type_definition import TypeDefinition
+    from openfga_sdk.models.userset import Userset
+
+    restriction = RelationReference(type="user", wildcard={} if wildcard else None, condition="")
+    role = TypeDefinition(
+        type="role",
+        relations={"assignee": Userset(this={})},
+        metadata=Metadata(relations={"assignee": RelationMetadata(directly_related_user_types=[restriction], module="")}, module=""),
+    )
+
+    class _Stored:
+        id = "model-EXISTING"
+        schema_version = "1.1"
+        conditions: ClassVar[dict[str, Any]] = {}
+        type_definitions: ClassVar[list[Any]] = [TypeDefinition(type="user"), role]
+
+    return _Stored()
+
+
+def _authored_assignee_model(*, wildcard: bool) -> dict[str, Any]:
+    restriction: dict[str, Any] = {"type": "user", "wildcard": {}} if wildcard else {"type": "user"}
+    return {
+        "schema_version": "1.1",
+        "type_definitions": [
+            {"type": "user"},
+            {"type": "role", "relations": {"assignee": {"this": {}}}, "metadata": {"relations": {"assignee": {"directly_related_user_types": [restriction]}}}},
+        ],
+        "conditions": {},
+    }
+
+
+@pytest.mark.parametrize(("stored", "desired"), [(True, False), (False, True)], ids=["sdk-[user:*]-repo-[user]", "sdk-[user]-repo-[user:*]"])
+def test_a_WILDCARD_toggle_survives_the_canonical_form_of_a_REAL_sdk_model(stored: bool, desired: bool) -> None:
+    """The shape `provision` compares: an SDK ``wildcard={}`` against an authored plain restriction, and
+    the reverse. Stripping every empty dict makes both pairs equal, and the boot keeps the store's rule."""
+    assert fga.canonical_model(_sdk_assignee_model(wildcard=stored)) != fga.canonical_model(_authored_assignee_model(wildcard=desired))
+
+
+def _empty_message_fields() -> set[str]:
+    """Wire names of every field the SDK's authorization-model schema types as an empty message (``object``)."""
+    import re
+
+    from openfga_sdk import models
+
+    found: set[str] = set()
+    seen: set[str] = set()
+    pending = ["AuthorizationModel"]
+    while pending:
+        klass = getattr(models, pending.pop())
+        for attr, kind in (getattr(klass, "openapi_types", None) or {}).items():
+            if kind == "object":
+                found.add(klass.attribute_map[attr])
+                continue
+            inner = re.sub(r"^(?:list\[|dict\[str, )(.*)\]$", r"\1", kind)
+            if hasattr(models, inner) and inner not in seen:
+                seen.add(inner)
+                pending.append(inner)
+    return found
+
+
+def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -> None:
+    """An empty message is a value by its presence — `this` is a direct assignment, `wildcard` is `[x:*]` —
+    so the canonical form must keep it while dropping the store's empty fills. Walked off the SDK's own
+    schema, so a field a later SDK adds is covered without anyone remembering to list it."""
+    fields = _empty_message_fields()
+    assert {"this", "wildcard"} <= fields, f"the schema walk lost a known empty message: {sorted(fields)}"
+
+    bare = fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t"}]})
+    dropped = [f for f in sorted(fields) if fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t", f: {}}]}) == bare]
+    assert not dropped, f"the canonical form strips these empty messages, so a model differing only by them reads as unchanged: {dropped}"
+
+
+@pytest.mark.parametrize("wildcard", [True, False], ids=["[user:*]", "[user]"])
+def test_an_unchanged_restriction_in_a_REAL_sdk_model_is_still_unchanged(wildcard: bool) -> None:
+    """The no-op beside it: the SDK renders an absent wildcard as ``None`` and fills ``condition``/``module``
+    with ``""``, and none of those may read as a change."""
+    assert fga.canonical_model(_sdk_assignee_model(wildcard=wildcard)) == fga.canonical_model(_authored_assignee_model(wildcard=wildcard))

@@ -43,7 +43,7 @@ def _model(**relations: list[str]) -> dict[str, Any]:
     }
 
 
-def _warehouse(can_read_data: dict[str, Any], *, reader_types: list[dict[str, str]] | None = None, condition: str = "") -> dict[str, Any]:
+def _warehouse(can_read_data: dict[str, Any], *, reader_types: list[dict[str, Any]] | None = None, condition: str = "") -> dict[str, Any]:
     """`warehouse` with two direct rungs and one derived permission, every part of it a parameter."""
     model = _model(warehouse=["reader", "pass_grants"])
     warehouse = model["type_definitions"][0]
@@ -114,6 +114,18 @@ def test_a_MISSING_RELATION_on_an_existing_type_is_a_difference() -> None:
             _warehouse(_READER, condition="current_time < grant_time + grant_duration"),
             _warehouse(_READER, condition="current_time <= grant_time + grant_duration"),
             id="a-CONDITION-expression-changed",
+        ),
+        # `wildcard: {}` is the whole difference between `[user:*]` and `[user]`, and an empty dict is
+        # exactly what the store's fills look like — so the stored side is in the served shape here.
+        pytest.param(
+            _as_openfga_serves_it(_warehouse(_READER, reader_types=[{"type": "user"}])),
+            _warehouse(_READER, reader_types=[{"type": "user", "wildcard": {}}]),
+            id="a-restriction-WIDENED-to-a-wildcard",
+        ),
+        pytest.param(
+            _as_openfga_serves_it(_warehouse(_READER, reader_types=[{"type": "user", "wildcard": {}}])),
+            _warehouse(_READER, reader_types=[{"type": "user"}]),
+            id="a-wildcard-NARROWED-to-a-restriction",
         ),
     ],
 )

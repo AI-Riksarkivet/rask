@@ -38,14 +38,17 @@ def shape(model: dict[str, Any]) -> dict[str, list[str]]:
 
 
 def needs_write(stored: dict[str, Any] | None, desired: dict[str, Any]) -> bool:
-    """Whether the store's newest model differs from this package's in anything OpenFGA evaluates.
+    """Whether the store's newest model differs from this package's, in canonical form.
 
     Compared in :func:`service_kit.governed.fga.canonical_model`'s form — the one the catalog's
     boot-time ``provision`` skips on, so the hook and the catalog agree about what "unchanged" means.
-    That form is what lets a BODY comparison converge: it reads only ``schema_version``,
-    ``type_definitions`` and ``conditions``, never the server-assigned ``id``, and it drops the
-    defaults the store fills in on write, so the store's copy of an unchanged model compares equal and
-    an upgrade mints no version for nothing.
+    That form reads only ``schema_version``, ``type_definitions`` and ``conditions``, never the
+    server-assigned ``id``, and drops the empty values the store fills in while keeping the grammar's
+    empty messages (``this``, ``wildcard``), so the store's copy of an unchanged model compares equal
+    and a rule body or a ``[user]``/``[user:*]`` restriction that changed does not.
+
+    It is a comparison of the written form, not of meaning: a model that evaluates identically but is
+    written differently — a union's branches reordered — counts as a difference and is written.
 
     ``None`` — an empty store — is a write: there is nothing for the services to check against.
     """

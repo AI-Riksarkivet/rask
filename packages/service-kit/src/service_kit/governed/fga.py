@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any, Final, Literal, NamedTuple, cast
 
 import aiohttp
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import ClientConfiguration, OpenFgaClient
 from openfga_sdk.client.models import (
     ClientBatchCheckItem,
@@ -366,25 +366,34 @@ def _plain(value: Any) -> Any:
     return value
 
 
+#: The model grammar's EMPTY MESSAGES, whose presence is the value: ``this: {}`` is a direct assignment
+#: and ``wildcard: {}`` is what makes ``[user:*]`` differ from ``[user]``. They are the only fields the
+#: SDK's model schema types as ``object``, walked rather than listed in
+#: `tests/test_an_unchanged_model_is_not_rewritten_on_every_boot.py`.
+_EMPTY_MESSAGES: Final = frozenset({"this", "wildcard"})
+
+
 def _without_defaults(value: Any) -> Any:
-    """Drop the keys OpenFGA fills in on write: ``None``, ``""``, ``{}`` and ``[]``.
+    """Drop the empty values OpenFGA fills in — ``None``, ``""``, ``{}`` and ``[]`` — except an empty message.
 
-    THIS IS WHAT MAKES THE COMPARISON POSSIBLE AT ALL. The store does not keep the model it was given —
-    it materialises `metadata: null`, `relations: {}`, `module: ""`, `condition: ""` and
-    `source_info: null`, which for this estate's model is 36,482 stored characters against 24,579
-    authored. Comparing the two directly would answer "different" forever, so the skip built on it would
-    be a branch that never runs.
+    THIS IS WHAT MAKES THE COMPARISON POSSIBLE AT ALL. The store does not keep the model it was given.
+    Measured on OpenFGA v1.18.3 (2026-09-25), writing this repo's `model.json` and reading it back over
+    REST fills `module: ""` (169), `source_info: null` (169), `object: ""` (234), `condition: ""` (132),
+    `directly_related_user_types: []` (89), `generic_types: []` (3), `metadata: null` (2) and
+    `relations: {}` (1); the SDK read adds `None` for every unset field. Comparing that directly would
+    answer "different" forever, so the skip built on it would be a branch that never runs.
 
-    Verified rather than assumed (2026-09-13): stripped this way, the live store's newest model and this
-    repo's `model.json` are byte-identical at 20,310 characters.
-
-    A falsey SCALAR is not a default — `0` and `False` are values a condition may carry — and neither
-    equals any of the four sentinels, so they survive.
+    An empty value under an :data:`_EMPTY_MESSAGES` key is kept: stripping it would make a relation
+    widened to ``[user:*]``, or narrowed back, compare equal and never be written. A falsey SCALAR is
+    not a default either — `0` and `False` are values a condition may carry — so they survive.
     """
     if isinstance(value, dict):
         kept = {}
         for key, item in value.items():
             stripped = _without_defaults(item)
+            if key in _EMPTY_MESSAGES and stripped == {}:
+                kept[key] = stripped
+                continue
             if stripped is None or stripped == "" or stripped == {} or stripped == []:
                 continue
             kept[key] = stripped
@@ -769,9 +778,29 @@ def make_client(
 
 
 #: The condition parameter that is the CHECK's clock: `condition_context` supplies it on every read, and
-#: no tuple may carry it. OpenFGA evaluates a parameter stored on the tuple over the one a check sends
-#: (pinned in `auth/model.fga.yaml`), so a stored clock would freeze the moment every check evaluates.
+#: :func:`reject_stored_clock` keeps it off every tuple OpenFGA will evaluate.
 CLOCK_PARAMETER: Final = "current_time"
+
+
+def reject_stored_clock(tuples: Iterable[ClientTuple]) -> None:
+    """Refuse any tuple whose condition context carries :data:`CLOCK_PARAMETER`.
+
+    OpenFGA evaluates a parameter stored on the tuple over the one a check sends (pinned in
+    `auth/model.fga.yaml`), so a stored clock freezes "now" inside a grant's window and the grant never
+    lapses. :func:`write_tuples` and :func:`check`'s ``contextual_tuples`` run this themselves, so no
+    caller can forget it; :func:`delete_tuples` does not, because a delete evaluates nothing and a
+    pinned grant must stay revocable.
+
+    Raises:
+        InvalidInputError: naming the first offending tuple.
+    """
+    for t in tuples:
+        condition = t.condition
+        if condition is not None and CLOCK_PARAMETER in (condition.context or {}):
+            raise InvalidInputError(
+                f"condition {condition.name!r} on {t.object}#{t.relation}@{t.user} cannot carry {CLOCK_PARAMETER} on the tuple: it is the "
+                "check's clock, supplied per request, and a stored value would override every check's and keep the grant from ever expiring"
+            )
 
 
 def condition_context(context: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -823,7 +852,8 @@ async def check(
     the access someone wants — and, just as often, what ELSE it would unlock — while the store is
     untouched. A concentric model makes this necessary rather than nice: a grant three levels up
     cascades to every child, and reading the DSL to predict that is exactly the reasoning humans get
-    wrong. Contextual tuples are per-request and never persisted.
+    wrong. Contextual tuples are per-request and never persisted, but they are evaluated like stored
+    ones, so one carrying the clock is refused (:func:`reject_stored_clock`) before anything is sent.
 
     Callers pass a BARE subject id (the token's ``sub``) and this prepends ``user:``. Pass
     ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
@@ -835,6 +865,7 @@ async def check(
     On exhausted retries / outage we fail closed with ``ServiceUnavailableError``.
     The per-request timeout is carried by ``client`` (see ``make_client``).
     """
+    reject_stored_clock(contextual_tuples or ())
     subject = f"user:{user}" if qualify else user
 
     async def _do_check() -> bool:
@@ -1686,8 +1717,11 @@ async def write_tuples(
     server-side conflict option is the same post-condition with none of the classification.
 
     Transient failures are retried; on outage we fail closed with ``ServiceUnavailableError`` so the caller
-    does not believe a grant succeeded when it did not.
+    does not believe a grant succeeded when it did not. A batch in which any tuple carries the check's
+    clock is refused whole with ``InvalidInputError`` (:func:`reject_stored_clock`), matching the
+    all-or-nothing write it would have been.
     """
+    reject_stored_clock(tuples)
 
     async def _do_write() -> None:
         # The cast papers over the SDK's own annotation, not our types: `write`'s `options` is

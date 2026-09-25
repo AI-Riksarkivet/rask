@@ -275,7 +275,9 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
     ``evaluated`` is True when OpenFGA will evaluate the tuple (a write, a simulated hypothesis) and False
     for a delete, which OpenFGA resolves by key alone. Only an evaluated tuple is refused the check's
     clock: the read door echoes a stored condition verbatim, so a delete refusing it would leave a
-    clock-pinned grant irrevocable through the body the Inspector sends back.
+    clock-pinned grant irrevocable through the body the Inspector sends back. The refusal is
+    ``fga.reject_stored_clock``, which ``fga.write_tuples`` and ``fga.check`` also run; calling it here
+    answers before a simulation's baseline check has been sent.
     """
     obj = _validated_object(body.object)
     fga_type = obj.partition(":")[0]
@@ -295,14 +297,6 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
         # rather than an outage the first time anyone checks the object.
         declared = _model_conditions().get(body.condition.name, {})
         supplied = set(body.condition.context or {})
-        # The clock belongs to the CHECK. OpenFGA evaluates a parameter stored on the tuple over the one
-        # the check sends (pinned in model.fga.yaml), so a clock written here freezes "now" inside the
-        # window and the grant never lapses — the caller, not the window, would decide its expiry.
-        if evaluated and fga.CLOCK_PARAMETER in supplied:
-            raise InvalidInputError(
-                f"condition {body.condition.name!r} cannot carry {fga.CLOCK_PARAMETER} on the tuple: it is the check's clock, supplied per "
-                "request, and a stored value would override every check's and keep the grant from ever expiring"
-            )
         required = set(declared) - {fga.CLOCK_PARAMETER}
         if missing := required - supplied:
             raise InvalidInputError(f"condition {body.condition.name!r} needs {', '.join(sorted(missing))}")
@@ -310,7 +304,10 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientT
             raise InvalidInputError(f"condition {body.condition.name!r} has no parameter {', '.join(sorted(unknown))}")
         condition = fga.RelationshipCondition(name=body.condition.name, context=dict(body.condition.context or {}))
 
-    return fga.ClientTuple(user=_qualified_subject(body.user), relation=body.relation, object=obj, condition=condition)
+    tup = fga.ClientTuple(user=_qualified_subject(body.user), relation=body.relation, object=obj, condition=condition)
+    if evaluated:
+        fga.reject_stored_clock([tup])
+    return tup
 
 
 async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: IDToken | None, body: AccessTuple, *, write: bool) -> AccessTuple:
@@ -386,10 +383,8 @@ async def check_access(client: EstateFgaClient, token: CurrentToken, body: Acces
     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
 
     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
-    ``non_expired_grant``. Omitting it against a time-boxed grant is a DENY, not a neutral answer:
-    OpenFGA cannot evaluate the CEL expression without its operands. The server does NOT default the
-    clock, deliberately — a check that silently substituted "now" would answer a question the caller
-    did not ask, and the whole point of the explorer is asking "was this true at 14:00?".
+    ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
+    wins, which is how the explorer asks "was this true at 14:00?".
     """
     obj = _validated_object(body.object)
     fga_type = obj.partition(":")[0]
