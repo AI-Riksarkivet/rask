@@ -166,8 +166,11 @@ garbage), and a handler never raises on malformed input — a crash would poison
   transient outages `RETRY`. The guards live in **two** places and the split is deliberate:
   `services/medallion/services/train.py` keeps its own segment/int-version/8 KiB guards for the
   TRAINING trigger, while the STAGE trigger validates through
-  `services/medallion/services/trigger_guards.py` (`parse_stage_trigger` + `uri_within`) — a module
-  neither handler owns, so the name grammar the two must agree on cannot drift inside one of them.
+  `services/medallion/services/trigger_guards.py` (`parse_stage_trigger` + `uri_within`). Each lane's
+  token grammar is derived from the key shape of the heads that feed IT: `/produce` and
+  `/ingest-media` feed `SAFE_TOKEN_PATTERN`, and `POST /train` applies the training lane's narrower
+  `TOKEN_PATTERN` (no dots: the token becomes the Ray submission id, which folds `.` to `-`) to its
+  own `Idempotency-Key`, so that door refuses with a 422 every key its consumer would drop.
   `uri_within` is the half that is a security boundary rather than a shape rule: a trigger may NAME
   the upstream it wants read, but the stage runner reads that location with its OWN object-store
   credentials, so the name is honoured only inside the storage root the stage already resolved.

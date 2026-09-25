@@ -8,13 +8,12 @@ deterministic garbage and a raising handler poisons the subscription (DATA-CONTR
 
 Two rules, and they are different kinds of thing:
 
-* :func:`safe_token` is a SHAPE rule, and it is deliberately the ``Idempotency-Key`` contract the
-  estate's own heads publish (``^[A-Za-z0-9._-]+$``, max 64 — ``/produce``, ``/ingest-media``,
-  ``/train``), hardened by refusing ``..``. A consumer stricter than the head that feeds it does not
-  add safety, it silently DROPs cascades the head already 202'd. (``services/train.py``'s private
-  ``_safe_name`` IS that consumer — it rejects the dots its own head accepts. Reconciling the two is
-  a follow-up in a file this change does not own; ``test_medallion_trigger_guards.py`` pins the
-  relation between the grammars meanwhile, so neither can drift unnoticed.)
+* :func:`safe_token` is a SHAPE rule, and it is deliberately the ``Idempotency-Key`` contract of the
+  heads that feed this lane (``^[A-Za-z0-9._-]+$``, max 64 — ``/produce``, ``/ingest-media``),
+  hardened by refusing ``..``. A consumer stricter than the head that feeds it does not add safety,
+  it silently DROPs cascades the head already 202'd. The training lane is fed by ``/train`` alone and
+  reads a narrower token (``services/train.py``'s ``TOKEN_PATTERN``), which that door applies to its
+  own key.
 * :func:`uri_within` is a SECURITY boundary. A trigger may NAME the upstream it wants read (I2 —
   resolve the location through the catalog, never compose a path), but the stage runner opens that name with
   its OWN object-store credentials, so it is honoured only inside the storage root the stage already

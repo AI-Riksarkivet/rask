@@ -334,13 +334,70 @@ def test_train_route_422s_the_names_its_consumer_would_drop() -> None:
     app.dependency_overrides[get_settings] = lambda: _settings()
     client = TestClient(app)
     ok_feature = {"dataset": "silver$features", "version": 1}
+    # A VALID key on every post: the header is required, so without one each body is refused for the
+    # missing key and the body checks below are never what answers.
+    key = {"Idempotency-Key": "idem-test"}
     for body in (
         {"model": "../etc", "features": [ok_feature]},
         {"model": "churn", "features": [{"dataset": "events", "version": 1}]},  # bare name
         {"model": "churn", "features": [{"dataset": "silver$../evil", "version": 1}]},
         {"model": "churn", "features": [ok_feature] * (train.MAX_FEATURES + 1)},
     ):
-        assert client.post("/train", json=body).status_code == 422
+        response = client.post("/train", json=body, headers=key)
+        assert response.status_code == 422, response.text
+        assert all(error["loc"][0] == "body" for error in response.json()["detail"]), response.text
+
+
+#: `(Idempotency-Key, whether a training run follows)`. Every row is answered by BOTH the door and the
+#: consumer; a row on which they disagree is a request its caller was told 202 that never trains.
+_TRAINING_KEYS = [
+    ("idem-test", True),
+    ("ui-train-1k9x2p", True),  # the models zone's content-derived key (`train.remote.ts`)
+    ("0f1c2d3e4f5a", True),
+    ("8e1c9b7a-2f3d-4c5b-9a01-1234567890ab", True),
+    ("Ok_1", True),
+    ("a" * 64, True),
+    ("my.retry.key", False),  # `.` folds to `-` in the Ray submission id, so `my-retry-key` names the same job
+    ("run.3", False),
+    (".", False),  # as the artifact directory `<base>/<token>/` on a filesystem base, it IS the base
+    ("..", False),
+    ("-leading-dash", False),
+    ("has space", False),
+    ("tok$en", False),
+    ("", False),
+    ("a" * 65, False),
+]
+
+
+@pytest.mark.parametrize(("key", "trains"), _TRAINING_KEYS)
+def test_the_door_202s_exactly_the_tokens_its_consumer_trains_on(monkeypatch: pytest.MonkeyPatch, key: str, trains: bool) -> None:
+    """`POST /train` and `/train-trigger` read ONE token grammar.
+
+    The door's `Idempotency-Key` becomes the trigger's `token`, and the consumer DROPs a token outside
+    its shape. A door wider than its consumer therefore answers 202 to a run that never starts, and the
+    caller holding that 202 has no way to learn it. Both halves are driven for every row: the real door
+    over HTTP, and the real consumer over the trigger `submit_train_request` publishes for the same key.
+    """
+
+    async def submitted(*_a: Any, **_kw: Any) -> str:
+        return "submitted"
+
+    monkeypatch.setattr(train.ray_submit, "submit_train_job", submitted)
+    monkeypatch.setattr(train, "schedule_train_watch", lambda *_a, **_kw: None)
+    features = [{"dataset": "silver$features", "version": 7}]
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[get_dapr] = _FakeDapr
+    app.dependency_overrides[get_settings] = lambda: _settings()
+
+    door = TestClient(app).post("/train", json={"model": "churn", "features": features}, headers={"Idempotency-Key": key})
+
+    bus = _FakeDapr()
+    asyncio.run(train.submit_train_request(cast(Any, bus), _settings(), token=key, model="churn", features=features))
+    consumer = asyncio.run(train.handle_train_trigger(_settings(), {"data": json.loads(bus.published[0]["data"])}))
+
+    assert door.status_code == (202 if trains else 422), door.text
+    assert consumer["status"] == ("SUCCESS" if trains else "DROP")
 
 
 def test_head_rejects_an_oversized_config() -> None:

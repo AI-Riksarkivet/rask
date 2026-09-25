@@ -22,9 +22,11 @@ import { gatewayJSON, parsedGateway } from '$lib/server/doors';
  * here would satisfy the door's 422 and reintroduce the exact defect the requirement exists to close,
  * because every replay would carry a fresh key.
  *
- * The door constrains the header to `^[A-Za-z0-9._-]{1,64}$`, so the JSON is hashed rather than
- * interpolated — a dataset name with a `$` in it (which is every governed table: `silver$features`)
- * would otherwise be refused 422 by the very validation this key is meant to satisfy.
+ * The door constrains the header to `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` (`TOKEN_PATTERN` in the
+ * medallion's `services/train.py`: no dots, because the key becomes the Ray submission id), so the
+ * JSON is hashed rather than interpolated — a dataset name with a `$` in it (which is every governed
+ * table: `silver$features`) would otherwise be refused 422 by the very validation this key is meant
+ * to satisfy. `ui-train-<base36>` is inside that shape.
  */
 function trainingKey(body: unknown): string {
 	const json = JSON.stringify(body);

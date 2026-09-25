@@ -25,6 +25,7 @@ from medallion.services.train import (
     DATASET_PATTERN,
     MAX_FEATURES,
     MODEL_PATTERN,
+    TOKEN_PATTERN,
     handle_train_trigger,
     submit_train_request,
     train_head_enabled,
@@ -96,7 +97,9 @@ async def train(
     # which is the ONLY moment this run is attributable: everything after here is a bus trigger and a
     # detached Ray job, and the job's own events author as `service-trainer` by design.
     originator: Annotated[str | None, Depends(authorize_train)],
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._-]+$")],
+    # The consumer's token shape, not the sibling doors' key shape: this key becomes the training
+    # token, and a key the consumer would DROP must be a 422 here (see `TOKEN_PATTERN`).
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=64, pattern=TOKEN_PATTERN)],
 ) -> dict[str, Any] | JSONResponse:
     """Request a training run: pin feature versions (omitted → LATEST, resolved HERE) and publish the
     training trigger — 202 with the correlation ``token``. Token-guarded like ``/produce``; a disabled

@@ -36,7 +36,6 @@ import medallion.services.transform as stage_runner
 from medallion.core.config import MedallionSettings
 from medallion.services import inprocess_executor
 from medallion.services.compute import UpstreamFacts, WriteResult
-from medallion.services.train import _safe_name as _train_safe_name
 from medallion.services.transform import handle_stage
 from medallion.services.trigger_guards import SAFE_TOKEN_PATTERN, StageTrigger, parse_stage_trigger, safe_token, uri_within
 from service_kit.lakehouse import warehouse_registry
@@ -241,7 +240,7 @@ def test_a_token_outside_the_shape_is_dropped(tmp_path: Path, reads: _Reads, tok
 )
 def test_every_token_the_estates_own_heads_can_mint_is_accepted(tmp_path: Path, reads: _Reads, token: str) -> None:
     """A consumer stricter than the head that feeds it is not safety, it is a silent DROP of a cascade
-    the head already 202'd. `/produce`, `/ingest-media` and `/train` all pin `Idempotency-Key` to
+    the head already 202'd. `/produce` and `/ingest-media` pin `Idempotency-Key` to
     `^[A-Za-z0-9._-]+$` (max 64) and thread it through as the cascade token, so the stage_runner honours
     exactly that shape — nothing narrower.
     """
@@ -321,27 +320,18 @@ def test_uri_within(base: str, candidate: str, expected: bool) -> None:
     assert uri_within(base, candidate) is expected
 
 
-def test_the_token_grammar_is_a_strict_superset_of_the_training_consumers() -> None:
-    """The two bus consumers' token rules, pinned in RELATION so neither drifts unnoticed.
+def test_the_stage_token_grammar_is_its_heads_key_shape_without_traversal() -> None:
+    """`safe_token` is the `Idempotency-Key` shape of `/produce` and `/ingest-media`, minus `..`.
 
-    They are not identical, and that is the point of stating it: `services/train.py`'s private
-    `_safe_name` rejects the dots its OWN head (`POST /train`, `Idempotency-Key` =
-    `^[A-Za-z0-9._-]+$`) 202s — so a dotted key there is accepted and then silently DROPped at the
-    consumer, which is the defect this module refuses to copy. Every value train accepts must stay
-    acceptable here (a superset — never a new DROP), and both must keep refusing the dangerous set.
+    Pinned as a literal so that a change to this grammar, or to the heads it is derived from, is made
+    on purpose. The training lane is fed by neither head: it reads its own, narrower token
+    (`medallion.services.train.TOKEN_PATTERN`), which `tests/unit/test_train.py` holds equal to what
+    `POST /train` accepts.
     """
-    accepted_by_train = ["ok", "Ok-1_2", "a" * 64, "0f1c2d3e4f5a", "8e1c9b7a-2f3d-4c5b-9a01-1234567890ab"]
-    assert all(_train_safe_name(s) for s in accepted_by_train)
-    assert all(safe_token(s) for s in accepted_by_train), "the stage_runner must not DROP a token the trainer accepts"
-
     dangerous = ["", "has space", "has/slash", "has$dollar", "..", "a/../b", "a\nb", "tok\t", "a" * 65]
-    assert not any(_train_safe_name(s) for s in dangerous)
     assert not any(safe_token(s) for s in dangerous)
-    assert safe_token(1) is False and _train_safe_name(1) is False
-
-    # The head contract this grammar is derived from, spelled out so a change to either is deliberate.
+    assert safe_token(1) is False
     assert SAFE_TOKEN_PATTERN == r"[A-Za-z0-9._-]{1,64}"
-    assert safe_token("my.retry.key") and not _train_safe_name("my.retry.key")
 
 
 def test_parse_stage_trigger_returns_none_rather_than_raising() -> None:
