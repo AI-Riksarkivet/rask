@@ -767,7 +767,7 @@ export interface paths {
          *     reaches a feed rather than a person.
          *
          *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
-         *     shipped without it. The classifier's default is the WRITER rung, so the live audit trail recorded
+         *     shipped without it. Unnamed, it resolved to the WRITER rung, so the live audit trail recorded
          *     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
          *     reader who was not also a writer — the feed's whole audience — was refused. Pinned by
          *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
@@ -958,7 +958,7 @@ export interface paths {
          *
          *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
          *     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
-         *     dependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever
+         *     dependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever
          *     arrives to be metadata-checked. Pinned by
          *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
          *

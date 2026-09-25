@@ -13,6 +13,7 @@ The op -> ``can_*`` mapping below is the ONLY policy logic in the app; the privi
   mutations  -> can_write_data / can_update_properties   (writer rung)
   lifecycle  -> can_drop / can_deregister / can_delete   (owner rung)
   create     -> can_create_table / can_create_namespace on the PARENT (create-on-parent)
+  undeclared -> refused for every caller                 (no rung is a default)
 
 Create-on-parent: creating a child authorizes the parent (the child has no id yet); a
 top-level child gates on the DEFAULT WAREHOUSE only when ``fga_lock_root_create`` is set,
@@ -24,9 +25,9 @@ named table. Fail-closed twice over: an unwired client raises 503 here, and
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from functools import lru_cache
-from typing import Final
+from typing import Final, NoReturn
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
@@ -93,7 +94,7 @@ _FGA_TYPE: dict[str, str] = {
 _DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "changes"})
 # `tasks` (#75) reports what is SCHEDULED against this object — a pending undrop deadline today.
 # Reader tier: it discloses no data and no principals, and an owner must be able to see the
-# deadline they are racing. Unmapped it would fall to WRITER, which is how the live audit found it.
+# deadline they are racing. Unmapped, it demanded WRITER — which is how the live audit found it.
 # `history` (GET /v1/table/{id}/history) is the commit log — WHAT changed and WHEN, never who. Its own
 # docstring already argued the rung ("the same rung as describe/list-versions") and the endpoint checks
 # `can_get_metadata` itself; what was missing is this line, so the ROUTER demanded `can_write_data`
@@ -148,7 +149,7 @@ _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 }
 
 # Full route suffixes that are lifecycle/destructive/ref-plane on the object itself (owner rung).
-# Matched on the FULL suffix so ``index/{name}/drop`` / ``version/delete`` stay writer-tier.
+# Matched on the FULL suffix so ``index/{index_name}/drop`` does not inherit ``drop``'s owner rung.
 # ``rename`` is owner-tier: it DESTROYS the source id (revokes its tuples) and re-seeds the caller as owner
 # of the destination, so a writer-tier gate would let a non-owner rename another user's table and seize sole
 # ownership (the same escalation closed for Overwrite via require_can_drop_table). Owner-gate the source.
@@ -158,8 +159,8 @@ _CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 # overwrites within the current line only — but they resolve through ``owner or publisher`` rather than
 # ``owner`` alone (owner ruling 2026-09-10). A tag is a NAMED POINTER at a version that already exists,
 # so blessing one destroys nothing, and welding that to ownership is what forced every cascade identity
-# to hold ``owner`` on every tenant. Their ``*/delete`` / ``*/list`` / ``*/version`` siblings fall
-# through to the reader/writer tiers below — except ``tags/delete``, mapped explicitly just below.
+# to hold ``owner`` on every tenant. Their ``*/list`` / ``*/version`` siblings are reads, resolved on the
+# trailing segment below; ``tags/delete`` is mapped explicitly just below.
 _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
     "table": {
         "drop": "can_drop",
@@ -180,8 +181,8 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "branches/delete": "can_drop",
         "tags/create": "can_create_tag",
         "tags/update": "can_update_tag",
-        # DELETE completes the tag lifecycle, and leaving it unmapped was the hole. An unmapped suffix
-        # falls to the writer rung, so a plain data writer could remove the pin that `published` is —
+        # DELETE completes the tag lifecycle, and it clears the owner bar because at the writer rung a plain
+        # data writer could remove the pin that `published` is —
         # and then defeat the owner-tier rollback guard, since publication refuses to move `published`
         # BACKWARDS but has nothing to say about republishing after the tag is gone.
         #
@@ -207,14 +208,14 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "access/list": "can_drop",
         # #68 access simulation (the "who can do what" playground check): probing an arbitrary
         # (user, relation) is the same authz-graph disclosure as enumerating it, so it clears the
-        # same owner bar. An unmapped suffix would fall through to writer-tier — never leave it unset.
+        # same owner bar.
         "access/check": "can_drop",
         # The SELF-view is the one access route that must NOT clear the owner bar. `access/list` and
         # `access/check` disclose principals; "what may I do here" discloses only the caller to
         # themselves. Owner-gating it would mean only the people who already know the answer could
         # ask — which is precisely why no surface over these primitives ever shipped. Reader tier:
-        # you may ask about anything you can see. Mapped EXPLICITLY, because the fall-through for an
-        # unmapped table suffix is the writer rung, which would be both wrong and silently wrong.
+        # you may ask about anything you can see. Mapped EXPLICITLY: `my-permissions` is no read word, so
+        # the trailing-segment rule below cannot classify it.
         "access/my-permissions": "can_get_metadata",
         # NOTE: `access/grant` and `access/revoke` are NOT here. They gated on the owner bar until the
         # grant axis landed, which meant handing out access required owning the data. They are now
@@ -225,26 +226,23 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # the same disclosure as access/list — owner bar.
         "access/graph": "can_drop",
         # #75/#76 on-demand maintenance: previewing/reclaiming version history + compacting are the drop
-        # rung, like the retention policy that schedules them (an unmapped suffix would fall to writer).
+        # rung, like the retention policy that schedules them.
         "maintenance/preview": "can_drop",
         "maintenance/run": "can_drop",
         "maintenance/compact": "can_drop",
         # [[LH-105]] rebuilding an index REPLACES the one that is there, so the index the table had is
         # gone whether or not the new one lands — the drop rung, like every other verb under this
-        # sub-path. Mapped explicitly: the fall-through for an unmapped table suffix is `can_write_data`,
-        # which would let a plain data writer replace an owner's tuned index with a default-shaped one
-        # and leave the table answering queries the whole time.
+        # sub-path. The writer rung would let a plain data writer replace an owner's tuned index with a
+        # default-shaped one and leave the table answering queries the whole time.
         "maintenance/reindex": "can_drop",
         # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
         # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
-        # is the highest rung there is, so it gates here. Mapped explicitly for the reason every
-        # neighbour is: an unmapped table suffix falls through to the writer rung, which would let a
-        # plain data writer reclaim an owner's history under a compliance-shaped verb.
+        # is the highest rung there is, so it gates here. The writer rung would let a plain data writer
+        # reclaim an owner's history under a compliance-shaped verb.
         "erasure": "can_drop",
         # #73 deletion protection: arming/disarming the safety on an object is a statement about its
         # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
-        # able to disarm protection they could never act on. (An unmapped suffix would fall through
-        # to writer-tier — never leave it unset.)
+        # able to disarm protection they could never act on.
         #
         # ITS OWN RELATION at that same tier ([[LH-055]]), not `can_drop`: `#41` audits every decision by
         # the RELATION, and the route suffix is not in the record, so sharing the name made "dropped this
@@ -263,7 +261,7 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
     "namespace": {
         "drop": "can_delete",
         # #96 undrop RESTORES the subtree into the estate — the same authority as removing it (the
-        # table door's #75 rule at the namespace rung; unmapped it would fall to writer tier).
+        # table door's #75 rule at the namespace rung).
         "undrop": "can_delete",
         # The namespace twin of the table door's rung — same tier as the `can_delete` it guards, its own
         # name for the same audit reason.
@@ -279,20 +277,58 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # wrong one for the read.
         #
         # The write is a grant-management act, not a property edit — `can_set_managed_access` derives
-        # from `manage_grants`. Mapped explicitly because the fall-through is `can_update_properties`
-        # (writer), which would let any writer switch off the control that stops owners widening access.
+        # from `manage_grants`. At the writer rung (`can_update_properties`) any writer could switch off
+        # the control that stops owners widening access.
         "managed-access/set": "can_set_managed_access",
         # The read sits at the READER bar deliberately: this flag is the REASON someone's grant controls
         # are missing, so the person who most needs the answer is exactly the one who may not change it.
         # Gating the read at the write's bar turns a stated policy back into an unexplained absence.
         "managed-access/describe": "can_get_metadata",
-        # The self-view sits at the READER bar here too — see the table block for why. Spelled out
-        # per type rather than defaulted: an unmapped namespace suffix falls to `can_update_properties`
-        # (writer), so omitting this line would let the page ask "what may I do?" only of people who
-        # can already write, which is the inverse of the question.
+        # The self-view sits at the READER bar here too — see the table block for why. Spelled out per
+        # type: each type's map is its own, and a suffix it does not declare is refused.
         "access/my-permissions": "can_get_metadata",
         "access/graph": "can_delete",
     },
+}
+
+#: The WRITER rung, declared door by door on the FULL suffix exactly like the owner map above, because a
+#: suffix that neither map, the read vocabulary nor the maintenance doors name is REFUSED rather than
+#: defaulted. A default rung is a permission nobody chose. At the writer rung it is one every plain data
+#: writer already holds, so a new destructive verb would ship open to all of them with nothing red; and
+#: a new read door would refuse its whole audience while the audit trail recorded a write. The refusal
+#: is loud for every caller, owners included, and
+#: `services/catalog/tests/test_an_undeclared_door_is_refused.py` drives the guard over every mounted
+#: route, so a door added without a rung fails there rather than in front of its first caller.
+#:
+#: A `{name}` segment stands for exactly one path segment, as the route's own `str` convertor does, so
+#: `index/{index_name}/drop` names the index-drop door without reaching the table's own `drop`.
+#:
+#: `namespace` declares no writer door. Every namespace route is a read, an owner-tier verb or a
+#: create-on-parent, so a namespace mutation nobody declared is refused rather than resolved to
+#: `can_update_properties`.
+_WRITER_SUFFIX_RELATION: Final[dict[str, dict[str, str]]] = {
+    "table": dict.fromkeys(
+        (
+            "insert",
+            "merge_insert",
+            "update",
+            "delete",
+            "add_columns",
+            "alter_columns",
+            "drop_columns",
+            "backfill_column",
+            "update_field_metadata",
+            "schema_metadata/update",
+            "create_index",
+            "create_scalar_index",
+            "index/{index_name}/drop",
+            "version/create",
+            "commit",
+        ),
+        "can_write_data",
+    ),
+    # The async rematerialize. `create` is create-on-parent and never reaches the resolver.
+    "materialized_view": {"refresh": "can_refresh"},
 }
 
 # Grant/revoke are authorized from the BODY, per rung, by `_authorize_grant` — they appear in neither
@@ -338,7 +374,7 @@ def _suffix(path: str, resource: str, object_id: str) -> str:
     """The route part after ``<mount>/<resource>/{id}/`` (e.g. ``version/create``).
 
     Checked against every mount, longest first, so `/management/v1/table/{id}/erasure` yields
-    `erasure` and reaches the owner-suffix map rather than falling through to the writer rung.
+    `erasure`. A path no mount strips yields `""`, which names no door and is refused.
     """
     clean = path.rstrip("/")
     for mount in _MOUNTS:
@@ -353,37 +389,63 @@ def _object(fga_type: str, id_segments: list[str] | str, delimiter: str) -> str:
     return f"{fga_type}:{fga.canonical_object_id(id_segments, delimiter=delimiter)}"
 
 
+def _declared_relation(declared: Mapping[str, str], suffix: str) -> str | None:
+    """The relation ``declared`` names for ``suffix``, else ``None``.
+
+    A ``{name}`` segment of a declared suffix matches exactly one non-empty segment of ``suffix``.
+    """
+    if suffix in declared:
+        return declared[suffix]
+    parts = suffix.split("/")
+    for pattern, relation in declared.items():
+        segments = pattern.split("/")
+        if len(segments) == len(parts) and all(
+            segment == part or (segment.startswith("{") and segment.endswith("}") and part != "") for segment, part in zip(segments, parts, strict=True)
+        ):
+            return relation
+    return None
+
+
+def _refuse_undeclared(fga_type: str, suffix: str) -> NoReturn:
+    """Refuse a door no rung map declares, for every caller — see ``_WRITER_SUFFIX_RELATION``.
+
+    Logged at ERROR because only a route shipped without its rung can reach this: authorization runs
+    after routing matched, so a caller cannot invent a suffix.
+    """
+    log.error("undeclared_door", extra={"fga_type": fga_type, "suffix": suffix})
+    raise PermissionDeniedError(f"{fga_type} declares no rung for {suffix!r}, so no caller may reach it")
+
+
 def _action_relation(fga_type: str, suffix: str) -> str:
     """The ``can_*`` relation to check for a non-create op, by object type + route suffix.
 
-    Owner-tier matches the FULL suffix; reader-tier matches the trailing segment; everything
-    else is writer-tier. Every returned relation exists on ``fga_type`` in the model and
-    reduces to the same rung the previous reader/writer/owner code used.
+    Owner- and writer-tier doors are declared on the FULL suffix; reads and the maintenance doors are
+    classified by the trailing segment. Every returned relation exists on ``fga_type`` in the model.
+
+    Raises:
+        PermissionDeniedError: Nothing declares ``suffix`` for ``fga_type``.
     """
-    owner = _OWNER_SUFFIX_RELATION.get(fga_type, {})
-    if suffix in owner:
-        return owner[suffix]
-    action = suffix.rsplit("/", 1)[-1] if suffix else ""
-    if fga_type == "namespace":
-        if action in _META_READ_ACTIONS or action in _DATA_READ_ACTIONS:
-            return "can_get_metadata"
-        return "can_update_properties"
+    if (relation := _declared_relation(_OWNER_SUFFIX_RELATION.get(fga_type, {}), suffix)) is not None:
+        return relation
+    action = suffix.rsplit("/", 1)[-1]
+    if fga_type == "namespace" and (action in _META_READ_ACTIONS or action in _DATA_READ_ACTIONS):
+        return "can_get_metadata"
     if fga_type == "materialized_view":
-        # Only ``create`` (create-on-parent, handled elsewhere) and ``refresh`` reach a view. A read maps
-        # to can_read/can_get_metadata; ``refresh`` is the async rematerialize (writer-tier can_refresh).
         if action in _DATA_READ_ACTIONS:
             return "can_read"
         if action in _META_READ_ACTIONS:
             return "can_get_metadata"
-        return "can_refresh"
-    # table type (transaction is authorized parent-scoped by _authorize_transaction, never here)
-    if action in _MAINTENANCE_ACTIONS:
-        return "can_maintain"
-    if action in _DATA_READ_ACTIONS:
-        return "can_read_data"
-    if action in _META_READ_ACTIONS:
-        return "can_get_metadata"
-    return "can_write_data"
+    # `transaction` and `classification` resolve in `authorize`'s own branches, so neither is served here.
+    if fga_type == "table":
+        if action in _MAINTENANCE_ACTIONS:
+            return "can_maintain"
+        if action in _DATA_READ_ACTIONS:
+            return "can_read_data"
+        if action in _META_READ_ACTIONS:
+            return "can_get_metadata"
+    if (relation := _declared_relation(_WRITER_SUFFIX_RELATION.get(fga_type, {}), suffix)) is not None:
+        return relation
+    _refuse_undeclared(fga_type, suffix)
 
 
 def _create_parent_check(resource: str, id_segments: list[str] | str, settings: Settings) -> tuple[str, str] | None:
@@ -453,6 +515,10 @@ async def _require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[st
     raise PermissionDeniedError(f"one of [{wanted}] required")
 
 
+#: The transaction doors `_authorize_transaction` serves.
+_TRANSACTION_SUFFIXES: Final = frozenset({"describe", "alter"})
+
+
 async def _authorize_transaction(client: OpenFgaClient, settings: Settings, segments: list[str], suffix: str, *, user: str) -> None:
     """Authorize a transaction op — PARENT-SCOPED to the enclosing namespace when the id carries one.
 
@@ -478,7 +544,12 @@ async def _authorize_transaction(client: OpenFgaClient, settings: Settings, segm
     transaction (``can_set_status: committer``, and ``committer`` ⊇ ``writer from parent``), so the two
     branches gate on the same privilege. ``tests/unit/test_fga_model_contract.py`` now proves every
     (type, relation) this module can check exists in the compiled model.
+
+    ``describe`` and ``alter`` are the only transaction doors; any other suffix is refused rather than
+    answered with the writer rung, the same rule ``_WRITER_SUFFIX_RELATION`` states for the resolver.
     """
+    if suffix not in _TRANSACTION_SUFFIXES:
+        _refuse_undeclared("transaction", suffix)
     is_read = suffix == "describe"
     parent_ns = fga.parent_namespace_id(segments, delimiter=settings.delimiter)
     if parent_ns is not None:
@@ -737,8 +808,8 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         raise UnauthenticatedError("authentication required")
 
     # The raw ASGI path (what routing actually matched) — NOT request.url.path, which re-parses the
-    # decoded path as a URL string and truncates at a decoded '#'/'?' inside an id, collapsing
-    # owner-tier suffixes (drop/deregister) to the generic writer tier for exotically-named tables.
+    # decoded path as a URL string and truncates at a decoded '#'/'?' inside an id, so for an
+    # exotically-named table the suffix would stop naming the route that matched.
     path: str = request.scope["path"]
     object_id = request.path_params.get("id")
 
@@ -804,10 +875,10 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         await _authorize_grant(request, client, settings, user=token.sub, fga_type=fga_type, segments=segments, revoking=suffix == "access/revoke")
         return
     # A CLASSIFICATION IS A LABEL, NOT A DATASET ([[LH-055]]). Its router carries exactly three routes
-    # and the two grant ones returned above, so only `access/my-permissions` reaches here. Refusing the
-    # rest EXPLICITLY rather than letting `_action_relation` answer them: the writer-tier fall-through
-    # resolves `can_write_data`, which this type does not define, and OpenFGA answers an undefined
-    # relation with a 400 that fails closed to 503 — an outage wearing a permission error's clothes.
+    # and the two grant ones returned above, so only `access/my-permissions` reaches here. It resolves
+    # HERE rather than in `_action_relation`, whose vocabulary names relations this type does not define,
+    # and OpenFGA answers an undefined relation with a 400 that fails closed to 503 — an outage wearing a
+    # permission error's clothes.
     if fga_type == "classification":
         if suffix != "access/my-permissions":
             raise PermissionDeniedError(f"{suffix!r} is not an action on a classification label")

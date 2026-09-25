@@ -109,7 +109,7 @@ async def table_history(
 
     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.
     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
-    dependency, so an unmapped suffix demands ``can_write_data`` before this line runs and no reader ever
+    dependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever
     arrives to be metadata-checked. Pinned by
     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
 

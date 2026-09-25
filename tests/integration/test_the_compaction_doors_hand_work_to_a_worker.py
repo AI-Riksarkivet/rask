@@ -155,22 +155,10 @@ def test_both_doors_land_on_the_maintainer_rung() -> None:
     was compacted in-pod (4 274/4 274, the memory ceiling the feature exists to remove); with the
     explicit mapping, 728 units ran ``distributed`` and denials fell to 0.
 
-    The dangerous direction is unchanged and still guarded below: a suffix that happened to match the
-    reader vocabulary would publish a version-minting door at the reader rung.
+    A suffix no map declares is refused rather than given a rung, which
+    ``services/catalog/tests/test_an_undeclared_door_is_refused.py`` pins for every mounted route.
     """
     from catalog.api.fga_deps import _action_relation
 
     assert _action_relation("table", "compaction_plan") == "can_maintain"
     assert _action_relation("table", "compaction_commit") == "can_maintain"
-
-
-def test_an_unmapped_table_suffix_never_falls_below_the_writer_rung() -> None:
-    """The fall-through is the writer rung, so a door nobody mapped is over-gated, never under-gated.
-
-    This is the half of the rung question that a per-suffix assertion cannot cover: the mapping above
-    is explicit, but every suffix added later inherits this default, and only a reader-tier default
-    would be a disclosure.
-    """
-    from catalog.api.fga_deps import _action_relation
-
-    assert _action_relation("table", "a_suffix_nobody_has_written_yet") == "can_write_data"

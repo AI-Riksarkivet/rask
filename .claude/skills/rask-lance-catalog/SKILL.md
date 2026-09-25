@@ -159,9 +159,13 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   (`service_kit.lakehouse.protection`) gating drop/deregister/rename (table) and drop (namespace) —
   deliberately NOT schema metadata, so unprotect is never reachable through the properties door,
   toggling never creates a table version, and the guard answers even for a corrupted dataset. Set
-  via `POST /v1/table/{id}/protection` / `/v1/namespace/{id}/protection`, owner-gated (`protection`
-  maps to `can_drop`/`can_delete` in `_OWNER_SUFFIX_RELATION` — an unmapped suffix falls to writer
-  tier). The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
+  via `POST /management/v1/table/{id}/protection` / `/management/v1/namespace/{id}/protection`,
+  owner-gated (`protection` maps to `can_set_protection`, the owner rung under its own audit name, in
+  `_OWNER_SUFFIX_RELATION`). A route suffix no rung map declares is REFUSED for every caller rather
+  than defaulted to a rung, so a new door ships with its entry in `_OWNER_SUFFIX_RELATION` or
+  `_WRITER_SUFFIX_RELATION` (or a read word in `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`) —
+  `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
+  on one that has none. The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
   A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this
   door — `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade`
   (no longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before anything

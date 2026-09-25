@@ -43,8 +43,3 @@ def test_the_compaction_doors_ask_for_the_MAINTAINER_rung(action: str) -> None:
 def test_a_real_data_write_still_asks_for_the_WRITER_rung() -> None:
     """The narrowing must not leak: `insert` is a data write and a maintainer is not a writer."""
     assert _action_relation("table", "insert") == "can_write_data"
-
-
-def test_an_unknown_suffix_still_falls_to_the_writer_rung() -> None:
-    """Fail-closed stays fail-closed — the fix is naming these two doors, not widening the default."""
-    assert _action_relation("table", "some_action_nobody_has_written_yet") == "can_write_data"

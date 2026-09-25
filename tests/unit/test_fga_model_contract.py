@@ -33,6 +33,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request
+from lance_namespace import PermissionDeniedError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
@@ -122,22 +123,27 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     settings = _settings(lock_root=False)
     root_settings = _settings(lock_root=True)
 
-    # 1. Non-create ops: _action_relation(type, suffix) for EVERY guarded type x EVERY route suffix
-    #    shape the router can produce — owner-tier full suffixes, reader-tier trailing actions, and a
-    #    sentinel that falls through to the writer tier. (`transaction` never routes through here.)
-    owner_suffixes = {s for m in fga_deps._OWNER_SUFFIX_RELATION.values() for s in m}
+    # 1. Non-create ops: _action_relation(type, suffix) for EVERY guarded type x EVERY suffix the rung
+    #    maps declare — owner- and writer-tier full suffixes, reader-tier and maintenance trailing
+    #    actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
+    #    pair. (`transaction` never routes through here.)
     suffixes = (
-        owner_suffixes
+        {s for m in fga_deps._OWNER_SUFFIX_RELATION.values() for s in m}
+        | {s for m in fga_deps._WRITER_SUFFIX_RELATION.values() for s in m}
         | set(fga_deps._META_READ_ACTIONS)
         | set(fga_deps._DATA_READ_ACTIONS)
-        | {"", "index/create", "version/delete", "insert", "some/unmapped/mutation"}
+        | set(fga_deps._MAINTENANCE_ACTIONS)
     )
     # `transaction` and `classification` both return from their own branch in `authorize` before
     # `_action_relation` is consulted, so enumerating the generic suffix map against them would assert
     # relations the app can never send. `classification` refuses every suffix but `my-permissions`.
     for fga_type in set(fga_deps._FGA_TYPE.values()) - {"transaction", "classification"}:
         for suffix in suffixes:
-            pairs.add((fga_type, fga_deps._action_relation(fga_type, suffix)))
+            try:
+                relation = fga_deps._action_relation(fga_type, suffix)
+            except PermissionDeniedError:
+                continue
+            pairs.add((fga_type, relation))
 
     # 2. Create-on-parent: the parent is a namespace for a NESTED child, and the configured root
     #    object (a `warehouse:`) for a TOP-LEVEL child when fga_lock_root_create is on — so each
@@ -340,9 +346,9 @@ def test_access_disclosure_routes_are_owner_tier() -> None:
     the OWNER bar, never the writer fall-through. They reveal the authz graph; a mere writer must not
     reach them.
 
-    The pair-existence contract above canNOT catch a downgrade here: dropping a suffix from the owner map
-    falls it through to ``can_write_data`` — a real relation, so that test stays green while the gate quietly
-    weakens. This asserts the resolved tier directly, so such a refactor fails loudly."""
+    The pair-existence contract above canNOT catch a downgrade here: moving a suffix from the owner map to
+    the writer map resolves ``can_write_data`` — a real relation, so that test stays green while the gate
+    quietly weakens. This asserts the resolved tier directly, so such a refactor fails loudly."""
     from catalog.api.fga_deps import _action_relation
 
     for suffix in ("access/list", "access/check", "access/graph"):
@@ -387,14 +393,12 @@ def test_grant_routes_are_intercepted_before_the_suffix_fallthrough() -> None:
 
     This test replaced an assertion that they resolve to the owner tier. That assertion was right while
     granting was welded to ownership and is wrong now — but deleting it would have removed the guard it
-    existed to be, because these suffixes are exactly the ones whose fall-through is ``can_write_data``:
-    if the interception is ever removed, a plain data WRITER silently gains the ability to hand out
-    ownership. So the guard is re-pointed, not dropped. It now pins the interception itself, which is
-    the thing that must not regress.
+    existed to be. Neither suffix is declared in a rung map, so without the interception every grant
+    and revoke would be refused for every caller, owners included. So the guard is re-pointed, not
+    dropped. It now pins the interception itself, which is the thing that must not regress.
 
-    The reason the fall-through is tolerable at all is that it is unreachable: ``authorize`` returns
-    inside the ``_GRANT_SUFFIXES`` branch before ``_action_relation`` is ever consulted. Both halves are
-    asserted here — that the suffixes are declared intercepted, AND that every rung the grant API
+    ``authorize`` returns inside the ``_GRANT_SUFFIXES`` branch before ``_action_relation`` is ever
+    consulted. Both halves are asserted here — that the suffixes are declared intercepted, AND that every rung the grant API
     accepts has a ``can_grant_*`` gate to be checked against. A rung without one would be refused by
     ``_authorize_grant``, so this cannot silently open; it would simply make the rung ungrantable."""
     from catalog.api.fga_deps import _GRANT_SUFFIXES, _grant_actions

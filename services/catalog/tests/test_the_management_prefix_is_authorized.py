@@ -14,6 +14,7 @@ alone would pass while the forty-second regressed.
 from __future__ import annotations
 
 import pytest
+from lance_namespace import PermissionDeniedError
 
 from catalog.api.fga_deps import _action_relation, _resource_for, _suffix
 
@@ -53,8 +54,8 @@ def test_an_unmounted_path_resolves_to_nothing(path: str = "/livez") -> None:
     ],
 )
 def test_the_suffix_survives_either_mount(path: str, expected: str) -> None:
-    """The suffix is what `_action_relation` looks up, so a mount it cannot strip silently collapses
-    every owner-tier verb to the writer rung."""
+    """The suffix is what `_action_relation` looks up, so a mount it cannot strip leaves every verb on
+    that mount with no door to resolve to."""
     assert _suffix(path, "table", _ID) == expected
 
 
@@ -64,9 +65,9 @@ def test_erasure_clears_the_OWNER_rung() -> None:
     assert _action_relation("table", "erasure") == "can_drop"
 
 
-def test_an_unstrippable_mount_would_be_caught_here() -> None:
-    """The regression this file exists for, stated as a test rather than a comment: a suffix of `""`
-    is what a route on an unrecognised mount produces, and `_action_relation` answers the WRITER rung
-    for it — so the failure is not a refusal an operator would notice, it is a quieter permission."""
+def test_a_suffix_the_parser_cannot_strip_is_refused() -> None:
+    """The regression this file exists for: a path `_suffix` cannot strip yields `""`, which names no
+    door, so the resolver refuses it for every caller rather than handing out a rung nobody chose."""
     assert _suffix("/some/other/mount/table/x/erasure", "table", "x") == ""
-    assert _action_relation("table", "") != "can_drop"
+    with pytest.raises(PermissionDeniedError, match="declares no rung"):
+        _action_relation("table", "")
