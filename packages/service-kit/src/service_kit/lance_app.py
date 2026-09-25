@@ -8,7 +8,7 @@ Three factories, three planes, and the split is deliberate rather than accidenta
   mount at the root; config is ``MediaSettings``; CORS must expose the Range headers a browser needs
   to seek video.
 * this — the LANCE plane. Routers mount at the root under each service's own paths (``/v1/...``,
-  ``/produce``, ``/stage runners/...``), config is each service's own ``*Settings``, and the middleware order
+  ``/produce``, ``/stage-runners/...``), config is each service's own ``*Settings``, and the middleware order
   is per-service because the catalog's Arrow-IPC data plane carries load-shedding and a body cap that
   the others do not.
 

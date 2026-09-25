@@ -165,3 +165,52 @@ def test_the_media_rewrites_land_on_paths_the_upstreams_ACTUALLY_serve(gw, publi
         f"{len(served)} paths do not include it, so this row 404s in production while the literal "
         f"comparison above passes — the ingest lesson, recurring."
     )
+
+
+# ── The producer rows, checked against the producer's own OpenAPI ────────────────────────────────────
+#
+# Every operation the gateway publishes for the medallion producer, as (method, public template). The
+# rewrite must equal one of the producer's OpenAPI keys EXACTLY and that key must carry the method: the
+# producer mounts three routers under `/stage-runners`, so a near-miss spelling is a 404, not a match.
+_PRODUCER_OPERATIONS = [
+    ("post", "/api/produce"),
+    ("post", "/api/train"),
+    ("get", "/api/promotions/{instance_id}"),
+    ("post", "/api/promotions/{instance_id}/decision"),
+    ("get", "/api/stage-runners"),
+    ("get", "/api/stage-runners/{stage_runner}/stages/{instance_id}"),
+    ("post", "/api/stage-runners/{stage_runner}/stages/{instance_id}/terminate"),
+    ("post", "/api/stage-runners/stages/rerun"),
+]
+
+
+@pytest.mark.parametrize(("method", "public"), _PRODUCER_OPERATIONS)
+def test_the_producer_rewrites_land_on_operations_the_producer_serves(gw, method: str, public: str) -> None:
+    from medallion.producer import app as producer
+
+    served: dict[str, dict[str, object]] = producer.openapi()["paths"]
+    route = gw._pick_route(public, gw._routes())
+    assert route is not None and route[2] == "medallion-producer", f"no producer row matches {public}"
+    upstream_path = route[1] + public[len(route[0]) :]
+
+    assert method in served.get(upstream_path, {}), (
+        f"the gateway forwards {method.upper()} {public} to {upstream_path}, which the producer does not serve; "
+        f"its stage-runner operations are {sorted(p for p in served if 'stage' in p)}"
+    )
+
+
+def test_a_rerun_sent_to_the_gateway_is_answered_by_the_rerun_verb(gw) -> None:
+    """The whole forward: the gateway's own proxy carrying the request into the producer's own app.
+
+    Anonymous on purpose. `rerun_stage` refuses an unsigned caller in its body, after routing, in words
+    no other producer route uses — so this 403 can only come from the verb. A forward that reached no
+    route answers 404, and one that reached a sibling answers in the sibling's words.
+    """
+    from medallion.producer import app as producer
+
+    with TestClient(gw.app) as client:
+        gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=producer))
+        response = client.post("/api/stage-runners/stages/rerun", json={"object_id": "table:acme-silver$features", "project": "acme", "to_version": 7})
+
+    assert response.status_code == 403, response.text
+    assert "re-running a cascade edge needs a signed-in caller" in response.text, response.text

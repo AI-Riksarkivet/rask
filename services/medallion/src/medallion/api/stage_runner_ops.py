@@ -44,7 +44,13 @@ def _app_token_header(settings: MedallionSettings) -> dict[str, str]:
     return {"dapr-api-token": token} if token else {}
 
 
-router = APIRouter(tags=["stage-runners"])
+#: The cascade operator surface's one path segment, shared with `rerun.py`'s router and forwarded to by
+#: the gateway's `/api/stage-runners` row. Declared once so the producer's routers cannot disagree about
+#: it; the gateway is a separate deployable, so its half is pinned against the producer's OpenAPI and a
+#: real forward in `services/gateway/tests/test_lance_routes.py`.
+STAGE_RUNNERS_PREFIX = "/stage-runners"
+
+router = APIRouter(prefix=STAGE_RUNNERS_PREFIX, tags=["stage-runners"])
 
 
 class StageRunnerInventory(BaseModel):
@@ -83,12 +89,12 @@ async def _forward(request: Request, settings: Any, stage_runner: str, path: str
     return response.json()
 
 
-@router.get("/stage-runners")
+@router.get("")
 async def list_stage_runners(settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]) -> StageRunnerInventory:
     return StageRunnerInventory(stage_runners=sorted((settings.stage_runner_urls or {}).keys()))
 
 
-@router.get("/stage-runners/{stage_runner}/stages/{instance_id}")
+@router.get("/{stage_runner}/stages/{instance_id}")
 async def show_stage(
     stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]
 ) -> Any:
@@ -96,7 +102,7 @@ async def show_stage(
     return await _forward(request, settings, stage_runner, f"/stages/{instance_id}", method="GET")
 
 
-@router.post("/stage-runners/{stage_runner}/stages/{instance_id}/terminate", status_code=202)
+@router.post("/{stage_runner}/stages/{instance_id}/terminate", status_code=202)
 async def terminate_stage(
     stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]
 ) -> Any:

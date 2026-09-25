@@ -57,10 +57,12 @@ described the row as a surviving deprecation shim, which would have made a call 
 rather than 404** — naming a backend as broken instead of the path as absent. The producer's INGEST
 doors are exactly `POST /produce`, `POST /ingest-media` and `POST /train`, all root-mounted and
 token-guarded — that rule bounds what may LAND data, and adding a protocol-specific fourth would make
-that protocol privileged. It does not bound the router surface, which is six: those three plus
-`promotions` (the quality gate's third answer), `stage_runner_ops` (`/stage runners/*`, workflow terminate) and
-`stage runners/stages/rerun` (the cascade's edge-addressed repair verb, 2026-09-04). Those three are human
-control rather than ingest, which is why they do not weaken the rule. A workload's stages run as event-triggered stage runners on the unified
+that protocol privileged. It does not bound the router surface, which is seven: those three plus
+`promotions` (the quality gate's third answer), `stage_runner_ops` (`/stage-runners/*`, workflow terminate),
+`rerun` (`POST /stage-runners/stages/rerun`, the cascade's edge-addressed repair verb, 2026-09-04) and
+`cascade_lag_read` (`GET /cascade/stalled`). `stage_runner_ops` and `rerun` share one prefix,
+`stage_runner_ops.STAGE_RUNNERS_PREFIX`, which the gateway's `/api/stage-runners` row forwards to. Those
+four are human control rather than ingest, which is why they do not weaken the rule. A workload's stages run as event-triggered stage runners on the unified
 Ray cluster (P7b) — the cascade is modality-blind, so this is the same shape for every runner.
 
 **Both bronze lanes converge on one topic, so stage runners must discriminate.** The events

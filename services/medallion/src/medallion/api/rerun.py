@@ -53,6 +53,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import authenticate_subject
+from medallion.api.stage_runner_ops import STAGE_RUNNERS_PREFIX
 from medallion.core.config import MedallionSettings, StageRunnerGate, dedicated_token_for, outbound_app_token
 from medallion.services import catalog_register
 from medallion.services.publication_trigger import build_stage_trigger
@@ -64,7 +65,9 @@ from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(tags=["stage-runners"])
+# The operator proxy's prefix, taken from it rather than retyped: the gateway forwards the whole
+# `/api/stage-runners` row to this one segment, and the verb is reachable only while both agree.
+router = APIRouter(prefix=STAGE_RUNNERS_PREFIX, tags=["stage-runners"])
 
 #: What the verb predicts it will do, never what it observed. The path is decided inside
 #: `submit_stage` AFTER this returns (R3), and two further horizons make even the prediction
@@ -189,7 +192,7 @@ async def _vended_location(settings: MedallionSettings, object_id: str) -> str |
 # so what is at risk is not the stage runner's work but this publish — the sidecar goes down with the pod, and
 # a trigger lost mid-flight is a repair an operator believes happened. 503 + Retry-After, exactly as
 # `/produce` and `/train` answer, rather than a 202 for a hop nothing will run.
-@router.post("/stage runners/stages/rerun", status_code=202, dependencies=[Depends(refuse_when_draining)])
+@router.post("/stages/rerun", status_code=202, dependencies=[Depends(refuse_when_draining)])
 async def rerun_stage(
     body: RerunRequest,
     request: Request,
