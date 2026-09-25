@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import pytest
 from repo_tree import repo_files
 
 
@@ -35,6 +36,7 @@ REPO = Path(__file__).resolve().parents[2]
 #: pointed at a deleted file. A register's NAME is not always lowercase-with-underscores, and a gate
 #: keyed on one spelling of a name is the estate's own recurring shape.
 _LOCATOR = re.compile(
+    r"(?<![\w-])"  # the name starts here: `test_a_x_open_y.py` names a test, not a register
     r"((?:open_[a-z0-9_.-]*?|OPEN-WORK))(?:\.(?:md|json))?"  # the register, extension optional
     r"(?:"
     r":(\d+)"  # :3061
@@ -82,6 +84,34 @@ def test_no_locator_points_into_a_register_that_is_gone() -> None:
     assert not dangling, "pointers into a register that no longer exists: " + "; ".join(
         f"{k!r} <- {', '.join(sorted(set(v))[:3])}" for k, v in sorted(dangling.items())
     )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "tests/unit/test_a_lakehouse_open_shares_the_process_session.py:41",
+        "services/x/reopen_log.md:12",
+        "a-open_thing.md:3",
+    ],
+)
+def test_open_inside_a_longer_name_is_not_a_register(text: str) -> None:
+    """A register is a root file whose name STARTS with `open_`; the same letters inside a test or
+    module name are not one, and a gate that says so fails on a citation that resolves."""
+    assert _LOCATOR.findall(text) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "locator"),
+    [
+        ("open_backlog_left_new.md:42", ("open_backlog_left_new", "42", "")),
+        ("see `open_python-audit P0`", ("open_python-audit", "", "P0")),
+        ("(open_backlog.md:7)", ("open_backlog", "7", "")),
+        ("./open_backlog.md:7", ("open_backlog", "7", "")),
+        ("OPEN-WORK §B3", ("OPEN-WORK", "", "B3")),
+    ],
+)
+def test_a_register_locator_is_still_found(text: str, locator: tuple[str, str, str]) -> None:
+    assert _LOCATOR.findall(text) == [locator]
 
 
 def test_the_carried_list_only_shrinks() -> None:

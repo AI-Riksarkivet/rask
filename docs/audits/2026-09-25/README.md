@@ -1,7 +1,8 @@
 # Audits of 2026-09-25 — what was checked, what was found, where it went
 
 Seven audits ran as multi-agent workflows on 2026-09-25. Each report below is the audit's own synthesis,
-kept verbatim so every finding keeps its citation. Their findings were turned into rows of
+kept verbatim so every finding keeps its citation; the one edit is that a pointer into a retired register now names
+the row in `open_backlog_left_new2.md` (or states the rule it pointed at). Their findings were turned into rows of
 `open_backlog_left_new2.md` (which superseded `open_backlog_left.md` and `open_backlog_left_new.md` the
 same day); this folder is the evidence those rows cite.
 
