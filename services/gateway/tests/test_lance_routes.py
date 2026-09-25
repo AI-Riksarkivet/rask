@@ -7,12 +7,16 @@ wrong rewrite silently 404s — and that longest-prefix ordering holds (a
 httpx client for one on a MockTransport: no network, real ASGI path handling.
 """
 
+import functools
 import importlib
+import importlib.util
+import os
 from types import ModuleType
 from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from fastapi.routing import APIRoute, iter_route_contexts
 from fastapi.testclient import TestClient
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -174,35 +178,72 @@ def test_the_media_rewrites_land_on_paths_the_upstreams_ACTUALLY_serve(gw, publi
     )
 
 
-# ── The producer's doors, derived from the producer's own OpenAPI ────────────────────────────────────
+# ── The producer's doors, derived from the producer as the chart deploys it ─────────────────────────
 #
 # Every operation the producer serves is either reachable through a gateway row or named below with the
 # reason it has none. A new producer route fails here until it gets one or the other, instead of
 # answering `404 no upstream` at the edge with nothing saying so.
 _PRODUCER_APP_ID = "medallion-producer"
 
+#: The chart-default settings that MOUNT a producer route. A producer built on code defaults serves
+#: fewer routes than the deployed one, and a route only the deployed one serves would pass unseen.
+_DEPLOYED_ROUTE_SETTINGS = {
+    "MEDALLION_CONTROL_PUBSUB": "pubsub-control-medallion-producer",  # catalog.controlEmit
+    "MEDALLION_DLQ_TOPIC": "dlq.medallion-producer",  # dapr.resiliency.enabled
+    "MEDALLION_CASCADE_LAG_BINDING_NAME": "medallion-cascade-lag-cron",  # medallion.cascadeLag.bindingName
+}
+
 #: Producer operations with no gateway row, and why each has none.
 _NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
     ("get", "/livez"): "kubelet probe at the pod root",
     ("get", "/readyz"): "kubelet probe at the pod root",
-    ("get", "/dapr/subscribe"): "read by the sidecar to discover the three subscriptions below",
+    ("get", "/dapr/subscribe"): "read by the sidecar to discover the pub/sub deliveries below",
     ("post", "/bronze-arrival"): "pub/sub delivery of the lineage topic, behind require_dapr_token",
+    ("post", "/publication-arrival"): "pub/sub delivery of the catalog's control topic, behind require_dapr_token",
     ("post", "/train-trigger"): "pub/sub delivery of the training topic, behind require_dapr_token",
     ("post", "/promotion-held"): "pub/sub delivery of a held promotion, behind require_dapr_token",
+    ("post", "/dlq-event"): "pub/sub delivery of the producer's dead letters, behind require_dapr_token",
+    ("post", "/medallion-cascade-lag-cron"): "the lag cron's input binding, delivered by the sidecar at the pod root",
+    ("options", "/medallion-cascade-lag-cron"): "the sidecar's probe of that binding before it delivers",
     ("post", "/ingest-media"): "synchronous and capped; docs/DECISIONS.md keeps it a service seam, and /api/ingest is the edge's ingest door",
 }
 
 
-def _producer_operations() -> set[tuple[str, str]]:
-    """(method, path) for every operation the producer's OpenAPI declares."""
-    from medallion.core.config import get_settings
-    from medallion.producer import app as producer
+@functools.cache
+def _producer_operations() -> frozenset[tuple[str, str]]:
+    """(method, path) for every route the deployed producer serves, schema-hidden ones included.
 
-    operations = {(method, path) for path, item in producer.openapi()["paths"].items() for method in item}
-    # The lag cron is an input binding the sidecar delivers to `POST /<binding name>`, mounted only when a
-    # deployment names one, so it is excluded by the setting that mounts it.
-    binding = get_settings().cascade_lag_binding_name
-    return operations - {("post", f"/{binding}")} if binding else operations
+    `medallion.producer` mounts its routes at import, from settings, so the deployed shape is a fresh
+    execution of the module under the chart's route-mounting settings. It runs under a private module
+    name, leaving `medallion.producer` (the default build other tests import) untouched.
+    """
+    import medallion.producer as default_build
+    from medallion.core.config import get_settings
+
+    saved = {name: os.environ.get(name) for name in _DEPLOYED_ROUTE_SETTINGS}
+    os.environ.update(_DEPLOYED_ROUTE_SETTINGS)
+    get_settings.cache_clear()
+    try:
+        spec = importlib.util.spec_from_file_location("_producer_as_deployed", default_build.__file__)
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"cannot load {default_build.__file__}")
+        deployed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(deployed)
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        get_settings.cache_clear()
+    # `iter_route_contexts` is FastAPI's own walk through included routers, with each route's effective
+    # (prefixed) path; `app.routes` alone holds the routers, not their routes.
+    return frozenset(
+        (method.lower(), context.path)
+        for context in iter_route_contexts(deployed.app.routes)
+        if isinstance(context.original_route, APIRoute) and context.path
+        for method in context.methods or ()
+    )
 
 
 def _public_operations() -> set[tuple[str, str]]:
