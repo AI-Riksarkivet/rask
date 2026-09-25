@@ -21,9 +21,10 @@ cascade trashing a whole SUBTREE, interacting with `require_no_live_trash` and t
 destructive, and an owner ruling rather than an implementation. Refusing 400 is the honest answer; the
 409 it used to give means "it already exists", which is not why the request was declined.
 
-An UNRECOGNISED mode still falls through to `Create`. `modes.py` records that tolerance as a deliberate
-decision for typos, and it stays: the refusal is for a named mode this door cannot honour, never for a
-value it does not recognise.
+A mode that is none of the three is refused too, as InvalidInput naming it, and before the backend is
+reached — the closed-vocabulary rule `modes.py` states for every mode the catalog reads (owner ruling
+2026-09-25). Folding it to `Create` would create a namespace on a free id for a request that asked for
+something else.
 """
 
 from __future__ import annotations
@@ -136,12 +137,17 @@ async def test_the_default_mode_still_conflicts_and_seeds_nothing(monkeypatch: p
     assert seeded == []
 
 
+@pytest.mark.parametrize("exists", [True, False], ids=["taken", "free"])
 @pytest.mark.anyio
-async def test_an_unrecognised_mode_still_falls_through_to_create(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`modes.py` records this tolerance as deliberate — it is for typos, and it stays."""
+async def test_an_unrecognised_mode_is_refused_before_the_backend(exists: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Refused whether or not the id is taken: the fault is the request's shape, not a collision."""
     seeded: list[tuple[str, ...]] = []
-    with pytest.raises(NamespaceAlreadyExistsError):
-        await _create(mode="nonsense", exists=True, monkeypatch=monkeypatch, seeded=seeded, created=[])
+    created: list[str] = []
+    with pytest.raises(InvalidInputError) as exc:
+        await _create(mode="nonsense", exists=exists, monkeypatch=monkeypatch, seeded=seeded, created=created)
+
+    assert "'nonsense'" in str(exc.value), f"the refusal must name the value it refused: {exc.value}"
+    assert created == [], "a refused mode must not reach the backend at all"
     assert seeded == []
 
 

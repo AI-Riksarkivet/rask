@@ -66,7 +66,7 @@ from catalog.core.lineage_emit import (
     InputPin,
     emit_write_event,
 )
-from catalog.core.modes import CreateMode
+from catalog.core.modes import RegisterMode
 from catalog.core.namespace import mixes_file_versions_at, open_dataset, warn_if_mixed_file_versions
 from catalog.core.vending import dataset_facts, unsanctioned_bases
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
@@ -780,13 +780,13 @@ async def register_table(
     # silently treating "replace" as "conflict" leaves the caller believing their new location was
     # rejected as a duplicate rather than never attempted.
     #
-    # An UNRECOGNISED value still folds to `Create` — `modes.py` records that tolerance as deliberate
-    # for typos, and the refusal is for a named mode this door cannot honour.
+    # A value outside those two is refused by the parse itself, as InvalidInput naming it — `ExistOk`
+    # included, which the spec gives `create` and not this door (`RegisterMode`).
     #
     # BEFORE `idem.begin`, deliberately: this is a SHAPE refusal, and minting an idempotency record
     # for a request the door was never going to attempt would make the replay of a malformed call
     # converge on nothing.
-    if CreateMode.parse(body.mode) is CreateMode.OVERWRITE:
+    if RegisterMode.parse(body.mode) is RegisterMode.OVERWRITE:
         raise InvalidInputError(
             "mode 'Overwrite' is not supported on this door: replacing a registration would detach bytes this "
             "catalog does not own from the table that currently points at them. Deregister the existing table "

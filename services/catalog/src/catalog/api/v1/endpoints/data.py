@@ -46,6 +46,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
+from catalog.core.modes import InsertMode
 from catalog.core.serialization import dump
 from catalog.schemas import (
     CommitFragmentsRequest,
@@ -320,11 +321,17 @@ async def insert_into_table(
     """Append Arrow-IPC rows — ``insert_into_table``; emits an INSERT lineage event.
     ``branch`` targets a non-main branch (spec 0.9 query param for Arrow-IPC-body ops)."""
     segments = parse_identifier(id, settings.delimiter)
+    # PARSED HERE, ONCE, for both arms. Without a branch the native backend reads `mode`; with one,
+    # pylance's `LanceDataset.insert` does, and the two refuse a value outside Append/Overwrite
+    # differently — InvalidInput (400) on main, a bare ValueError or OSError (500) on a branch, measured
+    # on pylance 12.0.0. Ahead of the coerce because that opens the dataset, and a shape refusal costs
+    # no round trip.
+    insert_mode = InsertMode.parse(mode)
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the native append 500s
     # on the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
     data = await run_in_threadpool(dataplane.coerce_insert_arrow, ns, so, segments, data, branch)
-    req = InsertIntoTableRequest(id=segments, mode=mode, branch=branch)
+    req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data)
     # Insert's response carries only a transaction_id, not the Lance version it produced — the shared
     # trailer reads version + schema off ONE reopen (best-effort) so the WROTE edge records the real version.

@@ -91,7 +91,7 @@ from lance_namespace import (
 from pydantic import BaseModel
 
 from catalog.core.config import shared_lance_session
-from catalog.core.modes import CreateMode
+from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import open_dataset
 from catalog.services import changes, native, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
@@ -1367,8 +1367,8 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     the feature worse than not having it, and nothing in the response says which dataset was written.
 
     `LanceDataset.insert` is the same operation the upstream path performs, taken against a handle
-    opened on the branch — so this is the operation honoured, not a re-derivation of it. `mode` carries
-    the spec's own value through unchanged.
+    opened on the branch — so this is the operation honoured, not a re-derivation of it. `mode` is read
+    through `InsertMode`, whose two values are pylance's own spellings of the spec's two modes.
     """
     if req.branch is None:
         response = cast(InsertIntoTableResponse, native.call(ns, "insert_into_table", req, data))
@@ -1396,11 +1396,12 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
     reader = pa.ipc.open_stream(pa.BufferReader(data))
     before = dataset.count_rows()
-    # `mode` PASSES THROUGH UNTRANSFORMED, matching the main path exactly. Hand-lowering it here would
-    # make the branch door accept spellings the branchless one rejects, which is a second vocabulary in
-    # everything but name — and `test_constrained_values_are_enums.py` refuses that idiom on sight.
+    # THROUGH `InsertMode`, the one vocabulary both arms share. pylance's own parser is not the spec's:
+    # it takes `create`, which the spec does not give this door, and refuses an unknown value with a bare
+    # ValueError that answers 500 where the branchless arm's native backend answers InvalidInput. The
+    # parse is idempotent, so a mode the door already parsed passes through unchanged.
     with _write_schema_errors():
-        dataset.insert(reader, mode=req.mode or "append")
+        dataset.insert(reader, mode=InsertMode.parse(req.mode).value)
     return InsertIntoTableResponse(version=dataset.version, num_inserted_rows=max(dataset.count_rows() - before, 0))
 
 

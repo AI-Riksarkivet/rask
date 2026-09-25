@@ -1,28 +1,66 @@
-"""The constrained wire vocabularies this catalog accepts, parsed ONCE (catalog-api-16).
+"""The constrained wire vocabularies this catalog accepts, each parsed ONCE into a CLOSED enum (catalog-api-16).
 
-``create``'s ``mode`` and ``drop_namespace``'s ``behavior`` are closed sets, and both arrived as a bare
-``str | None`` that every decision re-derived for itself with ``(value or "").lower()`` against a
-hand-written tuple — four copies of the mode vocabulary across the endpoint and the data plane. On this
-door the copies are not cosmetic: they decide whether a create DROPS an existing table, whether it
-seeds the caller as owner, and whether a failed grant may compensate by deleting. One vocabulary, one
-parser, and a reader can see the whole set in one place.
+Every ``mode`` and ``behavior`` the spec defines on a door the catalog serves is a closed set:
+``lance_docs/ns_catalog/spec.yaml`` gives each one as "Case insensitive, supports both PascalCase and
+snake_case. Valid values are: …". Each decides something a caller cannot take back — whether a create
+DROPS an existing table, whether it seeds the caller as owner, whether a drop takes a subtree with it —
+so each gets one enum, one parser, and a reader can see the whole vocabulary in one place.
 
-Both parsers are TOLERANT in exactly the way the copies were: case-insensitive, absent means the
-default, and an unrecognised value falls through to the default rather than raising. That tolerance is
-preserved deliberately rather than endorsed — every copy behaved this way, and turning a typo'd
-``mode`` into a 400 is a contract change for existing callers, not a refactor.
+CLOSED, NOT TOLERANT (owner ruling 2026-09-25). A value outside the vocabulary raises
+:class:`~lance_namespace.InvalidInputError` — spec code 13, answered 400 by the problem handlers —
+naming the value and the valid set. Absent (``None``, or the blank an empty query parameter arrives as)
+still means the spec's ``(default)``, because that is the spec's own answer for an omitted field.
+Folding an UNKNOWN value to the default answers a request the caller did not send, and on these doors
+that is a write reported as success: a typo'd create ``mode`` creates a table, and a drop whose
+``mode`` is ``PURGE`` (``purge`` is a query parameter) drops recoverably and writes a fresh trash
+record. Measured 2026-09-18: four such records on the live estate, each read as a successful purge.
+
+It is also the upstream answer. Measured on pylance 12.0.0's ``DirectoryNamespace``:
+``create_table(mode="bogus")`` raises ``InvalidInputError: Unsupported create_table mode 'bogus'.
+Supported modes are: 'Create', 'ExistOk', 'Overwrite'``, and ``insert_into_table`` refuses a mode
+outside ``append``/``overwrite`` with the same class. The same backend ignores ``mode`` and ``behavior``
+on ``create_namespace`` and ``drop_namespace``, so on those doors this module is the only parser.
+
+A member's value is its snake_case spelling; its PascalCase spelling is the same words capitalised and
+joined. Both are matched case-insensitively and nothing else is, so ``EXIST_OK`` and ``existok`` parse
+and ``exis_tok`` does not.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
 
+from lance_namespace import InvalidInputError
+
+
+def _pascal(member: StrEnum) -> str:
+    """The spec's PascalCase spelling of ``member`` (``exist_ok`` -> ``ExistOk``)."""
+    return "".join(word.capitalize() for word in member.value.split("_"))
+
+
+def _parse_closed[E: StrEnum](vocabulary: type[E], raw: str | None, *, default: E, field: str) -> E:
+    """Parse ``raw`` against ``vocabulary``: absent or blank is ``default``, a spelling of a member is that
+    member, and anything else is refused.
+
+    Raises:
+        InvalidInputError: ``raw`` is not a spelling of any member. The message names ``field``, the
+            value as sent, and every valid value in the spec's PascalCase.
+    """
+    if raw is None or raw == "":
+        return default
+    folded = raw.lower()
+    for member in vocabulary:
+        if folded in (member.value, member.value.replace("_", "")):
+            return member
+    valid = ", ".join(f"'{_pascal(member)}'" for member in vocabulary)
+    raise InvalidInputError(f"unrecognised {field} {raw!r}: valid values are {valid} (case insensitive, PascalCase or snake_case)")
+
 
 class CreateMode(StrEnum):
-    """How ``POST /v1/table/{id}/create`` treats a table that already exists.
+    """How ``POST /v1/table/{id}/create`` and ``POST /v1/namespace/{id}/create`` treat an id already in use.
 
-    ``CREATE`` conflicts, ``OVERWRITE`` drops and re-creates (spec: "the existing table is DROPPED and
-    a new table created"), ``EXIST_OK`` keeps the existing table untouched and reports its version.
+    ``CREATE`` conflicts, ``OVERWRITE`` drops and re-creates (spec: "the existing table is dropped and a
+    new table with this name is created"), ``EXIST_OK`` keeps the existing object untouched.
     """
 
     CREATE = "create"
@@ -30,25 +68,58 @@ class CreateMode(StrEnum):
     EXIST_OK = "exist_ok"
 
     @classmethod
-    def parse(cls, raw: str | CreateMode | None) -> CreateMode:
-        """Normalise a wire ``mode``. Absent, blank or unrecognised → :attr:`CREATE`.
+    def parse(cls, raw: str | None) -> CreateMode:
+        """Normalise a wire ``mode``. Absent or blank → :attr:`CREATE`, the spec's default.
 
-        ``ExistOk`` (the spec's camel-case spelling) and ``exist_ok`` are the SAME mode; both were
-        accepted by every hand-written copy and both stay accepted here. Idempotent, so a caller that
-        already holds a :class:`CreateMode` may pass it straight back in.
+        Idempotent, so a caller that already holds a :class:`CreateMode` may pass it straight back in.
+
+        Raises:
+            InvalidInputError: ``raw`` is none of Create, ExistOk, Overwrite.
         """
-        return _CREATE_MODES.get(str(raw or "").lower(), cls.CREATE)
+        return _parse_closed(cls, raw, default=cls.CREATE, field="create mode")
 
 
-#: Every spelling the four hand-written copies accepted, in one table. ``existok`` is the spec's
-#: camel-case ``ExistOk`` lowercased; ``exist_ok`` is the snake-case form clients also send.
-_CREATE_MODES: dict[str, CreateMode] = {
-    "": CreateMode.CREATE,
-    "create": CreateMode.CREATE,
-    "overwrite": CreateMode.OVERWRITE,
-    "existok": CreateMode.EXIST_OK,
-    "exist_ok": CreateMode.EXIST_OK,
-}
+class RegisterMode(StrEnum):
+    """How ``POST /v1/table/{id}/register`` treats an id that is already registered.
+
+    The spec gives this door TWO modes — "Create (default): the operation fails with 409. Overwrite: the
+    existing table registration is replaced with the new registration." — and no ``ExistOk``. Parsing it
+    with :class:`CreateMode` would admit a third value this door has no meaning for, so it is its own set.
+    """
+
+    CREATE = "create"
+    OVERWRITE = "overwrite"
+
+    @classmethod
+    def parse(cls, raw: str | None) -> RegisterMode:
+        """Normalise a wire ``mode``. Absent or blank → :attr:`CREATE`, the spec's default.
+
+        Raises:
+            InvalidInputError: ``raw`` is neither Create nor Overwrite — ``ExistOk`` included.
+        """
+        return _parse_closed(cls, raw, default=cls.CREATE, field="register mode")
+
+
+class InsertMode(StrEnum):
+    """What ``POST /v1/table/{id}/insert`` does with the rows already in the table.
+
+    ``APPEND`` (the spec's default) keeps them; ``OVERWRITE`` removes them and then inserts. The values
+    are pylance's own write-mode spellings for the same two operations, so a parsed member is passed to
+    either arm of the door as it is.
+    """
+
+    APPEND = "append"
+    OVERWRITE = "overwrite"
+
+    @classmethod
+    def parse(cls, raw: str | None) -> InsertMode:
+        """Normalise a wire ``mode``. Absent or blank → :attr:`APPEND`, the spec's default.
+
+        Raises:
+            InvalidInputError: ``raw`` is neither Append nor Overwrite — ``create`` included, which is in
+                pylance's write-mode vocabulary but not in the spec's for this door.
+        """
+        return _parse_closed(cls, raw, default=cls.APPEND, field="insert mode")
 
 
 class DropMode(StrEnum):
@@ -63,38 +134,38 @@ class DropMode(StrEnum):
     boolean: it is how a client makes a drop safe to retry, so a namespace a previous attempt already
     removed counts as success instead of failing the retry.
 
-    A FOURTH VOCABULARY, and not a :class:`CreateMode`. Parsing ``Fail``/``Skip`` with that one folds
-    both to ``CREATE``, so a ``Skip`` would read as the default and change nothing.
-
-    Tolerant in the same way as its siblings — case-insensitive, absent or unrecognised falls to the
-    default. The default is ``FAIL`` because that is the spec's, and because it is the direction that
-    errors rather than silently reporting a drop that never happened.
+    Not a :class:`CreateMode`: Fail/Skip is a different set, and neither of its words is a spelling of a
+    create mode.
     """
 
     FAIL = "fail"
     SKIP = "skip"
 
     @classmethod
-    def parse(cls, raw: str | DropMode | None) -> DropMode:
-        """Normalise a wire ``mode``. Absent, blank or unrecognised → :attr:`FAIL`."""
-        return cls.SKIP if str(raw or "").lower() == cls.SKIP.value else cls.FAIL
+    def parse(cls, raw: str | None) -> DropMode:
+        """Normalise a wire ``mode``. Absent or blank → :attr:`FAIL`, the spec's default.
+
+        Raises:
+            InvalidInputError: ``raw`` is neither Fail nor Skip.
+        """
+        return _parse_closed(cls, raw, default=cls.FAIL, field="drop mode")
 
 
 class DropBehavior(StrEnum):
     """What ``drop_namespace`` does about the namespace's contents.
 
-    ``RESTRICT`` refuses a non-empty namespace; ``CASCADE`` takes the subtree with it (recoverably,
-    when a trash grace period is configured).
+    ``RESTRICT`` (the spec's default) refuses a non-empty namespace; ``CASCADE`` takes the subtree with
+    it (recoverably, when a trash grace period is configured).
     """
 
     RESTRICT = "restrict"
     CASCADE = "cascade"
 
     @classmethod
-    def parse(cls, raw: str | DropBehavior | None) -> DropBehavior:
-        """Normalise a wire ``behavior``. Absent, blank or unrecognised → :attr:`RESTRICT`.
+    def parse(cls, raw: str | None) -> DropBehavior:
+        """Normalise a wire ``behavior``. Absent or blank → :attr:`RESTRICT`, the spec's default.
 
-        Defaulting the unknown case to RESTRICT is the safe direction and matches what the single
-        ``== "cascade"`` comparison already did: anything that was not cascade behaved as restrict.
+        Raises:
+            InvalidInputError: ``raw`` is neither Restrict nor Cascade.
         """
-        return cls.CASCADE if str(raw or "").lower() == cls.CASCADE.value else cls.RESTRICT
+        return _parse_closed(cls, raw, default=cls.RESTRICT, field="drop behavior")

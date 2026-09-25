@@ -145,9 +145,8 @@ async def create_namespace(
     # implementation. Refusing names the mode; the 409 it used to answer means "it already exists",
     # which is not why the request is declined.
     #
-    # An UNRECOGNISED value is NOT refused — `CreateMode.parse` folds it to `Create`, a tolerance
-    # `modes.py` records as deliberate for typos. The refusal is for a named mode, never for a
-    # spelling this door does not know.
+    # A value that is none of the three is refused by the parse itself, as InvalidInput naming it — the
+    # closed-vocabulary rule `modes.py` states for every mode this catalog reads.
     create_mode = CreateMode.parse(body.mode if body else None)
     if create_mode is CreateMode.OVERWRITE:
         raise InvalidInputError(
@@ -567,9 +566,6 @@ async def drop_namespace(
     if not segments:
         # Refused before anything is enumerated: a cascade of the root is every default-root table.
         raise InvalidInputError("the root namespace cannot be dropped")
-    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
-    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
-    fga_deps.require_not_protected(guard or {}, kind="namespace", obj_id=canonical, force=force)
     req = body or DropNamespaceRequest()
     # TWO ORTHOGONAL FIELDS, and this door read only one. `behavior` (below) decides what happens to
     # the CONTENTS; `mode` decides what happens when the namespace IS NOT THERE — "Fail (default):
@@ -579,8 +575,11 @@ async def drop_namespace(
     #
     # `Skip` is the IDEMPOTENCY lever rather than a status-code nicety: it is how a client makes a
     # drop safe to retry, so a namespace a previous attempt already removed counts as success.
+    #
+    # BOTH ARE PARSED BEFORE THE PROTECTION READ, because both are closed sets and a value outside
+    # either is refused as InvalidInput by the parse. That refusal is a shape answer: it costs no round
+    # trip, and an outage of the control root must not answer 503 for a request malformed on its face.
     drop_mode = DropMode.parse(req.mode)
-    req.id = reconcile_body_id(segments, req.id)
     # A Cascade drop (behavior=Cascade; case-insensitive per the lance spec) removes all child tables +
     # nested namespaces from storage. Their FGA grants must be revoked too, or a later object reusing a
     # child id would inherit the stale owner/reader/writer tuples (privilege bleed). Enumerate the
@@ -588,6 +587,10 @@ async def drop_namespace(
     # loop is a no-op and the listing is wasted work). Restrict (the dir-backend default) errors on a
     # non-empty namespace, so there are never extra tuples to revoke on that path.
     cascade = DropBehavior.parse(req.behavior) is DropBehavior.CASCADE
+    canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
+    guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
+    fga_deps.require_not_protected(guard or {}, kind="namespace", obj_id=canonical, force=force)
+    req.id = reconcile_body_id(segments, req.id)
     descendants: list[tuple[str, list[str]]] = []
     # Enumerated whenever a CASCADE is asked for — not only when FGA is on, as it used to be. A cascade
     # destroys children INSIDE the single native call, so they never re-enter this door: without this

@@ -136,6 +136,7 @@ async def create_governed_table(
     # THE MODE, PARSED ONCE (catalog-api-16). Four separate decisions below turn on it — the
     # pre-existence guards, the ownership seed, the schema read-back and the compensation rule — and
     # each used to re-derive it from the raw string with its own `.lower()` and its own spelling list.
+    # A value outside Create/ExistOk/Overwrite is refused here as InvalidInput, before any round trip.
     create_mode = CreateMode.parse(mode)
 
     # THE ROUND TRIPS COME AFTER THE FREE CHECKS (catalog-api-19). These two both dial out — a

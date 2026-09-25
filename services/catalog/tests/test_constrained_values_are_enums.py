@@ -17,10 +17,13 @@ from __future__ import annotations
 
 import pathlib
 import re
+from collections.abc import Callable
+from enum import StrEnum
 
 import pytest
+from lance_namespace import ErrorCode, InvalidInputError
 
-from catalog.core.modes import CreateMode, DropBehavior
+from catalog.core.modes import CreateMode, DropBehavior, DropMode, InsertMode, RegisterMode
 
 
 _SRC = pathlib.Path(__file__).resolve().parents[1] / "src" / "catalog"
@@ -56,8 +59,6 @@ def test_no_module_re_lowers_a_constrained_value_to_compare_it() -> None:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        (None, CreateMode.CREATE),
-        ("", CreateMode.CREATE),
         ("create", CreateMode.CREATE),
         ("Create", CreateMode.CREATE),
         ("overwrite", CreateMode.OVERWRITE),
@@ -66,30 +67,80 @@ def test_no_module_re_lowers_a_constrained_value_to_compare_it() -> None:
         ("existok", CreateMode.EXIST_OK),
         ("ExistOk", CreateMode.EXIST_OK),
         ("exist_ok", CreateMode.EXIST_OK),
+        ("EXIST_OK", CreateMode.EXIST_OK),
     ],
 )
-def test_every_spelling_the_door_accepted_still_parses(raw: str | None, expected: CreateMode) -> None:
-    """The four hand-written copies between them accepted all of these. A single parser that dropped
-    one would turn an ExistOk into a create — the ownership-seizure case the guards exist for."""
+def test_every_spelling_the_spec_admits_parses(raw: str, expected: CreateMode) -> None:
+    """The spec's words: case insensitive, PascalCase or snake_case. The vocabulary is closed, so a
+    spelling the parser lost would refuse a correct ExistOk as InvalidInput rather than pass unnoticed."""
     assert CreateMode.parse(raw) is expected
 
 
-def test_an_unrecognised_mode_still_means_create_exactly_as_before() -> None:
-    """PRESERVED, not endorsed: the four copies all fell through to create-semantics for an unknown
-    value, so this parser does too. Turning a typo'd mode into a 400 is a behaviour change for
-    existing callers and is not this finding's to make."""
-    assert CreateMode.parse("Overwrit") is CreateMode.CREATE
+#: Each closed vocabulary with its parser. A map rather than ``vocabulary.parse`` because ``StrEnum``
+#: itself declares no ``parse``, and the typed callable is what lets one test body serve every set.
+_PARSERS: dict[type[StrEnum], Callable[[str | None], StrEnum]] = {
+    CreateMode: CreateMode.parse,
+    RegisterMode: RegisterMode.parse,
+    InsertMode: InsertMode.parse,
+    DropMode: DropMode.parse,
+    DropBehavior: DropBehavior.parse,
+}
+
+
+def _pascal(member: StrEnum) -> str:
+    return "".join(word.capitalize() for word in member.value.split("_"))
+
+
+@pytest.mark.parametrize("vocabulary", list(_PARSERS), ids=lambda v: v.__name__)
+def test_each_member_parses_from_both_spellings_in_any_case(vocabulary: type[StrEnum]) -> None:
+    """The rule is stated once in `modes.py`, so it must hold for every set and not only the create one."""
+    parse = _PARSERS[vocabulary]
+    for member in vocabulary:
+        for spelling in (member.value, member.value.upper(), _pascal(member), _pascal(member).lower()):
+            assert parse(spelling) is member, f"{vocabulary.__name__}.parse({spelling!r})"
 
 
 @pytest.mark.parametrize(
-    ("raw", "expected"),
+    ("vocabulary", "default"),
     [
-        (None, DropBehavior.RESTRICT),
-        ("cascade", DropBehavior.CASCADE),
-        ("CASCADE", DropBehavior.CASCADE),
-        ("restrict", DropBehavior.RESTRICT),
-        ("nonsense", DropBehavior.RESTRICT),
+        (CreateMode, CreateMode.CREATE),
+        (RegisterMode, RegisterMode.CREATE),
+        (InsertMode, InsertMode.APPEND),
+        (DropMode, DropMode.FAIL),
+        (DropBehavior, DropBehavior.RESTRICT),
+    ],
+    ids=lambda v: getattr(v, "__name__", str(v)),
+)
+@pytest.mark.parametrize("absent", [None, ""], ids=["none", "blank"])
+def test_an_absent_value_is_the_spec_default(vocabulary: type[StrEnum], default: StrEnum, absent: str | None) -> None:
+    """Absent is the spec's own "(default)"; blank is how an empty query parameter arrives."""
+    assert _PARSERS[vocabulary](absent) is default
+
+
+@pytest.mark.parametrize(
+    ("vocabulary", "raw"),
+    [
+        pytest.param(CreateMode, "Overwrit", id="create-typo"),
+        pytest.param(CreateMode, "exists_ok", id="create-near-miss"),
+        pytest.param(CreateMode, "exis_tok", id="create-misplaced-underscore"),
+        pytest.param(CreateMode, " create", id="create-padded"),
+        pytest.param(CreateMode, "Skip", id="create-word-from-another-set"),
+        pytest.param(RegisterMode, "ExistOk", id="register-create-only-word"),
+        pytest.param(InsertMode, "create", id="insert-pylance-only-word"),
+        pytest.param(InsertMode, "Appnd", id="insert-typo"),
+        pytest.param(DropMode, "PURGE", id="drop-query-param-in-the-body"),
+        pytest.param(DropMode, "Overwrite", id="drop-word-from-another-set"),
+        pytest.param(DropBehavior, "Cascde", id="behavior-typo"),
     ],
 )
-def test_drop_behaviour_parses_the_same_way_it_compared(raw: str | None, expected: DropBehavior) -> None:
-    assert DropBehavior.parse(raw) is expected
+def test_a_value_outside_the_vocabulary_is_invalid_input_naming_it(vocabulary: type[StrEnum], raw: str) -> None:
+    """Owner ruling 2026-09-25: refused as InvalidInput (spec code 13), never folded to the default.
+    The message names the value as sent and every value the set does accept, so the caller can fix it."""
+    with pytest.raises(InvalidInputError) as refused:
+        _PARSERS[vocabulary](raw)
+
+    assert refused.value.code == ErrorCode.INVALID_INPUT
+    message = str(refused.value)
+    assert repr(raw) in message, f"the refusal must name the value it refused: {message}"
+    missing = [_pascal(member) for member in vocabulary if _pascal(member) not in message]
+    assert not missing, f"the refusal must list every valid value, missing {missing}: {message}"

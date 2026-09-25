@@ -316,12 +316,12 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
         # not-active (403). Seven days of a dead record pointing at a destroyed bucket is exactly the
         # residue `conftest`'s session cleanup exists to stop this suite manufacturing.
         requests.post(f"{catalog}/management/v1/namespace/{quote(top, safe='')}/undrop", headers=_auth(), timeout=120)
-        # PURGE, not a second recoverable drop — and `purge` is a QUERY parameter, which is the whole
-        # trap. The body's `mode` is the orthogonal Fail/Skip field for a namespace that is not there,
-        # and `DropMode.parse` folds anything it does not recognise to `FAIL` (`core/modes.py:80`), so
-        # spelling the opt-out as `{"mode": "PURGE"}` is accepted, drops recoverably, and writes a
-        # FRESH trash record. Measured 2026-09-18: four stale records accumulated on the live estate
-        # that way, each reading as a successful purge.
+        # PURGE, not a second recoverable drop — and `purge` is a QUERY parameter. The body's `mode` is
+        # the orthogonal Fail/Skip field for a namespace that is not there, and `DropMode.parse` refuses
+        # `{"mode": "PURGE"}` as InvalidInput, so this cleanup must spell the opt-out where the door
+        # reads it. What the refusal prevents, measured 2026-09-18: a body-spelled purge accepted as the
+        # default drops recoverably, and four such stale trash records sat on the live estate, each
+        # reading as a successful purge.
         purged = requests.post(
             f"{catalog}/v1/namespace/{quote(top, safe='')}/drop?purge=true",
             json={"id": [top], "behavior": "CASCADE"},
