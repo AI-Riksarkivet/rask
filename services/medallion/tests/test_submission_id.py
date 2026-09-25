@@ -5,15 +5,30 @@ landed on ONE id, and ``submit_or_reattach`` read the duplicate as a successful 
 second transform's work silently never ran.
 """
 
+import itertools
+
 import pytest
 
 from medallion.services.ray_jobs_api import submission_id
+from medallion.services.trigger_guards import safe_token
 
 
 _WORK = "s3://wh/bronze$a\x00s3://wh/silver$a"
 
 
-@pytest.mark.parametrize(("first", "second"), [("a.b", "a-b"), ("run.1", "run-1"), (".", "-"), ("my.retry.key", "my-retry-key")])
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("a.b", "a-b"),
+        ("run.1", "run-1"),
+        (".", "-"),
+        ("my.retry.key", "my-retry-key"),
+        # Both dotted and one fold: only a digest of the RAW token tells these apart.
+        ("my.retry.key", "my.retry-key"),
+        ("a.b-c", "a-b.c"),
+        ("run.1.x", "run-1.x"),
+    ],
+)
 def test_two_tokens_that_fold_alike_get_two_ids(first: str, second: str) -> None:
     """`.` is not an id character, and both spellings are keys the stage lane accepts — two cascades.
 
@@ -21,6 +36,18 @@ def test_two_tokens_that_fold_alike_get_two_ids(first: str, second: str) -> None
     first, and the job the second instance would have submitted never runs.
     """
     assert submission_id("silver", first, work=_WORK) != submission_id("silver", second, work=_WORK)
+
+
+def test_every_token_the_lane_accepts_over_the_folding_alphabet_gets_its_own_id() -> None:
+    """Injectivity, exhaustively where it is cheap: every `safe_token` over `a . - _`, up to 6 long.
+
+    `.` is the one character the lane accepts that the id folds, so two tokens that fold alike differ
+    only in where they put `.` and `-`: an id that keeps the fold, or digests anything but the raw
+    token, collides in this set.
+    """
+    accepted = [t for n in range(1, 7) for t in map("".join, itertools.product("a.-_", repeat=n)) if safe_token(t)]
+
+    assert len({submission_id("silver", t, work=_WORK) for t in accepted}) == len(accepted)
 
 
 def test_the_absent_marker_is_not_a_token_a_caller_can_send() -> None:

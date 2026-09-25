@@ -60,8 +60,10 @@ def test_the_dispatch_seam_derives_a_DETERMINISTIC_instance_id_from_the_work() -
     assert stage_submission_id("silver", "tok-1", "s3://a", "s3://z") != a
 
 
-def test_two_tokens_the_lane_accepts_are_two_instances_not_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`a.b` and `a-b` are two keys a head accepts for the same edge, so they are two cascades.
+@pytest.mark.parametrize("pair", [("a.b", "a-b"), ("a.b-c", "a-b.c")], ids=["dotted-and-verbatim", "both-dotted"])
+def test_two_tokens_the_lane_accepts_are_two_instances_not_one(monkeypatch: pytest.MonkeyPatch, pair: tuple[str, str]) -> None:
+    """Two keys a head accepts for the same edge that fold alike are two cascades — one verbatim and
+    one dotted, or both dotted.
 
     The job is submitted BY the instance, so two tokens on one instance id is one job: the second
     dispatch is answered as a re-attach and its own hop never runs. Driven through the real seam and
@@ -87,7 +89,7 @@ def test_two_tokens_the_lane_accepts_are_two_instances_not_one(monkeypatch: pyte
     engine = _Engine()
     monkeypatch.setattr(wf, "DaprWorkflowClient", lambda *a, **k: engine)
 
-    for token in ("a.b", "a-b"):
+    for token in pair:
         transform._dispatch_stage_workflow(
             get_settings(),
             from_uri="s3://wh/p-bronze/pages.lance",
@@ -97,7 +99,7 @@ def test_two_tokens_the_lane_accepts_are_two_instances_not_one(monkeypatch: pyte
             trigger=StageTrigger(token=token),
         )
 
-    assert sorted(spec["token"] for spec in engine.instances.values()) == ["a-b", "a.b"]
+    assert sorted(spec["token"] for spec in engine.instances.values()) == sorted(pair)
 
 
 def test_the_dispatch_seam_reports_a_LIVE_INSTANCE_as_handled_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
