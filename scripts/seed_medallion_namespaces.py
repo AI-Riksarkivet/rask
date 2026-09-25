@@ -25,8 +25,11 @@ which reads as a broken lane rather than an unprovisioned one. Authorization and
 seeded by different files and only one of them ran.
 
 AGNOSTIC BY CONSTRUCTION. The namespaces are read out of ``chart/values.yaml`` — the producer's
-``bronzeNamespace`` plus every stage runner's ``fromNamespace``/``toNamespace`` — so this names no lane and
-no workload. Add a stage runner to the chart and this seeds its namespaces; there is nothing here to edit.
+``bronzeNamespace`` plus the ``fromNamespace``/``toNamespace`` of every ``stageRunners[]`` and
+``mediaStageRunners[]`` row, the two lists the chart ranges over — so this names no lane and no
+workload. Add a stage runner to the chart and this seeds its namespaces; there is nothing here to edit.
+A values file with no ``medallion.stageRunners`` key is refused: a renamed key would otherwise seed
+the head tier alone and report success.
 
 THE WAREHOUSE IS REQUIRED, AND IT IS NOT THE BUCKET. Measured 2026-08-25, after this script was
 first written with ``--warehouse`` defaulting to ``lance-catalog``: that string is the S3 BUCKET and
@@ -71,6 +74,7 @@ import sys
 
 import httpx
 import yaml
+from pydantic import BaseModel, Field, ValidationError
 
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -98,25 +102,46 @@ def qualified(project: str, namespace: str) -> str:
     return f"{project}-{namespace}"
 
 
+class _Lane(BaseModel):
+    """One ``stageRunners[]`` / ``mediaStageRunners[]`` row, reduced to the two namespaces it runs between."""
+
+    from_namespace: str = Field(alias="fromNamespace")
+    to_namespace: str = Field(alias="toNamespace")
+
+
+class _Producer(BaseModel):
+    bronze_namespace: str = Field(default="", alias="bronzeNamespace")
+
+
+class _Medallion(BaseModel):
+    """The chart's ``medallion`` block, as far as the cascade's namespaces go.
+
+    ``stageRunners`` has no default, so an absent or null key is a ``ValidationError`` (Helm drops a
+    null key before a template reads it). ``[]`` is legal: the chart then renders the producer and no
+    stage runner, and the head is the whole cascade. ``mediaStageRunners`` is optional, as the chart's
+    ``| default list`` makes it.
+    """
+
+    producer: _Producer = Field(default_factory=_Producer)
+    stage_runners: list[_Lane] = Field(alias="stageRunners")
+    media_stage_runners: list[_Lane] = Field(default_factory=list, alias="mediaStageRunners")
+
+
 def declared_namespaces(values_path: pathlib.Path, project: str = "") -> list[str]:
     """Every top-level namespace the cascade will write into, read from the chart.
 
-    The producer's bronze namespace is the head; each stage runner names the two it moves between. Ordered
+    The producer's bronze namespace is the head; each stage runner names the two it runs between. Ordered
     and de-duplicated so the output reads the way the cascade runs. With ``project`` set, each is
     qualified the way the runtime will ask for it — see :func:`qualified`.
+
+    Raises:
+        ValidationError: the values file has no ``medallion.stageRunners`` list, or a row lacks a namespace.
     """
-    values = yaml.safe_load(values_path.read_text(encoding="utf-8"))
-    medallion = values.get("medallion") or {}
-    seen: dict[str, None] = {}
-    head = (medallion.get("producer") or {}).get("bronzeNamespace")
-    if head:
-        seen[head] = None
-    for stage_runner in medallion.get("stageRunners") or []:
-        for key in ("fromNamespace", "toNamespace"):
-            name = stage_runner.get(key)
-            if name:
-                seen[name] = None
-    return [qualified(project, name) for name in seen]
+    values = yaml.safe_load(values_path.read_text(encoding="utf-8")) or {}
+    medallion = _Medallion.model_validate(values.get("medallion") or {})
+    lanes = [*medallion.stage_runners, *medallion.media_stage_runners]
+    names = [medallion.producer.bronze_namespace, *(name for lane in lanes for name in (lane.from_namespace, lane.to_namespace))]
+    return [qualified(project, name) for name in dict.fromkeys(name for name in names if name)]
 
 
 def create(client: httpx.Client, warehouse: str, namespace: str) -> tuple[int, str]:
@@ -153,7 +178,12 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="print what would be created and exit 0")
     args = parser.parse_args()
 
-    namespaces = declared_namespaces(pathlib.Path(args.values), args.project)
+    try:
+        namespaces = declared_namespaces(pathlib.Path(args.values), args.project)
+    except ValidationError as exc:
+        problems = "; ".join(f"medallion.{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors(include_input=False))
+        print(f"!! {args.values} does not declare the cascade's lanes — {problems}", file=sys.stderr)
+        return 2
     if not namespaces:
         print("!! the chart declares no medallion namespaces — nothing to seed, which is itself suspicious", file=sys.stderr)
         return 2

@@ -8,7 +8,7 @@ recur and the answers are expensive to re-derive.
 **What the plan delivered, for anyone tracing the history.** Its slices S1–S4 (the submit/poll/verify
 workflow, `continue_as_new`, the automatic quality split, and the human approval) and §9.1's review
 band are implemented and pinned by tests under `services/medallion/tests`. S5 and S6 were audited and
-owe no code — S5's defect was closed by reordering rather than by a saga, and S6 is a `stage runners[]`
+owe no code — S5's defect was closed by reordering rather than by a saga, and S6 is a `stageRunners[]`
 declaration rather than a feature; both properties are pinned by
 `test_no_rows_without_a_catalog_record.py` and `test_a_same_tier_lane_is_legal.py`, which carry the
 full reasoning. §9.2's `lance-ray` rename is an ops scheduling item with no design work owed: it needs

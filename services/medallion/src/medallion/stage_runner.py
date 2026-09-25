@@ -79,7 +79,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # crashed the pod. A stage runner that cannot authorize must not sit in the subscription quietly
     # refusing every stage — nothing downstream would report it.
     settings = get_settings()
-    app.state.fga = await build_fga_client(settings, service="medallion-stage runner", fatal=True)
+    app.state.fga = await build_fga_client(settings, service="medallion-stage-runner", fatal=True)
     # THE WORKFLOW WORKER (S1). Without this the stage runner can SCHEDULE `stage_run` and nothing will ever
     # execute it: `DaprWorkflowClient` only enqueues, and the runtime is what registers the definitions
     # and pulls work. Ingest's first in-cluster deploy had the engine running in the sidecar and still

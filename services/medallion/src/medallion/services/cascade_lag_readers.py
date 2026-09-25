@@ -117,7 +117,7 @@ def _service_headers(settings: Any) -> dict[str, str]:  # noqa: ANN401 — the s
 def _lane_table(settings: Any, lane: str, *, table_map: str) -> str | None:  # noqa: ANN401 — the settings seam
     """One lane's SOURCE or DESTINATION table id, project-unqualified, or ``None`` when undeclared.
 
-    Read from the stage runner declarations (`stage runners[].fromDataset` / `.toDataset`, rendered by
+    Read from the stage runner declarations (`stageRunners[].fromDataset` / `.toDataset`, rendered by
     `chart/templates/medallion.yaml`) rather than composed from the tier name. A lane's table is a NAME
     the deployment chooses — `bronze$events`, `bronze-media$objects` — and nothing about the namespace
     predicts it, which is why the first version's `f"{project}-{source}"` could name no table at all.

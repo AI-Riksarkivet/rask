@@ -43,7 +43,7 @@ LANCE_APPS = (
     ("catalog", "catalog.main"),
     ("lineage", "lineage.main"),
     ("medallion-producer", "medallion.producer"),
-    ("medallion-stage runner", "medallion.stage_runner"),
+    ("medallion-stage-runner", "medallion.stage_runner"),
     ("maintenance", "maintenance.service"),
 )
 

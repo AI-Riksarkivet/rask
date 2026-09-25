@@ -266,7 +266,7 @@ spec:
             - { name: MEDALLION_CATALOG_URL, value: {{ printf "http://%s-catalog:%v" (include "lance.fullname" .) .Values.services.catalog.port | quote }} }
             {{- if $.Values.medallion.cascadeLag.bindingName }}
             {{- /* WHERE EACH LANE'S OUTPUT LANDS, derived from the stage runner declarations rather than kept
-                   as a second list. `stage runners[]` and `mediaStageRunners[]` already state fromNamespace ->
+                   as a second list. `stageRunners[]` and `mediaStageRunners[]` already state fromNamespace ->
                    toNamespace for every lane, so a lane added there is measured with no second edit and
                    a renamed lane cannot half-move. Without this the lag edge is `<source>->?`, which
                    matches no lineage run: the detector runs cleanly and measures nothing. */}}
@@ -280,7 +280,7 @@ spec:
                    catalog for a TABLE and matches a lineage run on a full table id; a namespace answers
                    neither. `<project>-<namespace>` named an id no create door will accept, so every tick
                    404'd into "never published", and matching a bare namespace hit every tenant's output
-                   as a substring. Derived here rather than listed so a lane added to `stage runners[]` is
+                   as a substring. Derived here rather than listed so a lane added to `stageRunners[]` is
                    measured with no second edit and a renamed dataset cannot half-move. */}}
             - { name: MEDALLION_LANE_SOURCES, value: {{ toJson $laneSources | quote }} }
             - { name: MEDALLION_LANE_DESTINATION_DATASETS, value: {{ toJson $laneOutputs | quote }} }
@@ -622,7 +622,7 @@ spec:
             - { name: MEDALLION_STAGE_LINEAGE_URL, value: {{ $root.Values.medallion.stageLineageUrl | default (printf "http://%s-lineage:%v" (include "lance.fullname" $root) $root.Values.services.lineage.port) | quote }} }
             {{- if .stageJob }}
             {{- /*
-               P7b seam: this stage runner's stage-job entrypoint (stage runners[].stageJob) — how the HTR lanes select
+               P7b seam: this stage runner's stage-job entrypoint (stageRunners[].stageJob) — how the HTR lanes select
                the layout/lines + transcribe jobs on the unified cluster; unset = ray_stage_job.py default.
             */}}
             - { name: MEDALLION_RAY_ENTRYPOINT, value: {{ .stageJob | quote }} }

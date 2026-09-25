@@ -487,7 +487,7 @@ dapr.io/config: "lance-tracing"
        age.externalHost · auth.enabled · catalog.controlEmit · dapr.{enabled,sidecars,sidecarRestricted,
        sidecarResources.*,resiliency.enabled} · dex.clientId · frontend.{apps,image.tag,serviceIdentity,
        idleTimeoutSeconds,oidc.*} · gateway.port · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
-       medallion.{enabled,port,buckets,producer.daprAppId,stage runners} · nats.{enabled,externalUrl} ·
+       medallion.{enabled,port,buckets,producer.daprAppId,stageRunners} · nats.{enabled,externalUrl} ·
        observability.{enabled,dbName,tracePipeline,greptimePort,environment,externalOtlpEndpoint,
        otelCollector.{enabled,externalEndpoint}} · openbao.{enabled,port,externalAddr} · pubsub.name ·
        resources.{default,<component>} · minio.{bucket,port,externalEndpoint} · security.readOnlyRootFilesystem ·

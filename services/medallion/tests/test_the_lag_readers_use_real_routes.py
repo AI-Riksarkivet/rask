@@ -42,7 +42,7 @@ class _Settings:
     transform_routes: dict[str, str] = {}
     lane_destinations: dict[str, str] = {"bronze": "silver", "bronze-media": "silver-media"}
     #: The SOURCE and DESTINATION tables of each lane, project-unqualified — the shape
-    #: `chart/templates/medallion.yaml` derives from `stage runners[].fromDataset` / `.toDataset`.
+    #: `chart/templates/medallion.yaml` derives from `stageRunners[].fromDataset` / `.toDataset`.
     lane_sources: dict[str, str] = {"bronze": "bronze$events", "bronze-media": "bronze-media$objects"}
     lane_destination_datasets: dict[str, str] = {"bronze": "silver$features", "bronze-media": "silver-media$features"}
     lag_projects: list[str] = []

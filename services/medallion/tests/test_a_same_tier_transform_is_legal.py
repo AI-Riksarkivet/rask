@@ -6,7 +6,7 @@ anger", and §5's table reads "Not yet. Same shape as bronze→silver; adopt aft
 Read as outstanding WORK that is wrong, and worth stating plainly: the stage runner is a namespace-PAIR
 machine. It reads `from_namespace/from_dataset`, writes `to_namespace/to_dataset`, and imposes no
 ordering between them — there is no tier ladder in the code, no "silver must follow bronze" check,
-nothing that inspects whether the two sides differ. A same-tier derivation is therefore a `stage runners[]`
+nothing that inspects whether the two sides differ. A same-tier derivation is therefore a `stageRunners[]`
 entry in values.yaml (`fromNamespace: silver` → `toNamespace: silver`), not a feature.
 
 That generality is the multimodal design working as intended: the tiers are exactly bronze→silver→gold

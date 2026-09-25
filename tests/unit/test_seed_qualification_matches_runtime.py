@@ -32,6 +32,8 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
+from typing import Any
 
 import pytest
 import yaml
@@ -138,3 +140,54 @@ def test_the_seeder_provisions_every_tier_a_stage_runner_moves_between() -> None
 
     seeded = set(module.declared_namespaces(values))
     assert moved_between <= seeded, f"the seeder would not provision {sorted(moved_between - seeded)}; it derives only {sorted(seeded)}"
+
+
+def _seeder() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("_seed_ns_values", REPO / "scripts/seed_medallion_namespaces.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _values(tmp_path: Path, medallion: dict[str, Any]) -> Path:
+    path = tmp_path / "values.yaml"
+    path.write_text(yaml.safe_dump({"medallion": medallion}), encoding="utf-8")
+    return path
+
+
+_HEAD: dict[str, Any] = {"producer": {"bronzeNamespace": "bronze"}}
+_EVENTS_LANE: dict[str, Any] = {"fromNamespace": "bronze", "toNamespace": "silver"}
+
+
+@pytest.mark.parametrize(
+    "medallion",
+    [
+        pytest.param(dict(_HEAD), id="absent"),
+        pytest.param({**_HEAD, "stage_runners": [_EVENTS_LANE]}, id="misspelled"),
+        # Helm drops a key set to null before any template reads it, so null is absent too.
+        pytest.param({**_HEAD, "stageRunners": None}, id="null"),
+    ],
+)
+def test_a_values_file_without_the_stage_runner_key_is_refused(
+    medallion: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A renamed chart key fails the seed. Read as an empty list, it seeds the head tier alone and reports success."""
+    seeder = _seeder()
+    monkeypatch.setattr(sys, "argv", ["seed", "--values", str(_values(tmp_path, medallion)), "--warehouse", "w", "--dry-run"])
+
+    assert seeder.main() == 2, "the seeder accepted a values file that declares no stage runner key"
+    assert "medallion.stageRunners" in capsys.readouterr().err, "the refusal does not name the key it could not find"
+
+
+def test_an_empty_stage_runner_list_seeds_the_head_alone(tmp_path: Path) -> None:
+    """`stageRunners: []` is legal: the chart renders the producer and no stage runner, so bronze is the whole cascade."""
+    assert _seeder().declared_namespaces(_values(tmp_path, {**_HEAD, "stageRunners": []})) == ["bronze"]
+
+
+def test_the_media_stage_runners_namespaces_are_seeded(tmp_path: Path) -> None:
+    """The chart ranges over `mediaStageRunners[]` beside `stageRunners[]`, so a media lane's tiers are cascade tiers too."""
+    medallion = {**_HEAD, "stageRunners": [_EVENTS_LANE], "mediaStageRunners": [{"fromNamespace": "bronze-audio", "toNamespace": "silver-audio"}]}
+
+    assert _seeder().declared_namespaces(_values(tmp_path, medallion)) == ["bronze", "silver", "bronze-audio", "silver-audio"]

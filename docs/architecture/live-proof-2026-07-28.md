@@ -91,7 +91,7 @@ Documented degradations only (no-OIDC `capi/v1/me` 401s; empty corpus 404s). Zer
    **events-lane** stage runner (`MEDALLION_FROM_DATASET=bronze$events`), which FAILs deterministically —
    run `f42e0b35-…`, `Dataset at path medallion/bronze was not found`, retries exhausted → Dapr DLQ.
    The page-lane HTR stage runners are the **unlanded P7b runner re-cut** (the chart's own
-   `stage runners[].stageJob` comment says so). The FAIL is itself correctly recorded in AGE as a `:Run`
+   `stageRunners[].stageJob` comment says so). The FAIL is itself correctly recorded in AGE as a `:Run`
    with `event_type FAIL` and the error string — the lineage plane behaved perfectly.
 2. **No per-stage/per-actor child runs exist** — correct, because no compute stage ran. lineage-kit's
    job→stage→actor emission is unit-proven (including across a real subprocess boundary) but has not
