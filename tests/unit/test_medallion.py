@@ -860,16 +860,25 @@ def test_the_stage_job_gets_the_ORIGINATOR_in_its_OWN_env_not_only_ray_metadata(
 
 
 def test_a_service_triggered_stage_sends_NO_blank_identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`""` is not an identity. A cascade with no person behind it must send nothing rather than an
-    empty string a reader could mistake for one — the same rule `metadata` already follows."""
+    """`""` is not an identity. A cascade with no person behind it must send NO originator key rather
+    than an empty one a reader could mistake for one — the same rule `metadata` already follows.
+
+    Absent and blank are different claims on the wire. Ray merges `runtime_env.env_vars` OVER the pod's
+    process env (`stage_submit.otlp_env`), so a key this body carries is owned by the submission even
+    when it is empty; and a job that asks "was I told who this is for?" by testing the key's PRESENCE
+    reads a blank as yes (`WorkOrder.to_env`). So the only passing shape is the key's absence.
+
+    `originator=""` is passed explicitly because it is exactly what the workflow activity hands the
+    submitter when the trigger names nobody (`workflow.submit_stage`).
+    """
     api = _FakeJobsAPI()
     monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
     settings = MedallionSettings.model_validate({"compute_enabled": True, "ray_enabled": True, "to_namespace": "silver"})
 
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t"))
+    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/b", to_uri="s3://lake/s", stage="silver", token="t", originator=""))
 
     env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env.get("RASK_ORIGINATOR", "") == "", "a service-run cascade must not fabricate a principal"
+    assert "RASK_ORIGINATOR" not in env, f"a service-run cascade must send no principal, neither blank nor fabricated: {env.get('RASK_ORIGINATOR')!r}"
     assert "rask.originator" not in api.posts[0]["metadata"]
 
 
