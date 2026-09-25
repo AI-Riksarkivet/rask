@@ -8,9 +8,10 @@ measured 2026-09-25 on e4e60b60 (the orchestrator's `probe_cross_tenant.py`): al
 `project:mine` only, got 200 on `GET /cascade/stalled?project=mine` listing acme's and other's cells.
 
 Everything below runs the real routers and the real door. Faked: the OIDC verifier (the bearer's text
-IS the sub), OpenFGA (a fixed grant set), the stage runner's workflow engine and the lag tick. The
-producer reaches the stage runner over a real ASGI hop carrying the real service token, so the tenant
-the producer authorizes on is the one the stage runner read off the instance it hosts.
+IS the sub), OpenFGA (a fixed grant set), the stage runner's workflow engine, the lag tick and the
+edge declaration it measures. The producer reaches the stage runner over a real ASGI hop carrying the
+real service token, so the tenant the producer authorizes on is the one the stage runner read off the
+instance it hosts.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -33,7 +34,7 @@ from medallion.api import cascade_lag_read, produce_auth, stage_ops, stage_runne
 from medallion.api import train as train_api
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.services import train as train_service
-from medallion.services.cascade_lag import LagTickReport, StalledTier
+from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, StalledTier
 from medallion.services.trigger_guards import StageTrigger
 from medallion.workflow import StageJobSpec, TrainJobSpec
 from service_kit.exceptions import register_handlers
@@ -154,17 +155,22 @@ def fga(monkeypatch: pytest.MonkeyPatch) -> _Fga:
     return double
 
 
-#: Cells for three tenants; `acme` twice, so one batch must carry each project exactly once.
-STALLED = [
-    StalledTier(edge="silver->gold", project=CONFIGURED),
-    StalledTier(edge="bronze->silver", project=CONFIGURED),
-    StalledTier(edge="silver->gold", project="other"),
-    StalledTier(edge="bronze->silver", project="mine"),
-]
+#: The declared cells for three tenants; `acme` twice, so one batch must carry each project once.
+EDGES = [("silver->gold", CONFIGURED), ("bronze->silver", CONFIGURED), ("silver->gold", "other"), ("bronze->silver", "mine")]
 
 
-def _tick(**_kw: object) -> LagTickReport:
-    return LagTickReport(edges=len(STALLED), published_points=0, failed=0, unpublished_source=list(STALLED))
+class _Ticks:
+    """`run_lag_tick`, with its signature, reporting every edge it is handed as stalled and recording
+    which edges each tick measured, so a filter applied after the measurement is visible as one."""
+
+    def __init__(self) -> None:
+        self.measured: list[list[tuple[str, str]]] = []
+
+    def __call__(
+        self, *, edges: Sequence[tuple[str, str]], published: object, consumed: object, gauge: object, memo: AbsentEdgeMemo | None = None
+    ) -> LagTickReport:
+        self.measured.append(list(edges))
+        return LagTickReport(edges=len(edges), published_points=0, failed=0, unpublished_source=[StalledTier(edge=e, project=p) for e, p in edges])
 
 
 def _stage_runner(stages: dict[str, _State]) -> FastAPI:
@@ -176,7 +182,11 @@ def _stage_runner(stages: dict[str, _State]) -> FastAPI:
     return app
 
 
-def _producer(stage_runner: Any) -> FastAPI:
+#: A wired authorization client; the FGA double ignores it, so `None` is the one value that differs.
+_WIRED = object()
+
+
+def _producer(stage_runner: Any, *, fga_client: object | None = _WIRED) -> FastAPI:
     """The producer's operator routers, assembled in the order `build_lance_service_app` uses."""
     app = FastAPI()
     register_handlers(app)
@@ -189,7 +199,7 @@ def _producer(stage_runner: Any) -> FastAPI:
     )
     app.dependency_overrides[get_settings] = lambda: settings
     app.state.oidc = _Verifier()
-    app.state.fga = object()
+    app.state.fga = fga_client
     app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=stage_runner))
     app.state.workflow_client = _Workflows(dict(TRAINS))
     return app
@@ -202,9 +212,25 @@ def stage_runner(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
 
 
 @pytest.fixture
-def producer(stage_runner: FastAPI, fga: _Fga, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    monkeypatch.setattr(cascade_lag_read, "run_lag_tick", _tick)
+def ticks(monkeypatch: pytest.MonkeyPatch) -> _Ticks:
+    """The tick and the declaration it measures. The door imports its readers lazily, so the
+    declaration is replaced at its own module."""
+    double = _Ticks()
+    monkeypatch.setattr(cascade_lag_read, "run_lag_tick", double)
+    monkeypatch.setattr("medallion.services.cascade_lag_readers.declared_edges", lambda _settings: list(EDGES))
+    return double
+
+
+@pytest.fixture
+def producer(stage_runner: FastAPI, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
     with TestClient(_producer(stage_runner), raise_server_exceptions=False) as client:
+        yield client
+
+
+@pytest.fixture
+def unwired(stage_runner: FastAPI, fga: _Fga, ticks: _Ticks) -> Iterator[TestClient]:
+    """The producer with OIDC on and no authorization client: a person must never be let through."""
+    with TestClient(_producer(stage_runner, fga_client=None), raise_server_exceptions=False) as client:
         yield client
 
 
@@ -366,6 +392,37 @@ def test_an_authz_OUTAGE_is_503_never_an_empty_answer(producer: TestClient, fga:
 
 def test_the_SERVICE_path_still_reads_every_cell(producer: TestClient) -> None:
     assert _projects(producer.get("/cascade/stalled", headers=SERVICE)) == [CONFIGURED, CONFIGURED, "other", "mine"]
+
+
+def test_a_caller_administering_NONE_is_answered_WITHOUT_a_measurement(producer: TestClient, ticks: _Ticks) -> None:
+    """The tick is a catalog and a lineage read per edge under the service's own credentials; a caller
+    holding no grant anywhere must not be able to spend it."""
+    response = producer.get("/cascade/stalled", headers=_bearer("carol"))
+
+    assert response.status_code == 200, response.text
+    assert ticks.measured == []
+
+
+def test_the_tick_measures_ONLY_the_callers_own_edges(producer: TestClient, ticks: _Ticks) -> None:
+    producer.get("/cascade/stalled", headers=_bearer("alice"))
+
+    assert ticks.measured == [[("bronze->silver", "mine")]]
+
+
+def test_an_UNWIRED_authorization_service_is_503_and_measures_nothing(unwired: TestClient, ticks: _Ticks) -> None:
+    assert unwired.get("/cascade/stalled", headers=_bearer("alice")).status_code == 503
+    assert ticks.measured == []
+
+
+def test_the_SINGLE_TENANT_row_belongs_to_the_configured_project(producer: TestClient, fga: _Fga, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A registry with no tenants, or one that cannot be read, declares the unqualified lanes as project
+    `""`: the tables `/produce` writes with no `?project=`, gated there on the configured project.
+    `project:` names no object at all."""
+    monkeypatch.setattr("medallion.services.cascade_lag_readers.declared_edges", lambda _settings: [("silver->gold", "")])
+
+    assert _projects(producer.get("/cascade/stalled", headers=_bearer("bob"))) == [""]
+    assert _projects(producer.get("/cascade/stalled", headers=_bearer("alice"))) == []
+    assert fga.calls == [("batch_check", ["project:acme"]), ("batch_check", ["project:acme"])]
 
 
 # ── the training watch ──────────────────────────────────────────────────────────────────────────────

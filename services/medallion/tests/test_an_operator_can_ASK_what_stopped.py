@@ -25,6 +25,13 @@ at. The door passes a no-op gauge and no memo, so a read changes no detector sta
 
 from __future__ import annotations
 
+import asyncio
+import threading
+
+import httpx
+import pytest
+from fastapi import FastAPI
+
 from medallion.services.cascade_lag import LagTickReport, StalledTier
 
 
@@ -96,3 +103,38 @@ def test_the_gauge_the_door_hands_the_tick_RECORDS_NOTHING() -> None:
     record_edge_lag(measurable, gauge=_silent_gauge())
 
     assert real_points == [3], "the read door's gauge published a point"
+
+
+def test_the_door_measures_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The declaration lists the warehouse registry and the tick reads the catalog and lineage per
+    edge, all synchronously; the cron door's own measurement is a 15 s tick that timed the pod's probes
+    out (`test_the_lag_tick_does_not_block_the_event_loop.py`, which also says why the assertion is the
+    thread and not a probe's latency). `/api/cascade` publishes this door at the edge."""
+    from medallion.api import cascade_lag_read
+    from medallion.api.produce_auth import ProducerCaller, admit_caller
+
+    ran_on: dict[str, int] = {}
+
+    def declared(_settings: object) -> list[tuple[str, str]]:
+        ran_on["declared_edges"] = threading.get_ident()
+        return [("silver->gold", "acme")]
+
+    def tick(**_kw: object) -> LagTickReport:
+        ran_on["run_lag_tick"] = threading.get_ident()
+        return _report(stalled=[("silver->gold", "acme")])
+
+    monkeypatch.setattr("medallion.services.cascade_lag_readers.declared_edges", declared)
+    monkeypatch.setattr(cascade_lag_read, "run_lag_tick", tick)
+    app = FastAPI()
+    app.include_router(cascade_lag_read.router)
+    app.dependency_overrides[admit_caller] = ProducerCaller
+
+    async def ask() -> tuple[int, httpx.Response]:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as client:
+            return threading.get_ident(), await client.get("/cascade/stalled")
+
+    loop_thread, response = asyncio.run(ask())
+
+    assert response.status_code == 200, response.text
+    assert set(ran_on) == {"declared_edges", "run_lag_tick"}, ran_on
+    assert loop_thread not in ran_on.values(), f"blocking work ran on the event loop's thread: {ran_on}"
