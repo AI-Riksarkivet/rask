@@ -16,11 +16,12 @@ from dapr.ext.fastapi import DaprApp
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode
+from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, Field
 
-from medallion.api.dependencies import DaprClientDep, SettingsDep
-from medallion.api.produce_auth import authorize_train
-from medallion.core.config import get_settings
+from medallion.api.dependencies import DaprClientDep, FgaClientDep, SettingsDep
+from medallion.api.produce_auth import AdmittedCaller, ProducerCaller, authorize_train, require_project_admin
+from medallion.core.config import MedallionSettings, get_settings
 from medallion.services.train import (
     DATASET_PATTERN,
     MAX_FEATURES,
@@ -34,6 +35,7 @@ from service_kit.draining import refuse_when_draining, retry_when_draining
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse.ns_errors import problem_body
+from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
 log = logging.getLogger(__name__)
@@ -157,8 +159,8 @@ class TrainRunState(BaseModel):
     """What an operator needs to answer "is my training run still being watched".
 
     A declared field list, not the SDK's state object: `WorkflowState` carries the serialized input
-    and the serialized output, and this route is reachable by anyone who may train — so it would
-    disclose the whole spec to answer a status question.
+    and the serialized output, and this route is reachable by any admin of the watch's project — so it
+    would disclose the whole spec to answer a status question.
     """
 
     instance_id: str
@@ -185,26 +187,49 @@ def _train_client(request: Request) -> Any:
     return client
 
 
-@router.get("/trains/{instance_id}")
-async def show_train(
-    instance_id: str,
-    request: Request,
-    _subject: Annotated[str | None, Depends(authorize_train)],
-) -> TrainRunState:
-    """DWF-MGT-002. `train_run` was startable and unobservable: a caller got a 202 and then had no
-    HTTP means to learn whether the watcher was alive, had abandoned the run, or was never scheduled
-    at all — which, before the hosting fix in this same change, was the DEFAULT chart's behaviour.
+def _watch_project(settings: MedallionSettings, serialized_input: str | None) -> str | None:
+    """The project a training watch RECORDS (`TrainJobSpec.project`), or ``None`` if it cannot be read.
 
-    Gated by the same door as `POST /train`, deliberately: reading the status of compute you were
-    refused permission to spend is not public, and the estate already argues this exact point on
-    `flows.get_run` and `ingest.get_ingest`.
+    By construction that is the configured project: the trigger consumer stamps `produce_admin_project`
+    on every watch, whatever the trigger claims, so a watch recording none is the configured one — the
+    project `POST /train` authorized. The gate reads the record rather than the setting, so it stays
+    on the resource's own tenant.
     """
+    try:
+        spec = json.loads(serialized_input or "{}")
+    except ValueError:
+        return None
+    project = spec.get("project", "") if isinstance(spec, dict) else None
+    if project == "":
+        return settings.produce_admin_project
+    return project if is_safe_project(project) else None
+
+
+async def _authorized_watch(
+    request: Request, *, settings: MedallionSettings, fga_client: OpenFgaClient | None, caller: ProducerCaller, instance_id: str
+) -> Any:
+    """Load the watch (404 when there is none), then authorize the caller on the project it records."""
     client = _train_client(request)
     # The SDK client is SYNCHRONOUS. Awaiting it inline blocks the event loop for every other request
     # on this worker — the same reason ingest and flows read their state through a thread.
     state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=True))
     if state is None:
         raise HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
+    await require_project_admin(fga_client, caller, project=_watch_project(settings, state.serialized_input))
+    return state
+
+
+@router.get("/trains/{instance_id}")
+async def show_train(instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> TrainRunState:
+    """DWF-MGT-002. `train_run` was startable and unobservable: a caller got a 202 and then had no
+    HTTP means to learn whether the watcher was alive, had abandoned the run, or was never scheduled
+    at all.
+
+    Gated on `can_administer` over the project the watch records: reading the status of compute you
+    may not spend is not public, and the estate argues this exact point on `flows.get_run` and
+    `ingest.get_ingest`.
+    """
+    state = await _authorized_watch(request, settings=settings, fga_client=fga_client, caller=caller, instance_id=instance_id)
     submission_id: str | None = None
     with suppress(Exception):
         # Best-effort: a state whose input this build cannot parse must still answer the STATUS
@@ -215,20 +240,18 @@ async def show_train(
 
 @router.post("/trains/{instance_id}/terminate", status_code=202)
 async def terminate_train(
-    instance_id: str,
-    request: Request,
-    _subject: Annotated[str | None, Depends(authorize_train)],
+    instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller
 ) -> TrainTerminateAccepted:
-    """DWF-MGT-003, for the training lane.
+    """DWF-MGT-003, for the training lane. Refused before the terminate unless the caller administers
+    the project the watch records.
 
     A HARD terminate is honest here and the response says exactly what it does and does not do.
     `train_run` only POLLS a Ray job it did not submit — `submit_train_job` did, before the watcher
     was ever scheduled — so stopping the watch does NOT stop the training job or free its GPUs. An
     operator told "terminated" would reasonably believe otherwise, so the body refuses to imply it.
     """
+    await _authorized_watch(request, settings=settings, fga_client=fga_client, caller=caller, instance_id=instance_id)
     client = _train_client(request)
-    if await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=False)) is None:
-        raise HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
     await asyncio.to_thread(lambda: client.terminate_workflow(instance_id))
     log.info("medallion_train_watch_termination_requested", extra={"instance_id": instance_id})
     return TrainTerminateAccepted(

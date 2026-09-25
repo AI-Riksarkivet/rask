@@ -19,19 +19,6 @@ from service_kit.lakehouse.warehouse_registry import UnresolvableProjectError
 router = APIRouter(tags=["produce"])
 
 
-@router.get("/authorize")
-async def authorize(_: Annotated[None, Depends(authorize_produce)]) -> dict[str, bool]:
-    """Admin-door probe (#77): 200 iff the caller passes the SAME ``authorize_produce`` gate as ``/produce``
-    (dev-open · service app-token · or a signed-in ``can_administer`` project admin) — else 401/403/503.
-
-    Side-effect-free, so a governed admin surface (the web audit-log viewer) can reuse the one admin door the
-    estate already owns without re-implementing the FGA check or gaining direct OpenFGA access: the web BFF
-    bearer-forwards the signed-in user's token here and only proceeds if this returns 200. The admin concept
-    lives here (``produce_admin_project``), so this is its natural home. Accepts the same optional
-    ``project`` query param as ``/produce`` (#84), so the BFF can probe admin-ship per tenant."""
-    return {"authorized": True}
-
-
 @router.post(
     "/produce",
     status_code=202,

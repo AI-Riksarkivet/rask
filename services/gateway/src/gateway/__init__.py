@@ -10,8 +10,9 @@ defaults that match `Procfile.micro`.
 
 Carries the lance-ns rows since the gateway fold (docs/architecture/lance-ns-merge.md,
 decision 4 + P1 "Gateway fold (code half)" + P4: rask's FastAPI gateway wins, the
-nginx gateway retired): `/api/catalog`, `/api/lineage`, `/api/produce`, `/api/train`
-and the whole-plane explorer namespace `/api/explorer{,/search,/annotations}`. The lance
+nginx gateway retired): `/api/catalog`, `/api/lineage`, the medallion producer's `/api/produce`,
+`/api/train`, `/api/trains`, `/api/promotions`, `/api/stage-runners` and `/api/cascade`, and the
+whole-plane explorer namespace `/api/explorer{,/search,/annotations}`. The lance
 services serve their own internal prefixes (`/v1/...`, `/api/...`), so each route
 row names the upstream prefix that replaces the public one — a wrong prefix
 silently 404s (the dev-micro.sh warning). The nginx `lance.lineageSidecarOnlyRoutes`
@@ -170,8 +171,8 @@ class Route(NamedTuple):
 
     The upstream prefix REPLACES the public one when forwarding. rask rows keep it identical (the fleet
     services mount under RASK_API_PREFIX themselves); lance rows rewrite — catalog/lineage serve
-    `/v1/...`/`/runs` at root, the medallion producer serves `/produce`+`/train` at root, and the media
-    trio serves `/api/...` internally.
+    `/v1/...`/`/runs` at root, the medallion producer serves `/produce`, `/train`, `/trains`,
+    `/promotions`, `/stage-runners` and `/cascade` at root, and the media trio serves `/api/...` internally.
     """
 
     public_prefix: str
@@ -232,8 +233,8 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # which is the worse failure: it names a backend as broken instead of the path as absent),
         # but the ORDERING PROPERTY it demonstrated is still load-bearing and still tested.
         Route("/api/ingest", "/api", *ingest),
-        # DEPRECATED — the medallion's IIIF head. Retires with the nine-plus-three IIIF files
-        # (A12); kept for one deprecation window so the frontend can move to /api/ingest first.
+        # The training head (`POST /train`): the producer serves it root-mounted, so the rewrite is a
+        # literal rather than `prefix`-interpolated.
         Route("/api/train", "/train", *medallion),
         # The training watch's status and terminate. A sibling of `/api/train`, not nested under it: the
         # producer serves `/trains/{id}`, and `_pick_route` never lets one of the two rows match the other.
@@ -248,8 +249,9 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # stage runner that hosts the instance — a stage runner has no row of its own because it is bus-only, and
         # `terminate_workflow` must run under the stage runner's app-id, so neither end can do both halves.
         Route("/api/stage-runners", "/stage-runners", *medallion),
-        # The cascade's stalled-tier read (`GET /cascade/stalled`), gated by the producer like its
-        # `/stage-runners` sibling. `tests/test_lance_routes.py` derives every producer door from its OpenAPI.
+        # The cascade's stalled-tier read (`GET /cascade/stalled`); the producer answers each caller with
+        # the cells of the projects they administer. `tests/test_lance_routes.py` derives every producer
+        # door from its OpenAPI.
         Route("/api/cascade", "/cascade", *medallion),
         Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
         Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),

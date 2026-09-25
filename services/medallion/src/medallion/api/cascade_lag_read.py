@@ -22,13 +22,11 @@ surface needs a side index recorded at hold time; this one needed a route.
 
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
-from medallion.api.dependencies import SettingsDep
-from medallion.api.produce_auth import authorize_produce
+from medallion.api.dependencies import FgaClientDep, SettingsDep
+from medallion.api.produce_auth import AdmittedCaller, administered_projects
 from medallion.services.cascade_lag import LagGauge, LagTickReport, StalledTier, run_lag_tick
 
 
@@ -61,21 +59,23 @@ def _silent_gauge() -> LagGauge:
     return _SilentGauge()
 
 
-def stalled_from(report: LagTickReport) -> StalledTiers:
-    """Project one tick's report onto the answer this door gives.
+def stalled_from(report: LagTickReport, *, visible: frozenset[str]) -> StalledTiers:
+    """Project one tick's report onto the answer this door gives: the cells of ``visible`` projects.
 
     Separate from the route so the projection is testable without standing up the readers, and so the
-    route stays the thin half: parse, authorize, measure, project.
+    route stays the thin half: parse, measure, authorize, project.
     """
-    return StalledTiers(unpublished_source=list(report.unpublished_source))
+    return StalledTiers(unpublished_source=[cell for cell in report.unpublished_source if cell.project in visible])
 
 
 @router.get("/cascade/stalled")
-async def stalled_tiers(settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]) -> StalledTiers:
+async def stalled_tiers(settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> StalledTiers:
     """Which tiers were written and never published — answerable without knowing an instance id.
 
-    Gated like its `/stage-runners` sibling rather than more loosely: the cells name projects and
-    edges, which is estate shape, and a reader who may not produce has no claim on it.
+    Each cell names its project, and a caller sees the cells of the projects they administer
+    (`can_administer`, one `batch_check` over the projects in the answer): a stalled tier is a
+    tenant's pipeline state, and an admin of one tenant has no claim on another's. Administering none
+    is an empty answer, not a 403 — the same rule as ingest's cross-tenant listing.
 
     MEASURED PER REQUEST, not served from the cron's last tick. A cached answer would need somewhere to
     live and would go stale exactly when it matters — the question is asked BECAUSE something looks
@@ -90,4 +90,5 @@ async def stalled_tiers(settings: SettingsDep, _subject: Annotated[str | None, D
         consumed=consumed_reader(settings),
         gauge=_silent_gauge(),
     )
-    return stalled_from(report)
+    visible = await administered_projects(fga_client, caller, (cell.project for cell in report.unpublished_source))
+    return stalled_from(report, visible=visible)

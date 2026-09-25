@@ -30,6 +30,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from medallion.api import stage_ops, stage_runner_ops
+from medallion.api.produce_auth import ProducerCaller, admit_caller
 from service_kit.exceptions import register_handlers
 
 
@@ -82,10 +83,11 @@ def test_a_live_cascade_stage_can_be_OBSERVED(stage_runner: TestClient) -> None:
 
 def test_the_status_read_does_NOT_disclose_the_spec(stage_runner: TestClient) -> None:
     """`WorkflowState` carries the whole `StageJobSpec` -- the URIs and the lineage blob. A status
-    question must not hand them over to answer."""
+    question must not hand them over to answer. `project` is the one field of the spec that crosses:
+    it is the tenant the producer authorizes the caller on, and the producer cannot read it itself."""
     body = stage_runner.get(f"/stages/{LIVE}").json()
 
-    assert set(body) == {"instance_id", "status", "submission_id", "polls_done"}, f"the wire shape widened: {sorted(body)}"
+    assert set(body) == {"instance_id", "status", "submission_id", "polls_done", "project"}, f"the wire shape widened: {sorted(body)}"
     assert "secret" not in json.dumps(body), "the spec leaked through the status route"
 
 
@@ -137,7 +139,11 @@ def _producer_app(stage_runner_urls: dict[str, str], transport: Any) -> FastAPI:
     app.include_router(stage_runner_ops.router)
     app.state.medallion_settings = MedallionSettings().model_copy(update={"stage_runner_urls": stage_runner_urls})
     app.state.http = transport
-    app.dependency_overrides[stage_runner_ops.authorize_produce] = lambda: "CiQwOGE4Njg0Yi1kYjg4"
+    # The door and the per-run authorization have their own suite
+    # (`test_the_operator_doors_authorize_on_the_resource.py`); a caller the door decided whole keeps
+    # these assertions about the forwarding.
+    app.dependency_overrides[stage_runner_ops.authorize_produce] = lambda: None
+    app.dependency_overrides[admit_caller] = ProducerCaller
     app.dependency_overrides[stage_runner_ops.SettingsDep.__metadata__[0].dependency] = lambda: app.state.medallion_settings
     return app
 
@@ -164,13 +170,18 @@ class _Recorder:
 
 
 def test_the_producer_forwards_to_the_STAGE_RUNNER_that_hosts_the_instance() -> None:
-    """The whole reason this half exists: the terminate has to execute in the stage_runner's process."""
+    """The whole reason this half exists: the terminate has to execute in the stage_runner's process.
+    The status read comes first, from the same stage runner, because it names the project the caller
+    is authorized on."""
     recorder = _Recorder()
     with TestClient(_producer_app({"silver-to-gold": "http://rask-silver-to-gold:8000"}, recorder), raise_server_exceptions=False) as c:
         resp = c.post(f"/stage-runners/silver-to-gold/stages/{LIVE}/terminate")
 
     assert resp.status_code == 202, resp.text
-    assert recorder.calls == [("POST", f"http://rask-silver-to-gold:8000/stages/{LIVE}/terminate")]
+    assert recorder.calls == [
+        ("GET", f"http://rask-silver-to-gold:8000/stages/{LIVE}"),
+        ("POST", f"http://rask-silver-to-gold:8000/stages/{LIVE}/terminate"),
+    ]
 
 
 def test_an_UNCONFIGURED_stage_runner_is_404_and_NAMES_what_is_configured() -> None:

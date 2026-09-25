@@ -46,6 +46,11 @@ class StageRunState(BaseModel):
     #: Echoed so an operator can cross-check the Ray dashboard for the job the watch is polling.
     submission_id: str | None = None
     polls_done: int = 0
+    #: The tenant this run is for, read off the trigger it carries — what the producer authorizes the
+    #: caller on, since it cannot read this app's workflow state itself. ``""`` is a single-tenant run
+    #: (its trigger named no project); ``None`` is an input this build cannot read, which the producer
+    #: refuses rather than guess, so the two must never collapse into one value.
+    project: str | None = None
 
 
 class StageTerminateAccepted(BaseModel):
@@ -77,10 +82,12 @@ async def show_stage(instance_id: str, request: Request, _token: Annotated[None,
     state = await _state_or_404(_client(request), instance_id, payloads=True)
     submission_id: str | None = None
     polls = 0
+    project: str | None = None
     with suppress(Exception):
         # Best-effort: a spec this build cannot parse must still answer the STATUS question, which is
         # the one the caller asked.
         spec = json.loads(state.serialized_input or "{}")
+        project = _trigger_project(spec)
         submission_id = str(spec.get("submission_id") or "") or None
         polls = int(spec.get("polls_done") or 0)
     return StageRunState(
@@ -88,7 +95,24 @@ async def show_stage(instance_id: str, request: Request, _token: Annotated[None,
         status=str(getattr(state.runtime_status, "name", state.runtime_status)),
         submission_id=submission_id,
         polls_done=polls,
+        project=project,
     )
+
+
+def _trigger_project(spec: dict[str, Any]) -> str | None:
+    """The trigger's project: ``""`` when it names none (single-tenant), ``None`` when it cannot be read.
+
+    Read off the TRIGGER, because that is the one field the stage runner resolved its tenant from before
+    scheduling the run (`transform.py` drops an unsafe one) — the table ids beside it cannot be split
+    back into a project, since a project id may itself contain `-`.
+    """
+    trigger = spec.get("trigger", {})
+    if not isinstance(trigger, dict):
+        return None
+    project = trigger.get("project")
+    if project is None:
+        return ""
+    return project if isinstance(project, str) else None
 
 
 @router.post("/stages/{instance_id}/terminate", status_code=202)

@@ -671,7 +671,8 @@ parks on dlq.medallion-producer, each stage runner on dlq.<daprAppId> — all qu
 {{- end }}
 {{/* MERGE FIX — the surviving gateway's port. docs/architecture/lance-ns-merge.md §decision 4: "rask's
 FastAPI gateway (:8888, Dapr-aware) wins; lance-ns's nginx gateway retires (P1/P4)", and rask's gateway
-carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/explorer/*). The nginx
+carries the lance routes (/api/catalog, /api/lineage, the producer's
+/api/{produce,train,trains,promotions,stage-runners,cascade}, /api/explorer/*). The nginx
 gateway (and its top-level `gateway:` values block, port 8080) is DELETED, so the fleet entry
 (`services.gateway.port`) is the source of truth; 8888 is the last-resort fallback for a values file with
 no fleet gateway (the port CLAUDE.md pins). */}}

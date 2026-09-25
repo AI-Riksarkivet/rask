@@ -47,7 +47,7 @@ def test_the_door_answers_what_stopped_without_an_instance_id() -> None:
     """THE DEFECT: the identities existed and no caller could reach them."""
     from medallion.api.cascade_lag_read import stalled_from
 
-    answered = stalled_from(_report(stalled=[("silver->gold", "acme"), ("bronze->silver", "brand-new")]))
+    answered = stalled_from(_report(stalled=[("silver->gold", "acme"), ("bronze->silver", "brand-new")]), visible=frozenset({"acme", "brand-new"}))
 
     assert [(cell.edge, cell.project) for cell in answered.unpublished_source] == [
         ("silver->gold", "acme"),
@@ -55,11 +55,21 @@ def test_the_door_answers_what_stopped_without_an_instance_id() -> None:
     ]
 
 
+def test_the_answer_carries_only_the_cells_of_VISIBLE_projects() -> None:
+    """Which projects are visible is the door's decision (`test_the_operator_doors_authorize_on_the_resource`);
+    the projection keeps exactly those cells and nothing else."""
+    from medallion.api.cascade_lag_read import stalled_from
+
+    answered = stalled_from(_report(stalled=[("silver->gold", "acme"), ("bronze->silver", "other")]), visible=frozenset({"other"}))
+
+    assert [(cell.edge, cell.project) for cell in answered.unpublished_source] == [("bronze->silver", "other")]
+
+
 def test_a_cascade_with_nothing_stopped_answers_an_empty_list() -> None:
     """ "Nothing is stalled" and "the door is broken" must not look alike, so it answers rather than 404s."""
     from medallion.api.cascade_lag_read import stalled_from
 
-    assert stalled_from(_report(stalled=[])).unpublished_source == []
+    assert stalled_from(_report(stalled=[]), visible=frozenset({"acme"})).unpublished_source == []
 
 
 def test_the_gauge_the_door_hands_the_tick_RECORDS_NOTHING() -> None:

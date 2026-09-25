@@ -5,7 +5,12 @@ service-to-service guard — the shared app-api-token — is kept UNCHANGED. Thi
 a signed-in OIDC user who holds ``can_administer`` on the project may trigger produce, so the web BFF can
 forward the *user's* bearer and the web pod never holds the service token (no secrets-posture change).
 
-Fail-closed at every step: no service token configured is dev-open (matching the old ``require_dapr_token``);
+WHICH PROJECT THE ADMIN CHECK NAMES depends on the door (owner ruling 2026-09-25, "Authorize on the
+resource"). A door whose ``?project=`` is its WRITE TARGET checks that project (`authorize_produce`). A door
+acting on an EXISTING resource authenticates only (`admit_caller`) and checks the project the resource
+records (`require_project_admin`, `administered_projects`), so no caller-chosen value can move its gate.
+
+Fail-closed at every step: no service token configured is a refusal unless the unauthenticated hatch is set;
 a matching Dapr token passes (service path) — but only for the CONFIGURED project, since the shared token
 carries no tenant identity (crossing tenants takes a user bearer); otherwise an OIDC bearer is REQUIRED
 and must be valid (else 401) AND resolve to a project admin (else 403), with an OpenFGA outage failing to
@@ -18,13 +23,16 @@ allow/deny/outage AND the service-token acceptance — is audited on the ``lance
 from __future__ import annotations
 
 import secrets
+from collections.abc import Iterable
 from typing import Annotated, Protocol
 
-from fastapi import Header, Query, Request
+from fastapi import Depends, Header, Query, Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
+from medallion.core.config import MedallionSettings
 from service_kit.governed import dapr_auth, fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import is_public_caller
@@ -56,7 +64,20 @@ async def _require_admin(fga_client: OpenFgaClient, *, user: str, obj: str) -> N
         raise ServiceUnavailableError("authorization service is not available") from None
     audit("can_administer", ALLOW if allowed else DENY, subject=user, resource=obj)
     if not allowed:
-        raise PermissionDeniedError("produce needs project admin (can_administer) or the service token")
+        raise PermissionDeniedError(f"{user} lacks can_administer on {obj}")
+
+
+class ProducerCaller(BaseModel):
+    """Who passed the producer's door, before any resource is read.
+
+    ``subject`` is the verified person, still to be authorized on a project. ``None`` is a caller the
+    door decided whole — the service token, or the unconfigured-door hatch — so nothing is left to
+    check against a resource.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    subject: str | None = None
 
 
 class _HasAppApiToken(Protocol):
@@ -91,41 +112,31 @@ def _expected_app_token(settings: _HasAppApiToken) -> str:
     return dapr_auth.expected_app_token() or settings.app_api_token or ""
 
 
-async def authorize_produce(
+async def _admit(
     request: Request,
-    settings: SettingsDep,
-    fga_client: FgaClientDep,
-    dapr_api_token: Annotated[str | None, Header()] = None,
-    authorization: Annotated[str | None, Header()] = None,
-    project: ProjectParam = None,
-    # The INVOKING Dapr app-id — what separates "a service called me" from "the public front door
-    # called me for a stranger". See `service_kit.governed.dapr_auth.is_public_caller`.
-    dapr_caller_app_id: Annotated[str | None, Header()] = None,
-) -> str | None:
-    """Allow EITHER the Dapr app-api-token (service) OR a signed-in project admin (OIDC + can_administer).
+    settings: MedallionSettings,
+    *,
+    dapr_api_token: str | None,
+    authorization: str | None,
+    dapr_caller_app_id: str | None,
+    project: str | None,
+) -> ProducerCaller:
+    """AUTHENTICATE a producer caller: the service path is decided whole here, a person only verified.
 
-    RETURNS the verified subject on the human path, or ``None`` when the caller is a service (or dev-open).
-    It used to return nothing, which is why a cascade this person started could never name them: this door
-    is the LAST place their identity exists — by the time a silver or gold stage fails, the request is
-    gone and the stage runner authors as a role. The value is only ever a TARGETING hint (it rides
-    ``lance.originator`` into the notifications plane, which re-derives visibility per recipient at
-    delivery); it authorizes nothing, and every authorization decision above is unchanged.
-
-    ``project`` (#84) moves the admin gate onto the REQUESTED project — the caller must administer the
-    project it produces into, not the fixed configured one; absent → ``produce_admin_project`` exactly as
-    before. The service-token path stays project-BLIND: the shared token authenticates the service, not
-    a tenant, so it may only produce into the configured project — a different requested project is
-    refused (403); crossing tenants takes a user bearer, which gets the per-project FGA check."""
+    ``project`` is what the service path is held to — the shared token carries no tenant identity, so it
+    is honoured for the configured project alone. A person is authorized by the caller of this function:
+    on the write target (`authorize_produce`) or on the resource (`require_project_admin`).
+    """
     expected = _expected_app_token(settings)
     # UNCONFIGURED IS A REFUSAL, through the same function every sibling door calls. This door used to
     # open here, and the asymmetry was unreachable from either side: `require_dapr_token` refuses, this
     # admitted, and nothing said which was intended — on the CASCADE HEAD. Owner ruling 2026-09-19
     # (`docs/DECISIONS.md`); `RASK_ALLOW_UNAUTHENTICATED_DAPR` is what a deployment that means to run
-    # open now says out loud. When the hatch is taken this returns as before: admitted, and `None`
-    # because no verified subject exists on that path, never a guess.
+    # open now says out loud. When the hatch is taken the caller is admitted with no subject, because
+    # no verified subject exists on that path, never a guess.
     if not expected:
         dapr_auth.refuse_unconfigured_door(caller=dapr_caller_app_id)
-        return None
+        return ProducerCaller()
     obj = f"project:{project or settings.produce_admin_project}"
     # Service-to-service path: a matching Dapr app-api-token. The shared token carries NO tenant
     # identity, so it must never be trusted for an arbitrary requested project — that would let any
@@ -149,8 +160,8 @@ async def authorize_produce(
             audit("produce_service_token", DENY, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj, reason="cross_project")
             raise PermissionDeniedError("the service token cannot produce into another project; use a project-admin bearer")
         audit("produce_service_token", ALLOW, subject=f"service:{dapr_caller_app_id or 'direct'}", resource=obj)
-        return None
-    # Human path: a signed-in project admin. Only when OIDC is configured + a verifier is wired.
+        return ProducerCaller()
+    # Human path: a signed-in person. Only when OIDC is configured + a verifier is wired.
     verifier: OIDCVerifier | None = getattr(request.app.state, "oidc", None)
     if settings.oidc_enabled and verifier is None and authorization:
         # OIDC enabled but no verifier wired (startup/discovery skew): an infrastructure fault, not a
@@ -171,11 +182,103 @@ async def authorize_produce(
             token = await verify_off_loop(verifier, raw)
         except UnauthenticatedError:
             raise UnauthenticatedError("invalid token") from None
-        if fga_client is None:  # OIDC on but FGA unwired → fail closed, never an unauthorized trigger
-            raise ServiceUnavailableError("authorization service is not available")
-        await _require_admin(fga_client, user=token.sub, obj=obj)
-        return token.sub
+        return ProducerCaller(subject=token.sub)
     raise PermissionDeniedError("invalid or missing produce credential")
+
+
+async def require_project_admin(fga_client: OpenFgaClient | None, caller: ProducerCaller, *, project: str | None) -> None:
+    """Authorize an admitted caller on ``project``: ``can_administer``, audited, fail closed.
+
+    A caller the door decided whole passes. A person needs the relation on the project. ``project=None``
+    is a resource whose tenant cannot be read, and a person is refused it (503) rather than checked
+    against the configured project, which would hand another tenant's run to that project's admins.
+    """
+    if caller.subject is None:
+        return
+    if project is None:
+        raise ServiceUnavailableError("the resource does not name its project, so it cannot be authorized")
+    if fga_client is None:  # OIDC on but FGA unwired → fail closed, never an unauthorized act
+        raise ServiceUnavailableError("authorization service is not available")
+    await _require_admin(fga_client, user=caller.subject, obj=f"project:{project}")
+
+
+async def administered_projects(fga_client: OpenFgaClient | None, caller: ProducerCaller, projects: Iterable[str]) -> frozenset[str]:
+    """WHICH of ``projects`` the caller may see: one ``batch_check``, one audit line per project.
+
+    The filtering twin of `require_project_admin`, shaped like ingest's `authorize_ingest_projects`: a
+    per-project verdict filters rather than refuses, so a caller who administers none gets nothing back
+    — a 403 for the whole call would say that some tenant has something to show. An authz outage is
+    true of the whole call and raises 503, so it never reads as "you administer nothing".
+    """
+    unique = sorted(set(projects))
+    if caller.subject is None:
+        return frozenset(unique)
+    if not unique:
+        return frozenset()
+    if fga_client is None:
+        raise ServiceUnavailableError("authorization service is not available")
+    objects = [f"project:{project}" for project in unique]
+    try:
+        verdicts = await fga.batch_check(fga_client, user=caller.subject, relation="can_administer", objects=objects)
+    except ServiceUnavailableError:
+        audit("can_administer", FAILURE, subject=caller.subject, resource=",".join(objects), reason="authz_unavailable")
+        raise ServiceUnavailableError("authorization service is not available") from None
+    for obj in objects:
+        audit("can_administer", ALLOW if verdicts.get(obj) else DENY, subject=caller.subject, resource=obj)
+    return frozenset(project for project, obj in zip(unique, objects, strict=True) if verdicts.get(obj))
+
+
+async def admit_caller(
+    request: Request,
+    settings: SettingsDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> ProducerCaller:
+    """The door of a route acting on an EXISTING resource: authentication, and no ``?project=`` at all.
+
+    Owner ruling 2026-09-25, "Authorize on the resource". The tenant of a stage run, a training watch or
+    a stalled cell is recorded on it, so the route reads the resource and authorizes on the project it
+    names (`require_project_admin` / `administered_projects`). A ``?project=`` here would hand that
+    choice to the caller — an admin of one project naming their own to read or stop another's, measured
+    2026-09-25 on `GET /cascade/stalled`.
+    """
+    return await _admit(request, settings, dapr_api_token=dapr_api_token, authorization=authorization, dapr_caller_app_id=dapr_caller_app_id, project=None)
+
+
+AdmittedCaller = Annotated[ProducerCaller, Depends(admit_caller)]
+
+
+async def authorize_produce(
+    request: Request,
+    settings: SettingsDep,
+    fga_client: FgaClientDep,
+    dapr_api_token: Annotated[str | None, Header()] = None,
+    authorization: Annotated[str | None, Header()] = None,
+    project: ProjectParam = None,
+    # The INVOKING Dapr app-id — what separates "a service called me" from "the public front door
+    # called me for a stranger". See `service_kit.governed.dapr_auth.is_public_caller`.
+    dapr_caller_app_id: Annotated[str | None, Header()] = None,
+) -> str | None:
+    """Allow EITHER the Dapr app-api-token (service) OR a signed-in project admin (OIDC + can_administer).
+
+    For a door whose ``?project=`` names the WRITE TARGET. A door acting on an existing resource takes
+    `admit_caller` and authorizes on the project that resource records.
+
+    RETURNS the verified subject on the human path, or ``None`` when the caller is a service (or the
+    unconfigured-door hatch). This door is the LAST place a cascade's requester exists — by the time a
+    silver or gold stage fails, the request is gone and the stage runner authors as a role. The value
+    is only ever a TARGETING hint (it rides ``lance.originator`` into the notifications plane, which
+    re-derives visibility per recipient at delivery); it authorizes nothing.
+
+    ``project`` (#84) puts the admin gate on the REQUESTED project — the caller must administer the
+    project it produces into; absent → ``produce_admin_project``. The service-token path stays
+    project-BLIND: the shared token authenticates the service, not a tenant, so it may only produce into
+    the configured project — a different requested project is refused (403); crossing tenants takes a
+    user bearer, which gets the per-project FGA check."""
+    caller = await _admit(request, settings, dapr_api_token=dapr_api_token, authorization=authorization, dapr_caller_app_id=dapr_caller_app_id, project=project)
+    await require_project_admin(fga_client, caller, project=project or settings.produce_admin_project)
+    return caller.subject
 
 
 async def authenticate_subject(

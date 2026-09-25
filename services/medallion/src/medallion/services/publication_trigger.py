@@ -117,9 +117,10 @@ def build_stage_trigger(*, object_id: str, event_id: str, extra: dict[str, Any])
     exists because two hand-maintained copies of one transform drifted into different schemas; its
     docstring is the rule this follows: *a mirror maintained by hand is a mirror that drifts*.
 
-    Returns ``None`` when the object names no cascade lane. The CALLER decides what that means — the
-    subscription acks it (a table outside the cascade is published constantly), while the re-run verb
-    owes the operator a 404. Deciding here would force one of those answers on both.
+    Returns ``None`` when the object is not a table id (no `table:` prefix, no delimiter, or an empty
+    namespace or table). The CALLER decides what that means — the subscription acks it, while the re-run
+    verb answers the operator's malformed input with a 400. Deciding here would force one of those
+    answers on both.
     """
     table = _table_name(object_id, DELIMITER)
     if table is None:

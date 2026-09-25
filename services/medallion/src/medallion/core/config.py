@@ -247,8 +247,8 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     #: The RUNG IS THE STAGE RUNNER'S OWN, not `/produce`'s. `promotions.py` records why: `authorize_produce`'s
     #: `can_administer` is "coarser AND different, and would lock out exactly the non-admin validator
     #: the rung exists for". So a silver->gold re-run asks `can_promote`, exactly as the stage runner does
-    #: when it runs the hop itself. The sibling verb `terminate` DOES sit on `authorize_produce`
-    #: ("whoever may start this tenant's pipeline may stop it") — two verbs on one plane, two rungs,
+    #: when it runs the hop itself. The sibling verb `terminate` asks `can_administer` on the project the
+    #: run records ("whoever administers this tenant's pipeline may stop it") — two verbs on one plane, two rungs,
     #: which is defensible because stopping is not re-driving, and is written down here rather than
     #: discovered.
     stage_runner_gates: dict[str, StageRunnerGate] = Field(

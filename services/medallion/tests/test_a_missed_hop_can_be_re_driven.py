@@ -194,6 +194,19 @@ def test_an_object_that_names_NO_EDGE_is_refused_before_any_gate(bus: _Bus, chec
     assert bus.published == [] and checks == []
 
 
+@pytest.mark.parametrize("object_id", ["acme-silver$features", "table:acme-silver", "table:$features", "table:acme-silver$"])
+def test_a_MALFORMED_object_id_is_the_callers_bad_input(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch, object_id: str) -> None:
+    """400 naming the shape, not the 403 a lane refusal gets: nothing about who may drive what can be
+    read off a string that is not an object id. Measured 2026-09-25 on e4e60b60: the bare identifier
+    the request model's own comment offered answered 403 "does not name a cascade edge"."""
+    with TestClient(_app(bus, checks, monkeypatch)) as client:
+        response = client.post(_RERUN, json={**_BODY, "object_id": object_id})
+
+    assert response.status_code == 400, response.text
+    assert "table:<project>-<tier>$<table>" in response.json()["detail"], response.text
+    assert bus.published == [] and checks == []
+
+
 def test_the_RANGE_reaches_the_trigger_and_an_absent_FLOOR_stays_absent(client: TestClient, bus: _Bus) -> None:
     """`from_version` absent means "everything up to `to`" — carried as-is rather than coerced to 0,
     because "no prior publication" and "published from version 0" are different claims and the stage runner

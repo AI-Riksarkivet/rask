@@ -5,8 +5,8 @@ means to learn whether that watcher was alive, had abandoned the run at its poll
 been scheduled at all -- which, on the default chart, was what actually happened (see
 `tests/unit/test_train_watch_is_hosted.py`, fixed in the same change).
 
-Both routes are gated by the SAME door as `POST /train`. Reading the status of compute a caller was
-refused permission to spend is not public, and the estate already argues exactly that on
+Both routes are gated on `can_administer` over the project the watch records. Reading the status of
+compute a caller may not spend is not public, and the estate already argues exactly that on
 `flows.get_run` and `ingest.get_ingest`.
 
 Terminate is HARD and the body says what it does NOT do: `train_run` only polls a Ray job that
@@ -27,6 +27,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from medallion.api import train as train_module
+from medallion.api.produce_auth import ProducerCaller, admit_caller
 from service_kit.exceptions import register_handlers
 
 
@@ -56,10 +57,10 @@ def _app(client: _Client | None) -> FastAPI:
     register_handlers(app)
     app.include_router(train_module.router)
     app.state.workflow_client = client
-    # The door itself is exercised by `test_promotion_door` and the produce-auth suite; here it is
-    # overridden so these tests isolate the ROUTE. Leaving it live would make every assertion below
-    # depend on the auth posture rather than on the management surface under test.
-    app.dependency_overrides[train_module.authorize_train] = lambda: "CiQwOGE4Njg0Yi1kYjg4"
+    # The door and the per-watch authorization are exercised by
+    # `test_the_operator_doors_authorize_on_the_resource.py`; here a caller the door decided whole
+    # isolates the ROUTE, so every assertion below is about the management surface, not the auth posture.
+    app.dependency_overrides[admit_caller] = ProducerCaller
     return app
 
 

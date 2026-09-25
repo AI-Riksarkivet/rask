@@ -190,7 +190,6 @@ _NOT_PUBLISHED_AT_THE_EDGE: dict[tuple[str, str], str] = {
     ("post", "/train-trigger"): "pub/sub delivery of the training topic, behind require_dapr_token",
     ("post", "/promotion-held"): "pub/sub delivery of a held promotion, behind require_dapr_token",
     ("post", "/ingest-media"): "synchronous and capped; docs/DECISIONS.md keeps it a service seam, and /api/ingest is the edge's ingest door",
-    ("get", "/authorize"): "an admin probe nothing calls; owner ruling 2026-09-25 gives it no row",
 }
 
 

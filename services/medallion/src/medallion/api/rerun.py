@@ -33,9 +33,9 @@ rather than implying a guarantee the listing could not make.
 **The rung is the STAGE RUNNER's own (R4).** Not `/produce`'s `can_administer`, which `promotions.py` records
 as "coarser AND different, and would lock out exactly the non-admin validator the rung exists for".
 A silver->gold re-run asks `can_promote` on `namespace:<project>-gold`, exactly as the stage runner asks when
-it runs the hop itself. Its sibling `terminate` sits on `authorize_produce` — two verbs on this plane,
-two rungs — which is defensible because stopping is not re-driving, and is written down rather than
-discovered.
+it runs the hop itself. Its sibling `terminate` asks `can_administer` on the project the run records —
+two verbs on this plane, two rungs — which is defensible because stopping is not re-driving, and is
+written down rather than discovered.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import PermissionDeniedError, ServiceUnavailableError
+from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -85,8 +85,9 @@ class RerunRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: The PUBLISHED table, as the control event named it — `table:acme-silver$features` or the bare
-    #: identifier. Its namespace IS the edge's source, which is why the verb needs no stage runner name.
+    #: The PUBLISHED table, as the control event names it: `table:<project>-<tier>$<table>`, e.g.
+    #: `table:acme-silver$features`. Anything else is a 400. Its namespace IS the edge's source, which is
+    #: why the verb needs no stage runner name.
     object_id: str = Field(min_length=1)
     project: str = Field(min_length=1)
     #: The delta this hop should consume. `from_version` absent means "everything up to `to_version`",
@@ -229,10 +230,11 @@ async def rerun_stage(
     # to authorize would be the second hand-maintained copy its docstring forbids.
     trigger = build_stage_trigger(object_id=body.object_id, event_id=token, extra=extra)
     if trigger is None:
-        # 403, not 404, and deliberately: the object may exist perfectly well and simply not name a
-        # cascade lane. `PermissionDeniedError` is what this plane's doors raise for "not yours to
-        # drive"; a 404 would tell an unauthorized caller which object ids are real.
-        raise PermissionDeniedError(f"{body.object_id!r} does not name a cascade edge")
+        # The caller's bad INPUT, so a 400 naming the shape: `build_stage_trigger` answers None only for
+        # a string that is not a table id at all — no `table:` prefix, no `$`, or an empty namespace or
+        # table — and reading that says nothing about which objects exist or who may drive them. A
+        # well-formed id that names no cascade lane is `_edge`'s 403 below.
+        raise InvalidInputError(f"{body.object_id!r} is not a table id; expected 'table:<project>-<tier>$<table>'")
     namespace = str(trigger["namespace"])
     gate, topic = _edge(settings, namespace)
     if fga_client is None:

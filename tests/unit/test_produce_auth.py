@@ -225,19 +225,6 @@ def test_route_token_match_passes_the_guard() -> None:
     assert response.status_code != 403
 
 
-# ── GET /authorize (#77 audit admin gate): the SAME door, side-effect-free ─────────────────────────
-
-
-def test_authorize_route_rejects_missing_credential() -> None:
-    # The web audit BFF relies on this: a non-admin (no credential) must be refused, never 200.
-    assert _client().get("/authorize").status_code == 403
-
-
-def test_authorize_route_allows_the_admin_door() -> None:
-    res = _client().get("/authorize", headers={"dapr-api-token": "s3cret"})
-    assert res.status_code == 200 and res.json() == {"authorized": True}
-
-
 # ── #84 per-tenant produce: the admin gate follows the REQUESTED project ───────────────────────────
 
 
@@ -287,8 +274,9 @@ def test_nonadmin_of_the_requested_project_is_403(monkeypatch: pytest.MonkeyPatc
 
 def test_route_rejects_a_malformed_project_with_422() -> None:
     # The project becomes an S3 prefix + lineage qualifier — a path-shaped value is refused at the edge.
-    res = _client().get("/authorize", params={"project": "../evil"}, headers={"dapr-api-token": "s3cret"})
+    res = _client().post("/produce", params={"project": "../evil"}, headers={"dapr-api-token": "s3cret", "Idempotency-Key": "idem-test"})
     assert res.status_code == 422
+    assert {e["field"] for e in res.json()["errors"]} == {"query.project"}, res.text
 
 
 def test_produce_route_409s_when_project_routing_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

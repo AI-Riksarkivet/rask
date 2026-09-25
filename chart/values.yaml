@@ -889,8 +889,9 @@ frontend:
 
 # --- lance-ns nginx gateway: RETIRED (lance-ns-merge.md decision 4 + P4) ----------------------------
 # The rask fleet gateway at services.gateway (uvicorn `gateway:app` on :8888) is the ONE front door; it
-# carries the lance routes (/api/catalog, /api/lineage, /api/produce, /api/train, /api/explorer/*) and the
-# lineage sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
+# carries the lance routes (/api/catalog, /api/lineage, the producer's
+# /api/{produce,train,trains,promotions,stage-runners,cascade}, /api/explorer/*) and the lineage
+# sidecar-only 403 guard as Python middleware. templates/gateway.yaml (nginx ConfigMap +
 # Deployment + Service) is deleted; the former top-level `gateway:` values block went with it.
 
 # --- Governance (Dex OIDC + OpenFGA). Off → open dev mode; on → the full governed demo. ------------

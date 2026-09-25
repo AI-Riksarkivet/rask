@@ -9,6 +9,13 @@ So: the producer authenticates and AUTHORIZES (it has the gateway row and alread
 door for `/produce` and `/train`), then forwards to the stage runner's ClusterIP with the service token. The
 stage runner verifies that token and does the work under its own app-id.
 
+AUTHORIZED ON THE RUN, not on a caller-chosen project (owner ruling 2026-09-25). The producer cannot
+read another app's workflow state, so it asks the hosting stage runner first; the stage runner reads
+the tenant off the trigger the instance carries, and `can_administer` is checked on THAT project before
+a status is returned or a terminate is forwarded. An admin of one project gets 403 on another's run —
+as ingest's run doors and the promotion door answer — because these instance ids are content hashes
+(`stage-<submission hash>`), so a 403 confirms only an id the caller already held.
+
 This mirrors the promotion review's reasoning in the opposite direction: there, the workflow was moved
 to the app that owns the door; here the workflow cannot move, so the door reaches it.
 """
@@ -19,11 +26,13 @@ from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
+from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
-from medallion.api.dependencies import SettingsDep
-from medallion.api.produce_auth import authorize_produce
+from medallion.api.dependencies import FgaClientDep, SettingsDep
+from medallion.api.produce_auth import AdmittedCaller, ProducerCaller, authorize_produce, require_project_admin
 from medallion.core.config import MedallionSettings, outbound_app_token
+from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
 def _app_token_header(settings: MedallionSettings) -> dict[str, str]:
@@ -91,25 +100,50 @@ async def _forward(request: Request, settings: Any, stage_runner: str, path: str
 
 @router.get("")
 async def list_stage_runners(settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]) -> StageRunnerInventory:
+    """The deployment's stage-runner names. The same answer for every tenant, so `?project=` only
+    chooses which project's admin the caller proves; it cannot select anything to disclose."""
     return StageRunnerInventory(stage_runners=sorted((settings.stage_runner_urls or {}).keys()))
 
 
-@router.get("/{stage_runner}/stages/{instance_id}")
-async def show_stage(
-    stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]
+def _run_project(settings: MedallionSettings, state: Any) -> str | None:
+    """The project a stage run belongs to, as its hosting stage runner read it, or ``None`` if unknowable.
+
+    ``""`` is a single-tenant run: its trigger carried no project, which is the cascade `/produce` starts
+    with none, gated there on the configured project. A missing key is a stage runner that cannot say —
+    an unreadable input, or a build that predates the field — and is never read as single-tenant.
+    """
+    project = state.get("project") if isinstance(state, dict) else None
+    if project == "":
+        return settings.produce_admin_project
+    return project if is_safe_project(project) else None
+
+
+async def _authorized_run(
+    request: Request, *, settings: MedallionSettings, fga_client: OpenFgaClient | None, caller: ProducerCaller, stage_runner: str, instance_id: str
 ) -> Any:
-    """DWF-MGT-002 for the cascade: an in-flight stage was unobservable over HTTP entirely."""
-    return await _forward(request, settings, stage_runner, f"/stages/{instance_id}", method="GET")
+    """Read the run from the stage runner that hosts it, then authorize the caller on ITS project."""
+    state = await _forward(request, settings, stage_runner, f"/stages/{instance_id}", method="GET")
+    await require_project_admin(fga_client, caller, project=_run_project(settings, state))
+    return state
+
+
+@router.get("/{stage_runner}/stages/{instance_id}")
+async def show_stage(stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> Any:
+    """DWF-MGT-002 for the cascade: an in-flight stage was unobservable over HTTP entirely. 403 unless the
+    caller administers the project the run records."""
+    return await _authorized_run(request, settings=settings, fga_client=fga_client, caller=caller, stage_runner=stage_runner, instance_id=instance_id)
 
 
 @router.post("/{stage_runner}/stages/{instance_id}/terminate", status_code=202)
 async def terminate_stage(
-    stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, _subject: Annotated[str | None, Depends(authorize_produce)]
+    stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller
 ) -> Any:
     """DWF-MGT-003 for the cascade.
 
-    Gated by the same door as `/produce`: whoever may start this tenant's pipeline may stop it. The
-    stage runner's 202 body — which says the Ray job keeps running — is carried through unchanged, because
-    softening it here is exactly how an operator comes to believe the GPUs are free.
+    Whoever administers the project a run belongs to may stop it, and the refusal comes before the
+    terminate is forwarded. The stage runner's 202 body — which says the Ray job keeps running — is
+    carried through unchanged, because softening it here is exactly how an operator comes to believe
+    the GPUs are free.
     """
+    await _authorized_run(request, settings=settings, fga_client=fga_client, caller=caller, stage_runner=stage_runner, instance_id=instance_id)
     return await _forward(request, settings, stage_runner, f"/stages/{instance_id}/terminate", method="POST")
