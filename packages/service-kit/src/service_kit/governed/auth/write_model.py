@@ -18,6 +18,8 @@ import json
 from importlib.resources import files
 from typing import Any
 
+from service_kit.governed.fga import canonical_model
+
 
 def model_document() -> dict[str, Any]:
     """The model as the services import it — the same bytes, never a second copy."""
@@ -25,22 +27,29 @@ def model_document() -> dict[str, Any]:
 
 
 def shape(model: dict[str, Any]) -> dict[str, list[str]]:
-    """What makes two models EQUAL for the purpose of deciding whether to write.
+    """Each type's relation NAMES — a readable index of a model, never the test of whether to write.
 
-    Types and their relation NAMES. Comparing whole documents would differ on the server-assigned
-    ``id`` every stored model carries, so every upgrade would look like a change and write again —
-    which is how a store reaches fifty models. Comparing only type names would miss exactly the drift
-    this exists to catch, since the nine missing relations were all on types that already existed.
+    A drift report reads as "warehouse lacks maintainer" from this, where two canonical strings would
+    only say "different". It cannot decide a write: a rule narrowed under an unchanged name —
+    ``can_read_data: reader or pass_grants`` to ``reader`` — leaves every name in place, so a name
+    comparison reports the store current while the store keeps granting through the removed path.
     """
     return {t["type"]: sorted(t.get("relations") or {}) for t in model.get("type_definitions", [])}
 
 
 def needs_write(stored: dict[str, Any] | None, desired: dict[str, Any]) -> bool:
-    """Whether the store's newest model differs from this package's.
+    """Whether the store's newest model differs from this package's in anything OpenFGA evaluates.
+
+    Compared in :func:`service_kit.governed.fga.canonical_model`'s form — the one the catalog's
+    boot-time ``provision`` skips on, so the hook and the catalog agree about what "unchanged" means.
+    That form is what lets a BODY comparison converge: it reads only ``schema_version``,
+    ``type_definitions`` and ``conditions``, never the server-assigned ``id``, and it drops the
+    defaults the store fills in on write, so the store's copy of an unchanged model compares equal and
+    an upgrade mints no version for nothing.
 
     ``None`` — an empty store — is a write: there is nothing for the services to check against.
     """
-    return stored is None or shape(stored) != shape(desired)
+    return stored is None or canonical_model(stored) != canonical_model(desired)
 
 
 def _call(api: str, path: str, body: dict[str, Any] | None = None, *, timeout: float = 30.0) -> dict[str, Any]:

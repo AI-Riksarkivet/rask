@@ -404,7 +404,7 @@ def _field(source: Any, name: str) -> Any:
     return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
 
 
-def _canonical_model(model: Any) -> str:
+def canonical_model(model: Any) -> str:
     """The comparable form of an authorization model, from either shape it arrives in.
 
     Fields are read off the top level BEFORE flattening, because the two shapes disagree about what the
@@ -577,7 +577,7 @@ async def provision(
             # which is the value the narrowing guard above reads to decide whether a boot is a
             # rollback, and it leaves an operator asking what the estate's authorization model says
             # with 1,316 candidates to diff.
-            if _canonical_model(current) == _canonical_model(model):
+            if canonical_model(current) == canonical_model(model):
                 log.info("openfga_model_unchanged", extra={"store_id": store_id, "model_id": current.id})
                 return store_id, str(current.id)
         changed = _body_changes(_relation_bodies(model["type_definitions"]), _relation_bodies(current.type_definitions)) if current is not None else []

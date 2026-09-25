@@ -135,14 +135,14 @@ def _install(monkeypatch: pytest.MonkeyPatch, *, desired: dict[str, Any], stored
 def test_the_canonical_form_ignores_the_defaults_openfga_fills_in() -> None:
     """The reachability proof, as a unit: the stored shape and the authored one must canonicalise equal,
     or the skip below is a branch that never runs."""
-    assert fga._canonical_model(_as_openfga_stores_it(MODEL)) == fga._canonical_model(MODEL)
+    assert fga.canonical_model(_as_openfga_stores_it(MODEL)) == fga.canonical_model(MODEL)
 
 
 def test_a_genuinely_different_model_does_not_canonicalise_equal() -> None:
     """The other half — otherwise the comparison would be 'always equal', which skips real edits."""
     widened = {**MODEL, "type_definitions": [*MODEL["type_definitions"], {"type": "team", "relations": {"member": {"this": {}}}}]}
 
-    assert fga._canonical_model(_as_openfga_stores_it(MODEL)) != fga._canonical_model(widened)
+    assert fga.canonical_model(_as_openfga_stores_it(MODEL)) != fga.canonical_model(widened)
 
 
 @pytest.mark.asyncio
@@ -237,7 +237,7 @@ def test_the_canonical_form_matches_a_REAL_sdk_model_not_just_a_double() -> None
             TypeDefinition(type="doc", relations={"can_read": Userset(computed_userset=ObjectRelation(relation="owner"))}),
         ]
 
-    assert fga._canonical_model(_Stored()) == fga._canonical_model(authored), (
+    assert fga.canonical_model(_Stored()) == fga.canonical_model(authored), (
         "the stored model and the authored one must canonicalise equal, or the unchanged-model skip is a "
         "branch that never runs and every boot mints another version"
     )

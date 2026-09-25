@@ -14,10 +14,12 @@ THE WRITE IS NOW A HOOK (`chart/templates/openfga-model.yaml`, weight 0 — afte
 before tuples). This is the other half: a hook that writes and a check that the write LANDED are
 different assertions, and only the second one notices a hook that silently stopped running.
 
-KEYED ON TYPES AND RELATION NAMES, the same comparison the writer uses
-(`service_kit.governed.auth.write_model.shape`). A stored model carries a server-assigned `id` the
-shipped document does not, so comparing whole documents would fail permanently and for the wrong
-reason.
+TWO GRAINS. The name checks (`service_kit.governed.auth.write_model.shape`) say WHICH type or relation
+is missing or extra, which is what an operator needs from a red run. The body check asks the question
+the writer decides on (`write_model.needs_write`): does the store hold this repo's rules, not only its
+names — a `can_*` narrowed under an unchanged name passes every name check. Neither compares whole
+documents: a stored model carries a server-assigned `id` and default fills the shipped document does
+not, so that comparison would fail permanently and for the wrong reason.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ import urllib.request
 
 import pytest
 
-from service_kit.governed.auth.write_model import model_document, shape
+from service_kit.governed.auth.write_model import model_document, needs_write, shape
 
 
 #: ALREADY CARRIES ITS SCHEME. `scripts/e2e_live.sh`'s `url` helper exports `http://<host>`, so
@@ -87,3 +89,14 @@ def test_the_store_carries_nothing_the_repo_has_dropped(deployed: dict) -> None:
     extra = {t: sorted(set(rels) - set(shipped.get(t, []))) for t, rels in live.items() if set(rels) - set(shipped.get(t, []))}
 
     assert not extra, f"the deployed model grants through relations this repo no longer defines: {extra}"
+
+
+def test_the_store_holds_every_RULE_the_repo_does(deployed: dict) -> None:
+    """The drift the name checks above cannot see: the same types and relations, one rule different.
+    A `can_*` narrowed in `model.fga` and never written leaves the store granting through the path the
+    repo removed, and every check still answers — so nothing downstream reports it."""
+    assert not needs_write(deployed, model_document()), (
+        "the deployed model's rules differ from this repo's `model.json`, so the store authorizes by rules "
+        "the code does not define. With the name checks green, a rule changed and the store never took it: "
+        "the `openfga-model` hook has not run since, or ran from a catalog image older than this checkout"
+    )
