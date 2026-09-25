@@ -53,11 +53,12 @@ async def erase_subject(
     Owner-gated (``can_drop``) — it destroys history, which is a stronger claim than the drop rung
     guards, and there is no rung above it.
 
-    **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any
-    retained version still answers the predicate after every step ran — which happens on a table with
-    a branch, because deleting rows on a branch does not remove that branch's pin on the parent's
-    history ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller
-    reading the status code reports the wrong thing.
+    **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained
+    version of any ref still answers the predicate after every step ran — which happens when a retained
+    branch version still stands on the files of the version it was cut from ([[LH-178]]). The residual
+    is named per ref (`main@2`, `work@3`), and `pinned_by` lists what to delete to finish, in an order
+    Lance accepts. A caller reporting completion to a data subject reads that field; a caller reading
+    the status code reports the wrong thing.
 
     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.
     Refusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had

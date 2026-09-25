@@ -99,11 +99,9 @@ async def preview_maintenance(
     """Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
     gated (``can_drop``); never mutates.
 
-    ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
-    measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
-    ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns — so [[LH-094]]'s
-    question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
-    both reclaim, and stay refused until that is decided for them.
+    ``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that
+    needs no containment argument: it calls ``_base_refs`` zero times and mutates nothing —
+    ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.
 
     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
     version of it: the caller acts on the version list, so

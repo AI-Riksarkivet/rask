@@ -4,11 +4,11 @@
 answering 200 for a branch it ignored has told the caller their branch was handled. That refusal was
 right while the door opened main whatever the request said.
 
-WHY THIS DOOR CAN OPEN NOW, when its two destructive siblings still cannot. The three were gated as one
-on [[LH-094]]'s reclaim question, but they are not alike: measured here, `preview_maintenance` calls
-`_base_refs` ZERO times and mutates nothing — `preview_gc` reads `ds.version`, `ds.versions()` and the
-tag and child-branch pins, and returns. It cannot reclaim anything on any ref, so the question that gates `/run` and
-`/compact` does not reach it.
+WHY THIS DOOR NEEDS NO CONTAINMENT ARGUMENT. `/run` and `/compact` honour the ref too, each on its own
+evidence (`test_the_gc_run_reclaims_the_ref_the_request_names`, `require_compactable`). This one is
+simpler: measured here, `preview_maintenance` calls `_base_refs` ZERO times and mutates nothing —
+`preview_gc` reads `ds.version`, `ds.versions()` and the tag and child-branch pins, and returns. It
+cannot reclaim anything on any ref.
 
 THE ASSERTION IS ON THE ANSWER, not on the call. A door that passed the branch to `open_dataset` and
 then previewed main would satisfy a spy and still be the defect; what a caller acts on is the version

@@ -67,14 +67,19 @@ def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path
 
 
 def _clean_branch_tag_beside_a_pinning_branch(tmp_path: Path) -> str:
-    """``clean`` v2 never held the subject and is tagged; main v2 holds it and ``work`` stands on main v2."""
+    """``clean`` v2 never held the subject and is tagged; main v2 holds it and ``work`` stands on main v2.
+
+    ``work`` drops the subject at v3 and a clean tag keeps v3, so work keeps standing on main v2's files
+    after the erasure rewrites and reclaims every ref.
+    """
     uri = str(tmp_path / "provenance")
     lance.write_dataset(_rows("bob"), uri)
     clean = lance.dataset(uri).create_branch("clean", 1)
     lance.write_dataset(_rows("eve"), clean.uri, mode="append")
     lance.dataset(uri).tags.create("trained", ("clean", 2))
-    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
-    lance.dataset(uri).create_branch("work", 2)
+    lance.write_dataset(_rows(_SUBJECT, "carol"), uri, mode="append")
+    lance.dataset(uri).create_branch("work", 2).delete(_PREDICATE)
+    lance.dataset(uri).tags.create("kept", ("work", 3))
     assert not _holds_subject(uri, ("clean", 2)), "the tagged branch version must be clean for this to be the right test"
     assert _holds_subject(uri, (None, 2)), "main's same-numbered version must hold the subject for this to be the right test"
     return uri
@@ -89,19 +94,20 @@ def test_a_BRANCH_tag_that_never_held_the_subject_is_not_dropped_on_mains_eviden
     assert any(s.surface == "tag:trained" and s.outcome == "retained" for s in report.surfaces), report.surfaces
 
 
-def test_pinned_by_names_only_the_refs_that_pin_a_residual_MAIN_version(tmp_path: Path) -> None:
-    """``residual_versions`` are main's; a retained tag on another branch pins that branch's history, not them.
+def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> None:
+    """A retained tag names a version of ITS branch, so ``trained`` on ``clean`` v2 pins nothing on main v2.
 
     Main v2 survives holding the subject because ``work`` stands on it. ``trained`` names ``clean`` v2 —
     the same number, a different snapshot — so listing it would send an operator with a deadline to
-    delete a clean reproducibility pointer that frees nothing.
+    delete a clean reproducibility pointer that frees nothing. ``kept`` is named because Lance will not
+    delete ``work`` while a tag names it.
     """
     uri = _clean_branch_tag_beside_a_pinning_branch(tmp_path)
 
     report = _erase(uri)
 
-    assert report.residual_versions == [2], report.residual_versions
-    assert report.pinned_by == {"branch:work": 2}
+    assert report.residual_versions == ["main@2"], report.residual_versions
+    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", "work@3"), ("branch:work", "main@2")]
 
 
 def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path) -> None:
@@ -125,5 +131,5 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
 
     report = erase(lance.dataset(uri), table="acme-bronze$subjects", predicate=_PREDICATE, retention=timedelta(days=1))
 
-    assert report.residual_versions == [2, 3], "main v2 and v3 must survive holding the subject for this to be the right test"
-    assert report.pinned_by == {}
+    assert report.residual_versions == ["main@2", "main@3"], "main v2 and v3 must survive holding the subject for this to be the right test"
+    assert report.pinned_by == []

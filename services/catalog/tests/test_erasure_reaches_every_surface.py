@@ -41,6 +41,20 @@ def table(tmp_path: Path) -> str:
     return uri
 
 
+@pytest.fixture
+def pinned(tmp_path: Path) -> str:
+    """A branch the erasure cannot release: ``work`` drops the subject at v2, and a clean tag keeps v2.
+
+    Work v2 still stands on main v1's data file, so main v1 — which holds the subject — stays referenced
+    after every ref is rewritten and reclaimed.
+    """
+    uri = str(tmp_path / "pinned")
+    dataset = lance.write_dataset(pa.table({"id": pa.array([1, 2, 3, 4]), "pii": pa.array([_SUBJECT, "bob", "carol", "dan"])}), uri)
+    dataset.create_branch("work").delete(_PREDICATE)
+    lance.dataset(uri).tags.create("trained", ("work", 2))
+    return uri
+
+
 def _pii(handle: Any) -> list[str]:
     return list(handle.to_table().to_pydict()["pii"])
 
@@ -71,18 +85,19 @@ def test_the_pinning_tag_is_removed(table: str) -> None:
     assert "pinned" not in lance.dataset(table).tags.list()
 
 
-def test_a_version_a_BRANCH_PINS_still_answers_and_the_report_says_so(table: str) -> None:
+def test_a_version_a_BRANCH_PINS_still_answers_and_the_report_says_so(pinned: str) -> None:
     """THE LIMIT, found by building this and worth more than the capability.
 
-    Deleting rows ON a branch does not remove that branch's pin on the parent's history: the branch
-    reads clean, and the parent's pre-delete version survives cleanup still holding the subject. So
-    every step can report success and the row stays readable — the one outcome an erasure must never
-    call done. The verify step catches it, and `complete` is False.
+    A branch pins the version it was cut from for as long as a retained branch version references that
+    version's files. Here a tag the erasure rightly keeps holds such a version, so the parent's
+    pre-delete version survives cleanup still holding the subject. Every step can report success and the
+    row stays readable — the one outcome an erasure must never call done. The verify step catches it,
+    and `complete` is False.
 
     Making it True means DELETING the branch, which destroys someone's working ref. That is an owner
     decision, not a side effect of an erasure call ([[LH-178]]).
     """
-    report = _erase(table)
+    report = _erase(pinned)
 
     assert report.residual_versions, "a branch pinned a version holding the subject and verify missed it"
     assert report.complete is False
@@ -127,14 +142,21 @@ def test_the_report_names_every_surface_it_touched(table: str) -> None:
     retry the caller can shrug at."""
     report = _erase(table)
 
-    assert {s.surface for s in report.surfaces} == {"branch:work", "branch:review", "tag:pinned", "main", "compact", "history", "verify"}
+    assert {s.surface for s in report.surfaces} == {
+        "branch:work",
+        "branch:review",
+        "tag:pinned",
+        "main",
+        *(f"{step}:{ref}" for step in ("compact", "history") for ref in ("main", "work", "review")),
+        "verify",
+    }
 
 
-def test_complete_is_EVIDENCE_not_the_absence_of_an_error(table: str) -> None:
+def test_complete_is_EVIDENCE_not_the_absence_of_an_error(pinned: str) -> None:
     """Every step on this table reports success and the erasure is still incomplete, because a branch
     pins a version holding the subject. A caller reading "no exception" would have told the data
     subject the wrong thing."""
-    report = _erase(table)
+    report = _erase(pinned)
 
     assert all(s.outcome != "failed" for s in report.surfaces if s.surface != "verify")
     assert report.complete is False
@@ -166,17 +188,18 @@ def test_retention_is_honoured_rather_than_forced_to_zero(table: str) -> None:
     assert _SUBJECT not in _pii(lance.dataset(table)), "the rows must still be deleted even when nothing is reclaimed"
 
 
-def test_the_report_names_the_BRANCH_that_pins_the_residual(table: str) -> None:
+def test_the_report_names_the_BRANCH_that_pins_the_residual(pinned: str) -> None:
     """`residual_versions` says the erasure is incomplete; only this says what to delete to finish it.
 
     Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so the pin is read
     rather than guessed. Without it an operator holding a legal deadline knows a branch is responsible
-    and has to go find which one — on a table that may carry dozens.
+    and has to go find which one — on a table that may carry dozens. The tag comes first because Lance
+    will not delete a branch a tag names.
     """
-    report = _erase(table)
+    report = _erase(pinned)
 
-    assert set(report.pinned_by) == {"branch:work", "branch:review"}
-    assert all(v in report.residual_versions for v in report.pinned_by.values())
+    assert report.residual_versions == ["main@1"]
+    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:trained", "work@2"), ("branch:work", "main@1")]
 
 
 def test_a_clean_erasure_names_no_pin(tmp_path: Path) -> None:
@@ -185,7 +208,7 @@ def test_a_clean_erasure_names_no_pin(tmp_path: Path) -> None:
     uri = str(tmp_path / "unpinned")
     lance.write_dataset(pa.table({"id": pa.array([1, 2]), "pii": pa.array([_SUBJECT, "bob"])}), uri)
 
-    assert _erase(uri).pinned_by == {}
+    assert _erase(uri).pinned_by == []
 
 
 def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path) -> None:
@@ -237,7 +260,7 @@ def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path) -> None:
 
     report = _erase(uri)
 
-    assert [s.outcome for s in report.surfaces if s.surface == "history"] == ["reclaimed"]
+    assert [s.outcome for s in report.surfaces if s.surface == "history:main"] == ["reclaimed"]
     assert "trained-on-v1" in lance.dataset(uri).tags.list(), "the clean tag had to survive for this to be the right test"
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
 
