@@ -30,7 +30,6 @@ def lance_storage_options(
     secret_access_key: str,
     region: str,
     *,
-    allow_http: bool = True,
     virtual_hosted: bool = False,
     session_token: str | None = None,
     server_side_encryption: str | None = None,
@@ -42,6 +41,17 @@ def lance_storage_options(
     Path-style addressing is the default (``virtual_hosted=False``): RustFS/MinIO reject virtual-hosted
     signing with 403 ``SignatureDoesNotMatch``, and one omitted key in a hand-rolled copy is exactly the
     drift this builder exists to prevent.
+
+    ``allow_http`` IS DERIVED FROM THE ENDPOINT'S SCHEME and cannot be passed ([[LH-096]]): ``"true"``
+    exactly for an ``http://`` endpoint. It is a PERMIT — "Allow non-TLS, i.e. non-HTTPS connections"
+    (``lance_docs/guide.md:2338``) — that object_store consults only when a request would otherwise be
+    refused, so a TLS store holding it looks identical until something downgrades. Measured on pylance
+    12.0.0 against a closed port: ``http://`` with ``allow_http=false`` dies at client construction
+    (``builder error``), ``https://`` with ``allow_http=false`` proceeds to its TLS request. The scheme
+    therefore settles both directions, and a parameter could only ever disagree with it. An empty
+    endpoint (AWS proper) answers ``"false"``: the regional endpoint the client resolves is TLS. The
+    rule is spelled exactly as the catalog's ``namespace_properties`` and ``service_kit.media.config``
+    spell it, so the three answer any endpoint alike.
 
     ``session_token`` completes a VENDED credential. An STS credential is a triple and the token is the
     half that carries the scoping, so a builder that cannot express one forces every vended-credential
@@ -71,7 +81,7 @@ def lance_storage_options(
         "aws_access_key_id": access_key_id,
         "aws_secret_access_key": secret_access_key,
         "region": region,
-        "allow_http": str(allow_http).lower(),
+        "allow_http": "true" if endpoint.startswith("http://") else "false",
         # No ``aws_`` alias exists for this one, and none is needed: it is not read from the
         # environment, so there is nothing for it to lose a precedence contest to.
         "virtual_hosted_style_request": str(virtual_hosted).lower(),

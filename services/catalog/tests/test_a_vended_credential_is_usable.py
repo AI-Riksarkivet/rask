@@ -13,51 +13,82 @@ The cause is drift the estate already has a guard against: the vendor hand-rolls
 instead of going through `lance_storage_options`, whose own docstring says it exists because "one
 omitted key in a hand-rolled copy is exactly the drift this builder exists to prevent". Two omitted
 keys, in the copy that ships credentials to clients.
+
+`allow_http` IS A PERMIT, NOT A REQUEST, and it follows the endpoint's scheme ([[LH-096]]). The
+catalog's own connection derives it that way; a vend is the same rule on the options that LEAVE the
+catalog, so an `https://` store must never be handed a credential that also permits plaintext. Measured
+on pylance 12.0.0 against a closed port: `http://` with `allow_http=false` dies at construction
+(`builder error`), `https://` with `allow_http=false` proceeds to a TLS request — so the scheme alone
+decides both halves and there is nothing a caller could need to override.
+
+The triple itself (key, secret, token, endpoint) is asserted by `tests/unit/test_vending.py`; this file
+is about whether a client can BUILD from what it was handed.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+import pytest
 
 
-def _vend(**kw: Any) -> dict[str, str]:
-    from catalog.core.vending import StsVendor
+VendorKind = Literal["sts", "web_identity"]
 
-    def fake_assume_role(**_: Any) -> dict[str, Any]:
-        return {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "TOK"}}
+#: Both plugs that issue a credential. `mode_b` issues none, so it has no options to get wrong.
+_VENDORS: tuple[VendorKind, ...] = ("sts", "web_identity")
 
-    vendor = StsVendor(
-        role_arn="arn:aws:iam::000000000000:role/vend",
-        region="us-east-1",
-        assume_role=fake_assume_role,
-        **kw,
-    )
-    vended = vendor.vend(table_location="s3://bucket/tbl", tier="read")
+
+def _fake_credentials(**_: Any) -> dict[str, Any]:
+    return {"Credentials": {"AccessKeyId": "AK", "SecretAccessKey": "SK", "SessionToken": "TOK"}}
+
+
+def _vend(kind: VendorKind, endpoint: str | None) -> dict[str, str]:
+    from catalog.core.vending import StsVendor, WebIdentityVendor
+
+    if kind == "sts":
+        vendor = StsVendor(role_arn="arn:aws:iam::000000000000:role/vend", region="us-east-1", endpoint=endpoint, assume_role=_fake_credentials)
+        vended = vendor.vend(table_location="s3://bucket/tbl", tier="read")
+    else:
+        web = WebIdentityVendor(region="us-east-1", endpoint=endpoint, assume=_fake_credentials)
+        vended = web.vend(table_location="s3://bucket/tbl", tier="read", web_identity_token="a.jwt.here")
     assert vended is not None
     return vended.storage_options
 
 
-def test_a_vended_credential_carries_what_a_lance_client_needs_to_build() -> None:
+@pytest.mark.parametrize("kind", _VENDORS)
+def test_a_vended_credential_carries_what_a_lance_client_needs_to_build(kind: VendorKind) -> None:
     """`allow_http` and path-style addressing are not optional extras.
 
     Without `allow_http`, object_store refuses to construct a client for an `http://` endpoint at all.
     Without path-style, RustFS/MinIO reject virtual-hosted signing with 403 `SignatureDoesNotMatch` —
     the same reason `lance_storage_options` defaults `virtual_hosted=False`.
     """
-    opts = _vend(endpoint="http://rustfs:9000")
+    opts = _vend(kind, "http://rustfs:9000")
     assert opts["allow_http"] == "true"
     assert opts["virtual_hosted_style_request"] == "false"
 
 
-def test_the_credential_itself_still_rides() -> None:
-    opts = _vend(endpoint="http://rustfs:9000")
-    assert (opts["aws_access_key_id"], opts["aws_secret_access_key"], opts["aws_session_token"]) == ("AK", "SK", "TOK")
-    assert opts["region"] == "us-east-1"
+@pytest.mark.parametrize("kind", _VENDORS)
+def test_an_https_endpoint_is_not_downgraded(kind: VendorKind) -> None:
+    """A TLS endpoint keeps TLS AND is not handed a plaintext permit beside it.
 
-
-def test_an_https_endpoint_is_not_downgraded() -> None:
-    """`allow_http` PERMITS plaintext; it must not be read as requesting it. A TLS endpoint keeps TLS —
-    the same trap `s3_filesystem` documents, where hardcoding `http` once silently downgraded a secured
-    connection."""
-    opts = _vend(endpoint="https://s3.example.com")
+    The endpoint alone was never enough: object_store consults `allow_http` only when a request would
+    otherwise be refused, so a credential carrying `https://` with `allow_http=true` works identically
+    until something downgrades — and then permits it. The same trap `s3_filesystem` documents, where
+    hardcoding `http` once silently downgraded a secured connection.
+    """
+    opts = _vend(kind, "https://s3.example.com")
     assert opts["endpoint"] == "https://s3.example.com"
+    assert opts["allow_http"] == "false", "an https store was vended a credential that also permits plaintext"
+
+
+@pytest.mark.parametrize("kind", _VENDORS)
+def test_a_vend_against_aws_proper_permits_no_plaintext(kind: VendorKind) -> None:
+    """No configured endpoint means botocore's regional AWS endpoint, which is `https://`.
+
+    The `endpoint` key is REMOVED for that case, so the scheme the permit follows is AWS's own — and a
+    permit derived from an empty endpoint must read as "no plaintext", since the store it names is TLS.
+    """
+    opts = _vend(kind, None)
+    assert "endpoint" not in opts
+    assert opts["allow_http"] == "false", "a credential for AWS proper permits plaintext"
