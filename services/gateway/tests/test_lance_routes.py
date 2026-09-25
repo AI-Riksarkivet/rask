@@ -289,6 +289,39 @@ def test_a_public_caller_is_refused_by_the_door_behind_the_row(gw, monkeypatch: 
     assert "is a public front door" in response.text, response.text
 
 
+class _HostedWorkflows:
+    """The producer's engine hosting ONE held promotion — `DaprWorkflowClient`'s two calls, its signatures."""
+
+    def __init__(self) -> None:
+        self.terminated: list[str] = []
+
+    def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> object:
+        raise AssertionError(f"a training door asked the engine about {instance_id!r}, which no training watch can be")
+
+    def terminate_workflow(self, instance_id: str, *, output: object = None, recursive: bool = True) -> None:
+        self.terminated.append(instance_id)
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_a_HELD_PROMOTION_is_not_a_training_watch_through_the_row(gw, monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    """`/api/trains` publishes a door on an engine that also hosts `promotion_review`; its own door is
+    `/api/promotions`, on `can_promote`. The caller is one the door decided whole, so only the kind of
+    instance can refuse it."""
+    from medallion.api.produce_auth import ProducerCaller, admit_caller
+    from medallion.producer import app as producer
+
+    engine = _HostedWorkflows()
+    monkeypatch.setitem(producer.dependency_overrides, admit_caller, ProducerCaller)
+    monkeypatch.setattr(producer.state, "workflow_client", engine, raising=False)
+    public = "/api/trains/promotion-tok-of-tenant-beta" + ("/terminate" if method == "post" else "")
+    with TestClient(gw.app) as client:
+        gw.app.state.http = httpx.AsyncClient(transport=httpx.ASGITransport(app=producer))
+        response = client.request(method, public)
+
+    assert response.status_code == 404, response.text
+    assert engine.terminated == []
+
+
 def test_a_rerun_sent_to_the_gateway_is_answered_by_the_rerun_verb(gw) -> None:
     """The whole forward: the gateway's own proxy carrying the request into the producer's own app.
 

@@ -27,6 +27,7 @@ from medallion.services.train import (
     MAX_FEATURES,
     MODEL_PATTERN,
     TOKEN_PATTERN,
+    TRAIN_WATCH_PREFIX,
     handle_train_trigger,
     submit_train_request,
     train_head_enabled,
@@ -205,16 +206,33 @@ def _watch_project(settings: MedallionSettings, serialized_input: str | None) ->
     return project if is_safe_project(project) else None
 
 
+def _no_watch(instance_id: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
+
+
 async def _authorized_watch(
     request: Request, *, settings: MedallionSettings, fga_client: OpenFgaClient | None, caller: ProducerCaller, instance_id: str
 ) -> Any:
-    """Load the watch (404 when there is none), then authorize the caller on the project it records."""
+    """Load the TRAINING watch (404 for anything else), then authorize the caller on the project it records.
+
+    This engine also hosts `promotion_review`, whose door is `/promotions/{id}` on `can_promote`. A
+    training door that acted on one would skip that rung and the promotion's outcome event, so an id
+    `schedule_train_watch` cannot mint is refused before the engine is asked, and a state whose
+    workflow is not `train_run` answers exactly as an absent one.
+    """
+    # Resolved here, as `promotions.py` does: `medallion.workflow` is the engine adapter, and a router
+    # the producer always mounts must not import it.
+    from medallion.workflow import train_run
+
+    if not instance_id.startswith(TRAIN_WATCH_PREFIX):
+        raise _no_watch(instance_id)
     client = _train_client(request)
     # The SDK client is SYNCHRONOUS. Awaiting it inline blocks the event loop for every other request
     # on this worker — the same reason ingest and flows read their state through a thread.
     state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=True))
-    if state is None:
-        raise HTTPException(status_code=404, detail=f"no training watch {instance_id!r}")
+    # `name` is the orchestration's registered name, which `workflow.register` leaves as `__name__`.
+    if state is None or state.name != train_run.__name__:
+        raise _no_watch(instance_id)
     await require_project_admin(fga_client, caller, project=_watch_project(settings, state.serialized_input))
     return state
 
@@ -253,7 +271,7 @@ async def terminate_train(
     await _authorized_watch(request, settings=settings, fga_client=fga_client, caller=caller, instance_id=instance_id)
     client = _train_client(request)
     await asyncio.to_thread(lambda: client.terminate_workflow(instance_id))
-    log.info("medallion_train_watch_termination_requested", extra={"instance_id": instance_id})
+    log.info("medallion_train_watch_termination_requested", extra={"instance_id": instance_id, "subject": caller.subject})
     return TrainTerminateAccepted(
         instance_id=instance_id,
         detail="the watch stops; the Ray training job it was polling keeps running and must be stopped through Ray",

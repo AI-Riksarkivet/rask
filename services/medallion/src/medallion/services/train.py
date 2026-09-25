@@ -55,6 +55,10 @@ DATASET_PATTERN = rf"^{_SEGMENT}\${_SEGMENT}$"
 #: the artifact directory `<artifact_base>/<token>/`, so it is one path-safe segment like the names above.
 TOKEN_PATTERN = rf"^{_SEGMENT}$"  # noqa: S105 — a shape regex; the training token is a correlation id, not a credential
 _SAFE_SEGMENT = re.compile(_SEGMENT)
+#: Every training watch's instance id is this prefix plus its Ray submission id. The producer's engine
+#: hosts other workflows too, so the training doors read the prefix as the first half of "is this a
+#: training watch at all".
+TRAIN_WATCH_PREFIX = "train-"
 
 
 def _safe_name(value: Any) -> bool:
@@ -381,7 +385,7 @@ def schedule_train_watch(settings: MedallionSettings, *, token: str, model: str,
     from medallion.workflow import TrainJobSpec, train_run
 
     submission_id = ray_submit.train_submission_id(token)
-    instance_id = f"train-{submission_id}"
+    instance_id = f"{TRAIN_WATCH_PREFIX}{submission_id}"
     spec = TrainJobSpec(token=token, model=model, submission_id=submission_id, originator=originator, project=project)
     # THROUGH THE PORT (`service_kit.lakehouse.saga`), so this layer names no workflow engine.
     #

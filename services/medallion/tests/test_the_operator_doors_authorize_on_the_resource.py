@@ -64,9 +64,12 @@ class _Verifier:
 
 
 class _State:
-    def __init__(self, payload: dict[str, Any] | str) -> None:
+    """`WorkflowState`'s fields these routes read; ``name`` is the registered workflow the SDK proxies."""
+
+    def __init__(self, payload: dict[str, Any] | str, *, name: str) -> None:
         self.serialized_input = payload if isinstance(payload, str) else json.dumps(payload)
         self.runtime_status = WorkflowStatus.RUNNING
+        self.name = name
 
 
 class _Workflows:
@@ -86,11 +89,11 @@ class _Workflows:
 def _stage(project: str | None) -> _State:
     """A stage instance as `_dispatch_stage_workflow` persists it: the trigger rides the spec whole."""
     trigger = StageTrigger(token="tok-1", project=project).model_dump()
-    return _State(StageJobSpec(from_uri="s3://wh/in", to_uri="s3://wh/out", stage="gold", trigger=trigger).model_dump())
+    return _State(StageJobSpec(from_uri="s3://wh/in", to_uri="s3://wh/out", stage="gold", trigger=trigger).model_dump(), name="stage_run")
 
 
 def _train(project: str) -> _State:
-    return _State(TrainJobSpec(token="tok-1", model="churn", submission_id="ray-train-tok-1", project=project).model_dump())
+    return _State(TrainJobSpec(token="tok-1", model="churn", submission_id="ray-train-tok-1", project=project).model_dump(), name="train_run")
 
 
 STAGES = {"stage-mine": _stage("mine"), "stage-other": _stage("other"), "stage-single": _stage(None)}
@@ -229,7 +232,7 @@ def test_the_stage_runner_reports_the_project_its_instance_RECORDS(stage_runner:
 
 def test_an_UNREADABLE_instance_names_no_project(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    with TestClient(_stage_runner({"stage-garbled": _State("not json")})) as client:
+    with TestClient(_stage_runner({"stage-garbled": _State("not json", name="stage_run")})) as client:
         body = client.get("/stages/stage-garbled", headers=SERVICE).json()
 
     assert body["status"] == "RUNNING", "the status question is still answered"
@@ -298,7 +301,9 @@ def _runner_without_the_field() -> FastAPI:
     return app
 
 
-@pytest.mark.parametrize("runner", [lambda: _stage_runner({"stage-x": _State("not json")}), _runner_without_the_field], ids=["unreadable-input", "older-build"])
+@pytest.mark.parametrize(
+    "runner", [lambda: _stage_runner({"stage-x": _State("not json", name="stage_run")}), _runner_without_the_field], ids=["unreadable-input", "older-build"]
+)
 def test_a_stage_whose_tenant_cannot_be_read_is_REFUSED_to_a_person(fga: _Fga, monkeypatch: pytest.MonkeyPatch, runner: Any) -> None:
     """Nothing to authorize on. Reading it as single-tenant would hand a tenant's run to acme's admins."""
     monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
@@ -382,6 +387,14 @@ def test_a_training_watch_of_another_project_CANNOT_BE_STOPPED(producer: TestCli
 
     assert response.status_code == 403, response.text
     assert _terminated(cast("FastAPI", producer.app)) == []
+
+
+def test_a_training_stop_is_logged_with_WHO_asked(producer: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.INFO, logger=train_api.log.name):
+        assert producer.post("/trains/train-acme/terminate", headers=_bearer("bob")).status_code == 202
+
+    [line] = [r for r in caplog.records if r.getMessage() == "medallion_train_watch_termination_requested"]
+    assert (line.__dict__["instance_id"], line.__dict__["subject"]) == ("train-acme", "bob")
 
 
 def test_a_training_watch_RECORDS_the_configured_project_whatever_the_trigger_claims(monkeypatch: pytest.MonkeyPatch) -> None:

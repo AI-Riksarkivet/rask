@@ -32,17 +32,23 @@ from service_kit.exceptions import register_handlers
 
 
 class _State:
-    def __init__(self, payload: dict[str, Any], status: WorkflowStatus) -> None:
+    """`WorkflowState`'s fields these routes read. ``name`` is the registered workflow, as the SDK's
+    own state proxies it from the orchestration."""
+
+    def __init__(self, payload: dict[str, Any], status: WorkflowStatus, *, name: str = "train_run") -> None:
         self.serialized_input = json.dumps(payload)
         self.runtime_status = status
+        self.name = name
 
 
 class _Client:
     def __init__(self, instances: dict[str, _State] | None = None) -> None:
         self._instances = dict(instances or {})
         self.terminated: list[str] = []
+        self.read: list[str] = []
 
     def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> _State | None:
+        self.read.append(instance_id)
         return self._instances.get(instance_id)
 
     def terminate_workflow(self, instance_id: str) -> None:
@@ -119,3 +125,53 @@ def test_no_engine_is_UNAVAILABLE_never_a_silent_success(call: Any) -> None:
     """503, not 404 and not 202. Answering 202 with no sidecar tells an operator a runaway was stopped."""
     with TestClient(_app(None), raise_server_exceptions=False) as client:
         assert call(client).status_code == 503
+
+
+# ── a training door acts on training watches only ───────────────────────────────────────────────────
+
+#: A held promotion, hosted by the same app-id as the training watches. `/promotions/{id}` is its door,
+#: gated on `can_promote`; a training door that acted on it would skip that rung and the outcome event.
+PROMOTION = "promotion-tok-of-tenant-beta"
+#: A `train-` id whose instance is not a training watch: the prefix alone cannot decide the kind.
+FORGED = "train-forged"
+
+
+@pytest.fixture
+def hosting() -> Iterator[tuple[TestClient, _Client]]:
+    promotion = {"token": "tok", "project": "beta", "from_namespace": "silver", "from_dataset": "silver$x", "to_namespace": "gold", "to_dataset": "gold$x"}
+    engine = _Client(
+        {
+            LIVE: _State({"submission_id": "ray-train-tok-1", "token": "tok-1", "model": "churn"}, WorkflowStatus.RUNNING),
+            PROMOTION: _State(promotion, WorkflowStatus.RUNNING, name="promotion_review"),
+            FORGED: _State(promotion, WorkflowStatus.RUNNING, name="promotion_review"),
+        }
+    )
+    with TestClient(_app(engine), raise_server_exceptions=False) as test_client:
+        yield test_client, engine
+
+
+@pytest.mark.parametrize("instance_id", [PROMOTION, FORGED])
+def test_a_non_training_instance_is_404_and_is_NEVER_TERMINATED(hosting: tuple[TestClient, _Client], instance_id: str) -> None:
+    client, engine = hosting
+
+    shown = client.get(f"/trains/{instance_id}")
+    stopped = client.post(f"/trains/{instance_id}/terminate")
+
+    assert (shown.status_code, stopped.status_code) == (404, 404), (shown.text, stopped.text)
+    assert engine.terminated == [], "a training door stopped a workflow that is not a training watch"
+
+
+def test_an_id_a_training_watch_cannot_have_is_refused_BEFORE_the_engine_is_asked(hosting: tuple[TestClient, _Client]) -> None:
+    """`schedule_train_watch` mints `train-<submission id>`, so any other id names no training watch and
+    the promotion's persisted spec is never read to answer it."""
+    client, engine = hosting
+
+    assert client.get(f"/trains/{PROMOTION}").status_code == 404
+    assert engine.read == []
+
+
+def test_a_training_watch_is_still_served_beside_the_promotions(hosting: tuple[TestClient, _Client]) -> None:
+    client, engine = hosting
+
+    assert client.post(f"/trains/{LIVE}/terminate").status_code == 202
+    assert engine.terminated == [LIVE]
