@@ -60,6 +60,7 @@ def _run(
     project: str | None = None,
     caller_app_id: str | None = None,
     captured: dict[str, object] | None = None,
+    wired: bool = True,
 ) -> str | None:
     async def fake_check(_client: object, **kw: object) -> bool:  # user=/relation=/obj= arrive as kwargs
         if captured is not None:
@@ -78,7 +79,7 @@ def _run(
         produce_auth.authorize_produce(
             request,
             settings,
-            cast(OpenFgaClient, object()),
+            cast(OpenFgaClient, object()) if wired else None,
             dapr_api_token=dapr_token,
             authorization=authz,
             project=project,
@@ -171,6 +172,11 @@ def test_the_promotion_door_verifies_the_bearer_OFF_the_event_loop() -> None:
 
 def test_fga_outage_is_503(monkeypatch: pytest.MonkeyPatch) -> None:
     _expect(monkeypatch, 503, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_raises=True)
+
+
+def test_an_UNWIRED_fga_client_is_503_even_for_an_admin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The check would allow; only the missing client can refuse, and it must, never as an allow."""
+    _expect(monkeypatch, 503, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_result=True, wired=False)
 
 
 def test_no_credential_is_403(monkeypatch: pytest.MonkeyPatch) -> None:

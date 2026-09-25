@@ -98,7 +98,12 @@ def _train(project: str) -> _State:
 
 
 STAGES = {"stage-mine": _stage("mine"), "stage-other": _stage("other"), "stage-single": _stage(None)}
-TRAINS = {"train-acme": _train(CONFIGURED), "train-other": _train("other"), "train-mine": _train("mine")}
+TRAINS = {
+    "train-acme": _train(CONFIGURED),
+    "train-other": _train("other"),
+    "train-mine": _train("mine"),
+    "train-garbled": _State("not json", name="train_run"),
+}
 
 
 class _Fga:
@@ -344,10 +349,56 @@ def test_a_stage_whose_tenant_cannot_be_read_is_REFUSED_to_a_person(fga: _Fga, m
 
 
 def test_the_SERVICE_path_is_unchanged_on_the_stage_doors(producer: TestClient, stage_runner: FastAPI) -> None:
-    """The shared token was decided whole at the door before this ruling, and still is."""
+    """The shared token is decided whole at the door: it needs no project to act on a run."""
     assert producer.get(_show("stage-other"), headers=SERVICE).status_code == 200
     assert producer.post(_stop("stage-other"), headers=SERVICE).status_code == 202
     assert _terminated(stage_runner) == ["stage-other"]
+
+
+def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_stage(unwired: TestClient, stage_runner: FastAPI) -> None:
+    """alice administers `mine`, so only the missing client can refuse her, and it must, as 503."""
+    shown = unwired.get(_show("stage-mine"), headers=_bearer("alice"))
+    stopped = unwired.post(_stop("stage-mine"), headers=_bearer("alice"))
+
+    assert (shown.status_code, stopped.status_code) == (503, 503), (shown.text, stopped.text)
+    assert _terminated(stage_runner) == []
+
+
+def test_a_trigger_that_is_not_a_MAPPING_names_no_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
+    spec = StageJobSpec(from_uri="s3://wh/in", to_uri="s3://wh/out", stage="gold").model_dump() | {"trigger": "tok-1"}
+    with TestClient(_stage_runner({"stage-odd": _State(spec, name="stage_run")})) as client:
+        body = client.get("/stages/stage-odd", headers=SERVICE).json()
+
+    assert body["project"] is None, "a trigger the stage runner cannot read is not a single-tenant one"
+
+
+def _runner_reporting(project: object) -> FastAPI:
+    """A stage runner whose status names ``project`` verbatim."""
+    app = FastAPI()
+    app.state.workflow_client = _Workflows({})
+
+    @app.get("/stages/{instance_id}")
+    async def show(instance_id: str) -> dict[str, object]:
+        return {"instance_id": instance_id, "status": "RUNNING", "submission_id": None, "polls_done": 0, "project": project}
+
+    @app.post("/stages/{instance_id}/terminate", status_code=202)
+    async def stop(instance_id: str) -> dict[str, str]:
+        app.state.workflow_client.terminated.append(instance_id)
+        return {"instance_id": instance_id, "detail": "stopped"}
+
+    return app
+
+
+def test_a_stage_whose_recorded_project_is_UNSAFE_is_refused_to_a_person(fga: _Fga) -> None:
+    """A project id no mint rule issues is nothing to authorize on, and never an FGA object."""
+    app = _runner_reporting("../acme")
+    with TestClient(_producer(app), raise_server_exceptions=False) as client:
+        refused = client.post(_stop("stage-x"), headers=_bearer("bob"))
+
+    assert refused.status_code == 503, refused.text
+    assert _terminated(app) == []
+    assert fga.calls == []
 
 
 # ── the stalled-tier read ───────────────────────────────────────────────────────────────────────────
@@ -444,6 +495,18 @@ def test_a_training_watch_of_another_project_CANNOT_BE_STOPPED(producer: TestCli
 
     assert response.status_code == 403, response.text
     assert _terminated(cast("FastAPI", producer.app)) == []
+
+
+def test_an_UNWIRED_authorization_service_refuses_a_person_THEIR_OWN_watch(unwired: TestClient) -> None:
+    assert unwired.get("/trains/train-acme", headers=_bearer("bob")).status_code == 503
+    assert unwired.post("/trains/train-acme/terminate", headers=_bearer("bob")).status_code == 503
+    assert _terminated(cast("FastAPI", unwired.app)) == []
+
+
+def test_a_training_watch_whose_input_cannot_be_read_is_REFUSED_to_a_person(producer: TestClient) -> None:
+    """Unreadable is not the configured project: reading it so would hand an unknown run to acme's admins."""
+    assert producer.get("/trains/train-garbled", headers=_bearer("bob")).status_code == 503
+    assert producer.get("/trains/train-garbled", headers=SERVICE).status_code == 200, "the service path needs no tenant"
 
 
 def test_a_training_stop_is_logged_with_WHO_asked(producer: TestClient, caplog: pytest.LogCaptureFixture) -> None:
