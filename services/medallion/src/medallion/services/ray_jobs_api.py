@@ -91,9 +91,11 @@ def submission_id(stage: str, token: str | None, work: str = "", code: str = "")
     Empty ``code`` reproduces the previous id byte-for-byte, so a deployment that does not set it is
     unchanged rather than silently re-attaching across builds under a new scheme.
 
-    The token stays visible in the id (operators grep the dashboard by it), and is INJECTIVE in it
-    (:func:`_token_segment`): two tokens the lane accepts are two jobs. ``work`` and ``code`` ride as
-    short digests so arbitrarily long URIs and tags cannot push the id past the length cap.
+    The token is INJECTIVE in the id (:func:`_token_segment`), so two accepted tokens name two stage
+    workflow instances (``transform._dispatch_stage_workflow``; the stage's Ray job itself is named by
+    ``derive_idempotency_key``) and two training Ray jobs. It stays greppable: verbatim, or folded with
+    its digest appended. ``work`` and ``code`` ride as short digests so arbitrarily long URIs and tags
+    cannot push the id past the length cap.
     """
     raw = f"ray-{stage}-{_token_segment(token)}"
     if work:

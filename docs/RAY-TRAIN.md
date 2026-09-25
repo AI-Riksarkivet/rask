@@ -58,7 +58,9 @@ therefore:
    checks go through ONE `batch_check` round trip regardless of feature count, so the gate cannot
    stack per-check retry budgets past the 30s ack window;
 2. submits the training job via the shared Ray Jobs REST seam with a **deterministic
-   `submission_id = ray-train-<token>`**;
+   `submission_id = ray-train-<token>`**, the key verbatim except where another key could spell the
+   same id — `notoken`, or a key ending in `_<12 lowercase hex>` — which carries `_` plus 12 hex of the
+   raw key's sha256 (`ray_jobs_api._token_segment`; measured: `notoken` → `ray-train-notoken_82d08533272d`);
 3. **acks SUCCESS immediately after the submit** (or after re-attaching to an already-running
    job on redelivery — the deterministic id is the idempotency key, per the §0 bus rule).
 

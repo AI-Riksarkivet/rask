@@ -16,7 +16,8 @@ from medallion.services.trigger_guards import SAFE_TOKEN_MAX_LENGTH, SAFE_TOKEN_
 SettingsDep = Annotated[MedallionSettings, Depends(get_settings)]
 
 #: A cascade head's REQUIRED ``Idempotency-Key``, in the stage lane's own token grammar: the key becomes
-#: every stage's trigger token, so a key the lane would DROP is refused 422 here instead of 202'd.
+#: the FIRST stage's trigger token (and, from ``/produce``, the cascade id every hop carries), so a key
+#: the lane would DROP is refused 422 here instead of 202'd.
 CascadeKeyHeader = Annotated[
     str,
     Header(alias="Idempotency-Key", min_length=1, max_length=SAFE_TOKEN_MAX_LENGTH, pattern=SAFE_TOKEN_PATTERN),
