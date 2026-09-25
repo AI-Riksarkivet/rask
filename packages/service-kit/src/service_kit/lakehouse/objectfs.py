@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Final
 
 import pyarrow.fs as pafs
 
+from service_kit.lakehouse.endpoint_scheme import allow_http_for
+
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,16 +44,22 @@ def lance_storage_options(
     signing with 403 ``SignatureDoesNotMatch``, and one omitted key in a hand-rolled copy is exactly the
     drift this builder exists to prevent.
 
-    ``allow_http`` IS DERIVED FROM THE ENDPOINT'S SCHEME and cannot be passed ([[LH-096]]): ``"true"``
-    exactly for an ``http://`` endpoint. It is a PERMIT — "Allow non-TLS, i.e. non-HTTPS connections"
-    (``lance_docs/guide.md:2338``) — that object_store consults only when a request would otherwise be
-    refused, so a TLS store holding it looks identical until something downgrades. Measured on pylance
-    12.0.0 against a closed port: ``http://`` with ``allow_http=false`` dies at client construction
-    (``builder error``), ``https://`` with ``allow_http=false`` proceeds to its TLS request. The scheme
-    therefore settles both directions, and a parameter could only ever disagree with it. An empty
-    endpoint (AWS proper) answers ``"false"``: the regional endpoint the client resolves is TLS. The
-    rule is spelled exactly as the catalog's ``namespace_properties`` and ``service_kit.media.config``
-    spell it, so the three answer any endpoint alike.
+    ``allow_http`` IS DERIVED FROM THE ENDPOINT'S SCHEME and cannot be passed ([[LH-238]]): ``"true"``
+    exactly for an ``http`` scheme, in any case. It is a PERMIT — "Allow non-TLS, i.e. non-HTTPS
+    connections" (``lance_docs/guide.md:2338``) — that object_store consults only when a request would
+    otherwise be refused, so a TLS store holding it looks identical until something downgrades. Measured
+    on pylance 12.0.0 against a closed port, in a process with no ambient ``AWS_ALLOW_HTTP``: ``http://``
+    with ``allow_http=false`` dies at client construction (``builder error``), ``https://`` with
+    ``allow_http=false`` proceeds to its TLS request. The scheme therefore settles both directions, and a
+    parameter could only ever disagree with it. An empty endpoint (AWS proper) answers ``"false"``: the
+    regional endpoint the client resolves is TLS. The rule is
+    ``service_kit.lakehouse.endpoint_scheme.allow_http_for``, which the catalog's
+    ``namespace_properties`` and ``service_kit.media.config`` call too.
+
+    AN AMBIENT ``AWS_ALLOW_HTTP`` BEATS THIS KEY, so the derivation holds only in a process without one:
+    measured on pylance 12.0.0, the variable won over ``allow_http`` in 5 of 5 fresh processes in each
+    direction, and the ``aws_allow_http`` spelling wins or loses to it per process. No spelling displaces
+    it; only its absence does ([[LH-238]]).
 
     ``session_token`` completes a VENDED credential. An STS credential is a triple and the token is the
     half that carries the scoping, so a builder that cannot express one forces every vended-credential
@@ -81,9 +89,9 @@ def lance_storage_options(
         "aws_access_key_id": access_key_id,
         "aws_secret_access_key": secret_access_key,
         "region": region,
-        "allow_http": "true" if endpoint.startswith("http://") else "false",
-        # No ``aws_`` alias exists for this one, and none is needed: it is not read from the
-        # environment, so there is nothing for it to lose a precedence contest to.
+        "allow_http": allow_http_for(endpoint),
+        # An ambient AWS_VIRTUAL_HOSTED_STYLE_REQUEST races this bare spelling per process; the
+        # `aws_`-prefixed one beat it 5 of 5 on pylance 12.0.0 ([[LH-238]]).
         "virtual_hosted_style_request": str(virtual_hosted).lower(),
     }
     if session_token:

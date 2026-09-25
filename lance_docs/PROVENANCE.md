@@ -113,24 +113,36 @@ Measured on pylance 12.0.0, 2026-09-25, on local tables at 2.1 and 2.2 with stab
 
 `service_kit.lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
 
-**`guide.md:2989-2991` holds for the compute pool's size and not for its override.** It says the pool
-"is determined by the number of cores on the machine" and "can be overridden by setting the
-`LANCE_CPU_THREADS` environment variable". Measured on pylance 12.0.0, 2026-09-25, varying only CPU
-affinity (`taskset -c`) and the variable, as the threads a process gains from importing `lance`,
-writing a 200,000-row table and scanning it once:
+**`guide.md:2989-2991` holds for the pool named `lance-cpu`. The pool that tracks the CPU count is
+`lance_background`, and neither variable sizes it.** Measured on pylance 12.0.0, 2026-09-25, counting
+a fresh process's threads by name (`/proc/self/task/*/comm`) after it writes a 200,000-row local
+table and scans it once. `taskset -c` sets affinity, `systemd-run --user --scope -p CPUQuota=<n>%` sets
+a cgroup quota, and `cpu.max` is read from inside the process:
 
-| Visible CPUs | `LANCE_CPU_THREADS` | Threads gained |
-| --- | --- | --- |
-| 4 | unset | 8 |
-| 8 | unset | 13 |
-| 64 | unset | 69 |
-| 4 | 32 | 9 |
-| 64 | 1 | 70 |
+| Visible CPUs | `cpu.max` | `lance_background` | `lance-cpu` |
+| --- | --- | --- | --- |
+| 4 | `max 100000` | 6 | 3 |
+| 16 | `max 100000` | 18 | 3 |
+| 64 | `max 100000` | 66 | 3 |
+| 64 | `400000 100000` (4 CPUs) | 6 | 3 |
+| 64 | `100000 100000` (1 CPU) | 3 | 2 |
 
-The pool follows CPU AFFINITY, and the documented override moves it in neither direction; pylance
-11.0.0 measured the same on 2026-09-16 ([[LH-172]]). A cgroup CPU quota does not reduce visible CPUs —
-in the lakehouse containers `nproc` reads 64 while `cpu.max` reads `100000 100000` — so the lever that
-bounds this pool is affinity (`os.sched_setaffinity`, or a `cpuset` on the pod), not the variable.
+- **`lance_background` is the available CPUs + 2, and "available" counts the cgroup quota as well as
+  affinity.** Neither `LANCE_CPU_THREADS` (1, 8, 64) nor `LANCE_IO_THREADS` (2, 64) moves that base: 65
+  after the write at 64 CPUs in every run. It also spawns threads on demand: scanning a
+  3,000,000-row, 15-file local table added 16 more by default, 4 at `LANCE_IO_THREADS=2` and 30 at
+  `=64`.
+- **`lance-cpu` is the pool `LANCE_CPU_THREADS` governs, in both directions.** It spawns on demand, so
+  a light workload shows 2-3 threads at any size. An IVF_PQ build over 200,000 x 128 float32 vectors
+  reached 33 threads at 64 CPUs unset, 2 at `LANCE_CPU_THREADS=1`, 9 at `=8`, and 32 at `=32` on 4
+  CPUs. Under the 1-CPU quota it stayed at 2 unset and reached 9 at `=8`. This is LD36 of
+  `docs/audits/2026-09-25/03-lance-docs-full-audit.md` ([[LH-250]]); the thread counts [[LH-172]]
+  reads as the compute pool are `lance_background`'s.
+- **A cgroup quota bounds both Lance pools; the 64-wide pools in a 64-CPU, 1-CPU-quota process are not
+  Lance's.** Under that quota, `import lance` (which loads numpy and pyarrow) adds 64 threads before
+  Lance spawns any, 63 of them numpy's OpenBLAS, sized to the visible CPUs with `OMP_NUM_THREADS`
+  unset; pyarrow's CPU pool reports `pa.cpu_count() == 64` and spawned 56 threads during a threaded
+  Parquet read.
 
 ## Re-vendoring
 

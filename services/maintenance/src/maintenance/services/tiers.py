@@ -111,9 +111,22 @@ def _tier_from_either_end(namespace: str) -> str | None:
     return _tier_from_namespace(namespace) or _tier_from_cascade_namespace(namespace)
 
 
+def _tier_from_namespace_path(path: str) -> str | None:
+    """The tier of a `$`-joined namespace path (`acme$bronze`), or ``None``.
+
+    A nested namespace id is its path joined by the catalog delimiter, so the tier may sit in any
+    segment. Segments are asked shallowest first and the first that names a tier wins. The caller
+    passes the NAMESPACE only, never the table, so a table named `gold` cannot size itself as gold.
+    """
+    for segment in path.split(CATALOG_DELIMITER):
+        if (tier := _tier_from_either_end(segment)) is not None:
+            return tier
+    return None
+
+
 def tier_of(dataset_uri: str) -> str | None:
-    """The medallion tier this dataset lives in, read from the NAMESPACE — in whichever of the five
-    layouts the estate actually writes.
+    """The medallion tier this dataset lives in, read from the NAMESPACE — in whichever of the six
+    layouts the estate writes.
 
     The tier is always a property of the namespace and never of the table name: matching the table
     would mis-tier a `gold_summary` that legitimately lives in silver, and mis-sizing is silent. What
@@ -125,12 +138,16 @@ def tier_of(dataset_uri: str) -> str | None:
          `medallion`, so every governed tier read as untiered and the #61 defaults never once applied
          to a medallion dataset. Measured live: bronze, silver and gold all returned None.
       3. ``<bucket>/<uuid8>_<namespace>$<table>``   — the `dir` backend's FLAT layout, which does not
-         nest a table under its namespace at all but encodes both in ONE directory name. Here
-         `parts[-2]` is the BUCKET, so catalog-governed tables read as untiered too.
+         nest a table under its namespace at all but encodes both in ONE directory name
+         (`<hash>_<object_id>`). Here `parts[-2]` is the BUCKET, so catalog-governed tables read as
+         untiered too. A nested namespace makes the object id `<parent>$<ns>$<table>`, so everything
+         before the LAST delimiter is the namespace path.
       4. ``<bucket>/medallion/<project>$<tier>``    — the cascade under a PROJECT: `project_root`
          reroutes the medallion base per tenant and the child of `medallion/` is project-qualified.
       5. ``<bucket>/<uuid8>_<tier>-<lane>$<table>`` — a cascade LANE vended through the catalog, so
          the flat layout carries the cascade's `<tier>-<lane>` order rather than `<project>-<tier>`.
+      6. ``<bucket>/medallion/<namespace>/<table>`` — a TABLE under a cascade namespace (the trainer's
+         `medallion/models/<model>`). The tier comes from `parts[-2]` alone, never from the table.
 
     ORDER OF THE TWO BRANCHES IS THE FIX, not a tidy-up. The delimiter test used to run FIRST, so
     layout 4 was read as flat: `acme$bronze` reduced to the namespace `acme`, which names no tier, and
@@ -139,9 +156,9 @@ def tier_of(dataset_uri: str) -> str | None:
     delimiter in the leaf evidence of the flat layout.
 
     Layout 3/5 is matched on the delimiter rather than the uuid prefix, and the prefix is stripped with
-    a single `split("_", 1)` so a namespace that itself contains an underscore (`transcripts_v2`)
-    survives intact — that one must stay untiered, which is what keeps this from degenerating into
-    "find a tier word anywhere in the path".
+    a single `split("_", 1)`, only when that `_` falls in the first segment, so a namespace that itself
+    contains an underscore (`transcripts_v2`) survives intact — that one must stay untiered, which is
+    what keeps this from degenerating into "find a tier word anywhere in the path".
 
     ``None`` when the URI names no tier. That is a real case (a control-plane dataset, an untiered
     namespace) and must not be guessed at — see `target_rows_for`.
@@ -152,18 +169,14 @@ def tier_of(dataset_uri: str) -> str | None:
 
     leaf = parts[-1]
     if parts[-2] == _CASCADE_PARENT:  # layouts 2 + 4 — the cascade: the child IS the namespace
-        # A project-scoped cascade child carries the catalog delimiter (`acme$bronze`), so the tier may
-        # sit on either side of it. Take the first delimiter-separated segment that names one; a plain
-        # child has exactly one segment and reads as before.
-        for segment in leaf.split(CATALOG_DELIMITER):
-            if (tier := _tier_from_either_end(segment)) is not None:
-                return tier
-        return None
+        return _tier_from_namespace_path(leaf)
+    if len(parts) >= 3 and parts[-3] == _CASCADE_PARENT:  # layout 6 — the leaf is a table; its parent is the namespace
+        return _tier_from_namespace_path(parts[-2])
 
-    if CATALOG_DELIMITER in leaf:  # layouts 3 + 5 — flat: the namespace is the leaf's own prefix, not a parent directory
-        namespace = leaf.split(CATALOG_DELIMITER, 1)[0]
-        # Strip the dir backend's uuid8 prefix, once: `aa3bed10_silver` -> `silver`.
-        return _tier_from_either_end(namespace.split("_", 1)[1] if "_" in namespace else namespace)
+    if CATALOG_DELIMITER in leaf:  # layouts 3 + 5 — flat: the namespace is inside the leaf, not a parent directory
+        # Strip the dir backend's uuid8 prefix, once: `aa3bed10_acme$bronze$events` -> `acme$bronze$events`.
+        object_id = leaf.split("_", 1)[1] if "_" in leaf.split(CATALOG_DELIMITER, 1)[0] else leaf
+        return _tier_from_namespace_path(object_id.rsplit(CATALOG_DELIMITER, 1)[0])
 
     return _tier_from_namespace(parts[-2])  # layout 1 — nested, and the catalog's convention alone
 

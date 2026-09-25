@@ -154,7 +154,7 @@ def test_the_cascade_LANES_are_tiered_by_their_PREFIX(namespace: str, expected: 
 
 
 def test_a_cascade_namespace_that_is_not_a_tier_stays_untiered() -> None:
-    """`medallion/models` (chart/values.yaml:917) is a real cascade namespace and names no tier."""
+    """`medallion/models` (chart/values.yaml `train.modelsNamespace`) is a real cascade namespace and names no tier."""
     assert target_rows_for("s3://lance-catalog/medallion/models") is None
 
 
@@ -176,6 +176,7 @@ def test_a_TABLE_named_after_a_tier_never_sets_the_tier() -> None:
     assert target_rows_for("s3://wh/plain/gold") is None
     assert target_rows_for("s3://wh/gold") is None
     assert target_rows_for("s3://wh/deadbeef_acme$plain$gold") is None  # flat, nested: the LAST `$` segment is the table
+    assert target_rows_for("s3://lance-catalog/medallion/models/gold") is None  # a model named `gold` under the trainer's namespace
 
 
 def test_the_tier_is_read_from_the_NAMESPACE_not_the_table_name() -> None:
@@ -243,46 +244,25 @@ def test_ALL_FIVE_layouts_the_estate_writes_resolve_to_a_tier() -> None:
 
 
 @pytest.mark.parametrize(
-    ("uri", "expected"),
+    "uri",
     [
-        pytest.param(
-            "s3://lance-catalog/aa3bed10_acme$bronze$events",
-            "bronze",
-            id="nested-namespace-in-the-flat-layout",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="the flat branch cuts the leaf at its FIRST `$`, so the namespace `acme$bronze` reads as its parent `acme`",
-            ),
-        ),
-        pytest.param(
-            "s3://lance-catalog/medallion/bronze-media/pages",
-            "bronze",
-            id="table-under-a-cascade-lane",
-            marks=pytest.mark.xfail(
-                strict=True,
-                raises=AssertionError,
-                reason="only the direct child of `medallion/` is read as a lane; one level down is layout 1, which reduces `bronze-media` to `media`",
-            ),
-        ),
+        pytest.param("s3://lance-catalog/aa3bed10_acme$bronze$events", id="nested-namespace-in-the-flat-layout"),
+        pytest.param("s3://lance-catalog/medallion/bronze-media/pages", id="table-under-a-cascade-lane"),
+        pytest.param("s3://lance-catalog/medallion/acme$bronze/pages", id="table-under-a-project-scoped-cascade-namespace"),
     ],
 )
-def test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier(uri: str, expected: str) -> None:
-    """Two layouts one config change away from the estate, which `tier_of` reads as untiered today.
+def test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier(uri: str) -> None:
+    """A table's tier is read from its whole namespace path, in both the flat and the cascade layout.
 
-    Each case asserts the CORRECT tier, and the strict xfail is the tracker: the day `tier_of` learns
-    either layout, that case XPASSes, strict turns it red, and the mark comes off. `raises=AssertionError`
-    keeps a crash in `tier_of` from counting as the known gap.
-
-    * The `dir` backend names a table's directory `<hash>_<object_id>`, and a nested object id is the
-      namespace path joined by `$` (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest Table
-      Directory). So the TABLE is the leaf's LAST segment and every segment before it is namespace.
-      Measured on pylance 12.0.0 / lance-namespace 0.11.1: `create_table(id=["acme", "bronze",
-      "events"])` lands at `f69e5ed1_acme$bronze$events`, and `tier_of` returns None for it.
-    * `medallion/<tier>-<lane>` IS the namespace, so a table beneath it belongs to the lane's tier and
-      the lane reduces from the LEFT, exactly as when the lane is itself the dataset.
-
-    Neither is a live miss: `chart/templates/medallion.yaml` writes every tier and lane as the dataset
-    `s3://<bucket>/medallion/<ns>`, and the catalog vends the flat layout for top-level namespaces.
+    * The `dir` backend names a table's directory `<hash>_<object_id>`
+      (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest Table Directory), and a nested
+      `object_id` is the namespace path joined by `$` (§ Manifest Table Schema, the `object_id` row).
+      So the leaf's LAST `$` segment is the table and every segment before it is namespace. Measured on
+      pylance 12.0.0 / lance-namespace 0.11.1: `create_table(id=["acme", "bronze", "events"])` lands at
+      `<hash>_acme$bronze$events`. The catalog reaches this shape through its nested-namespace door:
+      `require_warehouse_scoped` tells a caller to nest (`'<parent>$<ident>'`, `catalog/api/fga_deps.py`)
+      and `MAX_NAMESPACE_DEPTH` allows seven levels.
+    * The child of `medallion/` IS a namespace, so a table beneath it takes that namespace's tier and a
+      `<tier>-<lane>` reduces from the LEFT, exactly as when the lane is itself the dataset.
     """
-    assert tier_of(uri) == expected
+    assert tier_of(uri) == "bronze"

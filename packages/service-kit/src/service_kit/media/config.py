@@ -18,6 +18,7 @@ from pathlib import Path
 from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -296,7 +297,7 @@ class MediaSettings(BaseSettings):
         opts = {
             "endpoint": self.s3_endpoint,
             "region": self.s3_region,
-            "allow_http": "true" if self.s3_endpoint.startswith("http://") else "false",
+            "allow_http": allow_http_for(self.s3_endpoint),
             "virtual_hosted_style_request": "false",
         }
         # Credential resolution, per the estate's secrets rule (store only, fail-closed):

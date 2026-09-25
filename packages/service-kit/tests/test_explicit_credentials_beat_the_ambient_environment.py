@@ -59,8 +59,13 @@ def test_an_absent_session_token_is_still_omitted_entirely() -> None:
 
 
 def test_the_non_credential_options_keep_their_spelling() -> None:
-    """`endpoint`, `allow_http` and `virtual_hosted_style_request` are not read from AWS_* variables,
-    so renaming them would be churn — and `virtual_hosted_style_request` has no `aws_` alias at all."""
+    """Pins the spellings the builder emits, which do NOT displace the ambient environment.
+
+    Measured on pylance 12.0.0 in fresh processes: `AWS_ALLOW_HTTP` beat `allow_http` 5 of 5 each way;
+    `AWS_ENDPOINT_URL`, `AWS_ENDPOINT` and `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` beat the bare `endpoint` and
+    `virtual_hosted_style_request` in some processes and not others; `aws_endpoint` beat
+    `AWS_ENDPOINT_URL` and `aws_virtual_hosted_style_request` beat its variable 5 of 5. Closing that is
+    [[LH-238]]."""
     options = lance_storage_options("http://rustfs:9000", "AK", "SK", "us-east-1", virtual_hosted=False)
     assert options["endpoint"] == "http://rustfs:9000"
     assert options["allow_http"] == "true"

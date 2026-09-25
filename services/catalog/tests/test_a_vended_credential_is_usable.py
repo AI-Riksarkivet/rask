@@ -27,9 +27,20 @@ is about whether a client can BUILD from what it was handed.
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from typing import Any, Literal
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from lance_namespace import DescribeTableResponse
+
+from catalog.api.dependencies import get_namespace, get_settings, get_storage_options
+from catalog.api.v1.endpoints import tables
+from catalog.core.config import Settings
+from catalog.core.vending import StsVendor
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 VendorKind = Literal["sts", "web_identity"]
@@ -92,3 +103,39 @@ def test_a_vend_against_aws_proper_permits_no_plaintext(kind: VendorKind) -> Non
     opts = _vend(kind, None)
     assert "endpoint" not in opts
     assert opts["allow_http"] == "false", "a credential for AWS proper permits plaintext"
+
+
+class _Namespace:
+    """A backend whose `describe_table` answers an `s3://` location, the only kind `StsVendor` scopes."""
+
+    def describe_table(self, request: Any) -> DescribeTableResponse:
+        return DescribeTableResponse(location="s3://lakehouse/abc12345_ns$t")
+
+
+@pytest.fixture
+def describe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    application = FastAPI()
+    install_problem_handlers(application, logging.getLogger(__name__))
+    application.include_router(tables.router)
+    application.state.vendor = StsVendor(
+        role_arn="arn:aws:iam::000000000000:role/vend", region="us-east-1", endpoint="https://s3.example.com", assume_role=_fake_credentials
+    )
+    # The manifest read is the catalog's own root-credential open, not the vend, and needs a live store.
+    monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: (1, (), ()))
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[get_namespace] = _Namespace
+    application.dependency_overrides[get_storage_options] = lambda: {}
+    with TestClient(application) as client:
+        yield client
+
+
+def test_the_describe_door_hands_an_https_vend_on_without_a_plaintext_permit(describe_client: TestClient) -> None:
+    """The HTTP door, not only the vendor: `describe_table` copies the vend into its own response."""
+    response = describe_client.post("/v1/table/ns%24t/describe", params={"vend_credentials": "true"})
+
+    assert response.status_code == 200, response.text
+    options = response.json()["storage_options"]
+    assert options["endpoint"] == "https://s3.example.com"
+    assert options["aws_session_token"] == "TOK", "the door answered without the vend — this proves nothing about it"
+    assert options["allow_http"] == "false", "the describe door handed an https store a credential that also permits plaintext"

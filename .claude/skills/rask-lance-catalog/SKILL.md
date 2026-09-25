@@ -201,7 +201,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   ("read the body, not the docstring") was itself stale by 2026-08-16. A policy may skip a STEP
   (`cleanup_enabled`/`optimize_indices_enabled`), never reorder them — which is why they are modules
   in one service rather than four services each rescanning every bucket.
-- **A dataset URI encodes its TIER in FIVE different places, and they do not agree on which end it
+- **A dataset URI encodes its TIER in SIX different places, and they do not agree on which end it
   sits.** `maintenance/services/tiers.py` sizes fragments per tier (bronze 512 / silver 262 144 / gold
   524 288 rows — bronze rows are ~1.8 MB page images, silver/gold ~2 KB records, so one row count
   cannot serve all three). Reading the tier from the wrong segment does not error, it returns `None`
@@ -210,33 +210,33 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `<bucket>/medallion/<tier>[-<lane>]` (the cascade — the child IS the namespace, and lanes are
   `<tier>-<lane>` like `bronze-<lane>` / `gold-<lane>`, so the tier LEADS, reduce from the left);
   `<bucket>/<uuid8>_<namespace>$<table>` (the `dir` backend's FLAT layout — namespace and table share
-  ONE directory name, so the tier is in `parts[-1]`, not a parent directory);
+  ONE directory name, so the tier is in `parts[-1]`, not a parent directory; a NESTED namespace makes
+  it `<uuid8>_<parent>$<ns>$<table>`);
   `<bucket>/medallion/<project>$<tier>` (the cascade under a PROJECT — `project_root` reroutes the
   medallion base per tenant, so the promoted child is project-qualified);
   `<bucket>/<uuid8>_<tier>-<lane>$<table>` (a cascade LANE vended through the catalog — the flat
-  layout carrying the cascade's order rather than the catalog's).
+  layout carrying the cascade's order rather than the catalog's);
+  `<bucket>/medallion/<namespace>/<table>` (a TABLE under a cascade namespace — the trainer's
+  `medallion/models/<model>`, or a table beneath a lane).
   Until 2026-08-16 only the first was handled, so measured live, EVERY governed tier read as untiered
   and the per-tier defaults had never once applied. Layouts 4 and 5 landed later still and are the
   reason the branch ORDER is load-bearing: `medallion` has to be asked before the delimiter test, or a
   project's `acme$bronze` reads as the flat layout, reduces to the namespace `acme`, and the widest
   rows in the estate get Lance's default row count. Only `medallion` may promote its child; widening
   that would let a table NAMED `gold` size itself as gold.
-  **`None` IS STILL REACHABLE, so do not read the list as "all shapes handled".** Measured against
-  `tier_of` at HEAD: a NESTED namespace in the flat layout
-  (`<bucket>/<uuid8>_<parent>$<tier>$<table>`, e.g. `aa3bed10_acme$bronze$events`) reduces the leaf on
-  its FIRST delimiter and yields the PARENT; and a table nested under a cascade lane
-  (`<bucket>/medallion/<tier>-<lane>/<table>`, e.g. `medallion/bronze-media/pages`) is layout 1, which
-  reduces `bronze-media` from the right and yields `media`. Neither errors. The estate's *rendered*
-  URIs all resolve today (`chart/templates/medallion.yaml` writes `s3://<bucket>/medallion/<ns>` for
-  every tier and lane, and the catalog vends the flat layout for top-level namespaces), so both are a
-  hazard of the next layout change rather than a live miss — but nesting a namespace or landing a
-  table under a lane is a config change, not a code change, which is exactly how the first three
-  layouts each arrived. Both are pinned by
-  `tests/unit/test_tier_fragment_sizing.py::test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier`
-  as strict xfails asserting `bronze`, so the change that teaches `tier_of` either layout turns that
-  case red and takes its mark off. A fix for the flat one must read the tier from the NAMESPACE
-  segments only: the leaf's last `$` segment is the table (`lance_docs/ns_catalog/catalog/dir/index.md`
-  § Manifest Table Directory), and `deadbeef_acme$plain$gold` must stay untiered.
+  **Every branch reads the tier from a NAMESPACE PATH, never from a table.** The `dir` backend names a
+  table's directory `<hash>_<object_id>` (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest
+  Table Directory), and a nested `object_id` is the namespace path joined by `$` (§ Manifest Table
+  Schema, the `object_id` row) — so in the flat layout everything before the leaf's LAST `$` is
+  namespace, and the last segment is the table. The catalog reaches that nested shape through its own
+  door: `require_warehouse_scoped` tells a caller to nest (`'<parent>$<ident>'`) and
+  `MAX_NAMESPACE_DEPTH` allows seven levels. Under `medallion/`, a table's namespace is `parts[-2]`
+  and nothing else. `tiers.py::_tier_from_namespace_path` asks each `$` segment shallowest first.
+  `tests/unit/test_tier_fragment_sizing.py` pins both directions:
+  `test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier` (`aa3bed10_acme$bronze$events`,
+  `medallion/bronze-media/pages` and `medallion/acme$bronze/pages` are bronze) and
+  `test_a_TABLE_named_after_a_tier_never_sets_the_tier` (`deadbeef_acme$plain$gold` and
+  `medallion/models/gold` stay untiered — a model named `gold` is not gold-sized).
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.

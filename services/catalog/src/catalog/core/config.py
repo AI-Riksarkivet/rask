@@ -17,6 +17,7 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from service_kit.governed.settings import GovernedAuthSettings
+from service_kit.lakehouse.endpoint_scheme import allow_http_for
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -660,7 +661,7 @@ class Settings(
             f"{_STORAGE_PREFIX}access_key_id": self.s3_access_key_id,
             f"{_STORAGE_PREFIX}secret_access_key": self.s3_secret_access_key.get_secret_value(),
             f"{_STORAGE_PREFIX}region": self.s3_region,
-            f"{_STORAGE_PREFIX}allow_http": "true" if target.startswith("http://") else "false",
+            f"{_STORAGE_PREFIX}allow_http": allow_http_for(target),
             f"{_STORAGE_PREFIX}virtual_hosted_style_request": str(self.s3_virtual_hosted).lower(),
         }
 

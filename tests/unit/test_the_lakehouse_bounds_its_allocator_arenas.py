@@ -18,9 +18,10 @@ named the remainder:
 Those 60-68 MB reservations are glibc secondary arenas -- `HEAP_MAX_SIZE` is 64 MB on 64-bit. glibc
 sizes its arena cap from `sysconf(_SC_NPROCESSORS_ONLN)`, the HOST's core count, and a cgroup CPU
 *quota* does not reduce visible CPUs: measured in these containers, `nproc` reads **64** while
-`cpu.max` reads `100000 100000`, one CPU. `lance_docs/PROVENANCE.md` records the other end of the
-same defect -- Lance sizes its compute pool to the visible CPUs, 64 here, against that one-CPU budget --
-and this is the mechanism by which those threads become resident bytes.
+`cpu.max` reads `100000 100000`, one CPU. The 64-wide thread pools in such a process are not Lance's,
+which sizes both its pools to the quota: reproducing that condition on the host with pylance 12.0.0
+(`lance_docs/PROVENANCE.md`), numpy's OpenBLAS starts 63 threads and pyarrow's CPU pool is 64 wide.
+Arenas are how those threads become resident bytes.
 
 IT IS FRAGMENTATION, NOT A LEAK, which is why no retaining object was ever found. Each arena keeps its
 own free lists and is trimmed independently, and memory freed in one is never handed to another, so RSS
