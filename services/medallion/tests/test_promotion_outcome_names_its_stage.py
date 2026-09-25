@@ -41,40 +41,98 @@ right one's; it does not put a person in the author field.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, cast
 
 import pytest
+from dapr.ext.workflow import WorkflowActivityContext
 
-from medallion.schemas.promotion import PromotionSpec
+from medallion.core.config import MedallionSettings, get_settings
+from medallion.services.promotion_hold import hold_spec
+from medallion.services.transform import StageIdentity, resolve_stage_identity
 from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
 
 
 #: The producer's real deployed state: neither var is set, so `MedallionSettings` falls to the
 #: bronze->silver defaults. Pinned explicitly so the test cannot pass because a stray env var in the
-#: runner happened to name the gold stage.
+#: runner happened to name the gold stage — which is also why the fixture clears `get_settings`'s
+#: cache: the activity reads the process-wide cached settings, so deleting the env alone pins nothing
+#: once an earlier test has populated that cache.
 _PRODUCER_ENV_IS_UNSET = ("MEDALLION_OPERATION", "MEDALLION_AUTHOR")
 
+#: A tenant, because that is the shape a promotion has on the deployed estate: on a chart lane the
+#: stage runner project-qualifies all four names in `resolve_stage_identity` BEFORE the hold is taken,
+#: so the spec the producer receives already reads `acme-silver` / `acme-silver$features`.
+_PROJECT = "acme"
 
-def _gold_hold() -> PromotionReport:
-    """A silver->gold promotion, approved. The lane the producer's defaults do NOT describe."""
-    return PromotionReport(
-        spec=PromotionSpec(
-            token="tok-gold",
-            project="acme",
-            from_namespace="silver",
-            from_dataset="silver$features",
-            to_namespace="gold",
-            to_dataset="gold$catalog",
-            operation="aggregate_gold",
-            author="analyst",
-            version=48,
-        ),
-        outcome=PromotionOutcome(status="PROMOTED", decided_by="alice"),
+
+def _bronze_to_silver_stage() -> MedallionSettings:
+    """The bronze-to-silver stage runner's env as `chart/values.yaml` `medallion.stageRunners` sets it.
+
+    Tenant-free, as in the chart: qualifying the names is production's job, not the test's.
+    """
+    return MedallionSettings(
+        MEDALLION_FROM_NAMESPACE="bronze",
+        MEDALLION_FROM_DATASET="bronze$events",
+        MEDALLION_TO_NAMESPACE="silver",
+        MEDALLION_TO_DATASET="silver$features",
+        MEDALLION_OPERATION="embed_features",
+        MEDALLION_AUTHOR="data_eng",
     )
 
 
+def _silver_to_gold_stage() -> MedallionSettings:
+    """The silver-to-gold stage runner's env as `chart/values.yaml` `medallion.stageRunners` sets it."""
+    return MedallionSettings(
+        MEDALLION_FROM_NAMESPACE="silver",
+        MEDALLION_FROM_DATASET="silver$features",
+        MEDALLION_TO_NAMESPACE="gold",
+        MEDALLION_TO_DATASET="gold$catalog",
+        MEDALLION_OPERATION="aggregate_gold",
+        MEDALLION_AUTHOR="analyst",
+    )
+
+
+class _StubActivityContext:
+    """An activity context. `emit_promotion_outcome` never touches it."""
+
+
+def _ctx() -> WorkflowActivityContext:
+    """The stub, typed as the real context: constructing one needs a live workflow instance."""
+    return cast(WorkflowActivityContext, _StubActivityContext())
+
+
+def _approved_hold(stage: MedallionSettings, *, version: int) -> tuple[StageIdentity, PromotionReport]:
+    """An approved hold, composed on the path the stage runner takes in `transform._report_hold`.
+
+    The stage resolves its four names with `resolve_stage_identity` and hands exactly those to
+    `hold_spec`, so a hand-typed spec can only ever approximate them. The identity is returned beside
+    the report because it is also what the held stage's own lineage names (`_emit_fail_run` reads the
+    same four fields), and the outcome has to land on those nodes.
+    """
+    identity = resolve_stage_identity(stage, spec=None, project=_PROJECT)
+    spec = hold_spec(
+        stage,
+        token="tok-hold",
+        project=_PROJECT,
+        from_namespace=identity.from_namespace,
+        from_dataset=identity.from_dataset,
+        to_namespace=identity.to_namespace,
+        to_dataset=identity.to_dataset,
+        reasons=["row_count_positive"],
+        originator="alice",
+        version=version,
+    )
+    return identity, PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTED", decided_by="alice"))
+
+
+def _gold_hold() -> tuple[StageIdentity, PromotionReport]:
+    """A silver->gold promotion held on v48, approved. The lane the producer's defaults do NOT describe."""
+    return _approved_hold(_silver_to_gold_stage(), version=48)
+
+
 @pytest.fixture
-def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
+def captured(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
     """Capture what the activity asks `build_run_event` for, and never touch Dapr.
 
     The activity imports `build_run_event` INSIDE the function body, so patching the module attribute
@@ -97,12 +155,15 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     monkeypatch.setattr("medallion.workflow._run_async", _close)
     for var in _PRODUCER_ENV_IS_UNSET:
         monkeypatch.delenv(var, raising=False)
-    return calls
+    get_settings.cache_clear()
+    yield calls
+    get_settings.cache_clear()
 
 
 def test_the_approved_promotion_names_the_stage_that_was_held(captured: list[dict[str, Any]]) -> None:
     """The whole defect in one assertion set: job, author and version must describe the gold hop."""
-    emit_promotion_outcome(None, _gold_hold())  # ty: ignore[invalid-argument-type]
+    _, report = _gold_hold()
+    emit_promotion_outcome(_ctx(), report)
 
     assert captured, "emit_promotion_outcome built no run event at all"
     event = captured[-1]
@@ -122,12 +183,20 @@ def test_the_outputs_were_never_the_broken_half(captured: list[dict[str, Any]]) 
 
     Inputs and outputs come off the SPEC and were always right; only the fields read from `settings`
     were wrong. If a future refactor breaks these too, this test says so instead of the graph.
+
+    A chart lane's spec arrives already project-qualified, so "right" means the SAME nodes the held
+    stage's own lineage named: neither the producer's settings (`bronze` -> `silver`, tenant-free) nor
+    a second qualification of a name that already carries the tenant (`acme-acme-gold$catalog`).
     """
-    emit_promotion_outcome(None, _gold_hold())  # ty: ignore[invalid-argument-type]
+    held, report = _gold_hold()
+    emit_promotion_outcome(_ctx(), report)
     event = captured[-1]
 
-    assert event["output_name"] == "acme-gold$catalog"
-    assert event["inputs"] == [("silver", "acme-silver$features")]
+    read, wrote = (held.from_namespace, held.from_dataset), (held.to_namespace, held.to_dataset)
+    assert event["inputs"] == [read], f"the approval read {event['inputs']!r}; the held stage read {read!r}"
+    assert (event["output_namespace"], event["output_name"]) == wrote, (
+        f"the approval wrote {(event['output_namespace'], event['output_name'])!r}; the held stage wrote {wrote!r}"
+    )
 
 
 def test_a_silver_hold_still_names_the_silver_stage(captured: list[dict[str, Any]]) -> None:
@@ -137,12 +206,9 @@ def test_a_silver_hold_still_names_the_silver_stage(captured: list[dict[str, Any
     producer's defaults happen to be that stage's values. Pinning it stops a fix that merely swaps one
     hardcoded stage for another from looking correct.
     """
-    report = _gold_hold()
-    report.spec.from_namespace, report.spec.from_dataset = "bronze", "bronze$events"
-    report.spec.to_namespace, report.spec.to_dataset = "silver", "silver$features"
-    report.spec.operation, report.spec.author, report.spec.version = "embed_features", "data_eng", 72
+    _, report = _approved_hold(_bronze_to_silver_stage(), version=72)
 
-    emit_promotion_outcome(None, report)  # ty: ignore[invalid-argument-type]
+    emit_promotion_outcome(_ctx(), report)
     event = captured[-1]
 
     assert event["operation"] == "embed_features"
@@ -158,10 +224,10 @@ def test_a_hold_taken_before_this_change_still_emits(captured: list[dict[str, An
     already handles for `version` -- so the emit falls back to settings rather than emitting an empty
     job name, which would be a worse record than the wrong one.
     """
-    report = _gold_hold()
+    _, report = _gold_hold()
     report.spec.operation, report.spec.author, report.spec.version = "", "", 0
 
-    emit_promotion_outcome(None, report)  # ty: ignore[invalid-argument-type]
+    emit_promotion_outcome(_ctx(), report)
     event = captured[-1]
 
     assert event["operation"] == "embed_features", "an old spec must fall back to settings, not emit an empty job name"
