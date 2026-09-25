@@ -2,9 +2,9 @@
 
 E2 bootstrapped the sweep as a `maintainer` rather than a `writer` — a deliberate narrowing, recorded
 in `chart/templates/bootstrap-admin.yaml` and asserted by its own render gate. Distributed compaction
-then calls two catalog routes the sweep alone uses, `compaction_plan` and `compaction_commit`, and
-NEITHER is named in `fga_deps`' rung maps — so `_action_relation` falls them to the WRITER rung, which
-a maintainer does not hold. The two rules are individually right and jointly deny.
+then calls two catalog routes the sweep alone uses, `compaction_plan` and `compaction_commit`, so both
+must ask for the MAINTAINER rung. At the WRITER rung, which a maintainer does not hold, the two rules
+are individually right and jointly deny.
 
 MEASURED ON THE LIVE ESTATE 2026-09-09, and the shape is why it stayed invisible:
 

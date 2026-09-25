@@ -299,8 +299,8 @@ async def reindex_maintenance(
         str | None, Query(description="The ref to rebuild on. Omit for main; the ref travels with the work item so the worker opens what you named.")
     ] = None,
 ) -> ReindexResult | ReindexAccepted:
-    """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
-    index that is there, and an unmapped suffix would fall through to the writer rung.
+    """Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``, declared in
+    ``fga_deps._OWNER_SUFFIX_RELATION``) — it destroys the index that is there.
 
     **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
     than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and

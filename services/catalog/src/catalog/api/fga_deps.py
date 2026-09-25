@@ -27,11 +27,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from functools import lru_cache
-from typing import Final, NoReturn
+from typing import Final
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
+    InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
@@ -94,7 +95,7 @@ _FGA_TYPE: dict[str, str] = {
 _DATA_READ_ACTIONS = frozenset({"query", "count_rows", "credentials", "blobs", "changes"})
 # `tasks` (#75) reports what is SCHEDULED against this object — a pending undrop deadline today.
 # Reader tier: it discloses no data and no principals, and an owner must be able to see the
-# deadline they are racing. Unmapped, it demanded WRITER — which is how the live audit found it.
+# deadline they are racing.
 # `history` (GET /v1/table/{id}/history) is the commit log — WHAT changed and WHEN, never who. Its own
 # docstring already argued the rung ("the same rung as describe/list-versions") and the endpoint checks
 # `can_get_metadata` itself; what was missing is this line, so the ROUTER demanded `can_write_data`
@@ -126,9 +127,9 @@ _ALTERNATIVE_RUNGS: dict[tuple[str, str], str] = {("table", "credentials"): "can
 
 #: The two doors distributed compaction calls, and the ONLY callers are the maintenance plane.
 #:
-#: E2 bootstrapped the sweep as a `maintainer` rather than a `writer` — a deliberate narrowing — and
-#: these suffixes were named in no rung map, so `_action_relation` fell them to the writer rung below.
-#: The two rules are individually right and jointly deny: the router refuses before the endpoint runs.
+#: E2 bootstrapped the sweep as a `maintainer` rather than a `writer` — a deliberate narrowing — so these
+#: doors ask for `can_maintain`. At the writer rung the two rules are individually right and jointly
+#: deny: the router refuses before the endpoint runs.
 #:
 #: MEASURED ON THE LIVE ESTATE 2026-09-09, and none of it was red. `maintenance.distributedCompaction`
 #: was True in the running pod while 7,920 of 7,920 dataset outcomes reported `mode: in_pod`, and the
@@ -406,14 +407,21 @@ def _declared_relation(declared: Mapping[str, str], suffix: str) -> str | None:
     return None
 
 
-def _refuse_undeclared(fga_type: str, suffix: str) -> NoReturn:
-    """Refuse a door no rung map declares, for every caller — see ``_WRITER_SUFFIX_RELATION``.
+def _undeclared_door(fga_type: str, suffix: str) -> InternalError:
+    """The refusal for a door no rung map declares, for every caller — see ``_WRITER_SUFFIX_RELATION``.
 
-    Logged at ERROR because only a route shipped without its rung can reach this: authorization runs
-    after routing matched, so a caller cannot invent a suffix.
+    ``InternalError`` (spec code 18), not ``PermissionDenied``: authorization runs after routing
+    matched, so a caller cannot invent a suffix and only a route shipped without its rung reaches this.
+    Code 15 would send the caller to ask for access no grant can give.
     """
-    log.error("undeclared_door", extra={"fga_type": fga_type, "suffix": suffix})
-    raise PermissionDeniedError(f"{fga_type} declares no rung for {suffix!r}, so no caller may reach it")
+    return InternalError(f"{fga_type} declares no rung for {suffix!r}, so no caller may reach it")
+
+
+def _record_undeclared(path: str, fga_type: str, suffix: str, *, user: str, obj: str) -> None:
+    """Log and audit an undeclared-door refusal. The ERROR line names the path and suffix because the
+    500 the caller receives is redacted, so it is where an operator finds the route that shipped bare."""
+    log.error("undeclared_door", extra={"path": path, "fga_type": fga_type, "suffix": suffix})
+    audit("authz", FAILURE, subject=user, resource=obj, reason="undeclared_door", suffix=suffix)
 
 
 def _action_relation(fga_type: str, suffix: str) -> str:
@@ -423,7 +431,7 @@ def _action_relation(fga_type: str, suffix: str) -> str:
     classified by the trailing segment. Every returned relation exists on ``fga_type`` in the model.
 
     Raises:
-        PermissionDeniedError: Nothing declares ``suffix`` for ``fga_type``.
+        InternalError: Nothing declares ``suffix`` for ``fga_type`` (see :func:`_undeclared_door`).
     """
     if (relation := _declared_relation(_OWNER_SUFFIX_RELATION.get(fga_type, {}), suffix)) is not None:
         return relation
@@ -445,7 +453,7 @@ def _action_relation(fga_type: str, suffix: str) -> str:
             return "can_get_metadata"
     if (relation := _declared_relation(_WRITER_SUFFIX_RELATION.get(fga_type, {}), suffix)) is not None:
         return relation
-    _refuse_undeclared(fga_type, suffix)
+    raise _undeclared_door(fga_type, suffix)
 
 
 def _create_parent_check(resource: str, id_segments: list[str] | str, settings: Settings) -> tuple[str, str] | None:
@@ -545,11 +553,10 @@ async def _authorize_transaction(client: OpenFgaClient, settings: Settings, segm
     branches gate on the same privilege. ``tests/unit/test_fga_model_contract.py`` now proves every
     (type, relation) this module can check exists in the compiled model.
 
-    ``describe`` and ``alter`` are the only transaction doors; any other suffix is refused rather than
-    answered with the writer rung, the same rule ``_WRITER_SUFFIX_RELATION`` states for the resolver.
+    ``describe`` and ``alter`` are the only transaction doors (``_TRANSACTION_SUFFIXES``); ``authorize``
+    refuses any other suffix before calling this, the same rule ``_WRITER_SUFFIX_RELATION`` states for
+    the resolver.
     """
-    if suffix not in _TRANSACTION_SUFFIXES:
-        _refuse_undeclared("transaction", suffix)
     is_read = suffix == "describe"
     parent_ns = fga.parent_namespace_id(segments, delimiter=settings.delimiter)
     if parent_ns is not None:
@@ -838,6 +845,9 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
 
     # Transactions authorize parent-scoped (against their enclosing namespace), not on a per-txn object.
     if resource == "transaction":
+        if suffix not in _TRANSACTION_SUFFIXES:
+            _record_undeclared(path, "transaction", suffix, user=token.sub, obj=_object("transaction", segments, settings.delimiter))
+            raise _undeclared_door("transaction", suffix)
         await _authorize_transaction(client, settings, segments, suffix, user=token.sub)
         return
 
@@ -869,6 +879,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         raise PermissionDeniedError(f"the root namespace names no object, so {suffix!r} cannot be authorized on it")
 
     fga_type = _FGA_TYPE[resource]
+    obj = _object(fga_type, segments, settings.delimiter)
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
     # batch routes above, this one cannot be answered from the path alone.
     if suffix in _GRANT_SUFFIXES:
@@ -881,11 +892,15 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # permission error's clothes.
     if fga_type == "classification":
         if suffix != "access/my-permissions":
-            raise PermissionDeniedError(f"{suffix!r} is not an action on a classification label")
-        await _require(client, user=token.sub, relation="can_get_metadata", obj=_object(fga_type, segments, settings.delimiter))
+            _record_undeclared(path, fga_type, suffix, user=token.sub, obj=obj)
+            raise _undeclared_door(fga_type, suffix)
+        await _require(client, user=token.sub, relation="can_get_metadata", obj=obj)
         return
-    relation = _action_relation(fga_type, suffix)
-    obj = _object(fga_type, segments, settings.delimiter)
+    try:
+        relation = _action_relation(fga_type, suffix)
+    except InternalError:
+        _record_undeclared(path, fga_type, suffix, user=token.sub, obj=obj)
+        raise
     if (alternative := _ALTERNATIVE_RUNGS.get((fga_type, suffix))) is not None:
         await _require_any(client, user=token.sub, doors=[(relation, obj), (alternative, obj)])
         return

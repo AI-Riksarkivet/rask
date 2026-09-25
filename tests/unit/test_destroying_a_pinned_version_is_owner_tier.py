@@ -1,11 +1,8 @@
 """Deleting a TAG or a tagged VERSION must clear the same bar as the maintenance that respects them.
 
-The map's own comment states the rule that produced the hole: *"Their `*/delete` / `*/list` /
-`*/version` siblings fall through to the reader/writer tiers below."* So `tags/create` and
-`tags/update` are owner-gated (`can_create_tag`, `can_update_tag`) while `tags/delete` and
-`version/delete` are not mapped at all and land on the writer rung.
-
-That is backwards, and the asymmetry is what makes it exploitable rather than merely untidy:
+`tags/create` and `tags/update` are owner-gated (`can_create_tag`, `can_update_tag`), and
+`tags/delete` and `version/delete` must be too. At the writer rung the asymmetry is what makes them
+exploitable rather than merely untidy:
 
 - `maintenance/run` — which reclaims old versions and EXEMPTS tagged ones — is owner-gated
   (`can_drop`). The door that respects the tag is guarded.
@@ -37,12 +34,12 @@ TABLE = _OWNER_SUFFIX_RELATION["table"]
 
 @pytest.mark.parametrize("suffix", ["tags/delete", "version/delete"])
 def test_a_destructive_version_op_is_not_left_on_the_writer_rung(suffix: str) -> None:
-    """An UNMAPPED suffix falls through to writer — which the map's own comments call out twice as
-    'both wrong and silently wrong' for other routes, and it is the same failure here."""
+    """The door must be declared on the OWNER map: undeclared it is refused for every caller, and on the
+    writer map a plain data writer clears it."""
     assert suffix in TABLE, (
-        f"{suffix!r} is unmapped, so it falls through to the writer rung: a plain data writer can "
-        "destroy or unpin the version `published` points at, while `maintenance/run` — which exempts "
-        "tagged versions — is owner-gated"
+        f"{suffix!r} is not declared owner-tier: undeclared it is refused for every caller, and at the writer "
+        "rung a plain data writer can destroy or unpin the version `published` points at, while "
+        "`maintenance/run` — which exempts tagged versions — is owner-gated"
     )
 
 

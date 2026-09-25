@@ -7,8 +7,8 @@ intent for that plane — "the endpoints stay routing-only" — and this is the 
 The steps, and the order, are exactly what the door ran, because the ORDER is the contract:
 
 1. shape guards that cost nothing (wildcards, the multi-base allowlist, ``properties`` JSON, the
-   LANCE-ONLY format rule) — before any round trip, so a request that is invalid on its face never
-   pays for one (catalog-api-19);
+   LANCE-ONLY format rule) — before this function's round trips, so a request that is invalid on its
+   face never pays for a lookup (catalog-api-19);
 2. the parent-exists and live-trash guards — round trips, still strictly BEFORE the write;
 3. the derived-write pin, validated (and authorized) before the write rather than after it;
 4. the #21 lineage stamp into the Arrow payload;
@@ -102,7 +102,7 @@ async def create_governed_table(
     control: ControlEmitter,
     so: StorageOptions,
     data: bytes,
-    mode: str | None,
+    mode: CreateMode,
     properties: str | None,
     data_base: list[str],
     source: str | None,
@@ -112,8 +112,11 @@ async def create_governed_table(
 ) -> CreateTableResponse:
     """Create a Lance table from an Arrow-IPC stream, governed end to end.
 
-    The wire values arrive raw (``mode``/``properties``/the pin as the caller sent them) because the
-    validation of each one is part of the ORDER this function guarantees — see the module docstring.
+    ``mode`` arrives PARSED ONCE (catalog-api-16), by the door, which refuses a malformed one before its
+    idempotency claim; four decisions below turn on it — the pre-existence guards, the ownership seed,
+    the schema read-back and the compensation rule. The other wire values arrive raw (``properties``/the
+    pin as the caller sent them) because the validation of each one is part of the ORDER this function
+    guarantees — see the module docstring.
     """
     # A wildcard (`*`/`?`) in a segment would flow verbatim from the table's derived prefix into the
     # vended STS session policy and widen credentials to siblings — refused at SHAPE, before any write.
@@ -133,11 +136,6 @@ async def create_governed_table(
             raise InvalidInputError(f"table properties is not valid JSON: {exc}") from exc
     # #78 format honesty: reject a client that tries to select another file format (see the helper).
     reject_unsupported_format(parsed_properties)
-    # THE MODE, PARSED ONCE (catalog-api-16). Four separate decisions below turn on it — the
-    # pre-existence guards, the ownership seed, the schema read-back and the compensation rule — and
-    # each used to re-derive it from the raw string with its own `.lower()` and its own spelling list.
-    # A value outside Create/ExistOk/Overwrite is refused here as InvalidInput, before any round trip.
-    create_mode = CreateMode.parse(mode)
 
     # THE ROUND TRIPS COME AFTER THE FREE CHECKS (catalog-api-19). These two both dial out — a
     # describe against the namespace backend and a trash-registry read on the object store — and they
@@ -196,9 +194,9 @@ async def create_governed_table(
     #     authenticated user (or namespace-writer) SEIZE ownership of an already-owned table via a no-op
     #     create (audit: CRITICAL). We must never grant owner on a table this request did not create.
     # The describe (table_exists) runs only for Overwrite/ExistOk with FGA on.
-    pre_existed = create_mode is not CreateMode.CREATE and settings.fga_enabled and client is not None and await run_in_threadpool(table_exists, ns, segments)
-    overwrote_existing = pre_existed and create_mode is CreateMode.OVERWRITE
-    existok_kept_existing = pre_existed and create_mode is CreateMode.EXIST_OK
+    pre_existed = mode is not CreateMode.CREATE and settings.fga_enabled and client is not None and await run_in_threadpool(table_exists, ns, segments)
+    overwrote_existing = pre_existed and mode is CreateMode.OVERWRITE
+    existok_kept_existing = pre_existed and mode is CreateMode.EXIST_OK
     if overwrote_existing:
         await fga_deps.require_can_drop_table(client, settings, token, segments=segments)
     # ``dataplane.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
@@ -209,7 +207,7 @@ async def create_governed_table(
         so,
         segments,
         data,
-        mode=create_mode,
+        mode=mode,
         properties=parsed_properties,
         allow_external_blobs=settings.allow_external_blobs,
         external_blob_bases=settings.external_blob_base_list,
@@ -277,7 +275,7 @@ async def create_governed_table(
         resource="table",
         segments=segments,
         may_grant_owner=seeding_a_new_table,
-        undo=_undo_create if (seeding_a_new_table and compensation_allowed(create_mode, overwrote_existing)) else None,
+        undo=_undo_create if (seeding_a_new_table and compensation_allowed(mode, overwrote_existing)) else None,
     )
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
@@ -293,7 +291,7 @@ async def create_governed_table(
     # (nothing written, response.version = the existing version), so the payload schema could belong to a
     # table that was never created — read the true schema back PINNED at that version instead. Best-effort
     # either way (failure → []).
-    if create_mode is CreateMode.EXIST_OK:
+    if mode is CreateMode.EXIST_OK:
         _, schema_fields, _location = await run_in_threadpool(dataplane.read_version_and_schema, ns, so, segments, response.version)
     else:
         schema_fields = await run_in_threadpool(dataplane.payload_schema_fields, data, segments)

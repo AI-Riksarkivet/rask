@@ -9,12 +9,14 @@ a mocked namespace could not tell a plan that ran from one that was reported.
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance.optimize import CompactionTask
 
@@ -109,46 +111,70 @@ def test_an_option_the_door_does_not_forward_is_refused_at_the_wire(real_ns_clie
     assert response.status_code == 422, response.text
 
 
-def test_the_executors_own_MEMORY_BOUNDS_are_accepted_at_the_wire(real_ns_client: TestClient) -> None:
-    """The two that must cross, asserted through the real door rather than the function.
+def test_the_executors_own_MEMORY_BOUNDS_are_baked_into_every_task_the_door_plans(real_ns_client: TestClient) -> None:
+    """The two that must cross, read back out of the tasks the real door hands the worker.
 
     Against ~1.8 MB bronze rows, Lance's 8192-row default batch is ~15 GB per compute thread on a
     thread count taken from the host's cores. The maintenance plane bounds both for the in-pod
-    rewrite; if this door refused them the distributed path would be the one route in the estate that
-    could not be bounded at all.
+    rewrite; if this door refused or misrouted them the distributed path would be the one route in the
+    estate that could not be bounded at all.
+
+    Distinct, non-default numbers, so a door that swapped the two or dropped one for Lance's default
+    cannot pass. A task's JSON carries the options Lance baked into it (measured on pylance 12.0.0).
     """
     _fragmented_table(real_ns_client)
-    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 1024, "batch_size": 64, "num_threads": 2})
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 1024, "batch_size": 37, "num_threads": 3})
+
     assert response.status_code == 200, response.text
+    tasks: list[str] = response.json()["tasks"]
+    assert tasks, "a four-fragment table with a 1024-row target has work to plan, so the options below are read from something"
+    baked = [json.loads(task)["options"] for task in tasks]
+    assert [(options.get("batch_size"), options.get("num_threads")) for options in baked] == [(37, 3)] * len(tasks), baked
 
 
 @pytest.mark.parametrize(
-    "body",
+    "content",
     [
         pytest.param(None, id="no body"),
-        pytest.param({"target_rows_per_fragment": 1024}, id="policy but no bounds"),
-        pytest.param({"target_rows_per_fragment": 1024, "batch_size": 64}, id="batch_size alone"),
-        pytest.param({"target_rows_per_fragment": 1024, "num_threads": 2}, id="num_threads alone"),
+        pytest.param("null", id="a JSON null body"),
+        pytest.param('{"target_rows_per_fragment": 1024}', id="policy but no bounds"),
+        pytest.param('{"target_rows_per_fragment": 1024, "batch_size": 64}', id="batch_size alone"),
+        pytest.param('{"target_rows_per_fragment": 1024, "num_threads": 2}', id="num_threads alone"),
     ],
 )
-def test_a_plan_WITHOUT_the_executors_bounds_is_refused_400_naming_both(real_ns_client: TestClient, body: dict[str, int] | None) -> None:
+def test_a_plan_WITHOUT_the_executors_bounds_is_refused_400_naming_both(real_ns_client: TestClient, content: str | None) -> None:
     """The door refuses a plan that would bake Lance's defaults into every task.
 
     400 with the spec's `InvalidInput` code (13) rather than FastAPI's 422: the request parsed, and
     what is wrong with it is a domain rule `plan_compaction` owns, so the refusal is the same for an
     HTTP caller and an in-process one. The detail names both bounds so a bring-your-own executor
-    learns the whole pair it has to state.
+    learns the whole pair it has to state. The published schema marks the body and both bounds
+    required, and that stays a declaration: the door still answers 400, never FastAPI's 422.
     """
     location = _fragmented_table(real_ns_client)
     before = lance.dataset(location).version
 
-    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", json=body)
+    response = real_ns_client.post("/management/v1/table/db$t/compaction_plan", content=content, headers={"content-type": "application/json"})
 
     assert response.status_code == 400, response.text
     problem = response.json()
     assert problem["code"] == 13, problem
     assert "batch_size" in problem["detail"] and "num_threads" in problem["detail"], problem
     assert lance.dataset(location).version == before
+
+
+def test_the_published_contract_marks_the_body_and_both_bounds_required(real_ns_client: TestClient) -> None:
+    """A client generated from the OpenAPI learns the rule from its types, not from the first 400."""
+    spec = cast("FastAPI", real_ns_client.app).openapi()
+
+    operation = spec["paths"]["/management/v1/table/{id}/compaction_plan"]["post"]
+    assert operation["requestBody"].get("required") is True, operation["requestBody"]
+    schema = spec["components"]["schemas"]["CompactionPlanRequest"]
+    assert sorted(schema.get("required", [])) == ["batch_size", "num_threads"], schema.get("required")
+    for bound, ceiling in (("batch_size", 8192), ("num_threads", 64)):
+        published = schema["properties"][bound]
+        assert (published.get("type"), published.get("minimum"), published.get("maximum")) == ("integer", 1, ceiling), published
+        assert "anyOf" not in published and "default" not in published, f"{bound} is published as optional or nullable: {published}"
 
 
 def test_the_commit_door_refuses_an_empty_result_set(real_ns_client: TestClient) -> None:
@@ -177,13 +203,13 @@ def test_neither_door_silently_compacts_MAIN_when_a_BRANCH_is_named(real_ns_clie
 
 
 def test_both_doors_land_on_the_maintainer_rung() -> None:
-    """These two doors are gated on ``can_maintain``, explicitly rather than by falling through.
+    """These two doors are gated on ``can_maintain``, declared in ``_MAINTENANCE_ACTIONS``.
 
     A door only a maintainer calls asks for the maintainer rung outright. Unlike ``credentials`` — a
     data read for every other caller, which is why that one keeps ``can_read_data`` as its primary —
     ``compaction_plan``/``compaction_commit`` have no audience but maintenance, and the sweep reaches
     them as ``maintainer from parent`` rather than as a data writer. Measured on the deployed estate
-    2026-09-09: with the fall-through the distributed lane was refused 1 818 times and every dataset
+    2026-09-09: at the writer rung the distributed lane was refused 1 818 times and every dataset
     was compacted in-pod (4 274/4 274, the memory ceiling the feature exists to remove); with the
     explicit mapping, 728 units ran ``distributed`` and denials fell to 0.
 

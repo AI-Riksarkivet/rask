@@ -7,6 +7,11 @@ destructive verb ships open to all of them with nothing red, and a new read door
 audience while the audit trail records a write. A REFUSAL is loud for every caller, owners included,
 so the omission cannot survive the first request.
 
+The refusal is the spec's `InternalError` (code 18, "Unexpected server/implementation error"), not
+`PermissionDenied`: authorization runs after routing matched, so only a route shipped without its rung
+reaches it. Code 15 would send the caller to ask for access no grant can give, and a 4xx stays off the
+5xx series alerting pages on.
+
 The walk at the bottom is what makes the refusal safe to ship: it drives the real guard over every
 mounted route, so a route added without a rung fails HERE rather than in front of its first caller.
 """
@@ -15,20 +20,26 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from typing import Any, cast
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.routing import APIRoute, iter_route_contexts
-from lance_namespace import PermissionDeniedError
+from fastapi.testclient import TestClient
+from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 from starlette.types import Message
 
 from catalog.api import fga_deps
+from catalog.api.dependencies import get_fga_client
+from catalog.api.security import authenticate
 from catalog.api.v1.router import api_router
-from catalog.core.config import Settings
+from catalog.core.config import Settings, get_settings
+from service_kit.governed.audit import AUDIT_LOGGER, FAILURE
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 _ID = "acme$events"
@@ -105,26 +116,72 @@ def _authorize(template: str, body: dict[str, object] | None = None) -> None:
     ],
 )
 def test_an_undeclared_suffix_earns_no_rung(fga_type: str, suffix: str) -> None:
-    with pytest.raises(PermissionDeniedError, match="declares no rung"):
+    with pytest.raises(InternalError, match="declares no rung"):
         fga_deps._action_relation(fga_type, suffix)
 
 
+_UNDECLARED = "a_verb_nobody_declared"
+
+
 @pytest.mark.parametrize(
-    "template",
+    ("template", "resource"),
     [
-        "/management/v1/table/{id}/a_verb_nobody_declared",
-        "/v1/namespace/{id}/a_verb_nobody_declared",
-        "/v1/materialized_view/{id}/a_verb_nobody_declared",
-        "/v1/transaction/{id}/a_verb_nobody_declared",
+        ("/management/v1/table/{id}/a_verb_nobody_declared", "table:acme$events"),
+        ("/v1/namespace/{id}/a_verb_nobody_declared", "namespace:acme$events"),
+        ("/v1/materialized_view/{id}/a_verb_nobody_declared", "materialized_view:acme$events"),
+        ("/v1/transaction/{id}/a_verb_nobody_declared", "transaction:acme$events"),
+        ("/management/v1/classification/{id}/a_verb_nobody_declared", "classification:acme$events"),
     ],
 )
-def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(asked: list[tuple[str, str]], template: str) -> None:
+def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(
+    asked: list[tuple[str, str]], caplog: pytest.LogCaptureFixture, template: str, resource: str
+) -> None:
     """Through `authorize`, not only the resolver: a guard that caught the refusal and fell back would
-    leave every assertion above green while the route stayed open. The transaction row is here because
-    its doors resolve in `_authorize_transaction`, which never consults `_action_relation`."""
-    with pytest.raises(PermissionDeniedError, match="declares no rung"):
+    leave every assertion above green while the route stayed open. The transaction and classification
+    rows are here because those doors resolve in their own branches, which never consult
+    `_action_relation`.
+
+    The refusal is a DECISION like every other the guard makes, so it writes the same `audit()` record,
+    and its ERROR line names the path and suffix because the 500 body an operator's caller sees is
+    redacted."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+
+    with pytest.raises(InternalError, match="declares no rung"):
         _authorize(template)
+
     assert asked == [], f"the guard asked OpenFGA {asked} for a door nobody declared"
+    audited = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER]
+    assert [(r["audit.action"], r["audit.outcome"], r["audit.subject"], r["audit.resource"], r["audit.reason"], r["audit.suffix"]) for r in audited] == [
+        ("authz", FAILURE, "alice", resource, "undeclared_door", _UNDECLARED)
+    ], audited
+    path = template.replace("{id}", _ID)
+    errors = [r for r in caplog.records if r.name == fga_deps.log.name and r.levelno == logging.ERROR]
+    assert [(r.getMessage(), r.__dict__.get("path"), r.__dict__.get("suffix")) for r in errors] == [("undeclared_door", path, _UNDECLARED)]
+
+
+def test_an_undeclared_door_answers_the_specs_internal_error_on_the_wire(asked: list[tuple[str, str]]) -> None:
+    """The status and code a client reads, through the real problem handlers: 500 with code 18, the
+    detail redacted like every 5xx, and the endpoint never ran."""
+    ran: list[str] = []
+    router = APIRouter(dependencies=[Depends(fga_deps.authorize)])
+
+    @router.post("/v1/table/{id}/a_verb_nobody_declared")
+    def undeclared(id: str) -> dict[str, str]:
+        ran.append(id)
+        return {"ran": id}
+
+    app = FastAPI()
+    app.include_router(router)
+    install_problem_handlers(app, logging.getLogger(__name__))
+    app.dependency_overrides[get_settings] = _settings
+    app.dependency_overrides[get_fga_client] = lambda: _CLIENT
+    app.dependency_overrides[authenticate] = _token
+
+    response = TestClient(app, raise_server_exceptions=False).post(f"/v1/table/{_ID}/a_verb_nobody_declared", json={})
+
+    assert (response.status_code, response.headers["content-type"]) == (500, "application/problem+json"), response.text
+    assert (response.json()["code"], response.json()["detail"]) == (18, "Internal Server Error"), response.json()
+    assert ran == [] and asked == []
 
 
 def _guarded_templates() -> list[str]:

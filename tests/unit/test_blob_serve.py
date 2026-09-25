@@ -234,5 +234,5 @@ def test_parse_range(header: str | None, expected: tuple[int | None, int | None]
 
 def test_blobs_suffix_is_reader_tier() -> None:
     """CONTRACT: GET /management/v1/table/{id}/blobs serves DATA, so the router guard must map its suffix to
-    reader-tier ``can_read_data`` (same rung as /query) — not the writer-tier fallthrough."""
+    reader-tier ``can_read_data`` (same rung as /query), declared in ``_DATA_READ_ACTIONS``."""
     assert _action_relation("table", "blobs") == "can_read_data"

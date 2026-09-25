@@ -14,7 +14,7 @@ alone would pass while the forty-second regressed.
 from __future__ import annotations
 
 import pytest
-from lance_namespace import PermissionDeniedError
+from lance_namespace import InternalError
 
 from catalog.api.fga_deps import _action_relation, _resource_for, _suffix
 
@@ -66,8 +66,12 @@ def test_erasure_clears_the_OWNER_rung() -> None:
 
 
 def test_a_suffix_the_parser_cannot_strip_is_refused() -> None:
-    """The regression this file exists for: a path `_suffix` cannot strip yields `""`, which names no
-    door, so the resolver refuses it for every caller rather than handing out a rung nobody chose."""
+    """The RESOLVER half: `_suffix` yields `""` for a path no mount strips, and `""` names no door, so
+    `_action_relation` refuses it rather than handing out a rung nobody chose.
+
+    The guard never makes this call for such a path: `_resource_for` answers `None` for an unrecognised
+    mount and `authorize` stops at authentication, which
+    `test_stores_reads_are_gated.py::test_every_route_the_router_guard_waves_through_has_a_reason` covers."""
     assert _suffix("/some/other/mount/table/x/erasure", "table", "x") == ""
-    with pytest.raises(PermissionDeniedError, match="declares no rung"):
+    with pytest.raises(InternalError, match="declares no rung"):
         _action_relation("table", "")

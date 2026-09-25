@@ -46,7 +46,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import COMPACT_TABLE, DELETE, INSERT, MERGE_INSERT, UPDATE, merge_source_pin, parse_run_facets
-from catalog.core.modes import InsertMode
+from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.serialization import dump
 from catalog.schemas import (
     CommitFragmentsRequest,
@@ -139,6 +139,9 @@ async def create_table(
     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
     could carry provenance.
     """
+    # BEFORE `idem.begin`, like the register door's: a malformed mode is a SHAPE refusal, and a claim
+    # minted for it would hold the key for its lease and answer the corrected retry 409.
+    create_mode = CreateMode.parse(mode)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -156,7 +159,7 @@ async def create_table(
         control=control,
         so=so,
         data=data,
-        mode=mode,
+        mode=create_mode,
         properties=properties,
         data_base=data_base,
         source=source,
@@ -211,7 +214,9 @@ async def commit_fragments(
     return CommitFragmentsResponse(version=version, row_count=row_count)
 
 
-@management_router.post("/{id}/compaction_plan", response_model_exclude_none=True)
+# The published contract requires a body; the handler still accepts none, so a missing body meets the
+# same 400 `InvalidInput` as missing bounds instead of FastAPI's 422.
+@management_router.post("/{id}/compaction_plan", response_model_exclude_none=True, openapi_extra={"requestBody": {"required": True}})
 async def plan_table_compaction(
     id: str,
     ns: NamespaceDep,
@@ -231,9 +236,8 @@ async def plan_table_compaction(
     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
     and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
 
-    Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
-    table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
-    ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
+    Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
+    (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.
 
     The body must state ``batch_size`` and ``num_threads``, the executor's memory bounds. Lance bakes
     both into every task and the worker cannot set them afterwards, so a plan missing either is refused
@@ -717,10 +721,10 @@ def table_changes(id: str, body: TableChangesRequest, ns: NamespaceDep, settings
     what any particular person may do, so it is an untargeted control event like the other 31 and
     reaches a feed rather than a person.
 
-    THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
-    shipped without it. Unnamed, it resolved to the WRITER rung, so the live audit trail recorded
-    `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
-    reader who was not also a writer — the feed's whole audience — was refused. Pinned by
+    THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, or the router
+    refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
+    and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
+    ALLOW` beside the `read_data` record for the same call. Pinned by
     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
     """
     segments = parse_identifier(id, settings.delimiter)

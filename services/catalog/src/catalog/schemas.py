@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic.json_schema import JsonDict
 
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
@@ -830,6 +831,29 @@ class CommitFragmentsResponse(BaseModel):
     row_count: int
 
 
+def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:
+    """Publish ``batch_size`` and ``num_threads`` as the required, non-null integers the door enforces.
+
+    The MODEL keeps them optional because a field Pydantic requires is refused 422 by the framework on
+    this rask-only route, and the ruled answer is 400 ``InvalidInput`` from ``dataplane.plan_compaction``.
+    So the published schema declares the rule and the dataplane enforces it.
+    """
+    properties = schema["properties"]
+    if not isinstance(properties, dict):
+        raise TypeError(f"expected a properties mapping, got {type(properties).__name__}")
+    schema["required"] = ["batch_size", "num_threads"]
+    for name in ("batch_size", "num_threads"):
+        published = properties[name]
+        alternatives = published.pop("anyOf") if isinstance(published, dict) else None
+        if not isinstance(published, dict) or not isinstance(alternatives, list):
+            raise TypeError(f"expected {name} to be published as an optional field, got {published!r}")
+        (bound,) = [alternative for alternative in alternatives if isinstance(alternative, dict) and alternative.get("type") != "null"]
+        if not isinstance(bound, dict):
+            raise TypeError(f"expected {name}'s non-null alternative to be a schema, got {bound!r}")
+        published.update(bound)
+        published.pop("default", None)
+
+
 class CompactionPlanRequest(BaseModel):
     """Ask the catalog what compaction this table needs — a metadata read that mints nothing.
 
@@ -851,7 +875,7 @@ class CompactionPlanRequest(BaseModel):
     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", json_schema_extra=_publish_the_executor_bounds_as_required)
 
     #: Merge fragments until each holds about this many rows. ``None`` leaves Lance's own default.
     target_rows_per_fragment: int | None = Field(default=None, gt=0)
@@ -866,8 +890,9 @@ class CompactionPlanRequest(BaseModel):
     #: The executor's memory bounds (see the class docstring). OPTIONAL IN THE MODEL on purpose: a
     #: field Pydantic requires is refused 422 by the framework on this rask-only route, and absence is
     #: the domain refusal `dataplane.plan_compaction` owns — 400, code 13, the same answer an in-process
-    #: caller gets. The ceilings are the maintenance settings' own, so a caller cannot ask the plan for
-    #: a read the sweep's configuration forbids.
+    #: caller gets. The PUBLISHED schema marks both required (`_publish_the_executor_bounds_as_required`).
+    #: The ceilings are the maintenance settings' own, so a caller cannot ask the plan for a read the
+    #: sweep's configuration forbids.
     batch_size: int | None = Field(default=None, ge=1, le=8192, description="Required. Rows per scan batch in each rewrite task.")
     num_threads: int | None = Field(default=None, ge=1, le=64, description="Required. Compute threads per rewrite task.")
 

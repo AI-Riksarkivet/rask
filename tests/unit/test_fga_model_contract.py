@@ -33,7 +33,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request
-from lance_namespace import PermissionDeniedError
+from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import fga_deps
@@ -141,7 +141,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         for suffix in suffixes:
             try:
                 relation = fga_deps._action_relation(fga_type, suffix)
-            except PermissionDeniedError:
+            except InternalError:
                 continue
             pairs.add((fga_type, relation))
 
@@ -343,8 +343,7 @@ def test_the_test_yaml_references_the_model_rather_than_copying_it() -> None:
 def test_access_disclosure_routes_are_owner_tier() -> None:
     """CONTRACT (security, #51/#68): the access-DISCLOSURE routes — ``access/list`` (enumerate who holds
     access), ``access/check`` (simulate an arbitrary (user, relation)) and ``access/graph`` — must clear
-    the OWNER bar, never the writer fall-through. They reveal the authz graph; a mere writer must not
-    reach them.
+    the OWNER bar, never the writer rung. They reveal the authz graph; a mere writer must not reach them.
 
     The pair-existence contract above canNOT catch a downgrade here: moving a suffix from the owner map to
     the writer map resolves ``can_write_data`` — a real relation, so that test stays green while the gate
@@ -359,13 +358,11 @@ def test_access_disclosure_routes_are_owner_tier() -> None:
 def test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough() -> None:
     """CONTRACT (security): a door that returns table DATA is authorized with ``can_read_data``.
 
-    THE FALL-THROUGH IS THE DEFECT SURFACE, and it has now caught two doors the same way. `tasks` was
-    unmapped and fell to WRITER — "which is how the live audit found it", says the comment beside it —
-    and on 2026-09-08 the change feed did exactly the same: `POST /{id}/changes` shipped without a
-    mapping, and the live audit trail recorded `can_write_data ALLOW` on `table:bronze$pages` for what
-    the record beside it called a `read_data`. A new read door is refused for every reader who is not
-    also a writer, which for a change feed is its whole audience, and the audit trail describes a write
-    that never happened.
+    A read door is a read only when a read vocabulary names it: undeclared it is refused for every
+    caller, and at the writer rung it refuses every reader who is not also a writer — for a change feed,
+    its whole audience — while the audit trail describes a write that never happened. Measured
+    2026-09-08 on `POST /{id}/changes` at the writer rung: `can_write_data ALLOW` on
+    `table:bronze$pages` beside the `read_data` record for the same call.
 
     Asserting the SET is not enough — membership can be true while `_action_relation` routes elsewhere —
     so this resolves each one through the real classifier.
@@ -376,12 +373,10 @@ def test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough()
     for action in _DATA_READ_ACTIONS:
         assert _action_relation("table", action) == "can_read_data", action
 
-    # `history` is the THIRD door the same fall-through caught, and the only one whose own docstring
-    # already named the right rung: "Reader-tier: `can_get_metadata` on the table, the same rung as
-    # describe/list-versions". It was unmapped, so the ROUTER guard demanded `can_write_data` first and
-    # the endpoint's own `require_can_get_metadata` — a weaker check, running second — could only ever
-    # be reached by callers who had already cleared the higher bar. Measured on the estate 2026-09-09:
-    # one `GET /history` logged `can_write_data ALLOW` and then `can_get_metadata ALLOW`, in that order.
+    # `history`'s endpoint runs its own `require_can_get_metadata`, a check that runs SECOND: any higher
+    # rung the router asks first leaves it reachable only by callers who already cleared that bar.
+    # Measured 2026-09-09 at the writer rung: one `GET /history` logged `can_write_data ALLOW` and then
+    # `can_get_metadata ALLOW`, in that order.
     assert "history" in _META_READ_ACTIONS, "a commit log is metadata about the data, not a write"
     for action in _META_READ_ACTIONS:
         assert _action_relation("table", action) == "can_get_metadata", action

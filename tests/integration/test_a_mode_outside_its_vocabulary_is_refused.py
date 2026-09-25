@@ -175,6 +175,20 @@ def test_the_refusal_is_a_shape_answer_ahead_of_every_lookup(real_ns_client: Tes
     _refused(real_ns_client.post(path, content=_rows(), headers=ARROW_STREAM), value)
 
 
+def test_a_refused_create_mode_holds_no_idempotency_key(real_ns_client: TestClient) -> None:
+    """The create door's idempotency claim is an object-store write with a lease, so a mode parsed after
+    it would leave the key held by an attempt that never ran: the corrected retry under the same key
+    would answer 409 ConcurrentModification until the lease expired."""
+    _namespace(real_ns_client, "db")
+    keyed = {**ARROW_STREAM, "Idempotency-Key": "typo-then-fix"}
+
+    _refused(real_ns_client.post("/v1/table/db$t/create?mode=Overwrit", content=_rows(), headers=keyed), "Overwrit")
+    retried = real_ns_client.post("/v1/table/db$t/create?mode=create", content=_rows(), headers=keyed)
+
+    assert retried.status_code == 200, f"the corrected retry under the same key was refused: {retried.status_code} {retried.text[:300]}"
+    assert _rows_on(real_ns_client, "db$t") == 3
+
+
 @pytest.mark.parametrize("branch", [None, "work"], ids=["main", "branch"])
 def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str | None) -> None:
     """`dataplane.insert_into_table` is a seam of its own, so its branch arm must not depend on the door

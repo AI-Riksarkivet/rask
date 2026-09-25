@@ -21,7 +21,7 @@ for all of them and a cheaper answer is always wrong.
 from __future__ import annotations
 
 import pytest
-from lance_namespace import PermissionDeniedError
+from lance_namespace import InternalError
 
 from catalog.api.fga_deps import _action_relation
 
@@ -63,5 +63,5 @@ def test_an_unmapped_maintenance_verb_is_refused_rather_than_owner_gated() -> No
     If an undeclared suffix ever resolved to something owner-tier, every assertion above would pass for
     a door nobody had mapped, and this suite would be proving nothing.
     """
-    with pytest.raises(PermissionDeniedError, match="declares no rung"):
+    with pytest.raises(InternalError, match="declares no rung"):
         _action_relation("table", "maintenance/a-verb-nobody-mapped")

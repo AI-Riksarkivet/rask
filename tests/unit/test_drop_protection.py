@@ -274,7 +274,8 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
 
 
 def test_the_protection_suffix_is_owner_gated_not_writer(tmp_path: Any) -> None:
-    """The authz map is where a forgotten entry silently falls to WRITER tier — pin both kinds.
+    """The authz map is where each door's tier is declared, and a misplaced entry grants the wrong rung
+    — pin both kinds.
 
     THE TIER IS THE ASSERTION, not the relation's NAME. This asserted `== "can_drop"` / `== "can_delete"`,
     which reads as the same thing and is not: it pins the spelling and says nothing about the rung, so it
@@ -743,8 +744,8 @@ def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
 
 
 def test_the_undrop_suffixes_are_owner_gated_not_writer(tmp_path: Any) -> None:
-    """The authz map is where a forgotten entry silently falls to WRITER tier — pin both kinds (#96
-    extends #75's table rule to the namespace rung)."""
+    """The authz map is where each door's tier is declared, and a misplaced entry grants the wrong rung
+    — pin both kinds (#96 extends #75's table rule to the namespace rung)."""
     assert fga_deps._OWNER_SUFFIX_RELATION["table"]["undrop"] == "can_drop"  # noqa: SLF001
     assert fga_deps._OWNER_SUFFIX_RELATION["namespace"]["undrop"] == "can_delete"  # noqa: SLF001
 

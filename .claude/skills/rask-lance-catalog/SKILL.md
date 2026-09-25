@@ -162,8 +162,10 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   via `POST /management/v1/table/{id}/protection` / `/management/v1/namespace/{id}/protection`,
   owner-gated (`protection` maps to `can_set_protection`, the owner rung under its own audit name, in
   `_OWNER_SUFFIX_RELATION`). A route suffix no rung map declares is REFUSED for every caller rather
-  than defaulted to a rung, so a new door ships with its entry in `_OWNER_SUFFIX_RELATION` or
-  `_WRITER_SUFFIX_RELATION` (or a read word in `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`) —
+  than defaulted to a rung — `InternalError` (code 18, 500), audited and logged at ERROR with the path,
+  because only a route shipped without its rung reaches it — so a new door ships with its entry in
+  `_OWNER_SUFFIX_RELATION` or `_WRITER_SUFFIX_RELATION` (or a trailing word in
+  `_META_READ_ACTIONS`/`_DATA_READ_ACTIONS`/`_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. The record dies with the object: drop/deregister clear it so a reused id can't inherit it.
   A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this

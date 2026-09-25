@@ -2,8 +2,8 @@
 
 `_OWNER_SUFFIX_RELATION["table"]` names the suffixes that demand an owner rung, and it lists
 `branches/create` (`can_create_branch`), `tags/create`, `tags/update`, `tags/delete` (`can_drop`),
-`version/delete` (`can_drop`), `drop`, `deregister`, `rename` and `restore`. **`branches/delete` is
-not in it**, so `_action_relation` falls it through to the writer default `can_write_data`.
+`version/delete` (`can_drop`), `drop`, `deregister`, `rename` and `restore`. **`branches/delete` must
+be in it too**: undeclared it is refused for every caller, and at the writer rung a non-owner clears it.
 
 THE ASYMMETRY IS THE ARGUMENT, and it rests on what the estate already decided rather than on any claim
 about recoverability. `spec.yaml:2195` says only "Delete an existing branch from table `id`" and does
@@ -35,7 +35,7 @@ from catalog.api import fga_deps
 
 
 def test_branch_delete_demands_an_owner_rung() -> None:
-    """THE GATE. Absent from the owner map, the suffix falls through to the writer default."""
+    """THE GATE. The suffix must resolve through the owner map, never the writer rung."""
     relation = fga_deps._action_relation("table", "branches/delete")
 
     assert relation != "can_write_data", (
