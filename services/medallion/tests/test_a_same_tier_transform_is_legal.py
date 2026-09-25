@@ -23,6 +23,7 @@ derivation lane in the estate.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from pathlib import Path
 from typing import Any, cast
 
@@ -31,7 +32,8 @@ import pyarrow as pa
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import transform
+from medallion.services import catalog_register, transform
+from medallion.services.catalog_register import PublishOutcome
 
 
 class _Dapr:
@@ -68,24 +70,42 @@ def _same_tier_settings(tmp_path: Path) -> MedallionSettings:
 
 
 def _stub_catalog(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[dict[str, object]]:
-    """Stand in for the catalog, which is now the ONLY door a stage may promote through.
+    """Answer as the catalog client answers for a lane whose two tables it governs; return the publish asks.
 
-    Before the second enforcement point was removed these tests needed no catalog: the stage runner fired
-    the next stage's topic itself. It cannot any more, so a stage promotes only by publishing — hence
-    both this stub AND `MEDALLION_CATALOG_URL` on the settings, because `gate_decision` will not
-    choose PUBLISH without a catalog and the stub would then never be called.
+    The catalog is the only door a stage promotes through, which is why the settings carry
+    `MEDALLION_CATALOG_URL`: `gate_decision` does not choose PUBLISH without one, and a stage with no
+    catalog acks UNGOVERNED without ever reaching this stub.
 
-    A stage with no catalog does NOT retry. It acks and does not promote (`GateOutcome.UNGOVERNED`),
-    because redelivery cannot set an env var — this docstring said "RETRYs" while that was true of an
-    intermediate state, and it was corrected rather than left standing. Same pattern as
-    `test_cascade_via_publish.py`.
+    Every answer is one the real client can give: a stand-in answering what production never does
+    certifies a run production never has. `publish_stage_output` returns a `PublishOutcome` — a `None`
+    crashes the handler after its write into RETRY. A FIRST publication has no prior published version,
+    so `from_version` is ``None`` and `to_version` is the version asked about (the catalog's
+    `PublicationResult`), and a `gate_only` probe never moves the tag. The locations are the lane's
+    real ones, because a vended path the lane never writes makes the predecessor unreadable. Each
+    double binds its call to the real function's signature, so a call the real client would refuse
+    with a `TypeError` fails here too.
     """
     published: list[dict[str, object]] = []
-    # The lane's REAL output URI. Returning a path the lane never writes makes the predecessor
-    # unreadable and the stage RETRY -- a stub that lies about the vended location tests nothing.
-    monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "enriched.lance"))
-    monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
-    monkeypatch.setattr(transform.catalog_register, "publish_stage_output", lambda **k: published.append(k))
+    real_publish = catalog_register.publish_stage_output
+    real_ensure = catalog_register.ensure_stage_output
+    real_describe = catalog_register.describe_table_location
+
+    def _publish(**kwargs: Any) -> PublishOutcome:
+        inspect.signature(real_publish).bind(**kwargs)
+        published.append(kwargs)
+        return PublishOutcome(published=not kwargs.get("gate_only", False), from_version=None, to_version=kwargs["version"])
+
+    def _ensure(**kwargs: Any) -> str:
+        inspect.signature(real_ensure).bind(**kwargs)
+        return str(upstream / "enriched.lance")
+
+    def _describe(**kwargs: Any) -> str:
+        inspect.signature(real_describe).bind(**kwargs)
+        return str(upstream / "silver.lance")
+
+    monkeypatch.setattr(catalog_register, "ensure_stage_output", _ensure)
+    monkeypatch.setattr(catalog_register, "describe_table_location", _describe)
+    monkeypatch.setattr(catalog_register, "publish_stage_output", _publish)
     return published
 
 
@@ -96,13 +116,10 @@ class TestTheMoverImposesNoTierLadder:
 
         result = asyncio.run(transform.handle_stage(cast("Any", dapr), _same_tier_settings(upstream), {"data": {"token": "t"}}))
 
-        # NOT `== SUCCESS`, and the difference is the point. That assertion passed only because the
-        # stage runner used to fire the next topic itself, bypassing the gate. With one door the lane reaches
-        # the gate like any other, and a destination with no predecessor is a FIRST PROMOTION -- a band
-        # reason, so it HOLDs for a person ("a destination we cannot read is given a person's attention
-        # rather than a silent promote", compute.py:272). What this test exists to prove is that a
-        # same-tier lane is not refused FOR BEING SAME-TIER, and a drop would say so by name.
-        assert result["status"] != "DROP", f"a same-tier derivation was refused as another lane's: {result}"
+        # The whole dict, not its status: a HOLD also acks SUCCESS, with `reason: quality_blocked`, and a
+        # tier guard that withheld promotion from same-tier lanes would pass a status-only check. Review
+        # is off in this lane, so a first promotion raises no band reason and publishes.
+        assert result == {"status": "SUCCESS"}, f"a same-tier derivation did not promote: {result}"
         assert "medallion_stage_other_lane" not in caplog.text
 
     def test_it_really_derived_a_second_dataset(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
