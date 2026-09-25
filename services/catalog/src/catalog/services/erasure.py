@@ -40,6 +40,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
+from catalog.services.dataplane import recorded_branch
 from catalog.services.maintenance import COMPACTION_BOUND
 
 
@@ -69,10 +70,10 @@ class ErasureReport(BaseModel):
     #: Retained versions that STILL answer the predicate after every step ran. Non-empty means the
     #: erasure is incomplete however cleanly each step reported — see the verify step.
     residual_versions: list[int] = Field(default_factory=list)
-    #: `branch:<name>` / `tag:<name>` -> the version it pins, for every ref pinning a version that still
-    #: answers. THIS IS THE ACTIONABLE HALF: `residual_versions` says the erasure is incomplete, and only
-    #: this says what to delete to finish it. Lance records a branch's fork point in
-    #: `_refs/branches/<name>.json` (`parentVersion`), so the pin is read rather than inferred.
+    #: `branch:<name>` / `tag:<name>` -> the version it pins, for every ref pinning a MAIN version that
+    #: still answers. THIS IS THE ACTIONABLE HALF: `residual_versions` says the erasure is incomplete, and
+    #: only this says what to delete to finish it. Lance records a branch's fork point in
+    #: `_refs/branches/<name>.json` (`parentBranch`, `parentVersion`), so the pin is read rather than inferred.
     pinned_by: dict[str, int] = Field(default_factory=dict)
     #: True only when every surface reported a non-`failed` outcome AND nothing still answers the
     #: predicate. A caller reporting completion to a data subject reads THIS, never the absence of an
@@ -206,14 +207,15 @@ def erase(dataset: _Dataset, *, table: str, predicate: str, retention: timedelta
     #    holding the subject. So a run can perform every step successfully and leave the row readable,
     #    which is the one outcome an erasure must never report as done.
     residual = _versions_still_matching(dataset, predicate)
-    report.pinned_by = {
-        **{f"branch:{name}": v for name, v in branches.items() if v is not None and v in residual},
+    refs = {
+        **{f"branch:{name}": fork for name, fork in branches.items()},
         # Re-listed AFTER step 2, so these are the survivors: a tag whose delete failed pins its version
         # exactly as hard as a branch does, and naming only branches would leave that operator guessing.
-        # Only MAIN's tags: `residual` numbers main's versions, and a tag on another branch pins that
-        # branch's history however its number compares.
-        **{f"tag:{name}": ref[1] for name, ref in _tags(dataset).items() if ref is not None and ref[0] is None and ref[1] in residual},
+        **{f"tag:{name}": ref for name, ref in _tags(dataset).items()},
     }
+    # Only refs ON MAIN: `residual` numbers main's versions, and a tag on another branch, or a branch cut
+    # from one, pins that branch's history however its number compares.
+    report.pinned_by = {name: ref[1] for name, ref in refs.items() if ref is not None and ref[0] is None and ref[1] in residual}
     if residual:
         failed = True
         log.warning("erasure_incomplete", extra={"table": table, "versions": residual})
@@ -259,12 +261,21 @@ def _versions_still_matching(dataset: _Dataset, predicate: str) -> list[int]:
     return still
 
 
-def _branches(dataset: _Dataset) -> dict[str, int | None]:
-    """Every branch of this table mapped to the parent version it pins, `{}` when they cannot be listed.
+#: Lance's global version identifier, ``(branch, version)`` with ``None`` naming main as
+#: :func:`recorded_branch` normalises it — the form ``checkout_version`` takes ("Use
+#: `(branch_name, version_number)` tuples as global identifiers", ``lance_docs/guide.md`` Branches),
+#: because a bare version number means "on the handle's branch".
+type _Reference = tuple[str | None, int]
 
-    `branches.list()` answers a mapping of name -> metadata in pylance 11, carrying the `parent_version`
-    Lance records at the fork point. That version is what makes the erasure report actionable: a branch
-    pins the parent's history there, so it is the reason a pre-delete version survives cleanup.
+
+def _branches(dataset: _Dataset) -> dict[str, _Reference | None]:
+    """Every branch of this table mapped to the ``(parent branch, version)`` it was cut from, `{}` when unlisted.
+
+    `branches.list()` answers a mapping of name -> metadata carrying the `parent_branch` and
+    `parent_version` Lance records at the fork point (measured on pylance 12.0.0; ``parentBranch`` /
+    ``parentVersion`` in ``lance_docs/file_format.md`` "Branch Metadata File Format"). That reference is
+    what makes the erasure report actionable: a branch pins its parent's history there, so it is the
+    reason a pre-delete version survives cleanup.
 
     An unreadable branch list is NOT silently treated as "no branches" — the caller sees it because the
     report then names no branch surface at all, and `complete` stays true only if nothing else failed.
@@ -276,20 +287,8 @@ def _branches(dataset: _Dataset) -> dict[str, int | None]:
         log.warning("erasure_branch_list_failed", extra={"error": str(exc)})
         return {}
     if isinstance(listed, Mapping):
-        return {str(name): _parent_version(meta) for name, meta in listed.items()}
+        return {str(name): _reference(meta, branch_key="parent_branch", version_key="parent_version") for name, meta in listed.items()}
     return {str(name): None for name in (listed or [])}
-
-
-def _parent_version(meta: object) -> int | None:
-    """The fork point out of one branch's metadata, or None when it is not readable as an int."""
-    value = meta.get("parent_version") if isinstance(meta, Mapping) else None
-    return int(value) if isinstance(value, int) else None
-
-
-#: Lance's global version identifier, ``(branch, version)`` with ``None`` naming main — the form
-#: ``checkout_version`` takes ("Use `(branch_name, version_number)` tuples as global identifiers",
-#: ``lance_docs/guide.md`` Branches), because a bare version number means "on the handle's branch".
-type _Reference = tuple[str | None, int]
 
 
 def _tags(dataset: _Dataset) -> dict[str, _Reference | None]:
@@ -305,18 +304,18 @@ def _tags(dataset: _Dataset) -> dict[str, _Reference | None]:
         log.warning("erasure_tag_list_failed", extra={"error": str(exc)})
         return {}
     if isinstance(listed, Mapping):
-        return {str(name): _tag_reference(meta) for name, meta in listed.items()}
+        return {str(name): _reference(meta, branch_key="branch", version_key="version") for name, meta in listed.items()}
     return {str(name): None for name in (listed or [])}
 
 
-def _tag_reference(meta: object) -> _Reference | None:
-    """The ``(branch, version)`` one tag pins, or None when its metadata does not say."""
+def _reference(meta: object, *, branch_key: str, version_key: str) -> _Reference | None:
+    """The ``(branch, version)`` one ref's metadata names, or None when it does not say."""
     if not isinstance(meta, Mapping):
         return None
-    branch, version = meta.get("branch"), meta.get("version")
+    branch, version = meta.get(branch_key), meta.get(version_key)
     if (branch is not None and not isinstance(branch, str)) or not isinstance(version, int):
         return None
-    return (branch, version)
+    return (recorded_branch(branch), version)
 
 
 def _describe(reference: _Reference) -> str:

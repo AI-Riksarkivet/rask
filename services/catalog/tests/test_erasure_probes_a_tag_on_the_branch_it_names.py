@@ -102,3 +102,28 @@ def test_pinned_by_names_only_the_refs_that_pin_a_residual_MAIN_version(tmp_path
 
     assert report.residual_versions == [2], report.residual_versions
     assert report.pinned_by == {"branch:work": 2}
+
+
+def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path) -> None:
+    """``deeper`` stands on ``work`` v3, not main v3; main v2 and v3 survive by the retention window alone.
+
+    A fork point is a ``(parent branch, version)`` reference (``parent_branch`` in ``branches.list()``,
+    ``parentBranch`` in ``lance_docs/file_format.md`` "Branch Metadata File Format"), so a branch cut from
+    another branch pins that branch's history whatever its number. Naming ``deeper`` would send an
+    operator with a deadline to delete a branch that frees nothing on main.
+    """
+    uri = str(tmp_path / "grandchild")
+    lance.write_dataset(_rows("bob"), uri)
+    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
+    lance.write_dataset(_rows("carol"), uri, mode="append")
+    work = lance.dataset(uri).create_branch("work", 1)
+    lance.write_dataset(_rows("eve"), work, mode="append")
+    lance.write_dataset(_rows("fred"), lance.dataset(uri).checkout_version(("work", None)), mode="append")
+    lance.dataset(uri).create_branch("deeper", ("work", 3))
+    fork = lance.dataset(uri).branches.list()["deeper"]
+    assert (fork["parent_branch"], fork["parent_version"]) == ("work", 3), f"deeper must stand on work v3 for this to be the right test: {fork}"
+
+    report = erase(lance.dataset(uri), table="acme-bronze$subjects", predicate=_PREDICATE, retention=timedelta(days=1))
+
+    assert report.residual_versions == [2, 3], "main v2 and v3 must survive holding the subject for this to be the right test"
+    assert report.pinned_by == {}

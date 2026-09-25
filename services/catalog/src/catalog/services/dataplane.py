@@ -24,7 +24,7 @@ import re
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, suppress
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import lance
 import lance.optimize as lance_optimize
@@ -2055,7 +2055,22 @@ _REF_INVALID_MARKER = "ref is invalid:"
 #: The default ref. It is not in `branches.list()` on any dataset — the default is implicit — so the
 #: create door's collision pre-check cannot see it, and pylance answers a request to create it with its
 #: own bug-report text (measured on 11.0.0, 2026-09-15).
-MAIN_BRANCH = "main"
+MAIN_BRANCH: Final = "main"
+
+
+def recorded_branch(branch: object) -> str | None:
+    """A ref as Lance records it: ``None`` for main, the branch name otherwise.
+
+    Lance records main as null — a tag's ``branch`` and a branch's ``parentBranch``
+    (``lance_docs/file_format.md`` "Tag File Format" / "Branch Metadata File Format") — and it stores a
+    reference spelled ``("main", n)`` as null too (measured on pylance 12.0.0), while a request may name
+    main by name. Comparing refs through this makes both spellings one ref.
+    """
+    if branch is None or branch == MAIN_BRANCH:
+        return None
+    if not isinstance(branch, str):
+        raise TypeError(f"a branch is named by a str or None, got {type(branch).__name__}")
+    return branch
 
 
 def refuse_a_branch_name_the_backend_cannot_use(name: str) -> None:
@@ -2252,7 +2267,7 @@ def create_branch(ns: LanceNamespace, so: StorageOptions, req: CreateTableBranch
         raise TableBranchNotFoundError(f"source branch {req.from_branch!r} not found")
     # The residual version failure belongs to the SOURCE, so name that — not the branch being created,
     # which exists nowhere yet and tells the caller nothing about what was missing.
-    source = req.from_branch if req.from_branch is not None else "main"
+    source = req.from_branch if req.from_branch is not None else MAIN_BRANCH
     try:
         with _ref_errors("branch", source, invalid_name=req.name):
             dataset.create_branch(req.name, _branch_reference(req))

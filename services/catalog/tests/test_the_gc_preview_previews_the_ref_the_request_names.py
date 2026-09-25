@@ -7,7 +7,7 @@ right while the door opened main whatever the request said.
 WHY THIS DOOR CAN OPEN NOW, when its two destructive siblings still cannot. The three were gated as one
 on [[LH-094]]'s reclaim question, but they are not alike: measured here, `preview_maintenance` calls
 `_base_refs` ZERO times and mutates nothing — `preview_gc` reads `ds.version`, `ds.versions()` and the
-tags, and returns. It cannot reclaim anything on any ref, so the question that gates `/run` and
+tag and child-branch pins, and returns. It cannot reclaim anything on any ref, so the question that gates `/run` and
 `/compact` does not reach it.
 
 THE ASSERTION IS ON THE ANSWER, not on the call. A door that passed the branch to `open_dataset` and

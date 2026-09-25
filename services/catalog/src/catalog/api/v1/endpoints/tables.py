@@ -85,9 +85,6 @@ log = logging.getLogger(__name__)
 #: `install_problem_handlers`, which carries the spec `code` (INVALID_INPUT) a generated client
 #: dispatches on.
 _MAX_LIST_LIMIT = 1000
-#: The default branch every branch-unaware read answers off. The spec's ``branch`` field says "when not
-#: specified, the main branch is used", so a body naming it explicitly asks for what this door already does.
-_MAIN_BRANCH = "main"
 
 router = APIRouter(prefix="/v1/table", tags=["table"])
 
@@ -322,7 +319,7 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None) -> None:
 
     `main` is permitted: naming the branch you are already on is not a request this door cannot honour.
     """
-    if branch is None or branch == _MAIN_BRANCH:
+    if dataplane.recorded_branch(branch) is None:
         return
     dataplane.refuse_a_branch_this_door_cannot_honour(
         branch, door="describe", remedy=f"Use the branch operations under /v1/table/{{id}}/branches, or read the branch through `count_rows`. (got {branch!r})"

@@ -85,5 +85,5 @@ def test_naming_MAIN_is_not_this_condition() -> None:
     """
     from catalog.api.v1.endpoints import tables
 
-    assert tables._refuse_a_branch_describe_cannot_honour(tables._MAIN_BRANCH) is None
+    assert tables._refuse_a_branch_describe_cannot_honour(dataplane.MAIN_BRANCH) is None
     assert tables._refuse_a_branch_describe_cannot_honour(None) is None

@@ -101,7 +101,7 @@ async def preview_maintenance(
 
     ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
     measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
-    ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns — so [[LH-094]]'s
+    ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns — so [[LH-094]]'s
     question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
     both reclaim, and stay refused until that is decided for them.
 

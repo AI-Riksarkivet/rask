@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
 from lance_namespace import UnsupportedOperationError
 
+from catalog.services.dataplane import recorded_branch
 from service_kit.lakehouse.base_refs import BaseRefs
 from service_kit.lakehouse.features import (
     FLAG_BASE_PATHS,
@@ -243,22 +244,6 @@ def _as_utc(ts: object) -> datetime:
     return datetime.now(UTC)
 
 
-#: The default ref's name. Lance RECORDS main as null — a tag's ``branch`` and a branch's
-#: ``parentBranch`` (``lance_docs/file_format.md`` "Tag File Format" / "Branch Metadata File Format") —
-#: and it stores a reference spelled ``("main", n)`` as null too (measured on pylance 12.0.0), so a
-#: request naming this is compared as null.
-MAIN_BRANCH: Final = "main"
-
-
-def _recorded_branch(branch: object) -> str | None:
-    """A ref as Lance records it: ``None`` for main, the branch name otherwise."""
-    if branch is None or branch == MAIN_BRANCH:
-        return None
-    if not isinstance(branch, str):
-        raise TypeError(f"a branch is named by a str or None, got {type(branch).__name__}")
-    return branch
-
-
 def _tag_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
     """``{tag: version}`` for the tags pinning a version OF ``branch`` — the only tags its cleanup honours.
 
@@ -267,11 +252,11 @@ def _tag_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
     pylance 12.0.0: a tag on ``work`` v3 leaves main's v3 to ``cleanup_old_versions``, and a main tag on
     v4 leaves the branch's v4, so honouring every listed tag here withholds versions the run deletes.
     """
-    ref = _recorded_branch(branch)
+    ref = recorded_branch(branch)
     return {
         name: int(version)
         for name, tag in ds.tags.list().items()
-        if _recorded_branch(tag.get("branch")) == ref and isinstance(version := tag.get("version"), int)
+        if recorded_branch(tag.get("branch")) == ref and isinstance(version := tag.get("version"), int)
     }
 
 
@@ -285,11 +270,11 @@ def _fork_versions(ds: VersionedDataset, branch: str | None) -> dict[str, int]:
     of its own was cut from. Only DIRECT children are read: a grandchild stands on the same parent
     version its ancestor does, and Lance refuses to delete a branch another branch is cut from.
     """
-    ref = _recorded_branch(branch)
+    ref = recorded_branch(branch)
     return {
         name: int(version)
         for name, meta in ds.branches.list().items()
-        if _recorded_branch(meta.get("parent_branch")) == ref and isinstance(version := meta.get("parent_version"), int)
+        if recorded_branch(meta.get("parent_branch")) == ref and isinstance(version := meta.get("parent_version"), int)
     }
 
 
