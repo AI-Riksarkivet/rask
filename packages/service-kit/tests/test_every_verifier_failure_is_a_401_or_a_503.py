@@ -6,14 +6,18 @@ around them: `UnauthenticatedError` when the PRESENTED TOKEN is at fault (401, a
 `verifier_unavailable`). Any third type leaves both doors as an unmapped 500, and their `except Exception` branch
 records it as `invalid_token` against the caller.
 
-Measured 2026-09-25 on pyjwt 2.13.0 / httpx 0.28.1 / pydantic 2.13, four paths reach the door as a third type
+Measured 2026-09-25 on pyjwt 2.13.0 / httpx 0.28.1 / pydantic 2.13, these paths reach the door as a third type
 unless `oidc.py` classifies them:
 
 * a discovery document that is not JSON (a proxy's sign-in page) — `json.JSONDecodeError` out of `response.json()`;
 * a key set that is not JSON — `json.JSONDecodeError` out of `PyJWKClient.fetch_data`, which classifies only
   transport failures;
+* a key-set connection that closes before the status line, or a body cut short of its `Content-Length` —
+  `http.client.RemoteDisconnected` / `IncompleteRead`, because urllib wraps only the SEND in `URLError`;
 * key material `cryptography` refuses — a bare `ValueError`, because `PyJWKSet` skips only keys failing with
   `PyJWTError`;
+* a key set PyJWT cannot read — an entry that is not an object (`AttributeError`), a non-string `n` or `alg`
+  (`TypeError`), a body nested past the JSON parser's depth (`RecursionError`);
 * a token whose `alg` names another key family than the key its `kid` selects — `TypeError` out of PyJWT's
   `prepare_key` when `jwt.decode` is handed the raw key rather than the `PyJWK` that binds its algorithm. This is the
   one a CALLER chooses, so it must be a 401.
@@ -34,6 +38,7 @@ import logging
 import threading
 import time
 from collections.abc import Iterator
+from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Annotated
 
@@ -77,11 +82,19 @@ _Subject = Annotated[str, Depends(_deps.current_subject)]
 _OptionalSubject = Annotated[str, Depends(_deps.optional_subject)]
 
 
+class _Fault(StrEnum):
+    """An IdP that goes away mid-answer — a pod restarting while keys rotate."""
+
+    CLOSED_BEFORE_ANSWERING = "closed-before-answering"
+    BODY_CUT_SHORT = "body-cut-short"
+
+
 class _IdP(BaseModel):
-    """What the loopback IdP serves, by path; a case overwrites one document to break it."""
+    """What the loopback IdP serves, by path; a case overwrites one document, or faults one path, to break it."""
 
     issuer: str
     documents: dict[str, bytes]
+    faults: dict[str, _Fault] = {}
 
 
 def _b64url_uint(value: int) -> str:
@@ -117,7 +130,18 @@ def stranger_key() -> rsa.RSAPrivateKey:
 def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            fault = served.faults.get(self.path)
             body = served.documents.get(self.path)
+            if fault is _Fault.CLOSED_BEFORE_ANSWERING:
+                self.close_connection = True
+                return
+            if fault is _Fault.BODY_CUT_SHORT and body is not None:
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body[: len(body) // 2])
+                self.close_connection = True
+                return
             self.send_response(404 if body is None else 200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body or b"")))
@@ -262,13 +286,35 @@ def test_a_key_set_url_that_answers_404_is_ours(door: str, idp: _IdP, rsa_key: r
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
+@pytest.mark.parametrize("fault", list(_Fault))
+@pytest.mark.parametrize("door", DOORS)
+def test_a_key_set_the_idp_drops_mid_answer_is_ours(
+    door: str, fault: _Fault, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture
+) -> None:
+    """Named unreachable, not unusable: the set never arrived, so nothing is known about its keys."""
+    idp.faults[JWKS_PATH] = fault
+
+    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+
+    assert status == 503, body
+    assert "could not be reached" in json.loads(body)["detail"]
+    assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
+#: A zero modulus: every field of the right type, and a key `cryptography` will not build.
+_ZERO_MODULUS_JWK = {"kty": "RSA", "kid": KID, "use": "sig", "alg": "RS256", "n": "AA", "e": "AQAB"}
+
 #: Key-set bodies the provider could serve, none of which the token has any part in.
 UNUSABLE_KEY_SETS = {
     "not-json": SIGN_IN_PAGE,
     "json-but-not-an-object": b"[]",
     "no-keys": json.dumps({"keys": []}).encode(),
-    # A modulus of zero: well-formed JSON, a well-formed JWK, and a key `cryptography` will not build.
-    "key-material-refused": json.dumps({"keys": [{"kty": "RSA", "kid": KID, "use": "sig", "alg": "RS256", "n": "AA", "e": "AQAB"}]}).encode(),
+    "key-material-refused": json.dumps({"keys": [_ZERO_MODULUS_JWK]}).encode(),
+    "entry-not-an-object": json.dumps({"keys": [1]}).encode(),
+    "n-not-a-string": json.dumps({"keys": [{**_ZERO_MODULUS_JWK, "n": 5}]}).encode(),
+    "alg-not-a-string": json.dumps({"keys": [{**_ZERO_MODULUS_JWK, "alg": ["RS256"]}]}).encode(),
+    # `RecursionError`, outside every family the others raise: the reason `oidc.py` cannot name a closed set.
+    "nested-past-the-parsers-depth": b"[" * 100_000 + b"]" * 100_000,
 }
 
 
@@ -280,4 +326,5 @@ def test_a_key_set_with_no_usable_key_is_ours(door: str, key_set: bytes, idp: _I
     status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
+    assert "holds no usable signing key" in json.loads(body)["detail"]
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]

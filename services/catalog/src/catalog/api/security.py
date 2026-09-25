@@ -20,6 +20,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.dependencies import SettingsDep
+from service_kit import exceptions as fleet_exceptions
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
 from service_kit.governed.dapr_auth import (
     CredentialRejected,
@@ -178,6 +179,11 @@ def authenticate(
         raise UnauthenticatedError("Missing bearer token")
     try:
         token = verifier.verify(credentials.credentials)
+    except fleet_exceptions.ServiceUnavailableError:
+        # The IdP or this deployment's view of it failed, not the caller's bearer: the missing-verifier
+        # branch's reason. `verify` raises the fleet class, not the lance one this module raises.
+        audit("authn", FAILURE, reason="verifier_unavailable")
+        raise
     except Exception:
         audit("authn", FAILURE, reason="invalid_token")
         raise

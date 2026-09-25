@@ -38,6 +38,7 @@ Security posture (see CHANGELOG in the task notes):
 from __future__ import annotations
 
 import asyncio
+import http.client
 import logging
 import time
 from typing import NamedTuple
@@ -213,12 +214,9 @@ class OIDCVerifier:
         )
         # OURS, NOT THE CALLER'S. Everything from here to the mismatch check below is a statement
         # about this deployment's configuration and the issuer it points at — the presented token is
-        # not read and plays no part. Left unmapped these escape `verify`'s `(PyJWTError,
-        # PyJWKClientError, ValidationError)` tuple entirely (they are raised before its try block,
-        # from `_provider_for`), so the door's `except Exception` audited a configuration outage as
-        # `invalid_token` against a real subject and answered 500. `ServiceUnavailableError` is the
-        # vocabulary `deps.py` already uses for a verifier it does not have; this is the same fact
-        # arriving later.
+        # not read and plays no part. These errors are raised from `_provider_for`, before `verify`
+        # reaches its try block, so they are mapped here, to `ServiceUnavailableError`: the vocabulary
+        # `deps.py` uses for a verifier it does not have, and the same fact arriving later.
         try:
             with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
                 response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
@@ -316,20 +314,24 @@ class OIDCVerifier:
     def _key_set(provider: _Provider, *, refresh: bool) -> list[jwt.PyJWK]:
         """The provider's signing keys; every failure to produce them is the PROVIDER's, never the token's.
 
-        `PyJWKClient` raises four kinds here, and none reads the presented token: a transport failure
-        (`PyJWKClientConnectionError`), a set with no usable signing key (`PyJWKClientError` /
-        `PyJWKSetError`), a body that is not JSON (`json.JSONDecodeError` — `fetch_data` catches only
-        transport errors), and key material `cryptography` refuses (a bare `ValueError` — `PyJWKSet` skips
-        only keys failing with `PyJWTError`). Hence `ValueError` beside `PyJWTError`: the library leaves
-        those two unclassified.
+        `get_signing_keys` reads only the provider's response, and fails in one of two ways:
+
+        * the set could not be fetched — `PyJWKClientConnectionError`, or the `OSError` /
+          `http.client.HTTPException` raised once the request is sent (a connection closed before the status
+          line, a body cut short), which `fetch_data` does not wrap;
+        * the set holds no usable signing key — `PyJWKClientError` / `PyJWKSetError`, or whatever parsing
+          the provider's JSON raises untyped: `JSONDecodeError`, `ValueError` from `cryptography`,
+          `AttributeError` / `TypeError` from an entry PyJWT cannot read, `RecursionError` from a body nested
+          past the parser's depth.
         """
         uri = provider.jwk_client.uri
         try:
             return provider.jwk_client.get_signing_keys(refresh=refresh)
-        except jwt.PyJWKClientConnectionError as exc:
+        except (jwt.PyJWKClientConnectionError, OSError, http.client.HTTPException) as exc:
             log.warning("oidc_jwks_unreachable", extra={"jwks_uri": uri, "error": str(exc)})
             raise ServiceUnavailableError(f"The OIDC key set could not be reached at {uri}") from exc
-        except (jwt.PyJWTError, ValueError) as exc:
+        # Every input to the call is the provider's, and what it raises is an open set — see this docstring.
+        except Exception as exc:
             log.warning("oidc_jwks_malformed", extra={"jwks_uri": uri, "error": str(exc)})
             raise ServiceUnavailableError(f"The OIDC key set at {uri} holds no usable signing key") from exc
 
