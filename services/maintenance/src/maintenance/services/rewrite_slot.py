@@ -30,6 +30,7 @@ import signal
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 
 log = logging.getLogger(__name__)
@@ -81,7 +82,69 @@ def passes_committed() -> int:
     return _last_committed
 
 
-def retire_this_worker(*, passes: int) -> None:
+#: cgroup v2, then v1. Module-level so a test can point them somewhere writable.
+_CGROUP_V2_MAX = Path("/sys/fs/cgroup/memory.max")
+_CGROUP_V1_LIMIT = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
+
+#: Above this a v1 `limit_in_bytes` is the kernel's "unlimited" sentinel rather than a budget.
+_V1_UNLIMITED = 1 << 62
+
+
+@functools.cache
+def container_memory_limit() -> int:
+    """This CONTAINER's memory limit in bytes, or -1 when there is none to read.
+
+    THE CONTAINER'S AND NOT THE HOST'S, which is the distinction this row has already been bitten by:
+    `MALLOC_ARENA_MAX` sizes glibc's arenas from the host's CPU count and so governed nothing in a
+    512Mi pod. A budget read from `/proc/meminfo` would size the worker for a machine nobody runs it
+    on.
+
+    -1 FOR ANYTHING UNCERTAIN — no cgroup file, a v2 `max`, a v1 sentinel, an unparsable line. The
+    gate below reads that as "cannot say" and stays off, so an unlimited or non-Linux process keeps
+    running rather than retiring on its first unit. Cached because a container's limit cannot change
+    while it runs.
+    """
+    try:
+        raw = _CGROUP_V2_MAX.read_text(encoding="utf-8").strip()
+        return -1 if raw == "max" else int(raw)
+    except (OSError, ValueError):
+        pass
+    try:
+        value = int(_CGROUP_V1_LIMIT.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return -1
+    return -1 if value >= _V1_UNLIMITED else value
+
+
+def should_retire_for_memory(rss: int, *, limit: int, fraction: float) -> bool:
+    """Has this process spent its RESIDENT budget? ([[LH-183]])
+
+    THE COUNT ABOVE BOUNDS A LANE THIS ESTATE DOES NOT RUN. `should_retire` is keyed on committed
+    rewrites, and this lane commits none: `compaction_versions_removed_total` is ZERO against 374
+    no-op plans per worker per thirty minutes. Measured live 2026-09-25 on the deployed estate, the
+    consequence is visible rather than inferred — both workers at 866 and 861 MiB against a 4Gi limit,
+    ZERO restarts across 34.5 hours, and `maintenance_worker_retiring` never once logged. So
+    `passes_committed()` is 0 forever there and the retirement has never fired on the lane that grows.
+
+    Both lanes share the resident set, which is also the thing the OOM killer reads, so that is what
+    this gates on. The per-lane cost figures stay what they were measured to be and neither has to
+    stand in for the other: ~12 MiB per COMMIT where commits happen, ~1.06 KiB per dataset-operation
+    where they do not (two independently-scheduled pods agreeing to 1% over ~270,000 operations each).
+
+    THE FRACTION LEAVES ROOM FOR THE PEAK, and that is why it is well under 1. A rewrite's transient
+    peak is 400-700 MiB above the floor and comes back every time; retiring at the floor alone would
+    still be OOMKilled by the next peak. At the shipped 0.70 a 4Gi worker leaves at ~2.87 GiB, which
+    affords the largest measured peak twice over.
+
+    Non-positive is OFF, and so is any reading of -1, on the same terms as `should_retire`: a
+    misconfiguration or an unreadable `/proc` fails toward NOT recycling.
+    """
+    if fraction <= 0 or limit <= 0 or rss <= 0:
+        return False
+    return rss >= limit * fraction
+
+
+def retire_this_worker(*, passes: int, reason: str) -> None:
     """Ask this process to finish what it holds and leave, so Kubernetes starts a fresh one.
 
     SIGTERM TO SELF, never `sys.exit` and never `os._exit`, because the point is to take the SAME
@@ -92,6 +155,9 @@ def retire_this_worker(*, passes: int) -> None:
 
     ONE-WAY: `_retiring` cannot become false again, so the units still finishing behind this one do
     not each re-signal.
+
+    `reason` IS REQUIRED because two different budgets reach here and the log line is how an operator
+    tells a healthy recycle from a leak: `passes` is meaningless on the memory path, where it is 0.
     """
     global _retiring
     if _retiring:
@@ -99,7 +165,7 @@ def retire_this_worker(*, passes: int) -> None:
     _retiring = True
     log.warning(
         "maintenance_worker_retiring",
-        extra={"passes": passes, "rss_bytes": resident_bytes(), "reason": "committed-rewrite budget spent ([[LH-183]] ~12 MiB retained per pass)"},
+        extra={"passes": passes, "rss_bytes": resident_bytes(), "memory_limit_bytes": container_memory_limit(), "reason": reason},
     )
     os.kill(os.getpid(), signal.SIGTERM)
 

@@ -31,7 +31,7 @@ from maintenance.core.lineage_emit import CREATE_INDEX, MaintenanceEmitter
 from maintenance.services import credentials
 from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.index_build import UnknownIndexKindError, build_index
-from maintenance.services.rewrite_slot import passes_committed, retire_this_worker, should_retire
+from maintenance.services.rewrite_slot import container_memory_limit, passes_committed, retire_this_worker, should_retire, should_retire_for_memory
 from maintenance.services.sweep import memory_readings
 from maintenance.services.work_queue import SUCCESS
 from service_kit.draining import retry_when_draining
@@ -87,7 +87,8 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
     # THE SAME READINGS AS THE REWRITE LANE ([[LH-183]]), because they share a process: a series that
     # covers only compaction units cannot say which of the two grew it, and an index build over a large
     # table can hold the worker for an hour.
-    log.info("index_unit_done", extra={"uri": item.uri, "index": outcome.name, "version": outcome.version, **memory_readings()})
+    readings = memory_readings()
+    log.info("index_unit_done", extra={"uri": item.uri, "index": outcome.name, "version": outcome.version, **readings})
     # THE RUN REACHES THE GRAPH HERE, because this is where the build happened. The catalog door
     # emits when it builds in-process and deliberately does not when it queues — "a queued unit has
     # produced no version to measure" — so moving builds off the request path made them invisible
@@ -104,9 +105,14 @@ async def handle_index_unit(event: dict[str, Any], settings: MaintenanceSettings
     # compactions and then receives only index units would run past its ceiling with nothing checking.
     # Asked after the emit, for the reason the work lane asks after the ack: the signal starts a
     # graceful shutdown that finishes this response first.
+    # BOTH BUDGETS, for the same reason the work lane asks both: the pass count is 0 on a worker that
+    # has committed no rewrite, and an index build holds the process far longer than a compaction —
+    # an hour-long build on a worker already near its limit is the case a commit counter cannot see.
     passes = passes_committed()
     if should_retire(passes, after=settings.recycle_after_passes):
-        retire_this_worker(passes=passes)
+        retire_this_worker(passes=passes, reason="committed-rewrite budget spent ([[LH-183]] ~12 MiB retained per pass)")
+    elif should_retire_for_memory(int(readings.get("rss_bytes", -1)), limit=container_memory_limit(), fraction=settings.recycle_at_memory_fraction):
+        retire_this_worker(passes=passes, reason="memory")
     return {"status": SUCCESS}
 
 

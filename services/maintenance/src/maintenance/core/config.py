@@ -197,6 +197,19 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     #: must be able to say. Affordable only because a restart is cheap: measured on the live lane
     #: 2026-09-22 ([[LH-190]]), delivery resumes ~5s after readiness and the units redeliver at once.
     recycle_after_passes: int = Field(default=150, ge=0, alias="MAINTENANCE_RECYCLE_AFTER_PASSES")
+    #: Retire this worker when its RESIDENT set reaches this fraction of the container's own limit
+    #: ([[LH-183]]). The pass count above bounds the COMMITTING lane and this estate's workers commit
+    #: nothing, so that count stays 0 and its retirement never fires: measured live 2026-09-25, both
+    #: workers at 866 and 861 MiB against a 4Gi limit, ZERO restarts in 34.5 hours, and
+    #: `maintenance_worker_retiring` never logged. The resident set is what both lanes share and what
+    #: the OOM killer reads.
+    #:
+    #: 0.70 LEAVES ROOM FOR THE PEAK, which is why it is well under 1: a rewrite's transient peak is
+    #: 400-700 MiB above the floor and returns every time, so a worker retiring at the floor alone is
+    #: still killed by the next one. On a 4Gi worker this leaves at ~2.87 GiB, affording the largest
+    #: measured peak twice over. `ge=0.0` and 0 means never, the same posture as the pass mark: a
+    #: misconfiguration fails toward NOT recycling.
+    recycle_at_memory_fraction: float = Field(default=0.70, ge=0.0, le=1.0, alias="MAINTENANCE_RECYCLE_AT_MEMORY_FRACTION")
     #: Stores the PLATFORM owns and the catalog deliberately cannot resolve ([[LH-164]]). Today that is
     #: the model registry: the medallion trainer writes `<root>/medallion/models/<model>` directly and
     #: the catalog's promote/describe doors open it by EXPLICIT URI, because native namespace resolution

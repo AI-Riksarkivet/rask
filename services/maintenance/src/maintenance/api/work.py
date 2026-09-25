@@ -24,7 +24,7 @@ from pydantic import ValidationError
 from maintenance.api.dependencies import LineageEmitterDep, SettingsDep
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
-from maintenance.services.rewrite_slot import passes_committed, retire_this_worker, should_retire
+from maintenance.services.rewrite_slot import container_memory_limit, passes_committed, retire_this_worker, should_retire, should_retire_for_memory
 from maintenance.services.sweep import DatasetWorkItem, emit_sweep_lineage, execute_unit, memory_readings
 from maintenance.services.work_queue import SUCCESS, ack_for
 from service_kit.draining import retry_when_draining
@@ -82,6 +82,7 @@ async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emit
     # A MALFORMED unit returns above and is deliberately absent from this distribution: it never
     # executed, so counting it as 0.0 would drag the max toward zero — the direction that makes a
     # too-short `ackWait` look safe.
+    readings = memory_readings()
     log.info(
         "maintenance_unit_done",
         extra={
@@ -98,14 +99,23 @@ async def handle_unit(event: dict[str, Any], settings: MaintenanceSettings, emit
             # so the one lane that grows is the one lane the instrument could not reach. The readings
             # are three `/proc` and allocator lookups; at the measured 802 units per worker per thirty
             # minutes they are far below the per-unit object-store listing already on this path.
-            **memory_readings(),
+            **readings,
         },
     )
     # AFTER the log and before the return, so the unit that tripped the mark is still acked: the
     # signal starts uvicorn's graceful shutdown, which finishes this response first ([[LH-183]]).
+    # TWO BUDGETS, BECAUSE ONE OF THEM CANNOT SEE THIS LANE. `passes_committed()` counts committed
+    # rewrites and this lane commits none: measured live 2026-09-25, both workers sat at 866 and 861
+    # MiB against a 4Gi limit with ZERO restarts in 34.5 hours and `maintenance_worker_retiring` never
+    # once logged — the count is 0 forever here, so the retirement it gates has never fired on the
+    # only lane that grows. The resident set is what both lanes share and what the OOM killer reads,
+    # so it is the second gate; the `readings` are the ones already logged above, not a second trip
+    # through /proc.
     passes = passes_committed()
     if should_retire(passes, after=settings.recycle_after_passes):
-        retire_this_worker(passes=passes)
+        retire_this_worker(passes=passes, reason="committed-rewrite budget spent ([[LH-183]] ~12 MiB retained per pass)")
+    elif should_retire_for_memory(int(readings.get("rss_bytes", -1)), limit=container_memory_limit(), fraction=settings.recycle_at_memory_fraction):
+        retire_this_worker(passes=passes, reason="memory")
     return {"status": status}
 
 

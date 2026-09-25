@@ -1682,6 +1682,18 @@ maintenance:
     # inherit this number: it is a property of the tables, not of the code.
     recycleAfterPasses: 150
 
+    # THE SECOND BUDGET, and the one this estate's workers actually reach. `recycleAfterPasses` counts
+    # committed rewrites and this lane commits none, so that count stays 0 and its retirement can
+    # never fire: measured live 2026-09-25, both workers at 866 and 861 MiB against a 4Gi limit, ZERO
+    # restarts in 34.5 hours, and `maintenance_worker_retiring` never logged. This one gates on the
+    # RESIDENT set against the container's own limit — read from the running worker's own cgroup,
+    # `/sys/fs/cgroup/memory.max` = 4294967296 — which both lanes share and the OOM killer reads.
+    #
+    # WELL UNDER 1 BECAUSE OF THE PEAK: a rewrite's transient peak is 400-700 MiB above the floor and
+    # returns every time, so retiring at the floor alone is still killed by the next one. At 0.70 a
+    # 4Gi worker leaves at ~2.87 GiB, which affords the largest measured peak twice over. 0 disables.
+    recycleAtMemoryFraction: 0.70
+
     # The slice of `maxConcurrentUnits` RESERVED for index builds; compaction gets the remainder.
     # A reservation, not a measurement — an index build holds its token far longer than a compaction
     # (`indexAckWait` 3600s against the work queue's 720s), so letting index units take the whole pool
