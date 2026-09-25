@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 
 from medallion.services.inprocess_executor import IN_PROCESS_ENGINE, InProcessExecutor, WrongEngineError
-from service_kit.lakehouse.executor import Capability, Executor, RunHandle, RunState, SubmitOutcome, may_resubmit
+from service_kit.lakehouse.executor import Capability, Executor, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
@@ -131,14 +131,10 @@ async def test_a_task_for_ANOTHER_engine_is_refused_at_SUBMIT(executor: InProces
         await executor.submit(_order(), _registration(engine="ray"))
 
 
-def test_the_RESUBMIT_rule_reads_the_capability_not_a_habit() -> None:
-    """`may_resubmit` is a property of the port rather than a rule each caller remembers.
+def test_this_engine_promises_no_durable_record() -> None:
+    """Its run record dies with the process, so an UNKNOWN handle means the work was lost with it.
 
-    Against this engine — no `DURABLE_RECORD`, because its record dies with the process — an UNKNOWN
-    handle may be resubmitted, since a lost record means the work was lost with it. Against an engine
-    that DID promise durability the same machinery would be a spurious double-submit.
+    Claiming `DURABLE_RECORD` here would tell a resubmitting caller the opposite: that the engine still
+    holds the run and a second submit is a double-submit.
     """
     assert Capability.DURABLE_RECORD not in InProcessExecutor(lambda: {}).capabilities
-    assert may_resubmit(RunState.UNKNOWN, capabilities=frozenset())
-    assert not may_resubmit(RunState.UNKNOWN, capabilities=frozenset({Capability.DURABLE_RECORD}))
-    assert not may_resubmit(RunState.RUNNING, capabilities=frozenset()), "resubmitting a live run puts two writers on one destination"

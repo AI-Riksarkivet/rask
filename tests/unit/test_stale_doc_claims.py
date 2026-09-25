@@ -32,9 +32,7 @@ CATALOG_REGISTER = REPO_ROOT / "services/medallion/src/medallion/services/catalo
 PRODUCER = REPO_ROOT / "services/medallion/src/medallion/producer.py"
 PRODUCE_SERVICE = REPO_ROOT / "services/medallion/src/medallion/services/produce.py"
 COMPUTE = REPO_ROOT / "services/medallion/src/medallion/services/compute.py"
-S3_HARVEST = REPO_ROOT / "services/medallion/src/medallion/services/s3_harvest.py"
 INGEST_API = REPO_ROOT / "services/ingest/src/ingest/api.py"
-INGEST_ADAPTERS = REPO_ROOT / "services/ingest/src/ingest/adapters.py"
 OPTIMIZE = REPO_ROOT / "services/maintenance/src/maintenance/services/optimize.py"
 MAINTENANCE_E2E = REPO_ROOT / "tests/e2e-py/test_maintenance_e2e.py"
 RAY_MD = REPO_ROOT / "docs/RAY.md"
@@ -277,18 +275,6 @@ def test_the_ingest_request_docstring_matches_the_naming_module() -> None:
     api = _read(INGEST_API)
     assert "creates a NAMESPACE named after the project" not in api, "`ingest.naming` composes `<project>-<tier>`; the project never names a namespace."
     assert "the conflation itself is open work" not in api, "the conflation was closed by `ingest/naming.py`."
-
-
-def test_the_s3_harvest_docstring_does_not_claim_a_registration_that_is_not_there() -> None:
-    """`ingest.adapters` registers `service_kit.lakehouse.sources.S3FileSystemSource`, never `S3PrefixSource`."""
-    adapters = _read(INGEST_ADAPTERS)
-    assert "from service_kit.lakehouse.sources import S3FileSystemSource" in adapters
-    assert "from medallion.services.s3_harvest import" not in adapters
-
-    assert _retracted(" ".join(_module_docstring(S3_HARVEST).split()), "registered by ``ingest.adapters`` now"), (
-        "s3_harvest claims `ingest.adapters` registers it. It does not — `adapters.py` mentions the module "
-        "only in prose, and the only importer of `S3PrefixSource` is `tests/unit/test_s3_harvest.py`."
-    )
 
 
 def test_every_test_the_maintenance_service_cites_exists() -> None:

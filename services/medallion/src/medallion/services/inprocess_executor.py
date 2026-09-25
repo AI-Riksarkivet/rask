@@ -17,12 +17,11 @@ exact rather than approximate — `transform_stage` builds its own `WriteResult`
 ``measure(to_uri) + previous_rows + _column_map(upstream.schema, written, blob_field_names(upstream))``,
 and `measure_stage` computes the identical three, from the identical expressions.
 
-**Capabilities are what the resubmit machinery reads.** No `DURABLE_RECORD`: this engine's record dies
-with the process, and `executor.may_resubmit` therefore permits a resubmit on `UNKNOWN` — correct
-here, because a lost record means the work was lost with it. Against Ray the same absence is a
+**No `DURABLE_RECORD`.** This engine's record dies with the process, so an `UNKNOWN` handle means the
+work was lost with it and a resubmit is the only way it happens. Against Ray the same absence is a
 measured fact (its GCS is not fault-tolerant in this estate); against an engine that DID promise
-durability the machinery would be a spurious double-submit, which is the whole reason the rule is a
-property of the port rather than a habit of each caller.
+durability a resubmit on `UNKNOWN` would be a spurious double-submit, which is why durability is a
+capability the port names rather than a habit of each caller.
 """
 
 from __future__ import annotations
@@ -55,8 +54,8 @@ class InProcessExecutor:
 
     The run record is per-INSTANCE and dies with the process, which is the honest shape for a
     synchronous engine and is exactly what the absent `DURABLE_RECORD` capability advertises. A caller
-    holding a handle across a restart gets `UNKNOWN`, and `may_resubmit` then permits a resubmit —
-    correct, because there is nothing to reattach to.
+    holding a handle across a restart gets `UNKNOWN`, and a resubmit is then correct, because there is
+    nothing to reattach to.
     """
 
     name = IN_PROCESS_ENGINE

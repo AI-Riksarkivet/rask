@@ -3,8 +3,8 @@
 Two gates ran the same assertions in two places with different consequences. The catalog's withholds
 the `published` TAG — data stays committed but unpublished. The stage runner's withheld only the next
 TRIGGER, so a refused batch was already committed into silver or gold and visible to anyone reading
-`latest`; `assert_quality_on_batch` documents that hole in its own docstring. Only the tag is a real
-boundary, which is why the design deletes the local gate once the stage runner publishes.
+`latest`. Only the tag is a real boundary, which is why the design deletes the local gate once the
+stage runner publishes.
 
 This is the stage runner's half of that: one call, the catalog's answer, and a refusal that is a normal
 outcome rather than an error — the run did its job, it is the DATA that was refused.

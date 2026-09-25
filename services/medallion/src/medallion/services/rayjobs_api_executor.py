@@ -20,8 +20,8 @@ a poller that watched an id the submitter never used and reported a healthy job 
 **WHY `DURABLE_RECORD` IS NOT CLAIMED**, which is the one capability judgement here. A Jobs-API
 submission lives in the head's GCS, and a head restart takes the job history with it — observed on this
 estate when the in-cluster head was restarted. Its ABSENCE is what licenses the resubmit machinery, so
-claiming it would make `may_resubmit` refuse to resubmit a run that really was lost. Flyte's RayJob CR
-would carry it, which is the one property that path genuinely has and this one does not.
+claiming it would tell a resubmitting caller that a run which really was lost is still held. Flyte's
+RayJob CR would carry it, which is the one property that path genuinely has and this one does not.
 """
 
 from __future__ import annotations

@@ -11,18 +11,18 @@ from it by hand — not-yet-registered, record-lost, and a transport blip — wi
 `never_registered` and a poll ceiling. A port answering `None` forces every caller to re-derive that,
 and a caller that gets it wrong either resubmits live work or waits 24 hours on a job that is gone.
 
-THE RESUBMIT MACHINERY IS CAPABILITY-GATED, NOT UNCONDITIONAL. The medallion's `MAX_UNSEEN_POLLS` and
+`DURABLE_RECORD` IS WHAT A RESUBMIT HAS TO ASK ABOUT. The medallion's `MAX_UNSEEN_POLLS` and
 `MAX_RESUBMITS` are justified by an engine-specific durability defect it names outright: Ray's GCS is
 not fault-tolerant in this estate (no external Redis, a standing rule), so a head restart takes every
 job record with it. Against an engine that advertises `DURABLE_RECORD` the same machinery is a spurious
-DOUBLE-SUBMIT — a second copy of work nothing lost. `may_resubmit` makes that a property of the port
-rather than a rule each caller must remember.
+DOUBLE-SUBMIT — a second copy of work nothing lost — so it is sound only behind an engine that withholds
+the capability, which both adapters in this estate do.
 """
 
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict
 
@@ -39,11 +39,6 @@ class RunState(StrEnum):
     FAILED = "failed"
     CANCELLED = "cancelled"
     UNKNOWN = "unknown"
-
-
-#: The states a run cannot leave. `UNKNOWN` is deliberately NOT here: the engine may not know YET, and
-#: treating ignorance as terminal is how a running job is declared finished.
-TERMINAL: Final = frozenset({RunState.SUCCEEDED, RunState.FAILED, RunState.CANCELLED})
 
 
 class Capability(StrEnum):
@@ -122,16 +117,6 @@ class RunHandle(BaseModel):
 
     engine: str
     handle: str
-
-
-def may_resubmit(state: RunState, *, capabilities: frozenset[Capability]) -> bool:
-    """May a caller submit this work again?
-
-    Only for `UNKNOWN`, and only from an engine that does NOT promise a durable record. Every other
-    state is knowledge: resubmitting a RUNNING job puts two writers on one destination, and
-    resubmitting a SUCCEEDED one repeats work that already landed.
-    """
-    return state is RunState.UNKNOWN and Capability.DURABLE_RECORD not in capabilities
 
 
 class WrongEngineError(ValueError):

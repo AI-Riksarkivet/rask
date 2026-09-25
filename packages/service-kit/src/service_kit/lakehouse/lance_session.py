@@ -39,10 +39,6 @@ if TYPE_CHECKING:
 _CGROUP_V2 = Path("/sys/fs/cgroup/memory.max")
 _CGROUP_V1 = Path("/sys/fs/cgroup/memory/memory.limit_in_bytes")
 
-#: Where a container states its own CPU quota. Same v2-first rule as the memory pair above, and the
-#: same reason: a reader that knows one layout reports "unlimited" on the other.
-_CGROUP_CPU_V2 = Path("/sys/fs/cgroup/cpu.max")
-
 #: The share of the container a process may spend on Lance caches by DEFAULT. Deliberately below a
 #: half: the caps are LRU soft bounds (see the module docstring), so this is the size the cache grows
 #: TOWARD, and it has to leave room for the working set that is doing the growing — the reconcile scan
@@ -123,36 +119,6 @@ def _log_clamp(requested: int, granted: int, budget: int, fraction: float) -> No
         "lance_cache_clamped_to_container",
         extra={"requested_bytes": requested, "granted_bytes": granted, "container_budget_bytes": budget, "fraction": fraction},
     )
-
-
-def cpu_budget_cores(*, source: Path = _CGROUP_CPU_V2) -> float | None:
-    """The CPU cores THIS container may use, or ``None`` when nothing constrains it.
-
-    cgroup v2 states ``<quota> <period>`` in microseconds, so ``100000 100000`` is one CPU. ``max``
-    is an unconstrained cgroup — and a laptop or CI runner says it too, which is why ``None`` has to
-    mean "leave it alone" rather than "assume one".
-
-    The memory twin of this is :func:`cache_budget_bytes`, and its argument carries over verbatim: a
-    literal cannot track a chart value. ``resources.limits.cpu`` can move without anyone revisiting a
-    constant in Python, and what follows is throttling with no line to blame.
-
-    THERE IS NO THREAD-POOL TWIN OF ``affordable_cache_bytes`` HERE, and the measurement is why
-    ([[LH-172]]). A ``LANCE_CPU_THREADS``-setting companion was written, deployed and then removed:
-    driven on pylance 11.0.0, Lance's core-tracking pool follows CPU AFFINITY and ignores that variable
-    outright — four visible CPUs with ``LANCE_CPU_THREADS=32`` still built a four-wide pool. A cgroup
-    CPU *quota* does not reduce visible CPUs, so the pod sees 64 and sizes to 64 whatever this function
-    reports. What this answers is still true and still worth reading; what it cannot do is bound a pool.
-    """
-    try:
-        quota, _, period = source.read_text(encoding="utf-8").strip().partition(" ")
-    except OSError:
-        return None
-    if quota == "max":
-        return None
-    try:
-        return int(quota) / int(period or "100000")
-    except ValueError:
-        return None
 
 
 @cache

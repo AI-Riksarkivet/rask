@@ -45,9 +45,9 @@ def test_the_adapter_claims_cancel_and_failure_detail_but_not_a_durable_record()
 
     DURABLE_RECORD is deliberately absent: a Jobs-API submission lives in the head's GCS, and a head
     restart takes the job history with it — observed on this estate. Its absence is what licenses the
-    resubmit machinery; claiming it would make `may_resubmit` refuse to resubmit a run that really was
-    lost. CANCEL and FAILURE_DETAIL are claimed because `job_failure` classifies a real reason and the
-    lane can delete a job by id.
+    resubmit machinery; claiming it would tell a resubmitting caller that a lost run is still held.
+    CANCEL and FAILURE_DETAIL are claimed because `job_failure` classifies a real reason and the lane
+    can delete a job by id.
     """
     caps = RayJobsApiExecutor().capabilities
 

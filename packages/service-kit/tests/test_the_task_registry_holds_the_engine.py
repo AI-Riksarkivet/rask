@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from service_kit.lakehouse.task_registry import TaskRegistration, resolve_task
+from service_kit.lakehouse.task_registry import TaskRegistration
 
 
 def _reg(**over: object) -> TaskRegistration:
@@ -32,16 +32,6 @@ def test_the_registration_holds_the_engine_and_the_command() -> None:
     reg = _reg()
     assert reg.engine == "ray"
     assert reg.command.endswith("ray_stage_job.py")
-
-
-def test_an_unregistered_task_resolves_to_None() -> None:
-    """`None` rather than a default, the same contract `get_spec` states: the caller must be able to
-    tell "nobody registered this" from "this is configured", so a typo is refused at the door."""
-    assert resolve_task({}, "stage-transform") is None
-
-
-def test_a_registered_task_resolves() -> None:
-    assert resolve_task({"stage-transform": _reg()}, "stage-transform") is not None
 
 
 def test_an_empty_cardinality_list_means_ALL() -> None:

@@ -60,7 +60,6 @@ grant rather than by a reclaimer.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
@@ -221,55 +220,6 @@ def plan_repair(report: ReconcileReport) -> tuple[list[RevokedObject], dict[str,
     return planned, refused
 
 
-def repair_drift_sync(
-    settings: MaintenanceSettings,
-    *,
-    report: ReconcileReport,
-    revoke: Callable[[str], Sequence[object]],
-    cut_edge: Callable[[CutEdge], object] | None = None,
-) -> RepairReport:
-    """The pass's decision logic, with the revoke handed in.
-
-    Separated from :func:`repair_drift` so the ARMED path is testable without an OpenFGA client: the
-    thing worth pinning here is which objects get revoked and which are refused, and a test that had to
-    stand up a store to ask that question would be run rarely and trusted less.
-    """
-    out = RepairReport(enabled=settings.drift_repair_enabled, dry_run=settings.drift_repair_dry_run)
-    if not settings.drift_repair_enabled:
-        return out
-    planned, edges, out.refused = plan_repair_edges(report)
-    # CAPPED ON THE REVOKES ONLY. An edge cut removes exactly one tuple from a live object, so a
-    # handful of them cannot be the unreviewable batch the cap exists to prevent — and counting them
-    # against it would let a backlog of ghosts starve the smaller, safer repair indefinitely.
-    out.capped = max(0, len(planned) - settings.drift_repair_max_per_tick)
-    planned = planned[: settings.drift_repair_max_per_tick]
-    if out.dry_run:
-        out.revoked, out.edges_cut = planned, edges
-        return out
-    done: list[RevokedObject] = []
-    for target in planned:
-        try:
-            revoke(target.fga_object)
-        except Exception as exc:  # noqa: BLE001 — one unrevokable object must not cost the rest the pass
-            log.warning("drift_repair_object_failed", extra={"object": target.fga_object, "error": str(exc)})
-            out.error = str(exc)
-            continue
-        done.append(target)
-    out.revoked = done
-    cut: list[CutEdge] = []
-    if cut_edge is not None:
-        for edge in edges:
-            try:
-                cut_edge(edge)
-            except Exception as exc:  # noqa: BLE001 — same contract as the revokes above
-                log.warning("drift_repair_edge_failed", extra={"object": edge.object, "error": str(exc)})
-                out.error = str(exc)
-                continue
-            cut.append(edge)
-    out.edges_cut = cut
-    return out
-
-
 async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport, fga_client: Any) -> RepairReport:
     """Revoke the tuples of every object the report found gone.
 
@@ -282,6 +232,9 @@ async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport
         return RepairReport(enabled=settings.drift_repair_enabled, dry_run=settings.drift_repair_dry_run)
     planned, edges, refused = plan_repair_edges(report)
     out = RepairReport(enabled=True, dry_run=settings.drift_repair_dry_run, refused=refused)
+    # CAPPED ON THE REVOKES ONLY. An edge cut removes exactly one tuple from a live object, so a
+    # handful of them cannot be the unreviewable batch the cap exists to prevent — and counting them
+    # against it would let a backlog of ghosts starve the smaller, safer repair indefinitely.
     out.capped = max(0, len(planned) - settings.drift_repair_max_per_tick)
     planned = planned[: settings.drift_repair_max_per_tick]
     if out.dry_run:

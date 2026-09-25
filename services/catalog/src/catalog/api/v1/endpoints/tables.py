@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated
@@ -119,23 +118,21 @@ def _is_expired(expires_at: str) -> bool:
     return deadline < datetime.now(UTC)
 
 
-def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool, extra_roots: Sequence[str] = ()) -> list[str]:
+def _collect_tables(ns: LanceNamespace, delimiter: str, root_tables: list[str], include_declared: bool) -> list[str]:
     """Every table in the tree, fully qualified — root tables plus each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
     a walk of N namespaces is N blocking calls.
 
-    ``extra_roots`` seeds the walk with top-level namespaces the NATIVE enumeration cannot see. The
-    shipped ``dir`` backend stores a namespace as a ``__manifest`` ROW and answers a per-namespace
-    ``list_tables`` fine — but ``list_namespaces`` at the ROOT yields nothing (measured live: the
-    estate held media/silver/alpha/beta with registered tables while this walk returned only the two
-    flat root rows, so the lakehouse Tables registry showed 2 of 9). The BINDINGS registry is the
-    estate's sanctioned tolerant enumerator (``list_bindings`` — enumeration only, never destructive
-    decisions), so its ``top_ns`` names ride in as additional roots. Each visited namespace lists its
-    OWN tables — not its children's — so a seeded root with no native child listing still reports.
+    ``root_tables`` arrives already holding the root rows AND every bound warehouse's tables, because
+    this walk alone is blind to a bound namespace: the shipped ``dir`` backend stores a namespace as a
+    ``__manifest`` ROW, so ``list_namespaces`` at the ROOT yields nothing (measured live: the estate
+    held media/silver/alpha/beta with registered tables while this walk returned only the two flat
+    root rows, so the lakehouse Tables registry showed 2 of 9). :func:`list_all_tables` lists those
+    through the BINDINGS registry, each through its own warehouse-rooted connection, before calling here.
     """
     found = list(root_tables)
-    stack: list[list[str]] = [[], *[[name] for name in extra_roots]]
+    stack: list[list[str]] = [[]]
     seen: set[tuple[str, ...]] = set()
     while stack:
         parent = stack.pop()

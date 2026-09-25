@@ -1,13 +1,9 @@
 """The gate's decision over REAL Lance datasets — the composition neither existing suite covers.
 
-Two suites already exist and each tests one half. `test_gate_decision.py` drives `gate_decision` with
-synthetic lists of assertion names, so it pins the ORDERING and nothing about what produces those
-names. `tests/unit/test_dummy_quality_gate.py` drives `assert_quality_on_batch` — the PRE-COMMIT form,
-over an in-memory Arrow table — and asserts on `passed()`, never on the gate.
-
-So the seam between them was untested: a dataset that exists ON DISK, read back at a pinned version by
-the POST-commit `assert_quality`, and the outcome the gate actually returns for it. That is the seam
-the live cascade runs, and the one a reader would assume was covered because both halves are.
+`test_gate_decision.py` drives `gate_decision` with synthetic lists of assertion names, so it pins the
+ORDERING and nothing about what produces those names. The seam it leaves is a dataset that exists ON
+DISK, read back at a pinned version by the POST-commit `assert_quality`, and the outcome the gate
+actually returns for it. That is the seam the live cascade runs.
 
 Configured as the live estate is (verified on rask-bronze-to-silver 2026-08-23):
 MEDALLION_QUALITY_KEY_COLUMN=id, MEDALLION_REQUIRED_COLUMNS=id, MEDALLION_CASCADE_VIA_PUBLISH=true.

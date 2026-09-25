@@ -5,11 +5,9 @@ Every adapter here already existed. `LocalDirSource` and `S3FileSystemSource` ha
 because reaching them meant adding another head route, another settings block, another produce
 module. That is the cost I1 removes.
 
-`S3PrefixSource` in `medallion/services/s3_harvest.py` is NOT among them, and this docstring claimed
-it was. The `s3-prefix` kind registered below is built from `service_kit.lakehouse.sources.S3FileSystemSource`;
-nothing outside that module's own unit test imports `S3PrefixSource`, so it remains unwired and its
-`s3_input()` lineage twin with it. Read the `register()` calls below as the list of what is actually
-reachable — a name in this prose is not a route.
+The `s3-prefix` kind registered below is built from `service_kit.lakehouse.sources.S3FileSystemSource`.
+Read the `register()` calls below as the list of what is actually reachable — a name in this prose is
+not a route.
 
 Adding a source is now: one adapter (often already written), one `register()` call, one lineage
 twin. Gate A9 says a diff that does more than that has re-welded something.

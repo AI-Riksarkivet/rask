@@ -32,6 +32,8 @@ because an input was partial, rather than conclude the estate is clean.
 
 from __future__ import annotations
 
+import pytest
+
 from maintenance.services import repair
 from maintenance.services.reconcile import GhostObject, IncompleteScan, ReconcileReport
 
@@ -108,23 +110,28 @@ def test_an_UNRELATED_partial_read_refuses_nothing() -> None:
     assert refused == {}
 
 
-def test_the_ARMED_pass_honours_the_refusal_too() -> None:
-    """`plan_repair` is not the only door — `repair_drift_sync` re-plans, and a guard that lived only
-    in the planner would be bypassed by the path that actually deletes."""
+@pytest.mark.asyncio
+async def test_the_ARMED_pass_honours_the_refusal_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`plan_repair` is not the only door — `repair_drift`, the coroutine the reconcile route awaits,
+    re-plans, and a guard that lived only in the planner would be bypassed by the path that deletes."""
     from maintenance.core.config import MaintenanceSettings
 
     settings = MaintenanceSettings.model_validate({"MAINTENANCE_DRIFT_REPAIR_ENABLED": True, "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": False})
     seen: list[str] = []
 
-    def _revoke(obj: str) -> list[object]:
+    async def _revoke(client: object, obj: str, *, actor: str, origin: str) -> list[object]:
+        del client, actor, origin
         seen.append(obj)
         return []
 
-    out = repair.repair_drift_sync(
+    monkeypatch.setattr(repair.fga, "revoke_object_tuples", _revoke)
+
+    out = await repair.repair_drift(
         settings,
         report=_report(IncompleteScan(source="catalog:tables:s3://acme-wh", reason="manifest unreadable: 503")),
-        revoke=_revoke,
+        fga_client=object(),
     )
 
+    assert seen, "the armed pass revoked nothing at all, so the assertion below could not fail"
     assert "table:ns$t1" not in seen, f"the armed path revoked a table its record listing never read: {seen}"
     assert "ghost_tables" in out.refused

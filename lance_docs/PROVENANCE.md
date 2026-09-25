@@ -113,6 +113,25 @@ Measured on pylance 12.0.0, 2026-09-25, on local tables at 2.1 and 2.2 with stab
 
 `service_kit.lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
 
+**`guide.md:2989-2991` holds for the compute pool's size and not for its override.** It says the pool
+"is determined by the number of cores on the machine" and "can be overridden by setting the
+`LANCE_CPU_THREADS` environment variable". Measured on pylance 12.0.0, 2026-09-25, varying only CPU
+affinity (`taskset -c`) and the variable, as the threads a process gains from importing `lance`,
+writing a 200,000-row table and scanning it once:
+
+| Visible CPUs | `LANCE_CPU_THREADS` | Threads gained |
+| --- | --- | --- |
+| 4 | unset | 8 |
+| 8 | unset | 13 |
+| 64 | unset | 69 |
+| 4 | 32 | 9 |
+| 64 | 1 | 70 |
+
+The pool follows CPU AFFINITY, and the documented override moves it in neither direction; pylance
+11.0.0 measured the same on 2026-09-16 ([[LH-172]]). A cgroup CPU quota does not reduce visible CPUs —
+in the lakehouse containers `nproc` reads 64 while `cpu.max` reads `100000 100000` — so the lever that
+bounds this pool is affinity (`os.sched_setaffinity`, or a `cpuset` on the pod), not the variable.
+
 ## Re-vendoring
 
 ```bash

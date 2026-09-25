@@ -144,15 +144,6 @@ def list_tasks(control_root: str, storage_options: StorageOptions) -> list[TaskR
     return out
 
 
-def resolve_task(registry: dict[str, TaskRegistration], task: str) -> TaskRegistration | None:
-    """Look one task up in an already-loaded registry.
-
-    Separate from :func:`get_task` so a caller holding many registrations — a declaration door
-    validating a batch — resolves without one object-store read per name.
-    """
-    return registry.get(task)
-
-
 def _parse(raw: str, *, path: str) -> TaskRegistration | None:
     """An unreadable registration is ``None`` and a WARNING, never an exception.
 

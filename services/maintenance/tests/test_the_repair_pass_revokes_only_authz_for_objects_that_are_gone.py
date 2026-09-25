@@ -19,8 +19,10 @@ real records, and `orphan_buckets`/`orphan_files`/`orphaned_trash` are bytes. No
 increment, and the refusal is asserted per category rather than by a total, because a pass that
 planned one data-tier deletion among many revokes would still pass a count.
 
-THE TEST IS ON THE PLAN, not on a mock's call log: the plan is what a dry run shows an operator
-before they arm the thing, so it is the artifact that has to be right.
+THE PLANNER LEGS ASSERT ON THE PLAN, because the plan is what a dry run shows an operator before they
+arm the thing. THE DRY-RUN, ARMED AND CAP LEGS DRIVE `repair_drift` ITSELF — the coroutine the
+reconcile route awaits — with only the two OpenFGA writes stood in: whether a dry run writes is a
+property of that coroutine, and a copy of its decision logic could be right while it is wrong.
 """
 
 from __future__ import annotations
@@ -39,6 +41,7 @@ from maintenance.services.reconcile import (
     UngovernedTable,
     UnreferencedProject,
 )
+from maintenance.services.repair import RepairReport
 
 
 def _report() -> ReconcileReport:
@@ -65,16 +68,40 @@ def _settings(**over: object) -> MaintenanceSettings:
     return MaintenanceSettings.model_validate({**base, **over})
 
 
-class _Recorder:
-    """A revoke that records instead of calling OpenFGA — a class rather than a lambda so its return
-    type is the `Sequence` the seam declares, not whatever `list.append` happens to give back."""
+class _Store:
+    """The two OpenFGA writes `repair_drift` makes, recorded instead of sent.
+
+    Installed on `service_kit.governed.fga` — the module `repair.fga` names — so the production
+    coroutine runs unmodified and only the store behind it is absent. Each stand-in takes the keyword
+    arguments the real function requires, so a call that stopped passing `actor` or `origin` fails here
+    the way it would fail live.
+    """
 
     def __init__(self) -> None:
-        self.seen: list[str] = []
+        self.revoked: list[str] = []
+        self.cut: list[tuple[str, str, str]] = []
 
-    def __call__(self, obj: str) -> list[object]:
-        self.seen.append(obj)
+    async def revoke_object_tuples(self, client: object, obj: str, *, actor: str, origin: str) -> list[object]:
+        del client, actor, origin
+        self.revoked.append(obj)
         return []
+
+    async def delete_tuples(self, client: object, tuples: list[repair.fga.ClientTuple], *, actor: str, origin: str) -> None:
+        del client, actor, origin
+        self.cut.extend((t.user, t.relation, t.object) for t in tuples)
+
+
+@pytest.fixture
+def store(monkeypatch: pytest.MonkeyPatch) -> _Store:
+    fake = _Store()
+    monkeypatch.setattr(repair.fga, "revoke_object_tuples", fake.revoke_object_tuples)
+    monkeypatch.setattr(repair.fga, "delete_tuples", fake.delete_tuples)
+    return fake
+
+
+async def _repair(settings: MaintenanceSettings) -> RepairReport:
+    """The production pass, with a client present — `repair_drift` returns early on `None`."""
+    return await repair.repair_drift(settings, report=_report(), fga_client=object())
 
 
 def test_it_plans_a_revoke_for_every_object_that_is_GONE() -> None:
@@ -113,37 +140,39 @@ def test_a_DATA_tier_finding_is_never_planned_for_deletion(category: str, needle
     assert category in refused, f"{category} is silently ignored; it must be REFUSED by name so a reader can see the pass considered it"
 
 
-def test_a_DRY_RUN_plans_and_revokes_NOTHING() -> None:
+@pytest.mark.asyncio
+async def test_a_DRY_RUN_plans_and_revokes_NOTHING(store: _Store) -> None:
     """The operator arming this must be able to see the plan without it acting."""
-    revoke = _Recorder()
-    out = repair.repair_drift_sync(_settings(), report=_report(), revoke=revoke)
+    out = await _repair(_settings())
 
     assert out.dry_run is True
     assert len(out.revoked) == 3, out.model_dump()
-    assert revoke.seen == [], f"a dry run revoked {revoke.seen}"
+    assert store.revoked == [], f"a dry run revoked {store.revoked}"
 
 
-def test_DISABLED_does_not_even_plan() -> None:
-    revoke = _Recorder()
-    out = repair.repair_drift_sync(_settings(MAINTENANCE_DRIFT_REPAIR_ENABLED=False), report=_report(), revoke=revoke)
+@pytest.mark.asyncio
+async def test_DISABLED_does_not_even_plan(store: _Store) -> None:
+    out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_ENABLED=False))
 
     assert out.enabled is False
-    assert out.revoked == [] and revoke.seen == []
+    assert out.revoked == [] and store.revoked == []
 
 
-def test_ARMED_revokes_exactly_the_planned_objects() -> None:
-    revoke = _Recorder()
-    out = repair.repair_drift_sync(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False), report=_report(), revoke=revoke)
+@pytest.mark.asyncio
+async def test_ARMED_revokes_exactly_the_planned_objects(store: _Store) -> None:
+    out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False))
 
-    assert sorted(revoke.seen) == ["project:gone-p", "table:ns$gone-t", "warehouse:gone-w"]
+    assert sorted(store.revoked) == ["project:gone-p", "table:ns$gone-t", "warehouse:gone-w"]
     assert out.dry_run is False and len(out.revoked) == 3
 
 
-def test_the_CAP_truncates_and_SAYS_it_did() -> None:
+@pytest.mark.asyncio
+async def test_the_CAP_truncates_and_SAYS_it_did(store: _Store) -> None:
     """A truncated pass that reads as a complete one is how drift looks fixed and is not."""
-    out = repair.repair_drift_sync(_settings(MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK=2), report=_report(), revoke=_Recorder())
+    out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False, MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK=2))
 
     assert len(out.revoked) == 2 and out.capped == 1
+    assert len(store.revoked) == 2, f"the cap truncated the report but not the writes: {store.revoked}"
 
 
 def test_a_CLEAN_report_plans_nothing() -> None:
@@ -214,22 +243,20 @@ def test_the_annotation_category_has_LEFT_the_refusal_list() -> None:
     assert "orphaned_annotation_tasks" not in repair._REFUSED
 
 
-def test_a_DRY_RUN_cuts_no_edge() -> None:
-    cut: list[str] = []
-    out = repair.repair_drift_sync(_settings(), report=_report(), revoke=_Recorder(), cut_edge=lambda e: cut.append(e.object))
+@pytest.mark.asyncio
+async def test_a_DRY_RUN_cuts_no_edge(store: _Store) -> None:
+    out = await _repair(_settings())
 
     assert out.dry_run is True
     assert len(out.edges_cut) == 1, out.model_dump()
-    assert cut == [], f"a dry run cut {cut}"
+    assert store.cut == [], f"a dry run cut {store.cut}"
 
 
-def test_ARMED_cuts_exactly_the_dangling_edge() -> None:
-    cut: list[str] = []
-    out = repair.repair_drift_sync(
-        _settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False), report=_report(), revoke=_Recorder(), cut_edge=lambda e: cut.append(e.object)
-    )
+@pytest.mark.asyncio
+async def test_ARMED_cuts_exactly_the_dangling_edge(store: _Store) -> None:
+    out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False))
 
-    assert cut == ["annotation_project:anno-1"]
+    assert store.cut == [("project:gone-p", "tenant", "annotation_project:anno-1")]
     assert len(out.edges_cut) == 1
 
 

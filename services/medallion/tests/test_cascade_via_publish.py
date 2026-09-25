@@ -2,8 +2,7 @@
 
 Two gates ran identical assertions in two places with different consequences. The catalog's withholds
 the `published` TAG; the stage runner's withheld only the next TRIGGER, so a refused batch was already
-committed into silver or gold and visible to anyone reading `latest` (`assert_quality_on_batch`
-documents that hole itself). Only the tag is a boundary.
+committed into silver or gold and visible to anyone reading `latest`. Only the tag is a boundary.
 
 So the stage runner stops firing the next stage and asks the catalog to publish instead. The tag move emits
 `table_published`, the publication head routes it to the lane that owns the source namespace, and the
