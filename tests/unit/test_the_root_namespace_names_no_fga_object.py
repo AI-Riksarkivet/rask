@@ -29,19 +29,23 @@ is not fail-open — the ungranted subject is refused — but a decision keyed o
 decision, and which of the two an operator meets depends on their store rather than on their code.
 The conformance suite that drives this path runs in no lane, so neither behaviour was ever seen.
 
-SKIPPING THE CHECK OPENS NOTHING. `list_namespaces` filters every NAME it returns through
-`fga.list_objects` on `can_get_metadata` — the route's documented design is that the route opens and
-the ITEMS are checked, because narrowing the route to 403 breaks the breadcrumb a grantee needs to
-reach their own table. Authentication is enforced before any of this.
+SKIPPING THE CHECK IS SAFE ONLY ON THE READS THAT FILTER EVERY ITEM. `list` and `table/list` filter
+each name they return through FGA, and `describe`/`exists` of the root reveal nothing a tuple guards.
+Every other action on the root (drop, policy, protection, grants) is refused: an empty id exempted from
+the check lets any signed-in caller cascade-drop the whole default root.
 """
 
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, cast
 
+import lance
+import pyarrow as pa
 import pytest
-from lance_namespace import InvalidInputError
+from fastapi.testclient import TestClient
+from lance_namespace import InvalidInputError, PermissionDeniedError
 
 from catalog.api import fga_deps
 
@@ -102,3 +106,51 @@ def test_an_empty_id_on_a_table_is_a_typed_refusal(monkeypatch: pytest.MonkeyPat
     than an empty object or a silent open."""
     with pytest.raises(InvalidInputError):
         _drive(monkeypatch, "/v1/table/$/describe", "$")
+
+
+@pytest.mark.parametrize("suffix", ["list", "table/list", "describe", "exists"])
+def test_the_root_reads_that_filter_every_item_stay_open(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
+    assert _drive(monkeypatch, f"/v1/namespace/$/{suffix}", "$") == []
+
+
+@pytest.mark.parametrize("suffix", ["drop", "policy/set", "policy/delete", "protection", "access/grant", "access/revoke", "access/list", "undrop"])
+def test_every_other_action_on_the_root_is_refused(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
+    """No tuple can name the root, so an action that is not a per-item-filtered read cannot be authorized on it."""
+    with pytest.raises(PermissionDeniedError):
+        _drive(monkeypatch, f"/v1/namespace/$/{suffix}", "$")
+
+
+@pytest.mark.parametrize("purge", [False, True])
+def test_a_cascade_drop_of_the_root_is_refused_before_any_table_is_touched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, purge: bool) -> None:
+    """The door refuses it too, so the root survives a deployment that runs with FGA off."""
+    from catalog.core.config import get_settings
+
+    root = tmp_path / "lance-catalog"
+    root.mkdir()
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": f"file://{root}",
+        "LANCE_CONTROL_ROOT": f"file://{tmp_path / 'control'}",
+        "LANCE_TRASH_GRACE_DAYS": "1",
+        "LANCE_CONTROL_EMIT_ENABLED": "false",
+        "LANCE_S3_ACCESS_KEY_ID": "x",
+        "LANCE_S3_SECRET_ACCESS_KEY": "x",
+        "LANCE_S3_ENDPOINT_URL": "http://127.0.0.1:9",
+    }.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(root / "t"), data_storage_version="2.2", enable_stable_row_ids=True)
+    try:
+        with TestClient(app) as client:
+            assert client.post("/v1/namespace/db/create", json={}).status_code == 200
+            assert client.post("/v1/table/db$t/register", json={"location": "t"}).status_code == 200
+
+            resp = client.post(f"/v1/namespace/$/drop{'?purge=true' if purge else ''}", json={"behavior": "Cascade"})
+
+            assert resp.status_code == 400, resp.text
+            assert client.post("/v1/table/db$t/exists").status_code == 200, "a refused root drop must leave every table registered"
+            assert lance.dataset(str(root / "t")).count_rows() == 2
+    finally:
+        get_settings.cache_clear()

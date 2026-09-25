@@ -564,6 +564,9 @@ async def drop_namespace(
     explicit opt-out the table door has. A plain RESTRICT drop stays destructive-but-cheap: the
     namespace it removes is empty by definition, and re-creating an empty namespace needs no trash."""
     segments = parse_identifier(id, settings.delimiter)
+    if not segments:
+        # Refused before anything is enumerated: a cascade of the root is every default-root table.
+        raise InvalidInputError("the root namespace cannot be dropped")
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = await run_in_threadpool(protection.get_protection, settings.registry_root, settings.storage_options(), "namespace", canonical)
     fga_deps.require_not_protected(guard or {}, kind="namespace", obj_id=canonical, force=force)

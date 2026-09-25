@@ -329,6 +329,11 @@ def _resource_for(path: str) -> str | None:
     return None
 
 
+#: The only actions allowed on the root namespace, which names no FGA object: reads that filter every
+#: item they return (`list`, `table/list`) or reveal nothing a tuple guards (`describe`, `exists`).
+_ROOT_READ_SUFFIXES: Final = frozenset({"list", "table/list", "describe", "exists"})
+
+
 def _suffix(path: str, resource: str, object_id: str) -> str:
     """The route part after ``<mount>/<resource>/{id}/`` (e.g. ``version/create``).
 
@@ -775,10 +780,11 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     # STOCK `lance_namespace` client at a governed catalog: `ServiceUnavailableError: Internal Server
     # Error`.
     #
-    # RETURNING OPENS NOTHING. `list_namespaces` filters every NAME it returns through
-    # `fga.list_objects` on `can_get_metadata` — the route's documented design is that the ROUTE opens
-    # and the ITEMS are checked, because narrowing it to 403 breaks the breadcrumb a grantee needs to
-    # reach their own table. Authentication was enforced above.
+    # ONLY THE PER-ITEM READS RETURN. `list` and `table/list` filter every NAME they return through
+    # `fga.list_objects` on `can_get_metadata` — the route opens and the ITEMS are checked, because a
+    # 403 there breaks the breadcrumb a grantee needs to reach their own table. Every other action on the
+    # root is refused: exempting a cascade drop of the root lets any signed-in caller remove every
+    # default-root table. Authentication was enforced above.
     #
     # ANY OTHER RESOURCE WITH NO SEGMENTS IS MALFORMED, not a root: a table or transaction id has to
     # name something. That earns the spec's own typed 400 rather than an empty object or a silent
@@ -787,7 +793,9 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     if not segments:
         if resource != "namespace":
             raise InvalidInputError(f"{resource} id is empty: {object_id!r} names no {resource}")
-        return
+        if suffix in _ROOT_READ_SUFFIXES:
+            return
+        raise PermissionDeniedError(f"the root namespace names no object, so {suffix!r} cannot be authorized on it")
 
     fga_type = _FGA_TYPE[resource]
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
