@@ -29,8 +29,10 @@ Security posture (see CHANGELOG in the task notes):
   tokens are still validated against it. A ``jwks_uri`` under the issuer is rebased
   onto the override so the key fetch stays in-cluster; HTTPS enforcement applies to
   the override URL under the same ``allow_insecure`` knob.
-* **Opaque failures.** Every PyJWT / JWKS / crypto error is mapped to a generic
-  ``UnauthenticatedError`` — we never leak library names or crypto detail.
+* **Opaque failures, charged to their author.** A failure the presented token causes is a
+  generic ``UnauthenticatedError``; one the provider's own documents cause (discovery, the key
+  set) is a ``ServiceUnavailableError`` naming the URL that failed. Neither leaks library names
+  or crypto detail.
 """
 
 from __future__ import annotations
@@ -221,7 +223,10 @@ class OIDCVerifier:
             with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
                 response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
                 response.raise_for_status()
-                spec = _Discovery.model_validate(response.json())
+                # Parsed by the model rather than by `response.json()`: a body that is not JSON at all (a
+                # proxy's sign-in page) then lands in the same `ValidationError` as one of the wrong shape,
+                # instead of a `json.JSONDecodeError` that no branch below classifies.
+                spec = _Discovery.model_validate_json(response.content)
         except httpx.HTTPError as exc:
             # The message names the LOCATION rather than the exception: an operator reading a 503
             # needs to know which URL this deployment could not use, and a split-horizon override is
@@ -307,13 +312,66 @@ class OIDCVerifier:
                 return self._resolve(configured)
         raise UnauthenticatedError("Unrecognized token issuer")
 
-    def verify(self, token: str) -> IDToken:
-        """Verify a bearer token and return its parsed claims, or raise ``UnauthenticatedError``."""
-        provider = self._provider_for(token)
+    @staticmethod
+    def _key_set(provider: _Provider, *, refresh: bool) -> list[jwt.PyJWK]:
+        """The provider's signing keys; every failure to produce them is the PROVIDER's, never the token's.
+
+        `PyJWKClient` raises four kinds here, and none reads the presented token: a transport failure
+        (`PyJWKClientConnectionError`), a set with no usable signing key (`PyJWKClientError` /
+        `PyJWKSetError`), a body that is not JSON (`json.JSONDecodeError` — `fetch_data` catches only
+        transport errors), and key material `cryptography` refuses (a bare `ValueError` — `PyJWKSet` skips
+        only keys failing with `PyJWTError`). Hence `ValueError` beside `PyJWTError`: the library leaves
+        those two unclassified.
+        """
+        uri = provider.jwk_client.uri
         try:
-            signing_key = provider.jwk_client.get_signing_key_from_jwt(token).key
+            return provider.jwk_client.get_signing_keys(refresh=refresh)
+        except jwt.PyJWKClientConnectionError as exc:
+            log.warning("oidc_jwks_unreachable", extra={"jwks_uri": uri, "error": str(exc)})
+            raise ServiceUnavailableError(f"The OIDC key set could not be reached at {uri}") from exc
+        except (jwt.PyJWTError, ValueError) as exc:
+            log.warning("oidc_jwks_malformed", extra={"jwks_uri": uri, "error": str(exc)})
+            raise ServiceUnavailableError(f"The OIDC key set at {uri} holds no usable signing key") from exc
+
+    def _signing_key_for(self, provider: _Provider, token: str) -> jwt.PyJWK:
+        """The key the token's ``kid`` selects, with each failure charged to its one possible author.
+
+        `PyJWKClient.get_signing_key_from_jwt` does the same lookup but raises one `PyJWKClientError` for
+        "the set could not be fetched" and "the set holds no such kid" alike. Composed from its public parts
+        instead, so the header (the caller's) and the key set (the provider's) are read in separate steps.
+        """
+        try:
+            kid = jwt.get_unverified_header(token).get("kid")
+        except jwt.PyJWTError as exc:
+            raise UnauthenticatedError("Invalid or expired token") from exc
+        # A token naming no key selects none: `get_signing_keys` keeps only keys that carry a `kid`, so no
+        # fetch could answer it. (A non-string `kid` never gets here — the header read above refuses it.)
+        if not isinstance(kid, str):
+            raise UnauthenticatedError("Invalid or expired token")
+        # An unknown kid may be a key the provider rotated in after the cached set: refetch once, as
+        # `PyJWKClient.get_signing_key` does, before refusing the token.
+        for refresh in (False, True):
+            key = provider.jwk_client.match_kid(self._key_set(provider, refresh=refresh), kid)
+            if key is not None:
+                return key
+        raise UnauthenticatedError("Invalid or expired token")
+
+    def verify(self, token: str) -> IDToken:
+        """Verify a bearer token and return its parsed claims.
+
+        Raises ``UnauthenticatedError`` when the token is at fault and ``ServiceUnavailableError`` when the
+        provider's documents are — the two refusals the governed doors map. Pinned by
+        `packages/service-kit/tests/test_every_verifier_failure_is_a_401_or_a_503.py`.
+        """
+        provider = self._provider_for(token)
+        signing_key = self._signing_key_for(provider, token)
+        try:
             payload = jwt.decode(
                 token,
+                # The `PyJWK`, not its `.key`. PyJWT then verifies with the algorithm the key is bound to and
+                # refuses a header naming any other (RFC 8725 §3.1: one key, one algorithm). Given the raw key
+                # it prepares whatever family the header names, and a caller naming ES256 beside an RSA `kid`
+                # gets a `TypeError` out of `prepare_key` rather than a `PyJWTError`.
                 signing_key,
                 algorithms=provider.algorithms,
                 audience=self._audience,
@@ -336,7 +394,7 @@ class OIDCVerifier:
             # Inside the 401 mapping on purpose: a signed token whose claim SHAPES pydantic rejects
             # (e.g. a non-numeric exp) is a bad token — a 401, never an unhandled 500.
             return IDToken.model_validate(payload)
-        except (jwt.PyJWTError, jwt.PyJWKClientError, ValidationError) as exc:
+        except (jwt.PyJWTError, ValidationError) as exc:
             # Never leak the underlying JWT/crypto/validation error to the client.
             raise UnauthenticatedError("Invalid or expired token") from exc
 

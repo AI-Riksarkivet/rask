@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lance_namespace import UnauthenticatedError
 
 from annotator.api.security import (
     ANONYMOUS_SUBJECT,
@@ -29,6 +30,7 @@ from annotator.api.security import (
 )
 from annotator.core.config import AnnotatorSettings
 from service_kit.exceptions import register_handlers
+from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -111,14 +113,26 @@ def test_with_oidc_on_the_subject_is_the_verified_token_sub() -> None:
     assert r.json() == {"subject": "gina"}
 
 
-def test_a_token_the_verifier_rejects_does_not_authenticate() -> None:
-    class _Verifier:
-        def verify(self, token: str) -> Any:
-            raise ValueError("bad signature")
+def test_a_token_the_verifier_rejects_is_a_401_problem() -> None:
+    """The double carries `OIDCVerifier.verify`'s real contract: `verify(token) -> IDToken`, refusing a bad bearer
+    with `lance_namespace.UnauthenticatedError` — the type `service_kit.governed.oidc` raises for every failure the
+    presented token causes. A double raising anything else would test a verifier the estate does not run.
 
-    client = TestClient(_app(_settings(oidc_enabled=True, fga_enabled=False), oidc=_Verifier()))
-    with pytest.raises(ValueError, match="bad signature"):
-        client.get("/whoami", headers={"Authorization": "Bearer forged"})
+    `raise_server_exceptions=False` so an unmapped refusal reads as the 500 a caller would get, not as an exception
+    in the test process.
+    """
+
+    class _Verifier:
+        def verify(self, token: str) -> IDToken:
+            assert token == "forged"
+            raise UnauthenticatedError("Invalid or expired token")
+
+    app = _app(_settings(oidc_enabled=True, fga_enabled=False), oidc=_Verifier())
+    r = TestClient(app, raise_server_exceptions=False).get("/whoami", headers={"Authorization": "Bearer forged"})
+
+    assert r.status_code == 401, r.text
+    assert r.headers["content-type"].startswith("application/problem+json")
+    assert r.json()["code"] == int(UnauthenticatedError.code)
 
 
 # --------------------------------------------------------------------------------------------------

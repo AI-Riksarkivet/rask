@@ -41,6 +41,7 @@ import json
 import time
 from typing import Any
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -58,7 +59,7 @@ KID = "test-key-1"
 
 
 # --------------------------------------------------------------------------- #
-# Local RSA keypair + a fake JWKS client returning its public key.
+# Local RSA keypair + a real JWKS client whose one fetch answers its public key.
 # --------------------------------------------------------------------------- #
 
 
@@ -80,26 +81,33 @@ def private_pem(rsa_keypair: tuple[Any, Any]) -> bytes:
     )
 
 
-class _FakeSigningKey:
-    """Stand-in for ``jwt.PyJWK`` — only the ``.key`` attribute is read by verify()."""
+class _LocalJWKClient(jwt.PyJWKClient):
+    """A REAL ``PyJWKClient`` whose one network hop, ``fetch_data``, answers a local key set.
 
-    def __init__(self, key: object) -> None:
-        self.key = key
-
-
-class _FakeJWKClient:
-    """Returns our local public key regardless of the token's ``kid``.
-
-    Real ``PyJWKClient`` selects a key by ``kid`` from a fetched JWKS; here there is a
-    single key, so we hand it back unconditionally — the signature check itself proves
-    whether the token was signed by the matching private key.
+    Everything ``verify`` asks of the client runs as shipped: the key set is parsed into
+    ``PyJWK`` objects, the token's ``kid`` selects one, and that key's bound algorithm is
+    what ``jwt.decode`` verifies with. A stand-in carrying one method would tie these tests
+    to WHICH client methods ``verify`` calls, rather than to what it does with the answers.
     """
 
-    def __init__(self, public_key: object) -> None:
-        self._public_key = public_key
+    def __init__(self, uri: str, public_key: rsa.RSAPublicKey, **kwargs: Any) -> None:
+        super().__init__(uri, **kwargs)
+        numbers = public_key.public_numbers()
+        self._key_set = {
+            "keys": [
+                {
+                    "kty": "RSA",
+                    "kid": KID,
+                    "use": "sig",
+                    "alg": "RS256",
+                    "n": _b64url(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")),
+                    "e": _b64url(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")),
+                }
+            ]
+        }
 
-    def get_signing_key_from_jwt(self, _token: str) -> _FakeSigningKey:
-        return _FakeSigningKey(self._public_key)
+    def fetch_data(self) -> dict[str, Any]:
+        return self._key_set
 
 
 def _make_verifier(
@@ -113,8 +121,8 @@ def _make_verifier(
 
     ``_resolve`` is the single method that touches the network (discovery + JWKS). We
     replace it with one that returns a :class:`_Provider` built from a controlled
-    discovery doc and our fake JWKS client, while still running the verifier's *real*
-    ``_safe_algorithms`` intersection so the allowlist is genuinely exercised.
+    discovery doc and a local-key-set ``PyJWKClient``, while still running the verifier's
+    *real* ``_safe_algorithms`` intersection so the allowlist is genuinely exercised.
     """
     _, public_key = rsa_keypair
     advertised = ["RS256"] if advertised_algorithms is None else advertised_algorithms
@@ -129,13 +137,7 @@ def _make_verifier(
         )
         # Run the verifier's real allowlist intersection so HS256/none can never slip in.
         algorithms = self._safe_algorithms(spec.id_token_signing_alg_values_supported)
-        # _FakeJWKClient duck-types PyJWKClient's single used method; the model field is
-        # typed concretely, so silence the static type only for this deliberate double.
-        return _Provider(
-            spec=spec,
-            jwk_client=_FakeJWKClient(public_key),  # ty: ignore[invalid-argument-type]
-            algorithms=algorithms,
-        )
+        return _Provider(spec=spec, jwk_client=_LocalJWKClient(spec.jwks_uri, public_key), algorithms=algorithms)
 
     monkeypatch.setattr(OIDCVerifier, "_resolve", fake_resolve)
     return verifier
@@ -349,43 +351,34 @@ def _stub_network(
     monkeypatch: pytest.MonkeyPatch,
     *,
     document: dict[str, Any],
-    public_key: object,
+    public_key: rsa.RSAPublicKey,
 ) -> tuple[list[str], list[str]]:
     """Serve ``document`` from any discovery URL and the local key from any JWKS URI.
 
     Returns two recorders — the discovery URLs fetched and the JWKS URIs the
     ``PyJWKClient`` was constructed with — so tests assert the *fetch locations*
     while ``_resolve``'s own logic (issuer match, https guard, allowlist) runs real.
+
+    Both clients are the real classes, cut at the wire: a real ``httpx.Client`` on a
+    ``MockTransport`` (so ``_resolve`` parses a real ``httpx.Response``), and a
+    :class:`_LocalJWKClient` built with the keyword arguments ``_resolve`` passes.
     """
     discovery_urls: list[str] = []
     jwks_urls: list[str] = []
+    real_client = httpx.Client
 
-    class _Response:
-        def raise_for_status(self) -> None:
-            pass
+    def _serve(request: httpx.Request) -> httpx.Response:
+        discovery_urls.append(str(request.url))
+        return httpx.Response(200, json=document)
 
-        def json(self) -> dict[str, Any]:
-            return document
+    def _client(**kwargs: Any) -> httpx.Client:
+        return real_client(transport=httpx.MockTransport(_serve), **kwargs)
 
-    class _Client:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def __enter__(self) -> _Client:
-            return self
-
-        def __exit__(self, *exc: object) -> None:
-            pass
-
-        def get(self, url: str) -> _Response:
-            discovery_urls.append(url)
-            return _Response()
-
-    def _jwk_client(uri: str, **_kwargs: Any) -> _FakeJWKClient:
+    def _jwk_client(uri: str, **kwargs: Any) -> _LocalJWKClient:
         jwks_urls.append(uri)
-        return _FakeJWKClient(public_key)
+        return _LocalJWKClient(uri, public_key, **kwargs)
 
-    monkeypatch.setattr(oidc_module.httpx, "Client", _Client)
+    monkeypatch.setattr(oidc_module.httpx, "Client", _client)
     monkeypatch.setattr(oidc_module.jwt, "PyJWKClient", _jwk_client)
     return discovery_urls, jwks_urls
 
