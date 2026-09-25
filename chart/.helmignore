@@ -32,3 +32,16 @@ ci/
 # as TEMPLATES, so on a cold install Helm cannot map our `Cluster` CR in the same release. That is why
 # `cloudnative-pg.crds.create` is false, and it still is.
 crds-bootstrap/
+
+# PROMTOOL'S TEST FIXTURE, NOT A CHART FILE. `alerting/rules.yml` is mounted by vmalert and must
+# ship; `alerting/rules_test.yml` is its unit-test input and is read from the WORKING TREE by
+# `make alert-rules-drill` (`promtool test rules chart/alerting/rules_test.yml`) and by
+# `.dagger/charts.go`, never from the packaged chart — no template references it.
+#
+# IT IS NOT FREE TO SHIP. Helm stores the whole chart source in the release object on every
+# revision, and that object is a Kubernetes Secret with a hard 1 MiB ceiling. Measured 2026-09-25
+# by decoding `sh.helm.release.v1.rask.v238` and re-packing it: this one file is 40,912 packed
+# bytes, and dropping it takes the release from 98.3% to 94.4% of the limit — the difference
+# between `helm upgrade` working and failing with
+# `Secret "sh.helm.release.v1.rask.v239" is invalid: data: Too long`.
+alerting/rules_test.yml
