@@ -239,9 +239,8 @@ async def _authorized_watch(
 
 @router.get("/trains/{instance_id}")
 async def show_train(instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> TrainRunState:
-    """DWF-MGT-002. `train_run` was startable and unobservable: a caller got a 202 and then had no
-    HTTP means to learn whether the watcher was alive, had abandoned the run, or was never scheduled
-    at all.
+    """DWF-MGT-002: the HTTP view of a training watch. `POST /train` answers 202, and this is how a
+    caller learns whether the watcher is alive or has abandoned the run; an id no watch has is 404.
 
     Gated on `can_administer` over the project the watch records: reading the status of compute you
     may not spend is not public, and the estate argues this exact point on `flows.get_run` and

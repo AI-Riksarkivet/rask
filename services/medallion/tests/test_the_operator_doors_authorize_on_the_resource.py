@@ -682,7 +682,8 @@ def test_only_WRITE_TARGET_doors_take_a_caller_chosen_project() -> None:
 
 
 def test_the_producer_serves_no_admin_PROBE() -> None:
-    """`GET /authorize` had no caller anywhere; owner ruling 2026-09-25 deletes it."""
+    """Owner ruling 2026-09-25: the producer serves no admin probe; the BFFs gate on the catalog's
+    `GET /v1/events`."""
     from medallion.producer import app
 
     assert "/authorize" not in app.openapi()["paths"]

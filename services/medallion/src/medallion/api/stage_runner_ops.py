@@ -132,8 +132,8 @@ async def _authorized_run(
 
 @router.get("/{stage_runner}/stages/{instance_id}")
 async def show_stage(stage_runner: str, instance_id: str, request: Request, settings: SettingsDep, fga_client: FgaClientDep, caller: AdmittedCaller) -> Any:
-    """DWF-MGT-002 for the cascade: an in-flight stage was unobservable over HTTP entirely. 403 unless the
-    caller administers the project the run records."""
+    """DWF-MGT-002 for the cascade: the HTTP view of an in-flight stage. 403 unless the caller administers
+    the project the run records."""
     return await _authorized_run(request, settings=settings, fga_client=fga_client, caller=caller, stage_runner=stage_runner, instance_id=instance_id)
 
 

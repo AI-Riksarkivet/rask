@@ -130,12 +130,15 @@ dataset exists without a tuple for the medallion identity, which is a governance
 **Diagnose.** Stage runner logs (`kubectl logs -l app.kubernetes.io/component=bronze-to-silver`); grep
 `medallion_stage_denied` / `medallion_quality_blocked` / `ray_stage_job`.
 
-*Ask what stopped:* `GET /api/cascade/stalled` lists every tier that was written and never published, with
+*Ask what stopped:* `GET /api/cascade/stalled` lists the tiers that were written and never published, with
 no instance id needed: `{"unpublished_source": [{"edge": "silver->gold", "project": "acme"}]}`. It measures
 on each request and moves no lag series. A listed source never published, so no hop was ever triggered
-from it: the fault is in whatever writes that tier, not in the next hop. Auth is the `/produce` door: a
-signed-in bearer whose subject holds `can_administer` on `project:<medallion.produceAdminProject>`, or on
-`project:<id>` when you add `?project=<id>`. A service token that reaches it through the gateway is refused.
+from it: the fault is in whatever writes that tier, not in the next hop. Auth: a signed-in bearer sees
+only the cells of the projects where its subject holds `can_administer` (the single-tenant row, project
+`""`, counts as `project:<medallion.produceAdminProject>`), and `?project=` has no effect. **An empty list
+means none of YOUR projects has a stalled tier, not that nothing is stalled** — ask as an admin of the
+tenant in question, or in-cluster with the app token, which sees every tenant's cells. A service token
+that reaches it through the gateway is refused.
 
 **Act.** Re-seed FGA for a denial; a quality block is expected (fix the source data); resubmit/replay after
 fixing a Ray-job cause.
@@ -148,9 +151,10 @@ fixing a Ray-job cause.
 ```
 
 - `object_id` is the PUBLISHED source table, `table:<project>-<tier>$<table>`. Its tier picks the edge, so
-  `acme-silver$features` re-drives silver→gold. A bare identifier without `table:` is refused.
+  `acme-silver$features` re-drives silver→gold. An id that is not one of `project`'s tables (no
+  `table:`, unqualified `table:silver$features`, another project's table) is a 400.
 - `to_version` is the source's `published` tag version
-  (`GET /api/catalog/v1/table/acme-silver$features/tags/list`). Omit `from_version` to consume everything up
+  (`POST /api/catalog/v1/table/acme-silver$features/tags/list`, no body). Omit `from_version` to consume everything up
   to it.
 - `token` is optional. With it the stage runner reattaches to a live or finished job (`mode:
   reattach-if-live`); without it the hop recomputes and may duplicate a live job's compute
@@ -159,7 +163,8 @@ fixing a Ray-job cause.
   `namespace:<project>-<destination tier>`: `can_promote` into gold, `can_create_table` for the other
   edges (`medallion.stageRunners[].requiredAction`). 202 when the trigger is published. 503 means the
   trigger could not be published or authorization was unavailable, so retry. 403 means the caller lacks
-  the rung or the table names no cascade edge.
+  the rung or the table's tier drives no cascade edge. 400 means `object_id` is not one of `project`'s
+  tables.
 
 ## DLQ parking → a delivery gave up
 

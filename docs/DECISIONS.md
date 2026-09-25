@@ -340,7 +340,10 @@ two lists. The following are **WONTFIX — no UI surface, by design**, each for 
 - **Materialized-view create/refresh** — the backend is dormant (406); prior decision
   (feedback-no-speculative-features) forbids UI on unproven capability.
 - **Lineage ingest / media ingest** (`POST /lineage`, `/ingest-media`) — service-identity seams
-  (OpenLineage fidelity: humans never author lineage; media ingest has no user-bearer path by design).
+  (OpenLineage fidelity: humans never author lineage). `/ingest-media` does verify a bearer, but only
+  to name the run's originator (`authorize_ingest_media` returns its subject, pinned to the configured
+  project); it is synchronous and capped, and the edge's ingest door is `/api/ingest`, so it gets no
+  gateway row and no browser surface.
 
 The 10 buildable gaps the sweep found (table drop/deregister/rename + declare-empty, row update/delete +
 backfill_column, a namespace-detail page reusing GrantsPanel/policy) are **tracked in task #85** — neither
@@ -2498,7 +2501,11 @@ in `repair_drift`, all 414 maintenance tests passed; with the bound-seed merge r
 something that already exists authenticates only (`produce_auth.admit_caller`) and checks
 `can_administer` on the project the resource records: a stage run's, as its hosting stage runner reads it
 off the instance's trigger; a training watch's, from `TrainJobSpec.project`; a stalled cell's, one
-`batch_check` over the projects in the answer. Measured on e4e60b60: alice, admin of `project:mine` only,
+`batch_check` over the DECLARED projects before anything is measured, so only the caller's own edges
+are read (the single-tenant row, project `""`, is checked as the configured project). A training
+door acts on `train_run` instances only: the producer also hosts `promotion_review`, whose door is
+`/promotions/{id}` on `can_promote`. The service token's acceptance is audited on the project the
+call acts on, not the configured one. Measured on e4e60b60: alice, admin of `project:mine` only,
 got 200 on `GET /cascade/stalled?project=mine` listing acme's and other's cells, and `?project=mine` moved
 the stage show/terminate gate the same way. This supersedes "Cascade repair" (2026-09-04) where it says "`terminate` stays
 on `authorize_produce`": the rung is still `can_administer`, now on the run's own project. The service
