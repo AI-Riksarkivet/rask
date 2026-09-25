@@ -125,9 +125,10 @@ ray:
   dashboardUrl: http://rask-ray-head-svc:8265
   cluster:
     enabled: true
+  # The registry only. The TAG comes from the live release or chart/values-live-pins.yaml: this file is
+  # applied after both by `make k3s-up`, so a tag here reverts the running head on every converge.
   image:
     repository: localhost:5000/ray-cluster
-    tag: main-2cfe68f4
 
 # Interactive API docs (/docs, /redoc, /openapi.json) across the release.
 #

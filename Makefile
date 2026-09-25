@@ -838,7 +838,7 @@ k3s-pins: ## Capture what the cluster is RUNNING into chart/values-live-pins.yam
 	@# default is the right one.
 	@KUBECONFIG=$(KUBECONFIG) ./scripts/k3s-pins.sh chart/values-live-pins.yaml
 	@echo ">> now: make k3s-up   (or ./scripts/helm.sh upgrade rask ./chart -f chart/values-live-pins.yaml)"
-	@echo ">> NOT bare 'helm upgrade' — the release lives in Postgres; see scripts/helm.sh"
+	@echo ">> NOT bare 'helm upgrade' — every helm call goes through scripts/helm.sh"
 
 k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution k3s-stem-check names). STEM=lance-rest-catalog TAG=main-<sha>
 	@# THE DOCUMENTED FIX FOR A SPLIT STEM, made runnable. `k3s-stem-check` refuses `k3s-up` while one

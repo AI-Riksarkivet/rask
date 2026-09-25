@@ -37,7 +37,7 @@ spec:
           # that was never imported — re-breaking the cascade with nothing naming this file as the
           # cause (recorded 2026-08; the S3 endpoint line below carries the same scar). Advance the
           # tag HERE when the image advances, never by patching the live object alone.
-          image: localhost:5000/ray-lance:main-88ccfa2c
+          image: localhost:5000/ray-lance:main-0fec5f11
           imagePullPolicy: IfNotPresent
           # A real Ray head: GCS on 6379, dashboard + job-submission API on 8265, client on 10001.
           command: ["ray"]
