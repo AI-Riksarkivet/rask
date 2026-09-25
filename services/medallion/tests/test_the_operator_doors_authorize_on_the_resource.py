@@ -315,6 +315,23 @@ def test_an_UNKNOWN_stage_is_still_404(producer: TestClient) -> None:
     assert producer.get(_show("stage-nope"), headers=_bearer("alice")).status_code == 404
 
 
+def test_an_UNKNOWN_stage_runner_is_not_NAMED_to_a_person(producer: TestClient) -> None:
+    """carol holds no grant. The configured runners are `GET /stage-runners`' to disclose, and it asks
+    for `can_administer`; the 404 before any run is read must not hand them to anyone signed in."""
+    response = producer.get("/stage-runners/typo/stages/stage-mine", headers=_bearer("carol"))
+
+    assert response.status_code == 404, response.text
+    assert RUNNER not in response.text, response.text
+
+
+def test_an_UNKNOWN_stage_runner_is_still_NAMED_on_the_service_path(producer: TestClient) -> None:
+    """The typo against a values-driven list is the common cause, and the service path may list them."""
+    response = producer.get("/stage-runners/typo/stages/stage-mine", headers=SERVICE)
+
+    assert response.status_code == 404, response.text
+    assert RUNNER in response.text, response.text
+
+
 def _runner_without_the_field() -> FastAPI:
     """A stage runner build whose status body carries no `project` key at all — a mixed rollout."""
     app = FastAPI()
