@@ -269,8 +269,14 @@ def _as_access_tuple(t: fga.ClientTuple) -> AccessTuple:
     return AccessTuple(user=t.user, relation=t.relation, object=t.object, condition=condition)
 
 
-def _validated_write_tuple(body: AccessTuple) -> fga.ClientTuple:
-    """Validate a caller-named tuple against the compiled model before it can reach OpenFGA."""
+def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga.ClientTuple:
+    """Validate a caller-named tuple against the compiled model before it can reach OpenFGA.
+
+    ``evaluated`` is True when OpenFGA will evaluate the tuple (a write, a simulated hypothesis) and False
+    for a delete, which OpenFGA resolves by key alone. Only an evaluated tuple is refused the check's
+    clock: the read door echoes a stored condition verbatim, so a delete refusing it would leave a
+    clock-pinned grant irrevocable through the body the Inspector sends back.
+    """
     obj = _validated_object(body.object)
     fga_type = obj.partition(":")[0]
     assignable = _assignable_relations(fga_type)
@@ -289,8 +295,15 @@ def _validated_write_tuple(body: AccessTuple) -> fga.ClientTuple:
         # rather than an outage the first time anyone checks the object.
         declared = _model_conditions().get(body.condition.name, {})
         supplied = set(body.condition.context or {})
-        # `current_time` is the CALLER's clock, supplied per check — it must NOT ride the tuple.
-        required = {p for p in declared if p != "current_time"}
+        # The clock belongs to the CHECK. OpenFGA evaluates a parameter stored on the tuple over the one
+        # the check sends (pinned in model.fga.yaml), so a clock written here freezes "now" inside the
+        # window and the grant never lapses — the caller, not the window, would decide its expiry.
+        if evaluated and fga.CLOCK_PARAMETER in supplied:
+            raise InvalidInputError(
+                f"condition {body.condition.name!r} cannot carry {fga.CLOCK_PARAMETER} on the tuple: it is the check's clock, supplied per "
+                "request, and a stored value would override every check's and keep the grant from ever expiring"
+            )
+        required = set(declared) - {fga.CLOCK_PARAMETER}
         if missing := required - supplied:
             raise InvalidInputError(f"condition {body.condition.name!r} needs {', '.join(sorted(missing))}")
         if unknown := supplied - set(declared):
@@ -301,7 +314,7 @@ def _validated_write_tuple(body: AccessTuple) -> fga.ClientTuple:
 
 
 async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: IDToken | None, body: AccessTuple, *, write: bool) -> AccessTuple:
-    tup = _validated_write_tuple(body)
+    tup = _validated_write_tuple(body, evaluated=write)
     actor = token.sub if token else "anonymous"
     event = "access_tuple_write" if write else "access_tuple_delete"
     try:
@@ -529,7 +542,7 @@ async def simulate_access(client: EstateFgaClient, token: CurrentToken, body: Ac
     relation = _validated_relation(obj, body.relation)
     user = _qualified_subject(body.user)
     # Validated, not merely parsed — same gate a real write clears.
-    hypothetical = [_validated_write_tuple(t) for t in body.hypothetical]
+    hypothetical = [_validated_write_tuple(t, evaluated=True) for t in body.hypothetical]
     subject = token.sub if token else "anonymous"
     try:
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty

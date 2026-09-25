@@ -905,6 +905,27 @@ tests:
         context: { current_time: "2026-07-29T14:00:00Z" }
         assertions: { writer: false, can_write_data: false }
 
+  - name: a clock stored ON the tuple outranks the check's — so no tuple may be written with one
+    # OpenFGA evaluates a parameter the tuple carries over the same parameter in the request context.
+    # A `current_time` written onto a grant therefore freezes "now" inside the window, and the grant
+    # answers true a year after it closed. This is the premise of the estate-admin door's refusal
+    # (`access_admin._validated_write_tuple`); if a release ever reverses the precedence, this fails.
+    tuples:
+      - user: user:pinned
+        relation: writer
+        object: namespace:bronze
+        condition:
+          name: non_expired_grant
+          context:
+            grant_time: "2026-07-29T09:00:00Z"
+            grant_duration: 4h
+            current_time: "2026-07-29T10:00:00Z"
+    check:
+      - user: user:pinned
+        object: namespace:bronze
+        context: { current_time: "2027-07-29T14:00:00Z" }
+        assertions: { writer: true }
+
   - name: a permanent grant is unaffected by the condition being available
     # The rungs accept BOTH forms, so every pre-existing unconditional grant must keep working with no
     # context supplied at all. This is the migration-safety assertion.

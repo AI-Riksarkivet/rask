@@ -768,6 +768,12 @@ def make_client(
 # --------------------------------------------------------------------------- #
 
 
+#: The condition parameter that is the CHECK's clock: `condition_context` supplies it on every read, and
+#: no tuple may carry it. OpenFGA evaluates a parameter stored on the tuple over the one a check sends
+#: (pinned in `auth/model.fga.yaml`), so a stored clock would freeze the moment every check evaluates.
+CLOCK_PARAMETER: Final = "current_time"
+
+
 def condition_context(context: dict[str, Any] | None = None) -> dict[str, Any]:
     """The context a CONDITION is evaluated against, with the clock supplied by default.
 
@@ -787,7 +793,7 @@ def condition_context(context: dict[str, Any] | None = None) -> dict[str, Any]:
     RFC 3339 with an explicit offset is what the CEL ``timestamp`` type parses; a naive
     ``datetime.now()`` would serialise without one and fail the parse at the server.
     """
-    return {"current_time": datetime.now(UTC).isoformat(), **(context or {})}
+    return {CLOCK_PARAMETER: datetime.now(UTC).isoformat(), **(context or {})}
 
 
 async def check(

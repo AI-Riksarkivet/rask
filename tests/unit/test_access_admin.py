@@ -883,19 +883,58 @@ def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any
         )
 
 
-def test_current_time_is_not_accepted_on_the_tuple(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`current_time` is the CALLER's clock, supplied per check. Letting it ride the tuple would pin the
-    present moment at grant time, so the window would be evaluated against a frozen 'now' forever."""
-    written = _write_conditional(
-        monkeypatch,
-        AccessTuple(
-            user="alice",
-            relation="writer",
-            object="namespace:bronze",
-            condition=TupleCondition(name="non_expired_grant", context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h"}),
+def _clock_pinned_grant() -> AccessTuple:
+    """A time-boxed grant whose caller also supplied the CHECK's clock, pinned inside the window."""
+    return AccessTuple(
+        user="alice",
+        relation="writer",
+        object="namespace:bronze",
+        condition=TupleCondition(
+            name="non_expired_grant",
+            context={"grant_time": "2026-07-29T09:00:00Z", "grant_duration": "4h", "current_time": "2026-07-29T10:00:00Z"},
         ),
     )
-    assert "current_time" not in written[0].condition.context
+
+
+def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`current_time` is the CHECK's clock. OpenFGA evaluates a parameter stored on the tuple over the one
+    the check sends (pinned in `model.fga.yaml`), so a clock written onto the grant freezes 'now' inside
+    the window and the grant never lapses: whoever writes the tuple, not the window, decides its expiry."""
+    written: list[Any] = []
+
+    async def _fake_write(_client: Any, tuples: list[Any], **_kw: Any) -> None:
+        written.extend(tuples)
+
+    monkeypatch.setattr(ep.fga, "write_tuples", _fake_write)
+    with pytest.raises(InvalidInputError, match="current_time"):
+        asyncio.run(ep.write_access_tuple(client=_fga_client(), control=NoopControlEmitter(), token=_token("root_admin"), body=_clock_pinned_grant()))
+    assert written == []
+
+
+def test_a_simulated_hypothesis_cannot_carry_a_clock_either(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A contextual tuple is evaluated exactly like a stored one, so a pinned clock would answer "yes" for
+    a grant this API refuses to write — the simulation would describe a world that cannot be reached."""
+    checks: list[dict[str, Any]] = []
+
+    async def _fake_check(_client: Any, **kwargs: Any) -> bool:
+        checks.append(kwargs)
+        return True
+
+    monkeypatch.setattr(ep.fga, "check", _fake_check)
+    body = AccessSimulateRequest(user="alice", relation="writer", object="namespace:bronze", hypothetical=[_clock_pinned_grant()])
+    with pytest.raises(InvalidInputError, match="current_time"):
+        asyncio.run(ep.simulate_access(client=_fga_client(), token=None, body=body))
+    assert checks == []
+
+
+def test_a_grant_carrying_a_clock_can_still_be_revoked(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal guards what OpenFGA will EVALUATE. A delete names the tuple by key, and the read door
+    echoes a stored condition verbatim — so a pinned grant that reached the store by any other path must
+    stay revocable with the very body the Inspector sends back, or the one grant that never expires is
+    also the one grant this door cannot remove."""
+    written, response = _mutate(monkeypatch, _clock_pinned_grant(), write=False)
+    assert [(t.user, t.relation, t.object) for t in written] == [("user:alice", "writer", "namespace:bronze")]
+    assert response.object == "namespace:bronze"
 
 
 def test_a_read_echoes_the_condition_rather_than_flattening_it(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
