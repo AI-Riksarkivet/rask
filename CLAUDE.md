@@ -35,6 +35,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Python follows the ra-skills `writing-python` and `fastapi` references, read before writing:**
   Pydantic-only structured models, typed `lance_namespace` errors from catalog code, `TypeError` for a
   wrong type, no `# type: ignore` / `# ty: ignore` (narrow or cast).
+- **Finish Phase 1 first; the backlog does not grow without the owner.** The work is
+  `open_backlog_left_new2.md`, in FOCUS order. Phase 1 (the lakehouse) is done when its five criteria hold
+  together on the estate: (1) provenance/lineage correct, (2) catalog correct for lance-ns and
+  authz/governance, (3) not coupled to a workflow engine or Ray, (4) events correct, (5) resilient
+  (XC-090 is the proof). Never add a row without asking the owner; a found problem goes to the register's
+  parking list. A row closes when its fix is deployed and read back live, not when it merges.
 - **Owner decisions go through the multi-question tool**, each option with a concrete what, how and
   why — never as a question trailing a report.
 

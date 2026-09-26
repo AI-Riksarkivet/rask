@@ -149,6 +149,8 @@ _RULING_IN_WHAT_IS_LEFT_BUT_STARTABLE: dict[str, str] = {
     # cannot read a negation, and rewording the row to dodge the gate would be worse than recording why
     # the gate does not apply.
     "LH-196": "says 'No ruling needed either way; this is test fidelity, not platform policy' — the e2e bypasses a seam production uses, and fixing the TEST needs nobody's permission",
+    "LH-220": "'Implement D1', which is ruled; the 2026-09-26 ruling it cites only keeps the shared token unscoped until D1 lands",
+    "LH-263": "cites the 2026-09-26 erasure ruling already made (a branch rewrite may copy what it inherits, 64 MiB cap); recording it in DECISIONS.md and every listed surface are startable",
 }
 
 
