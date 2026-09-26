@@ -27,6 +27,7 @@ from pathlib import Path
 import lance
 import pyarrow as pa
 import pytest
+from lance.dataset import Tags
 
 from catalog.services.erasure import ErasureReport, erase
 
@@ -151,3 +152,32 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
 
     assert report.residual_versions == ["main@2", "main@3"], "main v2 and v3 must survive holding the subject for this to be the right test"
     assert (report.pinned_by, report.held_by_retention) == ([], ["main@2", "main@3"])
+
+
+def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``kept`` names main v2, the one version holding the subject, and step 2 cannot delete it.
+
+    No branch stands on main v2, so the surviving tag alone keeps it from cleanup, and it is the whole
+    of what an operator must delete to finish. Only ``tags.delete("kept")`` fails; the rest is real Lance.
+    """
+    uri = str(tmp_path / "stuck")
+    lance.write_dataset(_rows("bob"), uri)
+    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
+    lance.write_dataset(_rows("carol"), uri, mode="append")
+    lance.dataset(uri).tags.create("kept", 2)
+    assert _holds_subject(uri, (None, 2)), "the tagged version must hold the subject for this to be the right test"
+    delete = Tags.delete
+
+    def _refuse_kept(self: Tags, tag: str) -> None:
+        if tag == "kept":
+            raise OSError(f"object store refused deleting tag {tag!r}")
+        delete(self, tag)
+
+    monkeypatch.setattr(Tags, "delete", _refuse_kept)
+
+    report = _erase(uri)
+
+    assert any(s.surface == "tag:kept" and s.outcome == "failed" for s in report.surfaces), report.surfaces
+    assert report.residual_versions == ["main@2"], "only the tagged version may survive for this to be the right test"
+    assert not report.complete
+    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", "main@2")], report.pinned_by
