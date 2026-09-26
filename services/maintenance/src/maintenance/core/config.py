@@ -114,7 +114,12 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # whose rows turn out larger than whoever set the row count assumed — the exact way incident #93
     # happened. `max_source_rows` and `max_source_fragments` are deliberately not mirrored: they are
     # more row-count proxies, and one honest bound beats three that need reconciling.
-    max_source_bytes: int = Field(default=DEFAULT_MAX_SOURCE_BYTES, ge=1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
+    #
+    # AT MOST 1 GiB, the largest power of two ONE rewrite can hold in the chart's 4Gi worker: a pass
+    # peaks at ~1.7x its byte bound resident (measured, `rewrite_slot.py`), and the worker gate grants
+    # 0.75 x 4096 - 320 MiB = 2752 MiB, so 1 GiB peaks ~1741 MiB and 2 GiB ~3482 MiB. The catalog's plan
+    # door, `PolicyRequest` and `DatasetPlan` carry the same range, so no hop accepts what another refuses.
+    max_source_bytes: int = Field(default=DEFAULT_MAX_SOURCE_BYTES, ge=1024 * 1024, le=1024 * 1024 * 1024, alias="MAINTENANCE_MAX_SOURCE_BYTES")
     # HOW a compaction moves the bytes, not how many. Read off pylance 11's own signature rather than a
     # summary: `Literal["reencode", "try_binary_copy", "force_binary_copy"]`, and its docstring —
     # reencode decodes and re-encodes (Lance's default), `try_binary_copy` copies the encoded pages

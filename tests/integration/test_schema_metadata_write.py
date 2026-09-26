@@ -19,7 +19,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 from fastapi.testclient import TestClient
 
-from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
+from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -36,13 +36,12 @@ def _create(client: TestClient, table: str, *, stamp_lineage: bool = False) -> N
     """Create ``m1$<table>`` through the catalog's own Arrow create path."""
     client.post("/v1/namespace/m1/create", json={})
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    data = _ipc(rows)
     if stamp_lineage:
         # The SAME helper the create endpoint calls when lineage emission is on (it is off by default in
         # this fixture, and turning it on would demand a live lineage service). Stamping it here keeps the
         # keys real rather than hand-written, so the assertion is about the delete, not about the stamp.
-        data = inject_into_arrow_stream(data, build_lineage_metadata(table_id=f"m1${table}", namespace="m1", run_id="run-1"))
-    created = client.post(f"/v1/table/m1${table}/create?mode=overwrite", content=data, headers=ARROW)
+        rows = stamp_lineage_metadata(rows, build_lineage_metadata(table_id=f"m1${table}", namespace="m1", run_id="run-1"))
+    created = client.post(f"/v1/table/m1${table}/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
     assert created.status_code == 200, created.text
 
 

@@ -32,7 +32,9 @@ def added(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, Any] | N
     return seen
 
 
-@pytest.mark.parametrize("gate", ["manifest_flags", "protected_base", "invalid_ref", "vend_denied"])
+@pytest.mark.parametrize(
+    "gate", ["manifest_flags", "protected_base", "invalid_ref", "governed_elsewhere", "unauthenticated", "vend_denied", "plan_denied", "table_not_governed"]
+)
 def test_a_refusal_carries_the_gate(gate: str, added: list[tuple[int, dict[str, Any] | None]]) -> None:
     metrics.record_refused(1, gate)
 
@@ -69,7 +71,7 @@ def test_the_sweep_passes_the_gate_through() -> None:
     assert "record_refused(1 if result.refused else 0, result.refused_by)" in source, (
         "the sweep calls record_refused without the gate, so every refusal lands unattributed"
     )
-    assert 'refused_by="vend_denied"' in source, "the credential-vend refusal names no gate, so a missing grant reads as an unsupported manifest"
+    assert 'gate="vend_denied"' in source, "the credential-vend refusal names no gate, so a missing grant reads as an unsupported manifest"
 
 
 def test_a_ZERO_never_carries_a_gate_even_when_one_is_offered(added: list[tuple[int, dict[str, Any] | None]]) -> None:

@@ -27,7 +27,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
-from catalog.services.dataplane import create_table
+from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, erase
 from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -91,7 +91,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
         writer.write_table(_rows(_SUBJECT, "bob"))
-    create_table(ns, {}, ["subjects"], sink.getvalue().to_pybytes(), mode="create")
+    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes()), mode="create")
     open_dataset(ns, {}, ["subjects"]).insert(_rows("carol"))
     open_dataset(ns, {}, ["subjects"]).shallow_clone(str(tmp_path / "data" / "clone.lance"), (None, None))
     return ns

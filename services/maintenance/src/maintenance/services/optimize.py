@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping
 from datetime import timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 import lance
 import pyarrow.fs as pafs
@@ -21,7 +21,15 @@ from pydantic import BaseModel, Field
 
 from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE, shared_lance_session
 from maintenance.core.lineage_emit import declared_table_id
-from maintenance.services.compaction_executor import CompactionPlaneUnavailable, DistributedOutcome, MaintenanceDenied
+from maintenance.core.metrics import CatalogRefusal
+from maintenance.services.compaction_executor import (
+    CompactionPlaneUnavailable,
+    CompactionPlanRefused,
+    DistributedOutcome,
+    MaintenanceDenied,
+    MaintenanceUnauthenticated,
+    TableNotGoverned,
+)
 from maintenance.services.index_health import inspect_indices
 from maintenance.services.rewrite_slot import record_committed_rewrite, resident_bytes, rewrite_slot
 from service_kit.lakehouse.base_refs import BaseRefs, containment_of
@@ -80,13 +88,23 @@ class DatasetResult(BaseModel):
     refused: str | None = None
     #: WHICH GATE refused it: ``protected_base`` (another dataset resolves its files through this
     #: location), ``manifest_flags`` (this manifest sets a feature this pass cannot correctly rewrite),
-    #: ``invalid_ref`` (a branch directory whose NAME Lance will not parse) or ``vend_denied`` (the
-    #: catalog refused this identity a write credential, so the dataset is left alone rather than
-    #: maintained under the ambient key). A count that merges
-    #: them is not actionable — the first is someone else's clone and stays true forever, the second is
-    #: a pylance upgrade away from being supported, and the third clears when somebody removes a
-    #: directory — and the sweep's one WARNING carries this breakdown in place of a line per dataset.
-    refused_by: str | None = None
+    #: ``invalid_ref`` (a branch directory whose NAME Lance will not parse), ``governed_elsewhere`` (the
+    #: catalog vended for this unit's table id at a location that does not cover this dataset),
+    #: ``unauthenticated`` (either door's 401: maintenance's own service credential), or one of the catalog's
+    #: answers for the table id (:data:`~maintenance.core.metrics.CatalogRefusal`): ``vend_denied`` (the vend
+    #: door's 403), ``plan_denied`` (the plan door's 403) or ``table_not_governed`` (either door's 404 naming
+    #: no table or namespace by this id). Each catalog answer, ``governed_elsewhere`` and ``unauthenticated``
+    #: leave the dataset alone for the tick, because anything done after them would be signed by the ambient
+    #: key. A count that merges them is not actionable — a clone's source
+    #: stays refused forever, a manifest flag is a pylance upgrade away from being supported, a bad branch
+    #: name clears when somebody removes a directory — and the sweep's one WARNING carries this breakdown in
+    #: place of a line per dataset. A closed set: it is a metric label.
+    refused_by: Literal["protected_base", "manifest_flags", "invalid_ref", "governed_elsewhere", "unauthenticated"] | CatalogRefusal | None = None
+    #: The id the catalog refused, on one of its refusals (`CatalogRefusal`): the id this unit vended or
+    #: planned under. A rename leaves the id the location carries naming no table, so this is what
+    #: `compaction.tables.parked` labels and an operator greps for. ``None`` for every other gate, including
+    #: ``governed_elsewhere`` and ``unauthenticated``, where the catalog refused nothing about the id.
+    refused_table_id: str | None = None
     #: The table's ``data_storage_version`` as its manifest declares it; ``None`` when the manifest was
     #: not read. Carried on every outcome so the per-dataset record is a census of the estate's versions.
     data_storage_version: str | None = None
@@ -125,6 +143,10 @@ class DatasetResult(BaseModel):
     # Stable identifier for span aggregation (otel attributes.md: set `error.type` whenever the span
     # status is ERROR) — the exception CLASS name, never the message.
     error_type: str | None = None
+    #: The plan door refused this executor's request as malformed (`CompactionPlanRefused`). Its own
+    #: field because the steps after the skipped rewrite still run, and a failure in one of them takes
+    #: `error_type`; `compaction.plan.refused` counts this instead.
+    plan_refused: bool = False
     #: Wall-clock seconds this dataset's pass took, or None when nothing was attempted (a refusal or a
     #: trash exclusion decided WITHOUT opening the dataset). [[LH-098]]: the reclamation trail recorded
     #: what a pass achieved and never how long it took, so "which compaction rewrote my table, and was
@@ -132,6 +154,12 @@ class DatasetResult(BaseModel):
     #: cannot see from counts alone. None rather than 0.0 because a decision that did no work and a
     #: pass that took no measurable time are different facts, and 0.0 would merge them.
     duration_seconds: float | None = None
+
+    def park(self, reason: str, *, gate: CatalogRefusal, table_id: str | None) -> None:
+        """Record a catalog refusal for this dataset's table id: nothing more is done to it this tick."""
+        self.refused = reason
+        self.refused_by = gate
+        self.refused_table_id = table_id
 
 
 class Discovery(BaseModel):
@@ -306,6 +334,41 @@ def _rewrite(ds: lance.LanceDataset, size_kw: dict[str, Any], *, slots: int, def
         return ds.optimize.compact_files(defer_index_remap=True, **size_kw) if defer else ds.optimize.compact_files(**size_kw)
 
 
+def _rewrite_off_pod(rewrite: Rewriter, result: DatasetResult, *, uri: str, table_id: str, size_kw: dict[str, Any]) -> bool:
+    """Try the rewrite off this pod. ``True`` when that settled it, ``False`` when the in-pod rewrite should run.
+
+    `compact_files` does plan, execute and commit in one call, so the pod's memory ceiling is a
+    function of the largest table anyone owns; the distributed protocol leaves only the byte rewrite
+    here, signed by the table-scoped credential. `MaintenanceDenied` and `TableNotGoverned` pass
+    through: each stops the whole dataset, which is `compact_one`'s to record.
+    """
+    try:
+        outcome = rewrite(uri, table_id=table_id, options=size_kw)
+    except CompactionPlanRefused as exc:
+        # The REWRITE only, and no fallback: the request is this executor's bug, logged at ERROR where
+        # the door refused it. The table is not what is wrong, so index optimize and cleanup still run.
+        result.error = f"compaction: {exc}"
+        result.error_type = type(exc).__name__
+        result.plan_refused = True
+        return True
+    except CompactionPlaneUnavailable as exc:
+        # Nothing was planned, so nothing was written: falling back is safe and is the only answer that
+        # keeps reclaiming disk when the catalog is briefly unreachable. INFO rather than WARNING — the
+        # sweep is doing its job — but `compaction_mode` records which path ran, so a permanent
+        # degradation is a count rather than a guess.
+        log.info("compaction_plane_unavailable_falling_back", extra={"uri": uri, "table_id": table_id, "reason": str(exc)})
+        return False
+    result.compaction_mode = "distributed"
+    result.fragments_added = outcome.fragments_added
+    result.fragments_removed = outcome.fragments_removed
+    if outcome.tasks_failed:
+        # Reported, never swallowed: the successful tasks committed, so the pass DID work — but a
+        # half-done compaction that read as clean is worse than either outcome alone.
+        result.error = f"compaction: {outcome.tasks_failed} of {outcome.tasks_planned} task(s) failed"
+        result.error_type = "PartialCompaction"
+    return True
+
+
 def _compact_files(
     ds: lance.LanceDataset,
     result: DatasetResult,
@@ -355,39 +418,10 @@ def _compact_files(
         size_kw["compaction_mode"] = repack_mode
     size_kw["num_threads"] = DEFAULT_COMPACT_THREADS if compact_threads is None else compact_threads
     # THE REWRITE OFF THIS POD, when a rewriter was supplied and this dataset is one the catalog can
-    # name. `compact_files` below does plan, execute and commit in one call, so the pod's memory
-    # ceiling is a function of the largest table anyone owns; the distributed protocol leaves only the
-    # byte rewrite here, signed by the table-scoped credential. Tried BEFORE the refusal ladder's
-    # rewrite so a refusal still skips both paths, and after `size_kw` so both are bounded the same.
-    if refusal is None and rewrite is not None and table_id:
-        try:
-            outcome = rewrite(uri, table_id=table_id, options=size_kw)
-        except MaintenanceDenied as exc:
-            # REFUSE, and specifically do not fall through to the in-pod rewrite below. The catalog
-            # declined to authorize this rewrite; compacting locally would perform it under whatever
-            # credential opened `ds`, which on a denied table is the deployment's ambient key. That is
-            # the bypass this class exists to stop. Recorded as a refusal so it lands on the WARNING
-            # log, the `lance.maintenance.refused` span attribute and the refused counter — a denial
-            # an operator can grant away, not an error that looks like a fault in the sweep.
-            log.warning("maintenance_rewrite_denied", extra={"uri": uri, "table_id": table_id, "reason": str(exc)})
-            result.refused = str(exc)
-            return
-        except CompactionPlaneUnavailable as exc:
-            # Nothing was planned, so nothing was written: falling back is safe and is the only
-            # answer that keeps reclaiming disk when the catalog is briefly unreachable. INFO rather
-            # than WARNING — the sweep is doing its job — but `compaction_mode` records which path
-            # ran, so a permanent degradation is a count rather than a guess.
-            log.info("compaction_plane_unavailable_falling_back", extra={"uri": uri, "table_id": table_id, "reason": str(exc)})
-        else:
-            result.compaction_mode = "distributed"
-            result.fragments_added = outcome.fragments_added
-            result.fragments_removed = outcome.fragments_removed
-            if outcome.tasks_failed:
-                # Reported, never swallowed: the successful tasks committed, so the pass DID work —
-                # but a half-done compaction that read as clean is worse than either outcome alone.
-                result.error = f"compaction: {outcome.tasks_failed} of {outcome.tasks_planned} task(s) failed"
-                result.error_type = "PartialCompaction"
-            return
+    # name. Tried BEFORE the refusal ladder's rewrite so a refusal still skips both paths, and after
+    # `size_kw` so both are bounded the same.
+    if refusal is None and rewrite is not None and table_id and _rewrite_off_pod(rewrite, result, uri=uri, table_id=table_id, size_kw=size_kw):
+        return
 
     if refusal is not None:
         # Root-scoped work still runs below; only the rewrite is skipped. Recorded on the result so
@@ -598,7 +632,7 @@ def _reclaim_versions(
 _INVALID_REF = "Ref is invalid:"
 
 
-def classify_maintain_failure(message: str) -> str | None:
+def classify_maintain_failure(message: str) -> Literal["invalid_ref"] | None:
     """The refusal gate a maintain failure belongs to, or ``None`` when it is a real failure.
 
     A ref whose NAME Lance will not parse can never be maintained — no retry, no upgrade and no action
@@ -629,6 +663,25 @@ def summarize_refusals(results: list[DatasetResult]) -> dict[str, int]:
         if result.refused_by is not None:
             counts[result.refused_by] = counts.get(result.refused_by, 0) + 1
     return counts
+
+
+def _record_plan_door_refusal(result: DatasetResult, exc: MaintenanceDenied | TableNotGoverned, *, uri: str, table_id: str | None) -> None:
+    """Record the plan door's refusal on ``result``: refused rather than errored, because nothing failed.
+
+    A 403 or a 404 naming no table or namespace is the catalog's answer about the id and parks it under
+    that id. A 401 is this service's own credential, refused at every table alike, so it is never parked.
+    """
+    extra = {"uri": uri, "table_id": table_id, "reason": str(exc)}
+    match exc:
+        case MaintenanceUnauthenticated():
+            log.warning("maintenance_unauthenticated", extra=extra)
+            result.refused, result.refused_by = str(exc), "unauthenticated"
+        case TableNotGoverned():
+            log.warning("maintenance_table_not_governed", extra=extra)
+            result.park(str(exc), gate="table_not_governed", table_id=table_id)
+        case _:
+            log.warning("maintenance_rewrite_denied", extra=extra)
+            result.park(str(exc), gate="plan_denied", table_id=table_id)
 
 
 def compact_one(
@@ -677,7 +730,8 @@ def compact_one(
     sentence had the last two steps swapped until 2026-08-08 while the code and the inline comment
     below were right.) The two ``*_enabled`` flags let a policy skip a STEP
     without reordering them — an operator who wants compaction but not version reclamation (a tier
-    under legal hold, say) can have exactly that.
+    under legal hold, say) can have exactly that. A plan-door refusal (its 401, 403 or 404 naming no
+    table) stops all three: nothing is done to a table the catalog declined.
 
     ``scan_batch_size`` and ``compact_threads`` together bound the compaction read, and they only
     work together: the memory is their PRODUCT. Lance's default batch is 8192 ROWS, and rows are not a
@@ -820,6 +874,8 @@ def compact_one(
     # dataset with no declared id simply falls back to the URI derivation, which is the common case
     # until producers stamp it and remains the case for every dataset already on disk.
     result = DatasetResult(uri=uri, declared_table_id=declared_table_id(ds), data_storage_version=table_version, mixed_data_file_versions=mixed)
+    # The id the catalog's doors are asked under; see the precedence at `_compact_files` below.
+    addressed = table_id or result.declared_table_id
     try:
         # THE ORDER IS FIXED, and it is the whole reason these three are separate functions rather than
         # a configurable list: compaction leaves its new fragments unindexed, so index optimization must
@@ -859,7 +915,7 @@ def compact_one(
             # outcomes removed zero fragments between them.
             #
             # A dataset neither answer names still belongs on the in-pod path, and still takes it.
-            table_id=table_id or result.declared_table_id,
+            table_id=addressed,
         )
         _optimize_indices(ds, result, uri=uri, enabled=optimize_indices_enabled, index_columns=index_columns)
         _reclaim_versions(
@@ -871,6 +927,11 @@ def compact_one(
             cleanup_enabled=cleanup_enabled,
             auto_cleanup_interval_commits=auto_cleanup_interval_commits,
         )
+    except (MaintenanceDenied, TableNotGoverned) as exc:
+        # The plan door said NO. The WHOLE dataset, raised from step 1 so steps 2 and 3 never run: an index
+        # optimize or a cleanup here would be signed by whatever opened `ds`, on a refused table the ambient
+        # key, and an in-pod rewrite would be the bypass these refusals exist to stop.
+        _record_plan_door_refusal(result, exc, uri=uri, table_id=addressed)
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
         # `BaseException`, deliberately, and this is the LAST line of defence for the whole sweep.
         # pylance can PANIC (`pyo3_runtime.PanicException: not yet implemented` out of

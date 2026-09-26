@@ -30,7 +30,7 @@ from lance import DatasetBasePath
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
-from catalog.services.dataplane import create_table
+from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, erase
 from service_kit.lakehouse import base_refs
 from service_kit.lakehouse.base_refs import BaseRefs
@@ -236,7 +236,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
         writer.write_table(_rows("alice"))
-    create_table(ns, {}, ["subjects"], sink.getvalue().to_pybytes(), mode="create")
+    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes()), mode="create")
     so = {"aws_region": "eu-north-1"}
     seen: dict[str, Any] = {}
     listed: list[dict[str, str]] = []

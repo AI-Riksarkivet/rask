@@ -67,7 +67,7 @@ def _worker_executes(uri: str, task_json: str) -> str:
 def test_the_catalog_plans_compaction_and_hands_back_queue_shippable_tasks(tmp_path: Path) -> None:
     uri = _seed(tmp_path, fragments=3)
 
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
 
     assert plan.read_version == lance.dataset(uri).version
     assert plan.tasks, "three 100-row fragments with a 1000-row target must plan at least one task"
@@ -84,7 +84,7 @@ def test_a_worker_executes_the_task_and_the_catalog_commits_the_result(tmp_path:
     before = lance.dataset(uri)
     assert len(before.get_fragments()) == 3
 
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(uri, task) for task in plan.tasks]
     outcome = commit_compaction(uri, {}, results)
 
@@ -113,7 +113,7 @@ def test_the_commit_opens_the_dataset_ONCE(tmp_path: Path, monkeypatch: pytest.M
     place, so the reopen was buying nothing at all.
     """
     uri = _seed(tmp_path, fragments=3)
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(uri, task) for task in plan.tasks]
 
     real_open = lance.dataset
@@ -140,14 +140,14 @@ def test_a_policy_knob_this_door_does_not_honour_is_refused_not_dropped(tmp_path
     size, the plan ignores it, and the 200 says it worked. Refuse instead, naming what is accepted.
 
     `io_buffer_size` is the right example precisely because it is the SHAPE of knob this door does
-    forward two of — a machine-level bound. The two that cross (`batch_size`, `num_threads`) do so on
-    a measured necessity: Lance bakes them into the task at plan time and gives the executor no later
+    forward three of — a machine-level bound. The three that cross (`batch_size`, `num_threads`,
+    `max_source_bytes`) do so on a measured necessity: Lance bakes them into the task at plan time and gives the executor no later
     chance to set them. `io_buffer_size` is baked the same way but nothing in this estate configures
     it, and forwarding a knob nobody sets would widen the door for no reason.
     """
     uri = _seed(tmp_path, fragments=2)
     with pytest.raises(InvalidInputError) as caught:
-        plan_compaction(uri, {}, io_buffer_size=8192, batch_size=64, num_threads=2)
+        plan_compaction(uri, {}, io_buffer_size=8192, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     assert "io_buffer_size" in str(caught.value)
 
 
@@ -155,7 +155,7 @@ def test_a_table_that_needs_no_compaction_plans_no_work(tmp_path: Path) -> None:
     # One fragment already at target: the plan is empty, and an empty plan must be an ANSWER (no work
     # to queue), not an error — otherwise a scheduled sweep pages an operator for a healthy table.
     uri = _seed(tmp_path, fragments=1)
-    assert plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2).tasks == []
+    assert plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024).tasks == []
 
 
 def test_a_result_from_a_stale_plan_is_refused_as_non_retryable(tmp_path: Path) -> None:
@@ -166,7 +166,7 @@ def test_a_result_from_a_stale_plan_is_refused_as_non_retryable(tmp_path: Path) 
     resurrects overwritten data.
     """
     uri = _seed(tmp_path, fragments=3)
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(uri, task) for task in plan.tasks]
     # Someone overwrites the table while the worker was busy.
     lance.write_dataset(_table_of(5), uri, mode="overwrite", data_storage_version="2.2")
@@ -213,7 +213,7 @@ def test_the_worker_writes_the_bytes_before_the_catalog_is_asked_to_commit(tmp_p
     data_dir = Path(uri) / "data"
     before = {p.name for p in data_dir.iterdir()}
 
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(uri, task) for task in plan.tasks]
     written_by_the_worker = {p.name for p in data_dir.iterdir()} - before
     assert written_by_the_worker, "the worker's execute() is what writes the compacted data file"
@@ -223,51 +223,69 @@ def test_the_worker_writes_the_bytes_before_the_catalog_is_asked_to_commit(tmp_p
 
 
 def test_the_executors_MEMORY_BOUNDS_survive_the_plan_because_the_task_bakes_them(tmp_path: Path) -> None:
-    """The executor's `batch_size`/`num_threads` reach the task verbatim — the plan is where they live.
+    """The executor's `batch_size`/`num_threads`/`max_source_bytes` reach every task verbatim.
 
     They read like machine knobs the executor should own, but Lance gives the executor no later chance
     to state them: measured on pylance 12.0.0 (2026-09-25), a planned task's JSON carries an `options`
-    object holding both, and `CompactionTask.execute` takes only the dataset. Distinctive numbers, so
-    neither can be satisfied by a default: this is the same pair the maintenance plane bounds its
-    in-pod rewrite with (MAINTENANCE_SCAN_BATCH_SIZE, MAINTENANCE_COMPACT_THREADS).
+    object holding all three, and `CompactionTask.execute` takes only the dataset. Distinctive numbers,
+    so none can be satisfied by a default: these are the bounds the maintenance plane runs its in-pod
+    rewrite under (MAINTENANCE_SCAN_BATCH_SIZE, MAINTENANCE_COMPACT_THREADS, MAINTENANCE_MAX_SOURCE_BYTES).
     """
     uri = _seed(tmp_path, fragments=3)
+    source_bytes = 3 * 1024 * 1024 + 7
 
-    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=37, num_threads=3)
+    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=37, num_threads=3, max_source_bytes=source_bytes)
 
     assert planned.tasks, "the fixture must have something to compact or this proves nothing"
-    baked = json.loads(planned.tasks[0])["options"]
-    assert baked["batch_size"] == 37, f"the executor's read bound did not reach the task: {baked}"
-    assert baked["num_threads"] == 3, f"the executor's thread bound did not reach the task: {baked}"
+    baked = [json.loads(task)["options"] for task in planned.tasks]
+    found = [(options["batch_size"], options["num_threads"], options["max_source_bytes"]) for options in baked]
+    assert found == [(37, 3, source_bytes)] * len(baked), f"the executor's bounds did not reach every task: {baked}"
+
+
+@pytest.mark.parametrize(("mode", "baked_as"), [(None, None), ("try_binary_copy", "TryBinaryCopy")])
+def test_the_repack_mode_is_forwarded_and_absent_means_lances_default(tmp_path: Path, mode: str | None, baked_as: str | None) -> None:
+    """`compaction_mode` is baked at plan time like the bounds; unset, the task carries Lance's default."""
+    uri = _seed(tmp_path, fragments=3)
+    policy = {"compaction_mode": mode} if mode is not None else {}
+
+    planned = plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024, **policy)
+
+    assert planned.tasks, "the fixture must have something to compact or this proves nothing"
+    assert [json.loads(task)["options"]["compaction_mode"] for task in planned.tasks] == [baked_as] * len(planned.tasks)
 
 
 @pytest.mark.parametrize(
-    ("batch_size", "num_threads"),
+    ("batch_size", "num_threads", "max_source_bytes"),
     [
-        pytest.param(None, None, id="neither bound"),
-        pytest.param(64, None, id="batch_size alone"),
-        pytest.param(None, 2, id="num_threads alone"),
+        pytest.param(None, None, None, id="no bound"),
+        pytest.param(64, None, None, id="batch_size alone"),
+        pytest.param(None, 2, None, id="num_threads alone"),
+        pytest.param(None, None, 256 * 1024 * 1024, id="max_source_bytes alone"),
+        pytest.param(64, 2, None, id="max_source_bytes missing"),
     ],
 )
-def test_a_plan_WITHOUT_both_bounds_is_refused_and_the_refusal_names_both(tmp_path: Path, batch_size: int | None, num_threads: int | None) -> None:
-    """A plan missing either bound is refused, because nothing downstream can fill the gap in.
+def test_a_plan_WITHOUT_every_bound_is_refused_and_the_refusal_names_every_bound(
+    tmp_path: Path, batch_size: int | None, num_threads: int | None, max_source_bytes: int | None
+) -> None:
+    """A plan missing any bound is refused, because nothing downstream can fill the gap in.
 
-    Measured on pylance 12.0.0 (2026-09-25): a task planned without them bakes `"batch_size": null`
-    and `"num_threads": null` into its `options`, and `CompactionTask.execute` takes only the
-    dataset. `lance/optimize.py` documents what those nulls become: the scanner's default batch and
-    "the number of cores on the machine" — ~15 GB per thread against ~1.8 MB bronze rows, on the
-    HOST's core count. A plan like that is an OOM handed to whichever executor runs it.
+    Measured on pylance 12.0.0 (2026-09-25): a task planned without them bakes `"batch_size": null`,
+    `"num_threads": null` and `"max_source_bytes": null` into its `options`, and
+    `CompactionTask.execute` takes only the dataset. `lance/optimize.py` documents what those nulls
+    become: the scanner's default batch, "the number of cores on the machine", and "no limit" on the
+    source bytes one run takes on. A plan like that is an OOM handed to whichever executor runs it.
 
-    Both names are in the refusal whichever one is missing: they are one bound (memory is their
-    product), and a caller told only about the half it forgot would be refused again for the other.
+    Every name is in the refusal whichever is missing: memory is their product, and a caller told only
+    about the one it forgot would be refused again for the next.
     """
     uri = _seed(tmp_path, fragments=3)
 
     with pytest.raises(InvalidInputError) as caught:
-        plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=batch_size, num_threads=num_threads)
+        plan_compaction(uri, {}, target_rows_per_fragment=1024, batch_size=batch_size, num_threads=num_threads, max_source_bytes=max_source_bytes)
 
     message = str(caught.value)
-    assert "batch_size" in message and "num_threads" in message, f"the refusal must name both bounds: {message}"
+    assert "memory bounds" in message, f"refused for another reason than a missing bound: {message}"
+    assert all(bound in message for bound in ("batch_size", "num_threads", "max_source_bytes")), f"the refusal must name every bound: {message}"
 
 
 def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: Path) -> None:
@@ -285,7 +303,7 @@ def test_a_table_whose_BYTES_are_missing_is_a_client_error_not_a_500(tmp_path: P
     that resolves to nothing — one client branch for one condition.
     """
     with pytest.raises(TableNotFoundError, match="never written"):
-        plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2)
+        plan_compaction(str(tmp_path / "nothing-here"), {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
 
 
 # --------------------------------------------------------------------------- #
@@ -329,7 +347,7 @@ def test_the_distributed_commit_door_refuses_what_the_BUTTON_refuses(tmp_path: P
     committed costs nothing.
     """
     clone = _clone_shaped(tmp_path)
-    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(clone, task) for task in plan.tasks]
 
     with pytest.raises(Exception) as caught:  # noqa: B017 — the TYPE is the subject of the sibling assertion below
@@ -355,7 +373,7 @@ def test_the_distributed_doors_refuse_with_the_SAME_reason_the_button_gives(tmp_
         button_reason = str(exc)
     assert button_reason, "the button no longer refuses a shallow clone — re-point this gate"
 
-    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(clone, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     results = [_worker_executes(clone, task) for task in plan.tasks]
     try:
         commit_compaction(clone, {}, results)
@@ -372,7 +390,7 @@ def test_a_rewrite_at_another_file_version_is_refused_before_it_commits(tmp_path
     for i in range(3):
         lance.write_dataset(_table_of(10), uri, mode="append" if i else "create", data_storage_version="2.1", enable_stable_row_ids=True)
     before = lance.dataset(uri).version
-    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2)
+    plan = plan_compaction(uri, {}, target_rows_per_fragment=1000, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
     forged = []
     for task in plan.tasks:
         result = json.loads(_worker_executes(uri, task))

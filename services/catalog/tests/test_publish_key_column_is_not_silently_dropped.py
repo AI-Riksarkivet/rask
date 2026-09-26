@@ -55,12 +55,8 @@ SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())
 PROJECT = "acme"
 
 
-def _ipc(ids: list[int]) -> bytes:
-    table = pa.table({"id": pa.array(ids, pa.int64()), "payload": pa.array([f"p{i}" for i in range(len(ids))])}, schema=SCHEMA)
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+def _table(ids: list[int]) -> pa.Table:
+    return pa.table({"id": pa.array(ids, pa.int64()), "payload": pa.array([f"p{i}" for i in range(len(ids))])}, schema=SCHEMA)
 
 
 @pytest.fixture
@@ -74,7 +70,7 @@ def registry_root(tmp_path: Path) -> str:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _ipc([1, 2, 3]), mode="create")
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create")
     return namespace
 
 

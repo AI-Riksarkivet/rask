@@ -66,12 +66,8 @@ TABLE_PATH = "alpha"
 CANONICAL = "alpha"
 
 
-def _ipc(start: int = 1) -> bytes:
-    table = pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+def _table(start: int = 1) -> pa.Table:
+    return pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())})
 
 
 @pytest.fixture
@@ -82,7 +78,7 @@ def registry_root(tmp_path: Path) -> str:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _ipc(), mode="create")
+    create_table(namespace, {}, TABLE, _table(), mode="create")
     # A SECOND VERSION, so `version/delete` has one it may actually remove — written straight to the
     # dataset because the create door DECLARES a table and a second declare is a conflict, not an
     # append. Without it that door refuses for its own reasons and the control leg could not tell that

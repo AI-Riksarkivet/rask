@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import (
     AlterTableAddColumnsRequest,
@@ -38,17 +37,10 @@ from lance_namespace import (
 from catalog.services import dataplane
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 @pytest.fixture
 def ns(tmp_path: Path) -> LanceNamespace:
     backend = connect("dir", {"root": str(tmp_path)})
-    dataplane.create_table(backend, {}, ["t"], _ipc(pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]})), mode="create")
+    dataplane.create_table(backend, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create")
     return backend
 
 

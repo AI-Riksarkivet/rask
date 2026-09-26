@@ -34,6 +34,7 @@ from collections.abc import Iterable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
@@ -53,9 +54,12 @@ from catalog.api.v1.endpoints.access import _can_relations as _model_can_relatio
 from catalog.core.config import Settings, get_settings
 from service_kit.governed import fga as fga_module
 from service_kit.governed.oidc import IDToken
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+#: The create door reads its body before anything it orchestrates, so the stubbed write still needs a real stream.
+ARROW_BODY = encode_arrow_stream(pa.table({"id": [1]}))
 
 
 def _auth_settings() -> Settings:
@@ -313,7 +317,7 @@ def test_create_table_checks_writer_on_parent_namespace(client: TestClient, fake
 
     resp = client.post(
         "/v1/table/db1$users/create",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 403
@@ -341,7 +345,7 @@ def _existok_over_an_existing_table(client: TestClient, fake_ns: MagicMock, monk
 
     resp = client.post(
         "/v1/table/db1$users/create?mode=exist_ok",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 200, resp.text
@@ -397,7 +401,7 @@ def test_create_table_seeds_owner_and_parent_tuples(client: TestClient, fake_ns:
 
     resp = client.post(
         "/v1/table/db1$users/create",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 200
@@ -423,7 +427,7 @@ def test_create_table_does_not_seed_when_backend_fails(client: TestClient, fake_
 
     resp = client.post(
         "/v1/table/db1$users/create",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 409
@@ -614,7 +618,7 @@ def test_overwrite_by_owner_revokes_prior_grants_then_seeds(client: TestClient, 
 
     resp = client.post(
         "/v1/table/db1$users/create?mode=overwrite",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 200
@@ -640,7 +644,7 @@ def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(
 
     resp = client.post(
         "/v1/table/db1$users/create?mode=overwrite",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 403  # owner-tier gate on the destructive overwrite
@@ -661,7 +665,7 @@ def test_plain_create_seeds_without_revoking(client: TestClient, fake_ns: MagicM
 
     resp = client.post(
         "/v1/table/db1$new/create",
-        content=b"ARROW",
+        content=ARROW_BODY,
         headers={"Authorization": "Bearer t", **ARROW_STREAM},
     )
     assert resp.status_code == 200

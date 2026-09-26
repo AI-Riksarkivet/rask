@@ -155,18 +155,18 @@ def read_version_and_schema(
         return version, [], location
 
 
-def payload_schema_fields(data: bytes, table_id: list[str]) -> SchemaFields:
-    """Schema-facet fields parsed straight from an Arrow-IPC request payload (no storage round trip).
+def payload_schema_fields(schema: pa.Schema, table_id: list[str]) -> SchemaFields:
+    """Schema-facet fields read off the create payload's schema (no storage round trip).
 
     A create/Overwrite writes exactly this payload, so its schema — including the blob/vector field
     metadata ``facet_fields`` keys on — IS the new table's schema; re-opening the just-written dataset
     would cost a describe + object-store open for information already in memory. NOT valid for ExistOk
     (which may keep an existing table the payload never touched) — that path reads back pinned instead.
-    ``table_id`` is logging context only. Best-effort (``[]`` on a parse failure): the schema facet is an
+    ``table_id`` is logging context only. Best-effort (``[]`` on a failure): the schema facet is an
     enrichment, never a reason to fail the write.
     """
     try:
-        return facet_fields(pa.ipc.open_stream(data).schema)
+        return facet_fields(schema)
     except Exception as exc:
         log.warning("schema_facet_parse_failed", extra={"table": table_id, "error": str(exc)})
         return []
@@ -340,11 +340,33 @@ def _write_blob(
         raise
 
 
+#: What pyarrow raises for a body that is not an Arrow IPC stream. `ArrowIOError` is `OSError`, and a
+#: stream cut inside a batch raises it (measured on pyarrow 25.0.0); over an in-memory body no OSError
+#: can come from storage.
+_NOT_AN_ARROW_STREAM = (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, pa.ArrowIOError)
+
+
+def read_arrow_body(data: bytes) -> pa.Table:
+    """A write body as a table, or `InvalidInputError` (400, code 13) saying it is not an Arrow IPC stream.
+
+    Read whole, because a stream cut inside a batch parses its schema and fails only on the batch. Then
+    validated in full, because framing that parses says nothing about the buffers: offsets past a
+    values buffer, offsets that decrease, and non-UTF-8 string values all read without error, and Lance
+    writes the first as bytes from outside the request (pyarrow 25.0.0, pylance 12.0.0).
+    """
+    try:
+        table = pa.ipc.open_stream(data).read_all()
+        table.validate(full=True)
+    except _NOT_AN_ARROW_STREAM as exc:
+        raise InvalidInputError(f"the request body is not an Arrow IPC stream: {exc}") from exc
+    return table
+
+
 def create_table(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
-    data: bytes,
+    table: pa.Table,
     *,
     mode: str | CreateMode | None = None,
     properties: dict[str, str] | None = None,
@@ -362,8 +384,11 @@ def create_table(
     create-time-only, so a table that skipped this path could never gain the durable row identity
     ``row_id_lineage`` needs (row-level provenance: model → dataset version → the exact source rows).
 
-    Runs off the event loop (blocking pyarrow decode + Lance/S3 IO), so the endpoint stays a single
-    delegated call. ``allow_external_blobs`` permits ``Blob.from_uri`` columns pointing ANYWHERE outside
+    ``table`` arrives decoded: the door reads the body with :func:`read_arrow_body` before its
+    idempotency claim, so a body that is not an Arrow stream is refused 400 with nothing written.
+
+    Runs off the event loop (blocking Lance/S3 IO), so the endpoint stays a single delegated call.
+    ``allow_external_blobs`` permits ``Blob.from_uri`` columns pointing ANYWHERE outside
     the dataset root (the blanket bypass); ``external_blob_bases`` is the safer allowlist — external
     pointers are accepted only under one of these registered bases, with the blanket bypass left off.
     ``data_bases`` (#3-B) spreads the table's fragments across N approved buckets (Lance multi-base);
@@ -380,7 +405,6 @@ def create_table(
     """
     allow_external = allow_external_blobs
     external_blob_bases = external_blob_bases or []
-    table = pa.ipc.open_stream(data).read_all()
     normalized = CreateMode.parse(mode)
     existing, only_declared = _existing_location(ns, segments)
 
@@ -925,30 +949,33 @@ def _verify_fragment_data_files(location: str, so: StorageOptions, fragments: li
 #: that gap is absorbed — narrow enough that everything else in the two functions below stays checked.
 _RewriteResult: Any = lance_optimize.RewriteResult
 
-#: The POLICY half of what the plan door accepts: what shape the table should end up in. Optional —
-#: an absent knob leaves Lance's own choice, which for these is a shape rather than a memory ceiling.
+#: The POLICY half of what the plan door accepts: what shape the table should end up in, and how its
+#: bytes move. Optional — an absent knob leaves Lance's own choice, which for these is a shape or a
+#: re-encode rather than a memory ceiling.
 #:
-#: The rest of ``CompactionOptions`` (buffer sizes, encoding modes, index-remap strategy) stays out:
-#: those describe how a machine should do the work and, unlike the two executor bounds, the executor
-#: has other ways to reach them. Names are Lance's, verbatim, including
-#: ``materialize_deletions_threadhold``: it is spelled that way in ``lance.optimize`` and renaming it
-#: here would mean silently dropping whatever a caller sent.
+#: ``compaction_mode`` is here because the in-pod rewrite passes it (``MAINTENANCE_REPACK_MODE``) and
+#: Lance bakes it into the task at plan time, so a plan without it would repack differently from the
+#: same sweep in-pod. The rest of ``CompactionOptions`` (buffer sizes, index-remap strategy) stays out:
+#: nothing in this estate sets them. Names are Lance's, verbatim: ``Compaction.plan`` raises
+#: ``ValueError: Invalid compaction option`` for any other (``lance/optimize.py``, pylance 12.0.0).
 _COMPACTION_POLICY_KNOBS = (
     "target_rows_per_fragment",
     "max_rows_per_group",
     "max_bytes_per_file",
     "materialize_deletions",
-    "materialize_deletions_threadhold",
+    "materialize_deletions_threshold",
+    "compaction_mode",
 )
 
 #: The executor's MEMORY BOUNDS, which every plan must carry. Measured on pylance 12.0.0 (2026-09-25):
-#: a planned task's JSON bakes both into its ``options`` and ``CompactionTask.execute`` takes only the
-#: dataset, so the plan is the executor's one chance to state them. Left null they become Lance's
+#: a planned task's JSON bakes all three into its ``options`` and ``CompactionTask.execute`` takes only
+#: the dataset, so the plan is the executor's one chance to state them. Left null they become Lance's
 #: defaults: "The default `batch_size` is 8192 rows" and a compute pool "determined by the number of
 #: cores on the machine" (``lance_docs/guide.md`` § Scanning Data, § Threading Model) — against ~1.8 MB
-#: rows, ~15 GB per thread on the HOST's core count. Forwarded, never interpreted: the numbers are the
-#: executor's own.
-_COMPACTION_EXECUTOR_BOUNDS = ("batch_size", "num_threads")
+#: rows, ~15 GB per thread on the HOST's core count — and ``max_source_bytes`` "(default: None, no
+#: limit)" on what one run takes on (``lance/optimize.py``). Forwarded, never interpreted: the numbers
+#: are the executor's own.
+COMPACTION_EXECUTOR_BOUNDS = ("batch_size", "num_threads", "max_source_bytes")
 
 #: The compaction result's non-retryable remedy. A lost race voids the PLAN, not just the commit — the
 #: fragments the result names were chosen against a version that no longer exists.
@@ -986,6 +1013,7 @@ def plan_compaction(
     *,
     batch_size: int | None,
     num_threads: int | None,
+    max_source_bytes: int | None,
     branch: str | None = None,
     **policy: Any,
 ) -> PlannedCompaction:
@@ -998,10 +1026,10 @@ def plan_compaction(
     every byte of the rewrite — the split that keeps the catalog's memory ceiling a function of its
     request rate rather than of the largest table anyone owns.
 
-    ``batch_size`` and ``num_threads`` are the executor's memory bounds (``_COMPACTION_EXECUTOR_BOUNDS``)
-    and both are REQUIRED: a ``None`` in either refuses the plan, naming both, before the manifest is
-    opened. They have no default because the default would be Lance's: a batch counted in rows, on
-    every core of the host.
+    ``batch_size``, ``num_threads`` and ``max_source_bytes`` are the executor's memory bounds
+    (``COMPACTION_EXECUTOR_BOUNDS``) and all are REQUIRED: a ``None`` in any refuses the plan, naming
+    every one, before the manifest is opened. They have no default because the default would be
+    Lance's: a batch counted in rows, on every core of the host, over a plan with no byte limit.
 
     ``policy`` accepts only ``_COMPACTION_POLICY_KNOBS``; anything else is refused rather than dropped,
     so a caller tuning a knob this door does not honour learns it instead of watching the plan ignore it.
@@ -1011,18 +1039,19 @@ def plan_compaction(
     unknown = sorted(set(policy) - set(_COMPACTION_POLICY_KNOBS))
     if unknown:
         raise InvalidInputError(
-            f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS + _COMPACTION_EXECUTOR_BOUNDS)}"
+            f"unsupported compaction option(s) {unknown}; this door accepts {sorted(_COMPACTION_POLICY_KNOBS + COMPACTION_EXECUTOR_BOUNDS)}"
         )
-    if batch_size is None or num_threads is None:
-        # BOTH NAMES, whichever is missing. Memory is their product, so they are one bound: a caller
-        # told only about the half it forgot would be refused again for the other.
-        missing = [name for name, bound in zip(_COMPACTION_EXECUTOR_BOUNDS, (batch_size, num_threads), strict=True) if bound is None]
+    bounds = dict(zip(COMPACTION_EXECUTOR_BOUNDS, (batch_size, num_threads, max_source_bytes), strict=True))
+    if missing := [name for name, bound in bounds.items() if bound is None]:
+        # EVERY NAME, whichever is missing. Memory is their product, so they are one bound: a caller
+        # told only about the one it forgot would be refused again for the next.
         raise InvalidInputError(
-            f"a compaction plan must state the executor's memory bounds, batch_size AND num_threads (missing: {missing}). "
-            "Lance bakes both into every task at plan time and CompactionTask.execute accepts no options, so a plan without them runs "
-            "every rewrite on Lance's defaults: the scanner's default batch on every core of the host. Send the bounds your executor runs under."
+            f"a compaction plan must state the executor's memory bounds, batch_size, num_threads AND max_source_bytes (missing: {missing}). "
+            "Lance bakes all three into every task at plan time and CompactionTask.execute accepts no options, so a plan without them runs "
+            "every rewrite on Lance's defaults: the scanner's default batch on every core of the host, with no limit on the bytes one run takes on. "
+            "Send the bounds your executor runs under."
         )
-    options = {k: v for k, v in policy.items() if v is not None} | {"batch_size": batch_size, "num_threads": num_threads}
+    options = {k: v for k, v in policy.items() if v is not None} | bounds
     try:
         dataset = lance.dataset(location, storage_options=dict(so) if so else None, session=shared_lance_session())
         if branch is not None:
@@ -1068,9 +1097,9 @@ def plan_compaction(
                 f"This is a STORAGE fault, not a bad request: check the warehouse binding, the bucket and the credential: {exc}"
             ) from exc
         # `TableNotFoundError`, not `InvalidInputError`: code 13 tells a client its REQUEST is
-        # malformed and nothing about the policy is. What is absent is the DATA, which is what code 3
-        # says — the same answer `rename_table` gives a source that resolves to nothing, so one client
-        # branch serves both.
+        # malformed and nothing about the policy is. What is absent is the DATA, which code 4,
+        # TableNotFound, names (spec.yaml:2416) — the same answer `rename_table` gives a source that
+        # resolves to nothing, so one client branch serves both.
         raise TableNotFoundError(
             f"no dataset exists at this table's location ({location}) — it is declared or registered but was never written: {exc}"
         ) from exc
@@ -1420,15 +1449,17 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
                 current = open_dataset(ns, so, _table_id(req), branch=req.branch)
                 response.version = response.version if response.version is not None else current.version
         return response
+    # Validated here as well as at the door's coercion: this arm hands pyarrow's buffers to Lance
+    # in-process, and Lance writes whatever an unvalidated offset points at.
+    rows = read_arrow_body(data)
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
-    reader = pa.ipc.open_stream(pa.BufferReader(data))
     before = dataset.count_rows()
     # THROUGH `InsertMode`, the one vocabulary both arms share. pylance's own parser is not the spec's:
     # it takes `create`, which the spec does not give this door, and refuses an unknown value with a bare
     # ValueError that answers 500 where the branchless arm's native backend answers InvalidInput. The
     # parse is idempotent, so a mode the door already parsed passes through unchanged.
     with _write_schema_errors():
-        dataset.insert(reader, mode=InsertMode.parse(req.mode).value)
+        dataset.insert(rows, mode=InsertMode.parse(req.mode).value)
     return InsertIntoTableResponse(version=dataset.version, num_inserted_rows=max(dataset.count_rows() - before, 0))
 
 
@@ -1444,6 +1475,11 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
     is refused. There is no vector search, no full-text query and no index-selection surface here to
     re-derive and get subtly wrong.
     """
+    # BEFORE EITHER ARM. The branch arm hands pyarrow's buffers to Lance in-process, where an offset
+    # past its values buffer is written as process heap and a decreasing one crashes the process
+    # (measured on pylance 12.0.0); main's native reader refuses both, as a 500. Checked once, here, so
+    # both arms answer 400.
+    rows = read_arrow_body(data)
     if req.branch is None:
         return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
@@ -1461,7 +1497,7 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
             builder.when_not_matched_by_source_delete(req.when_not_matched_by_source_delete_filt)
         if req.use_index is not None:
             builder.use_index(req.use_index)
-        stats = builder.execute(pa.ipc.open_stream(pa.BufferReader(data)))
+        stats = builder.execute(rows)
     counts = stats if isinstance(stats, dict) else {}
     return MergeInsertIntoTableResponse(
         version=dataset.version,
@@ -1860,8 +1896,11 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     An already-aligned payload passes through UNTOUCHED: re-serializing it cost two full
     materialisations (the IPC re-encode + ``to_pybytes``) on every insert from a schema-exact client —
     which is every non-browser client — for zero behavioural difference (#141).
+
+    The body is read through :func:`read_arrow_body`, so one that is not a valid Arrow IPC stream is
+    refused 400 before the dataset opens, on both arms of the insert door.
     """
-    incoming = pa.ipc.open_stream(data).read_all()
+    incoming = read_arrow_body(data)
     # THE REF THE REQUEST NAMES, never main. This alignment DROPS columns the target does not have, so
     # aligning a branch-targeted insert to main's schema silently deletes any column the branch has and
     # main does not — and then the insert succeeds, reporting rows it quietly rewrote. A branch whose

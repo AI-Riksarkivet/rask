@@ -95,6 +95,7 @@ def test_the_bytes_are_rewritten_where_the_plan_was_not(tmp_path: Path) -> None:
         commit=catalog.commit,
         batch_size=64,
         num_threads=2,
+        max_source_bytes=256 * 1024 * 1024,
         rewrite_slots=1,
         policy={"target_rows_per_fragment": 1024},
     )
@@ -115,7 +116,16 @@ def test_a_table_already_at_TARGET_is_a_successful_no_op(tmp_path: Path) -> None
     catalog = _Catalog(uri)
 
     outcome = ce.compact_distributed(
-        uri, table_id="acme-bronze$events", write_options={}, plan=catalog.plan, commit=catalog.commit, batch_size=64, num_threads=2, rewrite_slots=1, policy={}
+        uri,
+        table_id="acme-bronze$events",
+        write_options={},
+        plan=catalog.plan,
+        commit=catalog.commit,
+        batch_size=64,
+        num_threads=2,
+        max_source_bytes=256 * 1024 * 1024,
+        rewrite_slots=1,
+        policy={},
     )
 
     assert outcome is not None
@@ -150,6 +160,7 @@ def test_the_EXECUTE_credential_is_the_one_this_worker_was_given(tmp_path: Path,
         commit=catalog.commit,
         batch_size=64,
         num_threads=2,
+        max_source_bytes=256 * 1024 * 1024,
         rewrite_slots=1,
         policy={"target_rows_per_fragment": 1024},
     )
@@ -187,6 +198,7 @@ def test_one_failed_task_COMMITS_the_rest_rather_than_orphaning_it(tmp_path: Pat
         commit=catalog.commit,
         batch_size=64,
         num_threads=2,
+        max_source_bytes=256 * 1024 * 1024,
         rewrite_slots=1,
         policy={"target_rows_per_fragment": 20},
     )
@@ -217,6 +229,7 @@ def test_EVERY_task_failing_commits_NOTHING(tmp_path: Path, monkeypatch: pytest.
             commit=catalog.commit,
             batch_size=64,
             num_threads=2,
+            max_source_bytes=256 * 1024 * 1024,
             rewrite_slots=1,
             policy={},
         )
@@ -290,6 +303,47 @@ def test_an_UNAVAILABLE_plan_door_falls_back_and_the_result_SAYS_which_path_ran(
     assert reached["n"] == 1, "the distributed branch was never entered — the fallback is untested"
     assert result.compaction_mode == "in_pod"
     assert len(lance.dataset(uri).get_fragments()) == 1, "the fallback did not compact"
+
+
+def test_a_failed_task_is_reported_on_the_result_as_a_PartialCompaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tasks that succeeded commit, so the pass did work, and the result still says one failed."""
+    from maintenance.services.optimize import compact_one
+
+    uri = _fragmented(tmp_path, table_id="acme-bronze$events")
+    catalog = _Catalog(uri)
+    calls = {"n": 0}
+    real_execute = ce._execute_one
+
+    def _flaky(task_json: str, dataset: lance.LanceDataset, *, slots: int) -> str:
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("worker OOM on task 2")
+        return real_execute(task_json, dataset, slots=slots)
+
+    def _rewrite(uri: str, *, table_id: str, options: Mapping[str, Any]) -> ce.DistributedOutcome:
+        outcome = ce.compact_distributed(
+            uri,
+            table_id=table_id,
+            write_options={},
+            plan=catalog.plan,
+            commit=catalog.commit,
+            policy={"target_rows_per_fragment": options["target_rows_per_fragment"]},
+            batch_size=int(options["batch_size"]),
+            num_threads=int(options["num_threads"]),
+            max_source_bytes=int(options["max_source_bytes"]),
+            rewrite_slots=1,
+        )
+        assert outcome is not None
+        return outcome
+
+    monkeypatch.setattr(ce, "_execute_one", _flaky)
+    result = compact_one(uri, {}, None, target_rows_per_fragment=20, cleanup_enabled=False, optimize_indices_enabled=False, rewrite=_rewrite)
+
+    assert calls["n"] == 3, f"the plan did not hold three tasks, so one failing is not a partial pass: {calls['n']}"
+    assert result.compaction_mode == "distributed", "the off-pod path did not run"
+    assert result.error_type == "PartialCompaction", (result.error, result.error_type)
+    assert result.error is not None and "1 of 3 task(s) failed" in result.error, result.error
+    assert lance.dataset(uri).count_rows() == 60, "the partial commit lost rows"
 
 
 def test_a_task_failure_after_planning_does_NOT_fall_back(tmp_path: Path) -> None:

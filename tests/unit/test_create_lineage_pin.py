@@ -30,7 +30,7 @@ def _ipc(table: pa.Table) -> bytes:
 class _Settings:
     delimiter = "$"
     fga_enabled = False
-    lineage_emit_enabled = False  # skips the in-body metadata inject; not what these tests pin
+    lineage_emit_enabled = False  # skips the lineage metadata stamp; not what these tests pin
     multibase_data_base_list: list[str] = []
     allow_external_blobs = False
     external_blob_base_list: list[str] = []

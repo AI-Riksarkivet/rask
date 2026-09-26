@@ -20,6 +20,7 @@ from pydantic.json_schema import JsonDict
 from catalog.core.vending import VendedCredentials
 from catalog.services import models as registry
 from catalog.services.changes import ChangeKind
+from catalog.services.dataplane import COMPACTION_EXECUTOR_BOUNDS
 from service_kit.control_events import CASCADE_ID_MAX_LENGTH, ORIGINATOR_MAX_LENGTH, CatalogControlEvent
 from service_kit.governed.user_state import UserStateDocument
 from service_kit.lakehouse.stage_stamp import ONE_TO_ONE
@@ -534,7 +535,8 @@ class PolicyRequest(BaseModel):
     # on the compaction PASS instead of on a read chunk. Per-tier for the reason above: a tier whose
     # rows turn out larger than whoever set the row count assumed is precisely how the read bound gets
     # away from you, and this one does not depend on knowing the row size. None → the sweep's default.
-    max_source_bytes: int | None = Field(default=None, ge=1024 * 1024)
+    # The range is `MaintenanceSettings.max_source_bytes`'s, which states the ceiling's reason.
+    max_source_bytes: int | None = Field(default=None, ge=1024 * 1024, le=1024 * 1024 * 1024)
     # HOW this tier's bytes move. Per-tier for the same reason the two bounds above are: a tier of
     # uniformly-encoded fragments can binary-copy where a tier that has evolved its schema cannot, and
     # `try_binary_copy` falls back rather than failing. None = Lance's re-encode, today's behaviour.
@@ -832,7 +834,7 @@ class CommitFragmentsResponse(BaseModel):
 
 
 def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:
-    """Publish ``batch_size`` and ``num_threads`` as the required, non-null integers the door enforces.
+    """Publish the executor bounds as the required, non-null integers the door enforces.
 
     The MODEL keeps them optional because a field Pydantic requires is refused 422 by the framework on
     this rask-only route, and the ruled answer is 400 ``InvalidInput`` from ``dataplane.plan_compaction``.
@@ -844,9 +846,8 @@ def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:
     required = schema.get("required", [])
     if not isinstance(required, list):
         raise TypeError(f"expected a required list, got {type(required).__name__}")
-    bounds = ("batch_size", "num_threads")
-    schema["required"] = [*required, *(name for name in bounds if name not in required)]
-    for name in bounds:
+    schema["required"] = [*required, *(name for name in COMPACTION_EXECUTOR_BOUNDS if name not in required)]
+    for name in COMPACTION_EXECUTOR_BOUNDS:
         published = properties[name]
         alternatives = published.pop("anyOf") if isinstance(published, dict) else None
         if not isinstance(published, dict) or not isinstance(alternatives, list):
@@ -858,22 +859,40 @@ def _publish_the_executor_bounds_as_required(schema: JsonDict) -> None:
         published.pop("default", None)
 
 
+def publish_the_plan_body_as_required(schema: JsonDict) -> None:
+    """Publish the plan door's body as the request model alone, without FastAPI's ``null`` alternative.
+
+    The handler takes ``CompactionPlanRequest | None`` so an absent or ``null`` body meets the same 400
+    ``InvalidInput`` as missing bounds rather than FastAPI's 422. The published body is required, so
+    ``null`` is not a value a client may send.
+    """
+    alternatives = schema.pop("anyOf")
+    if not isinstance(alternatives, list):
+        raise TypeError(f"expected the body to be published as an optional model, got {alternatives!r}")
+    (model,) = [alternative for alternative in alternatives if isinstance(alternative, dict) and alternative.get("type") != "null"]
+    if not isinstance(model, dict):
+        raise TypeError(f"expected the body's non-null alternative to be a schema, got {model!r}")
+    schema.update(model)
+    schema.pop("title", None)
+
+
 class CompactionPlanRequest(BaseModel):
     """Ask the catalog what compaction this table needs — a metadata read that mints nothing.
 
-    Most knobs are POLICY: what shape the table should end up in, each optional. Two are MECHANICS —
-    how much memory the rewrite may use — and both are REQUIRED, because **Lance bakes them into the
-    task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
-    ``options`` object holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute``
-    takes only the dataset. So the plan is the executor's one chance to state them.
+    Most knobs are POLICY: what shape the table should end up in, each optional. Three are MECHANICS —
+    how much memory the rewrite may use — and all three are REQUIRED, because **Lance bakes them into
+    the task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
+    ``options`` object holding ``batch_size``, ``num_threads`` and ``max_source_bytes``, and
+    ``CompactionTask.execute`` takes only the dataset. So the plan is the executor's one chance to
+    state them.
 
     Left out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch
     is counted in ROWS, and rows are not a unit of memory — against the ~1.8 MB bronze rows measured
-    here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores rather
-    than the pod's limit. So the door refuses a plan missing either one with 400 ``InvalidInput``,
-    naming both.
-    rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE`` and ``MAINTENANCE_COMPACT_THREADS``; a
-    bring-your-own executor sends the bounds it runs under.
+    here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores, over a
+    plan with no byte limit at all. So the door refuses a plan missing any of them with 400
+    ``InvalidInput``, naming all three.
+    rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS`` and
+    ``MAINTENANCE_MAX_SOURCE_BYTES``; a bring-your-own executor sends the bounds it runs under.
 
     The catalog does not INTERPRET them — it forwards the executor's own numbers into the plan. An
     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
@@ -887,18 +906,29 @@ class CompactionPlanRequest(BaseModel):
     max_bytes_per_file: int | None = Field(default=None, gt=0)
     #: Rewrite fragments to drop soft-deleted rows, not just to merge small files.
     materialize_deletions: bool | None = None
-    #: The deleted-row fraction above which a fragment is rewritten for deletions alone. Lance spells
-    #: the field ``threadhold``; the name is carried verbatim because renaming it here would mean
-    #: forwarding nothing.
-    materialize_deletions_threadhold: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: The deleted-row fraction above which a fragment is rewritten for deletions alone. Lance's own
+    #: name, ``materialize_deletions_threshold`` (``lance/optimize.py:44``, pylance 12.0.0).
+    materialize_deletions_threshold: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: HOW the bytes move. Baked at plan time like the bounds, and optional because Lance defines the
+    #: default: ``"reencode"`` (``lance/optimize.py``, pylance 12.0.0), which is what the in-pod rewrite
+    #: runs when ``MAINTENANCE_REPACK_MODE`` is unset.
+    compaction_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = Field(
+        default=None, description="How each rewrite task moves the bytes. Unset, Lance re-encodes."
+    )
     #: The executor's memory bounds (see the class docstring). OPTIONAL IN THE MODEL on purpose: a
     #: field Pydantic requires is refused 422 by the framework on this rask-only route, and absence is
     #: the domain refusal `dataplane.plan_compaction` owns — 400, code 13, the same answer an in-process
-    #: caller gets. The PUBLISHED schema marks both required (`_publish_the_executor_bounds_as_required`).
-    #: The ceilings are the maintenance settings' own, so a caller cannot ask the plan for a read the
+    #: caller gets. The PUBLISHED schema marks them required (`_publish_the_executor_bounds_as_required`).
+    #: The ranges are the maintenance settings' own, so a caller cannot ask the plan for a read the
     #: sweep's configuration forbids.
     batch_size: int | None = Field(default=None, ge=1, le=8192, description="Required. Rows per scan batch in each rewrite task.")
     num_threads: int | None = Field(default=None, ge=1, le=64, description="Required. Compute threads per rewrite task.")
+    max_source_bytes: int | None = Field(
+        default=None,
+        ge=1024 * 1024,
+        le=1024 * 1024 * 1024,
+        description="Required. Source bytes one plan may take on, summed over its tasks; Lance stops adding tasks at this limit.",
+    )
 
 
 class CompactionPlanResponse(BaseModel):

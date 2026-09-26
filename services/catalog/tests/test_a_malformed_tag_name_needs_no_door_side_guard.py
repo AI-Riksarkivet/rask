@@ -39,10 +39,7 @@ SCHEMA = pa.schema([pa.field("id", pa.int64())])
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, SCHEMA) as writer:
-        writer.write_table(pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA))
-    create_table(namespace, {}, TABLE_ID, sink.getvalue().to_pybytes(), mode="create")
+    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA), mode="create")
     return namespace
 
 

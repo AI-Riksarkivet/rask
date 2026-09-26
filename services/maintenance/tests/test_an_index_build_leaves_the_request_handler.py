@@ -21,9 +21,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import lance
 import pyarrow as pa
 import pytest
+import respx
 
 from maintenance.api import index_work
 from maintenance.core.config import MaintenanceSettings
@@ -121,6 +123,36 @@ async def test_the_build_is_signed_by_the_TABLE_scoped_credential(tmp_path: Path
 
     assert seen["table_id"] == "acme-bronze$events", "the declared id must reach the vending door or it signs with the root key"
     assert seen["write_options"] == {"aws_access_key_id": "vended"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "answer",
+    [
+        pytest.param(httpx.Response(403, json={"code": 15, "detail": "permission denied"}), id="vend-door-403"),
+        pytest.param(httpx.Response(404, json={"code": 4, "detail": "Table not found"}), id="vend-door-404"),
+        pytest.param(
+            httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {}}, "location": "s3://acme-bucket/medallion/bronze"}),
+            id="vend-location-elsewhere",
+        ),
+    ],
+)
+async def test_a_table_the_vend_door_refuses_is_ACKED_and_never_built(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, answer: httpx.Response) -> None:
+    """Each answer is about the id, so a redelivery gets the same one; building under the ambient key is the bypass.
+
+    The crossing reaches this handler only as a `MaintenanceDenied`: a vend at a location that does not cover
+    the dataset raises `GovernedElsewhere`, which this handler does not name.
+    """
+    uri = _table(tmp_path)
+    monkeypatch.setattr(index_work.credentials, "service_headers", lambda _settings: {})
+    item = IndexWorkItem(uri=uri, table_id="acme-bronze$events", column="id", kind=SCALAR_INDEX, index_type="BTREE")
+
+    with respx.mock() as router:
+        router.post("http://catalog.test/management/v1/table/acme-bronze$events/credentials").mock(return_value=answer)
+        status = await index_work.handle_index_unit({"data": item.model_dump()}, _settings(catalog_url="http://catalog.test"), NoopEmitter())
+
+    assert status == {"status": "SUCCESS"}
+    assert lance.dataset(uri).describe_indices() == [], "the index was built under the ambient key"
 
 
 def test_the_unit_id_is_DETERMINISTIC_so_a_redelivery_is_one_build() -> None:

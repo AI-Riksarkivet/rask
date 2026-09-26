@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from functools import partial
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Body, Header, Query
 from fastapi.concurrency import run_in_threadpool
@@ -56,6 +56,7 @@ from catalog.schemas import (
     CompactionPlanRequest,
     CompactionPlanResponse,
     TableChangesRequest,
+    publish_the_plan_body_as_required,
 )
 from catalog.services import blob_serving, changes, dataplane, native, table_create
 from service_kit.governed.audit import audit_read
@@ -66,6 +67,10 @@ log = logging.getLogger(__name__)
 
 
 ARROW_FILE = "application/vnd.apache.arrow.file"
+
+#: FastAPI types `Body(json_schema_extra=)` as a dict, while the pydantic `FieldInfo` it forwards to
+#: also takes a callable (`pydantic/fields.py`). One named alias absorbs that stub gap.
+_PLAN_BODY_SCHEMA: Any = publish_the_plan_body_as_required
 _OCTET_STREAM = "application/octet-stream"
 
 
@@ -139,9 +144,22 @@ async def create_table(
     every FIRST write of a derived table was emitted with no pin and no facet — only later merges
     could carry provenance.
     """
-    # BEFORE `idem.begin`, like the register door's: a malformed mode is a SHAPE refusal, and a claim
-    # minted for it would hold the key for its lease and answer the corrected retry 409.
+    # BEFORE `idem.begin`, like the register door's: a malformed mode, id, base, property map, source
+    # pin or run facet is a SHAPE refusal, and a claim minted for it would hold the key for its lease and
+    # answer the corrected retry 409.
     create_mode = CreateMode.parse(mode)
+    shape = table_create.parse_create_shape(
+        id,
+        settings=settings,
+        data_base=data_base,
+        properties=properties,
+        source=source,
+        source_version=source_version,
+        run_facets_json=run_facets_json,
+    )
+    # The body is shape too, read off the loop. The table read here is the one written, so the payload
+    # is decoded once.
+    table = await run_in_threadpool(dataplane.read_arrow_body, data)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -158,13 +176,10 @@ async def create_table(
         emitter=emitter,
         control=control,
         so=so,
-        data=data,
+        table=table,
         mode=create_mode,
-        properties=properties,
+        shape=shape,
         data_base=data_base,
-        source=source,
-        source_version=source_version,
-        run_facets_json=run_facets_json,
         authorization=authorization,
     )
     # AFTER the door succeeded, and only then: a failure raises past this line, leaving the claim
@@ -222,7 +237,7 @@ async def plan_table_compaction(
     ns: NamespaceDep,
     settings: SettingsDep,
     so: StorageOptionsDep,
-    body: CompactionPlanRequest | None = None,
+    body: Annotated[CompactionPlanRequest | None, Body(json_schema_extra=_PLAN_BODY_SCHEMA)] = None,
     branch: Annotated[
         str | None, Query(description="The ref to plan against. Omit for main; the plan reads this ref's fragments and its `read_version`.")
     ] = None,
@@ -239,9 +254,10 @@ async def plan_table_compaction(
     Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
     (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.
 
-    The body must state ``batch_size`` and ``num_threads``, the executor's memory bounds. Lance bakes
-    both into every task and the worker cannot set them afterwards, so a plan missing either is refused
-    400 (``InvalidInput``, code 13) with both named.
+    The body must state ``batch_size``, ``num_threads`` and ``max_source_bytes``, the executor's memory
+    bounds. Lance bakes them into every task and the worker cannot set them afterwards, so a plan
+    missing any is refused 400 (``InvalidInput``, code 13) with all three named. ``compaction_mode`` is
+    baked the same way and is optional: unset, Lance re-encodes.
 
     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
     to queue.
@@ -254,9 +270,17 @@ async def plan_table_compaction(
     if not described.location:
         raise InvalidInputError("table has no object-store location to compact")
     request = body or CompactionPlanRequest()
-    policy = request.model_dump(exclude_none=True, exclude={"batch_size", "num_threads"})
+    policy = request.model_dump(exclude_none=True, exclude=set(dataplane.COMPACTION_EXECUTOR_BOUNDS))
     plan = await run_in_threadpool(
-        lambda: dataplane.plan_compaction(described.location or "", so, batch_size=request.batch_size, num_threads=request.num_threads, branch=branch, **policy)
+        lambda: dataplane.plan_compaction(
+            described.location or "",
+            so,
+            batch_size=request.batch_size,
+            num_threads=request.num_threads,
+            max_source_bytes=request.max_source_bytes,
+            branch=branch,
+            **policy,
+        )
     )
     return CompactionPlanResponse(read_version=plan.read_version, tasks=plan.tasks)
 

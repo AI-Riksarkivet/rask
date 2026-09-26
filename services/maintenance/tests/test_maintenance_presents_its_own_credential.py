@@ -1,9 +1,8 @@
 """Maintenance stops presenting the estate's shared bearer at the catalog's service door.
 
 F2-3 / Q17-7's remainder. `service_headers` is the ONE builder both of maintenance's catalog doors
-use — the compaction pair and credential vending. Vending is the dangerous one to leave behind,
-because it reports any `>=400` as "vending unavailable" and returns `None`, so a 401 there does not
-fail: it silently falls back to the configured S3 key. Three subjects still hold the shared
+use — the compaction pair and credential vending. A header either door gets wrong is a 401 there, which
+stops the unit (`MaintenanceUnauthenticated`) at every table at once. Three subjects still hold the shared
 `APP_API_TOKEN`:
 `service-maintenance`, `service-ingest` and `notifications`. This is the first of them.
 
@@ -92,11 +91,9 @@ def test_the_identity_header_is_always_sent() -> None:
 def test_EVERY_door_maintenance_calls_uses_the_one_builder() -> None:
     """A credential control applied to one of two doors is not a control.
 
-    Both sites stamped the same two headers from their own copy, and the copy that mattered most was
-    the easiest to miss: `credentials.py` reports any `>=400` as "vending unavailable" and returns
-    `None`, so a 401 there does not fail loudly — maintenance quietly falls back to its configured S3
-    key with an `info` log. Discovered by grep rather than listed, so a THIRD door reds this instead
-    of drifting.
+    A door that builds its own headers can drift from the other, and a header it gets wrong is a 401
+    that stops every unit through that door. Discovered by grep rather than listed, so a THIRD door reds
+    this instead of drifting.
     """
     import pathlib
 

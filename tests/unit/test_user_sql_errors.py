@@ -21,7 +21,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import (
     DeleteFromTableRequest,
@@ -34,18 +33,11 @@ from lance_namespace import (
 from catalog.services.dataplane import create_table, delete_from_table, update_table
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 @pytest.fixture
 def table(tmp_path: Path) -> LanceNamespace:
     """A two-column table (`id`, `v`) in a real dir namespace."""
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["t"], _ipc(pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]})), mode="create")
+    create_table(ns, {}, ["t"], pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]}), mode="create")
     return ns
 
 

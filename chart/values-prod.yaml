@@ -212,7 +212,8 @@ maintenance:
   # being what finds work first.
   #
   # Relax it FURTHER only alongside `workTopic`: with the event lane off this cron IS the trigger, and
-  # an hourly primary would leave a busy estate an hour behind.
+  # an hourly primary would leave a busy estate an hour behind. Never past 75 minutes: MaintenanceTableParked's
+  # 4h window must hold three periods plus ackWait (test_the_parked_table_alert_can_fire_at_the_sweep_cadence.py).
   schedule: "0 0 * * * *" # hourly — the backstop under the event lane
   olderThanDays: 7
 

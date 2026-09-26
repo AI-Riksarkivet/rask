@@ -722,6 +722,41 @@ groups:
             indices. Find the table in the maintenance_dataset_outcome records where
             mixed_data_file_versions is true, and the writer that appended at another data_storage_version.
 
+      # A plan request the door refuses as malformed is the executor's bug with no in-pod fallback, so one pages.
+      - alert: CompactionPlanRequestRefused
+        expr: sum(increase(compaction_plan_refused_total[30m])) > 0
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "The catalog refused a compaction plan request as malformed"
+          description: >-
+            The maintenance executor sent a plan request the catalog refused as malformed, so that table was
+            not compacted and nothing rewrote it in-pod. The request is the executor's bug. The
+            compaction_plan_refused ERROR log line names the table, the status and the problem detail.
+
+      # One table the catalog keeps refusing, which the ratio rule cannot see. A rename leaves the old id with no
+      # tuples, so on a governed estate both doors answer it 403 on every tick. A worker's series first appears at
+      # 1, which increase() cannot see, so a deploy of N workers leaves N+1 sweep periods plus ackWait between
+      # counts: 4h holds two workers at the hourly backstop (pinned against the rendered chart by
+      # test_the_parked_table_alert_can_fire_at_the_sweep_cadence.py). vmalert keeps `for:` in memory, so its own
+      # restart restarts the clock.
+      - alert: MaintenanceTableParked
+        expr: sum by (table_id) (increase(compaction_tables_parked_total[4h])) > 0
+        for: 24h
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "The catalog has refused maintenance of {{ $labels.table_id }} for 24 hours"
+          description: >-
+            For a day the catalog has refused this table id, so the table is neither compacted nor cleaned.
+            Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no
+            can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance
+            derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404.
+            Grant the id, or fix the stamp or the location. The maintenance_vend_denied,
+            maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset.
+
       # A rewrite signs with a table-scoped vended credential or with the ambient process credential,
       # and until this series existed the only signal was an `info` line per dataset. Measured
       # 2026-09-11: 600 records in one window, 300 vend 401s and 300 ambient fallbacks, ZERO scoped —

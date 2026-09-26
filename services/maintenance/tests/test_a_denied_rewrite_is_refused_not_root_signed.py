@@ -13,9 +13,8 @@ THE TWO CONDITIONS ARE NOT THE SAME QUESTION:
     401 / 403                     the answer is NO    -> refuse; doing the work with a wider
                                                         credential is the authorization bypass
 
-`catalog_identity.py` already names this shape as the dangerous one — "`credentials.py` reports any
-`>=400` as 'vending unavailable'" — and `plan_via_catalog`'s own message says the plan was *refused*
-while raising *Unavailable*. The word was right and the class was wrong.
+A 401 refuses too, as `MaintenanceUnauthenticated`: it is about maintenance's own credential rather
+than the table, so it is never counted under the table's id, but the ambient key is the same bypass.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ import httpx
 import pytest
 
 from maintenance.services import catalog_compaction, credentials
-from maintenance.services.compaction_executor import CompactionPlaneUnavailable, MaintenanceDenied
+from maintenance.services.compaction_executor import CompactionPlaneUnavailable, MaintenanceDenied, MaintenanceUnauthenticated
 
 
 class _Settings:
@@ -86,6 +85,20 @@ def test_an_UNREACHABLE_plan_stays_an_outage(monkeypatch: pytest.MonkeyPatch, st
     _respond(monkeypatch, status, target=catalog_compaction.httpx, attr="post")
     with pytest.raises(CompactionPlaneUnavailable):
         catalog_compaction.plan_via_catalog("ns$t", {}, settings=_settings())
+
+
+@pytest.mark.parametrize(("status", "unauthenticated"), [(401, True), (403, False)])
+def test_a_401_is_told_apart_from_a_403_at_both_doors(monkeypatch: pytest.MonkeyPatch, status: int, unauthenticated: bool) -> None:
+    """A 401 is about this service's own credential and a 403 about the id; both refuse, only the second is the table's."""
+    _respond(monkeypatch, status, target=credentials.httpx, attr="post")
+    with pytest.raises(MaintenanceDenied) as vend:
+        credentials.write_options_for("s3://b/t", _settings(), fallback=_FALLBACK, declared_table_id="ns$t")
+    _respond(monkeypatch, status, target=catalog_compaction.httpx, attr="post")
+    with pytest.raises(MaintenanceDenied) as plan:
+        catalog_compaction.plan_via_catalog("ns$t", {}, settings=_settings())
+
+    assert [isinstance(caught.value, MaintenanceUnauthenticated) for caught in (vend, plan)] == [unauthenticated, unauthenticated]
+    assert all("ns$t" in str(caught.value) for caught in (vend, plan)), "the refusal must name the table it was asked for"
 
 
 def test_a_denial_is_NOT_an_unavailability_by_inheritance() -> None:

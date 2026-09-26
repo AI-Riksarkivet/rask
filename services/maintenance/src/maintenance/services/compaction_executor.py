@@ -144,12 +144,74 @@ class MaintenanceDenied(RuntimeError):
                                                             deployment's ambient key is an
                                                             authorization bypass, not a degradation.
 
+    The refusal covers the whole dataset for the tick, from either door: an index optimize or a cleanup
+    after it would be signed by the same ambient key.
+
     MEASURED ON THE LIVE ESTATE 2026-09-10, which is why this class exists: both maintenance->catalog
     clients classified on `status_code >= 400`, so a 403 took the outage branch. In one 60-minute
     window the sweep logged 20 fallbacks against 352 successes, and the vending log named eight tables
     it had been refused — `lakehouse$gold`, `m2proof_silver$...`, `blobtab_vaud1ns$vblob2` and five
     more — each of which was then rewritten under the root credential. Nothing was red: the fallback
     logs at INFO, because it was written for the outage it could not tell apart from this.
+    """
+
+
+class MaintenanceUnauthenticated(MaintenanceDenied):
+    """A door answered 401: it did not accept maintenance's own service credential.
+
+    About this service, not the table: a broken or rotated token is refused at every table alike, so it is
+    never counted under a table's id. A `MaintenanceDenied` for the one property the two share: no fallback,
+    because the ambient key would sign what the catalog has not authorized.
+    """
+
+
+def unauthenticated_remedy(*, table_id: str, identity: str) -> str:
+    """The sentence a maintenance 401 carries: the table it was asked for, and the credential to repair."""
+    return (
+        f"the catalog did not accept the service credential of {identity!r} when asked for {table_id} (401) — this is "
+        f"maintenance's own identity, not the table: check its Dapr app token and its dedicated token."
+    )
+
+
+class GovernedElsewhere(MaintenanceDenied):
+    """The catalog vended a credential for this unit's table id at a location that does not cover the dataset.
+
+    [[LH-141]]: a stale ``lineage.dataset_id`` stamp, or a path id left behind by a re-registration. The vend
+    door answered 200 and the table it names is healthy, so this is maintenance's own refusal of the DATASET,
+    never counted under the table's id. A `MaintenanceDenied` for the one property the two share: no fallback,
+    because the credential is scoped to the other location and the ambient key would be the bypass.
+    """
+
+
+class CompactionPlanRefused(RuntimeError):
+    """The plan door answered 4xx: the request THIS executor built is malformed.
+
+    Inherits from nothing that falls back: every caller answers `CompactionPlaneUnavailable` with an
+    in-pod rewrite, and that turns an executor bug into a silent change of path. Nothing was planned
+    and nothing was written, so the rewrite is skipped loudly for this tick. Only the rewrite: the
+    table is not what is wrong, so its index optimize and version cleanup still run. `status` and
+    `detail` are the door's own answer.
+    """
+
+    def __init__(self, message: str, *, status: int, detail: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.detail = detail
+
+
+class TableNotGoverned(RuntimeError):
+    """The vend or plan door answered 404 TableNotFound or NamespaceNotFound for the id this unit addresses.
+
+    An answer about the id, not the request (spec.yaml:2413 and :2416; 13 is the malformed request), so it
+    neither pages as `CompactionPlanRefused` nor falls back. With authorization on, the catalog's gate runs
+    before existence resolution, so an id that holds no tuples (an unregistered stamp, or the id a rename
+    left behind) is answered 403 and parks as `plan_denied` or `vend_denied` instead (measured 2026-09-26,
+    OIDC and FGA on). This 404 then means a table trashed after its unit was planned (a recoverable drop
+    keeps its tuples), a grant that outlived its table (a rename whose revoke failed), or (code 4) a
+    declared table never written; with authorization off it also means both 403 cases. The message carries
+    the door's own answer. It stops the whole dataset for the tick, as the 403s do: a rewrite, an index
+    optimize or a cleanup here would be signed by the ambient credential, and a trashed table is frozen
+    until undrop or purge.
     """
 
 
@@ -208,14 +270,16 @@ def compact_distributed(
     policy: Mapping[str, Any],
     batch_size: int,
     num_threads: int,
+    max_source_bytes: int,
     rewrite_slots: int,
 ) -> DistributedOutcome | None:
     """Plan elsewhere, rewrite here, commit elsewhere. ``None`` means this path is unavailable.
 
-    ``policy`` is the table's shape; ``batch_size`` and ``num_threads`` are THIS executor's memory
-    bounds and ride every plan request. Lance bakes them into each task, ``CompactionTask.execute``
-    takes no options, and the catalog refuses a plan without both — so they are required here rather
-    than left for a caller to remember inside ``policy``.
+    ``policy`` is the table's shape and repack mode; ``batch_size``, ``num_threads`` and
+    ``max_source_bytes`` are THIS executor's memory bounds and ride every plan request. Lance bakes
+    them into each task, ``CompactionTask.execute`` takes no options, and the catalog refuses a plan
+    without all three — so they are required here rather than left for a caller to remember inside
+    ``policy``.
 
     **The failure policy is measured, not preferred.** When some tasks fail and some succeed, the
     successful ones' data files are ALREADY WRITTEN. Discarding them leaves bytes on the store for
@@ -233,7 +297,7 @@ def compact_distributed(
     An EMPTY PLAN is a successful no-op: the table is at target. Commit is not called, for the same
     reason as above.
     """
-    planned = plan(table_id, {**policy, "batch_size": batch_size, "num_threads": num_threads})
+    planned = plan(table_id, {**policy, "batch_size": batch_size, "num_threads": num_threads, "max_source_bytes": max_source_bytes})
     if not planned.tasks:
         log.info("compaction_distributed_nothing_to_do", extra={"uri": uri, "table_id": table_id, "read_version": planned.read_version})
         return DistributedOutcome(read_version=planned.read_version, tasks_planned=0, tasks_executed=0)

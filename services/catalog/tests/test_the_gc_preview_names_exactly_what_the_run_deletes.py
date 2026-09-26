@@ -53,13 +53,6 @@ BRANCH = "work"
 NESTED = "deeper"
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def _rows(start: int) -> pa.Table:
     return pa.table({"id": pa.array([start], pa.int64())})
 
@@ -68,7 +61,7 @@ def _rows(start: int) -> pa.Table:
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _ipc(_rows(0)), mode="create")
+    create_table(ns, {}, TABLE_ID, _rows(0), mode="create")
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1))
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):

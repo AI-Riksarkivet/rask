@@ -18,16 +18,12 @@ from lance import blob_array, blob_field
 from lance_namespace import connect
 
 
-def _blob_ipc(payloads: list[bytes | None]) -> bytes:
+def _blob_table(payloads: list[bytes | None]) -> pa.Table:
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("src", pa.string())])
-    table = pa.table(
+    return pa.table(
         {"id": list(range(len(payloads))), "payload": blob_array(payloads), "src": ["cam"] * len(payloads)},
         schema=schema,
     )
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 @pytest.fixture
@@ -48,7 +44,7 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
     from catalog.services.dataplane import create_table
 
     ns = connect("dir", {"root": str(tmp_path)})
-    create_table(ns, {}, ["clips"], _blob_ipc([b"hello-world", b"X" * 100, b""]), mode="create")
+    create_table(ns, {}, ["clips"], _blob_table([b"hello-world", b"X" * 100, b""]), mode="create")
 
     app.dependency_overrides[get_namespace] = lambda: ns
     app.dependency_overrides[get_storage_options] = lambda: {}
@@ -166,7 +162,7 @@ def test_get_blob_version_param_over_http(blob_client: TestClient) -> None:
     from catalog.services.dataplane import create_table as recreate
 
     ns = blob_client.app.dependency_overrides[get_namespace]()
-    recreate(ns, {}, ["clips"], _blob_ipc([b"replacement"]), mode="overwrite")
+    recreate(ns, {}, ["clips"], _blob_table([b"replacement"]), mode="overwrite")
 
     head = blob_client.get("/management/v1/table/clips/blobs", params={"column": "payload", "row": 0})
     assert head.status_code == 200 and head.content == b"replacement"

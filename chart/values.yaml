@@ -1548,7 +1548,9 @@ maintenance:
   # estate every tick, so a short interval is what makes maintenance responsive. 120s is the demo
   # cadence; prod historically ran "0 */30 * * * *".
   #
-  # With the event lane ON, the cron becomes a BACKSTOP and should be relaxed to hourly or slower. It
+  # With the event lane ON, the cron becomes a BACKSTOP and should be relaxed to hourly, but no slower than
+  # 75 minutes: MaintenanceTableParked's 4h window must hold (workers + 1) periods plus ackWait, or it never
+  # fires (tests/unit/test_the_parked_table_alert_can_fire_at_the_sweep_cadence.py). It
   # still has to exist — the bus is provably incomplete (ingest, Ray TRAIN and external OpenLineage
   # producers emit over HTTP only and never reach the topic; the catalog's lineage lane has no outbox,
   # so a lost trigger is silent) and clock-due work like old-version GC has no write to react to. What

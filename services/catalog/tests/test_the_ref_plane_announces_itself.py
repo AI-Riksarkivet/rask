@@ -57,18 +57,14 @@ TABLE = ["alpha"]
 TABLE_PATH = "alpha"
 
 
-def _ipc() -> bytes:
-    table = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+def _table() -> pa.Table:
+    return pa.table({"id": pa.array([1, 2, 3], pa.int64())})
 
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _ipc(), mode="create")
+    create_table(namespace, {}, TABLE, _table(), mode="create")
     return namespace
 
 

@@ -34,7 +34,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.namespace import open_dataset
-from catalog.services.dataplane import create_table
+from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, erase
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -596,7 +596,7 @@ def _namespace(root: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("bob").schema) as writer:
         writer.write_table(_rows("bob"))
-    create_table(ns, {}, _TABLE_ID, sink.getvalue().to_pybytes(), mode="create")
+    create_table(ns, {}, _TABLE_ID, read_arrow_body(sink.getvalue().to_pybytes()), mode="create")
     open_dataset(ns, {}, _TABLE_ID).insert(_rows(_SUBJECT))
     open_dataset(ns, {}, _TABLE_ID).tags.create("snap", 2)
     open_dataset(ns, {}, _TABLE_ID).create_branch("work", 2)

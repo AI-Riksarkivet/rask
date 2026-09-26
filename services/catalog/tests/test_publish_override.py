@@ -32,21 +32,17 @@ SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())
 TABLE_ID = ["pages"]
 
 
-def _ipc(ids: list[int | None]) -> bytes:
-    table = pa.table(
+def _table(ids: list[int | None]) -> pa.Table:
+    return pa.table(
         {"id": pa.array(ids, pa.int64()), "payload": pa.array([f"p{i}" for i in range(len(ids))])},
         schema=SCHEMA,
     )
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, TABLE_ID, _ipc([1, 2, 3]), mode="create")
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3]), mode="create")
     return namespace
 
 

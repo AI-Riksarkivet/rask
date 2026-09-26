@@ -35,8 +35,8 @@ def _blob_schema() -> pa.Schema:
     return pa.schema([pa.field("id", pa.int64()), blob_field("payload"), pa.field("src", pa.string())])
 
 
-def _blob_ipc(payloads: list[bytes | None]) -> bytes:
-    table = pa.table(
+def _blob_table(payloads: list[bytes | None]) -> pa.Table:
+    return pa.table(
         {
             "id": list(range(len(payloads))),
             "payload": blob_array(payloads),
@@ -44,10 +44,6 @@ def _blob_ipc(payloads: list[bytes | None]) -> bytes:
         },
         schema=_blob_schema(),
     )
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _bytes(blob: BlobStream) -> bytes:
@@ -57,7 +53,7 @@ def _bytes(blob: BlobStream) -> bytes:
 @pytest.fixture
 def ns(tmp_path: Path):
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, ["clips"], _blob_ipc([b"hello-world", b"X" * 100, None, b""]), mode="create")
+    create_table(namespace, {}, ["clips"], _blob_table([b"hello-world", b"X" * 100, None, b""]), mode="create")
     return namespace
 
 
@@ -170,7 +166,7 @@ def test_read_blob_declared_only_table_is_404_not_500(ns) -> None:
 def test_read_blob_version_pins_the_payload_and_etag(ns) -> None:
     # Overwrite replaces the data; the pinned read still serves the ORIGINAL bytes, and the etag
     # names the SERVED version so resumable clients can detect the incarnation they started on.
-    create_table(ns, {}, ["clips"], _blob_ipc([b"replacement"]), mode="overwrite")
+    create_table(ns, {}, ["clips"], _blob_table([b"replacement"]), mode="overwrite")
     head = read_blob(ns, {}, ["clips"], column="payload", row=0)
     assert _bytes(head) == b"replacement"
     pinned = read_blob(ns, {}, ["clips"], column="payload", row=0, version=1)
@@ -195,7 +191,7 @@ def test_read_blob_rows_are_positional_after_delete(tmp_path: Path) -> None:
     # The documented contract: `row` is the POSITIONAL index at the served version. After a
     # delete, positions shift (probed: take_blobs indices stay consistent with count_rows).
     namespace = connect("dir", {"root": str(tmp_path)})
-    create_table(namespace, {}, ["d"], _blob_ipc([b"first", b"second"]), mode="create")
+    create_table(namespace, {}, ["d"], _blob_table([b"first", b"second"]), mode="create")
 
     from catalog.core.namespace import open_dataset
 

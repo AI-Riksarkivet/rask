@@ -48,8 +48,12 @@ ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13
 
 
+def _id_table(n: int = 3) -> pa.Table:
+    return pa.table({"id": pa.array(range(n), pa.int64())})
+
+
 def _rows(n: int = 3) -> bytes:
-    table = pa.table({"id": pa.array(range(n), pa.int64())})
+    table = _id_table(n)
     sink = pa.BufferOutputStream()
     with ipc.new_stream(sink, table.schema) as writer:
         writer.write_table(table)
@@ -194,7 +198,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     """`dataplane.insert_into_table` is a seam of its own, so its branch arm must not depend on the door
     having parsed first: handed the raw value, pylance's `insert` answers a bare ValueError, which is a 500."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, ["t"], _rows(), mode="create")
+    create_table(ns, {}, ["t"], _id_table(), mode="create")
     if branch is not None:
         open_dataset(ns, {}, ["t"]).create_branch(branch, None)
 

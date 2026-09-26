@@ -873,6 +873,144 @@ tests:
         alertname: LanceMixedDataFileVersions
         exp_alerts: []
 
+  # The first refused plan request: the per-tick zero steps to 1 and it pages on that evaluation.
+  - interval: 1m
+    input_series:
+      - series: "compaction_plan_refused_total"
+        values: "0+0x5 1+0x10"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CompactionPlanRequestRefused
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "maintenance"
+            exp_annotations:
+              summary: "The catalog refused a compaction plan request as malformed"
+              description: "The maintenance executor sent a plan request the catalog refused as malformed, so that table was not compacted and nothing rewrote it in-pod. The request is the executor's bug. The compaction_plan_refused ERROR log line names the table, the status and the problem detail."
+
+  # No refusal: silent.
+  - interval: 1m
+    input_series:
+      - series: "compaction_plan_refused_total"
+        values: "0+0x15"
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: CompactionPlanRequestRefused
+        exp_alerts: []
+
+  # One table refused on every 2-minute tick for 26 hours pages once the day has passed.
+  - interval: 2m
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
+        values: "0+1x780"
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              table_id: "acme$events"
+            exp_annotations:
+              summary: "The catalog has refused maintenance of acme$events for 24 hours"
+              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+
+  # The SAME table refused at the vend door, then at the plan door: one table, one clock.
+  - interval: 2m
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
+        values: "0+1x390 390+0x390"
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="plan_denied"}'
+        values: "_x360 0+1x420"
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              table_id: "acme$events"
+            exp_annotations:
+              summary: "The catalog has refused maintenance of acme$events for 24 hours"
+              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+
+  # The hourly backstop cadence: one count an hour must hold the clock.
+  - interval: 1h
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="plan_denied"}'
+        values: "0+1x26"
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              table_id: "acme$events"
+            exp_annotations:
+              summary: "The catalog has refused maintenance of acme$events for 24 hours"
+              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+
+  # Hourly ticks shared by two workers, both replaced at 12h. A worker's series first appears at 1, which
+  # increase() cannot see, so the deploy leaves 3h between visible counts (11h to 14h): the window holds it.
+  - interval: 5m
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="a"}'
+        values: "1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x23 _x180"
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="b"}'
+        values: "_x12 1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x11 _x180"
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="c"}'
+        values: "_x144 1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x23 7+0x23 8+0x11"
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied",pod="d"}'
+        values: "_x156 1+0x23 2+0x23 3+0x23 4+0x23 5+0x23 6+0x23 7+0x23"
+    alert_rule_test:
+      - eval_time: 26h
+        alertname: MaintenanceTableParked
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+              table_id: "acme$events"
+            exp_annotations:
+              summary: "The catalog has refused maintenance of acme$events for 24 hours"
+              description: "For a day the catalog has refused this table id, so the table is neither compacted nor cleaned. Break down by refused_by. vend_denied and plan_denied are a 403: this identity holds no can_maintain on the id, or the id names no table, which is what a rename leaves when maintenance derives the id from the location or the lineage.dataset_id stamp. table_not_governed is a 404. Grant the id, or fix the stamp or the location. The maintenance_vend_denied, maintenance_rewrite_denied and maintenance_table_not_governed WARNING lines name the dataset."
+
+  # Two tables, each refused for half the day: no table has been refused for 24 hours.
+  - interval: 2m
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$a",refused_by="vend_denied"}'
+        values: "0+1x390 390+0x390"
+      - series: 'compaction_tables_parked_total{table_id="acme$b",refused_by="vend_denied"}'
+        values: "_x360 0+1x420"
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: MaintenanceTableParked
+        exp_alerts: []
+
+  # Granted after 19 hours: the 4h window holds the clock to 23h, short of the day, so nothing fires by 25h.
+  - interval: 2m
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="plan_denied"}'
+        values: "0+1x570 570+0x210"
+    alert_rule_test:
+      - eval_time: 22h30m
+        alertname: MaintenanceTableParked
+        exp_alerts: []
+      - eval_time: 25h
+        alertname: MaintenanceTableParked
+        exp_alerts: []
+
+  # A gap longer than the window restarts the clock: refused 0-12h, nothing for 5h, refused again.
+  - interval: 2m
+    input_series:
+      - series: 'compaction_tables_parked_total{table_id="acme$events",refused_by="vend_denied"}'
+        values: "0+1x360 360+0x150 360+1x270"
+    alert_rule_test:
+      - eval_time: 25h
+        alertname: MaintenanceTableParked
+        exp_alerts: []
+
   # WORKFLOW ACTIVITY FAILURES. The one workflow family whose `status` label is TRUE — an activity that
   # exhausts its retries raises into the orchestrator, so the sidecar records a real failure.
   - interval: 1m

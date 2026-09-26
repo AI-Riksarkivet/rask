@@ -24,11 +24,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx
 import pytest
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
-from maintenance.services.compaction_executor import MaintenanceDenied
+from maintenance.services.compaction_executor import MaintenanceDenied, TableNotGoverned
 
 
 #: Distinctive values on purpose. A one-character secret is a substring of ordinary prose, so the
@@ -105,20 +106,24 @@ def test_an_unvendable_dataset_is_still_maintained(door: list[dict[str, Any]], u
         _Response(200, {"mode": "server_mediated"}),
         _Response(503, {}),
         _Response(200, {"mode": "direct", "credentials": {}}),
+        httpx.Response(404, json={"code": 0, "detail": "Not Found"}),
+        httpx.Response(404, text="not found"),
     ],
 )
-def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response) -> None:
-    """Three shapes of "no credential is on offer", and none of them is a refusal.
+def test_a_door_that_could_not_ANSWER_degrades_rather_than_failing_the_run(monkeypatch: pytest.MonkeyPatch, answer: _Response | httpx.Response) -> None:
+    """Shapes of "no credential is on offer", and none of them is a refusal.
 
     `server_mediated` is a supported posture, a 503 is an outage, and a `direct` answer carrying no
-    options offered nothing. Reclaiming disk through any of these is why the ambient fallback exists.
+    options offered nothing. A 404 that names no absent table or namespace (code 0 is a path no door
+    serves) is the door missing, not an answer about the id. Reclaiming disk through any of these is why
+    the ambient fallback exists.
     """
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
     assert credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT) == _AMBIENT
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_a_door_that_said_NO_refuses_instead_of_reaching_for_the_ambient_key(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
+@pytest.mark.parametrize(("status", "remedy"), [(401, "service credential"), (403, "can_maintain")])
+def test_a_door_that_said_NO_refuses_instead_of_reaching_for_the_ambient_key(monkeypatch: pytest.MonkeyPatch, status: int, remedy: str) -> None:
     """A DENIAL sat in the degrading list above, and it is a different question from the three there.
 
     "We could not ask" permits a fallback; "you may not" cannot, because the fallback is the ambient
@@ -126,12 +131,28 @@ def test_a_door_that_said_NO_refuses_instead_of_reaching_for_the_ambient_key(mon
     was to rewrite it with a key that can rewrite all of them. Measured on the live estate 2026-09-10:
     eight tables refused 403 and rewritten under the root key, visible only as an INFO line.
 
-    It refuses the DATASET, not the run: the sweep records a refusal and maintains everything else.
+    It refuses the DATASET, not the run: the sweep records a refusal and maintains everything else. The
+    remedy differs: a 403 is a grant on the table, a 401 is maintenance's own credential.
     """
     monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: _Response(status, {}))
     with pytest.raises(MaintenanceDenied) as caught:
         credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
-    assert "can_maintain" in str(caught.value), "the refusal must name the grant that would allow it"
+    assert remedy in str(caught.value), f"the refusal must name what would allow it: {caught.value}"
+
+
+@pytest.mark.parametrize(("code", "name"), [(4, "TABLE_NOT_FOUND"), (1, "NAMESPACE_NOT_FOUND")])
+def test_a_door_that_found_NO_SUCH_TABLE_refuses_instead_of_reaching_for_the_ambient_key(monkeypatch: pytest.MonkeyPatch, code: int, name: str) -> None:
+    """A 404 naming the table or namespace absent is an answer about the id, as a 403 is, not an outage.
+
+    Measured 2026-09-26 with distributed compaction off, the chart default: the ambient fallback rewrote,
+    re-indexed and cleaned a table the vend door had answered 404 TableNotFound (fragments 6 to 2, versions
+    7 to 1). A trashed table answers this way, and it is frozen until undrop or purge.
+    """
+    answer = httpx.Response(404, json={"code": code, "detail": "absent"})
+    monkeypatch.setattr(credentials.httpx, "post", lambda url, **kwargs: answer)
+    with pytest.raises(TableNotGoverned) as caught:
+        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
+    assert name in str(caught.value) and "acme-bronze$events" in str(caught.value), str(caught.value)
 
 
 def test_an_unreachable_catalog_degrades(monkeypatch: pytest.MonkeyPatch) -> None:

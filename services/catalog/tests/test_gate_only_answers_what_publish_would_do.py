@@ -49,16 +49,9 @@ CONFORMING = pa.schema(
 )
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def _make(tmp_path: Path, schema: pa.Schema, **cols: object):  # noqa: ANN201
     ns = connect("dir", {"root": str(tmp_path / "d")})
-    create_table(ns, {}, TABLE_ID, _ipc(pa.table(dict(cols), schema=schema)), mode="create")
+    create_table(ns, {}, TABLE_ID, pa.table(dict(cols), schema=schema), mode="create")
     return open_dataset(ns, {}, TABLE_ID).uri
 
 

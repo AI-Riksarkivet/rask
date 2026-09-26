@@ -42,8 +42,9 @@ THE COMMIT IS SIGNED BY A VENDED, TABLE-SCOPED CREDENTIAL, and a catalog denial 
 credential opened `ds`, which on a denied table is the deployment's ambient key. That is the bypass
 this class exists to stop" — and a config commit is a write to the same governed table, so it is the
 same bypass. `write_options_for` returns a scoped credential where the door vends one, raises
-`MaintenanceDenied` on a 401/403, and falls back to the ambient options only when vending is
-unconfigured or unreachable, which is the deployment posture it already counts.
+`MaintenanceDenied` on a 401/403 and `TableNotGoverned` on a 404 naming no table, and falls back to the
+ambient options only when vending is unconfigured or unreachable, which is the deployment posture it
+already counts.
 
 THE LINEAGE PLANE ALREADY ANTICIPATES THIS SHAPE. Lance records the operation as `UpdateConfig`, which
 `lineage.core.reconcile.MAINTENANCE_OPERATIONS` lists — so the sweep neither reports the version as a
@@ -61,7 +62,7 @@ import lance
 from pydantic import BaseModel, Field
 
 from maintenance.core.config import shared_lance_session
-from maintenance.services.compaction_executor import MaintenanceDenied
+from maintenance.services.compaction_executor import MaintenanceDenied, TableNotGoverned
 from maintenance.services.credentials import write_options_for
 from maintenance.services.orphans import OrphanFile
 from service_kit.lancekit.versions import committed_at
@@ -203,7 +204,7 @@ def raise_listing_floors(settings: MaintenanceSettings, *, orphans: list[OrphanF
         # catalog will refuse is the preview telling an operator the opposite of what happens.
         try:
             write_options = write_options_for(uri, settings, fallback=storage_options)
-        except MaintenanceDenied as exc:
+        except (MaintenanceDenied, TableNotGoverned) as exc:
             report.refused.append(outcome.model_copy(update={"refused": str(exc)}))
             continue
         if report.dry_run:

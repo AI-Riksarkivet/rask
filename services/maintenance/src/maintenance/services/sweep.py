@@ -34,10 +34,12 @@ from maintenance.core.metrics import (
     record_dataset_swept,
     record_failed,
     record_mixed_file_versions,
+    record_plan_refused,
     record_reclaimed,
     record_refused,
     record_run,
     record_run_started,
+    record_table_parked,
     record_trashed_skipped,
 )
 from maintenance.services import catalog_compaction, compaction_executor, credentials, purge
@@ -381,24 +383,41 @@ def maintain_one_item(item: DatasetWorkItem, *, settings: MaintenanceSettings, o
     # the in-pod rewrite while their bytes were signed by a table-scoped credential vended under the
     # very id the gate was told did not exist. Resolving once, here, is what makes the two agree.
     table_id = item.table_id or probe.declared_table_id or table_id_from_uri(item.uri)
+    # What every refusal below returns. The probe already read the manifest, so its census rides along.
+    refused = DatasetResult(uri=item.uri, data_storage_version=probe.data_storage_version, mixed_data_file_versions=probe.mixed_data_file_versions)
     try:
         write_options = credentials.write_options_for(item.uri, settings, fallback=options, declared_table_id=table_id)
+    except compaction_executor.GovernedElsewhere as exc:
+        # FIRST, because it is a `MaintenanceDenied` that the catalog did not give: the vend door answered
+        # 200 for a table that lives elsewhere. Refused against this DATASET only; the table the id names is
+        # healthy, so counting it under that id would page an operator to grant what is already granted.
+        log.warning("maintenance_governed_elsewhere", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
+        refused.refused = str(exc)
+        refused.refused_by = "governed_elsewhere"
+        return refused
+    except compaction_executor.MaintenanceUnauthenticated as exc:
+        # The vend door's 401: this service's credential, refused at every table alike, so never counted under
+        # this one's id. The dataset still stops: the ambient key would sign what the catalog has not authorized.
+        log.warning("maintenance_unauthenticated", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
+        refused.refused = str(exc)
+        refused.refused_by = "unauthenticated"
+        return refused
     except compaction_executor.MaintenanceDenied as exc:
         # The catalog refused this identity a write credential for this table. Maintaining it anyway
         # means maintaining it under `options` — the ambient key, which reaches every bucket in the
         # estate — so the refusal has to stop the dataset, not just the vend. Refused rather than
-        # errored: nothing is broken, a grant is missing, and the two must not read alike.
+        # errored: nothing is broken, a grant is missing, and the two must not read alike. NAMED, like
+        # every other gate: a missing grant and an unsupported manifest flag are a permissions fix and a
+        # dependency upgrade, and one number cannot say which.
         log.warning("maintenance_vend_denied", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
-        # NAMED, like every other gate. Without `refused_by` this refusal reached the counter in the
-        # unlabelled bucket, so a missing GRANT and an unsupported manifest FLAG — a permissions fix
-        # and a dependency upgrade — were one number.
-        return DatasetResult(
-            uri=item.uri,
-            refused=str(exc),
-            refused_by="vend_denied",
-            data_storage_version=probe.data_storage_version,
-            mixed_data_file_versions=probe.mixed_data_file_versions,
-        )
+        refused.park(str(exc), gate="vend_denied", table_id=table_id)
+        return refused
+    except compaction_executor.TableNotGoverned as exc:
+        # The vend door's 404: no table or namespace by this id. On the default lane the plan door is never
+        # asked, so this is the only place that answer arrives, and the ambient key must not touch the dataset.
+        log.warning("maintenance_table_not_governed", extra={"uri": item.uri, "table_id": table_id, "reason": str(exc)})
+        refused.park(str(exc), gate="table_not_governed", table_id=table_id)
+        return refused
     return _maintain_one(item.uri, item.plan, settings=settings, options=write_options, protected=protected, table_id=table_id)
 
 
@@ -526,15 +545,12 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
         return None
 
     def _rewrite(uri: str, *, table_id: str, options: Mapping[str, Any]) -> compaction_executor.DistributedOutcome:
-        # The two memory bounds ride the PLAN, and that is not where they look like they belong.
-        # Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON bakes `batch_size` and
-        # `num_threads`, and `CompactionTask.execute` takes only the dataset — so the catalog refuses a
-        # plan without both. INDEXED, never `.get()`: `options` is `_compact_files`' `size_kw`, which
-        # always carries the floored settings, and a missing key must fail this dataset loudly rather
-        # than earn a 400 that `plan_via_catalog` reads as an outage and answers with an in-pod rewrite.
-        policy: dict[str, Any] = {}
-        if (target := options.get("target_rows_per_fragment")) is not None:
-            policy["target_rows_per_fragment"] = target
+        # `options` is `_compact_files`' `size_kw`: exactly what the in-pod rewrite would pass, so the
+        # plan carries all of it. The three memory bounds and the repack mode ride the PLAN because
+        # Lance bakes them into each task and `CompactionTask.execute` takes only the dataset (measured
+        # on pylance 12.0.0, 2026-09-25). The bounds are INDEXED, never `.get()`: `size_kw` always
+        # carries the floored settings, and a missing key must fail here rather than at the door.
+        policy = {name: options[name] for name in ("target_rows_per_fragment", "compaction_mode") if options.get(name) is not None}
         outcome = compaction_executor.compact_distributed(
             uri,
             table_id=table_id,
@@ -546,6 +562,7 @@ def _rewriter(settings: MaintenanceSettings, write_options: dict[str, str]) -> R
             policy=policy,
             batch_size=int(options["batch_size"]),
             num_threads=int(options["num_threads"]),
+            max_source_bytes=int(options["max_source_bytes"]),
             # The MEMORY bound, and deliberately not `max_concurrent_units`, which is the THROUGHPUT
             # one. Only the rewrite holds bytes; a no-op unit never reaches it.
             rewrite_slots=settings.max_concurrent_compactions,
@@ -785,10 +802,27 @@ def execute_unit(item: DatasetWorkItem, *, settings: MaintenanceSettings, option
         bytes_removed=result.bytes_removed,
     )
     record_refused(1 if result.refused else 0, result.refused_by)
+    _record_parked(result)
     record_mixed_file_versions(1 if result.mixed_data_file_versions else 0)
+    record_plan_refused(1 if result.plan_refused else 0)
     if result.error is not None:
         record_failed({result.error_type or "Unknown": 1})
     return result
+
+
+def _record_parked(result: DatasetResult) -> None:
+    """Count a catalog refusal under the table id it refused, which `MaintenanceTableParked` pages on.
+
+    Only the catalog's three answers: a layout refusal can land on a location that names no table.
+    """
+    table_id = result.refused_table_id
+    if table_id is None:
+        return
+    match result.refused_by:
+        case "vend_denied" | "plan_denied" | "table_not_governed" as gate:
+            record_table_parked(table_id=table_id, refused_by=gate)
+        case _:
+            return
 
 
 def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], list[DatasetResult]]:
@@ -827,6 +861,7 @@ def plan_sweep(settings: MaintenanceSettings) -> tuple[list[DatasetWorkItem], li
     record_reclaimed(fragments_removed=0, versions_removed=0, indices_optimized=0)
     record_refused(0)
     record_mixed_file_versions(0)
+    record_plan_refused(0)
     options = settings.storage_options()
     older_than = timedelta(days=settings.older_than_days)
     policy_records = _load_policies(settings, options)
@@ -1147,7 +1182,11 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
       below. Deliberate — nothing FAILED, we declined before touching a byte, and a FAIL event would
       claim a maintenance run went wrong. Its visibility is the WARNING log, the ``lance.refused``
       span attribute, the ``compaction.datasets.refused`` counter and ``summarize``'s own line.
-    * no error + material work → the **COMPLETE** event (unchanged); no-op ticks skipped.
+    * material work, under any error but ``maintain:`` or ``open:`` → the **COMPLETE** event; no-op
+      ticks skipped.
+      A ``compaction:`` error skipped or cut short the rewrite (a refused plan, a partial compaction)
+      and an ``auto_cleanup:`` one missed a config write, but the versions reclaimed or fragments
+      merged changed the table all the same.
     * URI not the catalog's ``<uuid>_<table_id>`` layout → skipped either way (no id to key on). This is
       the DOCUMENTED blind spot for the medallion-nested datasets (``s3://<bucket>/medallion/<ns>`` has no
       catalog id to reconstruct — a URI→id map is out of proportion here).
@@ -1171,13 +1210,11 @@ async def emit_sweep_lineage(emitter: MaintenanceEmitter, results: list[DatasetR
         if table_id is None:
             continue
         namespace = fga.parent_namespace_id(table_id, delimiter=delimiter) or ""
-        if result.error is not None:
-            if result.error.startswith("maintain:"):
-                failed.append((table_id, namespace, result.error))
-            continue
-        if not _did_material_work(result):
-            continue
-        complete.append((table_id, namespace))
+        error = result.error or ""
+        if error.startswith("maintain:"):
+            failed.append((table_id, namespace, error))
+        elif not error.startswith("open:") and _did_material_work(result):
+            complete.append((table_id, namespace))
 
     if len(failed) > _MAX_FAIL_EMITS_PER_TICK:
         log.warning(

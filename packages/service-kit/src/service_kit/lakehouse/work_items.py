@@ -50,8 +50,8 @@ class DatasetPlan(BaseModel):
     #: The PASS bound, in bytes, beside the READ bound above — `None` means "the sweep's own default".
     #: Carried on the work item for the same reason `scan_batch_size` is: the plan is what crosses the
     #: broker, so a bound the planner resolved has to travel with the unit or the worker applies a
-    #: different one.
-    max_source_bytes: int | None = Field(default=None, ge=1024 * 1024)
+    #: different one. The range is `MaintenanceSettings.max_source_bytes`'s.
+    max_source_bytes: int | None = Field(default=None, ge=1024 * 1024, le=1024 * 1024 * 1024)
     #: HOW the bytes move — pylance's `compaction_mode`, carried under a distinct name because
     #: `DatasetResult.compaction_mode` already means in-pod vs distributed. `None` = Lance's default
     #: (`reencode`), which is today's behaviour and stays it unless an estate opts in.

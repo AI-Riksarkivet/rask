@@ -47,7 +47,7 @@ def _ipc(table: pa.Table) -> bytes:
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _ipc(pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=SCHEMA)), mode="create")
+    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=SCHEMA), mode="create")
     return namespace
 
 

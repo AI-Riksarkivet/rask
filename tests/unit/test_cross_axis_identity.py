@@ -21,11 +21,13 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pyarrow as pa
 import pytest
 
 from catalog.core.identifiers import parse_identifier
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed import fga
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 # Default plus three non-default delimiters (single-char and multi-char).
@@ -92,6 +94,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
 
     granted: dict[str, Any] = {}
     stamped: dict[str, Any] = {}
+    written: dict[str, pa.Table] = {}
 
     # `**_kw` on purpose: this fake stands in for `seed_ownership`, which the compensating seam calls
     # with whatever keywords it grows (it forwards `parent_object` since diff2 F3). This test is about
@@ -101,23 +104,22 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
         granted["resource"] = resource
         granted["segments"] = segments
 
+    real_build_meta = table_create.build_lineage_metadata
+
     def _build_meta(*, table_id: str, namespace: str, run_id: str) -> dict[str, str]:
         stamped["table_id"] = table_id
         stamped["namespace"] = namespace
         stamped["run_id"] = run_id
-        return {"lineage.dataset_id": table_id}
+        return real_build_meta(table_id=table_id, namespace=namespace, run_id=run_id)
 
-    def _facade_create(*_a: object, **_k: object) -> Any:
-        # Stub the whole write facade: this test is about the THREE-AXIS identity the endpoint derives
-        # (FGA object id, lineage Dataset name, Lance metadata id), not the write. Every create now routes
-        # through the direct 2.2 path (dataplane.create_table -> declare + write_dataset), so patching
-        # native.call no longer intercepts it — the facade is the correct seam. Returns the same fake
-        # location the old native stub did.
+    def _facade_create(_ns: object, _so: object, _segments: list[str], table: pa.Table, **_kw: object) -> Any:
+        # Stubs the write, not the table handed to it: this test is about the THREE-AXIS identity the
+        # endpoint derives, and the Lance metadata axis is only real if it reaches the table written.
+        written["table"] = table
         return SimpleNamespace(version=1, location="s3://lakehouse/uuid_alpha.bronze.images")
 
     monkeypatch.setattr(table_create.fga_deps, "seed_ownership", _seed)
     monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)
-    monkeypatch.setattr(table_create, "inject_into_arrow_stream", lambda payload, _meta: payload)  # no real Arrow
     monkeypatch.setattr(table_create.dataplane, "create_table", _facade_create)
 
     emitter = _RecordingEmitter()
@@ -131,7 +133,7 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
             emitter=cast(Any, emitter),
             control=cast(Any, NoopControlEmitter()),
             so=cast(Any, {}),  # unused on the native (non-blob) path this test drives
-            data=b"arrow-ipc-bytes",
+            data=encode_arrow_stream(pa.table({"id": [1]})),
             mode=None,
             properties=None,
             authorization="Bearer tok",
@@ -153,3 +155,10 @@ def test_create_handler_keeps_all_three_axes_identical_under_non_default_delimit
     # #21: the run id stamped into the Lance file is the SAME one the lineage event carries.
     assert stamped["run_id"] == emitter.create["run_id"]
     assert emitter.create["run_id"]  # and it's non-empty
+    # ...and all three coordinates are on the table handed to the write, not only computed.
+    metadata = written["table"].schema.metadata or {}
+    assert metadata.get(b"lineage.dataset_id") == canonical.encode()
+    assert metadata.get(b"lineage.namespace") == b"alpha.bronze"
+    assert metadata.get(b"lineage.create_run_id") == emitter.create["run_id"].encode()
+    # The WROTE edge's schema facet is read off the table written.
+    assert [field["name"] for field in emitter.create["schema_fields"]] == ["id"]

@@ -1,11 +1,11 @@
 """How maintenance identifies itself to the catalog — ONE builder, for every door it calls.
 
-There are two: the compaction plan/commit pair and credential vending. They stamped the same two
-headers from two copies, and a credential control applied to one of them is not a control. Vending is
-the dangerous copy to miss, because `credentials.py` reports any `>=400` as "vending unavailable" and
-returns `None` — so a 401 there does not fail, it silently falls back to the configured S3 key with
-an `info` log. A refusal that reads as an outage is at least visible; one that reads as absence is
-not.
+There are two: the compaction plan/commit pair and credential vending. One builder serves both, because
+a credential control applied to one of them is not a control. Both doors are read alike: a 401 raises
+`MaintenanceUnauthenticated`, a 403 `MaintenanceDenied`, and a 404 naming no table or namespace
+`TableNotGoverned`, so a header this builder gets wrong stops the unit rather than being signed around.
+Any other failure of the vend door to answer degrades to the ambient credential, with an `info` log and
+`compaction.credential.tier` tier=ambient.
 
 THE THIRD HALF. A privileged subject needs its token SEEDED as well as demanded and presented:
 `openbao.yaml` derives what to mint from its own list and `services.yaml` derives what to demand from

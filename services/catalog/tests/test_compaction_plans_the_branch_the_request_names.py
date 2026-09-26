@@ -34,13 +34,6 @@ TABLE_ID = ["rows"]
 BRANCH = "work"
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def _rows(n: int, start: int = 0) -> pa.Table:
     return pa.table({"id": pa.array(range(start, start + n), pa.int64())})
 
@@ -53,7 +46,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     the branch finds work. Equal fragment counts would make both answers look alike.
     """
     namespace = lance_ns = __import__("lance_namespace").connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _ipc(_rows(1)), mode="create")
+    create_table(namespace, {}, TABLE_ID, _rows(1), mode="create")
     open_dataset(namespace, {}, TABLE_ID).create_branch(BRANCH, None)
     branch = open_dataset(namespace, {}, TABLE_ID, branch=BRANCH)
     for i in range(1, 5):  # four more single-row fragments, only on the branch
@@ -81,7 +74,7 @@ def test_planning_a_BRANCH_reads_the_branch(ns) -> None:  # noqa: ANN001
     location = _location(ns)
     branch_version = open_dataset(ns, {}, TABLE_ID, branch=BRANCH).version
 
-    plan = plan_compaction(location, {}, branch=BRANCH, target_rows_per_fragment=1024, batch_size=64, num_threads=2)
+    plan = plan_compaction(location, {}, branch=BRANCH, target_rows_per_fragment=1024, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
 
     assert plan.read_version == branch_version, f"the plan read version {plan.read_version} while the branch is at {branch_version} — it planned against main"
     assert plan.tasks, "the branch has five single-row fragments and the plan found nothing to merge"
@@ -91,6 +84,6 @@ def test_planning_without_a_branch_still_reads_main(ns) -> None:  # noqa: ANN001
     """Pinned so the fix cannot be "always open the branch"."""
     main_version = open_dataset(ns, {}, TABLE_ID).version
 
-    plan = plan_compaction(_location(ns), {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2)
+    plan = plan_compaction(_location(ns), {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
 
     assert plan.read_version == main_version

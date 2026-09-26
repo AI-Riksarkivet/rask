@@ -68,3 +68,58 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
     await emit_sweep_lineage(emitter, results, delimiter=".")
     assert sorted(emitter.completed) == ["ns.tbl0", "ns.tbl2"], "a raising publish must not take its siblings down"
     assert emitter.failed == ["ns.bad"], "the FAIL lane must still run after a COMPLETE publish raised"
+
+
+@pytest.mark.parametrize(
+    ("result", "lane"),
+    [
+        pytest.param(
+            DatasetResult(
+                uri="s3://b/0001_ns.t", declared_table_id="ns.t", old_versions_removed=5, error="compaction: refused", error_type="CompactionPlanRefused"
+            ),
+            "complete",
+            id="a-skipped-rewrite-whose-cleanup-reclaimed",
+        ),
+        pytest.param(
+            DatasetResult(
+                uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="compaction: 1 of 3 task(s) failed", error_type="PartialCompaction"
+            ),
+            "complete",
+            id="a-partial-compaction-that-committed",
+        ),
+        pytest.param(
+            DatasetResult(
+                uri="s3://b/0001_ns.t",
+                declared_table_id="ns.t",
+                old_versions_removed=3,
+                error="auto_cleanup: config write failed",
+                error_type="RuntimeError",
+            ),
+            "complete",
+            id="a-failed-auto-cleanup-config-after-a-reclaiming-cleanup",
+        ),
+        pytest.param(
+            DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", error="compaction: refused", error_type="CompactionPlanRefused"),
+            None,
+            id="a-skipped-rewrite-that-reclaimed-nothing",
+        ),
+        pytest.param(
+            DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="maintain: boom", error_type="RuntimeError"),
+            "fail",
+            id="a-failed-pass",
+        ),
+        pytest.param(
+            DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="open: not a dataset", error_type="ValueError"),
+            None,
+            id="an-unopened-dataset",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_lane_is_decided_by_the_work_done_unless_the_pass_failed(result: DatasetResult, lane: str | None) -> None:
+    """A `compaction:` error skipped or cut short the rewrite, but whatever the pass reclaimed still changed the table."""
+    emitter = _RecordingEmitter()
+    await emit_sweep_lineage(emitter, [result], delimiter=".")
+
+    reached = "complete" if emitter.completed else "fail" if emitter.failed else None
+    assert reached == lane, (emitter.completed, emitter.failed)

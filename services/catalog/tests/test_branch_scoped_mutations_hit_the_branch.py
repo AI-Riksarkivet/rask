@@ -40,18 +40,14 @@ SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("label", pa.string())])
 BRANCH = "staging"
 
 
-def _ipc(ids: list[int], label: str) -> bytes:
-    table = pa.table({"id": pa.array(ids, pa.int64()), "label": pa.array([label] * len(ids))}, schema=SCHEMA)
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+def _table(ids: list[int], label: str) -> pa.Table:
+    return pa.table({"id": pa.array(ids, pa.int64()), "label": pa.array([label] * len(ids))}, schema=SCHEMA)
 
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _ipc([1, 2, 3], "main"), mode="create")
+    create_table(namespace, {}, TABLE_ID, _table([1, 2, 3], "main"), mode="create")
     dataset = open_dataset(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH) if hasattr(dataset, "create_branch") else pytest.skip("pylance has no branch API here")
     return namespace

@@ -315,7 +315,7 @@ def test_plan_compaction_answers_NOT_FOUND_for_a_table_whose_bytes_are_absent(tm
     location = ns.declare_table(DeclareTableRequest(id=["ns1", "empty"])).location  # declared, never written
 
     with pytest.raises(TableNotFoundError, match="never written"):
-        dataplane.plan_compaction(location, {}, target_rows_per_fragment=100, batch_size=64, num_threads=2)
+        dataplane.plan_compaction(location, {}, target_rows_per_fragment=100, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
 
 
 @pytest.mark.parametrize(
@@ -361,7 +361,7 @@ def test_plan_compaction_does_not_call_a_STORAGE_FAULT_a_missing_table(tmp_path:
 
     monkeypatch.setattr(dataplane.lance, "dataset", _fault)
     with pytest.raises(ServiceUnavailableError) as caught:
-        dataplane.plan_compaction(written, {}, batch_size=64, num_threads=2)
+        dataplane.plan_compaction(written, {}, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
 
     assert "never written" not in str(caught.value), f"a storage fault was reported as a missing table: {caught.value}"
     assert not isinstance(caught.value, TableNotFoundError), "a storage fault was given the not-found code"

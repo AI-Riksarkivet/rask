@@ -62,7 +62,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     change without touching main.
     """
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE_ID, _ipc(pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=MAIN_SCHEMA)), mode="create")
+    create_table(namespace, {}, TABLE_ID, pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=MAIN_SCHEMA), mode="create")
     dataset = open_dataset(namespace, {}, TABLE_ID)
     dataset.create_branch(BRANCH, None)
     branch_dataset = open_dataset(namespace, {}, TABLE_ID, branch=BRANCH)

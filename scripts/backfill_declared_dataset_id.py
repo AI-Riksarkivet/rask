@@ -86,16 +86,19 @@ def _plan() -> list[tuple[str, str, dict[str, str] | None]]:
             # The SAME table-scoped credential the sweep signs a rewrite with, falling back to the
             # ambient one wherever the vending door offers NONE.
             #
-            # A REFUSAL IS NOT A FALLBACK. `MaintenanceDenied` means the catalog actively declined this
-            # identity a write credential for this table; correcting its name under the ambient key
-            # would be exactly the bypass that refusal exists to prevent, so the table is skipped and
-            # named. Driven live 2026-09-10: the door refuses tables this identity holds no
-            # `can_maintain` on, and letting the exception escape aborted the whole pass at the first
-            # one — a repair that stops at the first table it may not touch has repaired nothing.
+            # AN ANSWER ABOUT THE ID IS NOT A FALLBACK: a 401/403, a 404 naming no table or namespace (a
+            # table dropped within `catalog.trashGraceDays` keeps its bytes here), or a location that
+            # does not cover the dataset. Correcting a name under the ambient key would be the bypass
+            # each exists to prevent, so the table is skipped with the door's answer. Driven live
+            # 2026-09-10: letting one escape aborted the whole pass at the first such table — a repair
+            # that stops at the first table it may not touch has repaired nothing.
             try:
                 write_options = credentials.write_options_for(uri, settings, fallback=options, declared_table_id=None)
-            except compaction_executor.MaintenanceDenied:
-                print(f"  x  {table_id}: the catalog refuses this identity a write credential — skipped, not signed with the ambient key")
+            except compaction_executor.GovernedElsewhere as exc:
+                print(f"  x  {table_id}: governed at another location — skipped, not signed with the ambient key: {exc}")
+                continue
+            except (compaction_executor.MaintenanceDenied, compaction_executor.TableNotGoverned) as exc:
+                print(f"  x  {table_id}: skipped, not signed with the ambient key — {exc}")
                 continue
             plan.append((uri, table_id, dict(write_options) if write_options else None))
     return plan

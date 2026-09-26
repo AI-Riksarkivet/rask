@@ -21,8 +21,11 @@ rewritten — no per-table credential can express a whole-estate read, and narro
 turn the guard off. Those are READS. The clause this serves is that no service holds a root key on a
 WRITE path, and the write path is here.
 
-Every failure degrades to the ambient credential and says so. Vending is a hardening, and a hardening
-that can fail a maintenance run turns an optional improvement into a new way to stop reclaiming disk.
+A door that could not ANSWER degrades to the ambient credential and says so. Vending is a hardening, and
+a hardening that can fail a maintenance run turns an optional improvement into a new way to stop
+reclaiming disk. An answer refuses instead: a 401 about this service's own credential
+(`MaintenanceUnauthenticated`), and three about the id — a 403 (`MaintenanceDenied`), a 404 naming no table
+or namespace (`TableNotGoverned`), or a location that does not cover the dataset (`GovernedElsewhere`).
 """
 
 from __future__ import annotations
@@ -40,8 +43,9 @@ from service_kit.lakehouse.table_locations import table_id_from_location
 if TYPE_CHECKING:
     from maintenance.core.config import MaintenanceSettings
 from maintenance.core.metrics import record_credential_tier
+from maintenance.services.catalog_compaction import table_not_governed
 from maintenance.services.catalog_identity import service_headers
-from maintenance.services.compaction_executor import MaintenanceDenied, denial_remedy
+from maintenance.services.compaction_executor import GovernedElsewhere, MaintenanceDenied, MaintenanceUnauthenticated, denial_remedy, unauthenticated_remedy
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +97,10 @@ def write_options_for(uri: str, settings: MaintenanceSettings, *, fallback: dict
     answer: the vended credential must COVER the dataset being maintained. See
     :func:`_refuse_a_credential_that_does_not_cover` — a credential scoped to another table's location
     is not a weaker credential, it is a credential for a different tenant's data.
+
+    Raises ``MaintenanceDenied`` (or its ``MaintenanceUnauthenticated`` or ``GovernedElsewhere``) or
+    ``TableNotGoverned`` where the door answered; each stops the caller's unit, which must not fall back
+    to ``fallback``.
 
     A DECLARED id is never repaired or second-guessed here. If a producer stamps a wrong one the vend
     fails on a table that does exist, which is a visible 403 in the log — whereas silently falling back
@@ -161,7 +169,7 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
     governed, holding = normalise(location), normalise(uri)
     if holding == governed or holding.startswith(f"{governed}/"):
         return
-    raise MaintenanceDenied(
+    raise GovernedElsewhere(
         f"the dataset at {uri} declares the table id {table_id!r}, which the catalog governs at {location} — "
         "the two name different locations, so a rewrite here would be signed for one tenant's table and land in "
         "another's. Repair the dataset's `lineage.dataset_id` stamp, or register the id the dataset really is."
@@ -221,7 +229,9 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
     except httpx.HTTPError as exc:
         logger.info("credential vending unreachable for %s (%s)", table_id, exc)
         return None
-    if response.status_code in (401, 403):
+    if response.status_code == 401:
+        raise MaintenanceUnauthenticated(f"no write credential vended: {unauthenticated_remedy(table_id=table_id, identity=settings.catalog_service_identity)}")
+    if response.status_code == 403:
         # A DENIAL, NOT AN OUTAGE — and the difference decides whether a rewrite may proceed. Falling
         # back here hands the caller the deployment's ambient key, which reaches every bucket in the
         # estate, in answer to the catalog saying this identity may not write this one table. Measured
@@ -232,6 +242,10 @@ def _vend(table_id: str, settings: MaintenanceSettings) -> Vended | None:
             f"authorized, and signing it with the ambient key would be a bypass. "
             f"{denial_remedy(table_id=table_id, identity=settings.catalog_service_identity)}"
         )
+    if (absent := table_not_governed(response, table_id=table_id)) is not None:
+        # AN ANSWER ABOUT THE ID, not an outage, so no fallback either: a trashed table, or with authorization
+        # off any unregistered id. Every other 4xx or 5xx below still degrades to the ambient credential.
+        raise absent
     if response.status_code >= 400:
         logger.info("credential vending unavailable for %s (%s)", table_id, response.status_code)
         return None

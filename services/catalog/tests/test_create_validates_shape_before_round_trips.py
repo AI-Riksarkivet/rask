@@ -17,12 +17,14 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError, LanceNamespace
 
 from catalog.api import fga_deps
 from catalog.api.v1.endpoints import data as ep
 from catalog.core.config import Settings
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
 
 
 def _settings() -> Settings:
@@ -56,7 +58,7 @@ def _create(**over: Any) -> Any:
         "emitter": None,
         "control": None,
         "so": {},
-        "data": b"",
+        "data": encode_arrow_stream(pa.table({"id": [1]})),
     }
     kwargs.update(over)
     return asyncio.run(ep.create_table(**kwargs))
@@ -86,3 +88,9 @@ def test_a_non_lance_format_is_refused_without_dialling_out(no_round_trips: list
     with pytest.raises(InvalidInputError):
         _create(properties='{"write.format.default": "parquet"}')
     assert not no_round_trips, f"dialled {no_round_trips} before the LANCE-ONLY format guard"
+
+
+def test_a_body_that_is_not_an_arrow_stream_is_refused_without_dialling_out(no_round_trips: list[str]) -> None:
+    with pytest.raises(InvalidInputError, match="not an Arrow IPC stream"):
+        _create(data=b"this is not an arrow ipc stream")
+    assert not no_round_trips, f"dialled {no_round_trips} before reading the request's own body"

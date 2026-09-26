@@ -159,6 +159,10 @@ def _arrow_ipc(table: pa.Table) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
+#: A real body for the write doors, which refuse one that is not a valid Arrow IPC stream.
+_ONE_ROW = _arrow_ipc(pa.table({"id": [1]}))
+
+
 def test_create_strips_root_storage_options_from_response(real_ns_client: TestClient) -> None:
     _ensure_namespace(real_ns_client, "db")
     # #88: a create response must NEVER carry storage credentials (storage access is vended only via
@@ -229,7 +233,7 @@ def test_merge_insert_maps_spec_09_query_params(client: TestClient, fake_ns: Mag
     fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
     client.post(
         "/v1/table/db$t/merge_insert?on=id&when_matched_update_all=true&when_matched_update_all_filt=score>0.5&timeout=30s&use_index=true",
-        content=b"A",
+        content=_ONE_ROW,
         headers=ARROW_STREAM,
     )
     req = fake_ns.merge_insert_into_table.call_args.args[0]
@@ -456,7 +460,7 @@ def test_merge_insert_emits_version_pinned_source_and_run_facets(client: TestCli
 
     resp = client.post(
         "/v1/table/db$t/merge_insert?on=id&when_matched_update_all=true&source=db$src&source_version=4",
-        content=b"A",
+        content=_ONE_ROW,
         headers={**ARROW_STREAM, "X-Lance-Run-Facets": '{"params": {"lr": 0.01, "epochs": 5}}'},
     )
     assert resp.status_code == 200
@@ -469,7 +473,7 @@ def test_merge_insert_emits_version_pinned_source_and_run_facets(client: TestCli
 
 def test_merge_insert_rejects_source_version_without_source(client: TestClient, fake_ns: MagicMock) -> None:
     # A pin with nothing to pin is a fail-fast 400 (before the merge commits), not a silently dropped version.
-    resp = client.post("/v1/table/db$t/merge_insert?on=id&source_version=4", content=b"A", headers=ARROW_STREAM)
+    resp = client.post("/v1/table/db$t/merge_insert?on=id&source_version=4", content=_ONE_ROW, headers=ARROW_STREAM)
     assert resp.status_code == 400, resp.text
 
 
@@ -491,7 +495,7 @@ def test_merge_insert_authz_checks_the_source_before_recording_it(client: TestCl
 
     resp = client.post(
         "/v1/table/db$t/merge_insert?on=id&source=up$stream&source_version=3",
-        content=b"A",
+        content=_ONE_ROW,
         headers=ARROW_STREAM,
     )
     assert resp.status_code == 200
@@ -510,11 +514,37 @@ def test_merge_insert_denies_when_source_not_readable(client: TestClient, fake_n
     monkeypatch.setattr(fga_deps, "require_can_get_metadata", _deny)
     resp = client.post(
         "/v1/table/db$t/merge_insert?on=id&source=secret$pii&source_version=1",
-        content=b"A",
+        content=_ONE_ROW,
         headers=ARROW_STREAM,
     )
     assert resp.status_code == 403, resp.text
     fake_ns.merge_insert_into_table.assert_not_called()  # denied before the write
+
+
+def test_create_denies_when_source_not_readable(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    # The create door's twin of the guard above: a pin on a source the caller can't read is a 403 BEFORE
+    # the write, so no cross-tenant DERIVED_FROM edge is ever emitted for it.
+    from lance_namespace import PermissionDeniedError
+
+    from catalog.api import fga_deps
+
+    checked: list[list[str]] = []
+    writes: list[object] = []
+
+    async def _deny(_client: object, _settings: object, _token: object, *, segments: list[str]) -> None:
+        checked.append(segments)
+        raise PermissionDeniedError("can_get_metadata required")
+
+    monkeypatch.setattr(fga_deps, "require_can_get_metadata", _deny)
+    monkeypatch.setattr("catalog.services.dataplane.create_table", lambda *a, **_k: writes.append(a) or CreateTableResponse(location="s3://x/t", version=1))
+    resp = client.post(
+        "/v1/table/db$t/create?source=secret$pii&source_version=1",
+        content=_arrow_ipc(pa.table({"id": [1]})),
+        headers=ARROW_STREAM,
+    )
+    assert resp.status_code == 403, resp.text
+    assert checked == [["secret", "pii"]], "the SOURCE was not the object checked"
+    assert writes == [], "denied after the write"
 
 
 def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClient, fake_ns: MagicMock) -> None:
@@ -533,7 +563,7 @@ def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClien
     for bad in bad_headers:
         resp = client.post(
             "/v1/table/db$t/merge_insert?on=id",
-            content=b"A",
+            content=_ONE_ROW,
             headers={**ARROW_STREAM, "X-Lance-Run-Facets": bad},
         )
         assert resp.status_code == 400, f"{bad[:40]!r} -> {resp.status_code}: {resp.text[:200]}"
@@ -542,7 +572,7 @@ def test_merge_insert_rejects_malformed_or_reserved_run_facets(client: TestClien
 
 def test_merge_insert_rejects_blank_source_with_version(client: TestClient, fake_ns: MagicMock) -> None:
     # An empty source can't carry a version pin — 400, not a nameless forged input vertex bypassing the guard.
-    resp = client.post("/v1/table/db$t/merge_insert?on=id&source=&source_version=4", content=b"A", headers=ARROW_STREAM)
+    resp = client.post("/v1/table/db$t/merge_insert?on=id&source=&source_version=4", content=_ONE_ROW, headers=ARROW_STREAM)
     assert resp.status_code == 400, resp.text
     fake_ns.merge_insert_into_table.assert_not_called()
     fake_ns.merge_insert_into_table.assert_not_called()  # rejected before the write

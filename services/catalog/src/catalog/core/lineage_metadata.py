@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
-
 
 #: Schema-metadata keys; the lineage service / a consumer reads these straight off the Lance table. Only
 #: opaque coordinates — no identity/PII (the creator is resolved via the gated /creator endpoint).
@@ -46,18 +44,15 @@ def build_lineage_metadata(*, table_id: str, namespace: str, run_id: str) -> dic
     }
 
 
-def inject_into_arrow_stream(stream: bytes, metadata: dict[str, str]) -> bytes:
-    """Return the Arrow IPC stream with ``metadata`` merged into its schema metadata.
+def stamp_lineage_metadata(table: pa.Table, metadata: dict[str, str]) -> pa.Table:
+    """Return ``table`` with ``metadata`` merged into its schema metadata.
 
-    Existing schema metadata is preserved; the ``metadata`` keys win on conflict. The record batches
-    are unchanged — only the schema's key/value metadata gains the lineage coordinates, which Lance
-    persists as the table's schema metadata at version 1.
+    Existing schema metadata is preserved; the ``metadata`` keys win on conflict. The columns are the
+    same buffers, not a copy — only the schema's key/value metadata gains the lineage coordinates, which
+    Lance persists as the table's schema metadata at version 1.
     """
-    reader = pa.ipc.open_stream(stream)
-    table = reader.read_all()
     merged: dict[bytes, bytes] = {
         **(table.schema.metadata or {}),
         **{key.encode(): value.encode() for key, value in metadata.items()},
     }
-    table = table.replace_schema_metadata(merged)
-    return encode_arrow_stream(table)
+    return table.replace_schema_metadata(merged)

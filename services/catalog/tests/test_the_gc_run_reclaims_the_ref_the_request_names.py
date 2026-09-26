@@ -48,13 +48,6 @@ TABLE_ID = ["rows"]
 BRANCH = "work"
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def _rows(n: int, start: int = 0) -> pa.Table:
     return pa.table({"id": pa.array(range(start, start + n), pa.int64())})
 
@@ -69,7 +62,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     branch-scoped reclaim removes 0 parent data files, a main-scoped one removes 2.
     """
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _ipc(_rows(1)), mode="create")
+    create_table(ns, {}, TABLE_ID, _rows(1), mode="create")
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1, start=1))
     lance.write_dataset(_rows(1, start=2), str(open_dataset(ns, {}, TABLE_ID).uri), mode="overwrite")
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, None)

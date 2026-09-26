@@ -22,9 +22,11 @@ import time
 from pathlib import Path
 from typing import Any, cast
 
+import httpx
 import lance
 import pyarrow as pa
 import pytest
+import respx
 
 from maintenance.services.compaction_executor import MaintenanceDenied
 from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_floors
@@ -36,7 +38,8 @@ class _Settings:
     """The fields this pass reads. A real `MaintenanceSettings` would drag its whole env.
 
     `catalog_url` empty is the NO-VENDING-DOOR posture, which `write_options_for` handles by returning
-    the ambient fallback and saying so. The tests that care about vending patch that function outright.
+    the ambient fallback and saying so. The tests that care about vending patch that function outright,
+    or set `catalog_url` and answer its door through respx.
     """
 
     def __init__(self, *, enabled: bool = True, dry_run: bool = False, max_per_tick: int = 10) -> None:
@@ -331,6 +334,44 @@ def test_a_denial_is_reported_by_the_DRY_RUN_too(monkeypatch: pytest.MonkeyPatch
 
     assert report.raised == []
     assert len(report.refused) == 1
+
+
+def test_a_table_the_catalog_does_not_govern_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, readable_floor: None) -> None:
+    """The vend door's 404 names no table by this id. Committing under the ambient key is the same bypass."""
+    monkeypatch.setattr("maintenance.services.credentials.service_headers", lambda _settings: {})
+    settings = _Settings(dry_run=True)
+    settings.catalog_url = "http://catalog.test"
+    uri = "s3://wh/4c49d010_acme-bronze$events"
+
+    with respx.mock() as router:
+        router.post("http://catalog.test/management/v1/table/acme-bronze$events/credentials").mock(
+            return_value=httpx.Response(404, json={"code": 4, "detail": "Table not found"})
+        )
+        report = raise_listing_floors(cast(Any, settings), orphans=[_orphan(uri, False)], storage_options={})
+
+    assert report.raised == []
+    assert "TABLE_NOT_FOUND" in (report.refused[0].refused or ""), report.refused
+
+
+def test_a_location_the_catalog_governs_elsewhere_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, readable_floor: None) -> None:
+    """The vend door answered 200 for a table at another location, so its credential does not cover this dataset.
+
+    It reaches this pass only as a `MaintenanceDenied`: `GovernedElsewhere` is not named here, and escaping
+    would abort the pass at the first crossing.
+    """
+    monkeypatch.setattr("maintenance.services.credentials.service_headers", lambda _settings: {})
+    settings = _Settings(dry_run=True)
+    settings.catalog_url = "http://catalog.test"
+    elsewhere = "s3://acme-bucket/medallion/bronze"
+
+    with respx.mock() as router:
+        router.post("http://catalog.test/management/v1/table/acme-bronze$events/credentials").mock(
+            return_value=httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {}}, "location": elsewhere})
+        )
+        report = raise_listing_floors(cast(Any, settings), orphans=[_orphan("s3://wh/4c49d010_acme-bronze$events", False)], storage_options={})
+
+    assert report.raised == []
+    assert elsewhere in (report.refused[0].refused or ""), report.refused
 
 
 def test_a_dataset_already_raised_is_not_raised_again(tmp_path: Path) -> None:

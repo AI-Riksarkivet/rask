@@ -51,18 +51,14 @@ TABLE = ["alpha"]
 TABLE_PATH = "alpha"
 
 
-def _ipc(start: int) -> bytes:
-    table = pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+def _table(start: int) -> pa.Table:
+    return pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())})
 
 
 @pytest.fixture
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(namespace, {}, TABLE, _ipc(1), mode="create")
+    create_table(namespace, {}, TABLE, _table(1), mode="create")
     # A SECOND VERSION, so "the parent is main's current version" is a number the request could not
     # have guessed and a null could not stand in for. With one version, 1 and "unset" are too close
     # to tell apart in a failure message.

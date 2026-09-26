@@ -10,19 +10,11 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from catalog.core.lineage_metadata import build_lineage_metadata, inject_into_arrow_stream
+from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 
 
-def _stream(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
-def _schema_meta(stream: bytes) -> dict[str, str]:
-    schema = pa.ipc.open_stream(stream).read_all().schema
-    return {k.decode(): v.decode() for k, v in (schema.metadata or {}).items()}
+def _schema_meta(table: pa.Table) -> dict[str, str]:
+    return {k.decode(): v.decode() for k, v in (table.schema.metadata or {}).items()}
 
 
 def test_build_lineage_metadata() -> None:
@@ -40,37 +32,41 @@ def test_build_lineage_metadata_carries_no_pii() -> None:
     assert not any("created_by" in key or "author" in key for key in md)
 
 
-def test_inject_into_arrow_stream_roundtrip() -> None:
+def test_stamp_lineage_metadata_roundtrip() -> None:
     table = pa.table({"id": [1, 2, 3], "payload_src": ["a", "b", "a"]})
     md = build_lineage_metadata(table_id="a$b$c", namespace="a$b", run_id="r-1")
-    out = inject_into_arrow_stream(_stream(table), md)
-    got = pa.ipc.open_stream(out).read_all()
+    got = stamp_lineage_metadata(table, md)
     assert got.column("id").to_pylist() == [1, 2, 3]  # data preserved
     assert got.column("payload_src").to_pylist() == ["a", "b", "a"]
-    meta = _schema_meta(out)
+    meta = _schema_meta(got)
     assert meta["lineage.dataset_id"] == "a$b$c"
     assert meta["lineage.create_run_id"] == "r-1"
 
 
-def test_inject_preserves_existing_schema_metadata() -> None:
+def test_stamp_shares_the_tables_buffers() -> None:
+    """A metadata swap, not a copy: the stamp costs nothing however large the create payload is."""
+    table = pa.table({"id": pa.array(range(1000), pa.int64())})
+    got = stamp_lineage_metadata(table, build_lineage_metadata(table_id="t", namespace="", run_id="r"))
+    assert got.column("id").chunk(0).buffers()[1].address == table.column("id").chunk(0).buffers()[1].address
+
+
+def test_stamp_preserves_existing_schema_metadata() -> None:
     schema = pa.schema([("id", pa.int64())], metadata={"existing": "keep"})
     table = pa.table({"id": [1]}, schema=schema)
-    out = inject_into_arrow_stream(_stream(table), build_lineage_metadata(table_id="t", namespace="", run_id="r"))
-    meta = _schema_meta(out)
+    meta = _schema_meta(stamp_lineage_metadata(table, build_lineage_metadata(table_id="t", namespace="", run_id="r")))
     assert meta["existing"] == "keep"  # pre-existing schema metadata is preserved
     assert meta["lineage.dataset_id"] == "t"
 
 
-def test_injected_metadata_persists_in_lance_file(tmp_path: Path) -> None:
+def test_stamped_metadata_persists_in_lance_file(tmp_path: Path) -> None:
     """The coordinates must survive a real Lance write → read (the whole point of #21)."""
     import lance
 
     table = pa.table({"id": [1, 2]})
     md = build_lineage_metadata(table_id="a$b$c", namespace="a$b", run_id="r-9")
-    got = pa.ipc.open_stream(inject_into_arrow_stream(_stream(table), md)).read_all()
 
     uri = str(tmp_path / "t.lance")
-    lance.write_dataset(got, uri)
+    lance.write_dataset(stamp_lineage_metadata(table, md), uri)
     schema = lance.dataset(uri).schema
     meta = {k.decode(): v.decode() for k, v in (schema.metadata or {}).items()}
     assert meta["lineage.dataset_id"] == "a$b$c"

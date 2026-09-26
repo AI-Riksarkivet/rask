@@ -76,40 +76,29 @@ GOVERNED_SCHEMA = pa.schema(
 )
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
-def _dummy_shaped() -> bytes:
-    return _ipc(
-        pa.table(
-            {
-                "id": pa.array([1, 2, 3], pa.int64()),
-                # FABRICATED: the row's position, not its parent. `runners/dummy` writes
-                # `list(range(len(ids)))` when `_rowid` is absent.
-                "source_rowid": pa.array([0, 1, 2], pa.int64()),
-                "checksum": pa.array(["a", "b", "c"]),
-            },
-            schema=DUMMY_SCHEMA,
-        )
+def _dummy_shaped() -> pa.Table:
+    return pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int64()),
+            # FABRICATED: the row's position, not its parent. `runners/dummy` writes
+            # `list(range(len(ids)))` when `_rowid` is absent.
+            "source_rowid": pa.array([0, 1, 2], pa.int64()),
+            "checksum": pa.array(["a", "b", "c"]),
+        },
+        schema=DUMMY_SCHEMA,
     )
 
 
-def _governed() -> bytes:
-    return _ipc(
-        pa.table(
-            {
-                "id": pa.array([1, 2, 3], pa.int64()),
-                "payload": pa.array(["p1", "p2", "p3"]),
-                "stage": pa.array(["silver"] * 3),
-                "lineage": pa.array(['{"run_id":"r1"}'] * 3).cast(pa.json_()),
-                "source_rowid": pa.array([11, 12, 13], pa.uint64()),
-            },
-            schema=GOVERNED_SCHEMA,
-        )
+def _governed() -> pa.Table:
+    return pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int64()),
+            "payload": pa.array(["p1", "p2", "p3"]),
+            "stage": pa.array(["silver"] * 3),
+            "lineage": pa.array(['{"run_id":"r1"}'] * 3).cast(pa.json_()),
+            "source_rowid": pa.array([11, 12, 13], pa.uint64()),
+        },
+        schema=GOVERNED_SCHEMA,
     )
 
 
@@ -144,7 +133,7 @@ def registry_root(tmp_path: Path) -> str:
     return str(root)
 
 
-def _client_over(payload: bytes, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[tuple[TestClient, LanceNamespace]]:
+def _client_over(payload: pa.Table, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, registry_root: str) -> Iterator[tuple[TestClient, LanceNamespace]]:
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     create_table(namespace, {}, TABLE_ID, payload, mode="create")
     with TestClient(_app(namespace, monkeypatch, registry_root)) as c:
@@ -173,27 +162,25 @@ def test_a_source_rowid_of_the_wrong_TYPE_is_REFUSED(tmp_path: Path, monkeypatch
     Worth its own test because it is the failure a reader is least likely to see: the column is
     present and non-null, so every count-based check passes.
     """
-    payload = _ipc(
-        pa.table(
-            {
-                "id": pa.array([1, 2, 3], pa.int64()),
-                "payload": pa.array(["p1", "p2", "p3"]),
-                "stage": pa.array(["silver"] * 3),
-                # JSONB, so this drive isolates the WIDTH defect: a string here is a second violation
-                # and the 400 would no longer prove which one the door caught.
-                "lineage": pa.array(['{"run_id":"r1"}'] * 3).cast(pa.json_()),
-                "source_rowid": pa.array([11, 12, 13], pa.int64()),
-            },
-            schema=pa.schema(
-                [
-                    pa.field("id", pa.int64()),
-                    pa.field("payload", pa.string()),
-                    pa.field("stage", pa.string()),
-                    pa.field("lineage", pa.json_()),
-                    pa.field("source_rowid", pa.int64()),
-                ]
-            ),
-        )
+    payload = pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int64()),
+            "payload": pa.array(["p1", "p2", "p3"]),
+            "stage": pa.array(["silver"] * 3),
+            # JSONB, so this drive isolates the WIDTH defect: a string here is a second violation
+            # and the 400 would no longer prove which one the door caught.
+            "lineage": pa.array(['{"run_id":"r1"}'] * 3).cast(pa.json_()),
+            "source_rowid": pa.array([11, 12, 13], pa.int64()),
+        },
+        schema=pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("payload", pa.string()),
+                pa.field("stage", pa.string()),
+                pa.field("lineage", pa.json_()),
+                pa.field("source_rowid", pa.int64()),
+            ]
+        ),
     )
     client, _ = next(_client_over(payload, tmp_path, monkeypatch, registry_root))
 
@@ -209,25 +196,23 @@ def test_a_lineage_of_the_wrong_TYPE_is_REFUSED(tmp_path: Path, monkeypatch: pyt
     2026-09-09, both types driven against a real dataset). A string column holding the same bytes reads
     back, is never null, and quietly cannot carry the index the tier is supposed to have.
     """
-    payload = _ipc(
-        pa.table(
-            {
-                "id": pa.array([1, 2, 3], pa.int64()),
-                "payload": pa.array(["p1", "p2", "p3"]),
-                "stage": pa.array(["silver"] * 3),
-                "lineage": pa.array(['{"run_id":"r1"}'] * 3),
-                "source_rowid": pa.array([11, 12, 13], pa.uint64()),
-            },
-            schema=pa.schema(
-                [
-                    pa.field("id", pa.int64()),
-                    pa.field("payload", pa.string()),
-                    pa.field("stage", pa.string()),
-                    pa.field("lineage", pa.string()),
-                    pa.field("source_rowid", pa.uint64()),
-                ]
-            ),
-        )
+    payload = pa.table(
+        {
+            "id": pa.array([1, 2, 3], pa.int64()),
+            "payload": pa.array(["p1", "p2", "p3"]),
+            "stage": pa.array(["silver"] * 3),
+            "lineage": pa.array(['{"run_id":"r1"}'] * 3),
+            "source_rowid": pa.array([11, 12, 13], pa.uint64()),
+        },
+        schema=pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("payload", pa.string()),
+                pa.field("stage", pa.string()),
+                pa.field("lineage", pa.string()),
+                pa.field("source_rowid", pa.uint64()),
+            ]
+        ),
     )
     client, _ = next(_client_over(payload, tmp_path, monkeypatch, registry_root))
 

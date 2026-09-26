@@ -26,12 +26,17 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import CountTableRowsResponse, ListTableTagsResponse, MergeInsertIntoTableResponse
 
+from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+#: A real body for the write doors, which refuse one that is not a valid Arrow IPC stream.
+_ONE_ROW = encode_arrow_stream(pa.table({"id": [1]}))
 
 
 # --- A3 -------------------------------------------------------------------------------------------
@@ -101,5 +106,5 @@ def test_merge_insert_takes_a_single_on_until_the_namespace_bump(client: TestCli
     This pins the current contract so the change lands with the bump, not before it.
     """
     fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
-    assert client.post("/v1/table/db$t/merge_insert?on=id", content=b"A", headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/db$t/merge_insert?on=id", content=_ONE_ROW, headers=ARROW_STREAM).status_code == 200
     assert fake_ns.merge_insert_into_table.call_args.args[0].on == "id"

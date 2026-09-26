@@ -6,8 +6,15 @@ service."""
 
 from __future__ import annotations
 
+from typing import Literal
+
 from opentelemetry import metrics
 
+
+#: The refusals the catalog gives for a TABLE ID, and the closed `refused_by` set of
+#: `compaction.tables.parked`: the vend door's 403, the plan door's 403, and the plan door's 404 naming
+#: the table or namespace absent.
+type CatalogRefusal = Literal["vend_denied", "plan_denied", "table_not_governed"]
 
 _meter = metrics.get_meter("lance.maintenance")
 
@@ -41,15 +48,24 @@ _indices_optimized = _meter.create_counter(
     unit="{index}",
     description="Secondary indices (vector/scalar/FTS) re-optimized to cover new fragments.",
 )
-#: #64 — datasets the pass REFUSED because their manifest sets a feature flag it cannot correctly
-#: rewrite (base_paths / shallow clone, data overlays, anything unknown). Its own series, not a
-#: sub-case of an error counter: nothing failed, and the number that matters is the TREND. The
-#: supported-flag set is a whitelist, so a pylance upgrade that adds a legitimate flag shows up here
-#: as a step change — and nowhere else — while the sweep otherwise still reports a clean run.
+#: #64 — datasets the pass REFUSED, labelled by the gate that refused them (`record_refused` names each).
+#: Its own series, not a sub-case of an error counter: nothing failed, and the number that matters is the
+#: TREND. The supported-flag set is a whitelist, so a pylance upgrade that adds a legitimate flag shows up
+#: here as a step change in `manifest_flags` — and nowhere else — while the sweep still reports a clean run.
 _refused = _meter.create_counter(
     "compaction.datasets.refused",
     unit="{dataset}",
-    description="Datasets refused by the maintenance pass because of an unsupported manifest feature flag.",
+    description="Datasets refused by the maintenance pass, by refused_by gate.",
+)
+
+#: PER TABLE, which `_refused` deliberately is not. A table the catalog refuses on every tick is one row in
+#: a refusal share measured at 45.3-46.5% of every sweep (2026-09-24), so only its own id can page on it.
+#: `table_id` is bounded by the refused tables and `refused_by` by `CatalogRefusal`. No zero is emitted:
+#: an absent series is the healthy estate, and a zero could name no table.
+_tables_parked = _meter.create_counter(
+    "compaction.tables.parked",
+    unit="{dataset}",
+    description="Datasets left untouched for the tick because the catalog refused their table id, by table_id and refused_by.",
 )
 
 #: Datasets whose manifest carries reader flag 256 (mixed data file versions). Its own series because
@@ -59,6 +75,16 @@ _mixed_file_versions = _meter.create_counter(
     "compaction.datasets.mixed_file_versions",
     unit="{dataset}",
     description="Datasets whose data files are at more than one Lance file version (reader flag 256), counted each time the sweep opens one.",
+)
+
+
+#: Plan requests the catalog's plan door refused 4xx as malformed (not 401/403, not 408/429). Its own
+#: series because it names the EXECUTOR as the fault: the table is not compacted and nothing rewrites it
+#: in-pod, so one is a bug to fix rather than a failure to watch the rate of.
+_plan_refused = _meter.create_counter(
+    "compaction.plan.refused",
+    unit="{request}",
+    description="Compaction plan requests the catalog refused as malformed; the executor built a request the plan door does not accept.",
 )
 
 
@@ -249,7 +275,10 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
     ~600 datasets a tick. A number that large and that flat is a standing condition, and the
     unlabelled series could not say whether it was somebody else's clone (`protected_base`, true
     forever), a manifest feature a pylance upgrade would support (`manifest_flags`), an unparseable
-    branch directory (`invalid_ref`) or a missing grant (`vend_denied`). `DatasetResult.refused_by`
+    branch directory (`invalid_ref`), a denied credential or plan (`vend_denied`, `plan_denied`), an
+    id the catalog governs no table by (`table_not_governed`), an id the catalog governs at another
+    location (`governed_elsewhere`) or maintenance's own service credential rejected with a 401
+    (`unauthenticated`). `DatasetResult.refused_by`
     already carried the answer and `summarize_refusals` already counted by it — it reached the sweep's
     WARNING and the response body and stopped there, which is the same shape as
     `compaction.bytes.reclaimed` before [[LH-099]].
@@ -268,6 +297,14 @@ def record_refused(datasets: int, refused_by: str | None = None) -> None:
     _refused.add(datasets)
 
 
+def record_table_parked(*, table_id: str, refused_by: CatalogRefusal) -> None:
+    """Record that the catalog refused ``table_id`` at one door this tick.
+
+    Keyword-only: both are strings, and a swapped pair would put a door name in the table label.
+    """
+    _tables_parked.add(1, {"table_id": table_id, "refused_by": refused_by})
+
+
 def record_mixed_file_versions(datasets: int) -> None:
     """Record how many datasets carry mixed data file versions (reader flag 256).
 
@@ -275,6 +312,15 @@ def record_mixed_file_versions(datasets: int) -> None:
     `increase()` sees that mix as a step from 0 rather than as a series appearing.
     """
     _mixed_file_versions.add(datasets)
+
+
+def record_plan_refused(requests: int) -> None:
+    """Record how many plan requests the door refused as malformed.
+
+    Always emits, including zero, for `record_mixed_file_versions`' reason: the alert's `increase()`
+    must see the first refusal as a step from 0, not as a series appearing.
+    """
+    _plan_refused.add(requests)
 
 
 def record_failed(errors_by_type: dict[str, int]) -> None:

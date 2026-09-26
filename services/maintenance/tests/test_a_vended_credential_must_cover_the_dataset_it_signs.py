@@ -30,7 +30,7 @@ import pytest
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
-from maintenance.services.compaction_executor import MaintenanceDenied
+from maintenance.services.compaction_executor import GovernedElsewhere
 
 
 AMBIENT = {"aws_access_key_id": "minioadmin"}
@@ -49,10 +49,13 @@ def _vends(location: str | None) -> object:
 
 
 def test_the_live_crossing_stops_the_unit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The measured case: a silver dataset in a tenant warehouse stamped with a bronze table's id."""
+    """The measured case: a silver dataset in a tenant warehouse stamped with a bronze table's id.
+
+    `GovernedElsewhere`, not the door's own `MaintenanceDenied`: the catalog vended, and the table it names
+    is healthy, so the sweep must not count this under that table's id."""
     monkeypatch.setattr(credentials, "_vend", _vends("s3://lance-catalog/medallion/bronze"))
 
-    with pytest.raises(MaintenanceDenied) as refusal:
+    with pytest.raises(GovernedElsewhere) as refusal:
         credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), fallback=AMBIENT, declared_table_id="bronze$events")
 
     message = str(refusal.value)

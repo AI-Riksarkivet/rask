@@ -44,13 +44,6 @@ TABLE_ID = ["rows"]
 BRANCH = "work"
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def _rows(n: int, start: int = 0) -> pa.Table:
     return pa.table({"id": pa.array(range(start, start + n), pa.int64())})
 
@@ -59,7 +52,7 @@ def _rows(n: int, start: int = 0) -> pa.Table:
 def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at two versions, the branch at several — so a preview can tell the refs apart."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, TABLE_ID, _ipc(_rows(1)), mode="create")
+    create_table(ns, {}, TABLE_ID, _rows(1), mode="create")
     open_dataset(ns, {}, TABLE_ID).insert(_rows(1, start=1))
     open_dataset(ns, {}, TABLE_ID).create_branch(BRANCH, None)
     branch = open_dataset(ns, {}, TABLE_ID, branch=BRANCH)
