@@ -460,13 +460,13 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
 
     payload = await request.body()
     # OFF THE LOOP. This route is `async def` because it awaits four actor round-trips, but the decode
-    # under it is pure synchronous CPU over the WHOLE body: `pa.ipc.open_stream(...).read_all()` (with
-    # an `open_file` retry, so a file-framed payload is parsed twice), `to_pylist()` materialising every
-    # row, per-row Pydantic construction, then a second full pass for the ontology check. None of it
-    # yields, this process has one loop serving the whole zone, and the payload is caller-sized — so
-    # inline it froze every other in-flight request and the pod's own /livez + /readyz for as long as
-    # the upload took to parse. Same fix and same reason as `assist.py` and `project_events.py`; the
-    # sibling Arrow route in `annotations/wire.py` is a plain `def` and gets the threadpool for free.
+    # under it is pure synchronous CPU over the WHOLE body: the Arrow decode and its full buffer
+    # validation, `to_pylist()` materialising every row, per-row Pydantic construction, then a second
+    # full pass for the ontology check. None of it yields, this process has one loop serving the whole
+    # zone, and the payload is caller-sized — so inline it froze every other in-flight request and the
+    # pod's own /livez + /readyz for as long as the upload took to parse. Same fix and same reason as
+    # `assist.py` and `project_events.py`; the sibling Arrow route in `annotations/wire.py` is a plain
+    # `def` and gets the threadpool for free.
     shapes, links = await run_in_threadpool(shapes_from_ipc, payload, ontology=ontology, taken_ids=taken)
 
     try:

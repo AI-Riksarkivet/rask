@@ -30,6 +30,7 @@ import pyarrow as pa
 from annotator.projects.models import Link, Shape
 from annotator.projects.ontology import ShapeLike, membership_violation
 from service_kit.exceptions import ValidationError
+from service_kit.lancekit.arrow_ipc import ArrowBodyError, decode_arrow_stream_or_file
 
 
 if TYPE_CHECKING:
@@ -134,22 +135,22 @@ def shapes_from_ipc(
 
 
 def _read_table(payload: bytes) -> pa.Table:
-    """Arrow IPC bytes → a table, with a refusal a human can act on.
+    """Arrow IPC bytes → a table whose buffers and names are validated, with a refusal a human can act on.
 
     Both framings are accepted because both are what `pyarrow` produces depending on which writer
     the caller reached for, and telling someone their valid Arrow file is invalid because they used
     `new_file` instead of `new_stream` is a distinction the format does not ask them to care about.
+
+    Validated before any row is read, because `to_pylist` follows the body's own offsets: an offset
+    past its values buffer becomes a shape's text holding process memory, which the draft stores and
+    the route returns.
     """
     if not payload:
         raise ValidationError("import refused — the request carried no data")
     try:
-        return pa.ipc.open_stream(pa.BufferReader(payload)).read_all()
-    except pa.ArrowInvalid:
-        pass
-    try:
-        return pa.ipc.open_file(pa.BufferReader(payload)).read_all()
-    except pa.ArrowInvalid as exc:
-        raise ValidationError(f"import refused — the payload is not Arrow IPC ({exc})") from exc
+        return decode_arrow_stream_or_file(payload)
+    except ArrowBodyError as exc:
+        raise ValidationError(f"import refused — the payload is not valid Arrow IPC ({exc})") from exc
 
 
 def _shape(row: dict[str, Any], index: int, taken: set[str]) -> Shape:

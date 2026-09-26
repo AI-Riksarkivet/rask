@@ -99,7 +99,7 @@ from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_d
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
+from service_kit.lancekit.arrow_ipc import ArrowBodyError, decode_arrow_stream, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.lancekit.versions import committed_at
 
@@ -340,26 +340,17 @@ def _write_blob(
         raise
 
 
-#: What pyarrow raises for a body that is not an Arrow IPC stream. `ArrowIOError` is `OSError`, and a
-#: stream cut inside a batch raises it (measured on pyarrow 25.0.0); over an in-memory body no OSError
-#: can come from storage.
-_NOT_AN_ARROW_STREAM = (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError, pa.ArrowIOError)
-
-
 def read_arrow_body(data: bytes) -> pa.Table:
-    """A write body as a table, or `InvalidInputError` (400, code 13) saying it is not an Arrow IPC stream.
+    """A write body as a table, or `InvalidInputError` (400, code 13) saying it is not a valid Arrow IPC stream.
 
-    Read whole, because a stream cut inside a batch parses its schema and fails only on the batch. Then
-    validated in full, because framing that parses says nothing about the buffers: offsets past a
-    values buffer, offsets that decrease, and non-UTF-8 string values all read without error, and Lance
-    writes the first as bytes from outside the request (pyarrow 25.0.0, pylance 12.0.0).
+    Decoded by the fleet's one validating decoder (`service_kit.lancekit.arrow_ipc`): read whole, then
+    validated in full, because framing that parses says nothing about the buffers — Lance writes an
+    offset past its values buffer as bytes from outside the request (pyarrow 25.0.0, pylance 12.0.0).
     """
     try:
-        table = pa.ipc.open_stream(data).read_all()
-        table.validate(full=True)
-    except _NOT_AN_ARROW_STREAM as exc:
-        raise InvalidInputError(f"the request body is not an Arrow IPC stream: {exc}") from exc
-    return table
+        return decode_arrow_stream(data)
+    except ArrowBodyError as exc:
+        raise InvalidInputError(f"the request body is not a valid Arrow IPC stream: {exc}") from exc
 
 
 def create_table(
@@ -1475,7 +1466,7 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
         # leave the response as the backend gave it rather than fail a successful insert.
         if response.version is None or response.num_inserted_rows is None:
             with suppress(Exception):
-                inserted = pa.ipc.open_stream(pa.BufferReader(data)).read_all().num_rows
+                inserted = read_arrow_body(data).num_rows
                 response.num_inserted_rows = response.num_inserted_rows if response.num_inserted_rows is not None else inserted
                 # `branch=req.branch` even though this arm is the branchless one: it is None here, so
                 # the call is identical — and it says "open the ref the request NAMES" at the seam

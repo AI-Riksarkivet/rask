@@ -5,9 +5,8 @@ validates every row through Pydantic inline on the event loop".
 
 `import_annotations` is `async def`, and correctly so: it awaits four actor round-trips. But it then
 called `shapes_from_ipc(payload, ...)` INLINE, and that function is fully synchronous CPU work over
-the entire request body — `pa.ipc.open_stream(...).read_all()` (with an `open_file` retry, so a
-file-framed payload is parsed twice), `table.to_pylist()` materialising every row as a Python dict,
-per-row Pydantic construction, then a SECOND full pass building
+the entire request body — the Arrow decode and its full buffer validation, `table.to_pylist()`
+materialising every row as a Python dict, per-row Pydantic construction, then a SECOND full pass building
 `ShapeLike.model_validate(s.model_dump(mode="json"))` for the ontology check. None of it yields.
 
 The annotator process has one event loop serving the whole zone, so while that ran, every other

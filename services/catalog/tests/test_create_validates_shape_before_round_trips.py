@@ -91,6 +91,6 @@ def test_a_non_lance_format_is_refused_without_dialling_out(no_round_trips: list
 
 
 def test_a_body_that_is_not_an_arrow_stream_is_refused_without_dialling_out(no_round_trips: list[str]) -> None:
-    with pytest.raises(InvalidInputError, match="not an Arrow IPC stream"):
+    with pytest.raises(InvalidInputError, match="not a valid Arrow IPC stream"):
         _create(data=b"this is not an arrow ipc stream")
     assert not no_round_trips, f"dialled {no_round_trips} before reading the request's own body"

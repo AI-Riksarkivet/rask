@@ -106,6 +106,17 @@ def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: Test
         pytest.param(_tampered(pa.string(), _OFFSETS, struct.pack("<iii", 0, 5, 65536)), id="utf8-offsets-past-the-values-buffer"),
         pytest.param(_tampered(pa.binary(), _OFFSETS, struct.pack("<iii", 0, 8, 5)), id="binary-offsets-that-decrease"),
         pytest.param(_tampered(pa.string(), b"hello", b"\xff\xfe\xfdlo"), id="utf8-values-that-are-not-utf8"),
+        # Reading runs the deserializer `import lance` registers for `lance.blob.v2`, which raises a plain
+        # TypeError for a storage type it refuses (pylance 12.0.0).
+        pytest.param(
+            _stream(
+                pa.table(
+                    [pa.array(range(3), pa.int64())],
+                    schema=pa.schema([pa.field("id", pa.int64(), metadata={b"ARROW:extension:name": b"lance.blob.v2", b"ARROW:extension:metadata": b""})]),
+                )
+            ),
+            id="pylances-blob-type-named-on-a-storage-it-refuses",
+        ),
     ],
 )
 def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(real_ns_client: TestClient, body: bytes) -> None:
@@ -115,7 +126,7 @@ def test_a_keyed_body_that_is_not_an_arrow_stream_lets_the_corrected_retry_run(r
     refused = real_ns_client.post(CREATE, content=body, headers=keyed)
     assert refused.status_code == 400, f"the malformed body was not refused 400: {refused.status_code} {refused.text[:300]}"
     assert refused.json().get("code") == INVALID_INPUT, refused.json()
-    assert "not an Arrow IPC stream" in str(refused.json().get("detail")), refused.json()
+    assert "not a valid Arrow IPC stream" in str(refused.json().get("detail")), refused.json()
 
     retried = real_ns_client.post(CREATE, content=_rows(), headers=keyed)
 

@@ -51,6 +51,7 @@ from service_kit.exceptions import (
 )
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
 from service_kit.lancekit.absence import reads_as_absent
+from service_kit.lancekit.arrow_ipc import decode_arrow_stream_or_file
 from service_kit.lancekit.catalog_client import catalog_api_client
 from service_kit.lancekit.catalog_client import request_headers as _request_headers
 
@@ -159,7 +160,9 @@ class CatalogTableReader:
     ``table_id`` is the catalog identifier as a list (``[namespace, table]``);
     ``scan_k`` is the large ``k`` used to express a filter/columns-only scan (the
     endpoint has no plain-scan verb). Decodes the ``application/vnd.apache.arrow.file``
-    response with :func:`pyarrow.ipc.open_file`.
+    response with :func:`~service_kit.lancekit.arrow_ipc.decode_arrow_stream_or_file`, which validates
+    it in full and raises :class:`~service_kit.lancekit.arrow_ipc.ArrowBodyError` for bytes that are not
+    a valid Arrow IPC body.
     """
 
     def __init__(
@@ -222,8 +225,9 @@ class CatalogTableReader:
             with_row_id=with_row_id,
             version=version,
         )
-        raw = self._transport.query(request)
-        return pa.ipc.open_file(pa.py_buffer(raw)).read_all()
+        # The response is bytes from another service, decoded by the same validating decoder as a
+        # caller's request body: framing that parses says nothing about the buffers it frames.
+        return decode_arrow_stream_or_file(self._transport.query(request))
 
     def count_rows(self, filter: str | None = None, *, version: int | None = None) -> int:
         return self._transport.count(self._id, filter, version=version)

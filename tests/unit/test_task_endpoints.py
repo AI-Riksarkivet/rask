@@ -19,8 +19,10 @@ version of this file's subject, and the ORIGINAL tests asserted the buggy behavi
 
 from __future__ import annotations
 
+import struct
 from typing import Any
 
+import pyarrow as pa
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -674,6 +676,146 @@ def test_an_import_requires_can_annotate(_live_project: Any, monkeypatch: pytest
     assert r.status_code == 403, r.text
     assert seen[0]["relation"] == "can_annotate"
     assert actor.drafts == []
+
+
+def _rewritten(table: pa.Table, good: bytes, bad: bytes, *, framing: str = "stream") -> bytes:
+    """`table` as an import body whose IPC framing still parses after `good` is overwritten with `bad`."""
+    sink = pa.BufferOutputStream()
+    opener = pa.ipc.new_stream if framing == "stream" else pa.ipc.new_file
+    with opener(sink, table.schema) as writer:
+        writer.write_table(table)
+    body = sink.getvalue().to_pybytes()
+    assert body.count(good) == 1, "the bytes to tamper with are not unique in the body"
+    return body.replace(good, bad)
+
+
+def _tampered(kind: pa.DataType, good: bytes, bad: bytes, *, framing: str = "stream") -> bytes:
+    """Two shapes whose `text` column's buffers are rewritten."""
+    values: list[Any] = [b"hello", b"world"] if kind == pa.binary() else ["hello", "world"]
+    return _rewritten(pa.table({"shape_type": ["bbox", "bbox"], "text": pa.array(values, kind)}), good, bad, framing=framing)
+
+
+_TEXT_OFFSETS = struct.pack("<iii", 0, 5, 10)
+_NOT_UTF8 = b"\xff\xfe\xfd\xfc"
+_END_OF_STREAM = b"\xff\xff\xff\xff\x00\x00\x00\x00"
+
+
+def _stream(table: pa.Table) -> bytes:
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema) as writer:
+        writer.write_table(table)
+    return sink.getvalue().to_pybytes()
+
+
+def _messages(body: bytes) -> list[bytes]:
+    return [message.serialize().to_pybytes() for message in pa.ipc.MessageReader.open_stream(body)]
+
+
+def _a_dictionary_batch_whose_id_names_no_field() -> bytes:
+    """A schema with one dictionary column, followed by the dictionary batch another stream wrote for its id 1."""
+    one = _messages(_stream(pa.table({"shape_type": ["bbox"], "label": pa.array(["cat"]).dictionary_encode()})))
+    two = _messages(_stream(pa.table({"a": pa.array(["cat"]).dictionary_encode(), "b": pa.array(["dog"]).dictionary_encode()})))
+    return b"".join([one[0], two[2], *one[1:], _END_OF_STREAM])
+
+
+def _a_compressed_text_declaring(declared: int, codec: str) -> bytes:
+    """The `text` values buffer's 8-byte uncompressed-length prefix rewritten, so the reader allocates `declared`."""
+    table = pa.table({"shape_type": ["bbox"], "text": ["x" * 1003]})
+    sink = pa.BufferOutputStream()
+    with pa.ipc.new_stream(sink, table.schema, options=pa.ipc.IpcWriteOptions(compression=codec)) as writer:
+        writer.write_table(table)
+    body = sink.getvalue().to_pybytes()
+    at = body.rindex(struct.pack("<q", 1003))
+    return body[:at] + struct.pack("<q", declared) + body[at + 8 :]
+
+
+def _an_integer_narrower_than_eight_bits() -> bytes:
+    """An int16 column whose schema declares a 4-bit width, at the byte where int16 and int32 schemas differ."""
+    narrow, wide = (_stream(pa.table({"shape_type": ["bbox"], "char_start": pa.array([1], kind)})) for kind in (pa.int16(), pa.int32()))
+    at = next(i for i, (a, b) in enumerate(zip(narrow, wide, strict=True)) if a != b)
+    return narrow[:at] + bytes([4]) + narrow[at + 1 :]
+
+
+#: Two batches of shapes whose `text` offsets differ, so the second batch's can be tampered with alone.
+_TWO_BATCHES = pa.Table.from_batches(
+    [
+        pa.record_batch({"id": ["a1", "a2"], "shape_type": ["bbox", "bbox"], "text": ["hello", "world"]}),
+        pa.record_batch({"id": ["a3", "a4"], "shape_type": ["bbox", "bbox"], "text": ["abc", "defghij"]}),
+    ]
+)
+_SECOND_BATCH_TEXT_OFFSETS = struct.pack("<iii", 0, 3, 10)
+
+
+def _blob_named_on(table: pa.Table, column: str) -> bytes:
+    """`table` whose `column` names pylance's `lance.blob.v2`, which `import lance` registers and whose deserializer refuses any storage but its struct."""
+    schema = table.schema
+    at = schema.get_field_index(column)
+    named = schema.field(at).with_metadata({b"ARROW:extension:name": b"lance.blob.v2", b"ARROW:extension:metadata": b""})
+    return _stream(table.cast(schema.set(at, named)))
+
+
+TAMPERED_BODIES = [
+    pytest.param(b"this is not an arrow ipc stream", id="a-body-that-is-not-arrow"),
+    pytest.param(_ipc([{"id": "a1", "shape_type": "bbox", "text": "hello"}])[:-20], id="a-stream-cut-inside-its-batch"),
+    pytest.param(_tampered(pa.binary(), _TEXT_OFFSETS, struct.pack("<iii", 0, 5, 4096)), id="binary-offsets-4096-past-the-values-buffer"),
+    pytest.param(_tampered(pa.binary(), _TEXT_OFFSETS, struct.pack("<iii", 0, 5, 65536)), id="binary-offsets-65536-past-the-values-buffer"),
+    pytest.param(_tampered(pa.binary(), _TEXT_OFFSETS, struct.pack("<iii", 0, 8, 5)), id="binary-offsets-that-decrease"),
+    pytest.param(_tampered(pa.string(), _TEXT_OFFSETS, struct.pack("<iii", 0, 5, 65536)), id="utf8-offsets-past-the-values-buffer"),
+    pytest.param(_tampered(pa.string(), _TEXT_OFFSETS, struct.pack("<iii", 0, 8, 5)), id="utf8-offsets-that-decrease"),
+    pytest.param(_tampered(pa.string(), b"hello", b"\xff\xfello"), id="utf8-values-that-are-not-utf8"),
+    pytest.param(
+        _tampered(pa.binary(), _TEXT_OFFSETS, struct.pack("<iii", 0, 5, 65536), framing="file"), id="file-framed-binary-offsets-past-the-values-buffer"
+    ),
+    pytest.param(_rewritten(pa.table({"shape_type": ["bbox"], "zzzq": ["x"]}), b"zzzq", _NOT_UTF8), id="a-column-name-that-is-not-utf8"),
+    pytest.param(_rewritten(pa.table({"shape_type": ["bbox"], "extra": [{"zzzq": "x"}]}), b"zzzq", _NOT_UTF8), id="a-nested-field-name-that-is-not-utf8"),
+    pytest.param(
+        _rewritten(pa.table({"shape_type": ["bbox"]}).replace_schema_metadata({"kkkq": "v"}), b"kkkq", _NOT_UTF8), id="a-schema-metadata-key-that-is-not-utf8"
+    ),
+    pytest.param(
+        _rewritten(pa.table({"shape_type": ["bbox"]}, schema=pa.schema([pa.field("shape_type", pa.string(), metadata={"k": "vvvq"})])), b"vvvq", _NOT_UTF8),
+        id="a-field-metadata-value-that-is-not-utf8",
+    ),
+    pytest.param(_a_dictionary_batch_whose_id_names_no_field(), id="a-dictionary-batch-whose-id-names-no-field"),
+    pytest.param(_a_compressed_text_declaring(2**50, "zstd"), id="a-zstd-buffer-declaring-2^50-bytes"),
+    pytest.param(_a_compressed_text_declaring(2**50, "lz4"), id="an-lz4-buffer-declaring-2^50-bytes"),
+    pytest.param(_an_integer_narrower_than_eight_bits(), id="an-integer-narrower-than-8-bits"),
+    pytest.param(_blob_named_on(pa.table({"shape_type": ["bbox"], "text": ["x"]}), "text"), id="pylances-blob-type-named-on-a-storage-it-refuses"),
+    pytest.param(_stream(pa.table({"shape_type": ["bbox"]})) + _stream(pa.table({"shape_type": ["bbox"]})), id="two-streams-in-one-body"),
+    pytest.param(
+        _rewritten(_TWO_BATCHES, _SECOND_BATCH_TEXT_OFFSETS, struct.pack("<iii", 0, 3, 65536)), id="text-offsets-past-the-values-buffer-in-the-second-batch"
+    ),
+    pytest.param(_stream(_TWO_BATCHES)[:-20], id="a-stream-cut-inside-its-second-batch"),
+]
+
+
+@pytest.mark.parametrize("body", TAMPERED_BODIES)
+def test_a_tampered_arrow_body_is_refused_and_nothing_is_imported(body: bytes, _live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Framing that parses says nothing about the buffers or names inside it.
+
+    `to_pylist` follows the body's own offsets: one past its values buffer becomes a shape's text
+    holding process memory, which the draft stores and the route returns, and one that decreases
+    aborts the process. Every such body answers the import's 400, and the draft is never written.
+    """
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True), raise_server_exceptions=False)
+
+    r = client.post("/tasks/t1/import", content=body)
+
+    assert r.status_code == 400, r.text
+    assert "not valid Arrow IPC" in r.text, f"refused by something other than the decoder: {r.text}"
+    assert actor.drafts == [], "a refused import still wrote to the draft"
+
+
+def test_every_batch_of_an_import_is_imported(_live_project: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    actor = _FakeActor(_task(state=TaskState.CLAIMED, assignee=SUBJECT))
+    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: actor)
+    client = TestClient(_app(allow=True))
+
+    r = client.post("/tasks/t1/import", content=_stream(_TWO_BATCHES))
+
+    assert r.status_code == 200, r.text
+    assert [(s["shape_id"], s["text"]) for s in actor.drafts[0]["shapes"]] == [("a1", "hello"), ("a2", "world"), ("a3", "abc"), ("a4", "defghij")]
 
 
 # --------------------------------------------------------------------------------------------------
