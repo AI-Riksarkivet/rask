@@ -211,11 +211,10 @@ def test_an_object_that_names_NO_EDGE_is_refused_before_any_gate(bus: _Bus, chec
 def test_a_MALFORMED_object_id_is_the_callers_bad_input(
     bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch, located: list[str], object_id: str
 ) -> None:
-    """400 naming the shape, not the 403 a lane refusal gets: nothing about who may drive what can be
-    read off a string that is not one of the named project's table ids. Measured 2026-09-25 on
-    e4e60b60: the bare identifier the request model's own comment offered answered 403 "does not name a
-    cascade edge"; on dd69cf72 `table:silver$features` with project `acme` answered 202 and re-drove
-    acme's lane."""
+    """An id that is not one of the body's project's table ids is the caller's bad input: 400 naming the
+    shape, decided before the catalog is asked, and not the 403 a lane refusal gets, since nothing about
+    who may drive what can be read off it. An unqualified `table:silver$features` is such an id: taken
+    as project `acme`'s, it would re-drive a lane the caller never named."""
     with TestClient(_app(bus, checks, monkeypatch, located=located)) as client:
         response = client.post(_RERUN, json={**_BODY, "object_id": object_id})
 

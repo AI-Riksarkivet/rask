@@ -56,8 +56,8 @@ def _app_token_header(settings: MedallionSettings) -> dict[str, str]:
 
 #: The cascade operator surface's one path segment, shared with `rerun.py`'s router and forwarded to by
 #: the gateway's `/api/stage-runners` row. Declared once so the producer's routers cannot disagree about
-#: it; the gateway is a separate deployable, so its half is pinned against the producer's OpenAPI and a
-#: real forward in `services/gateway/tests/test_lance_routes.py`.
+#: it; the gateway is a separate deployable, so its half is pinned in `services/gateway/tests/test_lance_routes.py`,
+#: which derives every route the producer serves as the chart deploys it and drives a real forward.
 STAGE_RUNNERS_PREFIX = "/stage-runners"
 
 router = APIRouter(prefix=STAGE_RUNNERS_PREFIX, tags=["stage-runners"])

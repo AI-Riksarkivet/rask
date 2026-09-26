@@ -250,8 +250,8 @@ def _routes(settings: GatewaySettings | None = None) -> list[Route]:
         # `terminate_workflow` must run under the stage runner's app-id, so neither end can do both halves.
         Route("/api/stage-runners", "/stage-runners", *medallion),
         # The cascade's stalled-tier read (`GET /cascade/stalled`); the producer answers each caller with
-        # the cells of the projects they administer. `tests/test_lance_routes.py` derives every producer
-        # door from its OpenAPI.
+        # the cells of the projects they administer. `tests/test_lance_routes.py` derives every route the
+        # producer serves as the chart deploys it.
         Route("/api/cascade", "/cascade", *medallion),
         Route(f"{prefix}/ray", f"{prefix}/ray", *compute),
         Route(f"{prefix}/projects", f"{prefix}/projects", *controlplane),

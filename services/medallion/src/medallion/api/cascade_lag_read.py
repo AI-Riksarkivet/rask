@@ -66,7 +66,7 @@ def stalled_from(report: LagTickReport, *, visible: frozenset[str]) -> StalledTi
     """Project one tick's report onto the answer this door gives: the cells of ``visible`` projects.
 
     Separate from the route so the projection is testable without standing up the readers, and so the
-    route stays the thin half: parse, measure, authorize, project.
+    route stays the thin half: authorize, measure, project.
     """
     return StalledTiers(unpublished_source=[cell for cell in report.unpublished_source if cell.project in visible])
 
