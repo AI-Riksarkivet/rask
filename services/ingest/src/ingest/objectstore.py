@@ -232,16 +232,11 @@ def source_filesystem(connection: SourceConnection) -> Any:  # noqa: ANN401 — 
     `insecure` reaches the boto3 client only: `pafs.S3FileSystem` exposes no verify-skip. A store
     needing one is listable but its enumeration will fail TLS — loudly, which is the right direction.
     """
-    import pyarrow.fs as pafs
-
     from service_kit.lakehouse.objectfs import lance_storage_options, s3_filesystem, without_credentials
 
     if connection.is_estate_default:
-        endpoint = configured_endpoint()
-        if not endpoint:
-            return pafs.S3FileSystem()
-        scheme, _, host = endpoint.partition("://")
-        return pafs.S3FileSystem(endpoint_override=host or endpoint, scheme=scheme or "http")
+        # No credential keys, so pyarrow's own AWS_* chain signs; no endpoint is AWS proper over TLS.
+        return s3_filesystem({"endpoint": configured_endpoint() or ""})
     options = lance_storage_options(connection.endpoint or "", connection.access_key or "", connection.secret_key or "", connection.region)
     if not (connection.access_key and connection.secret_key):
         # A registered store that declares no secret shares the deployment's credentials, so pyarrow's

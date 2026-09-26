@@ -231,8 +231,8 @@ def test_the_FLAT_layout_carries_cascade_LANES_too(uri: str, expected: int) -> N
     assert target_rows_for(uri) == expected
 
 
-def test_ALL_FIVE_layouts_the_estate_writes_resolve_to_a_tier() -> None:
-    """The coverage assertion, so a sixth layout cannot be added by fixing five in a helper and
+def test_ALL_SIX_layouts_the_estate_writes_resolve_to_a_tier() -> None:
+    """The coverage assertion, so a seventh layout cannot be added by fixing six in a helper and
     leaving `tier_of` reading only some of them. Every shape here is one the live estate writes."""
     assert [
         tier_of("s3://wh/acme-bronze/pages.lance"),  # 1 nested catalog
@@ -240,7 +240,71 @@ def test_ALL_FIVE_layouts_the_estate_writes_resolve_to_a_tier() -> None:
         tier_of("s3://wh/abc12345_acme-bronze$pages"),  # 3 flat catalog
         tier_of("s3://lance-catalog/medallion/acme$bronze"),  # 4 project-scoped cascade
         tier_of("s3://wh/abc12345_bronze-media$pages"),  # 5 flat cascade lane
-    ] == ["bronze"] * 5
+        tier_of("s3://lance-catalog/medallion/bronze-media/pages"),  # 6 table under a cascade namespace
+    ] == ["bronze"] * 6
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        pytest.param("s3://lance-catalog/medallion/gold-standard$bronze/pages", "bronze", id="layout-6-project-named-after-a-tier"),
+        pytest.param("s3://lance-catalog/medallion/bronze-age$silver", "silver", id="layout-4-project-named-after-a-tier"),
+        pytest.param("s3://lance-catalog/aa3bed10_bronze-age$silver$pages", "silver", id="flat-nested-project-named-after-a-tier"),
+        pytest.param("s3://lance-catalog/medallion/acme$bronze$gold-exports/pages", "bronze", id="a-child-named-after-a-tier"),
+    ],
+)
+def test_a_segment_that_IS_a_tier_outranks_one_that_only_derives_one(uri: str, expected: str) -> None:
+    """A segment that is exactly `bronze`, `silver` or `gold` names the tier, wherever it sits in the
+    path; a `<project>-<tier>` or `<tier>-<lane>` segment only derives one from an end. So neither a
+    project nor a child namespace named after a tier lends that tier to an explicit one. A wrong
+    explicit tier is worse than None (`target_rows_for`): `gold-standard$bronze` read as gold would size
+    ~1.8 MB bronze rows by gold's 524 288-row target.
+    """
+    assert tier_of(uri) == expected
+
+
+@pytest.mark.parametrize(
+    "uri",
+    [
+        pytest.param("s3://wh/aa3bed10_acme-bronze$gold-exports$t", id="derived-tiers-disagree-flat"),
+        pytest.param("s3://wh/aa3bed10_acme-silver$bronze-archive$t", id="derived-tiers-disagree-flat-other-order"),
+        pytest.param("s3://lance-catalog/medallion/acme-bronze$gold-exports", id="derived-tiers-disagree-cascade"),
+        pytest.param("s3://wh/aa3bed10_bronze$silver$t", id="two-exact-tiers-flat"),
+        pytest.param("s3://lance-catalog/medallion/gold$bronze/pages", id="two-exact-tiers-cascade"),
+    ],
+)
+def test_namespace_segments_that_DISAGREE_on_the_tier_name_none(uri: str) -> None:
+    """`acme-bronze$gold-exports` is a catalog `<project>-<tier>` over a child that reads as a
+    `<tier>-<lane>`, and the name alone cannot say which convention either segment follows. Neither
+    segment's order in the path settles it, so the answer is None and Lance sizes the table: a guess
+    would be a wrong explicit tier for one of the two readings.
+    """
+    assert tier_of(uri) is None
+
+
+@pytest.mark.parametrize(
+    ("uri", "expected"),
+    [
+        pytest.param("s3://lance-catalog/medallion/x/bronze-media/t", None, id="only-a-grandparent-medallion-promotes"),
+        pytest.param("s3://lance-catalog/medallion/bronze/x$y", "bronze", id="layout-6-is-asked-before-the-flat-layout"),
+        pytest.param("s3://wh/bronze$my_table", "bronze", id="an-unprefixed-flat-leaf-keeps-its-namespace"),
+        pytest.param("s3://wh/x_gold$t", None, id="a-non-hex-prefix-is-namespace-not-uuid8"),
+        pytest.param("s3://wh/aa3bed10_bronze$", None, id="a-malformed-flat-leaf-names-no-tier"),
+    ],
+)
+def test_each_BRANCH_boundary_of_tier_of(uri: str, expected: str | None) -> None:
+    """The edges between the three branches, each one a mutation of `tier_of` would cross.
+
+    * `medallion` promotes only the leaf's parent (layouts 2/4) or grandparent (layout 6); a deeper
+      `medallion` ancestor is an ordinary directory, and `bronze-media` read the catalog's way is `media`.
+    * Layout 6 is asked before the flat branch: `x$y` is a TABLE under `medallion/bronze`.
+    * The flat leaf's object id comes from `table_id_from_location`, which strips the `dir` backend's
+      prefix only when it is hex (`dir/index.md` § Manifest Table Directory). So `bronze$my_table`
+      keeps `bronze`, and `x_gold` is the namespace `x_gold`, which names no tier.
+    * A leaf that function refuses (`aa3bed10_bronze$`, an empty table) names no tier; reading the raw
+      leaf instead would size a directory that cannot be a table.
+    """
+    assert tier_of(uri) == expected
 
 
 @pytest.mark.parametrize(

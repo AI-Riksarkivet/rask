@@ -2488,7 +2488,7 @@ unconditional and sound only because both adapters withhold the capability. An e
 **Two deletions moved something that had to survive.** The LH-172 measurement lived only in the
 deleted `cpu_budget_cores` test. Re-measured on pylance 12.0.0 by thread name, it does not survive:
 the threads it counted are `lance_background`, which tracks the available CPUs (cgroup quota
-included) and which neither variable sizes, while `LANCE_CPU_THREADS` does govern the `lance-cpu`
+included) and whose base neither variable sizes, while `LANCE_CPU_THREADS` does govern the `lance-cpu`
 compute pool (LD36, LH-250). `lance_docs/PROVENANCE.md` records the per-pool counts. And the tests that drove `repair_drift_sync` and `extra_roots` now drive the
 production `repair_drift` and `list_all_tables`. Measured before the change: with the dry run inverted
 in `repair_drift`, all 414 maintenance tests passed; with the bound-seed merge removed from

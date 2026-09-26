@@ -42,6 +42,7 @@ from __future__ import annotations
 from typing import Final
 
 from service_kit.lakehouse.naming import CATALOG_DELIMITER
+from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 #: ~512 x 1.8 MB. Bronze rows are page images; a row count meant for narrow data produces fragments
@@ -115,13 +116,22 @@ def _tier_from_namespace_path(path: str) -> str | None:
     """The tier of a `$`-joined namespace path (`acme$bronze`), or ``None``.
 
     A nested namespace id is its path joined by the catalog delimiter, so the tier may sit in any
-    segment. Segments are asked shallowest first and the first that names a tier wins. The caller
-    passes the NAMESPACE only, never the table, so a table named `gold` cannot size itself as gold.
+    segment, and the segments' order decides nothing:
+
+    1. A segment that IS a tier (`bronze`) names it, over any segment that only derives one from an
+       end (`gold-standard`, `bronze-archive`) — so `gold-standard$bronze` is bronze.
+    2. Two segments that are different tiers answer ``None``.
+    3. With no exact segment, the derived tiers must agree, else ``None``: `acme-bronze$gold-exports`
+       reads as a `<project>-<tier>` or as a `<tier>-<lane>`, and a guess is a wrong explicit tier for
+       one of them (see `target_rows_for`).
+
+    The caller passes the NAMESPACE only, never the table, so a table named `gold` cannot size itself
+    as gold.
     """
-    for segment in path.split(CATALOG_DELIMITER):
-        if (tier := _tier_from_either_end(segment)) is not None:
-            return tier
-    return None
+    segments = path.split(CATALOG_DELIMITER)
+    exact = {segment for segment in segments if segment in _BY_TIER}
+    named = exact or {tier for segment in segments if (tier := _tier_from_either_end(segment)) is not None}
+    return next(iter(named)) if len(named) == 1 else None
 
 
 def tier_of(dataset_uri: str) -> str | None:
@@ -149,16 +159,16 @@ def tier_of(dataset_uri: str) -> str | None:
       6. ``<bucket>/medallion/<namespace>/<table>`` — a TABLE under a cascade namespace (the trainer's
          `medallion/models/<model>`). The tier comes from `parts[-2]` alone, never from the table.
 
-    ORDER OF THE TWO BRANCHES IS THE FIX, not a tidy-up. The delimiter test used to run FIRST, so
-    layout 4 was read as flat: `acme$bronze` reduced to the namespace `acme`, which names no tier, and
-    a project's bronze — the widest rows in the estate — was handed Lance's default row-count sizing.
-    `medallion` is the one parent that promotes its child, so it has to be asked first; only then is a
-    delimiter in the leaf evidence of the flat layout.
+    THE THREE BRANCHES ARE ORDERED, and the order is load-bearing. `medallion` is the one directory
+    that promotes a child, so the leaf's parent is asked first (layouts 2/4) and its grandparent second
+    (layout 6); only then is a delimiter in the leaf evidence of the flat layout (3/5). Asked the other
+    way, `medallion/acme$bronze` reads as flat and reduces to the namespace `acme`, which names no tier,
+    and `medallion/bronze/x$y` reads its table's `x` as the namespace.
 
-    Layout 3/5 is matched on the delimiter rather than the uuid prefix, and the prefix is stripped with
-    a single `split("_", 1)`, only when that `_` falls in the first segment, so a namespace that itself
-    contains an underscore (`transcripts_v2`) survives intact — that one must stay untiered, which is
-    what keeps this from degenerating into "find a tier word anywhere in the path".
+    Layout 3/5 is matched on the delimiter, and its object id comes from `table_id_from_location`, the
+    estate's one reading of `<uuid8>_<object_id>`: the prefix is stripped only when it is hex, so
+    `transcripts_v2$annotations` keeps its namespace and stays untiered, which is what keeps this from
+    degenerating into "find a tier word anywhere in the path".
 
     ``None`` when the URI names no tier. That is a real case (a control-plane dataset, an untiered
     namespace) and must not be guessed at — see `target_rows_for`.
@@ -174,9 +184,8 @@ def tier_of(dataset_uri: str) -> str | None:
         return _tier_from_namespace_path(parts[-2])
 
     if CATALOG_DELIMITER in leaf:  # layouts 3 + 5 — flat: the namespace is inside the leaf, not a parent directory
-        # Strip the dir backend's uuid8 prefix, once: `aa3bed10_acme$bronze$events` -> `acme$bronze$events`.
-        object_id = leaf.split("_", 1)[1] if "_" in leaf.split(CATALOG_DELIMITER, 1)[0] else leaf
-        return _tier_from_namespace_path(object_id.rsplit(CATALOG_DELIMITER, 1)[0])
+        object_id = table_id_from_location(dataset_uri)  # `aa3bed10_acme$bronze$events` -> `acme$bronze$events`
+        return _tier_from_namespace_path(object_id.rsplit(CATALOG_DELIMITER, 1)[0]) if object_id else None
 
     return _tier_from_namespace(parts[-2])  # layout 1 — nested, and the catalog's convention alone
 

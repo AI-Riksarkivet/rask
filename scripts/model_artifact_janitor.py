@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
+
 
 @dataclass
 class JanitorReport:
@@ -102,21 +104,15 @@ def referenced_tokens(registry_uri: str, storage_options: dict[str, str] | None)
     return tokens
 
 
-def _filesystem(base: str, storage_options: dict[str, str] | None) -> tuple[Any, str]:
-    """(pyarrow FileSystem, base path within it) for an s3:// or local artifact base."""
+def _filesystem(base: str, storage_options: StorageOptions | None) -> tuple[Any, str]:
+    """(pyarrow FileSystem, base path within it) for an s3:// or local artifact base.
+
+    No options for an s3:// base is AWS proper with the ambient credential chain.
+    """
     import pyarrow.fs as pafs
 
     if base.startswith("s3://"):
-        so = storage_options or {}
-        scheme, _, host = so.get("endpoint", "").partition("://")
-        fs = pafs.S3FileSystem(
-            endpoint_override=host or None,
-            access_key=so.get("access_key_id"),
-            secret_key=so.get("secret_access_key"),
-            scheme=scheme or "https",
-            region=so.get("region", "us-east-1"),
-        )
-        return fs, base.removeprefix("s3://").rstrip("/")
+        return s3_filesystem(storage_options or {"endpoint": ""}), base.removeprefix("s3://").rstrip("/")
     return pafs.LocalFileSystem(), base.rstrip("/")
 
 
@@ -211,14 +207,7 @@ def main() -> None:
 
     so = None
     if args.registry_uri.startswith("s3://") or args.artifact_base.startswith("s3://"):
-        so = {
-            "endpoint": args.s3_endpoint,
-            "access_key_id": args.s3_key,
-            "secret_access_key": args.s3_secret,
-            "region": args.s3_region,
-            "allow_http": "true",
-            "virtual_hosted_style_request": "false",
-        }
+        so = lance_storage_options(args.s3_endpoint, args.s3_key, args.s3_secret, args.s3_region)
     report = sweep(
         registry_uri=args.registry_uri,
         artifact_base=args.artifact_base,

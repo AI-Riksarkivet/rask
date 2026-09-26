@@ -36,7 +36,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeTableResponse
 
-from catalog.api.dependencies import get_namespace, get_settings, get_storage_options
+from catalog.api.dependencies import get_namespace, get_settings
 from catalog.api.v1.endpoints import tables
 from catalog.core.config import Settings
 from catalog.core.vending import StsVendor
@@ -122,20 +122,24 @@ def describe_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     )
     # The manifest read is the catalog's own root-credential open, not the vend, and needs a live store.
     monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: (1, (), ()))
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+    # The catalog's OWN connection is plaintext and root-keyed, so the production `get_storage_options`
+    # answers `allow_http=true` and the root pair: a door that merged it into the vend, either way round,
+    # would hand a reader the root secret or hand the https store a plaintext permit.
+    settings = Settings(LANCE_S3_ENDPOINT="http://rustfs:9000", LANCE_S3_ACCESS_KEY_ID="ROOTKEY", LANCE_S3_SECRET_ACCESS_KEY="ROOTSECRET")
     application.dependency_overrides[get_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = _Namespace
-    application.dependency_overrides[get_storage_options] = lambda: {}
     with TestClient(application) as client:
         yield client
 
 
 def test_the_describe_door_hands_an_https_vend_on_without_a_plaintext_permit(describe_client: TestClient) -> None:
-    """The HTTP door, not only the vendor: `describe_table` copies the vend into its own response."""
+    """The HTTP door, not only the vendor: `describe_table` answers the vend and nothing of its own connection."""
     response = describe_client.post("/v1/table/ns%24t/describe", params={"vend_credentials": "true"})
 
     assert response.status_code == 200, response.text
     options = response.json()["storage_options"]
     assert options["endpoint"] == "https://s3.example.com"
     assert options["aws_session_token"] == "TOK", "the door answered without the vend — this proves nothing about it"
+    assert options["aws_access_key_id"] == "AK"
+    assert not {"ROOTKEY", "ROOTSECRET"} & set(options.values()), "the describe door handed a reader the catalog's root credential"
     assert options["allow_http"] == "false", "the describe door handed an https store a credential that also permits plaintext"

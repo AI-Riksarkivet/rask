@@ -13,10 +13,11 @@ object storage in unit tests.
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlsplit
 
 import pyarrow.fs as pafs
 
-from service_kit.lakehouse.endpoint_scheme import allow_http_for
+from service_kit.lakehouse.endpoint_scheme import allow_http_for, endpoint_scheme
 
 
 if TYPE_CHECKING:
@@ -190,22 +191,30 @@ def normalise_credential_keys(storage_options: StorageOptions) -> StorageOptions
 
 
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
-    """An ``S3FileSystem`` from lance-style storage options — scheme derived from the endpoint (an
-    ``https://`` endpoint keeps TLS; hardcoding ``http`` once silently downgraded a secured connection).
+    """An ``S3FileSystem`` from lance-style storage options, reaching the endpoint over the scheme
+    ``endpoint_scheme`` reads — the rule ``allow_http`` follows too, so pyarrow and Lance agree on
+    which stores are plaintext. pyarrow accepts only a lowercase ``http``/``https`` (measured on pyarrow
+    25.0.0: ``scheme="HTTP"`` raises ``ArrowInvalid``), and an empty endpoint is AWS proper over TLS.
+
+    The override keeps the endpoint's PATH, less a trailing slash: Lance and boto3 address
+    ``<path>/<bucket>/<key>`` under an endpoint with one, and so does pyarrow given ``host/path``
+    (measured on pylance 12.0.0 and pyarrow 25.0.0 against a local listener). A host-only override
+    reaches ``/<bucket>/<key>``, a different root of the same store.
 
     The ``session_token`` is forwarded for the same reason ``records._s3_client`` forwards it, and the
     stakes are higher here: pyarrow falls back to the default credential chain for anything it was not
     given, so a half-forwarded vended credential can sign with the POD's own role — broader rights than
     the catalog scoped, not narrower. Dropping it fails open.
     """
-    scheme, _, host = storage_options["endpoint"].partition("://")
+    endpoint = storage_options["endpoint"]
+    parts = urlsplit(endpoint)
     access_key, secret_key, session_token = credential_of(storage_options)
     return pafs.S3FileSystem(
         access_key=access_key,
         secret_key=secret_key,
         session_token=session_token,
-        endpoint_override=host or storage_options["endpoint"],
-        scheme=scheme or "http",
+        endpoint_override=(parts.netloc + parts.path).rstrip("/"),
+        scheme=endpoint_scheme(endpoint),
         region=storage_options.get("region", ""),
         allow_bucket_creation=allow_bucket_creation,
     )

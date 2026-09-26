@@ -231,12 +231,21 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   namespace, and the last segment is the table. The catalog reaches that nested shape through its own
   door: `require_warehouse_scoped` tells a caller to nest (`'<parent>$<ident>'`) and
   `MAX_NAMESPACE_DEPTH` allows seven levels. Under `medallion/`, a table's namespace is `parts[-2]`
-  and nothing else. `tiers.py::_tier_from_namespace_path` asks each `$` segment shallowest first.
+  and nothing else. `tiers.py::_tier_from_namespace_path` ignores segment ORDER: a segment that IS a
+  tier outranks one that only derives a tier from an end (`medallion/gold-standard$bronze/pages` is
+  bronze, and so is `medallion/acme$bronze$gold-exports/pages`); two different exact tiers, or derived
+  tiers that disagree with no exact one (`aa3bed10_acme-bronze$gold-exports$t`), answer None, because
+  a wrong explicit tier is worse than Lance's default. The flat leaf's object id comes from
+  `table_locations.table_id_from_location`, the same crossing credential vending and lineage use,
+  which strips the prefix only when it is hex (`x_gold$t` names the namespace `x_gold`, which is no
+  tier), and a leaf it refuses (`aa3bed10_bronze$`) names no tier.
   `tests/unit/test_tier_fragment_sizing.py` pins both directions:
   `test_a_NESTED_namespace_and_a_table_under_a_LANE_resolve_to_their_tier` (`aa3bed10_acme$bronze$events`,
-  `medallion/bronze-media/pages` and `medallion/acme$bronze/pages` are bronze) and
+  `medallion/bronze-media/pages` and `medallion/acme$bronze/pages` are bronze),
   `test_a_TABLE_named_after_a_tier_never_sets_the_tier` (`deadbeef_acme$plain$gold` and
-  `medallion/models/gold` stay untiered — a model named `gold` is not gold-sized).
+  `medallion/models/gold` stay untiered — a model named `gold` is not gold-sized),
+  `test_a_segment_that_IS_a_tier_outranks_one_that_only_derives_one`,
+  `test_namespace_segments_that_DISAGREE_on_the_tier_name_none` and `test_each_BRANCH_boundary_of_tier_of`.
 - The reconciler reports cross-store drift and deletes nothing until its report runs clean. It runs on
   its OWN Dapr cron binding (`maintenance-reconcile-cron`), separate from the sweep's — a read-only
   drift report must not inherit the data-rewriting sweep's cadence.

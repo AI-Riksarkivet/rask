@@ -17,6 +17,8 @@ No ``services/`` imports — this is baked into the ray image and must not reach
 import ``lineage_kit``, which is not a service: ``packages/ray-cluster-env`` declares it precisely so
 the compute plane can emit through one authority (LIN-001, owner ruling 2026-09-18), and its run-id
 namespace is byte-identical to the one this file used to derive itself.
+Its storage options and artifact filesystem come from ``service_kit.lakehouse.objectfs``, which that
+env declares too.
 
 Env: MODEL FEATURES(json [{dataset,version,uri}]) CONFIG TOKEN MODELS_NAMESPACE REGISTRY_URI
      ARTIFACT_BASE [LINEAGE_URL] [LINEAGE_TOKEN] S3_ENDPOINT S3_KEY S3_SECRET [S3_REGION]
@@ -59,6 +61,7 @@ from lineage_kit.schemas import (
     SchemaField,
     custom_facet,
 )
+from service_kit.lakehouse.objectfs import StorageOptions, lance_storage_options, s3_filesystem
 
 
 #: The lane's own job facet. Everything ELSE about the envelope — the producer URI, every
@@ -73,15 +76,15 @@ from lineage_kit.schemas import (
 _JOB_TYPE_FACET = JobTypeJobFacet(processingType="BATCH", integration="RAY", jobType="TRAINING").model_dump(by_alias=True)
 
 
-def _storage_options() -> dict[str, str]:
-    return {
-        "endpoint": os.environ["S3_ENDPOINT"],
-        "access_key_id": os.environ["S3_KEY"],
-        "secret_access_key": os.environ["S3_SECRET"],
-        "region": os.environ.get("S3_REGION", "us-east-1"),
-        "allow_http": "true",
-        "virtual_hosted_style_request": "false",
-    }
+def _storage_options() -> StorageOptions:
+    """The estate's builder: ``allow_http`` follows the endpoint's scheme, and the ``aws_``-prefixed
+    credential keys displace an ambient AWS_* environment rather than blending with it."""
+    return lance_storage_options(
+        os.environ["S3_ENDPOINT"],
+        os.environ["S3_KEY"],
+        os.environ["S3_SECRET"],
+        os.environ.get("S3_REGION", "us-east-1"),
+    )
 
 
 def build_event(
@@ -329,17 +332,7 @@ def write_artifacts(artifact_base: str, token: str, files: dict[str, bytes]) -> 
     base = artifact_base.rstrip("/")
     uris: dict[str, str] = {}
     if base.startswith("s3://"):
-        import pyarrow.fs as pafs
-
-        so = _storage_options()
-        scheme, _, host = so["endpoint"].partition("://")
-        fs = pafs.S3FileSystem(
-            endpoint_override=host,
-            access_key=so["access_key_id"],
-            secret_key=so["secret_access_key"],
-            scheme=scheme or "http",
-            region=so["region"],
-        )
+        fs = s3_filesystem(_storage_options())
         for name, payload in files.items():
             path = f"{base.removeprefix('s3://')}/{token}/{name}"
             with fs.open_output_stream(path) as out:
