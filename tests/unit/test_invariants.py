@@ -2062,73 +2062,124 @@ def _run_bucket_init(rendered: str, monkeypatch: pytest.MonkeyPatch) -> tuple[in
     return exit_code, present
 
 
-def _maintenance_platform_buckets(rendered: str) -> dict[str, set[str]]:
-    """`MAINTENANCE_S3_PLATFORM_BUCKETS`, split, per Deployment that carries it."""
-    out: dict[str, set[str]] = {}
-    for doc in yaml.safe_load_all(rendered):
-        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
-            continue
-        for container in doc["spec"]["template"]["spec"].get("containers") or []:
-            for env in container.get("env") or []:
-                if env["name"] == "MAINTENANCE_S3_PLATFORM_BUCKETS":
-                    out[doc["metadata"]["name"]] = {b for b in (env.get("value") or "").split(",") if b}
-    return out
-
-
 @pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
 def test_the_bucket_init_creates_every_platform_bucket_and_every_zone(
     observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Every bucket a value hands the bucket-init Job must exist once it has run on an EMPTY store.
 
-    Each source is its own loop in the template, and the default values cannot see one dropped:
-    `minio.buckets` repeats `minio.bucket` and `medallion.buckets` is empty. So this render names a
-    platform bucket and a zone that no other value names, in both observability states.
+    Each source is its own hop in the template, and a hop dropped is invisible while another value names
+    the same bucket. So the root, the platform bucket and the zone here are each named by one value only.
     """
     rendered = _helm_template(
         "singleTenant.enabled=true",
         "explorer.enabled=true",
         f"observability.enabled={str(observability).lower()}",
-        "minio.buckets={lance-catalog,extra-platform}",
+        "minio.bucket=root-x",
+        "minio.buckets={extra-platform}",
         "medallion.buckets.gold=acme-gold",
     )
     exit_code, present = _run_bucket_init(rendered, monkeypatch)
 
     assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
-    missing = {"lance-catalog", "extra-platform", "acme-gold"} - present
+    missing = {"root-x", "extra-platform", "acme-gold"} - present
     assert not missing, f"the Job left these buckets uncreated: {sorted(missing)}"
 
 
+#: `observability.bucket` renamed with the two static values the render pairs it with: GreptimeDB's own
+#: key and the storage registry's observability row. A `--set` list index replaces the whole list, so
+#: both rows are restated.
+_OBSERVABILITY_BUCKET_RENAMED = (
+    "observability.bucket=obs-x",
+    "greptimedb-standalone.objectStorage.s3.bucket=obs-x",
+    "storage.stores[0].name=lance-catalog",
+    "storage.stores[0].bucket=lance-catalog",
+    "storage.stores[0].role=bronze",
+    "storage.stores[1].name=obs-x",
+    "storage.stores[1].bucket=obs-x",
+    "storage.stores[1].role=observability",
+)
+
+
 @pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
-def test_the_observability_bucket_is_made_and_exempt_only_while_observability_is_on(
+def test_a_renamed_bucket_leaves_nothing_behind_under_its_old_name(
     observability: bool, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """`observability.bucket` is the one name for GreptimeDB's bucket. While the feature is on the Job
-    makes it and `orphan_buckets` exempts it; while it is off neither names any observability bucket.
+    """Rename the root and GreptimeDB's bucket: the Job makes each under its new name only, and GreptimeDB
+    writes to the one it makes. A default spelled a second time in the values shows up here as a bucket
+    the Job makes under the old name, which nothing uses.
 
-    Renamed to `obs-x`, so a second spelling of the default anywhere else shows up as a stray bucket the
-    Job makes, or a stray exemption, that nothing uses.
+    With observability off the platform set is empty, which is the render that hands the Job an empty
+    name unless the template drops it.
     """
-    default = yaml.safe_load((CHART / "values.yaml").read_text())["observability"]["bucket"]
-    observability_buckets = {"obs-x", default}
-    wanted = {"obs-x"} if observability else set()
+    values = yaml.safe_load((CHART / "values.yaml").read_text())
+    spellings = {"root-x", "obs-x", values["minio"]["bucket"], values["observability"]["bucket"]}
+    wanted = {"root-x", "obs-x"} if observability else {"root-x"}
     rendered = _helm_template(
         "singleTenant.enabled=true",
         "explorer.enabled=true",
         f"observability.enabled={str(observability).lower()}",
-        "observability.bucket=obs-x",
+        "minio.bucket=root-x",
+        *_OBSERVABILITY_BUCKET_RENAMED,
     )
     exit_code, present = _run_bucket_init(rendered, monkeypatch)
 
     assert exit_code == 0, f"the bucket-init Job fails on a store it provisioned itself (exit {exit_code}):\n{capsys.readouterr().err}"
-    assert present & observability_buckets == wanted, (
-        f"observability.enabled={observability}: the Job made {sorted(present)}, wanted {sorted(wanted)} of {sorted(observability_buckets)}"
+    assert present & spellings == wanted, (
+        f"observability.enabled={observability}: the Job made {sorted(present & spellings)} of {sorted(spellings)}, wanted {sorted(wanted)}"
     )
+    if observability:
+        docs = [doc for doc in yaml.load_all(rendered, Loader=FAST_LOADER) if isinstance(doc, dict)]
+        assert 'bucket = "obs-x"' in _greptimedb_config(docs), "GreptimeDB writes to a bucket the Job does not make"
 
-    exempt = _maintenance_platform_buckets(rendered)
-    assert len(exempt) == 2, f"expected the planner and the worker to carry the platform-bucket env, found {sorted(exempt)}"
-    for name, buckets in exempt.items():
-        assert buckets & observability_buckets == wanted, f"observability.enabled={observability}: {name} exempts {sorted(buckets)} from orphan_buckets"
+
+#: The object store's three paths; the guard must not depend on their toggles. An external S3 bucket
+#: namespace is shared, so that path is where a rename is most likely forced.
+_STORE_PATHS = {
+    "in-cluster-store": (),
+    "external-s3": ("minio.enabled=false", "minio.externalEndpoint=https://s3.example.com"),
+    "eso": ("externalSecrets.enabled=true",),
+}
+
+
+@pytest.mark.parametrize("store_path", list(_STORE_PATHS.values()), ids=list(_STORE_PATHS))
+@pytest.mark.parametrize(
+    ("left_behind", "named"),
+    [
+        (("storage.stores=null",), "greptimedb-standalone.objectStorage.s3.bucket"),
+        (("greptimedb-standalone.objectStorage.s3.bucket=obs-x",), "storage.stores[rask-observability].bucket"),
+        (
+            (
+                "greptimedb-standalone.objectStorage.s3.bucket=obs-x",
+                "storage.stores[0].name=rask-observability",
+                "storage.stores[0].bucket=rask-observability",
+                "storage.stores[0].role=observability",
+                "storage.stores[1].name=obs-x",
+                "storage.stores[1].bucket=obs-x",
+                "storage.stores[1].role=observability",
+            ),
+            "storage.stores[rask-observability].bucket",
+        ),
+    ],
+    ids=["greptimedb-keeps-the-old-bucket", "the-store-registry-keeps-the-old-bucket", "an-agreeing-row-hides-no-disagreeing-one"],
+)
+def test_the_chart_REFUSES_an_observability_bucket_its_static_consumers_do_not_name(
+    left_behind: tuple[str, ...], named: str, store_path: tuple[str, ...]
+) -> None:
+    """GreptimeDB's bucket and the storage registry's observability row are static values, which cannot
+    follow `observability.bucket`. Renamed alone, the Job makes a bucket GreptimeDB never writes to and
+    every observability Deny guards it, while the live store has neither. So the render refuses a
+    disagreement on every store path, and names the key that disagrees, per store row.
+    """
+    with pytest.raises(subprocess.CalledProcessError) as exc:
+        _helm_template("observability.enabled=true", "observability.bucket=obs-x", *store_path, *left_behind)
+    message = exc.value.stderr or ""
+    assert named in message and "observability.bucket" in message, f"the render must fail with the disagreeing key NAMED, got: {message[-400:]}"
+
+
+def test_the_observability_bucket_guard_is_the_features_own() -> None:
+    """With observability off nothing makes or reads its bucket, so a rename alone is not refused."""
+    _helm_template("observability.enabled=false", "observability.bucket=obs-x")
 
 
 def test_every_dapr_annotated_pod_carries_the_injector_webhook_label() -> None:

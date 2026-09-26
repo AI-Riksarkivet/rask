@@ -298,10 +298,11 @@ class MaintenanceSettings(FgaSettings, BaseSettings):
     # report each one as drift on every tick FOREVER — a finding no operator can ever action, on a report
     # whose whole contract is that a clean run certifies the estate.
     #
-    # Measured live 2026-08-16: `rask-observability` — the RustFS bucket the chart's OWN mkbucket job
-    # creates for GreptimeDB's object storage — sat in orphan_buckets, so the drift total could not reach
-    # zero by any action short of deleting the observability store. The chart names this set in
-    # `lance.platformBuckets`; this is where it gets told.
+    # Measured live 2026-08-16: `rask-observability` — the bucket the chart's OWN mkbucket job creates
+    # for GreptimeDB's object storage — sat in orphan_buckets, so the drift total could not reach zero by
+    # any action short of deleting the observability store. The chart names this set in
+    # `lance.maintenancePlatformBuckets` (the Job's platform set plus the multibase bases); this is where
+    # it gets told.
     s3_platform_buckets: str = Field(default="", alias="MAINTENANCE_S3_PLATFORM_BUCKETS")
 
     @property

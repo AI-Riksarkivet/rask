@@ -16,12 +16,13 @@ claimed sync ``def`` while all three routes were coroutines doing boto3 inline).
 
 **Failure posture (live-proof 2026-07-28, defect 2).** A bucket that does not exist
 on the S3 backend is an EXPECTED, diagnosable state — the chart's bucket-init Job
-provisions the platform buckets, and a failed Job leaves them absent. It used to surface as an unhandled ``botocore`` ``NoSuchBucket`` → HTTP 500
-→ the storage browser's "Storage service unreachable", which named neither the
-bucket nor the cause. Every route below now translates the S3 boundary through
-``storage.s3_errors`` and answers **404 with the bucket (and key) in the detail**;
-only a genuine outage — unreachable endpoint, bad credentials — still reaches the
-500 path, which is what a 500 should mean.
+provisions the platform buckets and the catalog each warehouse's, and a provisioner
+that failed leaves its bucket absent. Unhandled, ``botocore``'s ``NoSuchBucket`` is
+an HTTP 500 → the storage browser's "Storage service unreachable", which names
+neither the bucket nor the cause. So every route below translates the S3 boundary
+through ``storage.s3_errors`` and answers **404 with the bucket (and key) in the
+detail**; only a genuine outage — unreachable endpoint, bad credentials — reaches
+the 500 path, which is what a 500 should mean.
 """
 
 import logging
@@ -186,8 +187,8 @@ def _missing_bucket(bucket: str) -> NotFoundError:
     """
     return NotFoundError(
         f"bucket not found: {bucket} — the S3 backend has no such bucket. "
-        "The platform provisions it from the chart's minio.buckets or observability.bucket; "
-        "check that the object store actually created it."
+        "Check that the chart's storage.stores maps the store to this bucket, and that its "
+        "provisioner ran: the chart's bucket-init Job for a platform bucket, the catalog for a warehouse's."
     )
 
 

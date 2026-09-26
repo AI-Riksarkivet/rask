@@ -1,3 +1,8 @@
+{{- if .Values.observability.enabled }}{{/* see `observability.bucket` */}}
+{{- $got := dict "greptimedb-standalone.objectStorage.s3.bucket" (index .Values "greptimedb-standalone" "objectStorage" "s3" "bucket") }}
+{{- range (.Values.storage).stores }}{{ if eq (get . "role") "observability" }}{{ $_ := set $got (printf "storage.stores[%s].bucket" .name) .bucket }}{{ end }}{{ end }}
+{{- range $k, $v := $got }}{{ if ne (toString $v) $.Values.observability.bucket }}{{ fail (printf "%s (%v) must equal observability.bucket (%s)" $k $v $.Values.observability.bucket) }}{{ end }}{{ end }}
+{{- end }}
 {{- if and .Values.observability.enabled (not .Values.externalSecrets.enabled) }}
 {{- /*
    GreptimeDB object-storage credentials — the greptimedb-standalone subchart reads these env-var keys

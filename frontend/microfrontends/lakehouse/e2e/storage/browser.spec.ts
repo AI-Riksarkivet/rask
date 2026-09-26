@@ -134,16 +134,16 @@ test('an unprovisioned bucket names itself instead of claiming the service is un
 				title: 'Not Found',
 				status: 404,
 				detail:
-					'bucket not found: images-batch — the S3 backend has no such bucket. The platform ' +
-					'provisions it from the chart’s rustfs.buckets; check that the object store ' +
-					'actually created it.',
+					'bucket not found: images-batch — the S3 backend has no such bucket. Check that the ' +
+					"chart's storage.stores maps the store to this bucket, and that its provisioner ran: " +
+					"the chart's bucket-init Job for a platform bucket, the catalog for a warehouse's.",
 			},
 			404,
 		),
 	);
 	await page.goto('/lakehouse/catalog/storage');
 	await expect(page.getByText(/bucket not found: images-batch/)).toBeVisible();
-	await expect(page.getByText(/rustfs\.buckets/)).toBeVisible();
+	await expect(page.getByText(/storage\.stores/)).toBeVisible();
 	await expect(page.getByText('Storage service unreachable (HTTP 404).')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
 });

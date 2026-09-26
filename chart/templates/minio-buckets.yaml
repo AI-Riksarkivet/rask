@@ -1,7 +1,8 @@
 {{- if .Values.minio.enabled }}
 {{- /* Bucket-init: the ONLY provisioner of the platform buckets, in-cluster or minio.externalEndpoint,
        so each is CREATED and none is waited for (see `minio.buckets` in values.yaml). NOT a hook — see
-       "BOOTSTRAP JOBS" in _helpers.tpl: the lakehouse apps need these buckets at startup, and a post-install hook fails only after `--wait` blamed something else. */}}
+       "BOOTSTRAP JOBS" in _helpers.tpl: the lakehouse apps need these buckets at startup, and a
+       post-install hook fails only after `--wait` blamed something else. */}}
 apiVersion: batch/v1
 kind: Job
 metadata:

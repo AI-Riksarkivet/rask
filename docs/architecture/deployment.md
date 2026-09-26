@@ -156,7 +156,9 @@ deployments. The Collector is the **single log shipper** (Vector retired, owner 
 bucket `rask-observability`. The bucket-init Job (`chart/templates/minio-buckets.yaml`)
 creates it from `observability.bucket` while `observability.enabled` is on; the store itself
 provisions no bucket, so that Job is the only provisioner of the platform buckets, and no manual
-bucket creation is required.
+bucket creation is required. Renaming it means setting `greptimedb-standalone.objectStorage.s3.bucket`
+and the `storage.stores` observability row to the same name: both are static values, and the render
+refuses either when it disagrees with `observability.bucket`.
 
 **App instrumentation:** `service_kit.setup_otel` instruments the FastAPI fleet —
 the services built on `make_service_app` call it automatically, and the gateway

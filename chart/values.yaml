@@ -56,6 +56,7 @@ storage:
       role: bronze
       secret: viewer-s3
       description: The lakehouse warehouse — the governed medallion datasets.
+    # While observability is on, this row's bucket must equal `observability.bucket`.
     - name: rask-observability
       bucket: rask-observability
       role: observability
@@ -2442,18 +2443,22 @@ minio:
   # name in scripts/demo_reset.sh + the vending/lineage tests — do not rename casually.
   bucket: lance-catalog
   # The PLATFORM buckets no feature owns: buckets the estate makes for itself, which no warehouse record
-  # claims. A feature's own bucket is not listed, so it has one spelling: `observability.bucket` joins
-  # the set only while `observability.enabled` is on (`lance.platformBuckets` in _helpers.tpl).
+  # claims. Neither the root nor a feature's own bucket is listed, because each has its own key: the Job
+  # adds `minio.bucket` itself, and `observability.bucket` joins the set only while
+  # `observability.enabled` is on (`lance.platformBuckets` in _helpers.tpl). A name listed here AND under
+  # its own key outlives a rename of that key, as a bucket the Job makes and nothing uses.
   # The bucket-init Job (templates/minio-buckets.yaml) CREATES that set, with minio.bucket and the
   # medallion.buckets zones, and is the only provisioner of platform buckets: the in-cluster store is a
   # plain StatefulSet that provisions none, and an external S3 has nothing else either. (Warehouse
   # buckets are the catalog's, made at runtime by `provision_bucket`.) So the Job creates rather than
   # waits: a platform bucket it waited for would never appear. The maintenance reconcile exempts the
-  # same set from `orphan_buckets`.
+  # same set from `orphan_buckets`. Turning observability off leaves its bucket on the store (nothing
+  # deletes a bucket), and `orphan_buckets` then reports it, holding the trash purge, until it is
+  # deleted: a telemetry bucket no enabled feature uses is an orphan an operator can act on.
   # GOVERNED tiers only. The raw buckets (images-batch*) are NOT here: raw is external (R23) and lives
   # on HCP. A local bucket sharing a name with an external one makes the browser report the empty
   # local one instead of 404ing.
-  buckets: ["lance-catalog"]
+  buckets: []
   # Externalize: when set, the apps (catalog/lineage/compaction + vending STS) connect HERE instead of the
   # in-cluster MinIO — pair with minio.enabled=false to use a managed S3. NOTE: the greptimedb-standalone
   # subchart's S3 endpoint (under `greptimedb-standalone.objectStorage.s3.endpoint`) must be overridden too.
@@ -3286,7 +3291,10 @@ observability:
   # Legacy escape hatch: ship OTLP to an off-cluster endpoint AND run no in-cluster store. Prefer
   # otelCollector.externalEndpoint (the OTel-first prod path); this stays for a raw non-Collector target.
   externalOtlpEndpoint: "" # e.g. http://otel-collector.observability:4318/v1/otlp
-  bucket: "rask-observability"          # bucket for GreptimeDB object storage
+  # GreptimeDB's bucket. Two static values must name it too, because neither can read this key:
+  # `greptimedb-standalone.objectStorage.s3.bucket` and the `storage.stores` row whose role is
+  # `observability`. templates/observability.yaml refuses a render in which either names another.
+  bucket: "rask-observability"
   # Retention for logs/traces/metrics. Applied as a database-level TTL on the
   # GreptimeDB `public` database via a post-install/post-upgrade hook Job
   # (templates/greptimedb-ttl-job.yaml), so every table (opentelemetry_logs,
@@ -3327,9 +3335,10 @@ observability:
 # GreptimeDB standalone subchart — unified metrics/logs/traces store on the in-cluster MinIO S3.
 # RESOLVED (lance-ns-merge P4 "operator Tenant wins"): the endpoint names the ONE object store — the
 # the object store's S3 Service `rask-minio:9000`, which renders whenever minio.enabled
-# (regardless of singleTenant). Both values below are STATIC subchart values that cannot follow chart
-# helpers: externalizing the store means overriding `endpoint` too (values-prod's EXTERNALIZE block
-# documents the pairing; prod_render_check proves it atomic), and `existingSecretName` must equal the
+# (regardless of singleTenant). The values below are STATIC subchart values that cannot follow chart
+# helpers: `bucket` must equal `observability.bucket` (the render refuses it otherwise), externalizing
+# the store means overriding `endpoint` too (values-prod's EXTERNALIZE block documents the pairing;
+# prod_render_check proves it atomic), and `existingSecretName` must equal the
 # rendered `<release>-observability-s3` Secret (templates/observability.yaml — minio.accessKey/secretKey,
 # the ONE store credential pair).
 greptimedb-standalone:
