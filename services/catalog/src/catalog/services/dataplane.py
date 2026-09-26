@@ -1241,6 +1241,38 @@ def _clean_lance_message(message: str) -> str:
     return _RUST_SOURCE_SUFFIX.sub("", body).strip()
 
 
+#: The most AND/OR connectives a caller's SQL fragment may carry. Lance's planner recurses once per
+#: connective of a flat boolean chain with no bound: on pylance 12.0.0, 150,000 `id = n OR ...` terms end
+#: the process with SIGSEGV. Its parser already bounds nesting ("recursion limit exceeded"), and a large
+#: value set carries no connective as one `IN (...)` list, so the bound sits far below the crash and above
+#: any hand-written filter.
+MAX_CALLER_SQL_CONNECTIVES: Final = 1_000
+
+_QUOTED_SQL = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`")
+_CONNECTIVE = re.compile(r"\b(?:and|or)\b", re.IGNORECASE)
+
+
+def refuse_an_unbounded_boolean_chain(sql: str | None, *, field: str) -> None:
+    """Refuse a caller's SQL fragment whose AND/OR chain could exhaust Lance's planner, before Lance sees it.
+
+    Connectives inside quoted literals and identifiers are not counted: they are text, not structure.
+
+    Raises:
+        TypeError: ``sql`` is not a string.
+        InvalidInputError: ``sql`` joins more than ``MAX_CALLER_SQL_CONNECTIVES`` conditions.
+    """
+    if sql is None:
+        return
+    if not isinstance(sql, str):
+        raise TypeError(f"{field} must be a SQL string, got {type(sql).__name__}")
+    connectives = len(_CONNECTIVE.findall(_QUOTED_SQL.sub(" ", sql)))
+    if connectives > MAX_CALLER_SQL_CONNECTIVES:
+        raise InvalidInputError(
+            f"{field} joins {connectives} conditions with AND/OR; at most {MAX_CALLER_SQL_CONNECTIVES} are accepted — "
+            "pass a large set of values as one IN (...) list"
+        )
+
+
 @contextmanager
 def _user_sql(action: str) -> Iterator[None]:
     """Translate Lance's expression-parse failures into a 4xx instead of letting them escape as a 500.
@@ -1391,6 +1423,9 @@ def update_table(ns: LanceNamespace, so: StorageOptions, req: UpdateTableRequest
     # MAIN, got a 200, and the lineage WROTE edge recorded main's version. A branch exists precisely so
     # work can be staged without touching main; silently writing to main is the one outcome that makes
     # the feature worse than not having it.
+    refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
+    for expression in updates.values():
+        refuse_an_unbounded_boolean_chain(expression, field="updates")
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
     with _user_sql("invalid update expression or predicate"):
         result = dataset.update(updates, where=req.predicate)
@@ -1407,6 +1442,7 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     table_id = _table_id(req)
     # Same omission as `update_table` above, and worse here: a wrong-target DELETE loses rows that were
     # never meant to be touched, and returns 200.
+    refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     dataset = open_dataset(ns, so, table_id, branch=req.branch)
     with _user_sql("invalid delete predicate"):
         dataset.delete(req.predicate)
@@ -1479,6 +1515,8 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
     # past its values buffer is written as process heap and a decreasing one crashes the process
     # (measured on pylance 12.0.0); main's native reader refuses both, as a 500. Checked once, here, so
     # both arms answer 400.
+    refuse_an_unbounded_boolean_chain(req.when_matched_update_all_filt, field="when_matched_update_all_filt")
+    refuse_an_unbounded_boolean_chain(req.when_not_matched_by_source_delete_filt, field="when_not_matched_by_source_delete_filt")
     rows = read_arrow_body(data)
     if req.branch is None:
         return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
@@ -1580,6 +1618,7 @@ def count_rows(ns: LanceNamespace, so: StorageOptions, req: CountTableRowsReques
     correct; re-implementing it here would put a second definition of "count" in the estate for no
     defect, and any divergence in predicate dialect or version resolution would be ours to own.
     """
+    refuse_an_unbounded_boolean_chain(req.predicate, field="predicate")
     if req.branch is None:
         response = native.call(ns, "count_table_rows", req)
         if not isinstance(response, CountTableRowsResponse) or response.count is None:

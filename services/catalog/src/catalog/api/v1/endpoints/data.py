@@ -694,6 +694,7 @@ def query_table(id: str, body: QueryTableRequest, ns: NamespaceDep, settings: Se
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
+    dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     response = native.call(ns, "query_table", body)
     if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
         raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
@@ -810,6 +811,7 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, ns: Na
     # main's plan with a 200 for a branch that had never been created. A guard that covers one of two
     # channels reads as a guard while being none.
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch or (body.query.branch if body.query else None), door="explain_table_query_plan")
+    dataplane.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
     result = native.call(ns, "explain_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
@@ -828,6 +830,7 @@ def analyze_table_query_plan(id: str, body: AnalyzeTableQueryPlanRequest, ns: Na
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text."""
     body.id = reconcile_body_id(parse_identifier(id, settings.delimiter), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
+    dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     result = native.call(ns, "analyze_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
