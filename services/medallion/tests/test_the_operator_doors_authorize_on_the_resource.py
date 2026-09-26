@@ -35,11 +35,13 @@ from medallion.api import train as train_api
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.services import train as train_service
 from medallion.services.cascade_lag import AbsentEdgeMemo, LagTickReport, StalledTier
+from medallion.services.dapr_saga import DaprSagaClient
 from medallion.services.trigger_guards import StageTrigger
 from medallion.workflow import StageJobSpec, TrainJobSpec
 from service_kit.exceptions import register_handlers
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.lakehouse.ns_errors import install_problem_handlers
+from service_kit.lakehouse.saga import SagaHandle, SagaStart
 
 
 APP_TOKEN = "the-estate-app-token"
@@ -532,6 +534,31 @@ def test_a_training_stop_is_logged_with_WHO_asked(producer: TestClient, caplog: 
 
     [line] = [r for r in caplog.records if r.getMessage() == "medallion_train_watch_termination_requested"]
     assert (line.__dict__["instance_id"], line.__dict__["subject"]) == ("train-acme", "bob")
+
+
+def test_the_training_doors_serve_the_watch_the_MINT_schedules(stage_runner: FastAPI, fga: _Fga, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The id and state come from `schedule_train_watch`, not from a literal: a mint whose ids the door
+    refuses would leave every real training watch unobservable and unstoppable."""
+    started: list[tuple[Any, dict[str, Any]]] = []
+
+    def start(self: DaprSagaClient, *, saga: Any, payload: dict[str, Any], instance_id: str) -> SagaHandle:
+        started.append((saga, payload))
+        return SagaHandle(instance_id=instance_id, outcome=SagaStart.STARTED)
+
+    monkeypatch.setattr(DaprSagaClient, "start", start)
+    minted = train_service.schedule_train_watch(MedallionSettings(), token="tok-1", model="churn", project=CONFIGURED)
+    assert minted is not None
+    [(saga, payload)] = started
+    app = _producer(stage_runner)
+    app.state.workflow_client = _Workflows({minted: _State(payload, name=saga.__name__)})
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        shown = client.get(f"/trains/{minted}", headers=_bearer("bob"))
+        served = client.get(f"/trains/{minted}", headers=SERVICE)
+        stopped = client.post(f"/trains/{minted}/terminate", headers=_bearer("bob"))
+
+    assert (shown.status_code, served.status_code, stopped.status_code) == (200, 200, 202), (shown.text, served.text, stopped.text)
+    assert _terminated(app) == [minted]
 
 
 def test_a_training_watch_RECORDS_the_configured_project_whatever_the_trigger_claims(monkeypatch: pytest.MonkeyPatch) -> None:
