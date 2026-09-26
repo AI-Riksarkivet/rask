@@ -17,7 +17,7 @@ import logging
 import threading
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import cast
+from typing import Required, TypedDict, Unpack, cast
 
 import pytest
 from fastapi import FastAPI, Request
@@ -88,11 +88,27 @@ def _run(
     )
 
 
-def _expect(monkeypatch: pytest.MonkeyPatch, status: int, **kw: object) -> None:
+class _RunArgs(TypedDict, total=False):
+    """`_run`'s keywords and their types, so a value passed through `_expect` is checked against them."""
+
+    app_token: Required[str | None]
+    dapr_token: str | None
+    authz: str | None
+    verifier: object | None
+    oidc_enabled: bool
+    fga_result: bool
+    fga_raises: bool
+    project: str | None
+    caller_app_id: str | None
+    captured: dict[str, object] | None
+    wired: bool
+
+
+def _expect(monkeypatch: pytest.MonkeyPatch, status: int, **kw: Unpack[_RunArgs]) -> None:
     # The gate raises the lance_namespace domain errors (same taxonomy as catalog/lineage security), so the
     # HTTP status is the ns_errors mapping of the error code, not an HTTPException attribute.
     with pytest.raises(LanceNamespaceError) as exc:
-        _run(monkeypatch, **kw)  # ty: ignore[invalid-argument-type]
+        _run(monkeypatch, **kw)
     assert status_for(int(exc.value.code)) == status
 
 

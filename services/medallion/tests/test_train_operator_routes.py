@@ -52,7 +52,7 @@ class _Client:
         self.read.append(instance_id)
         return self._instances.get(instance_id)
 
-    def terminate_workflow(self, instance_id: str) -> None:
+    def terminate_workflow(self, instance_id: str, *, output: Any | None = None, recursive: bool = True) -> None:
         self.terminated.append(instance_id)
 
 

@@ -27,12 +27,13 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from collections.abc import Sequence
 
 import httpx
 import pytest
 from fastapi import FastAPI
 
-from medallion.services.cascade_lag import LagTickReport, StalledTier
+from medallion.services.cascade_lag import AbsentEdgeMemo, ConsumedReader, LagGauge, LagTickReport, PublishedReader, StalledTier
 
 
 def _report(*, stalled: list[tuple[str, str]]) -> LagTickReport:
@@ -119,7 +120,9 @@ def test_the_door_measures_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -
         ran_on["declared_edges"] = threading.get_ident()
         return [("silver->gold", "acme")]
 
-    def tick(**_kw: object) -> LagTickReport:
+    def tick(
+        *, edges: Sequence[tuple[str, str]], published: PublishedReader, consumed: ConsumedReader, gauge: LagGauge, memo: AbsentEdgeMemo | None = None
+    ) -> LagTickReport:
         ran_on["run_lag_tick"] = threading.get_ident()
         return _report(stalled=[("silver->gold", "acme")])
 
