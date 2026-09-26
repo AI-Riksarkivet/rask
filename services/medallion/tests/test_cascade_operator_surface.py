@@ -142,7 +142,6 @@ def _producer_app(stage_runner_urls: dict[str, str], transport: Any) -> FastAPI:
     # The door and the per-run authorization have their own suite
     # (`test_the_operator_doors_authorize_on_the_resource.py`); a caller the door decided whole keeps
     # these assertions about the forwarding.
-    app.dependency_overrides[stage_runner_ops.authorize_produce] = lambda: None
     app.dependency_overrides[admit_caller] = ProducerCaller
     app.dependency_overrides[stage_runner_ops.SettingsDep.__metadata__[0].dependency] = lambda: app.state.medallion_settings
     return app

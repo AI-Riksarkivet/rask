@@ -66,21 +66,12 @@ def _client(request: Request) -> Any:
     return client
 
 
-def no_stage_run(instance_id: str) -> HTTPException:
-    """The answer for a run no workflow here has.
-
-    The producer gives a person this same answer for a stage runner it does not know, so the pair
-    cannot confirm a runner name; building both from here keeps them one answer.
-    """
-    return HTTPException(status_code=404, detail=f"no stage run {instance_id!r}")
-
-
 async def _state_or_404(client: Any, instance_id: str, *, payloads: bool) -> Any:
     # The SDK client is SYNCHRONOUS. Awaiting it inline would block the event loop for every other
     # request on this worker — the same reason ingest and flows read their state through a thread.
     state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=payloads))
     if state is None:
-        raise no_stage_run(instance_id)
+        raise HTTPException(status_code=404, detail=f"no stage run {instance_id!r}")
     return state
 
 

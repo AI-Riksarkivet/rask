@@ -9,6 +9,8 @@ WHICH PROJECT THE ADMIN CHECK NAMES depends on the door (owner ruling 2026-09-25
 resource"). A door whose ``?project=`` is its WRITE TARGET checks that project (`authorize_produce`). A door
 acting on an EXISTING resource authenticates only (`admit_caller`) and checks the project the resource
 records (`require_project_admin`, `administered_projects`), so no caller-chosen value can move its gate.
+A read of DEPLOYMENT config, the same for every tenant, admits any authenticated caller and checks no
+project (`admit_config_read`).
 
 Fail-closed at every step: no service token configured is a refusal unless the unauthenticated hatch is set;
 a matching Dapr token passes (service path) — on a write-target door only into the CONFIGURED project,
@@ -18,7 +20,7 @@ OpenFGA outage failing to 503 — never a silent allow; a request carrying neith
 enabled with NO verifier wired (startup/discovery skew) is 503 for a bearer-presenting caller — an
 auth-layer outage, not a caller verdict (the catalog/lineage ``security.py`` invariant). Every door
 decision — the ``can_administer`` allow/deny/outage AND the service-token acceptance — is audited on the
-``lance.audit`` stream (#41), naming the project the call acts on.
+``lance.audit`` stream (#41), naming the project the call acts on, or the path a config read reads.
 """
 
 from __future__ import annotations
@@ -35,7 +37,7 @@ from pydantic import BaseModel, ConfigDict
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.core.config import MedallionSettings
 from service_kit.governed import dapr_auth, fga
-from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
+from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 from service_kit.governed.dapr_auth import is_public_caller
 from service_kit.governed.oidc import OIDCVerifier, verify_off_loop
 from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
@@ -256,6 +258,24 @@ async def admit_caller(
 
 
 AdmittedCaller = Annotated[ProducerCaller, Depends(admit_caller)]
+
+
+async def admit_config_read(request: Request, caller: AdmittedCaller) -> ProducerCaller:
+    """The door of a DEPLOYMENT-CONFIG read: any caller `admit_caller` admits, and no project.
+
+    Owner default 2026-09-26: the answer names no tenant, so a project check authorizes nothing, and a
+    list gated tighter than the stage doors makes them its oracle. Lakekeeper gates
+    `GET /management/v1/info` the same way. The admission is the decision, so it is what is recorded,
+    against the path the door's own refusal names.
+    """
+    if caller.service is not None:
+        audit("produce_service_token", ALLOW, subject=caller.service, resource=request.url.path)
+    elif caller.subject is not None:
+        audit("authn", SUCCESS, subject=caller.subject, resource=request.url.path)
+    return caller
+
+
+ConfigReader = Annotated[ProducerCaller, Depends(admit_config_read)]
 
 
 async def authorize_produce(

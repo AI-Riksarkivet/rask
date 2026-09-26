@@ -57,6 +57,8 @@ def _bearer(sub: str) -> dict[str, str]:
 
 
 SERVICE = {"dapr-api-token": APP_TOKEN}
+#: The service token as daprd stamps it on a request the public gateway forwards for an anonymous caller.
+PUBLIC = {**SERVICE, "dapr-caller-app-id": "gateway"}
 
 
 class _Verifier:
@@ -319,22 +321,11 @@ def test_an_UNKNOWN_stage_is_still_404(producer: TestClient) -> None:
     assert producer.get(_show("stage-nope"), headers=_bearer("alice")).status_code == 404
 
 
-@pytest.mark.parametrize("door", [_show, _stop], ids=["show", "terminate"])
-def test_a_person_cannot_tell_an_UNKNOWN_stage_runner_from_a_MISSING_run(producer: TestClient, door: Any) -> None:
-    """carol holds no grant. The configured runners are `GET /stage-runners`' to disclose, on
-    `can_administer`, so a door that answers her before any run is read must not confirm a runner name
-    by answering a real one differently from a made-up one."""
-    method = "GET" if door is _show else "POST"
-    typo = producer.request(method, door("stage-nope").replace(RUNNER, "typo"), headers=_bearer("carol"))
-    real = producer.request(method, door("stage-nope"), headers=_bearer("carol"))
-
-    assert typo.status_code == real.status_code == 404, (typo.text, real.text)
-    assert typo.json() == real.json()
-
-
-def test_an_UNKNOWN_stage_runner_is_still_NAMED_on_the_service_path(producer: TestClient) -> None:
-    """The typo against a values-driven list is the common cause, and the service path may list them."""
-    response = producer.get("/stage-runners/typo/stages/stage-mine", headers=SERVICE)
+@pytest.mark.parametrize("headers", [SERVICE, _bearer("carol")], ids=["service", "person"])
+def test_an_UNKNOWN_stage_runner_is_NAMED_to_every_admitted_caller(producer: TestClient, headers: dict[str, str]) -> None:
+    """The typo against a values-driven list is the common cause, and the configured names are
+    `GET /stage-runners`' to give any admitted caller, carol included."""
+    response = producer.get("/stage-runners/typo/stages/stage-mine", headers=headers)
 
     assert response.status_code == 404, response.text
     assert RUNNER in response.text, response.text
@@ -424,6 +415,55 @@ def test_a_stage_whose_recorded_project_is_UNSAFE_is_refused_to_a_person(fga: _F
     assert refused.status_code == 503, refused.text
     assert _terminated(app) == []
     assert fga.calls == []
+
+
+# ── the deployment's stage-runner list ──────────────────────────────────────────────────────────────
+
+
+def test_a_signed_in_caller_administering_NOTHING_reads_the_runner_list(producer: TestClient) -> None:
+    """Owner default 2026-09-26: the names are deployment config, the same for every tenant."""
+    response = producer.get("/stage-runners", headers=_bearer("carol"))
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"stage_runners": [RUNNER]}
+
+
+@pytest.mark.parametrize("headers", [PUBLIC, {}], ids=["public-front-door", "no-credential"])
+def test_the_runner_list_is_REFUSED_to_a_caller_nobody_signed_in(producer: TestClient, headers: dict[str, str]) -> None:
+    assert producer.get("/stage-runners", headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize("query", ["?project=mine", "?project=other", "?project=acme", "?project=x"])
+def test_a_PROJECT_does_not_change_the_runner_list(producer: TestClient, query: str) -> None:
+    """The answer names no tenant, so there is no project to gate on: `x`, an id no mint issues, is
+    ignored like the rest."""
+    plain = producer.get("/stage-runners", headers=_bearer("alice"))
+    asked = producer.get("/stage-runners" + query, headers=_bearer("alice"))
+
+    assert (asked.status_code, asked.json()) == (plain.status_code, plain.json()) == (200, {"stage_runners": [RUNNER]})
+
+
+def _refused(request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+#: Every kind of caller the producer tells apart at its door.
+CALLERS = {"service": SERVICE, "admin-of-mine": _bearer("alice"), "admin-of-acme": _bearer("bob"), "no-grant": _bearer("carol"), "public": PUBLIC, "none": {}}
+
+
+@pytest.mark.parametrize("headers", CALLERS.values(), ids=CALLERS.keys())
+def test_a_stage_door_tells_no_caller_a_runner_name_the_list_withholds(fga: _Fga, headers: dict[str, str]) -> None:
+    """A configured runner that is down answers 502 before any run is read, where an unknown name
+    answers 404, so every caller a stage door admits can tell a real runner from a made-up one. The
+    list must answer exactly those callers, or the doors are an oracle for what it withholds."""
+    app = _producer(FastAPI())
+    app.state.http = httpx.AsyncClient(transport=httpx.MockTransport(_refused))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        door = client.get(_show("stage-mine"), headers=headers)
+        listed = client.get("/stage-runners", headers=headers)
+
+    assert door.status_code in {502, 403}, door.text
+    assert (door.status_code == 502) == (listed.status_code == 200), (door.text, listed.text)
 
 
 # ── the stalled-tier read ───────────────────────────────────────────────────────────────────────────
@@ -703,6 +743,25 @@ def test_a_SERVICE_read_of_the_stalled_cells_is_audited_per_project(producer: Te
     assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", f"project:{p}", None) for p in ("acme", "mine", "other")]
 
 
+@pytest.mark.parametrize(
+    ("headers", "record"),
+    [
+        (_bearer("carol"), ("authn", "success", "carol", "/stage-runners", None)),
+        (SERVICE, ("produce_service_token", "allow", "service:direct", "/stage-runners", None)),
+    ],
+    ids=["person", "service"],
+)
+def test_a_runner_list_read_is_AUDITED_as_the_admission_it_is(
+    producer: TestClient, audited: list[logging.LogRecord], headers: dict[str, str], record: tuple[object, ...]
+) -> None:
+    """No project is checked, so the record is the admission: a person's as the catalog records an
+    authentication-only read, the service token's as every producer door records its acceptance, both
+    against the path the refusal of the same door names."""
+    assert producer.get("/stage-runners", headers=headers).status_code == 200
+
+    assert _all_decisions(audited) == [record]
+
+
 def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(producer: TestClient, stage_runner: FastAPI, audited: list[logging.LogRecord]) -> None:
     """Refused at the door, before any run is read, so the record names the request's target rather
     than the configured project."""
@@ -716,12 +775,11 @@ def test_a_PUBLIC_callers_refusal_names_what_it_asked_for(producer: TestClient, 
 
 # ── which doors may take `?project=` at all ─────────────────────────────────────────────────────────
 
-#: The producer operations whose `?project=` names what the call WRITES, or a surface no tenant owns.
-#: Every other door acts on something that already exists and reads the tenant off it, so a new door
-#: that declares the parameter fails here until someone decides which kind it is.
+#: The producer operations whose `?project=` names what the call WRITES. Every other door acts on
+#: something that already exists and reads the tenant off it, or reads deployment config no tenant owns,
+#: so a new door that declares the parameter fails here until someone decides which kind it is.
 _PROJECT_PARAM_ALLOWED = {
     ("post", "/produce"): "the write target: the cascade head seeds THIS project's bronze",
-    ("get", "/stage-runners"): "the deployment's stage-runner names, identical for every tenant",
 }
 
 

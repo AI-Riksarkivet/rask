@@ -311,6 +311,7 @@ def _as_daprd_delivers(app: ASGIApp, *, app_token: str) -> ASGIApp:
         ("get", "/api/trains/train-ray-train-tok-1"),
         ("post", "/api/trains/train-ray-train-tok-1/terminate"),
         ("get", "/api/cascade/stalled"),
+        ("get", "/api/stage-runners"),
     ],
 )
 def test_a_public_caller_is_refused_by_the_door_behind_the_row(gw, monkeypatch: pytest.MonkeyPatch, method: str, public: str) -> None:
