@@ -1474,12 +1474,11 @@ class LineageRepository:
     async def recorded_event(self, run_id: str, event_type: str | None) -> dict[str, Any] | None:
         """The payload already stored for this ``(run_id, event_type)``, or ``None``.
 
-        Exists to tell a REPLAY from a new assertion (§ E2). The bus consumer is an ephemeral
-        ``deliverPolicy: all`` subscriber, so every lineage restart re-presents the entire retained
-        stream — that is the estate's stated recovery story, not a fault — and an authorization gate
-        meets those old events again each time. They are already in the graph, so refusing them loses
-        nothing, but it turns a restart into a burst of refusals that reads exactly like a producer
-        under attack.
+        Exists to tell a REPLAY from a new assertion (§ E2). Lineage's ``deliverPolicy: all`` consumer
+        re-presents the entire retained stream on its first attach and on a rebuild — the estate's
+        stated recovery story, not a fault — and an authorization gate meets those old events again.
+        They are already in the graph, so refusing them loses nothing, but it turns a replay into a
+        burst of refusals that reads exactly like a producer under attack.
 
         THE COMPARISON IS THE WHOLE POINT, and a key match alone would be a hole: the graph SETs
         ``author``, ``operation`` and ``event_type`` last-wins on a ``MERGE`` by run id, so accepting

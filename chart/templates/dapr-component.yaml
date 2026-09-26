@@ -174,25 +174,21 @@ scopes:
      EVERY message: jetstream only sets a DeliverGroup when queueGroupName is non-empty), and it CANNOT
      live on one shared component because lineage and medallion-producer both consume lineage.events.v1 — one
      shared queue group would split those messages across the two apps. deliverPolicy differs on
-     purpose: `all` for lineage (a restart replays the retained stream into the idempotent MERGE ingest —
-     that replay IS the outage-durability story), `new` for the cascade head + stage runners (a replayed
-     168h of triggers would re-fire cascades / re-run compute). The `new` subscribers ALSO get a
-     durableName: an ephemeral queue-group consumer is deleted with its last member, so a trigger
-     published (or unacked) while the stage runner is down was LOST — deliverPolicy=new skipped it on
-     reconnect (the chaos-confirmed cascade stall, docs/RESILIENCE.md). A durable+queue-group consumer
-     keeps its cursor across pod death AND redeploys — chaos-verified live 2026-07-06: publish-while-down
-     delivered on recovery, and a rollout restart re-attached with zero "consumer name already in use"
-     errors (that orphan failure applies to durables WITHOUT a queue group, not this combination).
-     lineage stays ephemeral ON PURPOSE — a durable cursor would defeat its replay-rebuilds-the-graph
-     recovery story.
+     purpose: `all` for lineage (a NEW durable starts at the stream's first message, so its first attach,
+     or a rebuild after `nats consumer rm LINEAGE lineage-durable`, replays the retained stream into the
+     idempotent ingest), `new` for the cascade head + stage runners (replayed triggers re-fire cascades).
 
-     THE REPLAY IS IDEMPOTENT FOR EVENTS THAT INGEST, AND THAT IS NOT ALL OF THEM. An event the door
-     refuses meets the same refusal on every restart, so the retained stream is re-refused in a burst at
-     each roll — measured 2026-09-18, 44 refusals and 44 dead-letter parks in the hour spanning one
-     lineage roll, 37 of them one unauthored run id. The two unrepairable classes (bytes that do not
-     parse, and a run carrying no author) are therefore ACKED and counted rather than parked, because no
-     grant, redelivery or restart can change their answer and a park writes a duplicate per roll. A named
-     PERSON who lacks a grant still parks: a tuple can be written and the same event then succeeds. */}}
+     EVERY subscriber is DURABLE + queue group ([[LH-303]]). An ephemeral consumer dies with its last
+     member and with a NATS restart, and the sidecar does not re-create it: measured 2026-09-26 on Dapr
+     1.18.1, NATS scaled to 0 and back left lineage deaf to the bus until its pod restarted, while the
+     durables resumed. Durable + queue group keeps its cursor across pod death, redeploys and NATS
+     restarts, with none of the "consumer name already in use" orphans of a durable WITHOUT a queue group
+     (chaos-verified 2026-07-06). Pinned by tests/unit/test_every_bus_subscriber_survives_a_bus_restart.py.
+
+     A REFUSAL REPEATS ON A REPLAY. The two unrepairable classes (bytes that do not parse, a run carrying
+     no author) are ACKED and counted rather than parked, because nothing can change their answer and a
+     park would write a duplicate per replay. A named PERSON who lacks a grant still parks: a tuple can be
+     written and the same event then succeeds. */}}
 {{- $subscribers := list (dict "appId" .Values.services.lineage.daprAppId "deliverPolicy" "all") }}
 {{- if .Values.medallion.enabled }}
 {{- $subscribers = append $subscribers (dict "appId" .Values.medallion.producer.daprAppId "deliverPolicy" "new") }}
@@ -201,9 +197,8 @@ scopes:
 {{- end }}
 {{- end }}
 {{- /* The INBOX (open_notifications.md §2). `new` is the strongest case in this list: lineage's `all`
-     + ephemeral pair replays the retained stream on every pod restart, which for a graph rebuild IS
-     the durability story and for an inbox would re-notify a week of history on every rollout — a badge
-     that lies loudest right after a deploy. The durable half is the other side of the same coin: a run
+     replays the retained stream on its first attach and on a rebuild, which for a graph IS the recovery
+     story and for an inbox would re-notify a week of history — a badge that lies loudest when it matters. The durable half is the other side of the same coin: a run
      that terminated while this app was down must still reach its author, and `new` alone skips it on
      reconnect. Unconditional, like the Deployment (services.notifications is frontDoor).
 
@@ -268,14 +263,8 @@ spec:
     - { name: publishingScopes, value: "{{ .appId }}=dlq.{{ .appId }}" }
     - { name: subscriptionScopes, value: "{{ .appId }}=dlq.{{ .appId }},{{ $.Values.pubsub.topic }}" }
     {{- end }}
-    {{- if eq .deliverPolicy "new" }}
-    {{- /*
-       Durable cursor for the trigger consumers (stage runners + cascade head): survives pod death and redeploys,
-       so a trigger published while the app is down is DELIVERED on recovery instead of skipped (see the
-       comment block above; chaos-verified). Name matches the app-id — one durable per subscriber app.
-    */}}
+    {{- /* One durable per subscriber app-id, for the reasons in the block above. */}}
     - { name: durableName, value: "{{ .appId }}-durable" }
-    {{- end }}
     {{- /*
        backOff supersedes ackWait for redelivery timing (NATS consumer semantics): its FIRST value is the
        effective ack window, so it must not undercut the slowest handler (a compute-on stage runner does real
@@ -306,12 +295,10 @@ scopes:
 {{- if .Values.dapr.resiliency.enabled }}
 ---
 {{- /* The lineage DLQ PARKING consumer — its own component, never the app's main one. The main
-     lineage component is deliverPolicy=all + EPHEMERAL on purpose (replay rebuilds the graph), but
-     the /lineage-dlq parking subscription rode it too — so every pod restart re-attached at the
-     beginning of the retained stream and re-parked up to 168h of already-parked dead letters:
-     ERROR logs + DEAD_LETTERED counts spiking on every rollout with no new loss, training operators
-     to ignore the one metric that means provenance is missing. deliverPolicy=new
-     plus a durable cursor parks each dead letter exactly once. Consumer config matches the
+     lineage component starts at the stream's first message (`all`), which a parking subscription must
+     not: riding it, a replay re-parks up to 168h of already-parked dead letters, spiking ERROR logs and
+     DEAD_LETTERED counts with no new loss. deliverPolicy=new plus its own durable parks each dead letter
+     exactly once. Consumer config matches the
      resiliency-mode values the nats-stream-job's durable-drift reconcile expects (EXP_MAXD/EXP_BOFF) —
      this component only renders when resiliency is on, which is also the only time LINEAGE_DLQ_TOPIC
      exists. */}}

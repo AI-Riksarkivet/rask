@@ -115,11 +115,14 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    (`chart/templates/dapr-component.yaml`): the consumer cursor survives pod death and redeploys, so a
    trigger published while a stage runner is down is **delivered on recovery** instead of skipped —
    chaos-verified live (publish-while-scaled-to-0 → `Unprocessed: 1` retained → processed on scale-up;
-   post-redeploy consumption clean). Lineage deliberately stays ephemeral + `deliverPolicy: all`: each
-   restart replays the retained stream into the idempotent MERGE (O(stream size) load, zero loss) —
-   a durable cursor there would defeat the replay-rebuilds-the-graph recovery story. Residual: the
-   replay load on lineage restarts, and gap #2's poison/no-DLQ window, which durable cursors do not
-   change.
+   post-redeploy consumption clean). Lineage is durable too, with `deliverPolicy: all` ([[LH-303]]):
+   an ephemeral consumer dies with a NATS restart and the sidecar does not re-create it (measured
+   2026-09-26: lineage heard nothing from the bus until its pod restarted). Its first attach replays the
+   retained stream into the idempotent ingest; to REBUILD the graph from the stream, remove the durable
+   and restart lineage — `nats consumer rm LINEAGE lineage-durable`, then
+   `kubectl rollout restart deploy/rask-lineage` — and the new durable replays from the first message.
+   Residual: gap #2's poison/no-DLQ window, which durable cursors do not change; and the catalog's own
+   broadcast consumer, still ephemeral by design (one per replica), which a NATS restart also removes.
 
 4. **Best-effort durable feed.** The `/events` feed table write is best-effort (logged on failure); the
    AGE graph is authoritative. The feed can lag the graph — visibility, not correctness.

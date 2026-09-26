@@ -8,9 +8,8 @@ even in a deployment with no broker behind it.
 **Three properties of this subscription that live in the chart, named here so they are not lost:**
 
 * `deliverPolicy: new` + a durable name. Non-negotiable for this consumer: lineage's own
-  `deliverPolicy: all` plus an ephemeral consumer replays the retained backlog on every pod restart,
-  which for a graph rebuild is the durability story and for an INBOX would re-notify a week of history
-  on every rollout.
+  `deliverPolicy: all` replays the retained backlog on its first attach and on a rebuild, which for a
+  graph is the recovery story and for an INBOX would re-notify a week of history.
 * Its own per-app pubsub component. `queueGroupName` lives on the component, and lineage consumes the
   same topic — one shared queue group would split those messages across the two apps.
 * Registration in the resiliency CRD before any dead-letter topic is configured. See

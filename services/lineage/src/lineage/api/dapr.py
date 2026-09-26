@@ -118,8 +118,8 @@ async def on_dead_letter(event: dict[str, Any], request: Request, _: Annotated[N
     """Park one dead-lettered ingest delivery: log + ack (Dapr-native DLQ, RESILIENCE gap #2).
 
     No auto-requeue — the delivery already exhausted the sidecar's Resiliency retry schedule, and
-    lineage's recovery story stays replay-from-stream (the ephemeral deliverPolicy=all consumer re-reads
-    the retained stream on restart); the DLQ adds operator VISIBILITY, not a second path. That bounds
+    lineage's recovery story stays replay-from-stream (its deliverPolicy=all consumer, re-created to
+    rebuild, re-reads the retained stream); the DLQ adds operator VISIBILITY, not a second path. That bounds
     what recovery can reach: a dead letter older than the stream's retention has no path back, because
     nothing re-ingests the DLQ stream itself.
 
@@ -181,10 +181,10 @@ def register_dapr(app: FastAPI) -> None:
         )(on_lineage_event)
         if settings.dapr_dlq_topic:
             # The parking route rides its OWN durable component (deliverPolicy=new), never the main
-            # ingest component: that one is deliverPolicy=all + ephemeral so replay can rebuild the
-            # graph — semantics that made this route re-park up to 168h of already-parked dead
-            # letters on every pod restart, spiking the terminal-loss metric with no new loss
-            # . The fallback keeps a dev stack without the component working.
+            # ingest component: that one is deliverPolicy=all so a replay can rebuild the graph, and
+            # riding it would re-park up to 168h of already-parked dead letters on a replay, spiking
+            # the terminal-loss metric with no new loss. The fallback keeps a dev stack without the
+            # component working.
             dapr_app.subscribe(
                 pubsub=settings.dapr_dlq_pubsub or settings.dapr_pubsub,
                 topic=settings.dapr_dlq_topic,

@@ -110,13 +110,13 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # Dead-letter topic for the ingest subscription (Dapr-native DLQ). "" (default) = none — the
     # pre-existing behavior. Ships together with the chart's Resiliency retry policy (a DLQ without
     # one dead-letters on the FIRST failure per Dapr's documented default). Lineage's recovery story
-    # stays replay-from-stream (ephemeral deliverPolicy=all consumer); the DLQ adds operator
-    # VISIBILITY for deliveries that exhausted retries, it does not replace the replay.
+    # stays replay-from-stream (its durable deliverPolicy=all consumer, re-created to rebuild); the DLQ
+    # adds operator VISIBILITY for deliveries that exhausted retries, it does not replace the replay.
     dapr_dlq_topic: str = Field(default="", alias="LINEAGE_DLQ_TOPIC")
     # The PARKING subscription's own pubsub component (durable, deliverPolicy=new). "" (default) falls
-    # back to `dapr_pubsub` — but that component is deliverPolicy=all + ephemeral BY DESIGN (replay
-    # rebuilds the graph), so riding it re-parked the whole retained DLQ backlog on every pod restart
-    # . The chart always sets this alongside LINEAGE_DLQ_TOPIC; the fallback only
+    # back to `dapr_pubsub` — but that component starts at the stream's first message (a replay rebuilds
+    # the graph), so riding it would re-park the whole retained DLQ backlog on a replay. The chart
+    # always sets this alongside LINEAGE_DLQ_TOPIC; the fallback only
     # exists so a dev stack without the extra component keeps working.
     dapr_dlq_pubsub: str = Field(default="", alias="LINEAGE_DLQ_PUBSUB")
     # Freshness budget in hours (data-contract gap #2): 0 (default) = the axis is OFF (no probe).

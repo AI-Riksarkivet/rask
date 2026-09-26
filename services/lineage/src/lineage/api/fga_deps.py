@@ -415,12 +415,12 @@ def _is_the_catalogs_own_drop(event: RunEvent | DatasetEvent, arrived: Mapping[s
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
     """Is this the SAME event the feed already holds — a redelivery rather than a new assertion?
 
-    THE BUS RE-PRESENTS EVERY RETAINED EVENT ON EVERY RESTART. The consumer is ephemeral with
-    `deliverPolicy: all`, which is the estate's recovery story ("the stream retains it and this
-    consumer re-sees it on restart"), so an authorization gate meets the whole history again each time
-    lineage rolls. Those runs are already in the graph — measured 2026-09-09, a full 2 161-message
-    replay left the durable feed flat at 3 248 rows — so refusing them loses nothing and merely turns
-    an ordinary restart into a burst of refusals indistinguishable from a producer under attack.
+    A REPLAY RE-PRESENTS EVERY RETAINED EVENT. Lineage's `deliverPolicy: all` consumer starts at the
+    stream's first message on its first attach and on a rebuild, which is the estate's recovery story,
+    so an authorization gate meets the whole history again each time. Those runs are already in the
+    graph — measured 2026-09-09, a full 2 161-message replay left the durable feed flat at 3 248 rows —
+    so refusing them loses nothing and merely turns a replay into a burst of refusals
+    indistinguishable from a producer under attack.
 
     CHECKED ONLY AFTER A DENIAL, so the authorized path pays no extra read: a replay of an event that
     still authorizes cleanly never reaches here.

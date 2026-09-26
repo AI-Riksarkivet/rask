@@ -20,10 +20,12 @@ The CONDITIONALS must match the components' own, which is why each branch below 
 its component carries rather than a convenient approximation.
 */}}
 {{- define "lance.chartDurables" -}}
-{{- $names := list -}}
+{{- /* Lineage's own subscriber, unconditional like its component ([[LH-303]]): durable so a NATS restart
+    cannot unsubscribe it. Left out of this set, the orphan pass would delete it on every release and
+    the re-created durable would replay the whole stream. */ -}}
+{{- $names := list (printf "%s-durable" .Values.services.lineage.daprAppId) -}}
 {{- if .Values.medallion.enabled -}}
-  {{- /* One `<appId>-durable` per subscriber that asks for `deliverPolicy: new` — the lineage service
-      subscribes with `all` and deliberately carries NO durable, so a replay can rebuild the graph. */ -}}
+  {{- /* One `<appId>-durable` per cascade subscriber. */ -}}
   {{- $names = append $names (printf "%s-durable" .Values.medallion.producer.daprAppId) -}}
   {{- range .Values.medallion.stageRunners -}}
     {{- $names = append $names (printf "%s-durable" .daprAppId) -}}

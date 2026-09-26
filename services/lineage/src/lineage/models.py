@@ -329,8 +329,8 @@ class UnauthoredRunError(PermissionDeniedError):
     nothing and parking it buys a duplicate.
 
     Measured on the deployed estate 2026-09-18: 37 of 44 refusals in one hour were this, all for ONE run
-    id, in a single burst at pod start with `already_recorded=False`, on a subscriber that is ephemeral
-    with `deliverPolicy: all` and therefore meets the whole retained stream again on every roll.
+    id, in a single burst at pod start with `already_recorded=False`, while the whole retained stream was
+    replayed.
 
     It stops being unrepairable when the producers sign ([[LH-064]]), at which point this arm should
     stop firing rather than begin discarding more.

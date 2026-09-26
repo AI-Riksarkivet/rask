@@ -66,10 +66,9 @@ async def handle_cloud_event(
       the message there. Measured on the live estate 2026-09-15, the sidecar and the app naming the
       same CloudEvent id back to back: daprd logged *"DROP status returned from app while processing
       pub/sub event a4d65ffd-…"*, the app logged `dapr_dead_letter_parked event_id='a4d65ffd-…'`, and
-      `POST /lineage-dlq` answered 200. So parking an UNREPAIRABLE event wrote a duplicate of it on
-      every roll — the consumer is ephemeral with `deliverPolicy: all`, so each restart re-presents the
-      retained stream and re-refuses the same events. One roll produced 49 parks inside two minutes of
-      pod start; one run sat in the DLQ twice, five days apart.
+      `POST /lineage-dlq` answered 200. So parking an UNREPAIRABLE event writes a duplicate of it on
+      every replay of the retained stream, which re-refuses the same events: one replay produced 49
+      parks inside two minutes; one run sat in the DLQ twice, five days apart.
 
       UPSTREAM SETTLES THE ACK, and it is not this estate's preference: dapr/dapr#6282, implemented by
       #7097, has a maintainer state that for a message the app can never accept "SUCCESS is still
