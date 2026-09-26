@@ -3,10 +3,9 @@
 open_fastapi-audit — "An `http://` OIDC issuer in production surfaces as an opaque 401 on every
 request, and the 'logged distinctly' the code promises does not exist".
 
-`_require_https` raises `UnauthenticatedError`, which every call site maps to 401 "Invalid or expired
-token". So an operator who ships `RASK_OIDC_ISSUER=http://…` without `RASK_OIDC_ALLOW_INSECURE` gets
-a service where every VALID bearer answers 401 with the same body a genuinely expired token gets —
-and the two are indistinguishable to the caller.
+`_require_https` refuses at VERIFY time, so an operator who ships `RASK_OIDC_ISSUER=http://…` without
+`RASK_OIDC_ALLOW_INSECURE` gets a pod that reports healthy and then refuses every bearer, valid or not,
+from the first request on.
 
 THE COMMENT CLAIMED OTHERWISE. It said the failure is "surfaced at verify time as an opaque auth
 failure but logged distinctly", and `oidc.py` imported no logging at all. A comment asserting a
@@ -83,7 +82,7 @@ def test_the_runtime_backstop_logs_what_its_comment_promises(caplog: pytest.LogC
         oidc._require_https("http://idp.internal/jwks", label="jwks_uri", allow_insecure=False)
 
     assert "oidc_insecure_url" in caplog.text, (
-        "the comment says the failure is 'logged distinctly' and nothing was logged — an operator sees only a 401 identical to an expired token"
+        "the comment says the failure is 'logged distinctly' and nothing was logged — a Lance door's 503 redacts it, so only the log names the setting"
     )
 
 

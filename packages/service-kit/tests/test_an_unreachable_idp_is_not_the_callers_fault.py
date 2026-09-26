@@ -41,15 +41,14 @@ import httpx
 import pytest
 from lance_namespace import UnauthenticatedError
 
-from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed import oidc
 
 
 ISSUER = "https://idp.example.test"
 
 
-def _verifier(issuer: str | list[str] = ISSUER) -> oidc.OIDCVerifier:
-    return oidc.OIDCVerifier(issuer=issuer, audience="rask", cache_ttl=300)
+def _verifier(issuer: str | list[str] = ISSUER, *, allow_insecure: bool = False) -> oidc.OIDCVerifier:
+    return oidc.OIDCVerifier(issuer=issuer, audience="rask", cache_ttl=300, allow_insecure=allow_insecure)
 
 
 def _unverified_token() -> str:
@@ -72,7 +71,7 @@ def test_an_UNREACHABLE_issuer_is_service_unavailable(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(httpx.Client, "get", _refuse)
 
-    with pytest.raises(ServiceUnavailableError):
+    with pytest.raises(oidc.ProviderUnavailableError):
         _verifier().verify(_unverified_token())
 
 
@@ -85,7 +84,7 @@ def test_a_discovery_path_that_404s_is_service_unavailable(monkeypatch: pytest.M
 
     monkeypatch.setattr(httpx.Client, "get", _not_found)
 
-    with pytest.raises(ServiceUnavailableError):
+    with pytest.raises(oidc.ProviderUnavailableError):
         _verifier().verify(_unverified_token())
 
 
@@ -103,7 +102,42 @@ def test_a_discovery_document_naming_ANOTHER_issuer_is_service_unavailable(monke
 
     monkeypatch.setattr(httpx.Client, "get", _other)
 
-    with pytest.raises(ServiceUnavailableError):
+    with pytest.raises(oidc.ProviderUnavailableError):
+        _verifier().verify(_unverified_token())
+
+
+def _discovery_document(monkeypatch: pytest.MonkeyPatch, **document: object) -> None:
+    def _serve(self: httpx.Client, url: str, **_kw: object) -> httpx.Response:
+        return httpx.Response(200, json={"issuer": ISSUER, "jwks_uri": f"{ISSUER}/jwks", **document}, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx.Client, "get", _serve)
+
+
+def test_a_discovery_document_advertising_an_HTTP_key_set_is_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The key-set URL is the provider's to advertise, and the scheme check reads nothing else."""
+    _discovery_document(monkeypatch, jwks_uri="http://idp.example.test/jwks")
+
+    with pytest.raises(oidc.ProviderUnavailableError):
+        _verifier().verify(_unverified_token())
+
+
+@pytest.mark.parametrize("allow_insecure", [False, True], ids=["https-only", "allow-insecure"])
+@pytest.mark.parametrize("jwks_uri", ["https://[::1/jwks", "https://[zz]/jwks", "file:///etc/hostname"])
+def test_a_discovery_document_advertising_a_key_set_url_no_client_can_fetch_is_service_unavailable(
+    monkeypatch: pytest.MonkeyPatch, jwks_uri: str, allow_insecure: bool
+) -> None:
+    """A URL that does not parse, or whose scheme is not HTTP, is the provider's whatever `allow_insecure` says."""
+    _discovery_document(monkeypatch, jwks_uri=jwks_uri)
+
+    with pytest.raises(oidc.ProviderUnavailableError):
+        _verifier(allow_insecure=allow_insecure).verify(_unverified_token())
+
+
+def test_a_provider_advertising_NO_ALGORITHM_we_accept_is_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The provider's advertised list against this deployment's allowlist: the token's own `alg` is never read."""
+    _discovery_document(monkeypatch, id_token_signing_alg_values_supported=["PS256"])
+
+    with pytest.raises(oidc.ProviderUnavailableError):
         _verifier().verify(_unverified_token())
 
 

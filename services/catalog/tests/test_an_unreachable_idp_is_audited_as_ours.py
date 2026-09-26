@@ -1,12 +1,15 @@
-"""The catalog's door charges an IdP it cannot reach to itself: a 503, audited `verifier_unavailable`.
+"""The catalog's door charges an IdP it cannot reach to itself: a 503 in the spec's envelope, audited `verifier_unavailable`.
 
 `catalog.api.security.authenticate` is its own door, not `service_kit.governed.deps`'s, so the split that module makes
 between `verify`'s two refusals is made here too. Without it every request during an IdP outage writes an
 `invalid_token` record against a caller whose bearer was never read.
 
-THE VERIFIER IS REAL, and its issuer is a loopback port nothing accepts on. The refusal is therefore the type `oidc.py`
-actually raises — `service_kit.exceptions.ServiceUnavailableError`, a different class from the `lance_namespace` one
-`security.py` raises for its own 503s — so a door catching the wrong one of the two stays red here.
+THE ENVELOPE IS THE SPEC'S. `lance_docs/ns_catalog/spec.yaml` requires `code` on the `ErrorResponse` that
+`ServiceUnavailableErrorResponse` references, and the missing-verifier branch of the same door already answers it, so
+the two statements of one fact answer one body.
+
+THE VERIFIER IS REAL, and its issuer is a loopback port nothing accepts on, so the refusal is the one `oidc.py`
+actually raises rather than a double's.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import jwt
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from lance_namespace import ErrorCode
 
 from catalog.api import security
 from catalog.api.dependencies import SettingsDep
@@ -40,7 +44,7 @@ def unreachable_issuer() -> Iterator[str]:
         yield f"http://127.0.0.1:{held.getsockname()[1]}"
 
 
-def _client(verifier: OIDCVerifier, issuer: str) -> TestClient:
+def _client(verifier: OIDCVerifier | None, issuer: str) -> TestClient:
     """The catalog's door behind the handler pair `build_lance_service_app` installs, in its order."""
     settings = Settings.model_validate(
         {
@@ -86,7 +90,18 @@ def test_an_issuer_the_catalog_cannot_reach_is_a_503_audited_as_ours(unreachable
     response = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
 
     assert response.status_code == 503, response.text
+    assert response.json()["code"] == ErrorCode.SERVICE_UNAVAILABLE, response.text
+    assert unreachable_issuer not in response.text
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
+def test_an_unreachable_issuer_and_no_verifier_at_all_answer_one_body(unreachable_issuer: str) -> None:
+    verifier = OIDCVerifier(unreachable_issuer, AUDIENCE, cache_ttl=300, allow_insecure=True)
+
+    outage = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
+    unwired = _client(None, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
+
+    assert outage.json() == unwired.json()
 
 
 def test_a_token_from_an_issuer_the_catalog_does_not_trust_is_still_the_callers(unreachable_issuer: str, audit_trail: pytest.LogCaptureFixture) -> None:

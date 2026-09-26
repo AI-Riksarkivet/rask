@@ -48,9 +48,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from lance_namespace import UnauthenticatedError
 
-from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed import oidc as oidc_module
-from service_kit.governed.oidc import IDToken, OIDCVerifier, _Discovery, _Provider
+from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError, _Discovery, _Provider
 
 
 ISSUER = "https://idp.example"
@@ -433,7 +432,7 @@ def test_split_horizon_discovery_issuer_mismatch_still_rejects(rsa_keypair: tupl
     )
     token = _sign(private_pem, _claims(iss=PUBLIC_ISSUER))
 
-    with pytest.raises(ServiceUnavailableError):
+    with pytest.raises(ProviderUnavailableError):
         verifier.verify(token)
 
 
@@ -490,7 +489,8 @@ def test_split_horizon_http_override_requires_allow_insecure(rsa_keypair: tuple[
 
     token = _sign(private_pem, _claims(iss=public_issuer))
 
-    with pytest.raises(UnauthenticatedError):
+    # This deployment's setting, not the caller's token: refused as ours.
+    with pytest.raises(ProviderUnavailableError):
         _make(allow_insecure=False).verify(token)
     assert discovery_urls == []  # guard fires BEFORE any fetch
 

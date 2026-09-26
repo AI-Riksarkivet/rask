@@ -29,7 +29,7 @@ from service_kit.governed.dapr_auth import (
     is_public_caller,
     service_principal,
 )
-from service_kit.governed.oidc import IDToken, OIDCVerifier
+from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
@@ -187,7 +187,11 @@ def authenticate(
         raise ServiceUnavailableError("Authentication is enabled but unavailable")
     if credentials is None or not credentials.credentials:
         raise UnauthenticatedError("Missing bearer token")
-    return verifier.verify(credentials.credentials)
+    try:
+        return verifier.verify(credentials.credentials)
+    except ProviderUnavailableError as exc:
+        # The missing-verifier branch's fact arriving later, so its body: the spec's `code` 17, not the fleet's.
+        raise ServiceUnavailableError("Authentication is enabled but unavailable") from exc
 
 
 #: The authenticated caller — an OIDC ``IDToken``, a ``ServicePrincipal``, or ``None`` when OIDC is off.

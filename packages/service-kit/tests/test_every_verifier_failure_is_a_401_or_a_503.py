@@ -2,9 +2,10 @@
 
 `OIDCVerifier.verify` has exactly two refusal types, and both doors (`authenticate`, `optional_subject`) are built
 around them: `UnauthenticatedError` when the PRESENTED TOKEN is at fault (401, audited `invalid_token`), and
-`ServiceUnavailableError` when the IdP, or this deployment's view of it, is at fault (503, audited
-`verifier_unavailable`). Any third type leaves both doors as an unmapped 500, and their `except Exception` branch
-records it as `invalid_token` against the caller.
+`ProviderUnavailableError` when the IdP, or this deployment's view of it, is at fault (503, audited
+`verifier_unavailable`). Any third type — the fleet's `ServiceUnavailableError` included — reaches their `except
+Exception` branch and is recorded as `invalid_token` against the caller, so each 503 case below also pins that its
+raise site uses the subclass the Lance-taxonomy doors catch.
 
 Measured 2026-09-25 on pyjwt 2.13.0 / httpx 0.28.1 / pydantic 2.13, these paths reach the door as a third type
 unless `oidc.py` classifies them:
@@ -35,6 +36,8 @@ the code under test.
 import base64
 import json
 import logging
+import socket
+import struct
 import threading
 import time
 from collections.abc import Iterator
@@ -87,6 +90,9 @@ class _Fault(StrEnum):
 
     CLOSED_BEFORE_ANSWERING = "closed-before-answering"
     BODY_CUT_SHORT = "body-cut-short"
+    #: A pod killed mid-response: the reader gets a bare `ConnectionResetError`, an `OSError` that is not also an
+    #: `http.client.HTTPException` — the one case only `_key_set`'s `OSError` member catches.
+    RESET_MID_BODY = "reset-mid-body"
 
 
 class _IdP(BaseModel):
@@ -95,19 +101,21 @@ class _IdP(BaseModel):
     issuer: str
     documents: dict[str, bytes]
     faults: dict[str, _Fault] = {}
+    #: Requests served, by path.
+    fetches: dict[str, int] = {}
 
 
 def _b64url_uint(value: int) -> str:
     return base64.urlsafe_b64encode(value.to_bytes((value.bit_length() + 7) // 8, "big")).rstrip(b"=").decode()
 
 
-def _discovery(issuer: str, *, jwks_path: str = JWKS_PATH) -> bytes:
-    """Both key families advertised, as Keycloak does and as an IdP advertising none implies.
+def _discovery(issuer: str, *, jwks_path: str = JWKS_PATH, algorithms: tuple[str, ...] = ("RS256", "ES256")) -> bytes:
+    """Both key families advertised by default, as Keycloak does and as an IdP advertising none implies.
 
     Both matter: `verify` intersects the advertised algorithms with its allowlist, so an IdP advertising only RS256
     would refuse an ES256 header before any key is prepared, and the family-mismatch case could not arise.
     """
-    return json.dumps({"issuer": issuer, "jwks_uri": f"{issuer}{jwks_path}", "id_token_signing_alg_values_supported": ["RS256", "ES256"]}).encode()
+    return json.dumps({"issuer": issuer, "jwks_uri": f"{issuer}{jwks_path}", "id_token_signing_alg_values_supported": list(algorithms)}).encode()
 
 
 def _key_set(key: rsa.RSAPrivateKey, kid: str) -> bytes:
@@ -128,19 +136,25 @@ def stranger_key() -> rsa.RSAPrivateKey:
 
 @pytest.fixture
 def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
+    #: Connections whose close must be a reset rather than an orderly FIN.
+    resets: set[socket.socket] = set()
+
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            served.fetches[self.path] = served.fetches.get(self.path, 0) + 1
             fault = served.faults.get(self.path)
             body = served.documents.get(self.path)
             if fault is _Fault.CLOSED_BEFORE_ANSWERING:
                 self.close_connection = True
                 return
-            if fault is _Fault.BODY_CUT_SHORT and body is not None:
+            if fault in (_Fault.BODY_CUT_SHORT, _Fault.RESET_MID_BODY) and body is not None:
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body[: len(body) // 2])
                 self.close_connection = True
+                if fault is _Fault.RESET_MID_BODY:
+                    resets.add(self.connection)
                 return
             self.send_response(404 if body is None else 200)
             self.send_header("Content-Type", "application/json")
@@ -151,7 +165,18 @@ def idp(rsa_key: rsa.RSAPrivateKey) -> Iterator[_IdP]:
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002 — stdlib's own parameter name
             return
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    class _Server(ThreadingHTTPServer):
+        def shutdown_request(self, request: socket.socket | tuple[bytes, socket.socket]) -> None:
+            if not isinstance(request, socket.socket) or request not in resets:
+                super().shutdown_request(request)
+                return
+            resets.discard(request)
+            # A zero linger makes close() send RST. The base sends SHUT_WR first, whose FIN would reach the reader
+            # ahead of the reset and read as a short body.
+            request.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            self.close_request(request)
+
+    server = _Server(("127.0.0.1", 0), _Handler)
     issuer = f"http://127.0.0.1:{server.server_address[1]}"
     served = _IdP(issuer=issuer, documents={DISCOVERY_PATH: _discovery(issuer), JWKS_PATH: _key_set(rsa_key, KID)})
     # `shutdown()` waits out one poll of `serve_forever`; at the 0.5 s default that is most of this file's runtime.
@@ -266,6 +291,41 @@ def test_a_token_whose_alg_names_another_key_family_is_the_callers(door: str, id
 
 
 @pytest.mark.parametrize("door", DOORS)
+def test_a_discovery_url_that_answers_404_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+    del idp.documents[DISCOVERY_PATH]
+
+    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+
+    assert status == 503, body
+    assert "could not be reached" in json.loads(body)["detail"]
+    assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
+@pytest.mark.parametrize("door", DOORS)
+def test_a_discovery_document_naming_another_issuer_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+    """The document disagrees with this deployment's configuration; the token is never read."""
+    idp.documents[DISCOVERY_PATH] = _discovery("https://another-issuer.example.test")
+
+    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+
+    assert status == 503, body
+    assert "different issuer" in json.loads(body)["detail"]
+    assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
+@pytest.mark.parametrize("door", DOORS)
+def test_a_provider_advertising_no_algorithm_we_accept_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
+    """The provider's advertised list against this deployment's allowlist; the token's own `alg` plays no part."""
+    idp.documents[DISCOVERY_PATH] = _discovery(idp.issuer, algorithms=("PS256",))
+
+    status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
+
+    assert status == 503, body
+    assert "signing algorithm" in json.loads(body)["detail"]
+    assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
+@pytest.mark.parametrize("door", DOORS)
 def test_a_discovery_document_that_is_not_json_is_ours(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
     idp.documents[DISCOVERY_PATH] = SIGN_IN_PAGE
 
@@ -283,6 +343,7 @@ def test_a_key_set_url_that_answers_404_is_ours(door: str, idp: _IdP, rsa_key: r
     status, body = _call(idp, door, _token(idp, rsa_key, "RS256"))
 
     assert status == 503, body
+    assert "could not be reached" in json.loads(body)["detail"]
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
@@ -313,7 +374,7 @@ UNUSABLE_KEY_SETS = {
     "entry-not-an-object": json.dumps({"keys": [1]}).encode(),
     "n-not-a-string": json.dumps({"keys": [{**_ZERO_MODULUS_JWK, "n": 5}]}).encode(),
     "alg-not-a-string": json.dumps({"keys": [{**_ZERO_MODULUS_JWK, "alg": ["RS256"]}]}).encode(),
-    # `RecursionError`, outside every family the others raise: the reason `oidc.py` cannot name a closed set.
+    # `RecursionError`, a family none of the others raise.
     "nested-past-the-parsers-depth": b"[" * 100_000 + b"]" * 100_000,
 }
 
@@ -328,3 +389,50 @@ def test_a_key_set_with_no_usable_key_is_ours(door: str, key_set: bytes, idp: _I
     assert status == 503, body
     assert "holds no usable signing key" in json.loads(body)["detail"]
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
+
+
+@pytest.mark.parametrize("key_set", UNUSABLE_KEY_SETS.values(), ids=UNUSABLE_KEY_SETS.keys())
+@pytest.mark.parametrize("door", DOORS)
+def test_a_key_set_the_idp_has_since_fixed_is_believed_at_once(door: str, key_set: bytes, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """`PyJWKClient` caches a body before parsing it, so an unusable set it cached would otherwise be served for the
+    cache's whole lifespan (300 s) after the provider replaced it — every caller refused for an outage that is over."""
+    client = _client(idp)
+    token = _token(idp, rsa_key, "RS256")
+    usable = idp.documents[JWKS_PATH]
+    idp.documents[JWKS_PATH] = key_set
+    assert _call(idp, door, token, client=client)[0] == 503
+
+    idp.documents[JWKS_PATH] = usable
+    status, body = _call(idp, door, token, client=client)
+
+    assert status == 200, body
+    # Two fetches in all: the first request's, and the second request's, which finds the fixed set. That second is a
+    # refetch for a body the cache kept, and a first read for one never cached (not JSON, or nested past the parser's depth).
+    assert idp.fetches[JWKS_PATH] == 2
+
+
+@pytest.mark.parametrize("key_set", UNUSABLE_KEY_SETS.values(), ids=UNUSABLE_KEY_SETS.keys())
+@pytest.mark.parametrize("door", DOORS)
+def test_a_key_set_that_arrived_unusable_is_fetched_once_per_request(door: str, key_set: bytes, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """The refetch is for a set the CACHE served. One fetched in this request is already fresh, and asking again only
+    doubles the load on an IdP serving garbage and the time each request is held."""
+    idp.documents[JWKS_PATH] = key_set
+    client = _client(idp)
+    token = _token(idp, rsa_key, "RS256")
+
+    fetched = []
+    for _ in range(2):
+        assert _call(idp, door, token, client=client)[0] == 503
+        fetched.append(idp.fetches[JWKS_PATH])
+
+    assert fetched == [1, 2]
+
+
+@pytest.mark.parametrize("door", DOORS)
+def test_a_key_set_that_cannot_be_reached_is_asked_for_once(door: str, idp: _IdP, rsa_key: rsa.RSAPrivateKey) -> None:
+    """The refetch above is for a set that ARRIVED unusable. One that never arrived is not asked for twice: against a
+    hung IdP each attempt waits out the fetch timeout, so a second would double the time a request is held."""
+    idp.faults[JWKS_PATH] = _Fault.CLOSED_BEFORE_ANSWERING
+
+    assert _call(idp, door, _token(idp, rsa_key, "RS256"))[0] == 503
+    assert idp.fetches[JWKS_PATH] == 1

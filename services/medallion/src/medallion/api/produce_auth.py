@@ -39,7 +39,7 @@ from medallion.core.config import MedallionSettings
 from service_kit.governed import dapr_auth, fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, SUCCESS, audit
 from service_kit.governed.dapr_auth import is_public_caller
-from service_kit.governed.oidc import OIDCVerifier, verify_off_loop
+from service_kit.governed.oidc import OIDCVerifier, ProviderUnavailableError, verify_off_loop
 from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
 
 
@@ -179,6 +179,9 @@ async def _admit(
             token = await verify_off_loop(verifier, raw)
         except UnauthenticatedError:
             raise UnauthenticatedError("invalid token") from None
+        except ProviderUnavailableError as exc:
+            # The unwired-verifier branch's fact arriving later, so its body: the spec's `code` 17, not the fleet's.
+            raise ServiceUnavailableError("authentication is enabled but unavailable") from exc
         return ProducerCaller(subject=token.sub)
     raise PermissionDeniedError("invalid or missing produce credential")
 
@@ -358,6 +361,8 @@ async def authenticate_subject(
         return (await verify_off_loop(verifier, raw)).sub
     except UnauthenticatedError:
         raise UnauthenticatedError("invalid token") from None
+    except ProviderUnavailableError as exc:
+        raise ServiceUnavailableError("authentication is enabled but unavailable") from exc
 
 
 async def authorize_train(

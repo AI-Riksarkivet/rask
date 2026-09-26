@@ -30,9 +30,9 @@ Security posture (see CHANGELOG in the task notes):
   onto the override so the key fetch stays in-cluster; HTTPS enforcement applies to
   the override URL under the same ``allow_insecure`` knob.
 * **Opaque failures, charged to their author.** A failure the presented token causes is a
-  generic ``UnauthenticatedError``; one the provider's own documents cause (discovery, the key
-  set) is a ``ServiceUnavailableError`` naming the URL that failed. Neither leaks library names
-  or crypto detail.
+  generic ``UnauthenticatedError``; one the provider or this deployment's configuration of it
+  causes (discovery, the key set, a non-HTTPS URL, no algorithm in common) is a
+  ``ProviderUnavailableError`` naming what failed. Neither leaks library names or crypto detail.
 """
 
 from __future__ import annotations
@@ -41,13 +41,13 @@ import asyncio
 import http.client
 import logging
 import time
-from typing import NamedTuple
+from typing import Annotated, NamedTuple
 from urllib.parse import urlsplit
 
 import httpx
 import jwt
 from lance_namespace import UnauthenticatedError
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
 
 from service_kit.exceptions import ServiceUnavailableError
 
@@ -101,11 +101,20 @@ class IDToken(BaseModel):
     iat: int
 
 
+def _fetchable_url(url: str) -> str:
+    """``url`` unchanged, if it parses and names an HTTP scheme; `urlsplit` raising on one that does not parse is part of the check."""
+    if urlsplit(url).scheme not in {"http", "https"}:
+        raise ValueError("must be an http or https URL")
+    return url
+
+
 class _Discovery(BaseModel):
     """The subset of the provider's discovery document we rely on (boundary-validated)."""
 
     issuer: str
-    jwks_uri: str
+    # Checked here, where a bad value is the document's fault: `_require_https` and `PyJWKClient` parse it
+    # outside any mapping, and raise `ValueError` / `PyJWKClientError` for one that does not parse or is not HTTP.
+    jwks_uri: Annotated[str, AfterValidator(_fetchable_url)]
     id_token_signing_alg_values_supported: list[str] = []
 
 
@@ -124,23 +133,30 @@ class _Provider(NamedTuple):
 log = logging.getLogger(__name__)
 
 
+class ProviderUnavailableError(ServiceUnavailableError):
+    """The provider could not be used — its documents or this deployment's configuration of it, never the token.
+
+    A fleet `ServiceUnavailableError`, so the fleet doors render it with the URL or setting that failed. A
+    door that answers in the Lance taxonomy catches this type and raises its own `lance_namespace` 503
+    instead: that body carries the spec's `code` and redacts the message. Named here so such a door can
+    catch it without importing the fleet taxonomy.
+    """
+
+
 def _require_https(url: str, *, label: str, allow_insecure: bool) -> None:
     """Reject non-HTTPS ``url`` unless ``allow_insecure`` is set (dev-only escape hatch)."""
     if allow_insecure:
         return
     if urlsplit(url).scheme != "https":
-        # A CONFIGURATION ERROR WEARING A CALLER'S VERDICT. This raises `UnauthenticatedError`, which
-        # every call site maps to 401 "Invalid or expired token" — so without the log line below, a
-        # valid bearer and a misconfigured issuer are the same answer to the caller AND the same silence
-        # in the logs. This comment used to claim the failure was "logged distinctly" while the module
-        # imported no logging at all; the claim is now true rather than deleted, because it is the
-        # right behaviour and only the implementation was missing.
+        # A configuration fault, never the caller's: the URL is this deployment's setting or the provider's
+        # discovery document, and no token is read. The log line names which one, because a Lance door's 503
+        # redacts the message.
         #
         # The ISSUER case is caught earlier, at settings construction (`GovernedAuthSettings`), where a
-        # misconfiguration belongs. This stays for `jwks_uri`, which comes from discovery and so cannot
-        # be seen until verify time.
+        # misconfiguration belongs. This stays for the discovery override, and for `jwks_uri`, which
+        # comes from discovery and so cannot be seen until verify time.
         log.warning("oidc_insecure_url", extra={"label": label, "scheme": urlsplit(url).scheme})
-        raise UnauthenticatedError(f"OIDC {label} must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for dev IdPs)")
+        raise ProviderUnavailableError(f"OIDC {label} must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for dev IdPs)")
 
 
 class OIDCVerifier:
@@ -186,7 +202,7 @@ class OIDCVerifier:
 
         Order follows our allowlist (our preference), and the result excludes anything
         not asymmetric. An empty intersection means we cannot safely verify against this
-        provider and the caller turns it into an auth failure.
+        provider, and the caller refuses it as the provider's fault.
         """
         advertised_upper = {alg.upper() for alg in advertised}
         # If the provider advertises nothing, fall back to our allowlist (RFC 8414 makes
@@ -215,8 +231,8 @@ class OIDCVerifier:
         # OURS, NOT THE CALLER'S. Everything from here to the mismatch check below is a statement
         # about this deployment's configuration and the issuer it points at — the presented token is
         # not read and plays no part. These errors are raised from `_provider_for`, before `verify`
-        # reaches its try block, so they are mapped here, to `ServiceUnavailableError`: the vocabulary
-        # `deps.py` uses for a verifier it does not have, and the same fact arriving later.
+        # reaches its try block, so they are mapped here, to `ProviderUnavailableError`: a 503, as
+        # `deps.py` answers for a verifier it does not have, because it is the same fact arriving later.
         try:
             with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS) as client:
                 response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}")
@@ -230,10 +246,10 @@ class OIDCVerifier:
             # needs to know which URL this deployment could not use, and a split-horizon override is
             # precisely the setting most likely to be the one that is wrong.
             log.warning("oidc_discovery_unreachable", extra={"discovery_base": discovery_base, "error": str(exc)})
-            raise ServiceUnavailableError(f"The OIDC issuer could not be reached at {discovery_base}{_DISCOVERY_SUFFIX}") from exc
+            raise ProviderUnavailableError(f"The OIDC issuer could not be reached at {discovery_base}{_DISCOVERY_SUFFIX}") from exc
         except ValidationError as exc:
             log.warning("oidc_discovery_malformed", extra={"discovery_base": discovery_base, "error": str(exc)})
-            raise ServiceUnavailableError(f"The OIDC discovery document at {discovery_base}{_DISCOVERY_SUFFIX} is not a discovery document") from exc
+            raise ProviderUnavailableError(f"The OIDC discovery document at {discovery_base}{_DISCOVERY_SUFFIX} is not a discovery document") from exc
 
         # The discovery document's own ``issuer`` is authoritative for token validation;
         # it must match what we configured (defends against a tampered discovery doc).
@@ -245,7 +261,7 @@ class OIDCVerifier:
         # that one IS about the token.
         if spec.issuer.rstrip("/") != configured_issuer:
             log.warning("oidc_discovery_issuer_mismatch", extra={"configured": configured_issuer, "advertised": spec.issuer})
-            raise ServiceUnavailableError("The OIDC discovery document advertises a different issuer than this deployment is configured for")
+            raise ProviderUnavailableError("The OIDC discovery document advertises a different issuer than this deployment is configured for")
 
         # A jwks_uri the provider advertises under its (public) issuer must be fetched from
         # the same split-horizon location as discovery; anything not under the issuer is a
@@ -256,7 +272,9 @@ class OIDCVerifier:
         _require_https(jwks_uri, label="jwks_uri", allow_insecure=self._allow_insecure)
         algorithms = self._safe_algorithms(spec.id_token_signing_alg_values_supported)
         if not algorithms:
-            raise UnauthenticatedError("No mutually-supported OIDC signing algorithm")
+            # The provider's list against this deployment's allowlist; the token's own `alg` is not read.
+            log.warning("oidc_no_common_algorithm", extra={"advertised": spec.id_token_signing_alg_values_supported, "allowed": self._allowed})
+            raise ProviderUnavailableError("No mutually-supported OIDC signing algorithm")
 
         jwk_client = jwt.PyJWKClient(jwks_uri, cache_jwk_set=True, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
         provider = _Provider(spec=spec, jwk_client=jwk_client, algorithms=algorithms)
@@ -314,26 +332,39 @@ class OIDCVerifier:
     def _key_set(provider: _Provider, *, refresh: bool) -> list[jwt.PyJWK]:
         """The provider's signing keys; every failure to produce them is the PROVIDER's, never the token's.
 
-        `get_signing_keys` reads only the provider's response, and fails in one of two ways:
+        The failures are classified by AUTHOR, not by type: the try body is one third-party call whose every
+        input is the provider's response, so whatever it raises is the provider's. Two kinds:
 
         * the set could not be fetched — `PyJWKClientConnectionError`, or the `OSError` /
           `http.client.HTTPException` raised once the request is sent (a connection closed before the status
-          line, a body cut short), which `fetch_data` does not wrap;
-        * the set holds no usable signing key — `PyJWKClientError` / `PyJWKSetError`, or whatever parsing
-          the provider's JSON raises untyped: `JSONDecodeError`, `ValueError` from `cryptography`,
-          `AttributeError` / `TypeError` from an entry PyJWT cannot read, `RecursionError` from a body nested
-          past the parser's depth.
+          line or reset mid-body, a body cut short), which `fetch_data` does not wrap;
+        * anything else: the set arrived and holds no usable signing key. Measured on pyjwt 2.13.0 that is
+          `PyJWTError`, `ValueError`, `AttributeError`, `TypeError` and `RecursionError`, but it is caught
+          whole: PyJWK hands provider values to `cryptography`, whose exceptions are not all `ValueError`s
+          (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type left out of a named tuple would
+          answer 500 and be audited `invalid_token` against the caller.
+
+        A set the cache served that fails is read once more with ``refresh=True``: `fetch_data` caches a body
+        before it is parsed, so without that read an unusable set outlives the provider's fix by the cache's
+        lifespan (300 s). A set fetched in this call is not asked for again — it is already the provider's
+        current answer, and against a slow IdP a second fetch doubles the time a request is held. Nor is one
+        that never arrived.
         """
         uri = provider.jwk_client.uri
+        cache = provider.jwk_client.jwk_set_cache
+        # The same test `get_jwk_set` applies before deciding to fetch.
+        served_from_cache = not refresh and cache is not None and cache.get() is not None
         try:
             return provider.jwk_client.get_signing_keys(refresh=refresh)
         except (jwt.PyJWKClientConnectionError, OSError, http.client.HTTPException) as exc:
             log.warning("oidc_jwks_unreachable", extra={"jwks_uri": uri, "error": str(exc)})
-            raise ServiceUnavailableError(f"The OIDC key set could not be reached at {uri}") from exc
-        # Every input to the call is the provider's, and what it raises is an open set — see this docstring.
+            raise ProviderUnavailableError(f"The OIDC key set could not be reached at {uri}") from exc
+        # Classified by author, not by type — see this docstring.
         except Exception as exc:
+            if served_from_cache:
+                return OIDCVerifier._key_set(provider, refresh=True)
             log.warning("oidc_jwks_malformed", extra={"jwks_uri": uri, "error": str(exc)})
-            raise ServiceUnavailableError(f"The OIDC key set at {uri} holds no usable signing key") from exc
+            raise ProviderUnavailableError(f"The OIDC key set at {uri} holds no usable signing key") from exc
 
     def _signing_key_for(self, provider: _Provider, token: str) -> jwt.PyJWK:
         """The key the token's ``kid`` selects, with each failure charged to its one possible author.
@@ -361,7 +392,7 @@ class OIDCVerifier:
     def verify(self, token: str) -> IDToken:
         """Verify a bearer token and return its parsed claims.
 
-        Raises ``UnauthenticatedError`` when the token is at fault and ``ServiceUnavailableError`` when the
+        Raises ``UnauthenticatedError`` when the token is at fault and ``ProviderUnavailableError`` when the
         provider's documents are — the two refusals the governed doors map. Pinned by
         `packages/service-kit/tests/test_every_verifier_failure_is_a_401_or_a_503.py`.
         """

@@ -190,11 +190,10 @@ class OidcSettings:
         """Fail fast at construction rather than fail open — or fail confusingly — at request time."""
         if self.oidc_enabled and not (self.oidc_issuer and self.oidc_audience):
             raise ValueError("RASK_OIDC_ISSUER and RASK_OIDC_AUDIENCE are required when OIDC is enabled")
-        # AN `http://` ISSUER IS A MISCONFIGURATION, AND IT BELONGS HERE. `_require_https` catches it at
-        # VERIFY time and raises `UnauthenticatedError`, which every call site maps to 401 "Invalid or
-        # expired token" — so an operator who shipped `RASK_OIDC_ISSUER=http://…` got a service where
-        # every VALID bearer answered 401 with the body a genuinely expired token gets, indistinguishable
-        # to the caller. A scheme is knowable at construction, which is what this validator is for.
+        # AN `http://` ISSUER IS A MISCONFIGURATION, AND IT BELONGS HERE. `_require_https` catches it
+        # only at VERIFY time, refusing every bearer — valid or not — with a 503 on the first request
+        # after a healthy-looking startup. A scheme is knowable at construction, which is what this
+        # validator is for.
         #
         # The `jwks_uri` half cannot move here: it comes from DISCOVERY, so settings never sees it and
         # `_require_https` remains the backstop for that path.

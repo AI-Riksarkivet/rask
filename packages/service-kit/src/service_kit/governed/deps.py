@@ -58,7 +58,7 @@ from openfga_sdk import OpenFgaClient
 from service_kit.exceptions import ServiceUnavailableError
 from service_kit.governed import fga
 from service_kit.governed.audit import FAILURE, SUCCESS, audit
-from service_kit.governed.oidc import IDToken, OIDCVerifier
+from service_kit.governed.oidc import IDToken, OIDCVerifier, ProviderUnavailableError
 
 
 #: The subject used when OIDC is disabled. Named rather than inlined so a grep for who can act
@@ -154,13 +154,14 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             raise UnauthenticatedError("Missing bearer token")
         try:
             token = verifier.verify(credentials.credentials)
-        except ServiceUnavailableError:
+        except ProviderUnavailableError:
             # OUR fault, not theirs. A verifier that cannot reach or trust its issuer fails for a
             # reason the caller's bearer had no part in, and recording it as `invalid_token` writes
             # a false statement into the estate's own evidence of who was refused and why — one
             # record per request, for the whole duration of a configuration outage. Same reason and
             # same status as the missing-verifier branch above, because it is the same fact arriving
-            # later.
+            # later. The verifier's own subclass rather than the fleet base, so a provider-fault site
+            # raising anything else is audited against the caller and a test sees it.
             audit("authn", FAILURE, reason="verifier_unavailable")
             raise
         except Exception:
@@ -211,7 +212,7 @@ def make_auth_deps(settings_dep: Any) -> AuthDeps:
             return ANONYMOUS_SUBJECT
         try:
             token = verifier.verify(credentials.credentials)
-        except ServiceUnavailableError:
+        except ProviderUnavailableError:
             # The same split as `authenticate`. Applying it to one door only would leave the other
             # writing the false records, and this door is the one an anonymous-capable endpoint uses
             # — so it is the one most likely to be called during an outage.

@@ -46,7 +46,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from service_kit.governed import fga
 from service_kit.governed.audit import ALLOW, DENY, FAILURE, audit
 from service_kit.governed.dapr_auth import is_public_caller
-from service_kit.governed.oidc import verify_off_loop
+from service_kit.governed.oidc import ProviderUnavailableError, verify_off_loop
 from service_kit.governed.settings import GovernedAuthSettings
 
 
@@ -146,8 +146,8 @@ async def _resolve_caller(
 ) -> _Caller:
     """Answer "who is this" once. Raises only for faults that are true of the CALL, never of a row.
 
-    `ServiceUnavailableError` (authentication enabled but unwired) and `UnauthenticatedError` (a
-    malformed or invalid bearer) propagate, because neither can be true of one project and false of
+    `ServiceUnavailableError` (authentication enabled but unwired, or its IdP unusable) and
+    `UnauthenticatedError` (a malformed or invalid bearer) propagate, because neither can be true of one project and false of
     the next — the listing's own docstring is explicit that rendering them as an empty page tells a
     caller their token works and they own nothing.
     """
@@ -207,6 +207,9 @@ async def _resolve_caller(
             token = await verify_off_loop(verifier, raw)
         except UnauthenticatedError:
             raise UnauthenticatedError("invalid token") from None
+        except ProviderUnavailableError as exc:
+            # The unwired-verifier branch's fact arriving later, so its body: the spec's `code` 17, not the fleet's.
+            raise ServiceUnavailableError("authentication is enabled but unavailable") from exc
         return _Caller(mode="user", subject=token.sub)
 
     return _Caller(mode="refused", refusal="invalid or missing ingest credential")
