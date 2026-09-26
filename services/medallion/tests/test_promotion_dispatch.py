@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from medallion.core.config import MedallionSettings
+from medallion.schemas.promotion import PromotionSpec
 from medallion.services.promotion_hold import hold_spec, publish_hold
 
 
@@ -137,7 +138,8 @@ class TestPublishingTheHold:
 
         assert await publish_hold(dapr, settings, spec) is True
         assert dapr.published[0]["topic_name"] == "medallion.promotion"
-        assert json.loads(dapr.published[0]["data"])["token"] == "tok-1"
+        # The whole spec, not one field: the hold topic refuses a hold missing any required one.
+        assert PromotionSpec.model_validate(json.loads(dapr.published[0]["data"])) == spec
 
     @pytest.mark.asyncio
     async def test_a_LOST_publish_reports_false_rather_than_raising(self) -> None:

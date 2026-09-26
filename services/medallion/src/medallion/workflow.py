@@ -1490,6 +1490,9 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
         # The version the approver ruled on; `build_run_event`'s default of 1 would name a version the
         # table may never have held, in the record that is supposed to be the durable one.
         version=spec.version,
+        # 0 is no commit: the hold was taken on a run that measured no write, which the stage recorded
+        # as synthetic (`transform._build_stage_event`). Its outcome describes no data either.
+        synthetic=not spec.version,
         token=f"{spec.token}:promotion-{outcome.status.lower()}",
         project=spec.project or None,
         originator=spec.originator or None,

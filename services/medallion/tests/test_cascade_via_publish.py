@@ -16,6 +16,8 @@ would not be.
 from __future__ import annotations
 
 import asyncio
+import inspect
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -25,7 +27,8 @@ import pyarrow as pa
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.services import transform
+from medallion.schemas.promotion import PromotionSpec
+from medallion.services import catalog_register, transform
 from medallion.services.catalog_register import PublishOutcome
 
 
@@ -67,16 +70,38 @@ def _event() -> dict[str, Any]:
     return {"data": {"token": "tok", "dataset": "bronze$events", "namespace": "bronze"}}
 
 
+def _data_version(uri: str) -> int:
+    """The newest version whose commit wrote rows, read from Lance: the stage's lineage-index build
+    commits a `CreateIndex` on top, and the version a stage offers and holds is the data commit."""
+    ds = lance.dataset(uri)
+    for entry in reversed(ds.versions()):
+        txn = ds.read_transaction(entry["version"])
+        if txn is not None and not isinstance(txn.operation, lance.LanceOperation.CreateIndex):
+            return entry["version"]
+    raise AssertionError(f"{uri} holds no data commit")
+
+
+def _bound_publish(answer: Callable[[dict[str, Any]], PublishOutcome]) -> Callable[..., PublishOutcome]:
+    """A `publish_stage_output` double that refuses, with the real function's TypeError, any call the real one would."""
+    signature = inspect.signature(catalog_register.publish_stage_output)
+
+    def _publish(**kwargs: Any) -> PublishOutcome:
+        signature.bind(**kwargs)
+        return answer(kwargs)
+
+    return _publish
+
+
 @pytest.fixture
 def published(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[dict[str, Any]]:
     """Capture the publish asks; the compute path stays the in-process one."""
     asks: list[dict[str, Any]] = []
 
-    def _publish(**kwargs: Any) -> PublishOutcome:
+    def _answer(kwargs: dict[str, Any]) -> PublishOutcome:
         asks.append(kwargs)
         return PublishOutcome(published=True, from_version=1, to_version=2)
 
-    monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _publish)
+    monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _bound_publish(_answer))
     # The stage runner now ASKS the catalog where to write before writing. Without this the fixture's
     # catalog URL would make a real HTTP call; the stub hands back a path under tmp_path so the
     # compute still lands somewhere writable.
@@ -114,15 +139,16 @@ class TestTheTagMoveIsTheTrigger:
 
 class TestARefusalBecomesTheHold:
     def test_a_refused_publish_stops_the_cascade_and_names_its_assertions(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
-        holds: list[Any] = []
+        holds: list[PromotionSpec] = []
+        asked: list[dict[str, Any]] = []
+
+        def _refuse(kwargs: dict[str, Any]) -> PublishOutcome:
+            asked.append(kwargs)
+            return PublishOutcome(published=False, failed_assertions=["row_count_positive"])
 
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
         monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
-        monkeypatch.setattr(
-            transform.catalog_register,
-            "publish_stage_output",
-            lambda **_: PublishOutcome(published=False, failed_assertions=["row_count_positive"]),
-        )
+        monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _bound_publish(_refuse))
         # THE GATE ANSWERS THIS NOW, not a standalone predicate. Stubbing the resolved gate rather than
         # `promotion_hold.review_enabled` is what keeps this test honest: the stage runner asks the gate that
         # governs the run, so a declared record and the chart's settings reach the decision through one
@@ -132,9 +158,10 @@ class TestARefusalBecomesTheHold:
             "effective_gate",
             lambda _settings, _spec: SimpleNamespace(review_band=0.25, review_enabled=True, key_column="id", required_columns=(), gate_source="chart"),
         )
-        monkeypatch.setattr(transform.promotion_hold, "hold_spec", lambda *a, **k: holds.append(k) or k)
 
-        async def _publish_hold(_dapr: Any, _settings: Any, _spec: Any) -> bool:
+        # The real `hold_spec` builds the hold; only the publish is captured.
+        async def _publish_hold(_dapr: Any, _settings: Any, spec: PromotionSpec) -> bool:
+            holds.append(spec)
             return True
 
         monkeypatch.setattr(transform.promotion_hold, "publish_hold", _publish_hold)
@@ -149,9 +176,13 @@ class TestARefusalBecomesTheHold:
         assert status["status"] == "SUCCESS"
         assert status["reason"] == "quality_blocked", "the ack must still say WHY it stopped"
         assert "medallion.silver" not in dapr.topics
-        assert holds and holds[0]["reasons"] == ["row_count_positive"], (
+        assert holds and holds[0].reasons == ["row_count_positive"], (
             "the catalog's verdict must reach the review — without the assertion names it cannot tell a corrupt finding from a reviewable one"
         )
+        # An approval publishes the held version, so it must be the one this run wrote and offered.
+        written = _data_version(str(upstream / "vended.lance"))
+        assert [ask["version"] for ask in asked] == [written], f"the catalog was offered {asked}, the run wrote v{written}"
+        assert holds[0].version == written, f"the hold names v{holds[0].version}; the run wrote v{written}"
 
 
 class TestTheDefaultIsUntouched:
@@ -169,14 +200,14 @@ class TestTheDefaultIsUntouched:
         """
         called: list[Any] = []
 
-        def _publish(**kwargs: Any) -> PublishOutcome:
+        def _first_publication(kwargs: dict[str, Any]) -> PublishOutcome:
             # The catalog's answer for a first publication: no prior version, the tag moved to the one asked about.
             called.append(kwargs)
             return PublishOutcome(published=True, from_version=None, to_version=kwargs["version"])
 
         monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
         monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
-        monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _publish)
+        monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _bound_publish(_first_publication))
         dapr = _Dapr()
         # Review pinned off: a first promotion under review HOLDs, which acks with a `reason` this test is not about.
         settings = _settings(upstream, MEDALLION_CASCADE_VIA_PUBLISH="false", MEDALLION_QUALITY_REVIEW_ENABLED="false")

@@ -42,18 +42,20 @@ right one's; it does not put a person in the author field.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 from collections.abc import Iterator
 from typing import Any, cast
 
 import pytest
+from dapr.aio.clients import DaprClient
 from dapr.ext.workflow import WorkflowActivityContext
 from dapr.ext.workflow._durabletask.internal.shared import from_json, to_json
 
 from medallion.api.promotions import handle_promotion_held
 from medallion.core.config import MedallionSettings, get_settings
 from medallion.schemas.promotion import PromotionSpec
-from medallion.services.promotion_hold import hold_spec
+from medallion.services.promotion_hold import hold_spec, publish_hold
 from medallion.services.transform import StageIdentity, resolve_stage_identity
 from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
 
@@ -108,12 +110,13 @@ def _ctx() -> WorkflowActivityContext:
 
 
 def _approved_hold(stage: MedallionSettings, *, version: int) -> tuple[StageIdentity, PromotionReport]:
-    """An approved hold, composed on the path the stage runner takes in `transform._report_hold`.
+    """An approved hold, built by `hold_spec` from the names `transform._report_hold` resolves.
 
     The stage resolves its four names with `resolve_stage_identity` and hands exactly those to
     `hold_spec`, so a hand-typed spec can only ever approximate them. The identity is returned beside
     the report because it is also what the held stage's own lineage names (`_emit_fail_run` reads the
-    same four fields), and the outcome has to land on those nodes.
+    same four fields), and the outcome has to land on those nodes. The version is the caller's here;
+    `test_cascade_via_publish` pins that the stage runner passes the one it wrote.
     """
     identity = resolve_stage_identity(stage, spec=None, project=_PROJECT)
     spec = hold_spec(
@@ -151,17 +154,38 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
         calls.append(kwargs)
         return {"run": {"runId": "r1", "facets": {}}, "eventType": kwargs.get("event_type", "COMPLETE")}
 
-    def _close(coro: Any) -> None:
-        close = getattr(coro, "close", None)
-        if callable(close):
-            close()
-
     monkeypatch.setattr("medallion.schemas.events.build_run_event", _spy)
-    monkeypatch.setattr("medallion.workflow._run_async", _close)
+    monkeypatch.setattr("medallion.workflow._run_async", _close_unpublished)
     for var in _PRODUCER_ENV_IS_UNSET:
         monkeypatch.delenv(var, raising=False)
     get_settings.cache_clear()
     yield calls
+    get_settings.cache_clear()
+
+
+def _close_unpublished(coro: Any) -> None:
+    """Stands in for `_run_async`: closes the publish coroutine, so none is left never awaited."""
+    close = getattr(coro, "close", None)
+    if callable(close):
+        close()
+
+
+@pytest.fixture
+def wire(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
+    """The run events `emit_promotion_outcome` would publish, built by the real `build_run_event`."""
+    from medallion.schemas import events
+
+    build = events.build_run_event
+    built: list[dict[str, Any]] = []
+
+    def _record(**kwargs: Any) -> dict[str, Any]:
+        built.append(build(**kwargs))
+        return built[-1]
+
+    monkeypatch.setattr(events, "build_run_event", _record)
+    monkeypatch.setattr("medallion.workflow._run_async", _close_unpublished)
+    get_settings.cache_clear()
+    yield built
     get_settings.cache_clear()
 
 
@@ -221,6 +245,36 @@ def test_a_silver_hold_still_names_the_silver_stage(captured: list[dict[str, Any
     assert event["version"] == 72
 
 
+def test_the_held_version_is_the_one_on_the_wire(wire: list[dict[str, Any]]) -> None:
+    """The version the approver ruled on reaches both places a reader finds it: the output's version
+    facet (the WROTE edge) and the run's `lance` facet."""
+    _, report = _gold_hold()
+
+    emit_promotion_outcome(_ctx(), report)
+
+    event = wire[-1]
+    assert event["outputs"][0]["facets"]["version"]["datasetVersion"] == "48"
+    assert event["run"]["facets"]["lance"]["version"] == 48
+    assert "synthetic" not in event["run"]["facets"]["lance"]
+
+
+@pytest.mark.parametrize("status", ["PROMOTED", "REJECTED"])
+def test_a_hold_that_names_no_written_version_asserts_none(wire: list[dict[str, Any]], status: str) -> None:
+    """Version 0 is no commit (pylance 12.0.0 numbers a new dataset's first commit 1). A hold carries it
+    when the held run measured no write, which is the run `_build_stage_event` records as synthetic. Its
+    outcome is recorded the same way, approved or refused: no version, and the synthetic mark that says
+    so deliberately. A 0 or a 1 on the record would name a version that was never written."""
+    _, held = _approved_hold(_silver_to_gold_stage(), version=0)
+
+    emit_promotion_outcome(_ctx(), PromotionReport(spec=held.spec, outcome=PromotionOutcome(status=status, decided_by="alice")))
+
+    event = wire[-1]
+    lance = event["run"]["facets"]["lance"]
+    assert "version" not in event["outputs"][0].get("facets", {}), f"the {status} record names a version: {event['outputs'][0]}"
+    assert "version" not in lance, f"the {status} run facet names a version: {lance}"
+    assert lance.get("synthetic") is True, f"the {status} record describes no data without saying so: {lance}"
+
+
 def test_the_outcome_names_the_person_the_batch_is_for(captured: list[dict[str, Any]]) -> None:
     """The author is a role literal and a service sub signs the event, so the ORIGINATOR is the only
     field that reaches the person whose batch was held (`rask-notifications`, Q2). Without it the
@@ -270,19 +324,50 @@ def test_a_hold_that_does_not_name_its_stage_is_refused(field: str, value: str |
     assert engine.scheduled == []
 
 
-def test_a_hold_the_stage_runner_builds_reaches_the_emit_intact(captured: list[dict[str, Any]]) -> None:
-    """The spec crosses three encodings between `hold_spec` and the emit: the hold topic's JSON, the
-    workflow input, and the activity input — the last two through the engine's own encoder."""
-    _, report = _gold_hold()
-    engine = _Engine()
+def test_hold_spec_refuses_a_call_that_names_no_version() -> None:
+    """A caller that forgets the version must fail at the call, not build a hold on version 0."""
+    with pytest.raises(TypeError, match="version"):
+        cast(Any, hold_spec)(
+            _silver_to_gold_stage(),
+            token="tok-hold",
+            project=_PROJECT,
+            from_namespace="acme-silver",
+            from_dataset="acme-silver$features",
+            to_namespace="acme-gold",
+            to_dataset="acme-gold$catalog",
+            reasons=["row_count_positive"],
+            originator="alice",
+        )
 
-    held = asyncio.run(handle_promotion_held({"data": json.loads(json.dumps(report.spec.model_dump()))}, client=engine))
+
+class _Bus:
+    """The stage runner's Dapr client, recording each publish. Bound to the real client's signature."""
+
+    def __init__(self) -> None:
+        self.published: list[dict[str, Any]] = []
+
+    async def publish_event(self, **kwargs: Any) -> None:
+        inspect.signature(DaprClient.publish_event).bind(self, **kwargs)
+        self.published.append(kwargs)
+
+
+def test_a_published_hold_reaches_the_emit_intact(captured: list[dict[str, Any]]) -> None:
+    """Every hop from `publish_hold` to the emit is the production one: the hold topic's JSON as the
+    stage runner sends it, then the workflow input and the activity input through the engine's own
+    encoder. A field dropped on any hop fails here. The version the stage runner hands `hold_spec` is
+    pinned in `test_cascade_via_publish`."""
+    stage, (_, report) = _silver_to_gold_stage(), _gold_hold()
+    bus, engine = _Bus(), _Engine()
+
+    assert asyncio.run(publish_hold(bus, stage, report.spec)) is True
+    # A JSON-typed publish reaches the subscriber with its payload parsed into the CloudEvent's `data`.
+    held = asyncio.run(handle_promotion_held({"data": json.loads(bus.published[0]["data"])}, client=engine))
+    assert held == {"status": "SUCCESS"}, f"the hold topic refused the hold the stage runner published: {held}"
     workflow_input = PromotionSpec.model_validate(from_json(to_json(engine.scheduled[0])))
     activity_input = from_json(to_json(PromotionReport(spec=workflow_input, outcome=report.outcome)))
     # The engine hands an activity the decoded JSON, which `emit_promotion_outcome` validates itself.
     emit_promotion_outcome(_ctx(), cast(PromotionReport, activity_input))
 
-    assert held == {"status": "SUCCESS"}
     assert workflow_input == report.spec
     event = captured[-1]
     assert (event["operation"], event["author"], event["version"]) == ("aggregate_gold", "analyst", 48)
