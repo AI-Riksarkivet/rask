@@ -1,19 +1,21 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-303, XC-107, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-305, XC-107, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-199** → **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
-   Why now: next in review, and LH-144 and LH-201 each wait on the row before them.
-2. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
+1. **XC-104** — An Arrow body that declares far more than it carries: one small request takes the annotator or catalog to its memory limit.
+   Why now: owner ruling 2026-09-26 admitted it as a counted Phase 1 row, right after LH-199.
+2. **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
+   Why now: next in review; LH-144 now has its precondition (staged and bus-delivered drops reach the graph since LH-199), and LH-201 waits on LH-200.
+3. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
    Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
-3. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
+4. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
    Why now: without it, "Phase 1 done" means only that every row closed.
-4. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
+5. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
    Why now: unchanged; XC-049 starts when the owner confirms the htr-batch team has the note.
 <!-- FOCUS:END -->
 
@@ -32,6 +34,8 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - **Shared service token (2026-09-26)** — the shared internal service token stays unscoped on the existing-resource producer doors until D1 (LH-220) gives each service its own identity.
 - **Stage-runner list (2026-09-26)** — `GET /stage-runners` is open to any signed-in caller; runner names are deployment config.
 - **Order after the batch deploys (2026-09-26)** — the one-request faults first (LH-278, XC-097, and LH-277's live check), then the parked rows.
+- **Drops at the lineage gate (2026-09-26)** — a DROP-lifecycle DatasetEvent (`drop_table`, `deregister_table`) whose signature verifies as the catalog's service identity is admitted without re-deriving the author's grants, which the same request revoked; every other event keeps the full check. The signing key's reach bounds it until XC-076.
+- **XC-104 admitted (2026-09-26)** — a counted Phase 1 row, right after LH-199.
 
 ## Decisions still open
 
@@ -61,8 +65,8 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 110 | 108 | 32 |
-| **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
+| **PHASE 1 · LAKEHOUSE** | 109 | 107 | 31 |
+| **PHASE 1 · CROSS-CUTTING** | 56 | 50 | 21 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
@@ -112,14 +116,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Call the captured previous handler after mark_draining; RED with a real uvicorn, not a patched os.kill (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 measured uvicorn 0.51.0 alive 12 s after SIGTERM). Test resilience.md §9's per-vend object-store client hypothesis: 10k opens of one S3 dataset with constant vs per-open-distinct credentials, heaptrack or a jemalloc A/B. Lakekeeper disables the AWS SDK identity cache for unbounded partition growth and runs jemalloc (crates/io/src/s3.rs:75-91). Set --timeout-graceful-shutdown from the lifecycle (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 step 3).
 - *Closes when:* The holder is named by measurement (filed upstream if external), and a recycle is observed exiting and being replaced cleanly.
 - *Evidence:* packages/service-kit/src/service_kit/draining.py:137-188 · services/maintenance/src/maintenance/services/rewrite_slot.py:94-119,147-170 · services/maintenance/src/maintenance/api/work.py:117 · commit 854a0cf2 (34.5 h soak)
-
-**LH-199 · The outbox relay deletes every staged DatasetEvent (every catalog DDL announcement) as poison**
-`lineage, catalog, service-kit` · **HIGH**
-- *What is left:* `_drain_outbox` and both DLQ replay routes parse staged bytes as RunEvent only; a staged DatasetEvent (create, drop, alter, declare, register, protect) fails with eventType/job/run errors, is logged `lineage_outbox_poison_dropped` and deleted. The outbox prose still says it 'closes' the loss window. Its test tests/unit/test_the_outbox_relay_refuses_what_the_bus_door_refuses.py::test_a_refused_event_is_counted_apart_and_not_dropped passes only because its 1,400-character source window ends before the drop call (test audit); rewrite it to drive the drain. A fix exists unintegrated on wip/td-LH-199 and wip/td-LH-199-r2 (head 5d5e506a); reconcile_cron.py:526 at ea8c5ff8 still parses RunEvent only. The same drain also aborts its whole tick when record_refusal raises (LH-297); land that fix with this one.
-- *Why:* Criteria 1 and 4. The only durable copy of a create or drop announcement is destroyed on exactly the bus outage the outbox exists for; LH-144 and LH-064 both need this first.
-- *How:* RED: stage a signed DatasetEvent built by the catalog's real `build_write_event(operation=CREATE_TABLE)`, drain, assert drained==1 and `ingest_dataset_event` called. Parse with the consumer's own discriminator (`parse_event`) at reconcile_cron.py and both dlq.py sites, route DatasetEvent to ingest_dataset_event and RunEvent to ingest_event, both still through enforce_bus_authz. Rewrite the outbox prose to 'narrows the loss window to commit-to-stage'. Lakekeeper has no outbox at all.
-- *Closes when:* A DatasetEvent whose publish failed is re-ingested by the drain and by the DLQ replay, pinned by the RED test on the real builder, and no drain path parses staged bytes as RunEvent only.
-- *Evidence:* services/lineage/src/lineage/api/reconcile_cron.py:526,545-549 · services/lineage/src/lineage/api/v1/endpoints/dlq.py:46,117 · services/catalog/src/catalog/core/lineage_emit.py:367-368 · services/lineage/src/lineage/models.py:467
 
 **LH-200 · `fga.batch_check` drops the per-item error, so an OpenFGA fault on one item reads as a permission denial**
 `service-kit (consumers: catalog, lineage, ingest, medallion, notifications)` · **HIGH**
@@ -1402,6 +1398,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *Closes when:* On a main push, e2e-stack and e2e-ray bring every pod Ready and run their suites, recorded with run ids, and the core lane renders no WorkflowRuntime without a Ray head.
 - *Evidence:* gh run 36148029490 (jobs 108118325356, 108118325294) · gh run 36116165165 (job 108014986505) · scripts/e2e_stack.sh:13-14,107-119,413-416 · chart/values.yaml:1342,2492,2507 · services/medallion/src/medallion/stage_runner.py:89-100 · services/medallion/src/medallion/producer.py:109-129 · verify-phase1-done/e2e-stack.log, e2e-stack-36116.log, e2e_history.py, ray_defaults.py
 
+**XC-104 · An Arrow body can declare far more than it carries: 224 bytes make the annotator allocate ~6 GB, and a 66 KB zstd body inflates to ~2 GiB, in the catalog and the annotator**
+`service-kit, catalog, annotator` · **HIGH**
+- *What is left:* The validating decoder (`service_kit.lancekit.arrow_ipc`) refuses buffers that lie about what the body holds and a compressed buffer whose declared length is absurd (2**50), but nothing bounds what a body honestly DECLARES. A buffer-free column (null type, empty struct, fixed_size_binary(0), run-end-encoded) or a zero-column batch states a row count no buffer has to back, so 144-496 bytes declare up to 2**62 rows: measured, 30M rows from 224 bytes, and the annotator's `to_pylist` of them peaked at 6.18 GB RSS in 10.5 s; pylance wrote 1e9 null rows in 9.6 s. An honest zstd or lz4 body inflates ~66 KB to ~2 GiB. A zero-column batch of length -1 decodes as 0 rows.
+- *Why:* Criterion 5: one request can take the annotator or catalog pod to its memory limit, the same one-request class as LH-278.
+- *How:* In the one decoder: refuse a table with more rows than 8 × the body's bytes (a row of any buffer-backed column costs at least one bit, so only buffer-free types pass the bound), and refuse a negative batch length. For compression: lance_docs/ns_catalog/spec.yaml says nothing about IPC compression, and lancedb's namespace client writes default, uncompressed streams (lancedb/namespace.py:262,275); pylance's compiled Rust client is still to be measured on the wire. Refuse compressed bodies if it sends none, else cap the decompressed total at the body cap. RED first at the decoder and at both doors.
+- *Closes when:* A 224-byte `pa.nulls(10**6)` body and a 66 KB zstd body are refused 400 at the catalog's write doors and the annotator's import, the deployed pods' memory does not move under them, and a mutation check kills each bound.
+- *Evidence:* XC-097 review round, probe `framing` (workflow wf_6f183f3b-bfe) · commit 74bb87cf's parked list · owner ruling 2026-09-26: admitted as a counted Phase 1 row, after LH-199
+
 ## PHASE 2 · COMPUTE
 
 **LH-129 · Ray jobs sign with a static S3 key and lineage tokens from pod env; they should open tables through the namespace with a projected SA token**
@@ -2150,7 +2154,6 @@ Found by the 2026-09-26 lakehouse map and parked by owner ruling (only its HIGH 
 - LH-294 · LOW · Nothing reports MemWAL state: a table carrying the `__lance_mem_wal` index is not flagged, and its `_mem_wal/` bytes are never reclaimed or read · `maintenance, lineage`
 - LH-295 · LOW · The catalog runs the dir backend in compatibility mode by default, and its list door dir-scans the root, so a Lance dataset written straight to the catalog root is listed as a table nothing governs · `catalog`
 - LH-296 · LOW · The catalog guard authorizes on scope['path'], so serving it under a root_path would skip every FGA check · `catalog`
-- LH-297 · LOW · A record_refusal failure aborts the whole outbox drain tick and reports zeros · `lineage`
 - LH-298 · LOW · Producer-door answer hygiene: a malformed ?project= is reported twice, a 502 carries the transport error text, and a stage runner's non-JSON error body becomes a 500 · `medallion`
 - LH-299 · LOW · The TRAIN lane sends empty ORIGINATOR, TRAIN_PROJECT and OTEL_* values to Ray · `medallion`
 - LH-300 · LOW · Two inconsistencies need one recorded answer each: /train's dot-free token grammar, and whether protection guards maintenance/run's history reclaim · `medallion, catalog, docs`
@@ -2169,7 +2172,8 @@ Found by the 2026-09-26 lakehouse map and parked by owner ruling (only its HIGH 
 Found by the XC-097 review round (2026-09-26) and parked under the same rule. Measurements: the XC-097 commit (74bb87cf) and the rev 244 deploy record.
 
 - LH-301 · MEDIUM · A write body that is valid Arrow but that Lance will not store answers 500 code 18 at create, insert and merge_insert: a list_view or run-end-encoded column (`LanceError(Schema): Unsupported data type`) and a `lance.blob.v2` value whose external uri lies outside the table's registered bases (`Invalid user input: External blob URI ... outside registered external bases`) surface as an untyped OSError. The blob refusal itself is right — a caller's `file://` uri is not resolved. LH-287's class, on the write doors · `catalog`
-- XC-104 · MEDIUM · A small body can declare far more than it carries, and the validating decoder has no bound on it. An honest zstd body inflates ~66 KB to ~2 GiB; and a buffer-free column (null type, empty struct, fixed_size_binary(0), run-end-encoded) or a zero-column batch lets a 144-496 byte body declare up to 2**62 rows, since no buffer bounds its length — at the annotator, `to_pylist` of 3e7 such rows from 224 bytes peaked at 6.18 GB RSS in 10.5 s, and pylance wrote 1e9 null rows in 9.6 s. A zero-column batch of length -1 decodes as 0 rows. Every bound refuses something legitimate (long REE runs, long all-null columns), so the bound is the owner's choice · `service-kit, catalog, annotator`
 - LH-302 · LOW · Create's rollback (`_write_blob_into`) catches Exception only, so a pylance `PanicException` (a BaseException) during the write skips it and leaves a declared table with no dataset (`describe` answers, `open` 404s); measured with an unaligned decimal body before XC-097 aligned the decoder's buffers, and no trigger is known after it. `catalog/services/maintenance.py` already catches BaseException for pylance panics · `catalog`
+- LH-303 · HIGH · Lineage's bus subscription does not survive a NATS restart: its consumer is ephemeral by design (`deliverPolicy: all`, chart/templates/dapr-component.yaml:196,309), the restart deletes it and the sidecar never re-creates it, so lineage receives nothing from the bus until its pod restarts. Measured 2026-09-26 (LH-199's outage proof): after NATS returned at 19:49:25Z the three durable LINEAGE consumers took the next event and lineage's consumer was absent; a catalog drop published at 19:50:46Z reached the graph only after `rollout restart deploy/rask-lineage` at 19:53:39Z · `lineage, chart`
+- LH-304 · LOW · On every lineage restart the retained stream's older catalog and maintenance events are refused "signature does not verify" (14 at 19:46Z, re-sent to the DLQ each time) before the replay exemption is consulted; fresh events verify, so the likely cause is key rotation since they were signed · `lineage`
 - XC-105 · LOW · The annotator's import converts a VALID body row by row (`to_pylist`, then `Shape`), and decimal, odd-timezone timestamp and duplicate-struct-name columns raise there and answer 500 · `annotator`
 - XC-106 · LOW · `scripts/k3s-pins.sh --check-only` stages `chart/values-live-pins.yaml.tmp` INSIDE the chart directory and removes it on exit, so a `helm template chart/` running at the same moment fails with `lstat ... .tmp: no such file or directory`; measured once in the suite under `-n auto` (test_a_declared_bucket_is_never_reported_as_an_orphan, which passes alone) · `scripts, tests`
