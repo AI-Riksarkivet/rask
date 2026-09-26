@@ -18,6 +18,7 @@ held the only caller of `release_run_units`.
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -125,6 +126,30 @@ def test_no_engine_is_UNAVAILABLE_never_a_silent_success(call: Any) -> None:
     """503, not 404 and not 202. Answering 202 with no sidecar tells an operator a runaway was stopped."""
     with TestClient(_app(None), raise_server_exceptions=False) as client:
         assert call(client).status_code == 503
+
+
+@pytest.fixture
+def engine_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A producer synced without `--extra workflow`: the engine adapter cannot be imported."""
+    monkeypatch.setitem(sys.modules, "dapr.ext.workflow", None)
+    monkeypatch.delitem(sys.modules, "medallion.workflow", raising=False)
+
+
+@pytest.mark.parametrize(
+    ("call", "status"),
+    [
+        (lambda c: c.get(f"/trains/{LIVE}"), 503),
+        (lambda c: c.post(f"/trains/{LIVE}/terminate"), 503),
+        (lambda c: c.get("/trains/promotion-x"), 404),
+    ],
+    ids=["show", "terminate", "not-a-training-id"],
+)
+@pytest.mark.usefixtures("engine_not_installed")
+def test_a_producer_WITHOUT_the_engine_answers_as_one_with_no_sidecar(call: Any, status: int) -> None:
+    """The engine is an optional extra and this router is always mounted, so its absence is the same
+    503 as a missing client, and an id no watch can have is still 404."""
+    with TestClient(_app(None), raise_server_exceptions=False) as client:
+        assert call(client).status_code == status
 
 
 # ── a training door acts on training watches only ───────────────────────────────────────────────────

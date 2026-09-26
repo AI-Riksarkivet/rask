@@ -220,13 +220,14 @@ async def _authorized_watch(
     `schedule_train_watch` cannot mint is refused before the engine is asked, and a state whose
     workflow is not `train_run` answers exactly as an absent one.
     """
-    # Resolved here, as `promotions.py` does: `medallion.workflow` is the engine adapter, and a router
-    # the producer always mounts must not import it.
-    from medallion.workflow import train_run
-
     if not instance_id.startswith(TRAIN_WATCH_PREFIX):
         raise _no_watch(instance_id)
     client = _train_client(request)
+    # Resolved here, as `promotions.py` does: `medallion.workflow` is the engine adapter, an optional
+    # extra, and a router the producer always mounts must not import it. After the client, because a
+    # live client means the extra is installed; without one the answer is the 503 above.
+    from medallion.workflow import train_run
+
     # The SDK client is SYNCHRONOUS. Awaiting it inline blocks the event loop for every other request
     # on this worker — the same reason ingest and flows read their state through a thread.
     state = await asyncio.to_thread(lambda: client.get_workflow_state(instance_id, fetch_payloads=True))
