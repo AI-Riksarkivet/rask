@@ -464,6 +464,21 @@ def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(monkeypatch: pyte
     _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="gateway")
 
 
+def test_a_PUBLIC_callers_refusal_is_audited_on_the_REQUESTED_project(monkeypatch: pytest.MonkeyPatch, audit_records: list[logging.LogRecord]) -> None:
+    """`?project=` is this door's write target, so the refusal names it rather than the configured one."""
+    _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="gateway", project="beta")
+
+    assert [_audit_fields(record) for record in audit_records] == [
+        {
+            "audit.action": "produce_service_token",
+            "audit.outcome": "deny",
+            "audit.subject": "service:gateway",
+            "audit.resource": "project:beta",
+            "audit.reason": "public_caller",
+        }
+    ]
+
+
 def test_the_TRAIN_door_inherits_the_refusal() -> None:
     """`authorize_train` delegates its whole decision to `authorize_produce`.
 

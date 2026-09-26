@@ -105,6 +105,8 @@ TRAINS = {
     "train-other": _train("other"),
     "train-mine": _train("mine"),
     "train-garbled": _State("not json", name="train_run"),
+    "train-unsafe": _State({"token": "tok-1", "model": "churn", "submission_id": "ray-train-tok-1", "project": "../acme"}, name="train_run"),
+    "train-listed": _State(json.dumps([CONFIGURED]), name="train_run"),
 }
 
 
@@ -528,6 +530,16 @@ def test_a_training_watch_whose_input_cannot_be_read_is_REFUSED_to_a_person(prod
     assert producer.get("/trains/train-garbled", headers=SERVICE).status_code == 200, "the service path needs no tenant"
 
 
+@pytest.mark.parametrize("instance_id", ["train-unsafe", "train-listed"])
+def test_a_watch_recording_no_USABLE_project_is_refused_to_a_person(producer: TestClient, fga: _Fga, instance_id: str) -> None:
+    """An unsafe project id, or an input that is not a mapping, names no project to authorize on: never
+    an FGA object, and never read as the configured project."""
+    response = producer.get(f"/trains/{instance_id}", headers=_bearer("bob"))
+
+    assert response.status_code == 503, response.text
+    assert fga.calls == []
+
+
 def test_a_training_stop_is_logged_with_WHO_asked(producer: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger=train_api.log.name):
         assert producer.post("/trains/train-acme/terminate", headers=_bearer("bob")).status_code == 202
@@ -652,6 +664,19 @@ def test_a_stage_whose_tenant_cannot_be_read_is_AUDITED_as_a_refusal(fga: _Fga, 
         assert client.post(_stop("stage-x"), headers=_bearer("bob")).status_code == 503
 
     assert _all_decisions(audited) == [("can_administer", "failure", "bob", "stage_run:stage-x", "resource_project_unreadable")]
+
+
+def test_a_watch_whose_tenant_cannot_be_read_is_AUDITED_as_a_refusal(producer: TestClient, audited: list[logging.LogRecord]) -> None:
+    assert producer.get("/trains/train-garbled", headers=_bearer("bob")).status_code == 503
+
+    assert _all_decisions(audited) == [("can_administer", "failure", "bob", "train_run:train-garbled", "resource_project_unreadable")]
+
+
+def test_a_SERVICE_read_of_a_watch_whose_tenant_cannot_be_read_is_audited_on_the_WATCH(producer: TestClient, audited: list[logging.LogRecord]) -> None:
+    """With no project to name, the record names the instance the call read, never `project:None`."""
+    assert producer.get("/trains/train-garbled", headers=SERVICE).status_code == 200
+
+    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "train_run:train-garbled", None)]
 
 
 def test_a_SERVICE_stop_is_audited_on_the_RUNS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
