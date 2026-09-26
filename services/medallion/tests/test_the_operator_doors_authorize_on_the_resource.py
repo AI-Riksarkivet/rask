@@ -319,13 +319,17 @@ def test_an_UNKNOWN_stage_is_still_404(producer: TestClient) -> None:
     assert producer.get(_show("stage-nope"), headers=_bearer("alice")).status_code == 404
 
 
-def test_an_UNKNOWN_stage_runner_is_not_NAMED_to_a_person(producer: TestClient) -> None:
-    """carol holds no grant. The configured runners are `GET /stage-runners`' to disclose, and it asks
-    for `can_administer`; the 404 before any run is read must not hand them to anyone signed in."""
-    response = producer.get("/stage-runners/typo/stages/stage-mine", headers=_bearer("carol"))
+@pytest.mark.parametrize("door", [_show, _stop], ids=["show", "terminate"])
+def test_a_person_cannot_tell_an_UNKNOWN_stage_runner_from_a_MISSING_run(producer: TestClient, door: Any) -> None:
+    """carol holds no grant. The configured runners are `GET /stage-runners`' to disclose, on
+    `can_administer`, so a door that answers her before any run is read must not confirm a runner name
+    by answering a real one differently from a made-up one."""
+    method = "GET" if door is _show else "POST"
+    typo = producer.request(method, door("stage-nope").replace(RUNNER, "typo"), headers=_bearer("carol"))
+    real = producer.request(method, door("stage-nope"), headers=_bearer("carol"))
 
-    assert response.status_code == 404, response.text
-    assert RUNNER not in response.text, response.text
+    assert typo.status_code == real.status_code == 404, (typo.text, real.text)
+    assert typo.json() == real.json()
 
 
 def test_an_UNKNOWN_stage_runner_is_still_NAMED_on_the_service_path(producer: TestClient) -> None:

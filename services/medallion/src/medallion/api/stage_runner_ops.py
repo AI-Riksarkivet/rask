@@ -31,6 +31,7 @@ from pydantic import BaseModel
 
 from medallion.api.dependencies import FgaClientDep, SettingsDep
 from medallion.api.produce_auth import AdmittedCaller, ProducerCaller, authorize_produce, require_project_admin
+from medallion.api.stage_ops import no_stage_run
 from medallion.core.config import MedallionSettings, outbound_app_token
 from service_kit.lakehouse.warehouse_registry import is_safe_project
 
@@ -69,22 +70,23 @@ class StageRunnerInventory(BaseModel):
     stage_runners: list[str]
 
 
-def _base_url(settings: Any, stage_runner: str, *, caller: ProducerCaller) -> str:
+def _base_url(settings: Any, stage_runner: str, *, instance_id: str, caller: ProducerCaller) -> str:
     url = (settings.stage_runner_urls or {}).get(stage_runner)
     if not url:
-        # 404 and NOT 502: the stage runner is not merely unreachable, it is not configured here at all, and
-        # those are different operator problems. The common cause is a name typo against a values-driven
-        # list, so the message names what IS configured — except to a person, who is not authorized yet
-        # (no run has been read) and gets that list only from `GET /stage-runners`, on `can_administer`.
-        detail = f"no stage runner {stage_runner!r} is configured"
-        if caller.subject is None:
-            detail += f"; known stage runners: {sorted((settings.stage_runner_urls or {}).keys())}"
-        raise HTTPException(status_code=404, detail=detail)
+        # A person is not authorized yet (no run has been read) and the runner names are
+        # `GET /stage-runners`' to disclose, on `can_administer`. So a person hears what a configured
+        # runner answers for a run it does not host, and a made-up name reads as a real one.
+        if caller.subject is not None:
+            raise no_stage_run(instance_id)
+        # 404 and NOT 502: not configured and unreachable are different operator problems. The common
+        # cause is a name typo against a values-driven list, so the message names what IS configured.
+        known = sorted((settings.stage_runner_urls or {}).keys())
+        raise HTTPException(status_code=404, detail=f"no stage runner {stage_runner!r} is configured; known stage runners: {known}")
     return url.rstrip("/")
 
 
-async def _forward(request: Request, settings: Any, stage_runner: str, path: str, *, method: str, caller: ProducerCaller) -> Any:
-    url = f"{_base_url(settings, stage_runner, caller=caller)}{path}"
+async def _forward(request: Request, settings: Any, *, stage_runner: str, instance_id: str, action: str = "", method: str, caller: ProducerCaller) -> Any:
+    url = f"{_base_url(settings, stage_runner, instance_id=instance_id, caller=caller)}/stages/{instance_id}{action}"
     client: httpx.AsyncClient | None = getattr(request.app.state, "http", None)
     if client is None:
         # Built once in the lifespan; a per-request client re-opens a connection every call, which is
@@ -125,7 +127,7 @@ async def _authorized_run(
     request: Request, *, settings: MedallionSettings, fga_client: OpenFgaClient | None, caller: ProducerCaller, stage_runner: str, instance_id: str
 ) -> Any:
     """Read the run from the stage runner that hosts it, then authorize the caller on ITS project."""
-    state = await _forward(request, settings, stage_runner, f"/stages/{instance_id}", method="GET", caller=caller)
+    state = await _forward(request, settings, stage_runner=stage_runner, instance_id=instance_id, method="GET", caller=caller)
     await require_project_admin(fga_client, caller, project=_run_project(settings, state), resource=f"stage_run:{instance_id}")
     return state
 
@@ -149,4 +151,4 @@ async def terminate_stage(
     the GPUs are free.
     """
     await _authorized_run(request, settings=settings, fga_client=fga_client, caller=caller, stage_runner=stage_runner, instance_id=instance_id)
-    return await _forward(request, settings, stage_runner, f"/stages/{instance_id}/terminate", method="POST", caller=caller)
+    return await _forward(request, settings, stage_runner=stage_runner, instance_id=instance_id, action="/terminate", method="POST", caller=caller)
