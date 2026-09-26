@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, TypeGuard
 
 from fastapi import Depends, Request
 from lance_namespace import (
@@ -45,6 +45,7 @@ from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, Ungoverne
 from lineage_kit.signing import signature_of, verify_signed_event
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
+from service_kit.openlineage import lifecycle_state
 
 
 log = logging.getLogger(__name__)
@@ -370,6 +371,9 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
     # subject may write; it says nothing about whether the producer is who it claims to be, so gating
     # the one on the other would let an estate with auth on and FGA off verify nothing at all.
     enforce_signature_if_present(arrived, lambda: dedicated_token_from_store(settings.dapr_secret_store))
+    if _is_the_catalogs_own_drop(event, arrived, settings):
+        log.info("lineage_catalog_drop_admitted", extra={"dataset": event.dataset.name, "operation": event.operation})
+        return
     if not settings.fga_enabled:
         return
     # The DUMP, deliberately, for everything below: `_is_replay` compares byte-for-byte against the row
@@ -384,6 +388,28 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, request: Request, se
         if not await _is_replay(event, payload, request):
             raise
         log.info("lineage_replay_not_reauthorized", extra={"run": event.run_id, "event_type": event.feed_event_type})
+
+
+def _is_the_catalogs_own_drop(event: RunEvent | DatasetEvent, arrived: Mapping[str, Any], settings: LineageSettings) -> TypeGuard[DatasetEvent]:
+    """A DROP the catalog signed — admitted on that signature, never on the author's grants (owner ruling 2026-09-26).
+
+    THE GRANTS ARE GONE BY DESIGN. The catalog emits `drop_table` / `deregister_table` and then revokes the
+    table's tuples in the same request, so a delivery that arrives after the revoke — every bus delivery
+    and every outbox drain — asks FGA about a table nobody may write, and the drop could never be recorded.
+    The catalog enforced `can_drop` before it mutated anything; its verified signature is that
+    attestation, the way Lakekeeper treats the catalog's own events as facts rather than re-asking a grant.
+
+    ONLY WHEN THE SIGNATURE VERIFIED, which `enforce_signature_if_present` has just established for any
+    signature present; an unsigned drop, or one signed by any other identity, keeps the full check. The
+    signing key's reach bounds this attestation (XC-076: until then every lakehouse pod can read it).
+    """
+    signature = signature_of(arrived)
+    return (
+        isinstance(event, DatasetEvent)
+        and signature is not None
+        and signature.identity == settings.catalog_service_identity
+        and lifecycle_state(event.operation or "") == "DROP"
+    )
 
 
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], request: Request) -> bool:
@@ -405,10 +431,12 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
     honours — precisely the mutation the run check above exists to refuse. An event that differs in any
     field is a new assertion and stays refused.
     """
+    # THE FEED'S OWN KEY, never `run_id`: a static change has no run id and is stored under the id
+    # derived from its content, so looking it up by run id answered "not a replay" for every DatasetEvent.
     repository = getattr(request.app.state, "repository", None)
-    if repository is None or not event.run_id:
+    if repository is None or not event.feed_id:
         return False
-    stored = await repository.recorded_event(event.run_id, event.feed_event_type)
+    stored = await repository.recorded_event(event.feed_id, event.feed_event_type)
     return stored is not None and stored == payload
 
 

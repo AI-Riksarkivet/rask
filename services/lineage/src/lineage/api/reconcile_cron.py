@@ -19,7 +19,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from lineage.api.dependencies import PublisherDep, RepositoryDep, SettingsDep
 from lineage.api.fga_deps import enforce_bus_authz
@@ -35,9 +35,9 @@ from lineage.core.reconcile import (
     read_version_operations,
     reconcile_all,
 )
-from lineage.models import RunEvent, author_sub_from_payload
+from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.schemas import ReconcileState, ReconcileStatus
-from service_kit import dapr_publish
+from lineage.services.staged import UnparseableEventError, parse_staged, republish_staged
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import require_dapr_token
 from service_kit.lakehouse import outbox, outbox_metrics
@@ -478,9 +478,11 @@ async def _drain_outbox(
 ) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
-    An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is ingested
-    idempotently (``ingest_event`` MERGEs on ``run_id``) and then deleted; a delete that fails just leaves
-    the object for the next tick to re-ingest (a no-op) and retry the delete. Returns the count ingested.
+    An unparseable (poison) object is dropped so it can't wedge the drain. A well-formed event is parsed
+    with the doors' own discriminator (``parse_staged``), ingested idempotently through the matching door
+    (``ingest_event`` for a run, ``ingest_dataset_event`` for a catalog DDL change) and then deleted; a
+    delete that fails just leaves the object for the next tick to re-ingest (a no-op) and retry the
+    delete. Returns the count ingested.
 
     RUNS BEFORE THE SWEEP, and the order is load-bearing on two counts (§ Q8-16).
 
@@ -523,8 +525,11 @@ async def _drain_outbox(
     drained = stranded = refused = recorded = 0
     for key, event_json in staged:
         try:
-            event = RunEvent.model_validate_json(event_json)
-        except ValidationError as exc:
+            # THE DOORS' DISCRIMINATOR, never `RunEvent` alone: every catalog create, drop and alter is a
+            # `DatasetEvent`, so a run-only parse destroys the staged copy of each one as poison ([[LH-199]]).
+            # The DLQ routes parse through the same function, so the two can never disagree about poison.
+            event: RunEvent | DatasetEvent = parse_staged(event_json)
+        except UnparseableEventError as exc:
             # ONLY a genuinely-unparseable event is poison. This must stay NARROW (audit 2026-07-14): the
             # broad `except Exception` it replaces deleted the staged object on ANY failure — a transient
             # error would destroy the event's ONLY durable copy, the exact loss #4 exists to prevent.
@@ -546,7 +551,14 @@ async def _drain_outbox(
                 extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author},
             )
             outbox_metrics.record_poison_dropped()
-            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+            # ITS OWN TRY, for the reason the refusal branch below has one: this handler is outside the
+            # per-event `except Exception`, so a delete that raised here (a store timeout, an AccessDenied)
+            # would leave the loop and strand every event behind it. Left staged, the object is poison again
+            # next tick and its delete is retried.
+            try:
+                await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+            except Exception as undropped:
+                log.warning("lineage_outbox_poison_left_staged", extra={"outbox_key": key, "error": str(undropped)})
             continue
         try:
             # THE FOURTH INGEST PATH, and it was the only one that authorized nothing. The HTTP door runs
@@ -573,11 +585,18 @@ async def _drain_outbox(
             # Graph AND durable feed, in one transaction — see `ingest_event`. The drained run reaching
             # /runs + /producers while SILENTLY absent from /events was the shape this relay exists to
             # prevent, and it is no longer expressible: there is one write.
-            await repository.ingest_event(event)  # idempotent — MERGE on run_id, feed ON CONFLICT DO NOTHING
+            #
+            # TWO DOORS, routed exactly as `services/consumer.py` routes them: a static metadata change has
+            # no run and no job, and the run door would mint a phantom `(:Job)` for it.
+            if isinstance(event, DatasetEvent):
+                await repository.ingest_dataset_event(event)
+            else:
+                await repository.ingest_event(event)  # idempotent — MERGE on run_id, feed ON CONFLICT DO NOTHING
             # RE-PUBLISH, then drop. Ingesting alone repairs the GRAPH and leaves every SUBSCRIBER unaware:
-            # medallion's `/bronze-arrival` reacts to this announcement, so a head event recovered but never
-            # re-published means provenance is restored while the bronze->silver->gold run it should have
-            # started stays halted forever. The relay is the only thing that can restart it.
+            # medallion's `/bronze-arrival` reacts to a head RUN, so one recovered but never re-published
+            # means provenance is restored while the bronze->silver->gold run it should have started stays
+            # halted forever; a recovered DDL change reaches the notifications bus lane only this way. Only a re-publish can restart it, and the DLQ replay makes the
+            # same one (`republish_staged`).
             #
             # BEFORE the drop, never after: a publish that fails must leave the staged object for the next
             # tick, which is the whole point of staging. The re-ingest on that tick is a no-op (MERGE on
@@ -587,26 +606,13 @@ async def _drain_outbox(
             # so this may re-deliver something subscribers already saw — which is exactly the at-least-once
             # contract they are built for: the graph MERGEs, the feed is ON CONFLICT DO NOTHING, the inbox
             # keys on `runId@STATE`, and the cascade carries an idempotency token.
-            if publisher is not None:
-                await dapr_publish.publish_event(
-                    publisher,
-                    timeout_seconds=settings.dapr_publish_timeout_seconds,
-                    pubsub_name=settings.dapr_pubsub,
-                    topic_name=settings.dapr_topic,
-                    # The STAGED BYTES, never `event.model_dump_json()`. The model is the parsed Python
-                    # shape (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`). Round-
-                    # tripping through the model re-publishes a document no subscriber can parse — a silent
-                    # corruption of the very event this path exists to save. Byte-identical redelivery is
-                    # also the honest thing: subscribers see exactly what they would have seen first time.
-                    data=event_json,
-                    data_content_type="application/json",
-                )
+            await republish_staged(publisher, settings, event_json)
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
         except PermissionDeniedError as exc:
-            # STRANDED, NEVER DROPPED, and under its own name. A refusal is not poison (malformed, wedges
+            # NEITHER POISON NOR STRANDED, and under its own name. A refusal is not poison (malformed, wedges
             # the drain forever, so dropped) and not a transient failure (retried next tick): it is a
-            # governance answer about a well-formed event, and destroying the only durable copy of a
-            # committed write's provenance is the wrong response to "you may not record this".
+            # governance answer about a well-formed event, so the object is retired only once the verdict
+            # AND the event are recorded below — never on the verdict alone.
             #
             # Its own log line because the fact is worth reading: a staged event the graph refuses means a
             # producer is staging provenance it is not authorized to record, which the generic stranded
@@ -625,12 +631,11 @@ async def _drain_outbox(
             # the tick's error boundary and aborted the WHOLE drain. Not `event.author`: that property
             # prefers the producer-supplied `name` and ownership facet, which is right for attribution on
             # a board and wrong for a loss record, where naming the wrong person is worse than naming
-            # nobody (`author_sub_from_payload`). The json already validated into a `RunEvent` on this
-            # path, so it parses.
+            # nobody (`author_sub_from_payload`). The json already parsed on this path.
             refused_author = author_sub_from_payload(json.loads(event_json))
             log.warning(
                 "lineage_outbox_event_unauthorized",
-                extra={"outbox_key": key, "run_id": event.run.run_id, "author": refused_author, "reason": str(exc)},
+                extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "reason": str(exc)},
             )
             # RECORD, THEN RETIRE — the terminal state a settled refusal needs ([[LH-182]]). Counting and
             # logging alone leaves the object, so the same event is re-read, re-parsed, re-refused and
@@ -647,21 +652,35 @@ async def _drain_outbox(
             # `s3:DeleteObject` on its own outbox (`DrainItsOwnOutboxAndNothingElse`). Building it anyway
             # broke the drain here — the AccessDenied is the tick's error boundary, so it aborted the
             # whole pass and the sweep then reported `refused=0`, a zero meaning "did not look".
-            recorded += 1
-            await repository.record_refusal(
-                outbox_key=key,
-                run_id=event.run.run_id,
-                author=refused_author,
-                reason=str(exc),
-                event_json=event_json,
-            )
-            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+            #
+            # ITS OWN TRY, because this handler is not covered by the per-event `except Exception` below
+            # it: a record or a drop that raised here would leave the loop, strand every later event of the
+            # tick and report zeros ([[LH-297]]). The verdict stands and stays counted; the object stays
+            # staged until its record lands, and the next tick re-refuses it into the same upsert.
+            landed = False
+            try:
+                await repository.record_refusal(
+                    outbox_key=key,
+                    # `None` for a static change: it names no run, and the key already identifies it.
+                    run_id=event.run_id,
+                    author=refused_author,
+                    reason=str(exc),
+                    event_json=event_json,
+                )
+                landed = True
+                recorded += 1
+                await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+            except Exception as unretired:
+                log.warning(
+                    "lineage_outbox_refusal_left_staged",
+                    extra={"outbox_key": key, "run_id": event.run_id, "recorded": landed, "error": str(unretired)},
+                )
             continue
         except Exception as exc:
             # LEFT STAGED on purpose — see "STRANDED IS NOT POISON" above. Named with both the object key
             # and the run it is about, because the two differ and only one of them finds the run in the graph.
             stranded += 1
-            log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run.run_id, "error": str(exc)})
+            log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run_id, "error": str(exc)})
             continue
         drained += 1
     # Always emit — adding 0 CREATES the series, so a dashboard/alert has data from the first tick instead

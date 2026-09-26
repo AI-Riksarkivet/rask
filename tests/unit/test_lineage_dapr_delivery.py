@@ -70,7 +70,7 @@ class _FakeRepo:
         self.ingested: list[RunEvent] = []
         self.refusals: list[dict[str, str | None]] = []
 
-    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
         that cannot record one no longer stands in for the repository. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain

@@ -81,7 +81,7 @@ class _Repo:
     def __init__(self) -> None:
         self.ingested: list[str] = []
 
-    async def record_refusal(self, **_k: Any) -> None:
+    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         return None
 
     async def ingest_event(self, ev: Any) -> None:  # noqa: ANN401 — the drain's and consumer's own shape

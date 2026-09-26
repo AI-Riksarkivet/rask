@@ -172,7 +172,7 @@ class _Repo:
         self.ingested: list[str] = []
         self.refusals: list[dict[str, str | None]] = []
 
-    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
         that cannot record one no longer stands in for the repository. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain
@@ -427,6 +427,7 @@ def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascad
     publish that fails leaves the event for the next tick. The re-ingest then is a no-op (MERGE on run_id).
     """
     from lineage.api import reconcile_cron
+    from lineage.services import staged
     from medallion.schemas.events import build_run_event
 
     uri = _uri(tmp_path)
@@ -452,7 +453,7 @@ def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascad
         # destroyed the event's only durable copy -- the exact loss the outbox exists to prevent.
         still_staged_at_publish.append(len(list(outbox.list_events(uri, {}))))
 
-    monkeypatch.setattr(reconcile_cron.dapr_publish, "publish_event", _fake_publish)
+    monkeypatch.setattr(staged.dapr_publish, "publish_event", _fake_publish)
 
     outcome = asyncio.run(reconcile_cron._drain_outbox(_authorized_request(), cast("Any", _Repo()), cast("Any", _Settings(uri)), {}, object()))
 

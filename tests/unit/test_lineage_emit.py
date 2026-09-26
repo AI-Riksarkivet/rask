@@ -307,8 +307,8 @@ def test_the_dapr_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkey
     best-effort AFTER the Lance write commits, so a crash between the write and the publish loses the
     event. The data exists on storage, the graph never learns of it — and because medallion's
     `/bronze-arrival` subscription reacts to this very announcement, the whole bronze->silver->gold
-    run silently never happens. The doc names the transactional outbox as what "closes the window
-    fully", and this asserts the catalog now goes through it.
+    run silently never happens. The object-store outbox narrows that window to commit→stage, and this
+    asserts the catalog goes through it.
 
     The invariants ratchet (`test_the_set_of_bare_lineage_publishes_does_not_grow`) proves no BARE
     publish site remains, which is the structural half — but it would pass just as well if the emit

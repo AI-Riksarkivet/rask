@@ -78,8 +78,9 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # publishes was already staged (that is where the drain read it from), so it is the durable path's
     # delivery half rather than a producer skipping the outbox. Publishing the STAGED BYTES verbatim,
     # before the staged object is dropped, is what makes a recovered event restart a halted cascade
-    # instead of merely repairing the graph.
-    ("services/lineage/src/lineage/api/reconcile_cron.py", "settings.dapr_topic"): "lineage-relay",
+    # instead of merely repairing the graph. One helper makes it for the drain and for the operator's DLQ
+    # replay alike (`lineage.services.staged.republish_staged`), so the two cannot announce differently.
+    ("services/lineage/src/lineage/services/staged.py", "settings.dapr_topic"): "lineage-relay",
     # CONTROL — no longer a row here, and the reason is a change to the estate rather than to this file.
     # `DaprControlEmitter.emit` used to publish DIRECTLY; it now goes through
     # `outbox.publish_with_outbox`, which is a `_TRANSPORT_MODULE` and so is deliberately unclassified

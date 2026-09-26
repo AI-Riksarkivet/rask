@@ -320,7 +320,8 @@ class DlqEvent(BaseModel):
 
     A file's presence in the outbox means "committed write, lineage not yet confirmed delivered" — the
     at-risk set the reconcile relay drains. ``parseable=False`` marks a poison object (the relay would drop
-    it): its run_id is the filename, the rest is unknown.
+    it): its run_id is the filename, the rest is unknown. A catalog DDL change (a ``DatasetEvent``) names no
+    run, so it lists under its staged key too, with its event time and dataset but no type, job or inputs.
     """
 
     run_id: str

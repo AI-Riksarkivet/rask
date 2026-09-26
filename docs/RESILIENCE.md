@@ -75,10 +75,11 @@ semantics, so it must not undercut the slowest handler. Either way the window co
    **the lineage event is lost** — the graph under-reports that write. No corruption, but a provenance hole.
    *Mitigation (shipped):* the **B4 storage→graph reconcile** back-fills exactly this loss mode — a Dapr-cron
    sweep reads on-disk Lance versions and stamps any write the graph is missing (`/datasets/{name}/reconcile`
-   + `services.lineage.reconcile`). The **transactional outbox** (`common.outbox`, opt-in via `LINEAGE_OUTBOX_URI`)
-   closes the window fully for producers that stage the event before publishing. *Ops surface (#83):* the outbox
+   + `services.lineage.reconcile`). The **object-store outbox** (`service_kit.lakehouse.outbox`, opt-in via the
+   catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage for producers that stage the event before
+   publishing — a crash between the write and the stage is still left to the back-fill. *Ops surface (#83):* the outbox
    backlog is now viewable + replayable on demand — `GET /admin/dlq` (the saturation snapshot + the governed
-   at-risk events) and `POST /admin/dlq/{run_id}/replay` (re-ingest one event, then drop; same `can_write_data`
+   at-risk events) and `POST /admin/dlq/{run_id}/replay` (re-ingest one event, re-publish it, then drop; same `can_write_data`
    authz as a fresh ingest, audited), surfaced in the frontend at `/dlq`. This is the manual twin of the
    reconcile relay's drain — an operator no longer waits for the next tick. *Full fix:* make the **Ray job the
    durable producer** (it owns the write + the emit) — the documented direction ([`FLOW.md`](FLOW.md) §7, [`RASK-INTEGRATION.md`](RASK-INTEGRATION.md)).
@@ -208,8 +209,9 @@ PSA would reject `lineage`/`openfga-migrate` until their root init containers ar
 ## Bottom line
 
 - **Corruption:** not possible on the event path — idempotent MERGE on `run_id`.
-- **Loss:** only at the catalog outbox gap (crash between S3 write + publish). Everything downstream of a
-  successful publish is durable + replayed.
+- **Loss:** only in the commit->stage window the outbox narrows the gap to (a crash between the write and
+  the stage, or a stage that fails AND a publish that fails). Everything staged or successfully published is
+  durable + replayed.
 - **Recovery:** automatic — `RETRY` for transient faults, JetStream buffer + replay for downed services.
 - **Hardening roadmap (for prod):** ~~durable PULL consumer~~ (RETIRED — contradicts the Dapr-first
   rule; superseded by durable push cursors + Resiliency retries) · ~~Dapr `deadLetterTopic`~~

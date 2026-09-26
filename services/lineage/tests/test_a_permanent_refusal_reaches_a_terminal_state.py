@@ -106,12 +106,10 @@ def test_the_drain_records_before_it_drops() -> None:
     from pathlib import Path
 
     source = Path("services/lineage/src/lineage/api/reconcile_cron.py").read_text()
-    branch = source[source.index("except PermissionDeniedError") :]
-    branch = (
-        branch[: branch.index("except ") + len("except ") + branch[branch.index("except ") + len("except ") :].index("except ")]
-        if branch.count("except ") > 1
-        else branch
-    )
+    # From the refusal handler to its SIBLING handler at the same indentation: the branch has a `try` of
+    # its own inside it, and prose mentioning `except` must not end the slice either.
+    branch = source[source.index("        except PermissionDeniedError") :]
+    branch = branch[: branch.index("\n        except Exception as exc:")]
 
     assert "record_refusal" in branch, "the refusal branch does not record the verdict, so deleting would be data loss"
     assert "drop_event" in branch, "the refusal branch never retires the object, so it is re-refused every tick forever"

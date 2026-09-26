@@ -69,7 +69,7 @@ class _Repo:
         self.ingested: list[Any] = []
         self.refusals: list[dict[str, str | None]] = []
 
-    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
         that cannot record one no longer stands in for the repository. Captured rather than ignored:
         several of these tests assert what the refusal path did, and a silent no-op would let a drain
@@ -156,7 +156,7 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
 
 def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None) -> Any:
     flt = _filter(_request(fga=object()), s, token)
-    return dlq.replay_dlq(run_id, _request(fga=object()), repo, s, token, flt)
+    return dlq.replay_dlq(run_id, _request(fga=object()), repo, s, token, flt, None)
 
 
 def test_replay_reingests_and_drops(tmp_path: Path) -> None:

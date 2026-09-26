@@ -19,9 +19,9 @@ fail a catalog write. Two transports sit behind the same :class:`LineageEmitter`
   retry budget dead-letter-parks on a ``dlq.*`` topic (Dapr-native DLQ, default-on via the
   ``dapr.resiliency.enabled`` chart resiliency; the subscriber's ``/dlq-event`` route ERROR-logs + acks —
   park-and-alert, not replay — docs/RESILIENCE.md gap #2, fixed 2026-07-12). The lineage
-  service subscribes via its
-  own sidecar. The outbox gap (crash between the Lance write and publish) remains: the catalog has no
-  DB for a transactional outbox; the durable producer is the Ray job (future), per microservices.md.
+  service subscribes via its own sidecar. With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
+  object-store outbox (``service_kit.lakehouse.outbox``) before the publish, which narrows the loss window
+  to commit→stage: a crash between the Lance write and the stage still loses it.
 """
 
 from __future__ import annotations
@@ -817,12 +817,11 @@ class DaprEmitter(_BaseLineageEmitter):
         event = self._signed(event)
         try:
             # STAGED, then published, then dropped on ack (#4). The emit is inline-awaited and
-            # best-effort AFTER the Lance write commits, so a crash between the write and the publish
-            # used to lose the event outright: the data exists on storage and the graph never learns of
+            # best-effort AFTER the Lance write commits, so an unstaged event is lost outright to a crash
+            # between the write and the publish: the data exists on storage and the graph never learns of
             # it. Worse than a provenance hole — the medallion `/bronze-arrival` subscription reacts to
             # this announcement, so a lost one means the whole bronze->silver->gold run silently never
-            # happens. docs/RESILIENCE.md gap #1 names this the estate's #1 weakness and names the
-            # transactional outbox as what "closes the window fully".
+            # happens. Staging narrows that window to commit→stage; it does not close it.
             #
             # Degrades to exactly the previous plain publish when `outbox_uri` is empty, which is the
             # default — so this is inert until a deployment sets LANCE_LINEAGE_OUTBOX_URI. Bounded by

@@ -1,16 +1,21 @@
-"""Durable object-store outbox for lineage events (#4) — closes the commit→publish loss window.
+"""Durable object-store outbox for lineage events (#4) — narrows the loss window to commit→stage.
 
-Today a producer commits its Lance write and then does a FIRE-AND-FORGET Dapr publish (the sidecar accepts
-the RPC but there is no broker/consumer ack). A crash between the commit and a durable delivery loses the
+A producer commits its Lance write and then does a FIRE-AND-FORGET Dapr publish (the sidecar accepts the
+RPC but there is no broker/consumer ack). A crash between the commit and a durable delivery loses the
 lineage event: the data landed but the graph never learns of it. The DLQ only catches events that were
 published *then* failed delivery; the reconcile back-fill only recovers version+schema, not the full event.
 
-The outbox closes it: the producer stages the FULL ``RunEvent`` JSON as an object under
-``<outbox_uri>/<run_id>.json`` BEFORE the publish, and deletes it once the publish returns. Because the
-stage happens AFTER the commit, every surviving object corresponds to a real committed write (no phantoms).
-If the process crashes before the delete — or the publish never lands — the object survives and the lineage
-service's reconcile relay re-ingests it (idempotent on ``run_id``) and deletes it. Strictly richer than the
-version+schema back-fill: inputs, author, and columnLineage are all preserved.
+The outbox narrows it: the producer stages the FULL event JSON — a ``RunEvent``, or the ``DatasetEvent``
+every catalog DDL change is — under ``<outbox_uri>/<key>.json`` (:func:`_object_key`) BEFORE the publish,
+and deletes it once the publish returns. Because the stage happens AFTER the commit, every surviving object
+corresponds to a real committed write (no phantoms). If the process crashes before the delete — or the
+publish never lands — the object survives and the lineage service's reconcile relay re-ingests it
+idempotently and deletes it. Strictly richer than the version+schema back-fill: inputs, author, and
+columnLineage are all preserved.
+
+NARROWED, NOT CLOSED. A crash between the commit and the stage loses the event to everything but the
+version+schema back-fill. A stage that fails is counted and the call degrades to a plain publish, so that
+event is unprotected and is lost only if the publish fails too.
 
 Storage-agnostic: an ``s3://`` outbox uses an ``S3FileSystem`` built from the SAME ``storage_options`` the
 producer/relay already use; a local/``file://`` path uses the local filesystem (dev + unit tests).
@@ -242,7 +247,8 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
     :func:`resolve_event` exists. Since `_object_key` widened, one run stages ``<run_id>@COMPLETE`` and
     ``<run_id>@FAIL`` as separate objects, so the filename is ``<run_id>@<eventType>`` and a caller that
     treats it as a run id is comparing a key to an id. A caller wanting the RUN reads it off the
-    parsed payload (``event.run.run_id``), the way `dlq._summary` does.
+    parsed payload, the way `dlq._summary` does — and a catalog DDL change (a ``DatasetEvent``) names no
+    run at all, so the key is the only name it has.
 
     BOUNDED (audit finding, docs/DECISIONS.md P1.2 (bounded drain)): the drain previously materialised the
     ENTIRE prefix into memory inside the single-flight lock, so a backlog (exactly the situation the outbox

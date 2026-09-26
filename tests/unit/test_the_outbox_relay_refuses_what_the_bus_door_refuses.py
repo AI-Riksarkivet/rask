@@ -26,10 +26,11 @@ THE SAME FUNCTION, NOT A SECOND COPY. `enforce_bus_authz` already authorizes AS 
 stamped, which is the only principal a cron tick has; reimplementing "may you record this" here is how
 the two doors would drift, and that drift is the defect this closes rather than repeats.
 
-A REFUSAL IS LEFT STAGED, NOT DROPPED. The drain separates a malformed object (poison — dropped,
+A REFUSAL IS RECORDED BEFORE IT IS RETIRED. The drain separates a malformed object (poison — dropped,
 because it can wedge the drain forever) from a failure (stranded — counted, left staged for the next
-tick). A governance refusal is neither malformed nor transient, and destroying the only durable copy of
-a committed write's provenance is the wrong answer to "you may not record this": the object stays.
+tick). A governance refusal is neither malformed nor transient, so the verdict and the event go to
+`lineage_outbox_refusals` first ([[LH-182]]) and only then is the object dropped: never destroy the only
+durable copy of a committed write's provenance to answer "you may not record this".
 
 IT IS COUNTED AS `refused`, NOT `stranded` ([[LH-004]]). `stranded` is documented as "a tick FAILED
 while it recovered everything else", and a refusal is the opposite: well-formed, deterministic, and no
@@ -45,6 +46,13 @@ from typing import Any
 import pytest
 
 from lineage.api import reconcile_cron
+from lineage.core.config import LineageSettings
+
+
+def _governed_settings(outbox_uri: str) -> LineageSettings:
+    """The real settings, FGA on — the whole point: the other executing tests leave it off."""
+    auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
+    return LineageSettings.model_validate({"database_url": "postgresql://x/y", "outbox_uri": outbox_uri, "fga_enabled": True, **auth})
 
 
 def test_the_relay_authorizes_before_it_ingests() -> None:
@@ -55,26 +63,72 @@ def test_the_relay_authorizes_before_it_ingests() -> None:
         "the outbox relay ingests staged events with no authorization, so a producer that cannot get an "
         "event past the bus door can stage it instead — the gate is skipped, not weakened"
     )
-    # The CALL, not the word: `ingest_event` appears in this function's own docstring first, so indexing
-    # the bare name compared the gate against a sentence rather than against the statement it guards.
-    ingest_at = body.index("repository.ingest_event(")
-    assert body.index("await enforce_bus_authz(") < ingest_at, "the check must run BEFORE the event reaches the graph"
+    # The CALLS, not the words: `ingest_event` appears in this function's own docstring first, so indexing
+    # the bare name compared the gate against a sentence rather than against the statement it guards. BOTH
+    # doors: a catalog DDL change reaches the graph through `ingest_dataset_event`.
+    gate_at = body.index("await enforce_bus_authz(")
+    for door in ("repository.ingest_event(", "repository.ingest_dataset_event("):
+        assert gate_at < body.index(door), f"the check must run BEFORE `{door}` reaches the graph"
 
 
-def test_a_refused_event_is_counted_apart_and_not_dropped() -> None:
+def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The drain's outcomes mean different things, and a refusal is its own.
 
     Poison is DROPPED because a malformed object wedges the drain forever. A refusal is well-formed and
-    deterministic: dropping it would destroy the only durable copy of a committed write's provenance to
-    answer a governance question. It is counted — as `refused`, not `stranded` — and left staged.
+    deterministic, so it lands on `refused`, never `stranded`, and its object is retired only AFTER the
+    verdict and the event are recorded ([[LH-182]]): a drop first would destroy the only durable copy of
+    a committed write's provenance. DRIVEN, with the order observed at the two calls themselves.
     """
-    body = inspect.getsource(reconcile_cron._drain_outbox)
+    import asyncio
+    import json as _json
+    from types import SimpleNamespace
+    from typing import cast
 
-    assert "PermissionDeniedError" in body, "a refusal must be caught distinctly — it is neither poison nor a transient failure"
-    refusal_at = body.index("PermissionDeniedError")
-    tail = body[refusal_at : refusal_at + 1400]
-    assert "refused += 1" in tail, "a refused event must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening"
-    assert "drop_event" not in tail, "a refusal must NOT delete the staged object — that is the poison path, and this is not poison"
+    from lance_namespace import PermissionDeniedError
+
+    from medallion.schemas.events import build_run_event
+    from service_kit.lakehouse import outbox
+
+    async def _refuse(*_args: object, **_kwargs: object) -> None:
+        raise PermissionDeniedError("can_write_data required")
+
+    steps: list[str] = []
+    real_drop = outbox.drop_event
+
+    def _drop(*args: Any) -> None:  # noqa: ANN401 — forwards the drain's own arguments
+        steps.append("drop")
+        real_drop(*args)
+
+    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refuse)
+    monkeypatch.setattr(outbox, "drop_event", _drop)
+
+    uri = f"file://{tmp_path}/_lineage_outbox"
+    event = build_run_event(
+        operation="ingest_events",
+        author="mallory",
+        job_namespace="medallion",
+        inputs=[("bronze", "bronze$events")],
+        output_namespace="bronze",
+        output_name="bronze$events",
+        version=2,
+        token="order-probe",
+    )
+    outbox.stage_event(uri, {}, event["run"]["runId"], _json.dumps(event))
+
+    class _Repo:
+        async def ingest_event(self, _ev: Any) -> None:  # noqa: ANN401
+            steps.append("ingest")
+
+        async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
+            steps.append("record")
+
+    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
+    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _Repo()), _governed_settings(uri), {}))
+
+    assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (
+        f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"
+    )
+    assert steps == ["record", "drop"], f"the refusal path ran {steps}: the object must be retired only after its verdict is recorded"
 
 
 def test_the_cron_can_supply_the_principal_the_gate_needs() -> None:
@@ -145,21 +199,13 @@ def test_a_refusal_is_HANDLED_and_not_a_crash(tmp_path: Any, monkeypatch: pytest
         async def ingest_event(self, ev: Any) -> None:  # pragma: no cover — a refusal must never reach here
             self.ingested.append(ev.run.run_id)
 
-        async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+        async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
             self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
-
-    class _Settings:
-        outbox_uri = uri
-        outbox_drain_limit = 500
-        dapr_pubsub = "lineage-pubsub"
-        dapr_topic = "lineage.events.v1"
-        dapr_publish_timeout_seconds = 5.0
-        fga_enabled = True  # the whole point: the other executing tests leave this OFF
 
     repo = _Repo()
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
 
-    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), cast("Any", _Settings()), {}))
+    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), _governed_settings(uri), {}))
 
     assert outcome.refused == 1, "a refused event must be counted as refused"
     assert outcome.stranded == 0, "`stranded` means a tick that FAILED; a governance refusal is not one"

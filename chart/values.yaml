@@ -479,8 +479,9 @@ services:
       schedule: "@every 300s" # demo cadence (prod: e.g. "0 */15 * * * *")
     # #4 transactional outbox: producers stage each lineage event to s3://<minio.bucket>/_lineage_outbox
     # BEFORE the fire-and-forget publish; the reconcile sweep DRAINS any survivor (a crash between the Lance
-    # commit and the publish), re-ingesting the FULL event (inputs/author/columnLineage) — closing the loss
-    # window the DLQ + version-only back-fill cannot. Requires reconcile.enabled (the drain runs in the sweep).
+    # commit and the publish), re-ingesting the FULL event (inputs/author/columnLineage) — narrowing the loss
+    # window to commit->stage, which the DLQ + version-only back-fill cannot. Requires reconcile.enabled (the
+    # drain runs in the sweep).
     #
     # DEFAULT ON, with reconcile above: staging and draining are ONE mechanism, and half of it is worse
     # than either half alone — reconcile without the outbox can only back-fill that a version EXISTS

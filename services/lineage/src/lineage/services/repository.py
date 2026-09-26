@@ -65,7 +65,7 @@ from lineage.schemas import (
 from lineage.services import cypher as cy
 from lineage.services import postgres as pg
 from service_kit.lakehouse.schema import SchemaFields
-from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for, static_event_id
+from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
 
 
 log = logging.getLogger(__name__)
@@ -430,7 +430,7 @@ class LineageRepository:
 
         THE FEED ROW STILL CARRIES AN IDENTITY, derived rather than absent. Both dedup indexes key on
         `run_id` and SQL NULL never equals NULL, so a row carrying none is appended again on every
-        at-least-once redelivery. `static_event_id` derives one from the event, and the notifications
+        at-least-once redelivery. `DatasetEvent.feed_id` derives one from the event, and the notifications
         plane derives the SAME id from its own copy — which is what makes one change land one pointer
         across two lanes. The stored `event` stays spec-correct and carries no `eventType` at all; the
         feed's own column reads COMPLETE because a static fact has no other state, and a non-terminal
@@ -456,13 +456,7 @@ class LineageRepository:
             # label tables, then public.lineage_events. Two concurrent ingests cannot form a cycle.
             await self._insert_feed_row(
                 conn,
-                run_id=static_event_id(
-                    producer=event.producer or "",
-                    namespace=event.dataset.namespace,
-                    name=event.dataset.name,
-                    operation=event.operation or "",
-                    event_time=event.event_time,
-                ),
+                run_id=event.feed_id,
                 event_type=event.feed_event_type,
                 event_time=event.event_time,
                 job=None,
@@ -1161,7 +1155,7 @@ class LineageRepository:
                     await run_cypher(conn, self._graph, delete, {})
         return count
 
-    async def record_refusal(self, *, outbox_key: str, run_id: str, author: str | None, reason: str, event_json: str) -> None:
+    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         """Preserve a settled governance refusal, so the staged object can be retired without data loss.
 
         [[LH-182]] A REFUSAL IS A LOSS RECORD, not an error. Someone staged provenance they were not
@@ -1173,7 +1167,8 @@ class LineageRepository:
         `author` IS OPTIONAL BY DESIGN, matching the nullable column. `author_sub_from_payload` answers
         ``None`` when the staged document names nobody it can verify, and on a loss record naming the
         wrong person is worse than naming none — so the absence is stored rather than papered over with
-        a placeholder a reader would mistake for a subject.
+        a placeholder a reader would mistake for a subject. `run_id` is ``None`` for a catalog DDL change
+        (a `DatasetEvent` names no run); `outbox_key` identifies it either way.
 
         UPSERT, because the drain re-reads the outbox every tick: a crash between this insert and the
         delete leaves the object in place, so the next tick WILL re-refuse an event already recorded.

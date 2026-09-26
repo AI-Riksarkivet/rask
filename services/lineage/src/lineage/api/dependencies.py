@@ -22,11 +22,12 @@ RepositoryDep = Annotated[LineageRepository, Depends(get_repository)]
 
 
 def get_publisher(request: Request) -> object | None:
-    """The relay's Dapr publisher, or ``None`` when this deployment runs without the outbox.
+    """The Dapr publisher that re-announces a recovered outbox event, or ``None`` without the outbox.
 
-    ``None`` is a real answer, not a missing dependency: the publisher exists only to re-publish drained
-    events, and a deployment with no ``outbox_uri`` never drains. Returning it rather than raising keeps
-    the drain's own guard the single place that decides whether a re-publish is possible.
+    ``None`` is a real answer, not a missing dependency: the publisher exists only to re-publish what the
+    relay drains or an operator replays, and a deployment with no ``outbox_uri`` does neither. Returning it
+    rather than raising keeps ``services.staged.republish_staged`` the single place that decides whether a
+    re-publish is possible.
     """
     return getattr(request.app.state, "dapr", None)
 

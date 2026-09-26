@@ -12,6 +12,7 @@ from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lineage.schemas import SchemaField
+from service_kit.openlineage import static_event_id
 
 
 _MODEL = ConfigDict(extra="allow", populate_by_name=True)
@@ -428,6 +429,23 @@ class DatasetEvent(BaseModel):
         return "COMPLETE"
 
     @property
+    def feed_id(self) -> str:
+        """The id the durable feed stores this change under — derived from its content, never minted.
+
+        A static change has no run id, and the feed dedups on ``(run_id, event_type, event_time)``, so it
+        is stored under :func:`service_kit.openlineage.static_event_id`. ONE derivation for the writer
+        (`LineageRepository.ingest_dataset_event`) and the reader that asks whether this exact event is
+        already there (`api.fga_deps._is_replay`), so the two cannot look in different places.
+        """
+        return static_event_id(
+            producer=self.producer or "",
+            namespace=self.dataset.namespace,
+            name=self.dataset.name,
+            operation=self.operation or "",
+            event_time=self.event_time,
+        )
+
+    @property
     def is_success(self) -> bool:
         """Always true: a static metadata change is a fact, not an attempt that could still fail.
 
@@ -562,6 +580,11 @@ class RunEvent(BaseModel):
     def feed_event_type(self) -> str:
         """The state the durable feed records this event under — for a run, its own wire state."""
         return self.event_type
+
+    @property
+    def feed_id(self) -> str | None:
+        """The id the durable feed stores this event under — for a run, its run id."""
+        return self.run.run_id
 
     @property
     def run_id(self) -> str | None:

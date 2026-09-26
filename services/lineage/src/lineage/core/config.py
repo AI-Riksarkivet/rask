@@ -88,6 +88,13 @@ class LineageSettings(GovernedAuthSettings, BaseSettings):
     # chosen rather than inherited.
     privileged_subjects: str = Field(default="", alias="LINEAGE_PRIVILEGED_SUBJECTS")
 
+    # WHO THE CATALOG IS when it signs what it emits — the name its signature carries (the chart's
+    # `catalog.serviceIdentity`, which the catalog reads as LANCE_SERVICE_IDENTITY). The bus gate admits a
+    # DROP it verifies as this signer without re-deriving the author's grants (`fga_deps.enforce_bus_authz`),
+    # so the two readers must name the same identity; pinned by
+    # `tests/unit/test_a_catalog_drop_is_admitted_on_the_catalogs_signature.py`.
+    catalog_service_identity: str = Field(default="service-catalog", alias="LINEAGE_CATALOG_SERVICE_IDENTITY")
+
     # --- Dapr pub/sub durable ingest (opt-in) — the catalog publishes to the Dapr pubsub.jetstream
     # component and the sidecar delivers each event to this service's subscription handler over HTTP, so
     # a lineage outage never loses provenance (the sidecar persists to NATS + redelivers per backOff).
