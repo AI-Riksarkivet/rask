@@ -17,7 +17,7 @@ THE REFUSAL LEGS ARE THE POINT, and both are asserted rather than assumed from t
 * a location that still HOLDS objects is refused and named — deleting it is the stranding this row
   exists to avoid, and today's 989/989 is not tomorrow's;
 * a probe that FAILS is refused too. "We could not tell" reads as the refusal everywhere else in this
-  estate's guards, for the reason `_refuse_a_referring_datasets_source` gives — what it guards is
+  estate's guards, for the reason `refuse_a_referring_datasets_source` gives — what it guards is
   unrecoverable.
 """
 

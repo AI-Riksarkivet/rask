@@ -12,8 +12,10 @@ open on the request path, so the mint-and-discard happens per call rather than p
 
 A SESSION IS NOT A HANDLE CACHE, and the distinction is the whole reason this is safe to do. Caching a
 DATASET HANDLE pins a version and needs a freshness contract; a `lance.Session`'s keys carry
-`(uri, version, etag)`, so a compaction writes NEW keys and a stale read is not expressible. That is
-recorded in `service_kit.lakehouse.lance_session`, along with its thread-safety under concurrent opens.
+`(uri, version, etag)`, so a compaction writes NEW keys and a new version is never served stale. An old
+version whose data files were reclaimed can be, which is why evidence reads open on
+`fresh_lance_session`. Both are recorded in `service_kit.lakehouse.lance_session`, with its
+thread-safety under concurrent opens.
 
 THE STRUCTURAL HALF LIVES IN `tests/unit/test_no_lakehouse_service_opens_lance_unbounded.py`, which
 holds all four lakehouse services to the rule at once — one gate rather than four copies that drift.
@@ -117,3 +119,23 @@ def test_the_caps_are_configurable_per_deployment(attr: str) -> None:
     from catalog.core.config import Settings
 
     assert hasattr(Settings.model_fields.get(attr), "default"), f"{attr} is not a setting"
+
+
+def test_the_evidence_session_is_held_to_its_own_small_bound(tmp_path: Path) -> None:
+    """`fresh_lance_session` is a SECOND session beside the shared one, which the cgroup clamp sizes for
+    ONE; at the shared caps each erasure would add a whole budget. The verification reads every retained
+    version once, so it gains nothing from a cache: measured on pylance 12.0.0 over these 251 versions of
+    growing fragment counts, a session at the shared caps held 23.5 MB."""
+    from catalog.core.config import fresh_lance_session
+
+    uri = str(tmp_path / "t.lance")
+    lance.write_dataset(pa.table({"id": list(range(100))}), uri)
+    for start in range(100, 25_100, 100):
+        lance.write_dataset(pa.table({"id": list(range(start, start + 100))}), uri, mode="append")
+
+    session = fresh_lance_session()
+    root = lance.dataset(uri, session=session)
+    for entry in root.versions():
+        root.checkout_version(entry["version"]).count_rows(filter="id = -1")
+
+    assert session.size_bytes() <= 16 << 20, f"{session.size_bytes()} bytes held by one erasure's evidence session"

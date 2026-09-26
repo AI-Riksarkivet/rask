@@ -11,8 +11,11 @@ The fix is ONE ``lance.Session`` per process, capped explicitly:
 
 - The caps are **LRU soft bounds**, not hard ceilings — never assert a hard total against them.
 - Session cache keys are ``(uri, version, etag)``, so a compaction bumping a dataset's version
-  writes NEW keys: there is no freshness contract to design and no stale-read window to reason
-  about. This is also why a shared session is safe for a service that MUTATES what it opens.
+  writes NEW keys and a new version is never served stale, which is why a shared session is safe for
+  a service that MUTATES what it opens. An OLD version can be: measured on pylance 12.0.0, a version
+  the session had read, whose manifest cleanup kept and whose data file it deleted, still answered its
+  rows through the session while a new session raised "Not found". A read that is EVIDENCE of what
+  storage holds opens on a session nothing has read through (the catalog's ``fresh_lance_session``).
 - ``lance.Session`` is thread-safe (verified: 8 threads × 50 open+checkout, zero errors), which
   the maintenance service needs — its sweep and reconcile crons hold separate locks and overlap.
 

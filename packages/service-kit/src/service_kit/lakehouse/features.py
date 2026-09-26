@@ -598,6 +598,28 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
     return CompactionBases(bases=bases, data_resolves_through_a_base=resolves)
 
 
+def data_file_base_paths(ds: FragmentCarrier) -> set[str]:
+    """The path of every base some data file of ``ds`` resolves through, as the manifest states it.
+
+    :class:`CompactionBases` answers WHETHER any file lives under a base; a caller that must tell one
+    base from another needs WHICH. ``DataFile.base_id`` names the base and ``ds._ds.base_paths()`` maps
+    it to its path, the accessor :func:`manifest_base_path_refs` reads.
+
+    RAISES when either cannot be read, or when a file names a base the manifest does not declare: which
+    base a file lives under is the whole question, so unknown must reach the caller as unknown.
+    """
+    through = {file.base_id for fragment in ds.get_fragments() for file in fragment.data_files() if file.base_id is not None}
+    if not through:
+        return set()
+    accessor = getattr(getattr(ds, "_ds", None), "base_paths", None)
+    if accessor is None:
+        raise TypeError(f"{type(ds).__name__} cannot map the bases {sorted(through)} its data files name")
+    declared = {int(base_id): str(base.path) for base_id, base in accessor().items()}
+    if undeclared := through - declared.keys():
+        raise ValueError(f"data files name bases {sorted(undeclared)} the manifest does not declare")
+    return {declared[base_id] for base_id in through}
+
+
 #: What an object store says when the credential is the problem rather than the path. Matched on the
 #: MESSAGE because that is all `pyarrow.fs` surfaces — the same constraint, and the same approach, as
 #: `_OPEN_REFUSAL_MARKERS` for pylance's own refusals.

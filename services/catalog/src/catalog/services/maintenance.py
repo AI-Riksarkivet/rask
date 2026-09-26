@@ -67,7 +67,7 @@ COMPACTION_BOUND: Final[dict[str, int]] = {"batch_size": 64, "num_threads": 2, "
 # that only previews must not claim it can reclaim.
 #
 # `uri` is deliberately ABSENT from all of them and still read through `getattr(ds, "uri", "")`. A
-# handle that cannot say where it lives is a case `_refuse_a_referring_datasets_source` REFUSES on
+# handle that cannot say where it lives is a case `refuse_a_referring_datasets_source` REFUSES on
 # purpose; declaring the attribute would type that branch out of existence.
 # --------------------------------------------------------------------------- #
 
@@ -155,7 +155,7 @@ def require_compactable(ds: CompactableDataset, storage_options: StorageOptions,
     dataset root" — a wrong PERMIT on a real clone, the one direction this gate must never take.
 
     **Somebody else's layout (#114) is the other half, and no flag can see it** — see
-    :func:`_refuse_a_referring_datasets_source`.
+    :func:`refuse_a_referring_datasets_source`.
     """
     reader, writer = manifest_feature_flags(ds)
     location = str(getattr(ds, "uri", "") or "")
@@ -170,7 +170,7 @@ def require_compactable(ds: CompactableDataset, storage_options: StorageOptions,
             f"maintenance refused: {reason}. Compacting here could rewrite bytes this dataset does not own — "
             "the sweep's compaction gate weighs this same evidence and refuses it too."
         )
-    _refuse_a_referring_datasets_source(ds, protected)
+    refuse_a_referring_datasets_source(ds, protected)
 
 
 def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) -> None:
@@ -193,10 +193,10 @@ def require_reclaimable(ds: ManifestCarrier, protected: BaseRefs | None = None) 
             f"maintenance refused: {reason}. Reclaiming versions here would act on a layout this pass cannot correctly rewrite — "
             "the sweep's version-reclamation gate refuses it too."
         )
-    _refuse_a_referring_datasets_source(ds, protected)
+    refuse_a_referring_datasets_source(ds, protected)
 
 
-def _refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) -> None:
+def refuse_a_referring_datasets_source(ds: object, protected: BaseRefs | None) -> None:
     """#114: refuse a dataset ANOTHER one resolves its files through — the half no flag check can see.
 
     Flag 16 marks the dataset that SPANS bases — the CLONE. The dataset in danger here is the SOURCE,

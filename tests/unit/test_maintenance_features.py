@@ -17,6 +17,7 @@ from __future__ import annotations
 import pathlib
 import re
 from collections.abc import Callable
+from typing import Any, cast
 
 import lance
 import pyarrow as pa
@@ -336,6 +337,57 @@ def test_DATA_LIVING_UNDER_A_BASE_refuses_even_when_the_base_is_no_dataset_root(
     )
     assert gathered.data_resolves_through_a_base is True
     assert features.describe_compaction_unsupported_flags(*features.manifest_feature_flags(ds), gathered) is not None
+
+
+def test_the_bases_data_files_resolve_through_are_named(tmp_path: pathlib.Path) -> None:
+    """WHICH base, not only whether: a branch's inherited files resolve through the table's own root, and
+    `target_bases` lands a dataset's files under a declared prefix (both measured on pylance 12.0.0)."""
+    alt = tmp_path / "altbase"
+    alt.mkdir()
+    uri = str(tmp_path / "targeted.lance")
+    lance.write_dataset(_table(), uri, initial_bases=[DatasetBasePath(str(alt), "alt")])
+    assert features.data_file_base_paths(lance.dataset(uri)) == set(), "every file under its own root names no base"
+    lance.write_dataset(_table(), uri, mode="append", target_bases=["alt"])
+    branch = lance.dataset(uri).create_branch("work")
+
+    assert features.data_file_base_paths(lance.dataset(uri)) == {str(alt)}
+    assert features.data_file_base_paths(branch) == {str(alt), uri}
+
+
+class _File:
+    base_id = 3
+
+
+class _Fragment:
+    def data_files(self) -> list[_File]:
+        return [_File()]
+
+
+class _Unmapped:
+    """Fragments naming base 3, and a manifest accessor that declares no such base."""
+
+    class _Handle:
+        def base_paths(self) -> dict[int, object]:
+            return {}
+
+    _ds = _Handle()
+
+    def get_fragments(self, filter: object = None) -> list[_Fragment]:  # noqa: A002 — pylance's own keyword
+        return [_Fragment()]
+
+
+class _NoAccessor:
+    _ds = object()
+
+    def get_fragments(self, filter: object = None) -> list[_Fragment]:  # noqa: A002 — pylance's own keyword
+        return [_Fragment()]
+
+
+def test_a_base_that_cannot_be_mapped_is_unknown_not_empty() -> None:
+    with pytest.raises(ValueError, match=r"bases \[3\] the manifest does not declare"):
+        features.data_file_base_paths(cast("Any", _Unmapped()))
+    with pytest.raises(TypeError, match="cannot map"):
+        features.data_file_base_paths(cast("Any", _NoAccessor()))
 
 
 def test_EVERY_UNREADABLE_reading_keeps_the_flag_16_refusal() -> None:

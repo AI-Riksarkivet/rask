@@ -716,18 +716,46 @@ def shared_lance_session() -> lance.Session:
     and a set of caps that describe a container the process is not running in. `rask-maintenance` was
     OOMKilled (exit 137) on 2026-09-10 before it clamped, which is why this is the shape it already uses.
 
-    NOT A HANDLE CACHE, and that distinction is why this needs no freshness contract. Caching a DATASET
-    pins a version; a `Session`'s keys carry `(uri, version, etag)`, so a compaction writes NEW keys and
-    a stale read is not expressible. `service_kit.lakehouse.lance_session` records that and its
-    thread-safety under concurrent opens.
+    NOT A HANDLE CACHE. Caching a DATASET pins a version; a `Session`'s keys carry `(uri, version, etag)`,
+    so a compaction writes NEW keys and a new version is never served stale. An OLD version is: measured
+    on pylance 12.0.0, a version this session has read, whose manifest cleanup kept, keeps answering
+    after cleanup deletes its data file, which is why a read that must see storage opens on
+    :func:`fresh_lance_session` instead.
+    `service_kit.lakehouse.lance_session` records its thread-safety under concurrent opens.
 
     ONE OBJECT per cap pair: `lance_session` is `@cache`d on its arguments, so every caller here gets
     the same session and the opens actually share a cache rather than each minting one.
     """
-    from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
+    from service_kit.lakehouse.lance_session import lance_session
+
+    return lance_session(*_affordable_caps())
+
+
+#: Each cache of an evidence session, at the floor `LanceSessionCaps` admits. Fixed, not clamped: see
+#: :func:`fresh_lance_session`.
+_EVIDENCE_CACHE_BYTES = 8 << 20
+
+
+def fresh_lance_session() -> lance.Session:
+    """A session nothing else has read through, for a read that is EVIDENCE — 8 MiB per cache, fixed.
+
+    The erasure's verification is the one such read today: it must report what storage holds, and the
+    shared session can answer a version whose files are gone (see :func:`shared_lance_session`).
+
+    OUTSIDE THE SHARED BUDGET, which the cgroup clamp sizes for ONE session: at those caps every
+    concurrent erasure would add a whole budget. It reads each retained version once, so a cache buys
+    it nothing, and the bound is 16 MiB per erasure in flight. Measured on pylance 12.0.0 over 301
+    versions: 34.9 MB at the shared caps, 8.4 MB at these.
+    """
+    import lance
+
+    return lance.Session(metadata_cache_size_bytes=_EVIDENCE_CACHE_BYTES, index_cache_size_bytes=_EVIDENCE_CACHE_BYTES)
+
+
+def _affordable_caps() -> tuple[int, int]:
+    """The configured cache caps, clamped from the cgroup rather than by lowering the defaults, so they
+    track the pod's real limit instead of a literal somebody has to remember to change."""
+    from service_kit.lakehouse.lance_session import affordable_cache_bytes
 
     caps = _session_caps()
-    # Clamped from the cgroup rather than by lowering the defaults, so the caps track the pod's real
-    # limit instead of a literal somebody has to remember to change.
-    metadata, index = affordable_cache_bytes(caps.lance_metadata_cache_mb << 20, caps.lance_index_cache_mb << 20)
-    return lance_session(metadata, index)
+    return affordable_cache_bytes(caps.lance_metadata_cache_mb << 20, caps.lance_index_cache_mb << 20)

@@ -661,8 +661,9 @@ def shared_lance_session() -> lance.Session:
     repeated opens grow a shared session's `size_bytes` and leave a bare open's flat.
 
     NOT A HANDLE CACHE. Caching a DATASET pins a version; a `Session`'s keys carry `(uri, version, etag)`,
-    so a compaction writes NEW keys and a stale read is not expressible — which is why this needs no
-    freshness contract. `service_kit.lakehouse.lance_session` records that and its thread-safety.
+    so a compaction writes NEW keys and a new version is never served stale — which is why this needs no
+    freshness contract. An old version whose data files were reclaimed can still be answered from it;
+    `service_kit.lakehouse.lance_session` records that measurement and its thread-safety.
 
     Clamped from the cgroup rather than by lowering the defaults, because a literal cannot track
     `resources.limits.memory`. `rask-maintenance` was OOMKilled (exit 137) on 2026-09-10 before it

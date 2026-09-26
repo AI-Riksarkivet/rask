@@ -566,7 +566,8 @@ def shared_lance_session() -> lance.Session:
     tick's second dataset (and the orphan scan's 500 version checkouts) HIT the cache instead of
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
     the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
-    so a compaction bumping a version writes new keys and freshness needs no design."""
+    so a compaction bumping a version writes new keys and a new version is never served stale. An old
+    version whose data files were reclaimed can be (`service_kit.lakehouse.lance_session`)."""
     from service_kit.lakehouse.lance_session import affordable_cache_bytes, lance_session
 
     settings = get_settings()

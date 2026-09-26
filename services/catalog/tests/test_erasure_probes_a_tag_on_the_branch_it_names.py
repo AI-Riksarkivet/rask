@@ -26,6 +26,7 @@ from pathlib import Path
 
 import lance
 import pyarrow as pa
+import pytest
 
 from catalog.services.erasure import ErasureReport, erase
 
@@ -40,7 +41,15 @@ def _rows(*names: str) -> pa.Table:
 
 
 def _erase(uri: str) -> ErasureReport:
-    return erase(lance.dataset(uri), table="acme-bronze$subjects", predicate=_PREDICATE, retention=_NOW)
+    return erase(
+        lance.dataset(uri),
+        storage_options={},
+        protected=None,
+        reopen=lambda: lance.dataset(uri),
+        table="acme-bronze$subjects",
+        predicate=_PREDICATE,
+        retention=_NOW,
+    )
 
 
 def _holds_subject(uri: str, reference: str | tuple[str | None, int]) -> bool:
@@ -97,39 +106,48 @@ def test_a_BRANCH_tag_that_never_held_the_subject_is_not_dropped_on_mains_eviden
 def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> None:
     """A retained tag names a version of ITS branch, so ``trained`` on ``clean`` v2 pins nothing on main v2.
 
-    Main v2 survives holding the subject because ``work`` stands on it. ``trained`` names ``clean`` v2 —
-    the same number, a different snapshot — so listing it would send an operator with a deadline to
-    delete a clean reproducibility pointer that frees nothing. ``kept`` is named because Lance will not
-    delete ``work`` while a tag names it.
+    Main v2 survives holding the subject because ``kept`` keeps work v3, which stands on its files.
+    ``trained`` names ``clean`` v2 — the same number, a different snapshot — so listing it would send an
+    operator with a deadline to delete a clean reproducibility pointer that frees nothing; and work's
+    head was rewritten, so naming ``work`` would destroy a working ref for nothing too.
     """
     uri = _clean_branch_tag_beside_a_pinning_branch(tmp_path)
 
     report = _erase(uri)
 
     assert report.residual_versions == ["main@2"], report.residual_versions
-    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", "work@3"), ("branch:work", "main@2")]
+    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:kept", "work@3")]
 
 
-def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path) -> None:
-    """``deeper`` stands on ``work`` v3, not main v3; main v2 and v3 survive by the retention window alone.
+@pytest.mark.parametrize("names", [("work", "deeper"), ("alpha", "zulu")], ids=["child-sorts-first", "child-sorts-last"])
+def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path, names: tuple[str, str]) -> None:
+    """The child stands on the parent's v3, not main v3; main v2 and v3 survive by the retention window alone.
 
     A fork point is a ``(parent branch, version)`` reference (``parent_branch`` in ``branches.list()``,
     ``parentBranch`` in ``lance_docs/file_format.md`` "Branch Metadata File Format"), so a branch cut from
-    another branch pins that branch's history whatever its number. Naming ``deeper`` would send an
+    another branch pins that branch's history whatever its number. Naming the child would send an
     operator with a deadline to delete a branch that frees nothing on main.
     """
+    parent, child = names
     uri = str(tmp_path / "grandchild")
     lance.write_dataset(_rows("bob"), uri)
     lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
     lance.write_dataset(_rows("carol"), uri, mode="append")
-    work = lance.dataset(uri).create_branch("work", 1)
-    lance.write_dataset(_rows("eve"), work, mode="append")
-    lance.write_dataset(_rows("fred"), lance.dataset(uri).checkout_version(("work", None)), mode="append")
-    lance.dataset(uri).create_branch("deeper", ("work", 3))
-    fork = lance.dataset(uri).branches.list()["deeper"]
-    assert (fork["parent_branch"], fork["parent_version"]) == ("work", 3), f"deeper must stand on work v3 for this to be the right test: {fork}"
+    lance.write_dataset(_rows("eve"), lance.dataset(uri).create_branch(parent, 1), mode="append")
+    lance.write_dataset(_rows("fred"), lance.dataset(uri).checkout_version((parent, None)), mode="append")
+    lance.dataset(uri).create_branch(child, (parent, 3))
+    fork = lance.dataset(uri).branches.list()[child]
+    assert (fork["parent_branch"], fork["parent_version"]) == (parent, 3), f"the child must stand on the parent's v3 for this to be the right test: {fork}"
 
-    report = erase(lance.dataset(uri), table="acme-bronze$subjects", predicate=_PREDICATE, retention=timedelta(days=1))
+    report = erase(
+        lance.dataset(uri),
+        storage_options={},
+        protected=None,
+        reopen=lambda: lance.dataset(uri),
+        table="acme-bronze$subjects",
+        predicate=_PREDICATE,
+        retention=timedelta(days=1),
+    )
 
     assert report.residual_versions == ["main@2", "main@3"], "main v2 and v3 must survive holding the subject for this to be the right test"
-    assert report.pinned_by == []
+    assert (report.pinned_by, report.held_by_retention) == ([], ["main@2", "main@3"])

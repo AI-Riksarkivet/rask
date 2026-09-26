@@ -14,7 +14,9 @@ kwarg assertion cannot show) stays where it is, beside the catalog's own session
 
 A SESSION IS NOT A HANDLE CACHE, which is why this is safe to require everywhere. Caching a DATASET
 pins a version and needs a freshness contract; a `Session`'s keys carry `(uri, version, etag)`, so a
-compaction writes NEW keys and a stale read is not expressible.
+compaction writes NEW keys and a new version is never served stale. An old version whose data files
+were reclaimed can be (`service_kit.lakehouse.lance_session`), so a read that is evidence of what
+storage holds opens on a session nothing has read through.
 
 MAINTENANCE IS IN SCOPE TOO — it is one of the four lakehouse services and shipped this first.
 service-kit is NOT, and the omission is deliberate: its opens are in code SHARED by services whose caps

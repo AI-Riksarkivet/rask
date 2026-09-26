@@ -14,7 +14,8 @@ nothing, so an estate could report an erasure that reclaimed exactly zero bytes 
 
 from __future__ import annotations
 
-from datetime import timedelta
+import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,7 +23,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from catalog.services.erasure import erase
+from catalog.services.erasure import ErasureReport, Pin, erase
 
 
 _SUBJECT = "alice"
@@ -43,10 +44,10 @@ def table(tmp_path: Path) -> str:
 
 @pytest.fixture
 def pinned(tmp_path: Path) -> str:
-    """A branch the erasure cannot release: ``work`` drops the subject at v2, and a clean tag keeps v2.
+    """A version the erasure cannot release: ``work`` drops the subject at v2, and a clean tag keeps v2.
 
     Work v2 still stands on main v1's data file, so main v1 — which holds the subject — stays referenced
-    after every ref is rewritten and reclaimed.
+    after every ref is rewritten and reclaimed, for as long as the tag keeps work v2.
     """
     uri = str(tmp_path / "pinned")
     dataset = lance.write_dataset(pa.table({"id": pa.array([1, 2, 3, 4]), "pii": pa.array([_SUBJECT, "bob", "carol", "dan"])}), uri)
@@ -59,8 +60,24 @@ def _pii(handle: Any) -> list[str]:
     return list(handle.to_table().to_pydict()["pii"])
 
 
-def _erase(uri: str, retention: timedelta = _NOW) -> Any:
-    return erase(lance.dataset(uri), table="acme-bronze$subjects", predicate=_PREDICATE, retention=retention)
+def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
+    return erase(
+        lance.dataset(uri),
+        storage_options={},
+        protected=None,
+        reopen=lambda: lance.dataset(uri),
+        table="acme-bronze$subjects",
+        predicate=_PREDICATE,
+        retention=retention,
+    )
+
+
+def _follow(uri: str, report: ErasureReport) -> None:
+    """Delete every ref ``pinned_by`` names, in the order it names them."""
+    dataset = lance.dataset(uri)
+    for pin in report.pinned_by:
+        kind, name = pin.ref.split(":", 1)
+        (dataset.branches if kind == "branch" else dataset.tags).delete(name)
 
 
 def test_the_subject_is_gone_from_main(table: str) -> None:
@@ -94,8 +111,8 @@ def test_a_version_a_BRANCH_PINS_still_answers_and_the_report_says_so(pinned: st
     row stays readable — the one outcome an erasure must never call done. The verify step catches it,
     and `complete` is False.
 
-    Making it True means DELETING the branch, which destroys someone's working ref. That is an owner
-    decision, not a side effect of an erasure call ([[LH-178]]).
+    Making it True means deleting that tag, a reproducibility pointer. That is an owner decision, not a
+    side effect of an erasure call ([[LH-178]]).
     """
     report = _erase(pinned)
 
@@ -130,7 +147,7 @@ def test_reclamation_is_a_NO_OP_when_a_branch_still_pins_the_history(tmp_path: P
     dataset.create_branch("work")
     dataset.delete(_PREDICATE)  # main only — the door's behaviour today
 
-    with_branch = lance.dataset(uri).cleanup_old_versions(_NOW, delete_unverified=True)
+    with_branch = lance.dataset(uri).cleanup_old_versions(_NOW)
     still_there = any(_SUBJECT in _pii(lance.dataset(uri).checkout_version(v["version"])) for v in lance.dataset(uri).versions())
 
     assert with_branch.old_versions == 0, "the branch stopped pinning the history without being touched"
@@ -172,11 +189,12 @@ def test_one_failed_surface_does_not_stop_the_others(table: str, monkeypatch: py
         raise RuntimeError("tag store unavailable")
 
     monkeypatch.setattr(broken, "delete", _boom)
-    report = erase(dataset, table="t", predicate=_PREDICATE, retention=_NOW)
+    report = erase(dataset, storage_options={}, protected=None, reopen=lambda: lance.dataset(table), table="t", predicate=_PREDICATE, retention=_NOW)
 
     assert report.complete is False
     assert [s.outcome for s in report.surfaces if s.surface == "main"] == ["deleted"], "main was skipped because a tag failed"
     assert _SUBJECT not in _pii(lance.dataset(table))
+    assert Pin(ref="tag:pinned", holds="main@1") in report.pinned_by, "the tag whose delete failed still holds main v1"
 
 
 def test_retention_is_honoured_rather_than_forced_to_zero(table: str) -> None:
@@ -188,18 +206,59 @@ def test_retention_is_honoured_rather_than_forced_to_zero(table: str) -> None:
     assert _SUBJECT not in _pii(lance.dataset(table)), "the rows must still be deleted even when nothing is reclaimed"
 
 
-def test_the_report_names_the_BRANCH_that_pins_the_residual(pinned: str) -> None:
+def test_the_window_is_judged_against_the_cutoff_the_cleanup_measured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """`cleanup_old_versions` measures its cutoff when it is called (measured on pylance 12.0.0), so an
+    instant taken before the call can place inside the window a version the cleanup was free to take.
+    The cleanup here is slowed until main v1 is older than its cutoff: the tag whose delete failed keeps
+    v1, and the report must not say the window does too."""
+    uri = str(tmp_path / "window")
+    lance.write_dataset(pa.table({"id": pa.array([1, 2]), "pii": pa.array([_SUBJECT, "bob"])}), uri)
+    lance.dataset(uri).tags.create("pinned", 1)
+    stamp = lance.dataset(uri).versions()[0]["timestamp"]
+    assert isinstance(stamp, datetime)
+    committed = stamp.astimezone(UTC)
+    cleanup = lance.LanceDataset.cleanup_old_versions
+
+    def _slow(self: lance.LanceDataset, *args: Any, **kwargs: Any) -> Any:
+        time.sleep(2)
+        return cleanup(self, *args, **kwargs)
+
+    def _boom(self: Any, name: str) -> None:
+        raise RuntimeError("tag store unavailable")
+
+    monkeypatch.setattr(lance.LanceDataset, "cleanup_old_versions", _slow)
+    monkeypatch.setattr(type(lance.dataset(uri).tags), "delete", _boom)
+    report = _erase(uri, retention=datetime.now(UTC) - committed + timedelta(seconds=1))
+
+    assert report.residual_versions == ["main@1"], "the failed tag delete must keep v1 for this to be the right test"
+    assert (report.pinned_by, report.held_by_retention) == ([Pin(ref="tag:pinned", holds="main@1")], [])
+
+
+def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str) -> None:
     """`residual_versions` says the erasure is incomplete; only this says what to delete to finish it.
 
-    Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so the pin is read
-    rather than guessed. Without it an operator holding a legal deadline knows a branch is responsible
-    and has to go find which one — on a table that may carry dozens. The tag comes first because Lance
-    will not delete a branch a tag names.
+    Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so which branch
+    stands on main v1 is read rather than guessed — and its head was rewritten, so it is the tag keeping
+    work v2 that holds main v1, not the branch. Naming the branch would send an operator holding a legal
+    deadline to destroy a working ref that frees nothing.
     """
     report = _erase(pinned)
 
     assert report.residual_versions == ["main@1"]
-    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:trained", "work@2"), ("branch:work", "main@1")]
+    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:trained", "work@2")]
+    _follow(pinned, report)
+    assert _erase(pinned).complete is True
+    assert "work" in lance.dataset(pinned).branches.list()
+
+
+def test_a_tag_the_erasure_already_removed_is_not_named(pinned: str) -> None:
+    """Tags are read AFTER step 2: naming one step 2 dropped would make following `pinned_by` fail."""
+    lance.dataset(pinned).tags.create("snapshot", 1)
+
+    report = _erase(pinned)
+
+    assert "snapshot" not in lance.dataset(pinned).tags.list(), "step 2 must drop the tag for this to be the right test"
+    assert [pin.ref for pin in report.pinned_by] == ["tag:trained"]
 
 
 def test_a_clean_erasure_names_no_pin(tmp_path: Path) -> None:
@@ -340,7 +399,15 @@ def _erase_watching(uri: str) -> list[tuple[str, Any]]:
     # CAST, not a suppression: `_Probe.__getattr__` forwards every member of the protocol to a real
     # dataset, which no static check can see. Declaring each forwarded member instead would be a
     # second copy of `_Dataset` that drifts from it silently — the opposite of what the probe is for.
-    erase(cast("Any", _Probe(lance.dataset(uri), log)), table="acme-bronze$subjects", predicate=_PREDICATE, retention=_NOW)
+    erase(
+        cast("Any", _Probe(lance.dataset(uri), log)),
+        storage_options={},
+        protected=None,
+        reopen=lambda: cast("Any", _Probe(lance.dataset(uri), log)),
+        table="acme-bronze$subjects",
+        predicate=_PREDICATE,
+        retention=_NOW,
+    )
     return log
 
 
