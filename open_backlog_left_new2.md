@@ -7,17 +7,15 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-264** — The test-audit fix batch: merged on the integration branch and deploying now. It stays open until the live readback closes it.
-   Why now: none of the batch's authz fixes is live until the deployed images carry it.
-2. **LH-278** and **XC-097** (and **LH-277**'s live check) — The one-request faults: an OR chain that kills the catalog, an annotator import that echoes process memory, and the Arrow-body fix's deploy.
+1. **LH-278** and **XC-097** (and **LH-277**'s live check) — The one-request faults: an OR chain that kills the catalog, an annotator import that echoes process memory, and the Arrow-body fix's deploy.
    Why now: owner-ordered first after the batch deploys; each is one request away from an outage or a leak.
-3. **LH-199** → **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
+2. **LH-199** → **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
    Why now: next in review, and LH-144 and LH-201 each wait on the row before them.
-4. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
+3. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
    Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
-5. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
+4. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
    Why now: without it, "Phase 1 done" means only that every row closed.
-6. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
+5. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
    Why now: unchanged; XC-049 starts when the owner confirms the htr-batch team has the note.
 <!-- FOCUS:END -->
 
@@ -65,14 +63,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 113 | 111 | 35 |
+| **PHASE 1 · LAKEHOUSE** | 112 | 110 | 34 |
 | **PHASE 1 · CROSS-CUTTING** | 56 | 50 | 21 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**252 open items**, of which **10 are blocked on a decision** and **242 can be picked up today**; 64 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**251 open items**, of which **10 are blocked on a decision** and **241 can be picked up today**; 64 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -300,14 +298,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Run the P5.3 probes first with pre-registered reading rules (MinIO and OpenFGA can fetch the k3s SA issuer's discovery and JWKS; a different SA's token with the same audience is refused when bound by sub). Each caller mounts a projected serviceAccountToken (audience rask-catalog or rask-lineage, 600 s) re-read per request; Lance REST clients set Authorization per call through DynamicContextProvider. The catalog adds the SA issuer to OIDCVerifier and validates offline by JWKS; map `system:serviceaccount:<ns>:<sa>` through the allowlist; delete x-lance-service-identity; dapr-api-token stays only as proof of sidecar arrival. The spec's schemes are OAuth2/Bearer/x-api-key (spec.yaml:6729-6742). Lakekeeper's limes KubernetesAuthenticator reads identity from the verified token (crates/lakekeeper/src/service/authn.rs:168-188).
 - *Closes when:* The shared token plus a claimed name answers 401, pod A's projected token cannot authenticate as B, nothing reads x-lance-service-identity, and the catalog can read no peer's service-token-*, and a service token cannot act on another tenant's run.
 - *Evidence:* services/catalog/src/catalog/api/security.py:87-170 · packages/service-kit/src/service_kit/governed/dapr_auth.py:457-512 · packages/service-kit/src/service_kit/governed/oidc.py:144-165 · chart/templates/services.yaml:354-398 · chart/templates/_helpers.tpl:1462-1480
-
-**LH-264 · The test-audit fix batch: three authz/correctness defects and twelve tests that certify a bug**
-`catalog, ingest, medallion, maintenance, chart, service-kit` · **HIGH**
-- *What is left:* The deploy. All sixteen units and the confirmed contract changes are merged on wip/ta-integrate with their RED tests, and none of them runs on the estate: the deployed catalog is `lakehouse-0fec5f11` (chart/values-live-pins.yaml:13), 65 commits behind ea8c5ff8, so none of the batch's authz fixes is live. One suite gate stays red until the deploy re-takes the pins: test_the_pinned_catalog_is_not_older_than_the_authorization_model compares that pin with model.fga's last commit, df1b39b0, a comment-only change (XC-088). The td-* fixes (LH-199, LH-183, LH-200, LH-206, XC-076) are not in ea8c5ff8; each stays on its own row.
-- *Why:* Criteria 1, 2 and 5. A caller-controlled grant clock and a model that silently keeps its old rules are authorization holes; a test that pins a bug keeps it shipped.
-- *How:* One worktree branch per unit from 7801c441, each with a failing test observed first and a mutation that turns the rewritten test red; integrated, run on the full suite, deployed and read back. The contract answers come from lance_docs/ns_catalog/spec.yaml (closed CreateMode enum) and lance_docs/guide.md:2338 (allow_http). Ship one batched deploy, then read back each deployment's image and re-take the pins with `make k3s-pins`.
-- *Closes when:* No unit of this batch appears in `git branch --no-merged` with unintegrated changes, judged by code diff and not by subject. The full suite is green. Every lakehouse deployment runs an image built from the integrated head, read back.
-- *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Wrong assertions, § Real product defects, § Owner rulings needed · workflow wf_8fbdbc5d-fb2 · the sixteen units merged as fa6f5bd3, 35d1067d, eb07fe33, fb550382, 148b577e, b5b65795, 4dd72eac, ea26d506, dbd85bbe, 5b52e04b, beeea496, 6cbd38e5, fcb32feb, ed32c2e4, b1b40184 and fc9b32b3 · ed061905 merged the compaction contract (the chain to 634d7fef and its review rounds, e399226c's vend-404 park included) and LH-277's decoder: the plan door requires max_source_bytes and forwards materialize_deletions_threshold under Lance's own name (dataplane.py:961-968,975-1054), a refused plan request fails loud as CompactionPlanRefused (catalog_compaction.py:93-135), a table the catalog refuses is left untouched for the tick, counted on compaction.tables.parked and paged by MaintenanceTableParked (optimize.py:668-684,930-934; rules.yml:738-758), and the park rule is in docs/DECISIONS.md:1345-1383 · ea8c5ff8 regenerated docs/catalog-openapi.json and catalog.ts, and test_openapi_contract passes · session-findings/probe_threshold.py · verify-session-findings/probe_thresh.py · git fbe02666
 
 **LH-270 · An empty per-base credential reference silently falls back to the estate credential**
 `catalog` · **HIGH**

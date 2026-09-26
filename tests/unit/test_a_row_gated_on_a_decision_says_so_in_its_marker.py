@@ -42,7 +42,6 @@ _DECISION = re.compile(
 #: Rows that match the phrase set and are CORRECTLY unmarked, each with the reason. A row leaves this
 #: set by gaining a marker or by losing the phrase — never by being deleted to quiet the gate.
 _MATCHES_BUT_NOT_GATED: dict[str, str] = {
-    "LH-264": "cites the test audit's rulings section as evidence; every ruling it needs was made on 2026-09-25 and the batch is in flight",
     "LH-141": "the whole row is startable (admit restamp at the lineage door, then the one-shot repair door); the match is prose, not a pending ruling",
     "LH-262": "the kms statement and its unit test are startable after LH-177's split; the body says no owner ruling parks it",
     # A row is added here only with a sentence a reader can check, and every entry so far has left the

@@ -3,22 +3,24 @@
 image:
   tags:
     age: "release_PG16_1.6.0"
+    alertmanager: "v0.28.0"
     assist-runner: "main-31b161ec"
     compute: "d4-205851"
     controlplane: "fix-71d7b04f"
     dashboard: "0.15.0"
     flows: "fix-71d7b04f"
-    gateway: "stagerunner-04d6fcda"
-    ingest: "main-0fec5f11"
-    lance-rest-catalog: "lakehouse-0fec5f11"
+    gateway: "main-ea8c5ff8"
+    ingest: "main-ea8c5ff8"
+    lance-rest-catalog: "lakehouse-ea8c5ff8"
     minio: "RELEASE.2025-04-22T22-12-26Z"
     nats: "2.14.2-alpine"
     nats-box: "0.19.7"
     nats-server-config-reloader: "0.23.0"
-    notifications: "main-467904ae"
+    notifications: "main-ea8c5ff8"
     openbao: "2.2.0"
     openfga: "v1.18.3"
     opentelemetry-collector-contrib: "0.157.0"
+    vmalert: "v1.106.1"
     web-annotator: "main-90b8d0ed"
     web-compute: "main-90b8d0ed"
     web-explorer: "main-90b8d0ed"
@@ -29,4 +31,4 @@ image:
   digests: {}
 ray:
   image:
-    tag: "main-0fec5f11"
+    tag: "main-ea8c5ff8"
