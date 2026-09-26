@@ -766,11 +766,11 @@ export interface paths {
          *     what any particular person may do, so it is an untargeted control event like the other 31 and
          *     reaches a feed rather than a person.
          *
-         *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route
-         *     shipped without it. Unnamed, it resolved to the WRITER rung, so the live audit trail recorded
-         *     `can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every
-         *     reader who was not also a writer — the feed's whole audience — was refused. Pinned by
-         *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.
+         *     THE GATE IS NOT AUTOMATIC — `fga_deps._DATA_READ_ACTIONS` must name `changes`, or the router
+         *     refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
+         *     and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
+         *     ALLOW` beside the `read_data` record for the same call. Pinned by
+         *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
          */
         post: operations["table_changes_management_v1_table__id__changes_post"];
         delete?: never;
@@ -857,13 +857,13 @@ export interface paths {
          *     no new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,
          *     and ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, "The lakehouse cloud-native cutover".
          *
-         *     Writer tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the
-         *     table default, which is the correct rung — a compaction preserves every row (Lance commits it as a
-         *     ``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.
+         *     Maintainer tier: the router ``authorize`` gate maps this to ``can_maintain``
+         *     (``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.
          *
-         *     The body must state ``batch_size`` and ``num_threads``, the executor's memory bounds. Lance bakes
-         *     both into every task and the worker cannot set them afterwards, so a plan missing either is refused
-         *     400 (``InvalidInput``, code 13) with both named.
+         *     The body must state ``batch_size``, ``num_threads`` and ``max_source_bytes``, the executor's memory
+         *     bounds. Lance bakes them into every task and the worker cannot set them afterwards, so a plan
+         *     missing any is refused 400 (``InvalidInput``, code 13) with all three named. ``compaction_mode`` is
+         *     baked the same way and is optional: unset, Lance re-encodes.
          *
          *     An empty ``tasks`` list is a successful answer: the table is already at target and there is nothing
          *     to queue.
@@ -914,11 +914,26 @@ export interface paths {
          *     Owner-gated (``can_drop``) — it destroys history, which is a stronger claim than the drop rung
          *     guards, and there is no rung above it.
          *
-         *     **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any
-         *     retained version still answers the predicate after every step ran — which happens on a table with
-         *     a branch, because deleting rows on a branch does not remove that branch's pin on the parent's
-         *     history ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller
-         *     reading the status code reports the wrong thing.
+         *     **THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained
+         *     version of any ref still answers the predicate after every step ran — which happens when a retained
+         *     branch version still stands on the files of the version it was cut from ([[LH-178]]). The residual
+         *     is named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only
+         *     when its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what
+         *     the `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a
+         *     caller reading the status code reports the wrong thing.
+         *
+         *     `complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and
+         *     fails to read, because a branch standing on some of its files kept its manifest when the rest were
+         *     reclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to
+         *     it fails, until what its detail names lets go: that branch deleted or its head rewritten.
+         *
+         *     `complete` is evidence about every retained version of every ref, and about nothing else: a data
+         *     file no version references that is younger than 7 days, an aborted write's residue, is neither
+         *     reclaimed nor probed, because Lance keeps it as possibly an in-flight write's
+         *     (`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).
+         *
+         *     A table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the
+         *     clone would break: its `compact:` and `history:` surfaces fail and `complete` is False.
          *
          *     ``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.
          *     Refusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had
@@ -964,7 +979,7 @@ export interface paths {
          *     The check below is the second one a request meets, not the first: ``authorize`` is a router-wide
          *     dependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever
          *     arrives to be metadata-checked. Pinned by
-         *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.
+         *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
          *
          *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
          *     into 10k object-store round trips.
@@ -1024,11 +1039,9 @@ export interface paths {
          * @description Dry-run the old-version cleanup — the versions GC would reclaim + the tags protecting others. Owner-
          *     gated (``can_drop``); never mutates.
          *
-         *     ``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is
-         *     measured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing —
-         *     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns — so [[LH-094]]'s
-         *     question about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``
-         *     both reclaim, and stay refused until that is decided for them.
+         *     ``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that
+         *     needs no containment argument: it calls ``_base_refs`` zero times and mutates nothing —
+         *     ``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.
          *
          *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
          *     version of it: the caller acts on the version list, so
@@ -1053,8 +1066,8 @@ export interface paths {
         put?: never;
         /**
          * Reindex Maintenance
-         * @description Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) — it destroys the
-         *     index that is there, and an unmapped suffix would fall through to the writer rung.
+         * @description Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``, declared in
+         *     ``fga_deps._OWNER_SUFFIX_RELATION``) — it destroys the index that is there.
          *
          *     **IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather
          *     than assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and
@@ -1423,10 +1436,8 @@ export interface paths {
          *     ``checked`` echoes the resolved tuple so the verdict is unambiguous.
          *
          *     ``context`` supplies the runtime values a CONDITION needs — ``current_time`` for the model's
-         *     ``non_expired_grant``. Omitting it against a time-boxed grant is a DENY, not a neutral answer:
-         *     OpenFGA cannot evaluate the CEL expression without its operands. The server does NOT default the
-         *     clock, deliberately — a check that silently substituted "now" would answer a question the caller
-         *     did not ask, and the whole point of the explorer is asking "was this true at 14:00?".
+         *     ``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one
+         *     wins, which is how the explorer asks "was this true at 14:00?".
          */
         post: operations["check_access_v1_access_check_post"];
         delete?: never;
@@ -5305,19 +5316,20 @@ export interface components {
          * CompactionPlanRequest
          * @description Ask the catalog what compaction this table needs — a metadata read that mints nothing.
          *
-         *     Most knobs are POLICY: what shape the table should end up in, each optional. Two are MECHANICS —
-         *     how much memory the rewrite may use — and both are REQUIRED, because **Lance bakes them into the
-         *     task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
-         *     ``options`` object holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute``
-         *     takes only the dataset. So the plan is the executor's one chance to state them.
+         *     Most knobs are POLICY: what shape the table should end up in, each optional. Three are MECHANICS —
+         *     how much memory the rewrite may use — and all three are REQUIRED, because **Lance bakes them into
+         *     the task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an
+         *     ``options`` object holding ``batch_size``, ``num_threads`` and ``max_source_bytes``, and
+         *     ``CompactionTask.execute`` takes only the dataset. So the plan is the executor's one chance to
+         *     state them.
          *
          *     Left out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch
          *     is counted in ROWS, and rows are not a unit of memory — against the ~1.8 MB bronze rows measured
-         *     here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores rather
-         *     than the pod's limit. So the door refuses a plan missing either one with 400 ``InvalidInput``,
-         *     naming both.
-         *     rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE`` and ``MAINTENANCE_COMPACT_THREADS``; a
-         *     bring-your-own executor sends the bounds it runs under.
+         *     here it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores, over a
+         *     plan with no byte limit at all. So the door refuses a plan missing any of them with 400
+         *     ``InvalidInput``, naming all three.
+         *     rask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS`` and
+         *     ``MAINTENANCE_MAX_SOURCE_BYTES``; a bring-your-own executor sends the bounds it runs under.
          *
          *     The catalog does not INTERPRET them — it forwards the executor's own numbers into the plan. An
          *     unrecognized field is refused rather than dropped — see ``dataplane.plan_compaction``.
@@ -5327,20 +5339,30 @@ export interface components {
              * Batch Size
              * @description Required. Rows per scan batch in each rewrite task.
              */
-            batch_size?: number | null;
+            batch_size: number;
+            /**
+             * Compaction Mode
+             * @description How each rewrite task moves the bytes. Unset, Lance re-encodes.
+             */
+            compaction_mode?: ("reencode" | "try_binary_copy" | "force_binary_copy") | null;
             /** Materialize Deletions */
             materialize_deletions?: boolean | null;
-            /** Materialize Deletions Threadhold */
-            materialize_deletions_threadhold?: number | null;
+            /** Materialize Deletions Threshold */
+            materialize_deletions_threshold?: number | null;
             /** Max Bytes Per File */
             max_bytes_per_file?: number | null;
             /** Max Rows Per Group */
             max_rows_per_group?: number | null;
             /**
+             * Max Source Bytes
+             * @description Required. Source bytes one plan may take on, summed over its tasks; Lance stops adding tasks at this limit.
+             */
+            max_source_bytes: number;
+            /**
              * Num Threads
              * @description Required. Compute threads per rewrite task.
              */
-            num_threads?: number | null;
+            num_threads: number;
             /** Target Rows Per Fragment */
             target_rows_per_fragment?: number | null;
         };
@@ -6776,28 +6798,49 @@ export interface components {
         ErasureReport: {
             /**
              * Bytes Reclaimed
+             * @description Bytes freed across every ref's cleanup.
              * @default 0
              */
             bytes_reclaimed?: number;
             /**
              * Complete
+             * @description True only when no surface failed, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.
              * @default false
              */
             complete?: boolean;
-            /** Pinned By */
-            pinned_by?: {
-                [key: string]: number;
-            };
-            /** Predicate */
+            /**
+             * Held By Retention
+             * @description Residuals the retention window keeps, itself or through a newer branch version on their files: an erasure with `retain_days=0`, or one after the window has passed, reclaims them.
+             */
+            held_by_retention?: string[];
+            /**
+             * Pinned By
+             * @description The refs whose deletion lets the next erasure reclaim a residual, in an order Lance accepts: tags, then branches deepest first. A tag is named when it holds a residual, directly or through a branch version on its files; a branch only when its head does, with its descendants and their tags. A residual whose ref was not reclaimed names nothing here: its `history:` surface says why.
+             */
+            pinned_by?: components["schemas"]["Pin"][];
+            /**
+             * Predicate
+             * @description The filter every matching row was deleted by.
+             */
             predicate: string;
-            /** Residual Versions */
-            residual_versions?: number[];
-            /** Surfaces */
+            /**
+             * Residual Versions
+             * @description Retained versions of any ref that still answer the predicate or could not be read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported.
+             */
+            residual_versions?: string[];
+            /**
+             * Surfaces
+             * @description Every surface the erasure attempted, in the order it attempted them.
+             */
             surfaces?: components["schemas"]["SurfaceResult"][];
-            /** Table */
+            /**
+             * Table
+             * @description The table id the erasure was asked of.
+             */
             table: string;
             /**
              * Versions Reclaimed
+             * @description Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays.
              * @default 0
              */
             versions_reclaimed?: number;
@@ -7830,6 +7873,22 @@ export interface components {
             /** Terms */
             terms: string;
         };
+        /**
+         * Pin
+         * @description One ref to delete before the erasure can finish, in the order ``ErasureReport.pinned_by`` gives.
+         */
+        Pin: {
+            /**
+             * Holds
+             * @description The version it stands on — a branch's fork point, a tag's version — as `<ref>@<version>`. One not in `residual_versions` keeps one that is through a branch version still on its files, or must go first because Lance refuses to delete a later entry.
+             */
+            holds: string;
+            /**
+             * Ref
+             * @description `branch:<name>` or `tag:<name>`.
+             */
+            ref: string;
+        };
         /** PolicyDeleteResponse */
         PolicyDeleteResponse: {
             /** Id */
@@ -8824,12 +8883,19 @@ export interface components {
         SurfaceResult: {
             /**
              * Detail
+             * @description Why, in words: the error, what a rewrite cost, what a residual needs.
              * @default
              */
             detail?: string;
-            /** Outcome */
+            /**
+             * Outcome
+             * @description What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, or `dangling` — a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.
+             */
             outcome: string;
-            /** Surface */
+            /**
+             * Surface
+             * @description `branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches` or `verify`.
+             */
             surface: string;
         };
         /**
@@ -10960,9 +11026,9 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: {
+        requestBody: {
             content: {
-                "application/json": components["schemas"]["CompactionPlanRequest"] | null;
+                "application/json": components["schemas"]["CompactionPlanRequest"];
             };
         };
         responses: {

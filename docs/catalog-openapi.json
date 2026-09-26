@@ -3056,21 +3056,31 @@
       },
       "CompactionPlanRequest": {
         "additionalProperties": false,
-        "description": "Ask the catalog what compaction this table needs \u2014 a metadata read that mints nothing.\n\nMost knobs are POLICY: what shape the table should end up in, each optional. Two are MECHANICS \u2014\nhow much memory the rewrite may use \u2014 and both are REQUIRED, because **Lance bakes them into the\ntask at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an\n``options`` object holding ``batch_size`` and ``num_threads``, and ``CompactionTask.execute``\ntakes only the dataset. So the plan is the executor's one chance to state them.\n\nLeft out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch\nis counted in ROWS, and rows are not a unit of memory \u2014 against the ~1.8 MB bronze rows measured\nhere it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores rather\nthan the pod's limit. So the door refuses a plan missing either one with 400 ``InvalidInput``,\nnaming both.\nrask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE`` and ``MAINTENANCE_COMPACT_THREADS``; a\nbring-your-own executor sends the bounds it runs under.\n\nThe catalog does not INTERPRET them \u2014 it forwards the executor's own numbers into the plan. An\nunrecognized field is refused rather than dropped \u2014 see ``dataplane.plan_compaction``.",
+        "description": "Ask the catalog what compaction this table needs \u2014 a metadata read that mints nothing.\n\nMost knobs are POLICY: what shape the table should end up in, each optional. Three are MECHANICS \u2014\nhow much memory the rewrite may use \u2014 and all three are REQUIRED, because **Lance bakes them into\nthe task at plan time**. Measured on pylance 12.0.0 (2026-09-25): a planned task's JSON carries an\n``options`` object holding ``batch_size``, ``num_threads`` and ``max_source_bytes``, and\n``CompactionTask.execute`` takes only the dataset. So the plan is the executor's one chance to\nstate them.\n\nLeft out, they become Lance's defaults, and that is an unbounded read: the scanner's default batch\nis counted in ROWS, and rows are not a unit of memory \u2014 against the ~1.8 MB bronze rows measured\nhere it is ~15 GB *per compute thread*, times a thread count taken from the HOST's cores, over a\nplan with no byte limit at all. So the door refuses a plan missing any of them with 400\n``InvalidInput``, naming all three.\nrask's own executor sends ``MAINTENANCE_SCAN_BATCH_SIZE``, ``MAINTENANCE_COMPACT_THREADS`` and\n``MAINTENANCE_MAX_SOURCE_BYTES``; a bring-your-own executor sends the bounds it runs under.\n\nThe catalog does not INTERPRET them \u2014 it forwards the executor's own numbers into the plan. An\nunrecognized field is refused rather than dropped \u2014 see ``dataplane.plan_compaction``.",
         "properties": {
           "batch_size": {
+            "description": "Required. Rows per scan batch in each rewrite task.",
+            "maximum": 8192.0,
+            "minimum": 1.0,
+            "title": "Batch Size",
+            "type": "integer"
+          },
+          "compaction_mode": {
             "anyOf": [
               {
-                "maximum": 8192.0,
-                "minimum": 1.0,
-                "type": "integer"
+                "enum": [
+                  "reencode",
+                  "try_binary_copy",
+                  "force_binary_copy"
+                ],
+                "type": "string"
               },
               {
                 "type": "null"
               }
             ],
-            "description": "Required. Rows per scan batch in each rewrite task.",
-            "title": "Batch Size"
+            "description": "How each rewrite task moves the bytes. Unset, Lance re-encodes.",
+            "title": "Compaction Mode"
           },
           "materialize_deletions": {
             "anyOf": [
@@ -3083,7 +3093,7 @@
             ],
             "title": "Materialize Deletions"
           },
-          "materialize_deletions_threadhold": {
+          "materialize_deletions_threshold": {
             "anyOf": [
               {
                 "maximum": 1.0,
@@ -3094,7 +3104,7 @@
                 "type": "null"
               }
             ],
-            "title": "Materialize Deletions Threadhold"
+            "title": "Materialize Deletions Threshold"
           },
           "max_bytes_per_file": {
             "anyOf": [
@@ -3120,19 +3130,19 @@
             ],
             "title": "Max Rows Per Group"
           },
+          "max_source_bytes": {
+            "description": "Required. Source bytes one plan may take on, summed over its tasks; Lance stops adding tasks at this limit.",
+            "maximum": 1073741824.0,
+            "minimum": 1048576.0,
+            "title": "Max Source Bytes",
+            "type": "integer"
+          },
           "num_threads": {
-            "anyOf": [
-              {
-                "maximum": 64.0,
-                "minimum": 1.0,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
             "description": "Required. Compute threads per rewrite task.",
-            "title": "Num Threads"
+            "maximum": 64.0,
+            "minimum": 1.0,
+            "title": "Num Threads",
+            "type": "integer"
           },
           "target_rows_per_fragment": {
             "anyOf": [
@@ -3147,6 +3157,11 @@
             "title": "Target Rows Per Fragment"
           }
         },
+        "required": [
+          "batch_size",
+          "num_threads",
+          "max_source_bytes"
+        ],
         "title": "CompactionPlanRequest",
         "type": "object"
       },
@@ -6410,33 +6425,47 @@
         "properties": {
           "bytes_reclaimed": {
             "default": 0,
+            "description": "Bytes freed across every ref's cleanup.",
             "title": "Bytes Reclaimed",
             "type": "integer"
           },
           "complete": {
             "default": false,
+            "description": "True only when no surface failed, `verify` among them. It can be True beside `dangling:` surfaces, which hold no subject data but stay listed and fail to read. A caller reporting completion to a data subject reads this, never the status code.",
             "title": "Complete",
             "type": "boolean"
           },
+          "held_by_retention": {
+            "description": "Residuals the retention window keeps, itself or through a newer branch version on their files: an erasure with `retain_days=0`, or one after the window has passed, reclaims them.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Held By Retention",
+            "type": "array"
+          },
           "pinned_by": {
-            "additionalProperties": {
-              "type": "integer"
+            "description": "The refs whose deletion lets the next erasure reclaim a residual, in an order Lance accepts: tags, then branches deepest first. A tag is named when it holds a residual, directly or through a branch version on its files; a branch only when its head does, with its descendants and their tags. A residual whose ref was not reclaimed names nothing here: its `history:` surface says why.",
+            "items": {
+              "$ref": "#/components/schemas/Pin"
             },
             "title": "Pinned By",
-            "type": "object"
+            "type": "array"
           },
           "predicate": {
+            "description": "The filter every matching row was deleted by.",
             "title": "Predicate",
             "type": "string"
           },
           "residual_versions": {
+            "description": "Retained versions of any ref that still answer the predicate or could not be read, as `<ref>@<version>` with `main` for main. Non-empty means the erasure is incomplete however cleanly each step reported.",
             "items": {
-              "type": "integer"
+              "type": "string"
             },
             "title": "Residual Versions",
             "type": "array"
           },
           "surfaces": {
+            "description": "Every surface the erasure attempted, in the order it attempted them.",
             "items": {
               "$ref": "#/components/schemas/SurfaceResult"
             },
@@ -6444,11 +6473,13 @@
             "type": "array"
           },
           "table": {
+            "description": "The table id the erasure was asked of.",
             "title": "Table",
             "type": "string"
           },
           "versions_reclaimed": {
             "default": 0,
+            "description": "Versions reclaimed across every ref's cleanup. Zero is not a failure: history inside the retention window stays.",
             "title": "Versions Reclaimed",
             "type": "integer"
           }
@@ -8738,6 +8769,27 @@
         "title": "PhraseQuery",
         "type": "object"
       },
+      "Pin": {
+        "description": "One ref to delete before the erasure can finish, in the order ``ErasureReport.pinned_by`` gives.",
+        "properties": {
+          "holds": {
+            "description": "The version it stands on \u2014 a branch's fork point, a tag's version \u2014 as `<ref>@<version>`. One not in `residual_versions` keeps one that is through a branch version still on its files, or must go first because Lance refuses to delete a later entry.",
+            "title": "Holds",
+            "type": "string"
+          },
+          "ref": {
+            "description": "`branch:<name>` or `tag:<name>`.",
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "holds"
+        ],
+        "title": "Pin",
+        "type": "object"
+      },
       "PolicyDeleteResponse": {
         "properties": {
           "id": {
@@ -8818,6 +8870,7 @@
           "max_source_bytes": {
             "anyOf": [
               {
+                "maximum": 1073741824.0,
                 "minimum": 1048576.0,
                 "type": "integer"
               },
@@ -10954,14 +11007,17 @@
         "properties": {
           "detail": {
             "default": "",
+            "description": "Why, in words: the error, what a rewrite cost, what a residual needs.",
             "title": "Detail",
             "type": "string"
           },
           "outcome": {
+            "description": "What the estate did there: `deleted`, `untagged`, `retained`, `rewritten`, `reclaimed`, `clean`, `failed`, or `dangling` \u2014 a listed version that fails to read and is proved not to hold the subject; it stays listed until what its detail names lets go.",
             "title": "Outcome",
             "type": "string"
           },
           "surface": {
+            "description": "`branch:<name>`, `tag:<name>`, `main`, `compact:<ref>`, `history:<ref>`, `dangling:<ref>@<version>`, `branches` or `verify`.",
             "title": "Surface",
             "type": "string"
           }
@@ -16226,7 +16282,7 @@
     },
     "/management/v1/table/{id}/changes": {
       "post": {
-        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find\nit. That `ControlAction` (`service_kit/control_events.py:101`) announces a version advance and\ncarries `{from_version, to_version}` \u2014 \"the RANGE (D-R3) the notification carries, so a consumer\nresolves the delta\" (`catalog/services/publication.py:245-254`) \u2014 which is exactly the window this\ndoor takes. Its emitter is a DIFFERENT `publication.py`, the route module\n`catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real\nadvance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and\ncalls here with it \u2014 no new `ControlAction` member, so no added control-buffer cost.\nIt is deliberately NOT in notifications' `NAMED_ACTIONS`: a version advance changes an OBJECT, not\nwhat any particular person may do, so it is an untargeted control event like the other 31 and\nreaches a feed rather than a person.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, and this route\nshipped without it. Unnamed, it resolved to the WRITER rung, so the live audit trail recorded\n`can_write_data ALLOW` beside the `read_data` record for the same call (2026-09-08), and every\nreader who was not also a writer \u2014 the feed's whole audience \u2014 was refused. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough`.",
+        "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nComposes the predicate `lance_docs/file_format.md:4270-4300` documents; the scan is\n`dataplane.read_changes`, which is its OWN scan and not the query door's \u2014 `QueryTableRequest`\nrequires `k` and `vector`, so reusing that door would mean inventing a vector to ask a question\nwith nothing to do with similarity. What the two doors DO share is the framing they answer in.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nTHE PUSH TRIGGER IS `table_published` ([[LH-091]]), and a BYO consumer needs no new event to find\nit. That `ControlAction` (`service_kit/control_events.py:101`) announces a version advance and\ncarries `{from_version, to_version}` \u2014 \"the RANGE (D-R3) the notification carries, so a consumer\nresolves the delta\" (`catalog/services/publication.py:245-254`) \u2014 which is exactly the window this\ndoor takes. Its emitter is a DIFFERENT `publication.py`, the route module\n`catalog/api/v1/endpoints/publication.py:343-356`, gated on `result.advanced` so only a real\nadvance signals. A consumer subscribes to `catalog.control.v1`, reads the pair off the event, and\ncalls here with it \u2014 no new `ControlAction` member, so no added control-buffer cost.\nIt is deliberately NOT in notifications' `NAMED_ACTIONS`: a version advance changes an OBJECT, not\nwhat any particular person may do, so it is an untargeted control event like the other 31 and\nreaches a feed rather than a person.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `fga_deps._DATA_READ_ACTIONS` must name `changes`, or the router\nrefuses the route for every caller. Any rung above the reader's refuses the feed's whole audience\nand records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data\nALLOW` beside the `read_data` record for the same call. Pinned by\n`tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.",
         "operationId": "table_changes_management_v1_table__id__changes_post",
         "parameters": [
           {
@@ -16681,7 +16737,7 @@
     },
     "/management/v1/table/{id}/compaction_plan": {
       "post": {
-        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, \"The lakehouse cloud-native cutover\".\n\nWriter tier: the router ``authorize`` gate maps this to ``can_write_data`` by falling through the\ntable default, which is the correct rung \u2014 a compaction preserves every row (Lance commits it as a\n``Rewrite``), so it is strictly less powerful than the ``delete`` a writer already has.\n\nThe body must state ``batch_size`` and ``num_threads``, the executor's memory bounds. Lance bakes\nboth into every task and the worker cannot set them afterwards, so a plan missing either is refused\n400 (``InvalidInput``, code 13) with both named.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
+        "description": "Plan a compaction and hand the work to a queue \u2014 the catalog does NOT execute it.\n\nRewriting a table's data files is unbounded work whose cost is set by the table rather than by the\nrequest. Doing it here would make this pod's memory ceiling a function of the largest table anyone\nowns and turn a maintenance pass into an availability incident for every other door on it. So the\nprotocol is split by credential: this door plans under ROOT creds (a manifest read \u2014 no data byte,\nno new version), a WORKER holding vended table-scoped creds runs each task and writes every byte,\nand ``/compaction_commit`` folds the results back in. See `docs/DECISIONS.md`, \"The lakehouse cloud-native cutover\".\n\nMaintainer tier: the router ``authorize`` gate maps this to ``can_maintain``\n(``fga_deps._MAINTENANCE_ACTIONS``), because only the maintenance plane calls it.\n\nThe body must state ``batch_size``, ``num_threads`` and ``max_source_bytes``, the executor's memory\nbounds. Lance bakes them into every task and the worker cannot set them afterwards, so a plan\nmissing any is refused 400 (``InvalidInput``, code 13) with all three named. ``compaction_mode`` is\nbaked the same way and is optional: unset, Lance re-encodes.\n\nAn empty ``tasks`` list is a successful answer: the table is already at target and there is nothing\nto queue.",
         "operationId": "plan_table_compaction_management_v1_table__id__compaction_plan_post",
         "parameters": [
           {
@@ -16782,18 +16838,11 @@
           "content": {
             "application/json": {
               "schema": {
-                "anyOf": [
-                  {
-                    "$ref": "#/components/schemas/CompactionPlanRequest"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "title": "Body"
+                "$ref": "#/components/schemas/CompactionPlanRequest"
               }
             }
-          }
+          },
+          "required": true
         },
         "responses": {
           "200": {
@@ -16970,7 +17019,7 @@
     },
     "/management/v1/table/{id}/erasure": {
       "post": {
-        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever any\nretained version still answers the predicate after every step ran \u2014 which happens on a table with\na branch, because deleting rows on a branch does not remove that branch's pin on the parent's\nhistory ([[LH-178]]). A caller reporting completion to a data subject reads that field; a caller\nreading the status code reports the wrong thing.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
+        "description": "Remove every row matching the predicate from every ref, then reclaim what no longer pins it.\n\nOwner-gated (``can_drop``) \u2014 it destroys history, which is a stronger claim than the drop rung\nguards, and there is no rung above it.\n\n**THE RESPONSE IS THE POINT, and a 200 is not the answer.** `complete` is False whenever a retained\nversion of any ref still answers the predicate after every step ran \u2014 which happens when a retained\nbranch version still stands on the files of the version it was cut from ([[LH-178]]). The residual\nis named per ref (`main@2`, `work@3`) with what keeps it: `pinned_by` the tags, and a branch only\nwhen its head stands on the residual's files, in an order Lance accepts; `held_by_retention` what\nthe `retain_days` window keeps. A caller reporting completion to a data subject reads `complete`; a\ncaller reading the status code reports the wrong thing.\n\n`complete` can be True beside `dangling:<ref>@<n>` surfaces. Each is a version that stays listed and\nfails to read, because a branch standing on some of its files kept its manifest when the rest were\nreclaimed; no fragment of it that still reads holds the subject. It stays listed, and time travel to\nit fails, until what its detail names lets go: that branch deleted or its head rewritten.\n\n`complete` is evidence about every retained version of every ref, and about nothing else: a data\nfile no version references that is younger than 7 days, an aborted write's residue, is neither\nreclaimed nor probed, because Lance keeps it as possibly an in-flight write's\n(`lance_docs/lance_sdk.md` cleanup_old_versions `delete_unverified`).\n\nA table a shallow clone resolves its files through is neither rewritten nor reclaimed, because the\nclone would break: its `compact:` and `history:` surfaces fail and `complete` is False.\n\n``branch`` is accepted and IGNORED rather than refused, and the description says so on the wire.\nRefusing would suggest a per-ref erasure exists; honouring it would let a caller believe they had\nerased a subject when they had narrowed the operation to one ref.",
         "operationId": "erase_subject_management_v1_table__id__erasure_post",
         "parameters": [
           {
@@ -17128,7 +17177,7 @@
     },
     "/management/v1/table/{id}/history": {
       "get": {
-        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\nTHE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.\nThe check below is the second one a request meets, not the first: ``authorize`` is a router-wide\ndependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever\narrives to be metadata-checked. Pinned by\n``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ_not_by_the_writer_fallthrough``.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
+        "description": "The table's commit log \u2014 one row per version, newest first: **what** changed and **when**.\n\nAnswers the question a catalog history view asks, from the format itself rather than from a\nside-table we would have to keep in sync. Lance is immutable and append-only at the manifest level, so\n``versions()`` gives the timestamps and the transaction log gives the substance: the operation kind, the\ndelete predicate exactly as the caller wrote it, which fields an update rewrote, fragment deltas, and\nwhether the schema was set at that version.\n\n**It does not answer WHO, deliberately.** Lance's transaction log has no notion of a user and should not\nhave one \u2014 identity is this estate's concern, not the format's. The actor per version already lives in\nthe lineage store, on the ``author`` run facet\n(``GET /datasets/{name}/producers`` \u2192 ``dataset_version`` + ``author`` + ``operation``), which is written\nfrom the verified OIDC subject on every governed write. A who/when/what view joins the two on the version\nnumber. Two sources, each authoritative for its own half \u2014 a third that merged them would just be a copy\nof one of them, free to drift.\n\nReader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is\nmetadata about the data, and it leaks real information (predicates name values, field names name\ncolumns), so it is gated exactly like the schema is rather than being treated as public.\n\nTHE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``fga_deps._META_READ_ACTIONS`` to get it.\nThe check below is the second one a request meets, not the first: ``authorize`` is a router-wide\ndependency, so an unnamed suffix is refused for every caller before this line runs and no reader ever\narrives to be metadata-checked. Pinned by\n``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.\n\n``limit`` bounds the per-version transaction reads \u2014 a table with 10k versions must not turn a UI page\ninto 10k object-store round trips.",
         "operationId": "table_history_management_v1_table__id__history_get",
         "parameters": [
           {
@@ -17448,7 +17497,7 @@
     },
     "/management/v1/table/{id}/maintenance/preview": {
       "post": {
-        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED HERE while its two destructive siblings still refuse it, and the split is\nmeasured rather than stylistic: this door calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tags and returns \u2014 so [[LH-094]]'s\nquestion about what a reclaim may DELETE on a branch never reaches it. ``/run`` and ``/compact``\nboth reclaim, and stay refused until that is decided for them.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather\nthan asserting the branch reached ``open_dataset``.",
+        "description": "Dry-run the old-version cleanup \u2014 the versions GC would reclaim + the tags protecting others. Owner-\ngated (``can_drop``); never mutates.\n\n``branch`` IS HONOURED, as on every door here (see the module header), and this is the one that\nneeds no containment argument: it calls ``_base_refs`` zero times and mutates nothing \u2014\n``preview_gc`` reads ``ds.version``, ``ds.versions()`` and the tag and child-branch pins and returns.\n\nPreviewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser\nversion of it: the caller acts on the version list, so\n``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather\nthan asserting the branch reached ``open_dataset``.",
         "operationId": "preview_maintenance_management_v1_table__id__maintenance_preview_post",
         "parameters": [
           {
@@ -17590,7 +17639,7 @@
     },
     "/management/v1/table/{id}/maintenance/reindex": {
       "post": {
-        "description": "Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``) \u2014 it destroys the\nindex that is there, and an unmapped suffix would fall through to the writer rung.\n\n**IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather\nthan assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and\n`create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name\nvector rebuild is refused at the default \u2014 ``LanceError(Index): Index name 'x' already exists`` \u2014\nand accepted under ``replace=True``. So the vector index, the one that cannot repair itself\nthrough the create doors, is repaired by a flag pylance already has. Dropping first would open a\nwindow in which the table has NO index \u2014 a search silently degrading to a full scan \u2014 and would\nleave it with none if the rebuild then failed, which is worse than the mis-parameterised index\nbeing repaired.\n\n**THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live\nindex's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`\nmerges OVER that reading for the caller who is deliberately changing something.\n\nWHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service\nreads, so the two cannot disagree about whether a worker exists. With a queue: publish one\n`IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild\nruns here.",
+        "description": "Rebuild one named index in place ([[LH-105]]). Owner-gated (``can_drop``, declared in\n``fga_deps._OWNER_SUFFIX_RELATION``) \u2014 it destroys the index that is there.\n\n**IT REPLACES; IT DOES NOT DROP AND RECREATE**, which is the whole design and was measured rather\nthan assumed. `LanceDataset.create_index` carries ``replace: bool = False`` and\n`create_scalar_index` carries ``replace: bool = True`` (pylance 11.0.0, 2026-09-15): a same-name\nvector rebuild is refused at the default \u2014 ``LanceError(Index): Index name 'x' already exists`` \u2014\nand accepted under ``replace=True``. So the vector index, the one that cannot repair itself\nthrough the create doors, is repaired by a flag pylance already has. Dropping first would open a\nwindow in which the table has NO index \u2014 a search silently degrading to a full scan \u2014 and would\nleave it with none if the rebuild then failed, which is worse than the mis-parameterised index\nbeing repaired.\n\n**THE SHAPE IS READ, NOT RESTATED.** `index_specs.describe_index_for_rebuild` reads the live\nindex's own parameterisation, so a repair cannot quietly re-tune what it repairs; `body.params`\nmerges OVER that reading for the caller who is deliberately changing something.\n\nWHERE IT RUNS follows the compact door beside it, off the same topic name the maintenance service\nreads, so the two cannot disagree about whether a worker exists. With a queue: publish one\n`IndexWorkItem` and answer 202. Without one: nothing would ever execute the unit, so the rebuild\nruns here.",
         "operationId": "reindex_maintenance_management_v1_table__id__maintenance_reindex_post",
         "parameters": [
           {
@@ -19257,7 +19306,7 @@
     },
     "/v1/access/check": {
       "post": {
-        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. Omitting it against a time-boxed grant is a DENY, not a neutral answer:\nOpenFGA cannot evaluate the CEL expression without its operands. The server does NOT default the\nclock, deliberately \u2014 a check that silently substituted \"now\" would answer a question the caller\ndid not ask, and the whole point of the explorer is asking \"was this true at 14:00?\".",
+        "description": "One ``(user, relation, object)`` OpenFGA Check over ANY model type \u2014 the estate-wide extension of\nthe per-object ``\u2026/access/check`` playground (#68), which stays as-is for table/namespace owners.\n\nAny relation the compiled model defines on the type may be probed (base rungs included \u2014 an admin\ndebugging a cascade asks about ``writer``, not just ``can_write_data``); an unknown one is a clean 400.\n``checked`` echoes the resolved tuple so the verdict is unambiguous.\n\n``context`` supplies the runtime values a CONDITION needs \u2014 ``current_time`` for the model's\n``non_expired_grant``. An omitted ``current_time`` defaults to the server's now; an explicit one\nwins, which is how the explorer asks \"was this true at 14:00?\".",
         "operationId": "check_access_v1_access_check_post",
         "parameters": [
           {
