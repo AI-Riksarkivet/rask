@@ -1622,6 +1622,7 @@ async def _report_hold(
     # so redelivery MERGEs rather than accumulating holds. Suppressed and best-effort for the
     # same reason every other lineage emit here is (I8): a graph outage must not convert a
     # correct refusal into a retry storm.
+    promotion_status = promotion_status_for(verdict.blocked_by)
     await _emit_stage_failure(
         dapr,
         settings,
@@ -1632,8 +1633,14 @@ async def _report_hold(
         project=project,
         token=f"{token}:quality-hold",
         error_message=refusal_message(verdict.blocked_by, settings.to_dataset),
-        promotion_status=promotion_status_for(verdict.blocked_by),
+        promotion_status=promotion_status,
     )
+    # ONLY A PROMOTION VERDICT BECOMES A QUESTION. MISCONFIGURED carries none: it is a deployment
+    # fault no validator can act on, with no target the catalog could publish — so a hold for it
+    # would ask a person a question no answer can act on. Every verdict exists only for a written
+    # version, which is why `result` is present whenever the status is.
+    if promotion_status is None or result is None:
+        return _QUALITY_BLOCKED
     # S3/S4: with review on, the hold becomes a QUESTION rather than a verdict. The stage runner does
     # not decide which kind of hold this is — it publishes what the gate saw, and the review
     # workflow (hosted by the producer, beside the door a person can answer on) splits corrupt
@@ -1658,7 +1665,7 @@ async def _report_hold(
             to_dataset=to_dataset,
             reasons=verdict.reasons,
             originator=trigger.originator or "",
-            version=result.version if result else 0,
+            version=result.version,
         )
         await promotion_hold.publish_hold(dapr, settings, spec)
     return _QUALITY_BLOCKED

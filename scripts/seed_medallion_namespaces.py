@@ -79,30 +79,14 @@ import httpx
 import yaml
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from service_kit.lakehouse.warehouse_registry import project_namespace
+
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
 #: 409 from this door means four different things and they share one error code — see the long note in
 #: seed_estate.py. Treating it as convergence is right for a seed, whose job is that the object exists.
 CONVERGED = (200, 201, 409)
-
-
-def qualified(project: str, namespace: str) -> str:
-    """Project-qualify a namespace exactly as the RUNTIME does, or return it unchanged.
-
-    Byte-identical to ``medallion.workflow._qualified``, and deliberately so: with
-    ``medallion.projectsEnabled`` the cascade writes ``<project>-<tier>`` at runtime while the chart
-    declares the bare tier names, so a seeder reading the chart provisions namespaces the cascade will
-    never ask for and misses every one it will. Measured live 2026-08-26 on tenant ``bind86``: bronze
-    existed as ``bind86-bronze``, silver as an unqualified leftover, gold not at all — and the cascade
-    ran bronze->silver, landed rows, emitted lineage, then died asking for ``bind86-gold``.
-
-    The two must not drift, so ``tests/unit/test_seed_qualification_matches_runtime.py`` pins them
-    against each other rather than trusting this comment.
-    """
-    if not project or namespace.startswith(f"{project}-"):
-        return namespace
-    return f"{project}-{namespace}"
 
 
 class _Lane(BaseModel):
@@ -166,8 +150,12 @@ def declared_namespaces(values_files: Sequence[pathlib.Path], project: str = "")
 
     The producer's bronze namespace is the head; each stage runner names the two it runs between. Ordered
     and de-duplicated so the output reads the way the cascade runs. An empty name is no namespace and
-    is never seeded. With ``project`` set, each is qualified the way the runtime will ask for it — see
-    :func:`qualified`.
+    is never seeded. With ``project`` set, each is qualified by ``project_namespace`` — the function the
+    stage runner names its tiers with (``resolve_stage_identity``) — because the chart declares bare tier
+    names and the cascade asks for ``<project>-<tier>``. Measured live 2026-08-26 on tenant ``bind86``
+    with a seeder that read the bare names: bronze existed as ``bind86-bronze``, silver as an unqualified
+    leftover, gold not at all — and the cascade ran bronze->silver, landed rows, emitted lineage, then
+    died asking for ``bind86-gold``.
 
     Raises:
         TypeError: a values file's top level is not a mapping.
@@ -176,7 +164,7 @@ def declared_namespaces(values_files: Sequence[pathlib.Path], project: str = "")
     medallion = _Medallion.model_validate(load_values(values_files).get("medallion") or {})
     lanes = [*medallion.stage_runners, *medallion.media_stage_runners]
     names = [medallion.producer.bronze_namespace, *(name for lane in lanes for name in (lane.from_namespace, lane.to_namespace))]
-    return [qualified(project, name) for name in dict.fromkeys(name for name in names if name)]
+    return [project_namespace(project, name) for name in dict.fromkeys(name for name in names if name)]
 
 
 def create(client: httpx.Client, warehouse: str, namespace: str) -> tuple[int, str]:

@@ -120,6 +120,11 @@ no format-level CAS.
 | `MISCONFIGURED` | a catalog and a downstream but no target — the chart cannot render this, so it is loud |
 | `NOTHING` | terminal; gold has no downstream |
 
+An approval is a promotion too, and takes the same door: `publish_promotion` asks the catalog to publish
+the version the hold was taken on, and nothing else. So only a promotion VERDICT (`BLOCK`, `HOLD`, a
+refused `PUBLISH`) becomes a hold a person is asked about; `MISCONFIGURED` has no target the catalog
+could publish, and asks nobody.
+
 `UNGOVERNED` exists because publishing needs a catalog and `has_target` does not imply one — a
 precondition that used to ride on a deleted flag's validator. Without it every ungoverned deployment
 answered RETRY forever, on a redelivery that cannot set an env var.

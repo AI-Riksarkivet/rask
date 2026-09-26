@@ -1210,12 +1210,9 @@ def promotion_review(ctx: DaprWorkflowContext, payload: dict[str, Any]) -> Gener
             )
             return {"status": status, "decided_by": decided_by, "reasons": spec.reasons}
 
-    # NOT gated on `pub_topic`. That condition was written when the topic WAS the promotion
-    # mechanism; under a tag-driven cascade the TAG MOVE is the promotion, and `publish_promotion`
-    # already chooses between the two on `spec.version`. Gating here skipped the resume on exactly the
-    # tiers the chart ships terminal — silver-to-gold (`toDataset: gold$catalog`, `requiredAction:
-    # can_promote`) and media-to-silver — so a person approved, no tag moved, and the
-    # `emit_promotion_outcome` below recorded PROMOTED anyway. Wrong data and a lying audit trail.
+    # UNCONDITIONAL: every approval resumes through the catalog, because the tag move IS the
+    # promotion on every tier — the terminal ones included, and silver-to-gold is both terminal and the
+    # tier the chart gates on `can_promote`.
     # AN ERROR BOUNDARY, for the same reason `stage_run` wraps `publish_stage_ready`: the only durable
     # record of this decision is written BELOW, and an exhausted retry policy raising through here
     # took the instance terminal FAILED and skipped it. `publish_stage_output` raises `RegisterError`
@@ -1309,7 +1306,9 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
     event = CatalogControlEvent(
         action="promotion_review_requested",
         object_type="table",
-        object_id=f"table:{_qualified(spec.project, spec.to_dataset)}",
+        # The catalog grants on `table:<catalog id>`, and `to_dataset` IS that id: the stage runner
+        # resolved it (env lanes already tenant-qualified, declared lanes exactly as declared).
+        object_id=f"table:{spec.to_dataset}",
         actor=None,
         extra={"subject": f"user:{spec.approver}", "reasons": spec.reasons, "project": spec.project, "token": spec.token},
         # DERIVED, not defaulted. `event_id` is documented as the client-side dedupe key, and the
@@ -1385,73 +1384,36 @@ def _resume_publish(
 
 
 def publish_promotion(ctx: WorkflowActivityContext, spec: PromotionSpec) -> None:
-    """Resume the promotion a person approved.
+    """Resume the promotion a person approved, through the catalog — the only door that advances a tier.
 
-    Under a tag-driven cascade the resume MOVES THE TAG — the next-stage trigger no longer exists, so
-    firing one would wake nothing. And it cannot be an ordinary re-publish: the version still fails the
-    assertion it failed the first time, so the door would refuse it for exactly the reason the approver
-    just overruled. It publishes with the findings the review ACCEPTED, which is the door built for
-    this — named findings only, and structural ones never.
-
-    Falls back to the trigger when the spec names no written version (0): a hold on a run that wrote
-    nothing has no version to publish.
+    It MOVES THE TAG to the version the hold was taken on; the tag move is what wakes the next lane.
+    It cannot be an ordinary re-publish: the version still fails the assertion it failed the first
+    time, so the door would refuse it for exactly the reason the approver just overruled. It publishes
+    with the findings the review ACCEPTED, which is the door built for this — named findings only, and
+    structural ones never.
     """
     # Dapr hands an activity the DECODED DICT, not the annotated model: the input crossed the
     # durable boundary as JSON and the SDK never reads the annotation. Coerce before use, or every
     # attribute read below is an AttributeError the moment a real workflow runs it (measured live:
     # `'dict' object has no attribute 'outcome'` killed the cascade's own failure reporter).
     spec = PromotionSpec.model_validate(spec)
-    from dapr.aio.clients import DaprClient
-
     from medallion.core.config import get_settings
-    from service_kit.dapr_publish import publish_event
 
     settings = get_settings()
-    if spec.version:
-        _resume_publish(
-            catalog_url=settings.catalog_url,
-            table_id=spec.to_dataset,
-            version=spec.version,
-            key_column=settings.quality_key_column,
-            accept_assertions=list(spec.reasons),
-            app_token=outbound_app_token(settings),
-            service_identity=settings.catalog_service_identity,
-            dedicated_token=_dedicated(settings),
-            token=settings.catalog_token,
-            timeout_seconds=settings.publish_timeout_seconds,
-            originator=spec.originator,
-        )
-        log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "version": spec.version, "accepted": spec.reasons})
-        return
-    if not spec.pub_topic:
-        # Neither a version to publish nor a topic to fire: a hold on a run that wrote nothing, on a
-        # tier with no next lane. Publishing the trigger below would post to `topic_name=""` — not a
-        # promotion, just a malformed publish nothing subscribes to. Nothing to promote is a real
-        # answer, and it is recorded as one.
-        log.warning(
-            "medallion_promotion_has_no_resume_path",
-            extra={"dataset": spec.to_dataset, "token": spec.token},
-        )
-        return
-    trigger: dict[str, Any] = {"token": spec.token, "dataset": spec.to_dataset, "namespace": spec.to_namespace}
-    if spec.project:
-        trigger["project"] = spec.project
-    if spec.originator:
-        trigger["originator"] = spec.originator
-
-    async def _publish() -> None:
-        async with DaprClient() as client:
-            await publish_event(
-                client,
-                timeout_seconds=settings.publish_timeout_seconds,
-                pubsub_name=settings.pubsub,
-                topic_name=spec.pub_topic,
-                data=json.dumps(trigger),
-                data_content_type="application/json",
-            )
-
-    _run_async(_publish())
-    log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "topic": spec.pub_topic})
+    _resume_publish(
+        catalog_url=settings.catalog_url,
+        table_id=spec.to_dataset,
+        version=spec.version,
+        key_column=settings.quality_key_column,
+        accept_assertions=list(spec.reasons),
+        app_token=outbound_app_token(settings),
+        service_identity=settings.catalog_service_identity,
+        dedicated_token=_dedicated(settings),
+        token=settings.catalog_token,
+        timeout_seconds=settings.publish_timeout_seconds,
+        originator=spec.originator,
+    )
+    log.info("medallion_promotion_published", extra={"dataset": spec.to_dataset, "version": spec.version, "accepted": spec.reasons})
 
 
 def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionReport) -> None:
@@ -1484,15 +1446,13 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
         author=spec.author,
         author_subject=settings.fga_service_identity,
         job_namespace=settings.job_namespace,
-        inputs=[(spec.from_namespace, _qualified(spec.project, spec.from_dataset))],
+        # The nodes the held stage wrote its own lineage on, exactly as it resolved them.
+        inputs=[(spec.from_namespace, spec.from_dataset)],
         output_namespace=spec.to_namespace,
-        output_name=_qualified(spec.project, spec.to_dataset),
+        output_name=spec.to_dataset,
         # The version the approver ruled on; `build_run_event`'s default of 1 would name a version the
         # table may never have held, in the record that is supposed to be the durable one.
         version=spec.version,
-        # 0 is no commit: the hold was taken on a run that measured no write, which the stage recorded
-        # as synthetic (`transform._build_stage_event`). Its outcome describes no data either.
-        synthetic=not spec.version,
         token=f"{spec.token}:promotion-{outcome.status.lower()}",
         project=spec.project or None,
         originator=spec.originator or None,
@@ -1517,22 +1477,11 @@ def emit_promotion_outcome(ctx: WorkflowActivityContext, payload: PromotionRepor
     with best_effort(
         "promotion_outcome",
         token=spec.token,
-        dataset=_qualified(spec.project, spec.to_dataset),
+        dataset=spec.to_dataset,
         status=outcome.status,
         decided_by=outcome.decided_by,
     ):
         _run_async(_publish())
-
-
-def _qualified(project: str, dataset: str) -> str:
-    """Project-qualify a dataset id, or return it unchanged for a single-tenant run.
-
-    The A18 defect this file already documents: an unqualified name against tenant-qualified grants
-    counts every recipient HIDDEN, so the audience is computed correctly and then discarded whole.
-    """
-    if not project or dataset.startswith(f"{project}-"):
-        return dataset
-    return f"{project}-{dataset}"
 
 
 # The registration tuples live at the END of the module, after every symbol they name. They used to

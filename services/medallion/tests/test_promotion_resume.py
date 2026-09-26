@@ -12,9 +12,11 @@ findings never, by anyone.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, cast
 
 import pytest
+from pydantic import ValidationError
 
 from medallion.schemas.promotion import PromotionSpec
 
@@ -42,7 +44,6 @@ def _spec(**over: Any) -> PromotionSpec:
         "to_dataset": "gold$catalog",
         "operation": "aggregate_gold",
         "author": "analyst",
-        "pub_topic": "",
         "reasons": ["row_count_positive"],
         "approver": "CiQwOGE4",
         "version": 7,
@@ -87,24 +88,83 @@ class TestTheSpecCarriesTheVersion:
         assert _spec().version == 7
 
 
-class TestAHoldWithNeitherVersionNorTopicPublishesNothing:
-    def test_it_does_not_fire_a_trigger_at_an_EMPTY_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The edge that removing `promotion_review`'s `if spec.pub_topic:` guard opens up.
+class TestTheCatalogIsTheOnlyDoorAnApprovalHas:
+    """`gate_decision`: the stage promotes through the catalog, which is the ONLY door. An approval is
+    a promotion too, so it gets the same single door — a version the catalog is asked to publish."""
 
-        With the caller's guard gone, `publish_promotion` is reached for every approval. A hold on a
-        run that wrote nothing carries `version == 0` and can only resume by trigger — and on a
-        terminal tier there is no topic to fire. Left unguarded that publishes to `topic_name=""`,
-        which is not a promotion, just a malformed publish nothing subscribes to.
+    def test_a_hold_naming_no_written_version_is_refused_at_the_hold_topic(self) -> None:
+        """Lance numbers a dataset's first version 1 (measured on pylance 12.0.0, an empty create
+        included), so 0 names nothing the catalog could publish. Refused where the hold arrives — DROP,
+        because redelivery cannot add a version — and no review is ever opened for it."""
+        from medallion.api.promotions import handle_promotion_held
 
-        Nothing to promote is a real answer here and is recorded as one, rather than reaching Dapr.
-        """
+        scheduled: list[Any] = []
+
+        class _Engine:
+            def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> str:  # noqa: A002
+                scheduled.append(input)
+                return instance_id
+
+            def raise_workflow_event(self, instance_id: str, event_name: str, *, data: Any = None) -> None:
+                raise AssertionError("the hold ingress raises no event")
+
+            def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> Any:
+                return None
+
+        ack = asyncio.run(handle_promotion_held({"data": _spec().model_dump() | {"version": 0}}, client=_Engine()))
+
+        assert ack == {"status": "DROP"}
+        assert scheduled == [], "a review was opened for a hold that names no written version"
+
+    def test_an_approval_never_fires_a_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A valid approval moves the tag once and publishes nothing: a topic fired beside the catalog
+        would advance a tier the catalog never ruled on."""
+        import dapr.aio.clients
+
+        import service_kit.dapr_publish
         from medallion import workflow
 
-        published: list[dict[str, Any]] = []
-        monkeypatch.setattr(workflow, "_resume_publish", lambda **k: published.append(k))
-        monkeypatch.setattr(workflow, "_run_async", lambda coro: published.append({"trigger": True}))
+        resumed: list[dict[str, Any]] = []
+        published: list[str] = []
+
+        def _record_loop(coro: Any) -> None:
+            published.append(f"_run_async({coro.__qualname__})")
+            coro.close()
+
+        async def _record_publish(*_a: Any, **kwargs: Any) -> None:
+            published.append(f"publish to {kwargs.get('topic_name')}")
+
+        class _RecordingDaprClient:
+            def __init__(self, *_a: Any, **_k: Any) -> None:
+                published.append("DaprClient()")
+
+        monkeypatch.setattr(workflow, "_resume_publish", lambda **k: resumed.append(k))
+        monkeypatch.setattr(workflow, "_run_async", _record_loop)
+        monkeypatch.setattr(service_kit.dapr_publish, "publish_event", _record_publish)
+        monkeypatch.setattr(service_kit.dapr_publish, "publish_json", _record_publish)
+        monkeypatch.setattr(dapr.aio.clients, "DaprClient", _RecordingDaprClient)
         _publishing_estate(monkeypatch)
 
-        workflow.publish_promotion(cast("Any", None), _spec(version=0, pub_topic=""))
+        workflow.publish_promotion(cast("Any", None), _spec())
 
-        assert published == [], f"a hold with neither a version nor a topic published something: {published}"
+        assert published == [], f"an approval published beside the catalog: {published}"
+        assert [ask["version"] for ask in resumed] == [7], f"the approval asked the catalog {len(resumed)} times"
+
+    def test_a_decoded_input_naming_no_written_version_is_refused_before_any_publish(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The engine hands the activity its DECODED input. One that names no written version — the
+        shape a stage that wrote nothing produced, carrying a downstream topic — is refused before it
+        can reach any publish, rather than resuming by firing that topic from the producer."""
+        from medallion import workflow
+
+        resumed: list[dict[str, Any]] = []
+        fired: list[Any] = []
+        monkeypatch.setattr(workflow, "_resume_publish", lambda **k: resumed.append(k))
+        monkeypatch.setattr(workflow, "_run_async", lambda coro: fired.append(coro.close()))
+        _publishing_estate(monkeypatch)
+        decoded = _spec().model_dump() | {"version": 0, "pub_topic": "medallion.gold"}
+
+        with pytest.raises(ValidationError):
+            workflow.publish_promotion(cast("Any", None), cast("Any", decoded))
+
+        assert fired == [], "an approval published to a topic: a promotion the catalog never ruled on"
+        assert resumed == [], "an approval asked the catalog to publish a version that does not exist"

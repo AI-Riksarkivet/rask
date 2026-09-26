@@ -145,9 +145,9 @@ _PUBLISH_INTENT: Final[dict[tuple[str, str], str]] = {
     # cascade advances only through `publication_trigger.py` above. This registry's stale-entry check
     # is what forced the row to be removed rather than left behind describing a door that is gone.
     ("services/medallion/src/medallion/workflow.py", "settings.sub_topic"): "trigger",
-    # The withheld next-stage trigger, released by an approval. A TRIGGER like every other cascade
-    # publish: losing one stalls the cascade, it does not lose a committed fact.
-    ("services/medallion/src/medallion/workflow.py", "spec.pub_topic"): "trigger",
+    # `workflow.py` (spec.pub_topic) IS DELIBERATELY ABSENT: an approval promotes only by asking the
+    # catalog to publish the held version (`publish_promotion`), so it has no topic to fire. A row
+    # here would be a second door beside the catalog's tag move.
     # The ASK: a held promotion telling its approver there is something to decide. CONTROL, not
     # lineage — the hold's own lineage FAIL already records what happened to the data; this records
     # what is being asked of a person, and a lost one costs a re-read rather than a committed fact.
@@ -4620,16 +4620,15 @@ def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
     `LANCE_RESERVED_BUCKETS`). So a bare `bronze` is unownable. Two shapes escape that, and an estate
     must be in one of them:
 
-    * **Project-qualified** (`medallion.projectsEnabled`) — `workflow.py::_qualified` prefixes
-      `<project>-` at RUNTIME, so `bronze` becomes `acme-bronze`: still top-level, but owned by that
-      project's warehouse. This is the shape `seed_estate.py` has always built.
+    * **Project-qualified** (`medallion.projectsEnabled`) — `project_namespace` prefixes `<project>-`
+      at RUNTIME (`transform.resolve_stage_identity`), so `bronze` becomes `acme-bronze`: still
+      top-level, but owned by that project's warehouse. This is the shape `seed_estate.py` has always built.
     * **Nested** (`<parent>$bronze`) — the guard returns early for `len(segments) > 1`, so a child
       inherits its parent's warehouse and only the parent is bound.
 
-    THE TRAP IS DOING BOTH. `_qualified` decides by `dataset.startswith(f"{project}-")`, and a nested
-    name does not start with `<project>-` — it starts with `<parent>$`. Measured live 2026-08-25 on an
-    estate whose project was `lakehouse` and whose tiers had been nested under a parent also called
-    `lakehouse`:
+    THE TRAP IS DOING BOTH. `project_namespace` prefixes every declared name unconditionally, so a
+    nested one is qualified too. Measured live 2026-08-25 on an estate whose project was `lakehouse`
+    and whose tiers had been nested under a parent also called `lakehouse`:
 
         POST /v1/table/lakehouse-lakehouse$gold$catalog/create -> 403
 
@@ -4662,9 +4661,8 @@ def test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse() -> None:
         # produces the doubled id above, so it is refused regardless of the warehouse setting.
         doubled = [ns for ns in declared if delimiter in ns]
         assert not doubled, (
-            "medallion.projectsEnabled is true, so `_qualified` prefixes `<project>-` at runtime — but "
-            "these namespaces are already nested, and a nested name does not start with `<project>-`, so "
-            "it gets qualified ANYWAY:\n  " + "\n  ".join(doubled) + "\n\n"
+            "medallion.projectsEnabled is true, so `project_namespace` prefixes `<project>-` at runtime — "
+            "and these namespaces are already nested, so they get qualified ANYWAY:\n  " + "\n  ".join(doubled) + "\n\n"
             "The result is `<project>-<parent>$<tier>`, a table id nothing can create — every hop 403s and "
             "the stage runner logs only `medallion_stage_failed`. Declare the bare tier name and let the runtime "
             "qualify it."

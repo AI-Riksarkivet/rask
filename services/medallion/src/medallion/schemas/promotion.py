@@ -23,16 +23,14 @@ class PromotionSpec(BaseModel):
 
     token: str
     project: str = ""
+    #: The four names the held stage resolved (`resolve_stage_identity`): catalog ids, already
+    #: tenant-qualified on an env lane and exactly as declared on a declared one. Every consumer —
+    #: lineage nodes, FGA objects, the catalog publish — uses them AS GIVEN; re-qualifying one names
+    #: an object the stage never wrote and no grant mentions.
     from_namespace: str
     from_dataset: str
     to_namespace: str
     to_dataset: str
-    #: Where the next stage listens; empty means TERMINAL — no next lane to wake. It does NOT mean
-    #: "promotes nothing", which is what this said while the resume was gated on it: under a
-    #: tag-driven cascade the tag move IS the promotion, and a terminal tier is precisely where it
-    #: matters (the chart gates silver-to-gold on `can_promote` and ships it `pubTopic: ""`).
-    #: `publish_promotion` picks tag-move vs trigger on `version`, never on this.
-    pub_topic: str = ""
     #: WHICH assertions failed. On the SPEC, set by the caller from the run's own result — never read
     #: from settings inside the body, where a value could change under a running instance.
     reasons: list[str] = Field(default_factory=list)
@@ -43,8 +41,9 @@ class PromotionSpec(BaseModel):
     approval_hours: int = 72
     #: The version the hold was taken on. The resume must publish THIS one — a later commit may have
     #: landed while the approver was deciding, and publishing that would ship a version nobody
-    #: reviewed. 0 names no written version, and `publish_promotion` then resumes by trigger.
-    version: int
+    #: reviewed. At least 1: Lance numbers a dataset's first version 1 (measured on pylance 12.0.0),
+    #: so a hold is only ever taken on something the catalog can be asked to publish.
+    version: int = Field(ge=1)
     #: The HELD STAGE's own lineage identity, resolved at hold time in the stage runner. The outcome is
     #: emitted by the PRODUCER, whose settings describe no stage, so a hold that cannot name its stage
     #: is refused at the hold topic rather than recorded under the producer's defaults.

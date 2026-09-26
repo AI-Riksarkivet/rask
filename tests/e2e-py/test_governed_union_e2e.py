@@ -476,7 +476,7 @@ ADMIN_TOKEN = os.environ.get("LANCE_E2E_ADMIN_TOKEN", "")
 def _ds(name: str) -> str:
     """Project-qualify a dataset id — `silver$features` -> `<project>-silver$features` for a tenant.
 
-    `workflow.py::_qualified` does this at RUNTIME, so the graph records the qualified name and a suite
+    `project_namespace` does this at RUNTIME, so the graph records the qualified name and a suite
     that asks for the bare one gets nothing back and reports it as an absent cascade.
     """
     return f"{PROJECT}-{name}" if PROJECT else name
@@ -785,7 +785,7 @@ def test_quality_gate_blocks_bad_batch_and_records_verdict(stack: tuple[str, str
         f"{STAGE_RUNNER_URL.rstrip('/')}/medallion-event",
         # BARE ids PLUS `project`, which is the shape `publication_trigger` actually publishes:
         # `accepted_input_names` compares `dataset` against the stage runner's own `MEDALLION_FROM_DATASET`
-        # (`bronze$events`, unqualified), and `_qualified` re-applies the project at RUNTIME from the
+        # (`bronze$events`, unqualified), and `project_namespace` applies the project at RUNTIME from the
         # separate field. Sent qualified and project-less, the stage runner answered `medallion_stage_other_lane`
         # — a ROUTING drop, which `_DROP` renders identically to a governance block, so the assertion
         # below passed on a trigger that never reached the quality gate at all.

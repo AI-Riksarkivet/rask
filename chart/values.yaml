@@ -1200,7 +1200,7 @@ medallion:
   # could not be created through either door (403 on the warehouse door, 400 "must belong to a warehouse"
   # on the root door), and `bronze`/`silver` survived only because they predate the guard.
   #
-  # With this on, `workflow.py::_qualified` prefixes `<project>-` at runtime, so the bare `bronze`
+  # With this on, `project_namespace` prefixes `<project>-` at runtime, so the bare `bronze`
   # declared below becomes `acme-bronze` — top-level, and owned by that project's warehouse. That is the
   # shape seed_estate.py has always built. Pinned by
   # tests/unit/test_invariants.py::test_a_medallion_NAMESPACE_can_actually_belong_to_a_warehouse.
@@ -1476,14 +1476,13 @@ medallion:
     # the first hop with a 200 OK on the wire.
     bronzeDataset: bronze$events
     # DECLARED UNQUALIFIED. On a projects-enabled estate the tier name is qualified at RUNTIME —
-    # `medallion/workflow.py::_qualified` prefixes `<project>-` unless the name already carries it — so
+    # `project_namespace` prefixes `<project>-` to every declared name — so
     # `bronze` becomes `acme-bronze`, a TOP-LEVEL namespace owned by that project's warehouse. That
     # satisfies `require_warehouse_scoped` (the namespace does belong to a warehouse) without nesting,
     # and it is the shape `seed_estate.py` has always built.
     #
     # DO NOT pre-qualify or pre-nest these. Measured 2026-08-25: declaring `lakehouse$gold` on an estate
-    # whose project is `lakehouse` produced `lakehouse-lakehouse$gold$catalog` — `_qualified` tests
-    # `startswith(f"{project}-")`, and `lakehouse$…` does not start with `lakehouse-`, so it qualified a
+    # whose project is `lakehouse` produced `lakehouse-lakehouse$gold$catalog`: the runtime qualified a
     # name that was already parented. Every silver→gold hop then 403'd on a table id that can never exist.
     #
     # A single-bucket estate (projects off, warehouses off) reads these verbatim and lands them in the

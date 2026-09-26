@@ -15,14 +15,13 @@ other stage — by publishing an event.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Annotated, Any, Protocol
 
 from dapr.ext.fastapi import DaprApp
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
+from lance_namespace import InvalidTableStateError, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
 from pydantic import BaseModel, ValidationError
 
 from medallion.api.dependencies import SettingsDep
@@ -143,7 +142,12 @@ def _client(client: _Client | None) -> _Client:
 
 
 def _live_spec(client: _Client, instance_id: str) -> PromotionSpec:
-    """Load the promotion behind `instance_id`, refusing anything this app cannot actually resume."""
+    """Load the promotion behind `instance_id`, refusing anything this app cannot actually resume.
+
+    A live instance whose stored input no longer validates is `InvalidTableState`: the review exists
+    and its state cannot serve the request, and a retry reads the same bytes. The response carries no
+    internals, so the log names the instance and the failing fields for the operator who must clear it.
+    """
     state = client.get_workflow_state(instance_id, fetch_payloads=True)
     if state is None:
         raise TableNotFoundError(f"no promotion under review with id {instance_id!r}")
@@ -151,21 +155,25 @@ def _live_spec(client: _Client, instance_id: str) -> PromotionSpec:
     if not _is_live(status):
         name = getattr(status, "name", str(status))
         raise TableNotFoundError(f"promotion {instance_id!r} is no longer under review ({name})")
-    return PromotionSpec.model_validate(json.loads(state.serialized_input or "{}"))
+    try:
+        return PromotionSpec.model_validate_json(state.serialized_input or "{}")
+    except ValidationError as exc:
+        log.warning(
+            "medallion_promotion_review_unreadable",
+            extra={"instance_id": instance_id, "fields": [".".join(str(part) for part in error["loc"]) for error in exc.errors()]},
+        )
+        raise InvalidTableStateError(f"promotion {instance_id!r} is under review but its stored input can no longer be read") from exc
 
 
 def promotion_object(spec: PromotionSpec) -> str:
     """The FGA object a decision is gated on: the DESTINATION stage of the promotion.
 
     `can_promote: validator` is a rung on the namespace being promoted INTO — a writer may write
-    within a stage without being able to promote into a gated one. Project-qualified the same way
-    lineage's audience is, and left bare on a projectless estate (#84), where a prefix would name an
-    object no tuple mentions.
+    within a stage without being able to promote into a gated one. `to_namespace` is used as given:
+    it is the namespace the stage runner resolved and checked its own rung on, so the approver is
+    gated on the same object the grants name.
     """
-    ns = spec.to_namespace
-    if spec.project and not ns.startswith(f"{spec.project}-"):
-        ns = f"{spec.project}-{ns}"
-    return f"namespace:{ns}"
+    return f"namespace:{spec.to_namespace}"
 
 
 async def handle_promotion_held(event: dict[str, Any], *, client: _Client | None = None) -> dict[str, str]:
@@ -236,7 +244,7 @@ async def decide_promotion(
     wf_client = _client(client)
     try:
         spec = await _bounded(_live_spec, wf_client, instance_id)
-    except (TableNotFoundError, PermissionDeniedError):
+    except (TableNotFoundError, PermissionDeniedError, InvalidTableStateError):
         raise
     except Exception as exc:
         raise ServiceUnavailableError("the workflow engine is not available") from exc
@@ -287,7 +295,8 @@ async def decide(
     subject: Annotated[str | None, Depends(authenticate_subject)],
 ) -> DecisionAccepted:
     """Approve or reject a held promotion. 403 without a signed-in `can_promote` holder on the
-    destination stage; 404 when this app hosts no live review under that id."""
+    destination stage; 404 when this app hosts no live review under that id; 409 when the review's
+    stored input can no longer be read."""
     outcome = await decide_promotion(
         instance_id,
         approved=body.approved,

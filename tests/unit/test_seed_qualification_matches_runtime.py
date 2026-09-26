@@ -10,21 +10,21 @@ and the cascade ran bronze->silver, landed rows, emitted lineage, held the promo
 then died asking for `bind86-gold$catalog` with a 403 that was really a 404, because the catalog runs
 its authorization gate BEFORE existence resolution and the two are indistinguishable from outside.
 
-THE MECHANISM. With `medallion.projectsEnabled`, `medallion.workflow._qualified` prefixes
-`<project>-` at runtime, so a chart that declares `gold` produces `bind86-gold`. But
-`seed_medallion_namespaces.py` read the chart's BARE names and had no `--project` at all, so it could
-only ever create the unqualified set: namespaces the cascade will never ask for, and none of the ones
-it will. Every tenant's tiers were therefore unprovisioned by construction, and the failure surfaced
-one hop from the end, in a stage runner log, as a permissions error.
+THE MECHANISM. With `medallion.projectsEnabled`, the stage runner names its tiers with
+`project_namespace` (`transform.resolve_stage_identity`), so a chart that declares `gold` produces
+`bind86-gold`. A seeder that provisions the chart's BARE names creates namespaces the cascade will
+never ask for, and none of the ones it will: every tenant's tiers are unprovisioned by construction,
+and the failure surfaces one hop from the end, in a stage runner log, as a permissions error.
 
 That script's own docstring already names this failure class, one level up — "authorization and
-existence were seeded by different files and only one of them ran". It recurred one level down
-because the two files agreed about the NAME and disagreed about the PROJECT.
+existence were seeded by different files and only one of them ran". It recurs one level down when
+the two files agree about the NAME and disagree about the PROJECT.
 
-WHY PIN THEM AGAINST EACH OTHER. Two implementations of one rule, in two languages, in two
-directories, run by different people at different times. Nothing reads both, a divergence is
-invisible in review, and the symptom appears hours later as a 403 nobody can attribute. Comparing the
-functions directly is the only check that stays true when either one is edited.
+WHY ONE FUNCTION, AND WHY PIN IT. The seeder and the stage runner run at different times, by
+different people, and a divergence between them is invisible in review until a 403 nobody can
+attribute. So the seeder calls the runtime's own `project_namespace` rather than a copy of it, and the
+check that stays true when either side is edited is the one below: the names the seeder would POST
+contain every namespace each chart stage runner resolves.
 """
 
 from __future__ import annotations
@@ -52,40 +52,77 @@ def _seeder() -> ModuleType:
     return module
 
 
-def _seed_qualified():
-    return _seeder().qualified
+def test_the_seeder_qualifies_with_the_runtime_s_own_function() -> None:
+    """One rule, not two copies of it: a copy agrees with the runtime only until either is edited."""
+    from service_kit.lakehouse.warehouse_registry import project_namespace
+
+    assert _seeder().project_namespace is project_namespace, "the seeder qualifies tier names with its own copy of the rule"
 
 
-def _runtime_qualified():
-    from medallion.workflow import _qualified
+def test_the_seeder_names_every_tier_through_that_function(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the CALL, not the binding: a copy defined inside `declared_namespaces` shadows the import
+    and leaves the module attribute untouched."""
+    from service_kit.lakehouse.warehouse_registry import project_namespace
 
-    return _qualified
+    seeder = _seeder()
+    asked: list[tuple[str, str]] = []
+
+    def _recorded(project: str, name: str) -> str:
+        asked.append((project, name))
+        return project_namespace(project, name)
+
+    monkeypatch.setattr(seeder, "project_namespace", _recorded)
+
+    seeded = seeder.declared_namespaces([REPO / "chart/values.yaml"], "bind86")
+
+    assert asked, "the seeder named its tiers without calling the runtime's rule"
+    assert seeded == [project_namespace(project, name) for project, name in asked], "the seeder named a tier the runtime's rule did not"
 
 
-#: The cases that matter, including the two that are easy to get wrong: an ALREADY-qualified name must
-#: not be double-prefixed (the cascade re-qualifies its own output on every hop), and an empty project
-#: must leave the name untouched (a single-tenant estate has no prefix).
-_CASES = [
-    ("bind86", "gold", "bind86-gold"),
-    ("bind86", "silver", "bind86-silver"),
-    ("bind86", "bronze-media", "bind86-bronze-media"),
-    ("bind86", "bind86-gold", "bind86-gold"),
-    ("acme", "gold", "acme-gold"),
-    ("", "gold", "gold"),
-    ("", "acme-gold", "acme-gold"),
-]
+def test_a_pre_prefixed_tier_is_seeded_as_the_stage_runner_asks_for_it(tmp_path: Path) -> None:
+    """The input a guarded copy of the rule answers differently: a tier already named `bind86-gold`."""
+    from medallion.core.config import MedallionSettings
+    from medallion.services.transform import resolve_stage_identity
 
-
-@pytest.mark.parametrize(("project", "name", "expected"), _CASES)
-def test_the_seeder_and_the_runtime_agree(project: str, name: str, expected: str) -> None:
-    seed, runtime = _seed_qualified(), _runtime_qualified()
-
-    assert seed(project, name) == expected, f"the SEEDER would provision {seed(project, name)!r}"
-    assert runtime(project, name) == expected, f"the RUNTIME would ask for {runtime(project, name)!r}"
-    assert seed(project, name) == runtime(project, name), (
-        "the seeder provisions one name and the cascade asks for another — the tier will not exist "
-        "when the stage runner reaches it, and the refusal will read as a permissions error"
+    stage = MedallionSettings(
+        MEDALLION_FROM_NAMESPACE="silver",
+        MEDALLION_FROM_DATASET="silver$features",
+        MEDALLION_TO_NAMESPACE="bind86-gold",
+        MEDALLION_TO_DATASET="bind86-gold$catalog",
     )
+    asked = resolve_stage_identity(stage, spec=None, project="bind86").to_namespace
+    assert asked == "bind86-bind86-gold", "the stage runner's rule no longer separates this case from a guarded copy"
+
+    lane = {"fromNamespace": "silver", "toNamespace": "bind86-gold"}
+    seeded = _seeder().declared_namespaces([_values(tmp_path, {**_HEAD, "stageRunners": [lane]})], "bind86")
+
+    assert asked in seeded, f"the cascade asks for {asked!r}, which the seeder would never provision; it seeds {seeded}"
+
+
+@pytest.mark.parametrize("project", ["bind86", ""])
+def test_the_seeder_provisions_every_namespace_a_stage_runner_asks_for(project: str) -> None:
+    """Every chart stage runner, resolved the way it resolves itself, for a tenant and for the
+    single-tenant estate — against the list the seeder would POST."""
+    from medallion.core.config import MedallionSettings
+    from medallion.services.transform import resolve_stage_identity
+
+    values = REPO / "chart/values.yaml"
+    medallion = yaml.safe_load(values.read_text(encoding="utf-8"))["medallion"]
+    rows = [*medallion["stageRunners"], *(medallion.get("mediaStageRunners") or [])]
+    assert rows, "the chart declares no stage runners, so this check would prove nothing"
+    asked: set[str] = set()
+    for row in rows:
+        stage = MedallionSettings(
+            MEDALLION_FROM_NAMESPACE=row["fromNamespace"],
+            MEDALLION_FROM_DATASET=row["fromDataset"],
+            MEDALLION_TO_NAMESPACE=row["toNamespace"],
+            MEDALLION_TO_DATASET=row["toDataset"],
+        )
+        identity = resolve_stage_identity(stage, spec=None, project=project)
+        asked |= {identity.from_namespace, identity.to_namespace}
+
+    seeded = set(_seeder().declared_namespaces([values], project))
+    assert asked <= seeded, f"the cascade asks for {sorted(asked - seeded)}, which the seeder would never provision; it seeds {sorted(seeded)}"
 
 
 def test_the_seeder_can_target_a_project_at_all() -> None:

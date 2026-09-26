@@ -66,7 +66,6 @@ async def test_a_failed_promotion_hold_records_the_error_string(caplog: pytest.L
         from_dataset="bronze.docs",
         to_namespace="silver",
         to_dataset="silver.docs",
-        pub_topic=settings.pub_topic,
         reasons=["row_count_zero"],
         version=3,
         operation="embed_features",

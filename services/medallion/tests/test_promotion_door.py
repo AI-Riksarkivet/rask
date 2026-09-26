@@ -58,17 +58,17 @@ class _WorkflowClient:
 
 
 def _held(**over: Any) -> dict[str, Any]:
+    """A chart lane's hold for tenant `acme`, named as the stage runner resolved it."""
     base: dict[str, Any] = {
         "token": "tok-1",
         "project": "acme",
-        "from_namespace": "silver",
-        "from_dataset": "silver$features",
-        "to_namespace": "gold",
-        "to_dataset": "gold$catalog",
+        "from_namespace": "acme-silver",
+        "from_dataset": "acme-silver$features",
+        "to_namespace": "acme-gold",
+        "to_dataset": "acme-gold$catalog",
         "operation": "aggregate_gold",
         "author": "analyst",
-        "version": 0,
-        "pub_topic": "",
+        "version": 7,
         "reasons": ["row_delta_band"],
         "approver": "CiQwOGE4Njg0Yi1kYjg4",
         "originator": "CiQwOGE4Njg0Yi1kYjg4",
@@ -226,7 +226,8 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
     async def test_an_unqualified_destination_is_used_as_is(self) -> None:
         """A projectless estate (#84) has no tenant prefix to add, and inventing one would gate against
         an object no tuple names."""
-        client = _WorkflowClient(instances={instance_for("tok-1"): _State(_held(project=""), WorkflowStatus.RUNNING)})
+        projectless = _held(project="", from_namespace="silver", from_dataset="silver$features", to_namespace="gold", to_dataset="gold$catalog")
+        client = _WorkflowClient(instances={instance_for("tok-1"): _State(projectless, WorkflowStatus.RUNNING)})
         gated: list[tuple[str, str]] = []
 
         async def _authorize(*, subject: str, obj: str) -> None:
@@ -235,6 +236,23 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
         await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
 
         assert gated == [("alice", "namespace:gold")]
+
+    @pytest.mark.asyncio
+    async def test_a_DECLARED_lane_gates_on_the_namespace_the_stage_resolved(self) -> None:
+        """A lane declared through the catalog door may name tenant-free ids, and the stage runner checks
+        its own `can_promote` on exactly the namespace it resolved (`namespace:curated`). The approver
+        must be gated on the same object: re-qualifying it names `namespace:acme-curated`, which no
+        tuple mentions, so every validator would be refused."""
+        declared = _held(from_namespace="landing", from_dataset="landing$events", to_namespace="curated", to_dataset="curated$catalog")
+        client = _WorkflowClient(instances={instance_for("tok-1"): _State(declared, WorkflowStatus.RUNNING)})
+        gated: list[tuple[str, str]] = []
+
+        async def _authorize(*, subject: str, obj: str) -> None:
+            gated.append((subject, obj))
+
+        await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
+
+        assert gated == [("alice", "namespace:curated")]
 
 
 class TestTheRungIsValidatorNotAdmin:

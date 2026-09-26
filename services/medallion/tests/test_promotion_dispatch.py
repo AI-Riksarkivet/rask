@@ -82,9 +82,10 @@ class TestWhatTheHoldCarries:
         assert spec.approval_hours == 48
         assert spec.approver == "CiQwOGE4"
 
-    def test_it_carries_the_DOWNSTREAM_topic_so_an_approval_can_resume_the_cascade(self) -> None:
-        """The approval happens in the producer, which has no idea what this stage runner's next hop is. If
-        the topic does not ride along, a yes records a decision and promotes nothing."""
+    def test_the_hold_carries_NO_downstream_topic(self) -> None:
+        """An approval resumes by asking the catalog to publish the held version, and the tag move wakes
+        the next lane. A topic on the hold would hand the producer a way to wake it directly — the
+        second door `gate_decision` rules out — so the stage runner's downstream never leaves it."""
         spec = hold_spec(
             _settings(MEDALLION_PUB_TOPIC="medallion.gold"),
             token="tok-1",
@@ -98,25 +99,7 @@ class TestWhatTheHoldCarries:
             version=7,
         )
 
-        assert spec.pub_topic == "medallion.gold"
-
-    def test_a_TERMINAL_stage_carries_no_topic_and_that_is_not_an_error(self) -> None:
-        """Gold has no next hop. An approval there records the decision and promotes nothing, which is
-        the honest outcome for the last tier."""
-        spec = hold_spec(
-            _settings(),
-            token="tok-1",
-            project="acme",
-            from_namespace="silver",
-            from_dataset="silver$features",
-            to_namespace="gold",
-            to_dataset="gold$catalog",
-            reasons=["row_count_positive"],
-            originator="",
-            version=7,
-        )
-
-        assert spec.pub_topic == ""
+        assert "medallion.gold" not in spec.model_dump_json(), f"the hold carries the downstream topic: {spec.model_dump()}"
 
 
 class TestPublishingTheHold:

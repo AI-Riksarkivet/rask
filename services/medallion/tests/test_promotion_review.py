@@ -86,8 +86,7 @@ def _spec(**over: Any) -> PromotionSpec:
         "to_dataset": "acme-gold$catalog",
         "operation": "aggregate_gold",
         "author": "analyst",
-        "version": 0,
-        "pub_topic": "medallion.gold",
+        "version": 7,
         "approver": "CiQwOGE4Njg0Yi1kYjg4",
         "reasons": ["row_delta_band"],
         "originator": "CiQwOGE4Njg0Yi1kYjg4",
@@ -149,27 +148,6 @@ class TestAnUnusualPromotionAsksAPerson:
         assert result["status"] == "PROMOTED"
         assert result["decided_by"] == "CiQwOGE4Njg0Yi1kYjg4", "the decision is part of the audit, not a side effect"
         assert "call_activity(publish_promotion)" in ctx.actions, "an approved promotion must actually resume the cascade"
-
-    def test_an_approved_promotion_on_a_TERMINAL_tier_STILL_MOVES_THE_TAG(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The tier the chart actually gates on `can_promote` is the one that promoted nothing.
-
-        `promotion_review` guarded the resume with `if spec.pub_topic:` — a condition written when
-        pub_topic WAS the promotion mechanism. Under a tag-driven cascade the TAG MOVE is the
-        promotion, and `publish_promotion` already chooses between them on `spec.version`. So on the
-        terminal tiers the chart ships with `pubTopic: ""` — silver-to-gold (`toDataset:
-        gold$catalog`, `requiredAction: can_promote`) and media-to-silver — a person approved, the
-        tag never moved, and `emit_promotion_outcome` recorded PROMOTED one line below regardless.
-        Wrong data and a lying audit trail from one stale condition.
-        """
-        ctx = _Ctx(
-            {"resolve_review_policy": {"verdict": "review", "reasons": ["row_delta_band"]}, "request_approval": True},
-            external={"approved": True, "subject": "CiQwOGE4Njg0Yi1kYjg4"},
-        )
-
-        result = _drive(ctx, _spec(pub_topic="", version=7), monkeypatch)
-
-        assert result["status"] == "PROMOTED"
-        assert "call_activity(publish_promotion)" in ctx.actions, "an approved promotion on the last tier recorded PROMOTED without moving the tag"
 
     def test_a_REJECTION_records_the_decision_and_promotes_NOTHING(self, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = _Ctx(
@@ -268,15 +246,6 @@ class TestTheActivitiesActuallyRUN:
         from medallion.workflow import request_approval
 
         assert request_approval(cast(Any, None), _spec(approver="")) is False
-
-    def test_the_dataset_id_is_PROJECT_QUALIFIED_or_the_approver_is_hidden(self) -> None:
-        """A18, again: an unqualified name against tenant-qualified grants counts every recipient
-        HIDDEN, so the audience is computed correctly and then discarded whole."""
-        from medallion.workflow import _qualified
-
-        assert _qualified("acme", "gold$catalog") == "acme-gold$catalog"
-        assert _qualified("acme", "acme-gold$catalog") == "acme-gold$catalog", "already-qualified must not double-prefix"
-        assert _qualified("", "gold$catalog") == "gold$catalog", "a single-tenant run stays unqualified"
 
     def test_a_service_cannot_approve_its_own_promotion(self) -> None:
         from medallion.workflow import settings_author_marker

@@ -49,11 +49,10 @@ def hold_spec(
 ) -> PromotionSpec:
     """Everything the review needs to resume the cascade, resolved at DISPATCH.
 
-    The deadline, the approver and the downstream topic all ride the spec rather than being read
-    inside the workflow: a body that reads settings replays against whatever the value is now instead
-    of what it was when the promotion was held. `pub_topic` matters most — the producer hosting the
-    review has no idea what this stage runner's next hop is, so without it an approval records a decision and
-    promotes nothing.
+    The deadline and the approver ride the spec rather than being read inside the workflow: a body
+    that reads settings replays against whatever the value is now instead of what it was when the
+    promotion was held. No downstream topic rides it: an approval resumes by asking the catalog to
+    publish `version`, and the tag move is what wakes the next lane.
     """
     return PromotionSpec(
         token=token,
@@ -62,7 +61,6 @@ def hold_spec(
         from_dataset=from_dataset,
         to_namespace=to_namespace,
         to_dataset=to_dataset,
-        pub_topic=settings.pub_topic,
         reasons=reasons,
         approver=settings.quality_review_approver,
         originator=originator,
@@ -75,7 +73,7 @@ def hold_spec(
         # `settings` is the held stage's. The producer that emits the outcome reads its own settings
         # and sets neither var, so before these rode the spec every approved promotion was recorded
         # as `embed_features`/`data_eng` — right by accident for a silver hold, wrong for every
-        # other lane. Same reason `pub_topic` is resolved at dispatch rather than in the workflow.
+        # other lane. Same reason the approver and deadline are resolved at dispatch.
         operation=settings.operation,
         author=settings.author,
     )

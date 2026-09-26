@@ -26,6 +26,7 @@ import pytest
 from dapr.ext.workflow import WorkflowActivityContext
 
 from medallion import workflow as wf
+from service_kit.governed.fga import canonical_object_id
 
 
 class _StubActivityContext:
@@ -44,21 +45,27 @@ def _ctx() -> WorkflowActivityContext:
 
 
 def _spec(**overrides: Any) -> dict[str, Any]:
+    """A chart lane's hold for tenant `acme`: the stage runner has already qualified all four names."""
     base = {
         "token": "tok-1",
         "project": "acme",
-        "from_namespace": "silver",
-        "from_dataset": "acme-silver$t",
-        "to_namespace": "gold",
-        "to_dataset": "catalog",
+        "from_namespace": "acme-silver",
+        "from_dataset": "acme-silver$features",
+        "to_namespace": "acme-gold",
+        "to_dataset": "acme-gold$catalog",
         "operation": "aggregate_gold",
         "author": "analyst",
-        "version": 0,
+        "version": 7,
         "reasons": ["row_count_drop"],
         "approver": "alice",
         "approval_hours": 24,
     }
     return {**base, **overrides}
+
+
+def _catalog_table_object(table_id: str) -> str:
+    """The object the CATALOG grants on for this table: `table:<canonical catalog id>`, never re-spelled."""
+    return f"table:{canonical_object_id(table_id.split('$'), delimiter='$')}"
 
 
 @pytest.fixture
@@ -101,12 +108,23 @@ def test_the_ask_names_the_approver_as_the_subject(published: list[dict[str, Any
     assert event["extra"]["subject"] == "user:alice", (
         "the subject is the entire targeting for the control lane; anything but `user:<sub>` is filed IGNORED with a SUCCESS ack and reaches nobody"
     )
-    assert event["object_id"] == "table:acme-catalog", (
-        "the object must be project-qualified: an unqualified name against tenant-qualified grants "
-        "counts every recipient HIDDEN, so the audience is computed correctly and then discarded whole"
+    assert event["object_id"] == _catalog_table_object("acme-gold$catalog"), (
+        "the object must be the table the catalog grants on: any other spelling counts every recipient "
+        "HIDDEN, so the audience is computed correctly and then discarded whole"
     )
     assert event["extra"]["reasons"] == ["row_count_drop"]
     assert event["extra"]["token"] == "tok-1", "the token is how the approver's decision finds this hold"
+
+
+def test_a_DECLARED_lane_ask_targets_the_table_the_catalog_knows(published: list[dict[str, Any]]) -> None:
+    """A lane declared through the catalog door may name tenant-free ids (`curated$catalog`), and the
+    stage resolves exactly those. The ask must gate the approver on THAT table: re-qualifying it names
+    `table:acme-curated$catalog`, an object no grant mentions, so every approver is counted HIDDEN."""
+    spec = _spec(from_namespace="landing", from_dataset="landing$events", to_namespace="curated", to_dataset="curated$catalog")
+
+    assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(spec)) is True
+
+    assert json.loads(published[0]["data"])["object_id"] == _catalog_table_object("curated$catalog")
 
 
 def test_the_control_topic_is_the_one_the_inbox_subscribes_to(published: list[dict[str, Any]]) -> None:

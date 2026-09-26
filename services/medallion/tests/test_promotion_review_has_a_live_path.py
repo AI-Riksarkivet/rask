@@ -21,11 +21,8 @@ The door exists. `POST /management/v1/table/{id}/publish` with `accept_assertion
 published by naming it — then advances the tag and emits `table_published`. That IS "a validator
 accepted data the gate refused", and it IS the tag-driven resume.
 
-What is still missing is the WIRING, which is a smaller thing than a missing API: an approved hold
-resumes via `workflow.publish_promotion` -> `spec.pub_topic`, and under `cascadeViaPublish` there is
-no `pub_topic` for it to publish to — the resume must call that publish door with the accepted
-assertion names instead. And `transform.py`'s gate is one `if/elif` chain whose publish branch always
-takes under `cascadeViaPublish`, so the band that raises the hold never runs in the first place.
+The WIRING is `workflow.publish_promotion`: an approved hold resumes by calling that publish door
+with the accepted assertion names, on the version the hold was taken on, and through no other path.
 
 This test does not defend the current shape. It defends the decision being made explicitly.
 """

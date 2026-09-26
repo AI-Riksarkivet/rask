@@ -28,10 +28,9 @@ hid: on a bronze->silver promotion the emit is ACCIDENTALLY correct, and only a 
 outputs on the same event ARE right -- but not the operation or the author, so the one activity that
 knows which stage was held cannot say so.
 
-WHY THIS IS THE SAME BUG THE FILE ALREADY FIXED ONCE. `hold_spec`'s docstring says `pub_topic`
-"matters most -- the producer hosting the review has no idea what this stage runner's next hop is, so
-without it an approval records a decision and promotes nothing." Identical reasoning, identical
-carrier, and the operation/author/version were left behind.
+THE SPEC IS THE ONLY CARRIER. The producer hosting the review knows nothing about the stage it is
+reviewing, so every field the outcome names -- job, author, version and the four table names -- rides
+the spec from the stage runner that resolved them, and the emit uses them exactly as given.
 
 NOT a notifications regression: `author` here is a chart ROLE LITERAL by design (see the
 `rask-notifications` skill, trap 1 -- `enforce_author` would overwrite a human anyway), and
@@ -44,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 from collections.abc import Iterator
 from typing import Any, cast
 
@@ -58,6 +58,7 @@ from medallion.schemas.promotion import PromotionSpec
 from medallion.services.promotion_hold import hold_spec, publish_hold
 from medallion.services.transform import StageIdentity, resolve_stage_identity
 from medallion.workflow import PromotionOutcome, PromotionReport, emit_promotion_outcome
+from service_kit.lakehouse.transform_specs import TransformSpec
 
 
 #: The producer's real deployed state: neither var is set, so `MedallionSettings` falls to the
@@ -137,6 +138,31 @@ def _approved_hold(stage: MedallionSettings, *, version: int) -> tuple[StageIden
 def _gold_hold() -> tuple[StageIdentity, PromotionReport]:
     """A silver->gold promotion held on v48, approved. The lane the producer's defaults do NOT describe."""
     return _approved_hold(_silver_to_gold_stage(), version=48)
+
+
+#: A lane declared through the catalog's door, for the tenant. Its ids are CATALOG identifiers and the
+#: door does not require them to carry `<project>-` (`TransformSpec.from_id` documents `bronze$events`),
+#: so the stage resolves exactly these names and writes its own lineage on them.
+_DECLARED = TransformSpec(name="curate", project=_PROJECT, from_id="landing$events", to_id="curated$catalog", task="dummy")
+
+
+def _declared_hold() -> tuple[StageIdentity, PromotionReport]:
+    """An approved hold on the declared lane, composed the way `transform._report_hold` composes it."""
+    stage = _silver_to_gold_stage()
+    identity = resolve_stage_identity(stage, spec=_DECLARED, project=_PROJECT)
+    spec = hold_spec(
+        stage,
+        token="tok-declared",
+        project=_PROJECT,
+        from_namespace=identity.from_namespace,
+        from_dataset=identity.from_dataset,
+        to_namespace=identity.to_namespace,
+        to_dataset=identity.to_dataset,
+        reasons=["row_count_positive"],
+        originator="alice",
+        version=5,
+    )
+    return identity, PromotionReport(spec=spec, outcome=PromotionOutcome(status="PROMOTED", decided_by="alice"))
 
 
 @pytest.fixture
@@ -228,6 +254,41 @@ def test_the_outputs_were_never_the_broken_half(captured: list[dict[str, Any]]) 
     )
 
 
+def test_a_DECLARED_lane_outcome_lands_on_the_tables_the_stage_wrote(captured: list[dict[str, Any]]) -> None:
+    """The stage resolved `landing$events` -> `curated$catalog`, wrote its lineage there, and handed
+    those names over on the spec. Re-qualifying them in the producer names `acme-curated$catalog`, a
+    node the stage never wrote and a `table:` object no grant mentions -- so the approval's record
+    reaches nobody and sits beside, not on, the table it is about."""
+    held, report = _declared_hold()
+    emit_promotion_outcome(_ctx(), report)
+    event = captured[-1]
+
+    assert event["inputs"] == [(held.from_namespace, held.from_dataset)] == [("landing", "landing$events")], f"the approval read {event['inputs']!r}"
+    assert (event["output_namespace"], event["output_name"]) == (held.to_namespace, held.to_dataset) == ("curated", "curated$catalog"), (
+        f"the approval wrote {(event['output_namespace'], event['output_name'])!r}; the stage wrote {(held.to_namespace, held.to_dataset)!r}"
+    )
+
+
+def test_a_lost_DECLARED_lane_outcome_names_the_table_it_was_about(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """When the publish fails the log line is all that is left of the decision, so it must name the
+    table a person can find: the one the stage wrote, not a spelling the catalog has never seen."""
+    import medallion.workflow as workflow_mod
+
+    def _refused(coro: Any) -> None:
+        coro.close()
+        raise RuntimeError("sidecar refused")
+
+    monkeypatch.setattr(workflow_mod, "_run_async", _refused)
+    _, report = _declared_hold()
+
+    with caplog.at_level(logging.ERROR):
+        emit_promotion_outcome(_ctx(), report)
+
+    lost = [record for record in caplog.records if "best_effort_emit_failed_promotion_outcome" in record.message]
+    assert lost, f"the lost outcome was not reported: {[record.message for record in caplog.records]}"
+    assert getattr(lost[0], "dataset", None) == "curated$catalog", f"the lost-outcome line named {getattr(lost[0], 'dataset', None)!r}"
+
+
 def test_a_silver_hold_still_names_the_silver_stage(captured: list[dict[str, Any]]) -> None:
     """The accidental-pass case, made deliberate.
 
@@ -256,23 +317,6 @@ def test_the_held_version_is_the_one_on_the_wire(wire: list[dict[str, Any]]) -> 
     assert event["outputs"][0]["facets"]["version"]["datasetVersion"] == "48"
     assert event["run"]["facets"]["lance"]["version"] == 48
     assert "synthetic" not in event["run"]["facets"]["lance"]
-
-
-@pytest.mark.parametrize("status", ["PROMOTED", "REJECTED"])
-def test_a_hold_that_names_no_written_version_asserts_none(wire: list[dict[str, Any]], status: str) -> None:
-    """Version 0 is no commit (pylance 12.0.0 numbers a new dataset's first commit 1). A hold carries it
-    when the held run measured no write, which is the run `_build_stage_event` records as synthetic. Its
-    outcome is recorded the same way, approved or refused: no version, and the synthetic mark that says
-    so deliberately. A 0 or a 1 on the record would name a version that was never written."""
-    _, held = _approved_hold(_silver_to_gold_stage(), version=0)
-
-    emit_promotion_outcome(_ctx(), PromotionReport(spec=held.spec, outcome=PromotionOutcome(status=status, decided_by="alice")))
-
-    event = wire[-1]
-    lance = event["run"]["facets"]["lance"]
-    assert "version" not in event["outputs"][0].get("facets", {}), f"the {status} record names a version: {event['outputs'][0]}"
-    assert "version" not in lance, f"the {status} run facet names a version: {lance}"
-    assert lance.get("synthetic") is True, f"the {status} record describes no data without saying so: {lance}"
 
 
 def test_the_outcome_names_the_person_the_batch_is_for(captured: list[dict[str, Any]]) -> None:

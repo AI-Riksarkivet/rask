@@ -60,17 +60,17 @@ class _Request:
 
 
 def _held() -> dict[str, Any]:
+    """A chart lane's hold for tenant `acme`, named as the stage runner resolved it."""
     return {
         "token": "tok-1",
         "project": "acme",
-        "from_namespace": "silver",
-        "from_dataset": "silver$features",
-        "to_namespace": "gold",
-        "to_dataset": "gold$catalog",
+        "from_namespace": "acme-silver",
+        "from_dataset": "acme-silver$features",
+        "to_namespace": "acme-gold",
+        "to_dataset": "acme-gold$catalog",
         "operation": "aggregate_gold",
         "author": "analyst",
-        "version": 0,
-        "pub_topic": "",
+        "version": 7,
         "reasons": ["row_delta_band"],
         "approver": "CiQwOGE4Njg0Yi1kYjg4",
         "originator": "CiQwOGE4Njg0Yi1kYjg4",
@@ -107,7 +107,7 @@ async def test_a_PERMITTED_reader_still_sees_the_promotion(monkeypatch: pytest.M
 
     out = await show(instance_for("tok-1"), _request(fga_client=_FGA()), "CiQwOGE4Njg0Yi1kYjg4")  # ty: ignore[invalid-argument-type]
 
-    assert out.to_dataset == "gold$catalog"
+    assert out.to_dataset == "acme-gold$catalog"
     assert out.reasons == ["row_delta_band"]
     assert seen == [("CiQwOGE4Njg0Yi1kYjg4", "namespace:acme-gold")], "the gate must run against the promotion's OWN destination"
 

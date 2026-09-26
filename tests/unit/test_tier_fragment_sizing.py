@@ -201,7 +201,7 @@ def test_the_PROJECT_SCOPED_cascade_layout_is_tiered(uri: str, expected: int) ->
     """A cascade tier under a PROJECT still lives beneath `medallion/`, and it must size like its tier.
 
     The cascade is multi-tenant: `project_root` reroutes the whole medallion base per project and
-    `medallion/workflow.py::_qualified` prefixes the namespace, so the child of `medallion/` is
+    `project_namespace` prefixes the namespace, so the child of `medallion/` is
     `<project>-<tier>` or the catalog-delimited `<project>$<tier>` rather than a bare tier. Both read
     as untiered while the delimiter branch was tested BEFORE the `medallion` parent: `acme$bronze`
     reduced to the namespace `acme`, which names no tier, so a project's bronze — the widest rows in
