@@ -1443,6 +1443,8 @@ THREE SOURCES, in order, matching `rask.rayAuthToken`:
      reads back whatever it synced from OpenBao.
   3. `randAlphaNum 40` — same length as the hash prefix it replaces, so nothing downstream sees a
      shorter credential.
+Only identities with a source 1 or 2 are rendered at all (`lance.mountedServiceIdentities`); for any
+other, 3 would be a new value on every render, so the seed Job mints it once instead ([[LH-304]]).
 
 A LOOKED-UP VALUE THAT IS STILL DERIVABLE IS TREATED AS ABSENT, which is the only reason this
 remediates rather than merely stops the bleeding: every estate deployed before this holds the old
@@ -1795,6 +1797,22 @@ not allowed here is an app that boots and then 401s with nothing naming the caus
 {{/* EVERY seeded service identity, space-separated. ONE derivation, shared by the seed's own list, by
 `lance.identitiesForApp` and by the deny-list that subtracts from it -- a second copy would let an
 identity be seeded and then denied to its own owner, which boots fine and 401s later. */}}
+{{/*
+The identities a daprd-less pod MOUNTS from `infra-credentials` — the trainer, the web BFF and the Ray
+stage lanes — so their token has a second writer and a stable source (the `lookup` in
+`lance.dedicatedServiceToken`). The seed Job writes these as rendered and mints every other identity's
+token itself, once ([[LH-304]]). `test_a_dedicated_service_token_survives_an_upgrade.py` fails if this
+set and the Secret's `service-token-*` entries drift.
+*/}}
+{{- define "lance.mountedServiceIdentities" -}}
+{{- $root := . -}}{{- $mounted := list -}}
+{{- if $root.Values.auth.dedicatedServiceCredentials -}}
+{{- $mounted = list $root.Values.medallion.train.trainerIdentity $root.Values.frontend.serviceIdentity -}}
+{{- range $root.Values.medallion.stageRunners }}{{- $mounted = append $mounted .serviceIdentity }}{{- end -}}
+{{- end -}}
+{{- join " " (compact $mounted | uniq | sortAlpha) -}}
+{{- end -}}
+
 {{- define "lance.allServiceIdentities" -}}
 {{- $root := . -}}
 {{- $all := list $root.Values.medallion.train.trainerIdentity $root.Values.medallion.producer.serviceIdentity $root.Values.frontend.serviceIdentity $root.Values.maintenance.catalogServiceIdentity -}}

@@ -311,8 +311,32 @@ spec:
                      token is alphanumeric and safe bare, but a credential from a secret manager carries
                      `+/=` and can carry `$`, which this `sh -c` would expand — seeding a DIFFERENT value
                      than the mounted half and 401ing that identity with no error anywhere. */}}
+              {{- /* MINTED HERE, ONCE, when nothing else holds the value ([[LH-304]]). A token the operator
+                     supplied, or one a daprd-less pod mounts from `infra-credentials`, has a stable
+                     source and is written as rendered. Any other would be `randAlphaNum` again on every
+                     render — nothing it could be looked up from — so each upgrade rotated it under the
+                     signers it did not restart: measured 2026-09-26, lineage refused the catalog's
+                     events "signature does not verify" after a chart-only upgrade. So it is minted in
+                     this Job, only on a clean "No value found", and never rendered at all. Any other
+                     read failure stops the Job rather than rotating a credential it could not see. */}}
+              seed_absent() {
+                if out=$(bao kv get -field=token "secret/$1" 2>&1); then return 0; fi
+                case "$out" in
+                  "No value found at"*) ;;
+                  *) echo "cannot read secret/$1, refusing to mint over it: $out" >&2; exit 1 ;;
+                esac
+                tok=$(dd if=/dev/urandom bs=96 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40)
+                [ "${#tok}" -eq 40 ] || { echo "could not mint a 40-character token for $1" >&2; exit 1; }
+                bao kv put "secret/$1" token="$tok" >/dev/null || { echo "could not write secret/$1" >&2; exit 1; }
+                echo "minted secret/$1"
+              }
+              {{- $mounted := include "lance.mountedServiceIdentities" $ | splitList " " }}
               {{- range (compact $privileged | uniq | sortAlpha) }}
+              {{- if or (get (default dict $.Values.auth.serviceTokens) .) (has . $mounted) }}
               bao kv put secret/service-token-{{ . }} token={{ include "lance.dedicatedServiceToken" (list $ .) | squote }}
+              {{- else }}
+              seed_absent service-token-{{ . }}
+              {{- end }}
               {{- end }}
               echo "seeded the per-identity service credentials into OpenBao"
               {{- if $.Values.minio.viewerAccessKey }}
