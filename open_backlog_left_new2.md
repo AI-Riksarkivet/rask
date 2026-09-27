@@ -1,14 +1,14 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-307, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-308, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
-   Why now: next in review; LH-144 now has its precondition (staged and bus-delivered drops reach the graph since LH-199), and LH-201 waits on LH-200.
+1. **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
+   Why now: next in review; LH-201 waits on LH-200.
 2. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
    Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
 3. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
@@ -66,14 +66,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 109 | 107 | 31 |
+| **PHASE 1 · LAKEHOUSE** | 108 | 106 | 30 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**247 open items**, of which **10 are blocked on a decision** and **237 can be picked up today**; 59 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**246 open items**, of which **10 are blocked on a decision** and **236 can be picked up today**; 58 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -101,14 +101,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* The HMAC facet stays inside the payload, built through service_kit custom_facet so it carries `_schemaURL`; the resolver returns the current key plus the previous one during a rotation window. Do not import Lakekeeper's sequence numbers: the per-table Lance version already orders events (put-if-not-exists commit, lance_docs/file_format.md:4770,4791). Under D1 the bearer becomes a projected SA token; the per-identity HMAC key stays in the Dapr secret store. Lakekeeper signs no events (docs/audits/2026-09-25/lakekeeper-deep-read/events.md).
 - *Closes when:* An unsigned or non-verifying event is refused at `/lineage-events` and in the outbox drain; delegation is accepted only from the chart-derived signer set; an event signed with the previous key verifies inside the window; a lineage restart parks nothing in `dlq.lineage.events`; one forged unsigned event is observed refused live.
 - *Evidence:* services/lineage/src/lineage/api/fga_deps.py:290-333,372 · packages/lineage-kit/src/lineage_kit/signing.py:41-42,160-234 · packages/service-kit/src/service_kit/openlineage.py:30-34,70-77 · chart/templates/_ray-cluster-config.tpl:236-251
-
-**LH-144 · Lineage has not recognised a catalog drop since drops became DatasetEvents, so dropped tables read as ungoverned**
-`lineage, catalog` · **HIGH**
-- *What is left:* (1) Derive `dropped_at` from DatasetEvent DROP lifecycle rows as well as Run history, latest event_time winning, so a recreate clears it and a later compaction does not un-drop; RED through the real `build_write_event(drop_table)` and `ingest_dataset_event`. Needs LH-199 so staged drops survive. (2) The reconcile records an observed-absence DROP DatasetEvent only on a clean dataset-not-found, never on NoSuchBucket or access denied; anything whose bytes still exist is reported `ungoverned_live`. (3) Re-probe `exists` on an ungoverned table and record which tuple admitted it (it is gated on can_get_metadata, fga_deps.py:103).
-- *Why:* Criteria 1 and 4. Every drop becomes a permanent 'ungoverned' finding, so the reconcile's signal grows with every test run and hides a real gap. D14(4) confirmed the observed-absence DROP.
-- *How:* OpenLineage LifecycleStateChange DROP on a DatasetEvent is the static drop; DropTable is the lance-ns drop. Lakekeeper announces only what happened and rebuilds structure from its catalog index, never a subject grant (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §4).
-- *Closes when:* A catalog drop is recognised by `dropped_at` (RED through a DatasetEvent), and after one reconcile tick no ungoverned node names absent bytes.
-- *Evidence:* services/catalog/src/catalog/core/lineage_emit.py:198-209,367-368 · services/lineage/src/lineage/services/repository.py:794-808 · services/lineage/src/lineage/services/cypher.py:222-224 · services/lineage/src/lineage/api/reconcile_cron.py:154,213-218 · git 64baf2f0
 
 **LH-183 · Maintenance workers grow ~17-19 MiB/h of native memory, and the recycle meant to bound it cannot exit the process**
 `maintenance, service-kit` · **HIGH**
@@ -376,7 +368,7 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 **LH-164 · The cascade head and stage-runner env still compose a second, chart-side home per medallion tier**
 `medallion, maintenance, chart` · **MEDIUM**
-- *What is left:* (1) The head and stage runners are told `s3://<bucket>/medallion/<ns>` by the chart and produce.py, while stage outputs live where the catalog placed them; `silver-media` is bound into tenant warehouse `lakehouse-wh`. This half waits on D6. (2) Workable now: reap the 15 e2etrain* datasets under the model-registry root, anchoring each prefix with a trailing '/' and taking the dry-run listing with the same pattern.
+- *What is left:* (1) The head and stage runners are told `s3://<bucket>/medallion/<ns>` by the chart and produce.py, while stage outputs live where the catalog placed them; `silver-media` is bound into tenant warehouse `lakehouse-wh`. This half waits on D6. (2) Workable now: reap the 15 e2etrain* datasets under the model-registry root, anchoring each prefix with a trailing '/' and taking the dry-run listing with the same pattern. The reconcile now names this residue: at helm rev 249 its `ungoverned_live` class is eight `models$e2etrain*` datasets (written by ray_train_job.py, 2026-09-07 to 09-14) and `lakehouse-bronze$events` at `s3://lakehouse-wh/medallion/bronze` (compacted by maintenance on 2026-09-01); the catalog answers all nine not found.
 - *Why:* Criterion 2: a location the writer composes is a home the catalog cannot govern, and residue under it can collide with a real create.
 - *How:* Under D6(a): the head creates through CreateTable?mode=exist_ok or DeclareTable and seeds at the returned location (CreateTable takes no location, spec.yaml:1424-1441); then remove the four chart URIs and the produce.py composition, move `silver-media` to the platform warehouse and re-run the reconcile.
 - *Closes when:* Each tier has one catalog-placed home, no chart value or code composes a medallion location, no default-lane namespace is bound into a tenant warehouse, and the reconcile reports zero ungoverned or unregistered medallion datasets.
@@ -2174,3 +2166,7 @@ Found by the XC-104 review round (2026-09-27) and parked under the same rule. Me
 
 - XC-107 · HIGH · The annotator's task import materialises every row an honest body carries through `to_pylist` before any row check, so a small body still exhausts the pod: a 440-byte zstd body of 30M booleans grew it 5.8 GB, and a value shared by many rows is copied per row (1 MB bodies: +402 MB as a dictionary, +3,188 MB as a list_view). The shared decoder bounds only what a body declares and how far it inflates; the fix is an import row limit and an expansion bound at the annotator. Annotation plane, not Phase 1, by owner ruling · `annotator`
 - LH-306 · MEDIUM · pylance 12's RestNamespace sends no Content-Type on create, insert or merge_insert (measured on the wire), and the catalog's write load-shed recognises a bulk write only by `content-type: application/vnd.apache.arrow.stream` (load_shed.py:41-49), so the stock Lance client's writes are never counted against `catalog.maxConcurrentWrites` · `catalog`
+
+Found by the LH-144 live proof (2026-09-27) and parked under the same rule. Measurements: the rev 249 deploy record.
+
+- LH-307 · LOW · 38 lineage Dataset nodes name 18 buckets that no longer exist (test and proof warehouses such as `e2edel-*` and `durproof-wh`, and the retired `lakehouse` and `landing` buckets); the reconcile reports each as `ungoverned` with a NoSuchBucket reason on every tick, and nothing retires a graph node whose bucket was deleted · `lineage, maintenance`
