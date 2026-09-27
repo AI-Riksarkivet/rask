@@ -2,11 +2,11 @@
 
 Authoritative result of a **live probe** against a real native pylance `DirectoryNamespace` (create a
 namespace + table, then call every op and classify 200 vs 406). Routes are 100% wired (54/54 spec ops);
-this measures which are **backend-backed (200)** vs **spec-correct 406** because the native Rust backend
-genuinely stubs them. Dispatch: most ops go to `native` (the Rust `DirectoryNamespace`); several go to the
+this measures which are **backend-backed (200)** vs **spec-correct 406**, because the native Rust backend
+stubs them or because the catalog refuses them (the three version-tracking ops, [[LH-206]]). Dispatch: most ops go to `native` (the Rust `DirectoryNamespace`); several go to the
 in-process `dataplane` (pylance, always 200) — see `services/catalog/services/{native,dataplane}.py`.
 
-**Tally: 48 / 54 backed (200), 6 spec-correct 406.** `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
+**Tally: 47 / 54 backed (200), 7 spec-correct 406** — four native-backend stubs and three version-tracking ops the catalog refuses while it does not advertise `managed_versioning` ([[LH-206]]). `uv run pytest tests/unit tests/integration` → 568 passed (measured 2026-07-12; e2e suites skipped unless their live backends are set).
 
 > **Correction (2026-08-05):** `rename_table` was still listed as unsupported long after #5b backed it
 > in-process (`dataplane.rename_table` — copy the dataset root to the destination, repoint the namespace,
@@ -30,7 +30,7 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 | Columns (6) | 5 (add/alter/drop/update-field-metadata via dataplane; schema-metadata NATIVE, dataplane only for the null-delete extension) | `backfill_columns` |
 | Indices (5) | all 5 | — |
 | Tags (5) | all 5 (dataplane) | — |
-| Versions (6) | 4 (`list` / `describe` / `create` / `delete`, native + dict marshalling) | `batch-create` / `batch-commit` |
+| Versions (6) | 3 (`list` / `describe` native; `delete` in-process via `cleanup_old_versions`) | `create` / `batch-create` / `batch-commit` (catalog-refused) |
 | Branches (3) | all 3 (dataplane: `ds.branches` / `ds.create_branch`) | — |
 | Transactions (2) | 1 (`describe`) | `alter_transaction` |
 | Materialized views (2) | — | `create` / `refresh` |
@@ -40,24 +40,24 @@ in-process `dataplane` (pylance, always 200) — see `services/catalog/services/
 credential vending) and `GET /management/v1/table/{id}/blobs` (credential-less blob serving with RFC 9110 Range +
 ETag/If-Range, 2026-07-12) — both governed by the same router-level authorize (reader tier).
 
-The **6 remaining 406s are genuine native-backend stubs**, not catalog gaps:
+Of the **7 remaining 406s**, four are genuine native-backend stubs and three are the catalog's own refusal:
 - **`create_materialized_view` / `refresh_materialized_view`** — pylance ships the *complete* typed MV API
   (request/response models with `source_query` / `output_schema` / `udtf_spec` / `auto_refresh`) and wires
   delegation on `DirectoryNamespace`, but the native dir backend raises `NotImplementedError`. A real
   implementation is a **greenfield materialization subsystem** (run a query engine → write a Lance table →
   incremental refresh); pylance offers only scan/filter, no query engine. So it's buildable, but a new
   subsystem, not a thin delegation — out of scope here.
-- **`batch_create_table_versions` / `batch_commit_tables`** — external-manifest-store *batch* registration
-  primitives the dir backend doesn't implement (it reads `_versions/` directly rather than acting as an
-  external manifest store). A REST/managed backend would back these.
+- **`create_table_version` / `batch_create_table_versions` / `batch_commit_tables`** — version-TRACKING ops the
+  spec pairs with `managed_versioning`, which `describe_table` never reports here. The catalog answers 406
+  whatever the backend implements (`versions.py::_versions_are_unmanaged`): a table commits through Lance's
+  own manifest CAS or `/commit`, and these would publish a client-staged manifest unjudged.
 - **`backfill_columns` / `alter_transaction`** — stubbed in the native Rust namespace. `backfill_columns`
   answers `alter_table_backfill_columns not implemented`, and since #101 that MESSAGE reaches the
   client: Unsupported is a capability statement, not a fault, so `ns_errors.problem_detail` exempts it from the
   5xx detail redaction that used to render it as "Internal Server Error" in the lakehouse UI.
 
-So the catalog is complete **to the limit of its backend**; the remaining gaps need upstream work in the
-Rust `DirectoryNamespace` (rename/backfill/transaction/batch-version) or a real query engine (MV) — not a
-thin in-process fill.
+So the catalog is complete **to the limit of its backend**; the remaining stubs need upstream work in the
+Rust `DirectoryNamespace` (backfill/transaction) or a real query engine (MV) — not a thin in-process fill.
 
 ## Durable-artifact + recovery
 - **The medallion stage runners write provenance by default, and real Lance data when `MEDALLION_COMPUTE_ENABLED`.**

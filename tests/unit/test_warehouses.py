@@ -514,24 +514,6 @@ def test_binding_lookup_unbound_routes_to_default(monkeypatch: pytest.MonkeyPatc
     assert asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "db1")) is None
 
 
-def test_batch_guard_rejects_warehouse_bound_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
-    # F3: the batch routes carry no {id} to route by, so they'd place a warehouse-bound tenant's table in the
-    # shared bucket. The guard rejects a batch that references a bound namespace; an unbound one passes.
-    on = Settings.model_validate({"warehouses_enabled": True, "s3_access_key_id": "x", "s3_secret_access_key": "x"})
-    # bound + ACTIVE (the resolver reads status live, so a bound namespace must resolve past the deactivation
-    # gate to reach the batch guard's own rejection).
-    monkeypatch.setattr(
-        warehouses,
-        "binding_for_namespace",
-        lambda *_a, **_k: {"warehouse_id": "wh-a", "root_uri": "s3://bkt-a"},
-    )
-    monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: {"id": "wh-a", "status": "active"})
-    with pytest.raises(InvalidInputError):
-        asyncio.run(dependencies.assert_no_warehouse_bound_namespace(_bare_request(), on, [["db1", "t1"]]))
-    monkeypatch.setattr(warehouses, "binding_for_namespace", lambda *_a, **_k: None)  # unbound → ok
-    asyncio.run(dependencies.assert_no_warehouse_bound_namespace(_bare_request(), on, [["db2", "t2"]]))
-
-
 # --------------------------------------------------------------------------- #
 # reserved buckets: EVERY platform-owned bucket, regardless of zoning
 # --------------------------------------------------------------------------- #

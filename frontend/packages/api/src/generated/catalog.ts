@@ -2423,17 +2423,9 @@ export interface paths {
         put?: never;
         /**
          * Batch Commit Tables
-         * @description Atomic multi-table commit — delegates to the native ``batch_commit_tables``.
-         *
-         *     OWNERSHIP PARITY with ``/declare`` (audit 2026-07-12): a ``declare_table`` sub-op CREATES a table
-         *     (``_authorize_batch`` gated it as create-on-parent), so the creator must be seeded owner + parent
-         *     edge exactly like the dedicated route — without this, a batch-declared table had NO owner tuple
-         *     (fail-closed asymmetry: the creator couldn't manage their own table at owner tier, and the
-         *     reused-id revoke assumptions didn't hold). ``seed_ownership`` is a no-op with FGA off.
-         *
-         *     #3-A: no ``{id}`` to route by → runs against the default root, so a ``declare_table`` for a
-         *     warehouse-bound namespace would create the table in the SHARED bucket. Reject that (use the per-table
-         *     routes) before touching storage.
+         * @description Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
+         *     never reported, so no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those
+         *     two have their own doors, which carry the protection, ownership and lineage a batch would skip.
          */
         post: operations["batch_commit_tables_v1_table_batch_commit_post"];
         delete?: never;
@@ -2453,11 +2445,8 @@ export interface paths {
         put?: never;
         /**
          * Batch Create Table Versions
-         * @description Atomically create version entries for multiple tables — delegates to the native
-         *     ``batch_create_table_versions`` (implemented by the 0.9 dir backend).
-         *
-         *     #3-A: this batch route has no ``{id}`` to route by, so it runs against the default root — reject a body
-         *     that names a warehouse-bound namespace rather than writing its version metadata to the wrong bucket.
+         * @description Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
+         *     never reported, so no entry is created, whatever the mounted backend implements.
          */
         post: operations["batch_create_table_versions_v1_table_version_batch_create_post"];
         delete?: never;
@@ -3415,33 +3404,12 @@ export interface paths {
         put?: never;
         /**
          * Create Table Version
-         * @description Create one version entry for this table, from a manifest the table itself owns.
+         * @description Not supported (406) while this catalog does not manage table versions.
          *
-         *     THE ONLY DOOR IN THIS MODULE THAT WRITES, and until [[LH-018]] it recorded nothing. It MOVES a
-         *     manifest into the table's version slot, so a version exists afterwards that did not before — and a
-         *     version minted through the SPEC's own commit door left no provenance, while the same table's
-         *     `/commit` door emitted. Two doors onto one table, one of them silent.
-         *
-         *     Emitted AFTER the native call, pinned to the version just minted, exactly as the column doors and
-         *     `restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion
-         *     control, and two ops the dir backend answers 406) and stay quiet on purpose — an emit from those
-         *     would be provenance for work that never happened.
-         *
-         *     NO `Idempotency-Key` SEAM HERE, DELIBERATELY: the version CAS already converges a replay, and
-         *     wiring `catalog.api.idempotency` on top would add a second answer to a question the spec has
-         *     settled. Measured 2026-09-16 against a real `dir` namespace — a staged manifest committed at version
-         *     2, then the identical request replayed::
-         *
-         *         attempt 1 -> OK, version 2
-         *         attempt 2 -> ConcurrentModificationError (code 14)
-         *
-         *     which is precisely the error set `lance_docs/namespace.md:1772` declares for this operation
-         *     (1 NamespaceNotFound, 4 TableNotFound, 14 ConcurrentModification). That is the seam's own bar and it
-         *     is met without it: the replay is non-destructive (the slot is occupied, so nothing moves), it maps to
-         *     409 rather than a bare 500, and the caller can tell its own commit from a competing writer's by
-         *     reading `DescribeTableVersion` and comparing the `e_tag` of the manifest it staged. Contrast
-         *     `create_table`, which the seam DOES wrap: there a replay's `AlreadyExists` is indistinguishable from
-         *     a name collision and the caller cannot learn whether its own write landed.
+         *     ``CreateTableVersion`` moves a client-staged manifest into the table's next version slot. The spec
+         *     pairs it with ``managed_versioning``, which ``describe_table`` never reports here, so no client is
+         *     sent to it; served, it would publish a manifest whose data files nothing judges against the table's
+         *     file version.
          */
         post: operations["create_table_version_v1_table__id__version_create_post"];
         delete?: never;
@@ -3461,15 +3429,17 @@ export interface paths {
         put?: never;
         /**
          * Batch Delete Table Versions
-         * @description Delete version ranges from the table — wraps the native ``batch_delete_table_versions`` op.
+         * @description Delete old versions of this table — never the current one, and never one a tag or a branch pins.
          *
-         *     PROTECTION-GATED ([[LH-056]]). This is the most direct of the three partial deletions: it destroys
-         *     the VERSION rather than a ref to one, with nothing behind it, so a protected table refuses it on
-         *     the same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
-         *     handler and runs identically either way.
+         *     ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the
+         *     latest". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:
+         *     Lance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again
+         *     by the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a
+         *     child branch pins is refused (409), naming the pin. Every range is judged before anything is
+         *     deleted, and ``branch`` scopes the delete to that ref's own history.
          *
-         *     The store read is a plain call rather than a threadpool hop because FastAPI already runs a sync
-         *     handler off the event loop.
+         *     Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
+         *     turns the protection lock only. FastAPI runs this sync handler off the event loop.
          */
         post: operations["batch_delete_table_versions_v1_table__id__version_delete_post"];
         delete?: never;
@@ -10368,9 +10338,11 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -11663,9 +11635,11 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
+                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
+                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;
@@ -15299,11 +15273,9 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                authorization?: string | null;
                 "dapr-api-token"?: string | null;
                 "x-lance-service-identity"?: string | null;
                 "dapr-caller-app-id"?: string | null;
-                "x-lance-originator"?: string | null;
             };
             path: {
                 id: string;

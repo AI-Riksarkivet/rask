@@ -24579,7 +24579,7 @@
     },
     "/v1/table/batch-commit": {
       "post": {
-        "description": "Atomic multi-table commit \u2014 delegates to the native ``batch_commit_tables``.\n\nOWNERSHIP PARITY with ``/declare`` (audit 2026-07-12): a ``declare_table`` sub-op CREATES a table\n(``_authorize_batch`` gated it as create-on-parent), so the creator must be seeded owner + parent\nedge exactly like the dedicated route \u2014 without this, a batch-declared table had NO owner tuple\n(fail-closed asymmetry: the creator couldn't manage their own table at owner tier, and the\nreused-id revoke assumptions didn't hold). ``seed_ownership`` is a no-op with FGA off.\n\n#3-A: no ``{id}`` to route by \u2192 runs against the default root, so a ``declare_table`` for a\nwarehouse-bound namespace would create the table in the SHARED bucket. Reject that (use the per-table\nroutes) before touching storage.",
+        "description": "Not supported (406) while this catalog does not manage table versions \u2014 ``managed_versioning`` is\nnever reported, so no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those\ntwo have their own doors, which carry the protection, ownership and lineage a batch would skip.",
         "operationId": "batch_commit_tables_v1_table_batch_commit_post",
         "parameters": [
           {
@@ -24694,7 +24694,7 @@
     },
     "/v1/table/version/batch-create": {
       "post": {
-        "description": "Atomically create version entries for multiple tables \u2014 delegates to the native\n``batch_create_table_versions`` (implemented by the 0.9 dir backend).\n\n#3-A: this batch route has no ``{id}`` to route by, so it runs against the default root \u2014 reject a body\nthat names a warehouse-bound namespace rather than writing its version metadata to the wrong bucket.",
+        "description": "Not supported (406) while this catalog does not manage table versions \u2014 ``managed_versioning`` is\nnever reported, so no entry is created, whatever the mounted backend implements.",
         "operationId": "batch_create_table_versions_v1_table_version_batch_create_post",
         "parameters": [
           {
@@ -30901,7 +30901,7 @@
     },
     "/v1/table/{id}/version/create": {
       "post": {
-        "description": "Create one version entry for this table, from a manifest the table itself owns.\n\nTHE ONLY DOOR IN THIS MODULE THAT WRITES, and until [[LH-018]] it recorded nothing. It MOVES a\nmanifest into the table's version slot, so a version exists afterwards that did not before \u2014 and a\nversion minted through the SPEC's own commit door left no provenance, while the same table's\n`/commit` door emitted. Two doors onto one table, one of them silent.\n\nEmitted AFTER the native call, pinned to the version just minted, exactly as the column doors and\n`restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion\ncontrol, and two ops the dir backend answers 406) and stay quiet on purpose \u2014 an emit from those\nwould be provenance for work that never happened.\n\nNO `Idempotency-Key` SEAM HERE, DELIBERATELY: the version CAS already converges a replay, and\nwiring `catalog.api.idempotency` on top would add a second answer to a question the spec has\nsettled. Measured 2026-09-16 against a real `dir` namespace \u2014 a staged manifest committed at version\n2, then the identical request replayed::\n\n    attempt 1 -> OK, version 2\n    attempt 2 -> ConcurrentModificationError (code 14)\n\nwhich is precisely the error set `lance_docs/namespace.md:1772` declares for this operation\n(1 NamespaceNotFound, 4 TableNotFound, 14 ConcurrentModification). That is the seam's own bar and it\nis met without it: the replay is non-destructive (the slot is occupied, so nothing moves), it maps to\n409 rather than a bare 500, and the caller can tell its own commit from a competing writer's by\nreading `DescribeTableVersion` and comparing the `e_tag` of the manifest it staged. Contrast\n`create_table`, which the seam DOES wrap: there a replay's `AlreadyExists` is indistinguishable from\na name collision and the caller cannot learn whether its own write landed.",
+        "description": "Not supported (406) while this catalog does not manage table versions.\n\n``CreateTableVersion`` moves a client-staged manifest into the table's next version slot. The spec\npairs it with ``managed_versioning``, which ``describe_table`` never reports here, so no client is\nsent to it; served, it would publish a manifest whose data files nothing judges against the table's\nfile version.",
         "operationId": "create_table_version_v1_table__id__version_create_post",
         "parameters": [
           {
@@ -30929,22 +30929,6 @@
               ],
               "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
               "title": "Delimiter"
-            }
-          },
-          {
-            "in": "header",
-            "name": "authorization",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
             }
           },
           {
@@ -30994,22 +30978,6 @@
               ],
               "title": "Dapr-Caller-App-Id"
             }
-          },
-          {
-            "in": "header",
-            "name": "x-lance-originator",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "X-Lance-Originator"
-            }
           }
         ],
         "requestBody": {
@@ -31057,7 +31025,7 @@
     },
     "/v1/table/{id}/version/delete": {
       "post": {
-        "description": "Delete version ranges from the table \u2014 wraps the native ``batch_delete_table_versions`` op.\n\nPROTECTION-GATED ([[LH-056]]). This is the most direct of the three partial deletions: it destroys\nthe VERSION rather than a ref to one, with nothing behind it, so a protected table refuses it on\nthe same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this\nhandler and runs identically either way.\n\nThe store read is a plain call rather than a threadpool hop because FastAPI already runs a sync\nhandler off the event loop.",
+        "description": "Delete old versions of this table \u2014 never the current one, and never one a tag or a branch pins.\n\n``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for \"through the\nlatest\". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:\nLance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again\nby the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a\nchild branch pins is refused (409), naming the pin. Every range is judged before anything is\ndeleted, and ``branch`` scopes the delete to that ref's own history.\n\nOwner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``\nturns the protection lock only. FastAPI runs this sync handler off the event loop.",
         "operationId": "batch_delete_table_versions_v1_table__id__version_delete_post",
         "parameters": [
           {

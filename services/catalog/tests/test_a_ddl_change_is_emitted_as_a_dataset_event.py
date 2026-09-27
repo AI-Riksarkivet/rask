@@ -21,7 +21,6 @@ from catalog.core.lineage_emit import InputRef, build_write_event
 
 DDL_OPERATIONS = (
     "create_table",
-    "create_table_version",
     "declare_table",
     "register_table",
     "drop_table",

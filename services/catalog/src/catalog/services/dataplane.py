@@ -879,9 +879,7 @@ def _refuse_foreign_file_versions(location: str, so: StorageOptions, frags: Sequ
     version would answer it with the wrong error. ``read_version`` 0 names no manifest, so the latest is
     judged, and the caller commits at the version returned: a commit at 0 runs no conflict check at all,
     so an Overwrite landing between this read and the commit would slip unjudged files onto another
-    version (measured on 12.0.0). A base that cannot be read fails closed. ``version/create`` and the
-    batch version doors publish a client-staged manifest without this judgement (see the
-    rask-lance-catalog skill).
+    version (measured on 12.0.0). A base that cannot be read fails closed.
     """
     try:
         base = lance.dataset(location, version=read_version or None, storage_options=dict(so) if so else None, session=shared_lance_session())

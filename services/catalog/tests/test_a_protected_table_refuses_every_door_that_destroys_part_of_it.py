@@ -79,11 +79,15 @@ def registry_root(tmp_path: Path) -> str:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     create_table(namespace, {}, TABLE, _table(), mode="create")
-    # A SECOND VERSION, so `version/delete` has one it may actually remove — written straight to the
-    # dataset because the create door DECLARES a table and a second declare is a conflict, not an
-    # append. Without it that door refuses for its own reasons and the control leg could not tell that
-    # from a protection refusal.
-    lance.write_dataset(pa.table({"id": pa.array([10, 11, 12], pa.int64())}), str(tmp_path / "data" / f"{TABLE_PATH}.lance"), mode="append")
+    # TWO MORE VERSIONS, so `version/delete` has one it may actually remove: version 1 carries the
+    # `release` tag `_seed_refs` makes and the current version is never deletable, which leaves version
+    # 2. Written straight to the dataset because the create door DECLARES a table and a second declare
+    # is a conflict, not an append. Without them that door refuses for its own reasons and the control
+    # leg could not tell that from a protection refusal.
+    for start in (10, 20):
+        lance.write_dataset(
+            pa.table({"id": pa.array([start, start + 1, start + 2], pa.int64())}), str(tmp_path / "data" / f"{TABLE_PATH}.lance"), mode="append"
+        )
     return namespace
 
 
@@ -129,12 +133,12 @@ def _seed_refs(client: TestClient) -> None:
 
 
 #: `(label, path, body)` for each door that destroys part of a table. The version range is
-#: START-INCLUSIVE, END-EXCLUSIVE (`VersionRange`'s own description), so `[1, 2)` is version 1 alone —
-#: `[1, 1)` is empty and answers `deleted_count: 0` with a 200, which is a control that cannot fail.
+#: START-INCLUSIVE, END-EXCLUSIVE (`VersionRange`'s own description), so `[2, 3)` is version 2 alone —
+#: the one version neither tagged nor current.
 DESTRUCTIVE = [
     ("branch", "branches/delete", {"id": TABLE, "name": "staging"}),
     ("tag", "tags/delete", {"id": TABLE, "tag": "release"}),
-    ("version", "version/delete", {"id": TABLE, "ranges": [{"start_version": 1, "end_version": 2}]}),
+    ("version", "version/delete", {"id": TABLE, "ranges": [{"start_version": 2, "end_version": 3}]}),
 ]
 
 
@@ -148,8 +152,9 @@ def test_the_door_reaches_its_target_when_the_table_is_UNPROTECTED(app: FastAPI,
 
     assert answer.status_code == 200, f"the {label} door did not reach its target, so the protection legs prove nothing: {answer.text}"
     if label == "version":
-        # A 200 ALONE IS NOT THE CONTROL here: an empty range answers `deleted_count: 0` and 200, so the
-        # protection leg below would be comparing against a door that destroys nothing.
+        # A 200 ALONE IS NOT THE CONTROL here: a range naming only absent versions answers
+        # `deleted_count: 0` and 200, so the protection leg below would be comparing against a door that
+        # destroys nothing.
         assert answer.json().get("deleted_count", 0) >= 1, f"the version door deleted nothing, so its protection leg proves nothing: {answer.text}"
 
 

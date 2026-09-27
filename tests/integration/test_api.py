@@ -16,11 +16,9 @@ import lance
 import pyarrow as pa
 from fastapi.testclient import TestClient
 from lance_namespace import (
-    BatchDeleteTableVersionsResponse,
     CountTableRowsResponse,
     CreateNamespaceResponse,
     CreateTableResponse,
-    CreateTableVersionResponse,
     DescribeTableResponse,
     DescribeTableVersionResponse,
     ListNamespacesResponse,
@@ -751,7 +749,7 @@ def test_declare_emits_versionless_marker(client: TestClient, fake_ns: MagicMock
     assert captured["source_uri"] == "s3://bucket/t"
 
 
-# --- version ops: the native bindings are `request: dict`-typed; native.call must marshal the pydantic ---
+# --- version describe: the native binding is `request: dict`-typed; native.call must marshal the pydantic ---
 # --- request to a dict, else a TypeError surfaces as a fake 501. These guard that fix (audit finding). ---
 
 
@@ -768,27 +766,6 @@ def test_describe_version_missing_maps_to_404(client: TestClient, fake_ns: Magic
     fake_ns.describe_table_version.side_effect = TableVersionNotFoundError("version 99 not found")
     resp = client.post("/v1/table/db$t/version/describe?version=99")
     assert resp.status_code == 404
-
-
-def test_create_version_marshals_request_to_a_dict(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.create_table_version.return_value = CreateTableVersionResponse()
-    # The door reads the table's own location to confine `manifest_path`, so the double has to answer
-    # with one. The path below is the shape that actually commits — a STORE key carrying the table's
-    # prefix — measured 2026-09-16 against both the `dir` and S3 backends; the spec's table-relative
-    # example commits on neither and is refused here.
-    fake_ns.describe_table.return_value.location = "s3://bucket/db/t.lance"
-    resp = client.post("/v1/table/db$t/version/create", json={"version": 2, "manifest_path": "db/t.lance/_versions/2.manifest"})
-    assert resp.status_code == 200
-    arg = fake_ns.create_table_version.call_args.args[0]
-    assert isinstance(arg, dict) and arg["id"] == ["db", "t"] and arg["version"] == 2
-
-
-def test_batch_delete_versions_marshals_request_to_a_dict(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.batch_delete_table_versions.return_value = BatchDeleteTableVersionsResponse()
-    resp = client.post("/v1/table/db$t/version/delete", json={"ranges": [{"start_version": 1, "end_version": 1}]})
-    assert resp.status_code == 200
-    arg = fake_ns.batch_delete_table_versions.call_args.args[0]
-    assert isinstance(arg, dict) and arg["id"] == ["db", "t"]
 
 
 def test_request_validation_on_a_SPEC_route_maps_to_400_problem_json(client: TestClient) -> None:

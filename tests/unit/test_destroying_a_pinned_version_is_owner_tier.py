@@ -1,4 +1,4 @@
-"""Deleting a TAG or a tagged VERSION must clear the same bar as the maintenance that respects them.
+"""Deleting a TAG or a VERSION must clear the same bar as the maintenance that respects them.
 
 `tags/create` and `tags/update` are owner-gated (`can_create_tag`, `can_update_tag`), and
 `tags/delete` and `version/delete` must be too. At the writer rung the asymmetry is what makes them
@@ -6,8 +6,9 @@ exploitable rather than merely untidy:
 
 - `maintenance/run` — which reclaims old versions and EXEMPTS tagged ones — is owner-gated
   (`can_drop`). The door that respects the tag is guarded.
-- `version/delete` at writer tier destroys a tag-pinned version directly, leaving `published`
-  pointing at bytes that no longer exist. The door that ignores the tag is not.
+- `version/delete` destroys version history directly — the same reclamation, on versions the caller
+  names. It refuses a tagged one, but at writer tier any plain data writer could still shorten the
+  history an owner keeps for time travel.
 - `tags/delete` at writer tier removes the pin, which then defeats the owner-tier rollback guard:
   publication refuses to move `published` BACKWARDS, so a writer deletes the tag and republishes at
   an older version instead.
@@ -46,7 +47,7 @@ def test_a_destructive_version_op_is_not_left_on_the_writer_rung(suffix: str) ->
 @pytest.mark.parametrize("suffix", ["tags/delete", "version/delete"])
 def test_it_clears_the_same_bar_as_the_maintenance_that_respects_tags(suffix: str) -> None:
     """`maintenance/run` reclaims versions and EXEMPTS tagged ones, at `can_drop`. A door that
-    destroys the same thing without the exemption cannot ask for less."""
+    destroys the same thing cannot ask for less."""
     assert TABLE[suffix] == TABLE["maintenance/run"], (
         f"{suffix!r} is gated on {TABLE.get(suffix)!r} while the tag-respecting reclamation is gated "
         f"on {TABLE['maintenance/run']!r} — the unguarded door must not be the cheaper one"

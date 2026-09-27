@@ -46,10 +46,9 @@ _SPEC_VALUES = frozenset({"ALTER", "CREATE", "DROP", "OVERWRITE", "RENAME", "TRU
 @pytest.mark.parametrize(
     ("operation", "expected"),
     [
-        # The five DDL verbs MEASURED on the live feed, in the case the wire actually carries.
+        # The DDL verbs MEASURED on the live feed, in the case the wire actually carries.
         ("create_table", "CREATE"),
         ("declare_table", "CREATE"),
-        ("create_table_version", "CREATE"),
         ("drop_table", "DROP"),
         ("add_columns", "ALTER"),
         ("update_schema_metadata", "ALTER"),
@@ -99,7 +98,6 @@ def test_every_value_this_maps_to_is_in_the_SPECS_enum() -> None:
 _ALL_DDL = (
     "create_table",
     "declare_table",
-    "create_table_version",
     "register_table",
     "drop_table",
     "deregister_table",

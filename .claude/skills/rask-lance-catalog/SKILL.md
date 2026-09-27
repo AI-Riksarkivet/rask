@@ -15,12 +15,14 @@ Two contracts stack here, and confusing them is how bugs happen:
 
 ## The spec surface (verified 2026-08-04 against lance.org)
 
-- **Operations: 54/54 ROUTED, 48 backend-backed.** `tests/integration/test_spec_conformance.py`
+- **Operations: 54/54 ROUTED, 47 backend-backed.** `tests/integration/test_spec_conformance.py`
   asserts both halves — every spec op has a served route, and the vendored
   `lance_docs/ns_catalog/spec.yaml` still carries 54 ops (a shrunken spec would silently weaken the
-  check). The other **6 answer a spec-correct 406** because the native `dir` backend stubs them:
-  `backfill_column`, `alter_transaction`, `batch_create_table_versions`, `batch_commit_tables`, and
-  BOTH materialized-view ops (`docs/COVERAGE.md`). Spelling matters when grepping: the spec op and
+  check). The other **7 answer a spec-correct 406**: four because the native `dir` backend stubs them —
+  `backfill_column`, `alter_transaction` and BOTH materialized-view ops — and the three version-TRACKING
+  ops because the catalog refuses them while it never advertises `managed_versioning` —
+  `create_table_version`, `batch_create_table_versions`, `batch_commit_tables`
+  (`versions.py::_versions_are_unmanaged`, `docs/COVERAGE.md`). Spelling matters when grepping: the spec op and
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
   `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
   **`rename_table` is NOT one of them.** It is backed in-process and answers 200; `docs/COVERAGE.md:15-17`
@@ -281,15 +283,26 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   converge path never seeds governance onto a flag-256 dataset, and a refusal whose detach fails is a
   503 `PartiallyApplied` naming `attached: true`. Only `main` is judged. Pinned by
   `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
-- **Five doors commit client-produced data, and four judge its file versions.** `/commit`
+- **Four doors commit client-produced data, and all four judge its file versions.** `/commit`
   (`dataplane.commit_appended_fragments`), `/compaction_commit` (`commit_compaction`), `register`, and
   ingest's own `Lander.commit_fragments` refuse data files at another version than the table's
-  (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). **`version/create` and the batch
-  version doors do NOT**: they move a client-staged manifest into the version slot, and judging it needs a
-  manifest-file parser nothing here has yet. The dir backend reports `managed_versioning: None`, so stock
-  clients do not route commits through them, and a write-tier credential can already put
-  `_versions/` directly (the vend-scope row), so the gap adds no capability — but it is open work, not
-  covered ground.
+  (`service_kit.lakehouse.features.describe_foreign_data_file_versions`). The spec's version-TRACKING
+  doors (`version/create`, `version/batch-create`, `batch-commit`) would move a client-staged manifest
+  into the version slot unjudged, so they answer 406 while `managed_versioning` is never advertised
+  ([[LH-206]]). Advertising it is a design change, not a flag: those doors would first need the
+  judgement, protection and lineage the four above carry.
+- **`version/delete` reclaims through `cleanup_old_versions(versions=[...])`, never the `dir` backend's raw
+  manifest delete** ([[LH-206]], `maintenance.delete_versions`). Measured on pylance 12.0.0, the raw delete
+  removes every manifest on `{0, -1}` (describe 200, the table unopenable), and a range ending at latest
+  rolls the table back so the next append mints that number again. The door refuses any range
+  that reaches the current version (400; ranges are end-exclusive), refuses a version a tag or a child
+  branch pins (409, naming it), judges every range before deleting any, and asks `maintenance/run`'s
+  #114 base-reference gate, because the reclaim also removes data files only those versions referenced.
+  **The pin refusal covers refs that exist when the reclaim starts, not refs created during it.** Lance
+  reads tags and branches once per `cleanup_old_versions`, and no door serializes `tags/create`,
+  `tags/update` or `branches/create` with a reclaim: measured with concurrent races, a tag created
+  mid-reclaim named a deleted version (31 of 60), and `maintenance/run` loses the same race (59 of 60).
+  Parked as LH-308, which covers every reclaim path, the sweep included.
 - `deregister` keeps bytes ON PURPOSE (external data); `drop` removes them. Neither leaves Lance
   orphans — but partially-failed writes and unpurged buckets do, and nothing reclaims those yet.
   `services/maintenance`'s orphan pass REPORTS them (`MAINTENANCE_ORPHAN_SCAN_ENABLED` — it opens

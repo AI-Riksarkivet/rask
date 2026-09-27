@@ -106,8 +106,9 @@ describe('the UI can reach it', () => {
 					!p.startsWith('src/routes/') &&
 					!p.endsWith('.test.ts'),
 			)
-			// One segment after the table id, so the BACKED nested creates beside it — `tags/create`,
-			// `branches/create`, `version/create` — are not swept up as re-implementations.
+			// One segment after the table id, so the nested creates beside it — `tags/create`,
+			// `branches/create`, and `version/create` (which answers 406) — are not swept up as
+			// re-implementations.
 			.filter((p) => /v1\/table\/[^`'"/]*\/create\b/.test(read(p)));
 
 		expect(others, 'one client for the create door, like insert and merge_insert').toEqual([]);

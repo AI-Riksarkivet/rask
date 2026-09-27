@@ -130,7 +130,6 @@ LIFECYCLE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/Lifecycle
 #: that already ride the same event.
 _LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
     "create_table": "CREATE",
-    "create_table_version": "CREATE",
     "declare_table": "CREATE",
     "register_table": "CREATE",
     "drop_table": "DROP",

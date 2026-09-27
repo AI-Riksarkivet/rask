@@ -191,9 +191,10 @@ _OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # `maintenance/run`, which reclaims version history and EXEMPTS tagged versions. The door that
         # respects the tag cannot be the expensive one while the door that removes it is cheap.
         "tags/delete": "can_drop",
-        # Same rung, same reason, one step more direct: this destroys the VERSION rather than the pin,
-        # so `published` is left naming bytes that no longer exist. `version/list` and the read-side
-        # siblings still fall through to the reader tier — only the destructive verb is lifted.
+        # Same rung, same reason, one step more direct: this destroys VERSIONS rather than a pin — the
+        # reclamation `maintenance/run` performs, on versions the caller names. The door refuses a
+        # tagged, forked-from or current version itself; the rung decides who may shorten the history at
+        # all. `version/list` and the read-side siblings still fall through to the reader tier.
         #
         # This rung carries more weight here than it would in an Iceberg catalog, and deliberately:
         # Lance keeps the CAS in the object store, so the serving pointer is a tag INSIDE the dataset
@@ -340,11 +341,11 @@ _GRANT_SUFFIXES = frozenset({"access/grant", "access/revoke"})
 # Body-keyed batch routes (no ``{id}`` path param); the tables are named in the body.
 _BATCH_PATHS = frozenset({"/v1/table/version/batch-create", "/v1/table/batch-commit"})
 
-# Destructive batch-commit operations require the owner tier — same as their dedicated
-# routes — so a writer can't deregister a table by wrapping it in a batch-commit (the
-# generic writer batch_check would otherwise pass). The wire model (CommitTableOperation)
-# has no drop op, so deregister_table is the only destructive batch kind. Maps op key ->
-# can_* relation.
+# A batch sub-operation is authorized at its dedicated route's rung, and a destructive one at the
+# owner tier: deregister_table is the only destructive kind, since the wire model
+# (CommitTableOperation) has no drop op. Both batch doors answer 406 and run nothing ([[LH-206]]);
+# the guard answers first, as it does at every door, so a caller without the rung reads 403.
+# Maps op key -> can_* relation.
 _BATCH_OWNER_OPS: dict[str, str] = {"deregister_table": "can_deregister"}
 
 

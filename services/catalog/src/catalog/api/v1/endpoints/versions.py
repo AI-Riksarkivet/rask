@@ -1,12 +1,15 @@
-"""Table version endpoints (delegated to the native backend / external manifest store)."""
+"""Table version endpoints.
+
+``list`` and ``describe`` delegate to the native backend, ``delete`` is served in-process through
+``cleanup_old_versions``, and the three version-TRACKING ops answer 406 — see :func:`_versions_are_unmanaged`.
+"""
 
 from __future__ import annotations
 
 import logging
 from typing import Annotated
-from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Header, Query, Request
+from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     BatchCommitTablesRequest,
@@ -17,38 +20,26 @@ from lance_namespace import (
     BatchDeleteTableVersionsResponse,
     CreateTableVersionRequest,
     CreateTableVersionResponse,
-    DescribeTableRequest,
     DescribeTableVersionRequest,
     DescribeTableVersionResponse,
     InvalidInputError,
-    LanceNamespace,
     ListTableVersionsRequest,
     ListTableVersionsResponse,
-    ServiceUnavailableError,
+    UnsupportedOperationError,
 )
 
-from catalog.api import fga_deps, lineage_deps
-from catalog.api.dependencies import (
-    FgaClientDep,
-    LineageEmitterDep,
-    NamespaceDep,
-    SettingsDep,
-    StorageOptionsDep,
-    assert_no_warehouse_bound_namespace,
-)
+from catalog.api import fga_deps
+from catalog.api.dependencies import FgaClientDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import paginate_versions
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.core.lineage_emit import CREATE_TABLE_VERSION
-from catalog.services import dataplane, native
+from catalog.core.namespace import open_dataset
+from catalog.services import dataplane, maintenance, native
 from service_kit.governed import fga
-from service_kit.lakehouse import protection
+from service_kit.lakehouse import base_refs, protection
 
 
-# The native dir backend implements create / describe / batch-delete versions, but its bindings are typed
-# ``request: dict`` (not the pydantic model) — ``native.call`` marshals the request to a dict for those, so
-# these delegate directly and return real results instead of the marshalling-bug 501 they surfaced before.
 log = logging.getLogger(__name__)
 
 #: Ceiling for the spec list ops' `limit`. The Lance Namespace spec pages these with
@@ -122,97 +113,36 @@ async def table_history(
     return {"table": id, "versions": rows}
 
 
-@router.post("/version/batch-create", response_model_exclude_none=True)
-async def batch_create_table_versions(
-    request: Request,
-    body: BatchCreateTableVersionsRequest,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-) -> BatchCreateTableVersionsResponse:
-    """Atomically create version entries for multiple tables — delegates to the native
-    ``batch_create_table_versions`` (implemented by the 0.9 dir backend).
+def _versions_are_unmanaged(operation: str) -> UnsupportedOperationError:
+    """The refusal for a version-TRACKING op while this catalog does not manage table versions.
 
-    #3-A: this batch route has no ``{id}`` to route by, so it runs against the default root — reject a body
-    that names a warehouse-bound namespace rather than writing its version metadata to the wrong bucket."""
-    await assert_no_warehouse_bound_namespace(request, settings, [getattr(e, "id", None) for e in (body.entries or [])])
-    # Every entry carries its own `manifest_path`, on the same terms as the single-table door. This
-    # operation answers 406 on the dir backend today, which is not a reason to let the field through
-    # unchecked: the guard belongs with the route, not with whichever backend happens to be mounted.
-    for entry in body.entries or []:
-        await _refuse_a_manifest_this_table_does_not_own(ns, list(getattr(entry, "id", None) or []), getattr(entry, "manifest_path", None))
-    return await run_in_threadpool(native.call, ns, "batch_create_table_versions", body)
+    The spec pairs these ops with ``managed_versioning``: a caller routes commits through them only when
+    ``describe_table`` reports it, and the catalog's namespace never does (pinned by
+    ``test_the_catalog_namespace_does_not_advertise_managed_versioning``). Advertising it would put
+    clients on a catalog-mediated commit pointer, the Iceberg shape the LANCE-ONLY ruling in CLAUDE.md
+    exists to avoid. A table commits through Lance's own manifest commit or the catalog's ``/commit``
+    door, which judge what they publish; these would move a client-staged manifest into the version
+    slot unjudged.
+    """
+    return UnsupportedOperationError(
+        f"{operation} is not supported: this catalog does not manage table versions (describe_table never reports managed_versioning). "
+        "Commit through Lance's own manifest commit, or POST /management/v1/table/{id}/commit"
+    )
+
+
+@router.post("/version/batch-create", response_model_exclude_none=True)
+def batch_create_table_versions(body: BatchCreateTableVersionsRequest) -> BatchCreateTableVersionsResponse:
+    """Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
+    never reported, so no entry is created, whatever the mounted backend implements."""
+    raise _versions_are_unmanaged("BatchCreateTableVersions")
 
 
 @router.post("/batch-commit", response_model_exclude_none=True)
-async def batch_commit_tables(
-    request: Request,
-    body: BatchCommitTablesRequest,
-    ns: NamespaceDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
-) -> BatchCommitTablesResponse:
-    """Atomic multi-table commit — delegates to the native ``batch_commit_tables``.
-
-    OWNERSHIP PARITY with ``/declare`` (audit 2026-07-12): a ``declare_table`` sub-op CREATES a table
-    (``_authorize_batch`` gated it as create-on-parent), so the creator must be seeded owner + parent
-    edge exactly like the dedicated route — without this, a batch-declared table had NO owner tuple
-    (fail-closed asymmetry: the creator couldn't manage their own table at owner tier, and the
-    reused-id revoke assumptions didn't hold). ``seed_ownership`` is a no-op with FGA off.
-
-    #3-A: no ``{id}`` to route by → runs against the default root, so a ``declare_table`` for a
-    warehouse-bound namespace would create the table in the SHARED bucket. Reject that (use the per-table
-    routes) before touching storage.
-    """
-    await assert_no_warehouse_bound_namespace(
-        request,
-        settings,
-        [getattr(getattr(op, "declare_table", None), "id", None) for op in (body.operations or [])],
-    )
-    response: BatchCommitTablesResponse = await run_in_threadpool(native.call, ns, "batch_commit_tables", body)
-    # The native batch is ATOMIC — every declared table exists once that call returns — but the seeds
-    # are not part of it, and they cannot be: OpenFGA is a different store with no shared transaction.
-    #
-    # This loop used to `seed_ownership` and abandon the rest on the FIRST failure (diff2 F3.1). An
-    # OpenFGA blip partway through a 12-table batch therefore left tables 5-12 committed on storage
-    # with no `owner` grant and no `parent` edge — and because `grant_on_create` writes both in one
-    # batch, `owner from parent` cannot rescue them either. They are invisible to every list (per-item
-    # filtering) and undroppable by every caller including an estate admin. The endpoint 5xx'd naming
-    # none of them.
-    #
-    # Two changes here, neither of which needs a convergence ruling:
-    #
-    #  * KEEP GOING. The seeds are independent, so stopping at the first failure strands every table
-    #    after it as well. Continuing minimises the stranded set instead of maximising it.
-    #  * NAME WHAT IS STRANDED. The error now lists exactly which tables landed without ownership, so
-    #    an operator can repair them through the estate-admin editor instead of discovering the state
-    #    when a bucket-vs-catalog byte count disagrees months later.
-    #
-    # WHAT IS STILL OPEN, deliberately: the batch does not CONVERGE. A retry re-runs the native batch,
-    # which fails `TableAlreadyExists` and never reaches the seeds again. Fixing that is a design
-    # decision — pre-flight the seeds, seed-then-commit (which trades this failure for tuples on
-    # tables that may not exist), or an idempotent re-seed keyed on the declared ids — and it is
-    # recorded rather than guessed at.
-    stranded: list[str] = []
-    first_error: Exception | None = None
-    for operation in body.operations or []:
-        declare = getattr(operation, "declare_table", None)
-        segments = getattr(declare, "id", None) if declare is not None else None
-        if not segments:
-            continue
-        try:
-            await fga_deps.seed_ownership(client, settings, token, resource="table", segments=segments)
-        except Exception as exc:  # noqa: BLE001 — every remaining seed still gets its chance
-            stranded.append(fga.canonical_object_id(segments, delimiter=settings.delimiter))
-            first_error = first_error or exc
-            log.warning("batch_commit_seed_failed", extra={"table": segments, "error": str(exc)})
-    if stranded:
-        raise ServiceUnavailableError(
-            f"batch committed, but {len(stranded)} table(s) landed WITHOUT ownership and are "
-            f"unreachable until an estate admin grants it: {', '.join(stranded)}. "
-            f"Retrying this batch will not repair them — the tables already exist. Cause: {first_error}"
-        )
-    return response
+def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResponse:
+    """Not supported (406) while this catalog does not manage table versions — ``managed_versioning`` is
+    never reported, so no sub-operation runs, ``declare_table`` and ``deregister_table`` included. Those
+    two have their own doors, which carry the protection, ownership and lineage a batch would skip."""
+    raise _versions_are_unmanaged("BatchCommitTables")
 
 
 @router.post("/{id}/version/list", response_model_exclude_none=True)
@@ -259,177 +189,16 @@ def list_table_versions(
     return answer
 
 
-def _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path: str) -> None:
-    """Shape refusals that need no knowledge of where the table lives, so they cost no round trip."""
-    unsafe = (
-        not manifest_path
-        or "\\" in manifest_path
-        or ".." in manifest_path.split("/")
-        or any(character.isspace() or ord(character) < 0x20 for character in manifest_path)
-    )
-    if unsafe:
-        raise InvalidInputError(
-            f"manifest_path {manifest_path!r} is not a path inside a single table — it contains a traversal, "
-            f"a backslash or a control character, and creating a version MOVES the file it names"
-        )
-
-
-def _in_the_store(path: str) -> tuple[str, str]:
-    """Split a location or a ``manifest_path`` into ``(authority, key)`` as the OBJECT STORE sees it.
-
-    The authority is ``<scheme>://<netloc>`` when the value is fully qualified and empty when it is
-    store-relative; the key is the rest, with the leading and trailing separators stripped so a bucket
-    key and a filesystem path compare on the same terms.
-    """
-    parts = urlsplit(path)
-    if parts.scheme:
-        return f"{parts.scheme}://{parts.netloc}", parts.path.strip("/")
-    return "", path.strip("/")
-
-
-def _refuse_a_manifest_outside(manifest_path: str, *, table_location: str | None) -> None:
-    """Refuse a ``manifest_path`` that does not name a place inside ``table_location``.
-
-    FAIL-CLOSED ON AN UNKNOWN LOCATION: with nothing to compare against there is no way to tell this
-    table's manifest from a sibling's, and the failure mode is a destructive move rather than a refused
-    read.
-
-    CONTAINMENT IS TESTED AGAINST ``<key>/``, never as a bare string prefix, and a qualified candidate's
-    authority must match exactly — otherwise ``medallion/bronze-evil`` passes for ``medallion/bronze``
-    and the bucket ``acme-bucket-evil`` passes for ``acme-bucket``. Both near-misses are reachable by
-    anyone who can choose a table name, which is every writer. Same reasoning and same shape as
-    :func:`catalog.core.vending._location_within`; not reused directly because that one splits an
-    ``s3://`` location and this field is also a bare filesystem path on a ``dir`` namespace.
-
-    AN UNQUALIFIED CANDIDATE IS COMPARED KEY-ONLY, because the backend resolves it inside the SAME store
-    the table is in — so "no scheme" means "this store", not "this table".
-
-    AN EMPTY OUTER KEY FAILS CLOSED, and this is the one place the shape deliberately differs from
-    ``vending._location_within``: there an empty prefix IS the whole bucket, because the policy it
-    renders says so. Here it would mean every object in the store is inside the table and the guard
-    stops guarding, so a table location that reduces to a bare store root is refused instead. No table
-    in this estate has one — locations carry a project prefix — so the branch costs nothing and removes
-    a way for the check to silently become a no-op.
-    """
-    if not table_location:
-        raise InvalidInputError(
-            f"manifest_path {manifest_path!r} cannot be checked because this table's location is unknown, so there is nothing to confine it to"
-        )
-    outer_authority, outer_key = _in_the_store(table_location)
-    inner_authority, inner_key = _in_the_store(manifest_path)
-    authority_agrees = not inner_authority or inner_authority == outer_authority
-    within = authority_agrees and bool(outer_key) and (inner_key == outer_key or inner_key.startswith(f"{outer_key}/"))
-    if not within:
-        raise InvalidInputError(
-            f"manifest_path {manifest_path!r} does not name a place inside this table's own location "
-            f"({table_location!r}); creating a version MOVES that file, so naming one this table does not own "
-            f"both destroys it and grafts its rows here. The path is resolved inside the table's object store, "
-            f"so it must carry the table's own prefix"
-        )
-
-
-async def _refuse_a_manifest_this_table_does_not_own(ns: LanceNamespace, segments: list[str], manifest_path: str | None) -> None:
-    """Refuse a ``manifest_path`` that can name a file outside the table it is being created for.
-
-    ``create_table_version`` MOVES the file at this path into the table's version slot — it is not a
-    copy. Driven against a real ``dir`` namespace 2026-09-11 with no privileged access: a caller holding
-    ``can_write_data`` on one table named a manifest inside another table's ``_versions/`` directory and
-    both destroyed that version and grafted its rows into their own table (victim [1, 2, 3] -> [1, 3];
-    attacker [1] -> [1, 2]). The FGA gate above is sound and does not reach this: it authorises the table
-    in ``id``, while the reach came from a field nothing inspected.
-
-    THE BACKEND RESOLVES THIS FIELD INSIDE THE TABLE'S OBJECT STORE, NOT INSIDE THE TABLE, and that is
-    what decides the guard. Measured 2026-09-16 by staging one real manifest and driving every spelling
-    at it — on a local ``dir`` namespace, and again against the estate's own S3 store::
-
-        dir  '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
-        dir  't.lance/_versions/<n>.manifest-<uuid>'           -> InvalidInput "Staging manifest not found"
-        dir  '/<root>/t.lance/_versions/<n>.manifest-<uuid>'   -> OK, version 2 committed
-        s3   '_versions/<n>.manifest-<uuid>'                   -> InvalidInput "Staging manifest not found"
-        s3   '<prefix>/t.lance/_versions/<n>.manifest-<uuid>'  -> OK, version 2 committed
-
-    So the accepted spelling is the STORE-relative one — the whole filesystem path for ``dir``, the
-    bucket key for S3 — and the spec's own table-relative example
-    (``namespace.md``, "Table Version Metadata Schema": ``"_versions/9223372036854775806.manifest"``)
-    commits on neither backend.
-
-    THERE IS THEREFORE NO SAFE "RELATIVE MEANS CONFINED" SHORTCUT, and reading the S3 row as one is the
-    live hole this closes: a bare ``other-project/other.lance/_versions/x`` carries no scheme and no
-    leading slash, so a guard that only judges absolute paths waves it through — and the backend
-    resolves it against the BUCKET and moves another project's manifest into this table. Every spelling
-    is compared, and a bare ``_versions/x`` is refused with the rest: as a store key it is outside the
-    table, it commits on neither backend, and if such an object existed it would be moved in.
-
-    THE VERSION CAS IS NOT THIS GUARD, which is why the door looked safe. The backend refuses any version
-    but ``latest + 1``, so an arbitrary slot cannot be written — but aimed at the version the CAS demands,
-    the cross-table move succeeds.
-    """
-    if manifest_path is None:
-        return
-    _refuse_a_manifest_whose_SHAPE_can_leave_any_table(manifest_path)
-    described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=segments))
-    # NARROWED, not trusted: `location` is optional in the spec's response model, and a backend that
-    # answers without one leaves nothing to compare against. Anything that is not a string is the same
-    # situation as absent, and both fail closed below rather than reaching `urlsplit`.
-    location = getattr(described, "location", None)
-    _refuse_a_manifest_outside(manifest_path, table_location=location if isinstance(location, str) else None)
-
-
 @router.post("/{id}/version/create", response_model_exclude_none=True)
-async def create_table_version(
-    id: str,
-    body: CreateTableVersionRequest,
-    ns: NamespaceDep,
-    so: StorageOptionsDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    emitter: LineageEmitterDep,
-    authorization: Annotated[str | None, Header()] = None,
-) -> CreateTableVersionResponse:
-    """Create one version entry for this table, from a manifest the table itself owns.
+def create_table_version(id: str, body: CreateTableVersionRequest) -> CreateTableVersionResponse:
+    """Not supported (406) while this catalog does not manage table versions.
 
-    THE ONLY DOOR IN THIS MODULE THAT WRITES, and until [[LH-018]] it recorded nothing. It MOVES a
-    manifest into the table's version slot, so a version exists afterwards that did not before — and a
-    version minted through the SPEC's own commit door left no provenance, while the same table's
-    `/commit` door emitted. Two doors onto one table, one of them silent.
-
-    Emitted AFTER the native call, pinned to the version just minted, exactly as the column doors and
-    `restore_table` do. The other routes here mint nothing (reads, a delete governed by the deletion
-    control, and two ops the dir backend answers 406) and stay quiet on purpose — an emit from those
-    would be provenance for work that never happened.
-
-    NO `Idempotency-Key` SEAM HERE, DELIBERATELY: the version CAS already converges a replay, and
-    wiring `catalog.api.idempotency` on top would add a second answer to a question the spec has
-    settled. Measured 2026-09-16 against a real `dir` namespace — a staged manifest committed at version
-    2, then the identical request replayed::
-
-        attempt 1 -> OK, version 2
-        attempt 2 -> ConcurrentModificationError (code 14)
-
-    which is precisely the error set `lance_docs/namespace.md:1772` declares for this operation
-    (1 NamespaceNotFound, 4 TableNotFound, 14 ConcurrentModification). That is the seam's own bar and it
-    is met without it: the replay is non-destructive (the slot is occupied, so nothing moves), it maps to
-    409 rather than a bare 500, and the caller can tell its own commit from a competing writer's by
-    reading `DescribeTableVersion` and comparing the `e_tag` of the manifest it staged. Contrast
-    `create_table`, which the seam DOES wrap: there a replay's `AlreadyExists` is indistinguishable from
-    a name collision and the caller cannot learn whether its own write landed.
+    ``CreateTableVersion`` moves a client-staged manifest into the table's next version slot. The spec
+    pairs it with ``managed_versioning``, which ``describe_table`` never reports here, so no client is
+    sent to it; served, it would publish a manifest whose data files nothing judges against the table's
+    file version.
     """
-    segments = parse_identifier(id, settings.delimiter)
-    body.id = reconcile_body_id(segments, body.id)
-    await _refuse_a_manifest_this_table_does_not_own(ns, segments, body.manifest_path)
-    response = await run_in_threadpool(native.call, ns, "create_table_version", body)
-    await lineage_deps.emit_measured_write(
-        emitter,
-        segments,
-        ns=ns,
-        so=so,
-        settings=settings,
-        token=token,
-        operation=CREATE_TABLE_VERSION,
-        authorization=authorization,
-        pin_version=body.version,
-    )
-    return response
+    raise _versions_are_unmanaged("CreateTableVersion")
 
 
 @router.post("/{id}/version/describe", response_model_exclude_none=True)
@@ -455,21 +224,33 @@ def describe_table_version(
 
 @router.post("/{id}/version/delete", response_model_exclude_none=True)
 def batch_delete_table_versions(
-    id: str, body: BatchDeleteTableVersionsRequest, ns: NamespaceDep, settings: SettingsDep, force: RaskFlag = False
+    id: str, body: BatchDeleteTableVersionsRequest, ns: NamespaceDep, settings: SettingsDep, so: StorageOptionsDep, force: RaskFlag = False
 ) -> BatchDeleteTableVersionsResponse:
-    """Delete version ranges from the table — wraps the native ``batch_delete_table_versions`` op.
+    """Delete old versions of this table — never the current one, and never one a tag or a branch pins.
 
-    PROTECTION-GATED ([[LH-056]]). This is the most direct of the three partial deletions: it destroys
-    the VERSION rather than a ref to one, with nothing behind it, so a protected table refuses it on
-    the same record its drop consults. ``force`` turns that lock only; the FGA gate ran before this
-    handler and runs identically either way.
+    ``ranges`` are the spec's ``VersionRange``: start inclusive, end exclusive, ``-1`` for "through the
+    latest". A range that reaches the current version is refused (400), the spec's ``{0, -1}`` included:
+    Lance commits by put-if-not-exists on the next number, so a deleted latest manifest is minted again
+    by the next write and a pinned ``(table, version)`` would name different rows. A version a tag or a
+    child branch pins is refused (409), naming the pin. Every range is judged before anything is
+    deleted, and ``branch`` scopes the delete to that ref's own history.
 
-    The store read is a plain call rather than a threadpool hop because FastAPI already runs a sync
-    handler off the event loop.
+    Owner tier (``can_drop``, the rung ``maintenance/run`` clears), protection-gated like drop; ``force``
+    turns the protection lock only. FastAPI runs this sync handler off the event loop.
     """
     segments = parse_identifier(id, settings.delimiter)
     body.id = reconcile_body_id(segments, body.id)
     canonical = fga.canonical_object_id(segments, delimiter=settings.delimiter)
     guard = protection.get_protection(settings.registry_root, settings.storage_options(), "table", canonical)
     fga_deps.require_not_protected(guard or {}, kind="table", obj_id=canonical, force=force)
-    return native.call(ns, "batch_delete_table_versions", body)
+    ds = open_dataset(ns, so, segments, branch=body.branch)
+    ranges = [(r.start_version, r.end_version) for r in body.ranges]
+    # Judged before the sibling scan, which opens every dataset beside this one, so a refused request
+    # does no estate I/O. `delete_versions` judges again against the handle it deletes from.
+    maintenance.versions_in_ranges(ranges, current=int(ds.version))
+    location = str(getattr(ds, "uri", "") or "")
+    refs = base_refs.sibling_base_refs(location, so)
+    if refs.unreadable:
+        log.warning("version_delete_base_refs_incomplete", extra={"location": location, "unreadable": len(refs.unreadable)})
+    deleted = maintenance.delete_versions(ds, ranges=ranges, branch=body.branch, protected=refs)
+    return BatchDeleteTableVersionsResponse(deleted_count=deleted)

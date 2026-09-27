@@ -4,8 +4,9 @@
 current version, the pins on THIS ref (a version tagged on this branch, or one a child branch was cut
 from, is NEVER collected), the retain-last-N window, and the age cutoff — it never mutates. ``run_gc``
 performs the reclaim with the SAME tag exemption the sweep uses (``error_if_tagged_old_versions=False``),
-so a long-lived promotion tag can't stall GC. Pure over a Lance dataset handle, so both are unit-testable
-with a fake ``ds``.
+so a long-lived promotion tag can't stall GC. ``delete_versions`` backs the spec's version-delete door
+with the same reclaim, for named versions, and refuses a pinned one instead of skipping it. Pure over a
+Lance dataset handle, so these are unit-testable with a fake ``ds``.
 
 The destructive verbs are gated by :func:`require_compactable` and :func:`require_reclaimable`, which
 ask the SWEEP's gates per verb rather than one stricter gate of their own — see either for why a button
@@ -19,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 
-from lance_namespace import UnsupportedOperationError
+from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
 from catalog.services.dataplane import recorded_branch
 from service_kit.lakehouse.base_refs import BaseRefs
@@ -107,6 +108,12 @@ class ReclaimableDataset(VersionedDataset, ManifestCarrier, Protocol):
     """The preview surface PLUS the destructive reclaim — and the manifest the gate reads first."""
 
     def cleanup_old_versions(self, *, older_than: timedelta, retain_versions: int | None, error_if_tagged_old_versions: bool) -> Any: ...  # noqa: ANN401 — pylance returns an untyped stats object
+
+
+class VersionDeletableDataset(VersionedDataset, ManifestCarrier, Protocol):
+    """The preview surface PLUS the reclaim of NAMED versions — and the manifest the gate reads first."""
+
+    def cleanup_old_versions(self, *, versions: list[int], error_if_tagged_old_versions: bool) -> Any: ...  # noqa: ANN401 — pylance returns an untyped stats object
 
 
 class Optimizer(Protocol):
@@ -365,6 +372,64 @@ def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_version
         "old_versions_removed": int(getattr(stats, "old_versions", 0) or 0),
         "bytes_removed": int(getattr(stats, "bytes_removed", 0) or 0),
     }
+
+
+#: ``VersionRange.end_version`` for "through the latest version" (``lance_docs/ns_catalog/spec.yaml``).
+THROUGH_LATEST: Final = -1
+
+
+def versions_in_ranges(ranges: Sequence[tuple[int, int]], *, current: int) -> list[int]:
+    """The versions ``ranges`` name, each ``(start, end)`` start-inclusive and end-exclusive.
+
+    A range that reaches ``current`` is refused, the spec's ``(0, -1)`` "all versions" included: Lance
+    commits a version by put-if-not-exists on its number, so deleting the latest manifest rolls the
+    table back and the next write mints that number again. Every range is judged before any is applied.
+    """
+    if not ranges:
+        raise InvalidInputError("version/delete names no version range")
+    named: set[int] = set()
+    for start, end in ranges:
+        if end == THROUGH_LATEST or end > current:
+            raise InvalidInputError(
+                f"range [{start}, {end}) reaches version {current}, the current version: deleting it lets the next write mint that "
+                "number again, so this door never does. end_version is exclusive; nothing was deleted"
+            )
+        if start < 0 or end <= start:
+            raise InvalidInputError(f"range [{start}, {end}) names no version: start_version is inclusive, end_version exclusive; nothing was deleted")
+        named.update(range(start, end))
+    return sorted(named)
+
+
+def _refuse_pinned_versions(ds: VersionedDataset, branch: str | None, targets: Sequence[int]) -> None:
+    """Refuse when a tag on this ref, or a branch cut from it, pins one of ``targets`` — naming every pin."""
+    wanted = set(targets)
+    pins = [f"tag {name!r} at version {version}" for name, version in _tag_versions(ds, branch).items() if version in wanted]
+    pins += [f"branch {name!r} cut at version {version}" for name, version in _fork_versions(ds, branch).items() if version in wanted]
+    if pins:
+        raise InvalidTableStateError(f"refused: {', '.join(sorted(pins))} pins a version in the range; delete the pin first. Nothing was deleted")
+
+
+def delete_versions(ds: VersionDeletableDataset, *, ranges: Sequence[tuple[int, int]], branch: str | None, protected: BaseRefs | None) -> int:
+    """Delete the versions ``ranges`` name on ``ds``'s ref (DESTRUCTIVE); return how many were removed.
+
+    ``cleanup_old_versions(versions=...)``, measured on pylance 12.0.0: the current version is never
+    removed, a tagged one raises under ``error_if_tagged_old_versions=True``, a version a branch was cut
+    from is kept, and data files only the removed versions referenced go with them. A pin is refused
+    before the call so the caller learns which one; a tag that lands between that check and the call is
+    refused by the call and named from a second read. A tag or branch created while the call runs is
+    not seen: Lance reads the refs once, and nothing serializes ref creation with a reclaim (measured
+    with 60 concurrent races: a tag named a deleted version in 31, and ``run_gc`` loses the same race).
+    ``protected`` is the #114 base-reference map, as for ``run_gc``.
+    """
+    targets = versions_in_ranges(ranges, current=int(ds.version))
+    require_reclaimable(ds, protected)
+    _refuse_pinned_versions(ds, branch, targets)
+    try:
+        stats: Any = ds.cleanup_old_versions(versions=targets, error_if_tagged_old_versions=True)
+    except OSError:
+        _refuse_pinned_versions(ds, branch, targets)
+        raise
+    return int(getattr(stats, "old_versions", 0) or 0)
 
 
 def compact_now(

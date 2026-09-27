@@ -748,18 +748,14 @@ def test_batch_commit_requires_writer_on_each_table(client: TestClient, fake_ns:
     assert set(seen["objects"]) == {"table:db1$a", "table:db1$b"}
 
 
-def test_batch_commit_declare_seeds_ownership_like_the_declare_route(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT (audit 2026-07-12): a ``declare_table`` sub-op inside ``/v1/table/batch-commit``
-    CREATES a table, so the creator is seeded owner + parent edge exactly like the dedicated
-    ``/declare`` route — previously the batch path seeded NOTHING (the created table had no owner
-    tuple: fail-closed, but the creator couldn't manage their own table)."""
-    from lance_namespace import BatchCommitTablesResponse
-
-    fake_ns.batch_commit_tables.return_value = BatchCommitTablesResponse(results=[])
+def test_an_AUTHORIZED_batch_commit_answers_406_and_seeds_nothing(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+    """CONTRACT ([[LH-206]]): past the batch gate, ``/v1/table/batch-commit`` answers the spec's 406 while
+    the catalog does not manage table versions. A ``declare_table`` sub-op creates no table and seeds no
+    tuple, and the backend is never reached."""
     _wire(client)
 
     async def fake_batch_check(_c: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        return dict.fromkeys(objects, True)  # create-on-parent allowed
+        return dict.fromkeys(objects, True)
 
     grants: list[dict] = []
 
@@ -771,16 +767,15 @@ def test_batch_commit_declare_seeds_ownership_like_the_declare_route(client: Tes
 
     body = {"operations": [{"declare_table": {"id": ["db1", "fresh"]}}]}
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})
-    assert resp.status_code == 200
-    assert len(grants) == 1  # exactly the declared table, nothing else
-    assert grants[0]["user_sub"] == "alice"
-    assert grants[0]["resource"] == "table"
-    assert grants[0]["obj_id"] == "db1$fresh"  # canonical id — byte-identical to the check path
+    assert resp.status_code == 406, resp.text
+    assert resp.json()["code"] == 0
+    assert grants == []
+    fake_ns.batch_commit_tables.assert_not_called()
 
 
 def test_batch_commit_deregister_requires_owner_tier(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: a destructive op inside batch-commit (``deregister_table``) is checked at the
-    OWNER tier via ``can_deregister`` — closing the writer back-door the audit flagged."""
+    OWNER tier via ``can_deregister``, the rung of its dedicated route, before the door's 406."""
     _wire(client)
     captured: list[dict] = []
     monkeypatch.setattr(fga_module, "batch_check", _fake_batch_check(captured, allow=False))

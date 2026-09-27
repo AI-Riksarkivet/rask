@@ -274,7 +274,7 @@ event-driven medallion stage runners (see §7, [`FLOW.md`](FLOW.md)).
 ## 8. "Commit auth" — what it is and how it's already handled
 
 A **commit** here = writing a new Lance version (append/merge/update/delete, or a
-version/batch-commit). In a governed catalog you want a commit to be **(a) authorized,
+fragment commit through `/commit`). In a governed catalog you want a commit to be **(a) authorized,
 (b) audited, (c) lineage-tracked** — three *different* things:
 
 | Concern | Question | Who answers it | Status |

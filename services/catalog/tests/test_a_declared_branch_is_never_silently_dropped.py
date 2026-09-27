@@ -31,8 +31,8 @@ retire a keyed-by-line exemption, which is the failure mode an exemption list ex
 
 WHAT THIS GATE IS AND IS NOT. It does not know which upstream operations honour `branch` — nothing
 static can, because the answer lives in Rust behind `self._inner` and differs per operation. Driven on
-2026-08-31, `describe_table_version` and `batch_delete_table_versions` honour it while
-`list_table_versions` did not, from adjacent lines of the same module. So this gate does not assert a
+2026-08-31, `describe_table_version` honoured it while `list_table_versions` did not, from adjacent
+lines of the same module. So this gate does not assert a
 bug; it asserts that somebody LOOKED. A new door that hands a branch to `native.call` fails here until
 its author drives it and records what happened, which is the step that was skipped ten times.
 """
@@ -66,11 +66,6 @@ _ANSWERED: dict[str, str] = {
         "at 1: `branch=work` returned version 4 with manifest_path under `tree/work/_versions/`, and a "
         "branch that had never been created returned 404."
     ),
-    "api/v1/endpoints/versions.py::batch_delete_table_versions": (
-        "HONOURS it. Driven 2026-08-31: `branch=work` with ranges [2,3] returned deleted_count 0 and "
-        "left every main version readable; `branch=ghost-never-made` was refused 404 'branch not "
-        "found'. A door that 404s an absent ref is a door that read the parameter."
-    ),
     "api/v1/endpoints/columns.py::backfill_column": (
         "MOOT. Driven 2026-08-31: the dir backend answers `alter_table_backfill_columns` with 501 "
         "'Not supported' for every request, branch or no branch, so there is no target to get wrong. "
@@ -82,11 +77,6 @@ _ANSWERED: dict[str, str] = {
         "`?branch=ghost-never-made` returned 404. NOTE THE CHANNEL — `branch` is a QUERY parameter on "
         "this route, not a body field. A first probe sent it in the JSON body, FastAPI ignored it, the "
         "door answered for main, and that looked exactly like the defect. It was not one."
-    ),
-    "api/v1/endpoints/versions.py::create_table_version": (
-        "UNDRIVEN, and recorded as such rather than assumed safe. Driving 2026-08-31 got 422 on the "
-        "request shape before reaching any branch behaviour, so nothing is known about it. This entry "
-        "is a debt, not a clearance — it is in `open_lakehouse_diff_left.md` §P."
     ),
 }
 

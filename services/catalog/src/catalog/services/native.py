@@ -15,13 +15,12 @@ from opentelemetry import trace
 from service_kit.lakehouse.ns_errors import as_unsupported_if_stub
 
 
-# These three native ``DirectoryNamespace`` methods are typed ``request: dict`` and forward to Rust WITHOUT
-# calling ``request.model_dump()`` themselves — unlike every sibling, which takes the pydantic model and
-# dumps it internally. Passing the pydantic model to them raises ``TypeError: ... is not an instance of
-# 'Mapping'`` (which a too-broad stub hint previously laundered into a fake 501 — they are actually backed).
-# So ``call`` dumps pydantic args to a dict for exactly these. (Confirmed against lance_namespace; the
-# audit traced the masked 501s here.)
-_DICT_REQUEST_METHODS = frozenset({"create_table_version", "describe_table_version", "batch_delete_table_versions"})
+# ``describe_table_version`` on the native ``DirectoryNamespace`` is typed ``request: dict`` and forwards to
+# Rust WITHOUT calling ``request.model_dump()`` — unlike its siblings, which take the pydantic model and dump
+# it internally. Passing the model raises ``TypeError: ... is not an instance of 'Mapping'``, which a broad
+# stub hint would launder into a fake 501, so ``call`` dumps pydantic args to a dict for the methods named
+# here. (Confirmed against lance_namespace.)
+_DICT_REQUEST_METHODS = frozenset({"describe_table_version"})
 
 
 def _as_dict(arg: object) -> object:

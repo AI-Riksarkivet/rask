@@ -130,18 +130,22 @@ def test_the_catalog_skill_does_not_still_call_the_producers_bronze_ungoverned()
 
 
 def test_the_catalog_skill_agrees_with_the_coverage_doc_on_the_unsupported_ops() -> None:
-    """SIX spec-correct 406s, and `rename_table` is not one of them (`tables.py` backs it in-process).
+    """The skill and `docs/COVERAGE.md` state the SAME count of spec-correct 406s, and `rename_table` is
+    not one of them (`tables.py` backs it in-process).
 
-    The STATUS moved 501 -> 406 on 2026-09-02 (the spec's own code; `docs/DECISIONS.md` records the
-    reversal), so this gate keys on the count and the op rather than on the number — a gate that
-    matched the status string would have to be edited every time the estate becomes MORE conformant.
+    Keyed on agreement between the two documents rather than on a literal count, because the count
+    moves whenever a door is served or refused ([[LH-206]] added the three version-tracking ops), and a
+    gate that pins the number has to be edited in the same commit it is meant to check.
     """
     assert "async def rename_table(" in _read(REPO_ROOT / "services/catalog/src/catalog/api/v1/endpoints/tables.py")
 
     skill = _read(SKILL)
     marker = "answer a spec-correct 406"
     bullet = skill[skill.index(marker) - 400 : skill.index(marker) + 400]
-    assert "**7 answer a spec-correct 406**" not in skill, "docs/COVERAGE.md corrected this to SIX on 2026-08-05."
+    in_skill = re.search(r"\*\*(\d+) answer a spec-correct 406\*\*", skill)
+    in_coverage = re.search(r"(\d+) spec-correct 406", _read(REPO_ROOT / "docs/COVERAGE.md"))
+    assert in_skill is not None and in_coverage is not None, "one of the two documents no longer states its 406 count"
+    assert in_skill.group(1) == in_coverage.group(1), f"SKILL.md says {in_skill.group(1)} spec-correct 406s, docs/COVERAGE.md says {in_coverage.group(1)}"
     assert "`rename_table`," not in bullet, "`rename_table` is backed in-process by the dataplane and answers 200."
 
 

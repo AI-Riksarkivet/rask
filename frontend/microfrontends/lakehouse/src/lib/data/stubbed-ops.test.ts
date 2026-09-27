@@ -1,9 +1,10 @@
 /**
  * NO ACTION IN THIS ZONE MAY BE WIRED TO A CATALOG OP THE DEPLOYED BACKEND STUBS.
  *
- * `docs/COVERAGE.md` records the live probe: the catalog wires 54/54 spec ops, but six of them are
- * genuine `NotImplementedError` stubs in the native Rust `DirectoryNamespace` the chart pins, so
- * they answer **501 for every input**. `alter_table_backfill_columns` is one of them.
+ * `docs/COVERAGE.md` records the live probe: the catalog wires 54/54 spec ops, but seven of them
+ * answer **406 for every input** — four genuine `NotImplementedError` stubs in the native Rust
+ * `DirectoryNamespace` the chart pins, and three version-tracking ops the catalog refuses while it
+ * never advertises `managed_versioning`. `alter_table_backfill_columns` is one of them.
  *
  * The lakehouse offered a per-column "backfill" button on the schema table that POSTed
  * `/v1/table/{id}/backfill_column`. It could not succeed — not for a wrong argument, not for a
@@ -31,7 +32,7 @@ function sources(): string[] {
 }
 
 /**
- * The six routes `docs/COVERAGE.md` classifies as native stubs (501 on every call).
+ * The seven routes `docs/COVERAGE.md` classifies as 406 on every call.
  *
  * These are matched as PATH SHAPES, not as a word list under a shared prefix. The first version of
  * this gate anchored every op on `v1/table/`, which structurally could not match five of the six:
@@ -45,6 +46,7 @@ const STUBBED_ROUTES = [
 	/v1\/materialized_view\/[^`'"]*\/(create|refresh)/,
 	/v1\/table\/batch-commit/,
 	/v1\/table\/version\/batch-create/,
+	/v1\/table\/[^`'"]*\/version\/create/,
 	/v1\/transaction\/[^`'"]*\/alter/,
 ];
 const callsAStub = (src: string) => STUBBED_ROUTES.some((re) => re.test(src));
