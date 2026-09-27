@@ -32,7 +32,7 @@ from pydantic import ValidationError as PydanticValidationError
 from starlette.concurrency import run_in_threadpool
 
 from annotator.api.dependencies import ControlEmitterDep
-from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker
+from annotator.api.security import CheckerDep, CurrentSubject, FgaChecker, SettingsDep
 from annotator.api.v1.responses import DraftImport
 from annotator.projects.actor import AnnotationTaskActorInterface
 from annotator.projects.imports import shapes_from_ipc
@@ -401,7 +401,7 @@ async def save_draft(task_id: TaskId, payload: SaveDraftRequest, checker: Checke
 
 
 @router.post("/{task_id}/import", status_code=status.HTTP_200_OK)
-async def import_annotations(task_id: TaskId, request: Request, checker: CheckerDep, subject: CurrentSubject) -> DraftImport:
+async def import_annotations(task_id: TaskId, request: Request, checker: CheckerDep, subject: CurrentSubject, settings: SettingsDep) -> DraftImport:
     """Import annotations made elsewhere into this task's draft, as Arrow IPC.
 
     ONE format — the canonical annotations schema — because the estate already has one and three
@@ -467,7 +467,7 @@ async def import_annotations(task_id: TaskId, request: Request, checker: Checker
     # pod's own /livez + /readyz for as long as the upload took to parse. Same fix and same reason as
     # `assist.py` and `project_events.py`; the sibling Arrow route in `annotations/wire.py` is a plain
     # `def` and gets the threadpool for free.
-    shapes, links = await run_in_threadpool(shapes_from_ipc, payload, ontology=ontology, taken_ids=taken)
+    shapes, links = await run_in_threadpool(shapes_from_ipc, payload, max_bytes=settings.max_body_bytes, ontology=ontology, taken_ids=taken)
 
     try:
         draft = await actor.save_draft(

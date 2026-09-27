@@ -66,6 +66,8 @@ def _settings(delimiter: str) -> Any:
         multibase_base_credential_ref_map={},
         dapr_secret_store="",
         dapr_secret_s3_field="",
+        # [[XC-104]] The door holds the body to this once its compressed buffers inflate.
+        max_body_bytes=256 * 1024 * 1024,
     )
 
 

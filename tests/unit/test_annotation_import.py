@@ -26,6 +26,10 @@ from annotator.projects.ontology import LabelClass, LabelOntology, RelationClass
 from service_kit.exceptions import ValidationError
 
 
+#: The annotator's default body cap (MEDIA_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 32 * 1024 * 1024
+
+
 def ipc(rows: list[dict[str, object]], schema: pa.Schema | None = None) -> bytes:
     """Arrow IPC stream bytes, the way a `scripts/` converter would emit them."""
     table = pa.Table.from_pylist(rows, schema=schema) if schema else pa.Table.from_pylist(rows)
@@ -54,6 +58,7 @@ def test_a_canonical_row_becomes_a_draft_shape() -> None:
     shapes, links = shapes_from_ipc(
         ipc([{"id": "a1", "shape_type": "bbox", "label": "figure", "x": 1.0, "y": 2.0, "width": 3.0, "height": 4.0}]),
         ontology=ontology(),
+        max_bytes=_BODY_LIMIT,
     )
 
     assert len(shapes) == 1
@@ -69,14 +74,14 @@ def test_every_imported_shape_is_stamped_as_imported() -> None:
     only acquire when they are written there. "Not drawn here" is carried by `source`, and the task's
     own state machine is what keeps the work reviewed: an import cannot skip submit or accept.
     """
-    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "figure"}]), ontology=ontology())
+    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "figure"}]), ontology=ontology(), max_bytes=_BODY_LIMIT)
 
     assert shapes[0].source == IMPORT_SOURCE
 
 
 def test_a_row_with_no_id_still_imports_and_gets_one() -> None:
     """An export with no ids is perfectly reasonable — it just cannot carry links."""
-    shapes, _ = shapes_from_ipc(ipc([{"shape_type": "bbox", "label": "figure"}]), ontology=ontology())
+    shapes, _ = shapes_from_ipc(ipc([{"shape_type": "bbox", "label": "figure"}]), ontology=ontology(), max_bytes=_BODY_LIMIT)
 
     assert shapes[0].shape_id, "an imported shape must always end up with an id"
 
@@ -89,7 +94,7 @@ def test_a_foreign_shape_name_normalises(written: str, canonical: str) -> None:
     """Even ONE format needs this: rows written by older tooling carry `rectangle`, a name neither
     the service (`bbox`) nor the canvas accepts. A row that silently kept it is a row the canvas
     cannot draw."""
-    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": written}]))
+    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": written}]), max_bytes=_BODY_LIMIT)
 
     assert shapes[0].shape_type == canonical
 
@@ -103,6 +108,7 @@ def test_normalisation_happens_BEFORE_the_ontology_check() -> None:
     shapes, _ = shapes_from_ipc(
         ipc([{"id": "a1", "shape_type": "rectangle", "label": "figure"}]),
         ontology=ontology(classes=[LabelClass(name="figure", tools=["bbox"])]),
+        max_bytes=_BODY_LIMIT,
     )
 
     assert shapes[0].shape_type == "bbox"
@@ -122,7 +128,7 @@ def test_a_label_outside_the_taxonomy_is_REFUSED_and_NAMED() -> None:
     discovered at submit after a reviewer has already worked through the item.
     """
     with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "spaceship"}]), ontology=ontology())
+        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "spaceship"}]), ontology=ontology(), max_bytes=_BODY_LIMIT)
 
     assert "spaceship" in str(caught.value), "a refusal that does not name the label cannot be acted on"
 
@@ -142,6 +148,7 @@ def test_ONE_bad_label_refuses_the_WHOLE_import() -> None:
                 ]
             ),
             ontology=ontology(),
+            max_bytes=_BODY_LIMIT,
         )
 
 
@@ -150,6 +157,7 @@ def test_a_class_that_forbids_the_tool_is_refused() -> None:
         shapes_from_ipc(
             ipc([{"id": "a1", "shape_type": "polygon", "label": "figure"}]),
             ontology=ontology(classes=[LabelClass(name="figure", tools=["bbox"])]),
+            max_bytes=_BODY_LIMIT,
         )
 
     assert "figure" in str(caught.value)
@@ -166,6 +174,7 @@ def test_an_import_is_NOT_judged_by_the_completeness_rules() -> None:
     shapes, _ = shapes_from_ipc(
         ipc([{"id": "a1", "shape_type": "bbox", "label": "figure"}]),
         ontology=ontology(classes=[LabelClass(name="figure"), LabelClass(name="caption", required=True)]),
+        max_bytes=_BODY_LIMIT,
     )
 
     assert len(shapes) == 1
@@ -173,7 +182,7 @@ def test_an_import_is_NOT_judged_by_the_completeness_rules() -> None:
 
 def test_an_unconstrained_ontology_accepts_anything() -> None:
     """Same posture as every other surface: an ontology that constrains nothing is not a filter."""
-    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "whatever"}]), ontology=None)
+    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "whatever"}]), ontology=None, max_bytes=_BODY_LIMIT)
 
     assert shapes[0].label == "whatever"
 
@@ -194,6 +203,7 @@ def test_a_rows_links_column_becomes_typed_edges() -> None:
             ]
         ),
         ontology=ontology(relations=[RelationClass(name="describes")]),
+        max_bytes=_BODY_LIMIT,
     )
 
     assert len(links) == 1
@@ -205,6 +215,7 @@ def test_an_undeclared_relation_is_refused() -> None:
         shapes_from_ipc(
             ipc([{"id": "a1", "shape_type": "bbox", "label": "figure", "links": json.dumps([{"name": "haunts", "to_shape": "a1"}])}]),
             ontology=ontology(relations=[RelationClass(name="describes")]),
+            max_bytes=_BODY_LIMIT,
         )
 
     assert "haunts" in str(caught.value)
@@ -217,6 +228,7 @@ def test_a_link_pointing_at_a_shape_that_is_not_there_is_refused() -> None:
         shapes_from_ipc(
             ipc([{"id": "a1", "shape_type": "bbox", "label": "figure", "links": json.dumps([{"name": "describes", "to_shape": "ghost"}])}]),
             ontology=ontology(relations=[RelationClass(name="describes")]),
+            max_bytes=_BODY_LIMIT,
         )
 
     assert "ghost" in str(caught.value)
@@ -229,6 +241,7 @@ def test_a_link_may_point_at_a_shape_ALREADY_in_the_draft() -> None:
         ipc([{"id": "a1", "shape_type": "bbox", "label": "figure", "links": json.dumps([{"name": "describes", "to_shape": "drawn-1"}])}]),
         ontology=ontology(relations=[RelationClass(name="describes")]),
         taken_ids={"drawn-1"},
+        max_bytes=_BODY_LIMIT,
     )
 
     assert links[0].to_shape == "drawn-1"
@@ -243,34 +256,34 @@ def test_an_id_that_collides_with_the_existing_draft_is_refused() -> None:
     """Re-keying silently would re-point any link naming that id at a DIFFERENT annotation — a wrong
     answer rather than a failed import."""
     with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(ipc([{"id": "drawn-1", "shape_type": "bbox"}]), taken_ids={"drawn-1"})
+        shapes_from_ipc(ipc([{"id": "drawn-1", "shape_type": "bbox"}]), taken_ids={"drawn-1"}, max_bytes=_BODY_LIMIT)
 
     assert "drawn-1" in str(caught.value)
 
 
 def test_a_duplicate_id_WITHIN_one_import_is_refused() -> None:
     with pytest.raises(ValidationError):
-        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox"}, {"id": "a1", "shape_type": "bbox"}]))
+        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox"}, {"id": "a1", "shape_type": "bbox"}]), max_bytes=_BODY_LIMIT)
 
 
 def test_a_row_with_no_shape_type_is_refused() -> None:
     """It is not an annotation, it is a row."""
     with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(ipc([{"id": "a1", "label": "figure"}]))
+        shapes_from_ipc(ipc([{"id": "a1", "label": "figure"}]), max_bytes=_BODY_LIMIT)
 
     assert "shape_type" in str(caught.value)
 
 
 def test_bytes_that_are_not_arrow_are_refused_without_a_traceback() -> None:
     with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(b"this is a COCO json file, actually")
+        shapes_from_ipc(b"this is a COCO json file, actually", max_bytes=_BODY_LIMIT)
 
     assert "Arrow" in str(caught.value)
 
 
 def test_an_empty_body_is_refused() -> None:
     with pytest.raises(ValidationError):
-        shapes_from_ipc(b"")
+        shapes_from_ipc(b"", max_bytes=_BODY_LIMIT)
 
 
 def test_the_ARROW_FILE_framing_is_accepted_too() -> None:
@@ -282,7 +295,7 @@ def test_the_ARROW_FILE_framing_is_accepted_too() -> None:
     with pa.ipc.new_file(sink, table.schema) as writer:
         writer.write_table(table)
 
-    shapes, _ = shapes_from_ipc(sink.getvalue(), ontology=ontology())
+    shapes, _ = shapes_from_ipc(sink.getvalue(), ontology=ontology(), max_bytes=_BODY_LIMIT)
 
     assert shapes[0].shape_id == "a1"
 
@@ -296,6 +309,7 @@ def test_attributes_arrive_as_a_flat_string_map() -> None:
     shapes, _ = shapes_from_ipc(
         ipc([{"id": "a1", "shape_type": "bbox", "label": "figure", "attributes": json.dumps({"order": 2, "checked": True})}]),
         ontology=ontology(),
+        max_bytes=_BODY_LIMIT,
     )
 
     assert shapes[0].attributes == {"order": "2", "checked": "True"}
@@ -303,7 +317,7 @@ def test_attributes_arrive_as_a_flat_string_map() -> None:
 
 def test_attributes_that_are_not_valid_json_are_refused() -> None:
     with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "attributes": "{oops"}]))
+        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "attributes": "{oops"}]), max_bytes=_BODY_LIMIT)
 
     assert "attributes" in str(caught.value)
 
@@ -315,6 +329,7 @@ def test_a_declared_attribute_type_is_enforced_at_import() -> None:
         shapes_from_ipc(
             ipc([{"id": "a1", "shape_type": "bbox", "label": "figure", "attributes": json.dumps({"order": "not-a-number"})}]),
             ontology=ontology(classes=[LabelClass(name="figure", attributes=[{"name": "order", "type": "int"}])]),
+            max_bytes=_BODY_LIMIT,
         )
 
     assert "order" in str(caught.value)
@@ -360,6 +375,7 @@ def test_a_text_span_imports_with_its_parent_and_range() -> None:
             _SPAN_SCHEMA,
         ),
         ontology=ontology(),
+        max_bytes=_BODY_LIMIT,
     )
 
     span = shapes[1]

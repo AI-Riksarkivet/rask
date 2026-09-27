@@ -37,6 +37,10 @@ from lance_namespace import MergeInsertIntoTableRequest, connect
 from catalog.services.dataplane import create_table, merge_insert_into_table, open_dataset
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 lance = pytest.importorskip("lance")
 
 
@@ -68,7 +72,7 @@ def _code(ns, *, branch: str | None, on: str, payload: pa.Table) -> int | None: 
     """Drive merge_insert and return the spec code it answered, or None if it did not fail."""
     request = MergeInsertIntoTableRequest(id=TABLE_ID, on=on, when_matched_update_all=True, branch=branch)
     try:
-        merge_insert_into_table(ns, {}, request, _ipc(payload))
+        merge_insert_into_table(ns, {}, request, _ipc(payload), max_bytes=_BODY_LIMIT)
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject; the class is only how it carries one
         return getattr(exc, "code", None)
     return None

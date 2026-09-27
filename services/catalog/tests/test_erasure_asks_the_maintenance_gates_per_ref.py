@@ -36,6 +36,10 @@ from service_kit.lakehouse import base_refs
 from service_kit.lakehouse.base_refs import BaseRefs
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 _PREDICATE = "pii = 'alice'"
 
 
@@ -236,7 +240,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
         writer.write_table(_rows("alice"))
-    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes()), mode="create")
+    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create")
     so = {"aws_region": "eu-north-1"}
     seen: dict[str, Any] = {}
     listed: list[dict[str, str]] = []

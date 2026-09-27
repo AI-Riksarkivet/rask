@@ -38,6 +38,10 @@ from lance_namespace import InsertIntoTableRequest, InvalidInputError, connect
 from catalog.services.dataplane import create_table, insert_into_table, open_dataset
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -203,6 +207,6 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
         open_dataset(ns, {}, ["t"]).create_branch(branch, None)
 
     with pytest.raises(InvalidInputError):
-        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], mode="Appnd", branch=branch), _rows(5))
+        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], mode="Appnd", branch=branch), _rows(5), max_bytes=_BODY_LIMIT)
 
     assert open_dataset(ns, {}, ["t"], branch=branch).count_rows() == 3, "a refused insert must write no rows"

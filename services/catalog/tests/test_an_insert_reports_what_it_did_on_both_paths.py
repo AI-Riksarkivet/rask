@@ -28,6 +28,10 @@ from lance_namespace import InsertIntoTableRequest, connect
 from catalog.services.dataplane import create_table, insert_into_table, open_dataset
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 lance = pytest.importorskip("lance")
 
 TABLE_ID = ["rows"]
@@ -61,8 +65,8 @@ def test_both_paths_report_the_same_shape_for_the_same_payload(ns) -> None:  # n
     field, one fewer comparison — so it could only ever fail when this one already had. The messages
     below carry which side was wrong, which is the only thing the extra test bought.
     """
-    main = insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)))
-    branched = insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)))
+    main = insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT)
+    branched = insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), _ipc(_rows(30)), max_bytes=_BODY_LIMIT)
 
     assert main.num_inserted_rows == 2, f"the MAIN path did not report the rows it wrote: {main}"
     assert branched.num_inserted_rows == 2, f"the BRANCH path did not report the rows it wrote: {branched}"

@@ -13,9 +13,12 @@ goes through `service_kit.lancekit.arrow_ipc`, with no exception, and these gate
   a module once it escapes; dereferencing it (`pa.Table`) or aliasing it to a plain name
   (`ipc = pa.ipc`, which the scan follows) is fine;
 - a literal `importlib.import_module`, `__import__` or `sys.modules[...]` naming such a module;
-- a reader reference in the canonical module whose table does not pass through `_validated`;
+- a reader reference in the canonical module whose table does not pass through `_validated`, save in
+  the two message walks that hold a caller's body to what its bytes carry ([[XC-104]]), which may
+  yield a message's metadata and its raw body and nothing else;
 - a `_validated` that does not call `validate(full=True)` — plain `validate()` accepts decreasing
-  offsets and string values that are not UTF-8.
+  offsets and string values that are not UTF-8;
+- a module other than the catalog's `/query` reader taking the decoder that skips that bound.
 
 Readers are pyarrow's public and private IPC entry points (Feather v2 is the IPC file format, and
 `pyarrow.dataset` over an IPC format reads it), `pyarrow.flight`, and the wrappers that decode IPC
@@ -29,14 +32,24 @@ through an extension the fleet does not install.
 from __future__ import annotations
 
 import ast
+import re
 from functools import cache
 from pathlib import Path
+from typing import TypeGuard
 
 import pytest
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _CANONICAL = Path("packages/service-kit/src/service_kit/lancekit/arrow_ipc.py")
+
+#: The decoder's walks over messages, which decode no batch and hand back only a message's metadata and raw body.
+_MESSAGE_WALKS = frozenset({"_stream_messages", "_file_messages"})
+
+#: The decoders that skip a caller's size bound, and the one module that may take one: the catalog's
+#: `/query` response is bounded by the query, and an honest projection is as dense as a hostile body.
+_UNBOUNDED = re.compile(r"\b(?:decode_arrow_response|_decoded_stream|_decoded_file)\b")
+_RESPONSE_READER = Path("packages/service-kit/src/service_kit/lancekit/reader.py")
 
 #: The libraries whose bindings the scan follows.
 _TRACKED_ROOTS = frozenset({"pyarrow", "pandas", "lancedb", "polars"})
@@ -405,8 +418,100 @@ def test_every_read_in_the_decoder_passes_through_the_full_validation() -> None:
         for inner in ast.walk(node)
     }
     assert module.found, "the canonical decoder reads no Arrow IPC — the gate is looking at the wrong module"
-    unvalidated = [f"{scope}:{getattr(node, 'lineno', '?')}" for scope, node in module.found if id(node) not in validated]
+    unvalidated = [f"{scope}:{getattr(node, 'lineno', '?')}" for scope, node in module.found if id(node) not in validated and scope not in _MESSAGE_WALKS]
     assert not unvalidated, f"a read in the decoder does not pass through _validated: {unvalidated}"
+
+
+def _is_attribute(node: ast.expr, name: str) -> TypeGuard[ast.Attribute]:
+    return isinstance(node, ast.Attribute) and node.attr == name
+
+
+def _yields_a_message_undecoded(node: ast.Yield) -> bool:
+    """`<message>.metadata.to_pybytes(), <message>.body` and nothing else."""
+    value = node.value
+    if not (isinstance(value, ast.Tuple) and len(value.elts) == 2):
+        return False
+    metadata, body = value.elts
+    return (
+        isinstance(metadata, ast.Call)
+        and not metadata.args
+        and not metadata.keywords
+        and _is_attribute(metadata.func, "to_pybytes")
+        and _is_attribute(metadata.func.value, "metadata")
+        and _is_attribute(body, "body")
+    )
+
+
+def test_a_message_walk_hands_back_only_undecoded_messages() -> None:
+    """The exception above holds only while a walk yields a message's bytes: a table it handed back would reach a caller unvalidated."""
+    tree = ast.parse((_REPO_ROOT / _CANONICAL).read_text())
+    walks = {node.name: node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name in _MESSAGE_WALKS}
+    assert set(walks) == _MESSAGE_WALKS, f"the decoder no longer defines {sorted(_MESSAGE_WALKS - set(walks))} — the exception names nothing"
+
+    for name, walk in walks.items():
+        handed_back = [node for node in ast.walk(walk) if isinstance(node, (ast.Yield, ast.YieldFrom, ast.Return))]
+        assert any(isinstance(node, ast.Yield) for node in handed_back), f"{name} yields nothing — this walk is stale"
+        stray = [
+            node.lineno
+            for node in handed_back
+            if not (isinstance(node, ast.Yield) and _yields_a_message_undecoded(node)) and not (isinstance(node, ast.Return) and node.value is None)
+        ]
+        assert not stray, f"{name} hands back something other than a message's metadata and raw body at lines {stray}"
+
+
+#: Every function a service calls to decode a caller's body, each taking the door's cap as `max_bytes`.
+_BOUNDED_DECODES = frozenset(
+    {
+        "decode_arrow_stream",
+        "decode_arrow_stream_or_file",
+        "read_arrow_body",
+        "coerce_insert_arrow",
+        "insert_into_table",
+        "merge_insert_into_table",
+        "shapes_from_ipc",
+        "_read_table",
+    }
+)
+
+
+def _cap_passed(call: ast.Call) -> ast.expr | None:
+    return next((keyword.value for keyword in call.keywords if keyword.arg == "max_bytes"), None)
+
+
+def test_every_body_decode_in_a_service_passes_that_services_body_cap() -> None:
+    """The bound is only as tight as the cap a door hands it: `max_bytes` is the service's own `max_body_bytes`, or forwarded.
+
+    `run_in_threadpool(f, ..., max_bytes=...)` is a call of `f` for this gate; a positional cap or a
+    literal is refused, because either can be any number while the tests of the decoder still pass.
+    OUTSIDE THE SCAN: a decoder reached through an alias import, `functools.partial` or
+    `asyncio.to_thread`, and which object's `max_body_bytes` is read. The runtime proof that each
+    catalog door hands its own cap is `tests/integration/test_a_write_body_cannot_outgrow_the_catalogs_cap.py`.
+    """
+    offenders, seen = [], 0
+    for path, text in _fleet_sources().items():
+        if not str(path).startswith("services/"):
+            continue
+        for call in (node for node in ast.walk(ast.parse(text)) if isinstance(node, ast.Call)):
+            named = [call.func, *call.args[:1]] if isinstance(call.func, ast.Name) and call.func.id == "run_in_threadpool" else [call.func]
+            if not any((isinstance(n, ast.Name) and n.id in _BOUNDED_DECODES) or (isinstance(n, ast.Attribute) and n.attr in _BOUNDED_DECODES) for n in named):
+                continue
+            seen += 1
+            cap = _cap_passed(call)
+            forwarded = isinstance(cap, ast.Name) and cap.id == "max_bytes"
+            configured = isinstance(cap, ast.Attribute) and cap.attr == "max_body_bytes"
+            if not (forwarded or configured):
+                offenders.append(f"{path}:{call.lineno}")
+    assert seen >= 12, f"only {seen} body decodes found in the services — this walk is stale"
+    assert not offenders, f"a body decode that does not pass its service's body cap as max_bytes: {offenders}"
+
+
+def test_only_the_query_reader_takes_the_decoder_without_the_size_bound() -> None:
+    """A caller's body decoded without the bound is one small request away from the pod's memory limit ([[XC-104]]).
+
+    Read as text, so a comment naming a decoder counts too; a name built at runtime is outside the scan.
+    """
+    takers = sorted(str(path) for path, text in _fleet_sources().items() if path != _CANONICAL and _UNBOUNDED.search(text))
+    assert takers == [str(_RESPONSE_READER)], f"only the catalog's /query reader may skip a caller's size bound; taken by: {takers}"
 
 
 def test_the_decoders_validation_is_full() -> None:

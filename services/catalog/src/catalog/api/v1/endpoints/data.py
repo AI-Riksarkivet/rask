@@ -159,7 +159,7 @@ async def create_table(
     )
     # The body is shape too, read off the loop. The table read here is the one written, so the payload
     # is decoded once.
-    table = await run_in_threadpool(dataplane.read_arrow_body, data)
+    table = await run_in_threadpool(dataplane.read_arrow_body, data, max_bytes=settings.max_body_bytes)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -365,9 +365,9 @@ async def insert_into_table(
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the native append 500s
     # on the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
-    data = await run_in_threadpool(dataplane.coerce_insert_arrow, ns, so, segments, data, branch)
+    data = await run_in_threadpool(dataplane.coerce_insert_arrow, ns, so, segments, data, branch, max_bytes=settings.max_body_bytes)
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
-    response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data)
+    response: InsertIntoTableResponse = await run_in_threadpool(dataplane.insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes)
     # Insert's response carries only a transaction_id, not the Lance version it produced — the shared
     # trailer reads version + schema off ONE reopen (best-effort) so the WROTE edge records the real version.
     await lineage_deps.emit_measured_write(
@@ -457,7 +457,7 @@ async def merge_insert_into_table(
         use_index=use_index,
         branch=branch,
     )
-    response: MergeInsertIntoTableResponse = await run_in_threadpool(dataplane.merge_insert_into_table, ns, so, req, data)
+    response: MergeInsertIntoTableResponse = await run_in_threadpool(dataplane.merge_insert_into_table, ns, so, req, data, max_bytes=settings.max_body_bytes)
     # merge can add/change columns (schema drift at this version) → record the post-write schema, read
     # PINNED at the version this merge produced so a concurrent writer can't smuggle in a later schema.
     await lineage_deps.emit_measured_write(

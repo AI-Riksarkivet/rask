@@ -65,7 +65,7 @@ def app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setattr(tasks_ep, "_proxy", lambda _task_id: _Actor())
     monkeypatch.setattr(tasks_ep, "_verified_project_state", lambda _p, _e: asyncio.sleep(0, result=None))
 
-    def _slow_decode(payload: bytes, *, ontology: Any = None, taken_ids: Any = None) -> tuple[list, list]:  # noqa: ARG001
+    def _slow_decode(payload: bytes, *, max_bytes: int, ontology: Any = None, taken_ids: Any = None) -> tuple[list, list]:  # noqa: ARG001
         """Stands in for the real pyarrow decode + two Pydantic passes. Sleeps, like they compute."""
         time.sleep(DECODE_SECONDS)
         return [], []

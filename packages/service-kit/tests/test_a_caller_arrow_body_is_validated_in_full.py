@@ -25,6 +25,8 @@ import pytest
 from service_kit.lancekit.arrow_ipc import ArrowBodyError, decode_arrow_stream, decode_arrow_stream_or_file, encode_arrow_stream
 
 
+#: A caller's body cap, far above every body here: these bodies are refused for what they hold, not their size.
+_LIMIT = 64 * 1024 * 1024
 _OFFSETS = struct.pack("<iii", 0, 5, 10)
 _NOT_UTF8 = b"\xff\xfe\xfd\xfc"
 
@@ -184,20 +186,20 @@ TAMPERED = [
 @pytest.mark.parametrize("body", TAMPERED)
 def test_a_tampered_stream_is_refused(body: bytes) -> None:
     with pytest.raises(ArrowBodyError):
-        decode_arrow_stream(body)
+        decode_arrow_stream(body, max_bytes=_LIMIT)
 
 
 @pytest.mark.parametrize("body", TAMPERED)
 def test_a_tampered_stream_is_refused_where_either_framing_is_taken(body: bytes) -> None:
     with pytest.raises(ArrowBodyError):
-        decode_arrow_stream_or_file(body)
+        decode_arrow_stream_or_file(body, max_bytes=_LIMIT)
 
 
 def test_a_tampered_file_is_refused() -> None:
     body = _rewritten(_file(_two_values(pa.binary())), _OFFSETS, struct.pack("<iii", 0, 5, 65536))
 
     with pytest.raises(ArrowBodyError):
-        decode_arrow_stream_or_file(body)
+        decode_arrow_stream_or_file(body, max_bytes=_LIMIT)
 
 
 def test_a_field_name_under_a_registered_extension_type_is_decoded(_labelled_registered: Any) -> None:
@@ -206,7 +208,7 @@ def test_a_field_name_under_a_registered_extension_type_is_decoded(_labelled_reg
     body = _rewritten(_stream(table), b"zzzq", _NOT_UTF8)
 
     with pytest.raises(ArrowBodyError):
-        decode_arrow_stream(body)
+        decode_arrow_stream(body, max_bytes=_LIMIT)
 
 
 #: What a registered library's deserializer raises for extension metadata it refuses, by the metadata
@@ -238,16 +240,16 @@ def _refusing_type_registered() -> Any:
 
 @pytest.mark.parametrize("raises", list(_DESERIALIZER_RAISES))
 @pytest.mark.parametrize("decode", [decode_arrow_stream, decode_arrow_stream_or_file], ids=["stream", "stream-or-file"])
-def test_what_a_registered_deserializer_raises_is_a_refusal(_refusing_type_registered: Any, raises: bytes, decode: Callable[[bytes], pa.Table]) -> None:
+def test_what_a_registered_deserializer_raises_is_a_refusal(_refusing_type_registered: Any, raises: bytes, decode: Callable[..., pa.Table]) -> None:
     """Reading a body runs every registered type's deserializer on metadata the caller chose, and each raises its own classes."""
     body = _stream(pa.table({"e": pa.ExtensionArray.from_storage(_RefusesItsMetadata(raises), pa.array([1]))}))
 
     with pytest.raises(ArrowBodyError, match="the metadata is not this type's"):
-        decode(body)
+        decode(body, max_bytes=_LIMIT)
 
 
 @pytest.mark.parametrize("decode", [decode_arrow_stream, decode_arrow_stream_or_file], ids=["stream", "stream-or-file"])
-def test_pylances_blob_type_named_on_a_storage_it_refuses_is_a_refusal(decode: Callable[[bytes], pa.Table]) -> None:
+def test_pylances_blob_type_named_on_a_storage_it_refuses_is_a_refusal(decode: Callable[..., pa.Table]) -> None:
     """`import lance` registers `lance.blob.v2`, and every service that decodes a caller's body imports lance.
 
     Its deserializer raises TypeError for a storage type that is not its struct (pylance 12.0.0).
@@ -257,7 +259,7 @@ def test_pylances_blob_type_named_on_a_storage_it_refuses_is_a_refusal(decode: C
     body = _stream(pa.table([pa.array([1])], schema=pa.schema([blob_named])))
 
     with pytest.raises(ArrowBodyError, match="BlobType storage type must be a struct"):
-        decode(body)
+        decode(body, max_bytes=_LIMIT)
 
 
 @pytest.mark.parametrize(
@@ -282,7 +284,7 @@ def test_pylances_blob_type_named_on_a_storage_it_refuses_is_a_refusal(decode: C
 )
 def test_a_refused_name_or_metadata_is_named_by_where_it_sits(body: bytes, names: str) -> None:
     with pytest.raises(ArrowBodyError) as refused:
-        decode_arrow_stream(body)
+        decode_arrow_stream(body, max_bytes=_LIMIT)
 
     assert str(refused.value) == names
     assert isinstance(refused.value.__cause__, UnicodeDecodeError), "the refusal's cause is the decode that failed"
@@ -298,7 +300,7 @@ def test_a_decoded_table_is_aligned_as_lance_reads_it(framing: str, tmp_path: Pa
     lance = importlib.import_module("lance")
     body = _stream(_DECIMAL_AFTER_INT8) if framing == "stream" else _file(_DECIMAL_AFTER_INT8)
 
-    lance.write_dataset(decode_arrow_stream_or_file(body), str(tmp_path / "t"))
+    lance.write_dataset(decode_arrow_stream_or_file(body, max_bytes=_LIMIT), str(tmp_path / "t"))
 
     assert lance.dataset(str(tmp_path / "t")).to_table().equals(_DECIMAL_AFTER_INT8)
 
@@ -309,13 +311,13 @@ def test_a_stream_refused_for_its_buffers_is_refused_for_its_buffers() -> None:
     body = _rewritten(_stream(_two_values(pa.binary())), _OFFSETS, struct.pack("<iii", 0, 8, 5))
 
     with pytest.raises(ArrowBodyError, match="non-monotonic offset"):
-        decode_arrow_stream_or_file(body)
+        decode_arrow_stream_or_file(body, max_bytes=_LIMIT)
 
 
 def test_the_stream_decoder_takes_no_file() -> None:
     """A stream-only door (the catalog's, whose native reader takes no file) must not accept one here."""
     with pytest.raises(ArrowBodyError):
-        decode_arrow_stream(_file(_two_values(pa.string())))
+        decode_arrow_stream(_file(_two_values(pa.string())), max_bytes=_LIMIT)
 
 
 @pytest.mark.parametrize("framing", ["stream", "file"])
@@ -323,32 +325,32 @@ def test_a_valid_body_decodes_to_the_table_it_carries(framing: str) -> None:
     table = pa.table({"v": ["hello", "world"], "n": [1, 2], "s": [{"a": 1}, {"a": 2}]})
     body = _stream(table) if framing == "stream" else _file(table)
 
-    assert decode_arrow_stream_or_file(body).equals(table)
+    assert decode_arrow_stream_or_file(body, max_bytes=_LIMIT).equals(table)
 
 
 def test_a_valid_stream_decodes_to_the_table_it_carries() -> None:
     table = pa.table({"v": ["hello", "world"]})
 
-    assert decode_arrow_stream(_stream(table)).equals(table)
+    assert decode_arrow_stream(_stream(table), max_bytes=_LIMIT).equals(table)
 
 
 @pytest.mark.parametrize("framing", ["stream", "file"])
 def test_every_batch_of_a_valid_body_is_decoded(framing: str) -> None:
     body = _stream(_TWO_BATCHES) if framing == "stream" else _file(_TWO_BATCHES)
 
-    assert decode_arrow_stream_or_file(body).to_pydict() == {"v": ["hello", "world", "abc", "defghij"]}
+    assert decode_arrow_stream_or_file(body, max_bytes=_LIMIT).to_pydict() == {"v": ["hello", "world", "abc", "defghij"]}
 
 
 def test_every_batch_of_a_valid_stream_is_decoded_by_the_stream_decoder() -> None:
-    assert decode_arrow_stream(_stream(_TWO_BATCHES)).to_pydict() == {"v": ["hello", "world", "abc", "defghij"]}
+    assert decode_arrow_stream(_stream(_TWO_BATCHES), max_bytes=_LIMIT).to_pydict() == {"v": ["hello", "world", "abc", "defghij"]}
 
 
 @pytest.mark.parametrize("decode", [decode_arrow_stream, decode_arrow_stream_or_file])
 @pytest.mark.parametrize("spelling", [str, Path])
-def test_a_path_is_refused_rather_than_opened(decode: Callable[[Any], pa.Table], spelling: Callable[[Path], Any], tmp_path: Path) -> None:
+def test_a_path_is_refused_rather_than_opened(decode: Callable[..., pa.Table], spelling: Callable[[Path], Any], tmp_path: Path) -> None:
     """pyarrow reads a str or a path-like from disk, so a decoder of a caller's body takes bytes only."""
     on_disk = tmp_path / "body.arrows"
     on_disk.write_bytes(_stream(pa.table({"v": ["on-disk"]})))
 
     with pytest.raises(TypeError, match=f"got {type(spelling(on_disk)).__name__}"):
-        decode(spelling(on_disk))
+        decode(spelling(on_disk), max_bytes=_LIMIT)

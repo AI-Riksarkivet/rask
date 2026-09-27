@@ -35,6 +35,10 @@ from lance_namespace import InsertIntoTableRequest, connect
 from catalog.services.dataplane import coerce_insert_arrow, create_table, insert_into_table, open_dataset
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 lance = pytest.importorskip("lance")
 
 
@@ -85,7 +89,7 @@ def test_coercion_against_a_BRANCH_keeps_the_branch_only_column(ns) -> None:  # 
     """
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
 
-    coerced = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=BRANCH)
+    coerced = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
 
     names = pa.ipc.open_stream(coerced).read_all().column_names
     assert BRANCH_ONLY in names, (
@@ -97,9 +101,9 @@ def test_coercion_against_a_BRANCH_keeps_the_branch_only_column(ns) -> None:  # 
 def test_a_branch_insert_lands_the_branch_only_column(ns) -> None:  # noqa: ANN001
     """The same defect seen end to end, so the fix is not a coercion-shaped local truth."""
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
-    data = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=BRANCH)
+    data = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
 
-    insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data)
+    insert_into_table(ns, {}, InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data, max_bytes=_BODY_LIMIT)
 
     written = open_dataset(ns, {}, TABLE_ID, branch=BRANCH).to_table().to_pydict()
     assert "keep me" in (written.get(BRANCH_ONLY) or []), f"the branch row lost its {BRANCH_ONLY!r} value: {written}"
@@ -113,6 +117,6 @@ def test_main_is_unchanged_by_the_fix(ns) -> None:  # noqa: ANN001
     """
     payload = pa.table({"id": pa.array([3], pa.int64()), "s": pa.array(["c"]), "zz": pa.array([1], pa.int64())})
 
-    coerced = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=None)
+    coerced = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=None, max_bytes=_BODY_LIMIT)
 
     assert "zz" not in pa.ipc.open_stream(coerced).read_all().column_names

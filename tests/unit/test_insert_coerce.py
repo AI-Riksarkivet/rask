@@ -17,6 +17,10 @@ from lance_namespace import InvalidInputError
 from catalog.services import dataplane
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 def _ipc(table: pa.Table) -> bytes:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, table.schema) as w:
@@ -29,7 +33,7 @@ def _target(monkeypatch: pytest.MonkeyPatch, schema: pa.Schema) -> None:
 
 
 def _coerce(data: bytes) -> pa.Table:
-    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data)
+    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data, max_bytes=_BODY_LIMIT)
     return pa.ipc.open_stream(out).read_all()
 
 
@@ -90,7 +94,7 @@ def test_aligned_payload_passes_through_untouched(monkeypatch: pytest.MonkeyPatc
     schema = pa.schema([("id", pa.int64()), ("tag", pa.string())])
     _target(monkeypatch, schema)
     data = _ipc(pa.table({"id": pa.array([1], pa.int64()), "tag": pa.array(["a"], pa.string())}))
-    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data)
+    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data, max_bytes=_BODY_LIMIT)
     assert out is data
 
 
@@ -99,6 +103,6 @@ def test_matching_names_with_differing_nullability_still_coerces(monkeypatch: py
     the declared nullability lands (the native append checks the schema, not the values)."""
     _target(monkeypatch, pa.schema([pa.field("id", pa.int64(), nullable=False)]))
     data = _ipc(pa.table({"id": pa.array([1], pa.int64())}))  # incoming field is nullable=True
-    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data)
+    out = dataplane.coerce_insert_arrow(cast(Any, None), cast(Any, {}), ["hunt", "t"], data, max_bytes=_BODY_LIMIT)
     assert out is not data
     assert pa.ipc.open_stream(out).read_all().schema.field("id").nullable is False

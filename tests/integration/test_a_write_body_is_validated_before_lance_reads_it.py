@@ -7,7 +7,8 @@ pylance 12.0.0: `?branch=work` answered 200 and the branch held a 65,531-byte va
 10-byte body). Main hands the bytes to the native backend, whose reader refuses the same body as a 500.
 
 Other bodies make the reader raise a class of its own — an unknown dictionary id (KeyError), a
-compressed buffer declaring 2**50 bytes (MemoryError), a 4-bit integer (NotImplementedError) — and
+compressed buffer declaring 2**50 bytes (MemoryError; the decoder refuses it as too large before the
+reader allocates), a 4-bit integer (NotImplementedError) — and
 reading any body runs each registered extension type's deserializer on the caller's metadata, which
 raises what that library raises: `import lance` registers `lance.blob.v2`, whose deserializer raises
 TypeError for a storage type it refuses. Lance refuses metadata that is not UTF-8 with an untyped
@@ -30,6 +31,10 @@ import pytest
 from lance_namespace import InsertIntoTableRequest, InvalidInputError, connect
 
 from catalog.services.dataplane import create_table, insert_into_table, open_dataset
+
+
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
 
 
 if TYPE_CHECKING:
@@ -152,7 +157,7 @@ def test_a_write_body_that_is_not_a_valid_arrow_stream_is_refused_and_writes_not
 
     assert refused.status_code == 400, f"the malformed body was not refused 400: {refused.status_code} {refused.text[:300]}"
     assert refused.json().get("code") == INVALID_INPUT, refused.json()
-    assert "not a valid Arrow IPC stream" in str(refused.json().get("detail")), refused.json()
+    assert str(refused.json().get("detail")).startswith("the request body is "), refused.json()
     assert _rows_on(real_ns_client, branch) == 3, "a refused write must write no rows"
 
 
@@ -164,8 +169,8 @@ def test_the_insert_branch_arm_refuses_it_without_the_door(tmp_path: Path, body:
     create_table(ns, {}, ["t"], _table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"]), mode="create")
     open_dataset(ns, {}, ["t"]).create_branch("work", None)
 
-    with pytest.raises(InvalidInputError, match="not a valid Arrow IPC stream"):
-        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], branch="work"), body)
+    with pytest.raises(InvalidInputError, match="^the request body is "):
+        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], branch="work"), body, max_bytes=_BODY_LIMIT)
 
     assert open_dataset(ns, {}, ["t"], branch="work").count_rows() == 3, "a refused insert must write no rows"
 

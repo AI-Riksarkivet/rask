@@ -33,6 +33,10 @@ from service_kit.lakehouse.base_refs import BaseRefs, normalise
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
+#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 256 * 1024 * 1024
+
+
 _SUBJECT = "alice"
 _PREDICATE = "pii = 'alice'"
 
@@ -91,7 +95,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
         writer.write_table(_rows(_SUBJECT, "bob"))
-    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes()), mode="create")
+    create_table(ns, {}, ["subjects"], read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT), mode="create")
     open_dataset(ns, {}, ["subjects"]).insert(_rows("carol"))
     open_dataset(ns, {}, ["subjects"]).shallow_clone(str(tmp_path / "data" / "clone.lance"), (None, None))
     return ns

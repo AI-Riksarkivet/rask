@@ -70,3 +70,11 @@ def test_a_valid_response_is_the_table_it_carries() -> None:
     reader = CatalogTableReader(_Answers(_file(_TWO_BLOBS)), ["ns", "t"])
 
     assert reader.to_table().equals(_TWO_BLOBS)
+
+
+def test_a_projection_of_a_field_that_stores_nothing_is_read() -> None:
+    """A response is not held to what a caller's body may declare: this projection is 394 bytes, 254 rows per byte."""
+    nulls = pa.table({"n": pa.nulls(100_000)})
+    reader = CatalogTableReader(_Answers(_file(nulls)), ["ns", "t"])
+
+    assert reader.to_table().equals(nulls)

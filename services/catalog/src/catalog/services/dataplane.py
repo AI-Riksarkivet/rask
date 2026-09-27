@@ -95,11 +95,12 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import open_dataset
 from catalog.services import changes, native, warehouse_credentials
 from catalog.services.base_credentials import compose_base_store_params
+from catalog.services.cast_size import bytes_after_cast
 from service_kit.lakehouse.features import VersionedDataFile, describe_foreign_data_file_versions
 from service_kit.lakehouse.objectfs import StorageOptions, s3_filesystem
 from service_kit.lakehouse.schema import SchemaFields, facet_fields
 from service_kit.lancekit.absence import reads_as_absent
-from service_kit.lancekit.arrow_ipc import ArrowBodyError, decode_arrow_stream, encode_arrow_stream
+from service_kit.lancekit.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_stream, encode_arrow_stream
 from service_kit.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
 from service_kit.lancekit.versions import committed_at
 
@@ -340,15 +341,25 @@ def _write_blob(
         raise
 
 
-def read_arrow_body(data: bytes) -> pa.Table:
-    """A write body as a table, or `InvalidInputError` (400, code 13) saying it is not a valid Arrow IPC stream.
+def read_arrow_body(data: bytes, *, max_bytes: int) -> pa.Table:
+    """A write body as a table, or `InvalidInputError` (400, code 13) saying it is too large or not a valid Arrow IPC stream.
 
     Decoded by the fleet's one validating decoder (`service_kit.lancekit.arrow_ipc`): read whole, then
     validated in full, because framing that parses says nothing about the buffers — Lance writes an
     offset past its values buffer as bytes from outside the request (pyarrow 25.0.0, pylance 12.0.0).
+    ``max_bytes`` is the catalog's body cap (``LANCE_MAX_BODY_BYTES``), which the body may not exceed
+    once its compressed buffers inflate: the write load-shed sizes its concurrency as if each write held
+    at most that much (``values-prod.yaml``, ``catalog.maxConcurrentWrites``), and the native backend
+    inflates the same bytes again on the main arm. :func:`coerce_insert_arrow` holds the rows it
+    re-encodes to the same cap.
     """
     try:
-        return decode_arrow_stream(data)
+        return decode_arrow_stream(data, max_bytes=max_bytes)
+    except ArrowBodyTooLargeError as exc:
+        raise InvalidInputError(
+            f"the request body is too large once decoded: {exc}; write large payloads directly to object storage with vended credentials"
+            " instead of through the catalog"
+        ) from exc
     except ArrowBodyError as exc:
         raise InvalidInputError(f"the request body is not a valid Arrow IPC stream: {exc}") from exc
 
@@ -1440,7 +1451,7 @@ def delete_from_table(ns: LanceNamespace, so: StorageOptions, req: DeleteFromTab
     return DeleteFromTableResponse(version=dataset.version)
 
 
-def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes) -> InsertIntoTableResponse:
+def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTableRequest, data: bytes, *, max_bytes: int) -> InsertIntoTableResponse:
     """Append (or overwrite) Arrow-IPC rows on the ref the request NAMES.
 
     The worst of this family, because it is a WRITE that succeeds. Measured live 2026-08-31 against the
@@ -1466,7 +1477,7 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
         # leave the response as the backend gave it rather than fail a successful insert.
         if response.version is None or response.num_inserted_rows is None:
             with suppress(Exception):
-                inserted = read_arrow_body(data).num_rows
+                inserted = read_arrow_body(data, max_bytes=max_bytes).num_rows
                 response.num_inserted_rows = response.num_inserted_rows if response.num_inserted_rows is not None else inserted
                 # `branch=req.branch` even though this arm is the branchless one: it is None here, so
                 # the call is identical — and it says "open the ref the request NAMES" at the seam
@@ -1478,7 +1489,7 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
         return response
     # Validated here as well as at the door's coercion: this arm hands pyarrow's buffers to Lance
     # in-process, and Lance writes whatever an unvalidated offset points at.
-    rows = read_arrow_body(data)
+    rows = read_arrow_body(data, max_bytes=max_bytes)
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
     before = dataset.count_rows()
     # THROUGH `InsertMode`, the one vocabulary both arms share. pylance's own parser is not the spec's:
@@ -1490,7 +1501,9 @@ def insert_into_table(ns: LanceNamespace, so: StorageOptions, req: InsertIntoTab
     return InsertIntoTableResponse(version=dataset.version, num_inserted_rows=max(dataset.count_rows() - before, 0))
 
 
-def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeInsertIntoTableRequest, data: bytes) -> MergeInsertIntoTableResponse:
+def merge_insert_into_table(
+    ns: LanceNamespace, so: StorageOptions, req: MergeInsertIntoTableRequest, data: bytes, *, max_bytes: int
+) -> MergeInsertIntoTableResponse:
     """Run the spec's merge-insert against the ref the request NAMES.
 
     Same defect and same severity as `insert_into_table`: verified live, a merge naming `work` applied
@@ -1508,7 +1521,7 @@ def merge_insert_into_table(ns: LanceNamespace, so: StorageOptions, req: MergeIn
     # both arms answer 400.
     refuse_an_unbounded_boolean_chain(req.when_matched_update_all_filt, field="when_matched_update_all_filt")
     refuse_an_unbounded_boolean_chain(req.when_not_matched_by_source_delete_filt, field="when_not_matched_by_source_delete_filt")
-    rows = read_arrow_body(data)
+    rows = read_arrow_body(data, max_bytes=max_bytes)
     if req.branch is None:
         return cast(MergeInsertIntoTableResponse, native.call(ns, "merge_insert_into_table", req, data))
     dataset = open_dataset(ns, so, _table_id(req), branch=req.branch)
@@ -1910,7 +1923,7 @@ def update_schema_metadata(
     return filter_internal_metadata(result)
 
 
-def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None) -> bytes:
+def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[str], data: bytes, branch: str | None = None, *, max_bytes: int) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the native append.
 
     A client that INFERS types loosely — most importantly the browser's apache-arrow, which infers
@@ -1928,9 +1941,12 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
     which is every non-browser client — for zero behavioural difference (#141).
 
     The body is read through :func:`read_arrow_body`, so one that is not a valid Arrow IPC stream is
-    refused 400 before the dataset opens, on both arms of the insert door.
+    refused 400 before the dataset opens, on both arms of the insert door. Rows that would be over
+    ``max_bytes`` as the table's types are refused before the cast runs (:mod:`catalog.services.cast_size`),
+    so a dictionary decoded once per row cannot allocate past the cap, and neither arm is handed a body
+    larger than the one the caller was held to.
     """
-    incoming = read_arrow_body(data)
+    incoming = read_arrow_body(data, max_bytes=max_bytes)
     # THE REF THE REQUEST NAMES, never main. This alignment DROPS columns the target does not have, so
     # aligning a branch-targeted insert to main's schema silently deletes any column the branch has and
     # main does not — and then the insert succeeds, reporting rows it quietly rewrote. A branch whose
@@ -1954,12 +1970,24 @@ def coerce_insert_arrow(ns: LanceNamespace, so: StorageOptions, table_id: list[s
         # the same schema mismatch. Reported, not refused: accept -> refuse on a live door is a
         # contract change rather than a bug fix.
         log.warning("insert_dropped_columns", extra={"table": table_id, "columns": discarded})
+    selected = pa.table({f.name: incoming.column(f.name) for f in target})
+    _refuse_over_the_cap(sum(bytes_after_cast(selected.column(f.name), f.type) for f in target), max_bytes)
     try:
-        selected = pa.table({f.name: incoming.column(f.name) for f in target})
         aligned = selected.cast(pa.schema([pa.field(f.name, f.type, f.nullable) for f in target]))
     except (pa.ArrowInvalid, pa.ArrowTypeError, pa.ArrowNotImplementedError) as exc:
         raise InvalidInputError(f"insert rows don't match the table schema: {exc}") from exc
-    return encode_arrow_stream(aligned)
+    body = encode_arrow_stream(aligned)
+    _refuse_over_the_cap(len(body), max_bytes)
+    return body
+
+
+def _refuse_over_the_cap(size: int, max_bytes: int) -> None:
+    """Both arms of the insert door read the coerced body again, so it is held to the caller's cap here, once."""
+    if size > max_bytes:
+        raise InvalidInputError(
+            f"the insert rows take {size:,} bytes as the table's column types, over the {max_bytes:,}-byte limit on a body;"
+            " send them as those types, or in smaller inserts"
+        )
 
 
 def update_field_metadata(

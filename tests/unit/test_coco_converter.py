@@ -24,6 +24,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 from coco_to_annotations import main, rows_for_image, to_ipc  # ty: ignore[unresolved-import] — sys.path above  # noqa: E402
 
 
+#: The annotator's default body cap (MEDIA_MAX_BODY_BYTES), far above every body here.
+_BODY_LIMIT = 32 * 1024 * 1024
+
+
 COCO = {
     "categories": [{"id": 1, "name": "figure"}, {"id": 2, "name": "caption"}],
     "images": [{"id": 42}, {"id": 43}],
@@ -95,7 +99,7 @@ def test_the_schema_is_DECLARED_so_a_late_polygon_is_not_dropped() -> None:
     The assertion is on the IMPORTED result rather than the table, because that is where the loss
     would actually show up.
     """
-    shapes, _ = shapes_from_ipc(to_ipc(rows_for_image(COCO, 42)))
+    shapes, _ = shapes_from_ipc(to_ipc(rows_for_image(COCO, 42)), max_bytes=_BODY_LIMIT)
 
     polygons = [s.polygon for s in shapes]
     assert polygons[1] == [0.0, 0.0, 5.0, 0.0, 5.0, 5.0], "the polygon was dropped by schema inference"
@@ -110,6 +114,7 @@ def test_the_converters_output_imports_cleanly() -> None:
     shapes, links = shapes_from_ipc(
         to_ipc(rows_for_image(COCO, 42)),
         ontology=LabelOntology.model_validate({"kind": "detection", "classes": [LabelClass(name="figure"), LabelClass(name="caption")], "allow_empty": True}),
+        max_bytes=_BODY_LIMIT,
     )
 
     assert [s.shape_id for s in shapes] == ["coco-1", "coco-2"]
@@ -126,6 +131,7 @@ def test_a_COCO_category_outside_the_taxonomy_is_refused_BY_THE_SERVICE() -> Non
         shapes_from_ipc(
             to_ipc(rows_for_image(COCO, 42)),
             ontology=LabelOntology.model_validate({"kind": "detection", "classes": [LabelClass(name="figure")], "allow_empty": True}),
+            max_bytes=_BODY_LIMIT,
         )
 
     assert "caption" in str(caught.value)
@@ -137,7 +143,7 @@ def test_the_cli_writes_a_file_the_importer_reads(tmp_path: Path) -> None:
 
     assert main([str(src), "--image", "42", "-o", str(out)]) == 0
 
-    shapes, _ = shapes_from_ipc(out.read_bytes())
+    shapes, _ = shapes_from_ipc(out.read_bytes(), max_bytes=_BODY_LIMIT)
     assert len(shapes) == 2
 
 

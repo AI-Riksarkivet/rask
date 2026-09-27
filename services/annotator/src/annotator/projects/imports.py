@@ -83,6 +83,7 @@ def _cell(row: dict[str, Any], name: str) -> Any:
 def shapes_from_ipc(
     payload: bytes,
     *,
+    max_bytes: int,
     ontology: LabelOntology | None = None,
     taken_ids: set[str] | None = None,
 ) -> tuple[list[Shape], list[Link]]:
@@ -96,7 +97,7 @@ def shapes_from_ipc(
     be refused AT THE DOOR and named, not discovered at submit after a reviewer has already worked
     through the item.
     """
-    table = _read_table(payload)
+    table = _read_table(payload, max_bytes=max_bytes)
     taken = set(taken_ids or ())
 
     shapes: list[Shape] = []
@@ -134,7 +135,7 @@ def shapes_from_ipc(
     return shapes, links
 
 
-def _read_table(payload: bytes) -> pa.Table:
+def _read_table(payload: bytes, *, max_bytes: int) -> pa.Table:
     """Arrow IPC bytes → a table whose buffers and names are validated, with a refusal a human can act on.
 
     Both framings are accepted because both are what `pyarrow` produces depending on which writer
@@ -143,12 +144,14 @@ def _read_table(payload: bytes) -> pa.Table:
 
     Validated before any row is read, because `to_pylist` follows the body's own offsets: an offset
     past its values buffer becomes a shape's text holding process memory, which the draft stores and
-    the route returns.
+    the route returns. Held to ``max_bytes`` once inflated and to what its bytes carry before any row is
+    read, so a body cannot declare rows no byte backs. The rows an honest body does carry are not bounded
+    here, and `to_pylist` builds a dict for each ([[XC-107]], parked).
     """
     if not payload:
         raise ValidationError("import refused — the request carried no data")
     try:
-        return decode_arrow_stream_or_file(payload)
+        return decode_arrow_stream_or_file(payload, max_bytes=max_bytes)
     except ArrowBodyError as exc:
         raise ValidationError(f"import refused — the payload is not valid Arrow IPC ({exc})") from exc
 
