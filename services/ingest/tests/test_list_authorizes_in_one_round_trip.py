@@ -11,11 +11,15 @@ same body, so a test that asserts only on visibility passes either way.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
+from openfga_sdk.client.models import ClientBatchCheckRequest, ClientTuple
+from openfga_sdk.client.models.batch_check_response import ClientBatchCheckResponse
+from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
+from openfga_sdk.models.check_error import CheckError
 
 from ingest import create_app
 from ingest.runs import RunRecord
@@ -143,3 +147,54 @@ def test_an_invalid_bearer_is_still_401_not_an_empty_page(_oidc_on: None, monkey
     res = _client(monkeypatch, spy, _Verifier(None), ["a", "b"]).get("/api/ingests", headers=_BEARER)
 
     assert res.status_code == 401, res.text
+
+
+class _UnansweringOpenFga:
+    """An OpenFGA client answering BatchCheck through the SDK's own response classes.
+
+    Every project is administered except those in ``unanswered``, which come back as the SDK hands back
+    an item the server could not evaluate: ``allowed=False`` beside a ``CheckError``.
+    """
+
+    def __init__(self, unanswered: set[str]) -> None:
+        self._unanswered = unanswered
+        self.asked: list[str] = []
+
+    async def batch_check(self, body: ClientBatchCheckRequest, options: dict[str, Any] | None = None) -> ClientBatchCheckResponse:
+        del options
+        result = []
+        for index, item in enumerate(body.checks):
+            self.asked.append(item.object)
+            error = CheckError(input_error="validation_error", message="relation not found in the pinned model") if item.object in self._unanswered else None
+            # The SDK hands the batch ITEM back as `request` (client.py `map_response`); its annotation says ClientTuple.
+            result.append(ClientBatchCheckSingleResponse(allowed=error is None, request=cast("ClientTuple", item), correlation_id=f"c{index}", error=error))
+        return ClientBatchCheckResponse(result)
+
+
+def _client_over_the_sdk(fga_client: _UnansweringOpenFga, projects: list[str]) -> TestClient:
+    """The listing with the REAL `fga.batch_check` in the path — only the OpenFGA client is a double."""
+    import asyncio
+
+    app = create_app()
+    app.state.oidc = _Verifier("alice")
+    app.state.fga = fga_client
+    asyncio.run(_seed(app, projects))
+    return TestClient(app)
+
+
+def test_the_sdk_harness_lists_what_openfga_answered(_oidc_on: None) -> None:
+    """Without this, the 503 below could be a listing that never reached OpenFGA."""
+    fga_client = _UnansweringOpenFga(unanswered=set())
+    res = _client_over_the_sdk(fga_client, ["a", "b"]).get("/api/ingests", headers=_BEARER)
+
+    assert res.status_code == 200, res.text
+    assert sorted(r["project"] for r in res.json()["runs"]) == ["a", "b"]
+    assert sorted(fga_client.asked) == ["project:a", "project:b"]
+
+
+def test_a_project_openfga_could_not_answer_is_503_not_a_missing_row(_oidc_on: None) -> None:
+    """An unanswered item read as a deny drops that tenant's runs from the page as if the caller held
+    no grant, which is the outage rendered as an answer."""
+    res = _client_over_the_sdk(_UnansweringOpenFga(unanswered={"project:b"}), ["a", "b"]).get("/api/ingests", headers=_BEARER)
+
+    assert res.status_code == 503, f"an unanswered item filtered the page: {res.status_code} {res.text}"

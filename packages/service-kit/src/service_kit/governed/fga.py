@@ -29,8 +29,10 @@ so the request surfaces as a 503 rather than a 500 — and never as a silent all
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
@@ -55,6 +57,7 @@ from openfga_sdk.client.models.list_users_request import ClientListUsersRequest
 from openfga_sdk.client.models.read_changes_request import ClientReadChangesRequest
 from openfga_sdk.configuration import RetryParams
 from openfga_sdk.exceptions import ApiException
+from openfga_sdk.models.check_error import CheckError
 from openfga_sdk.models.create_store_request import CreateStoreRequest
 from openfga_sdk.models.error_code import ErrorCode
 from openfga_sdk.models.fga_object import FgaObject
@@ -105,8 +108,27 @@ _TRANSIENT_NETWORK: tuple[type[BaseException], ...] = (
     asyncio.TimeoutError,
     OSError,
 )
+
+
+class _UnansweredBatchItems(Exception):
+    """BatchCheck answered, but not for every item: each one named here carries its own ``CheckError``.
+
+    The SDK reports such an item as ``allowed=False``, so reading the verdict alone turns an OpenFGA
+    fault into a denial. It is transient only when no item names an ``input_error``: an input fault is
+    the per-item form of the 400 :func:`check` does not retry, and it recurs on every attempt. The split
+    is not exact on the deployed engine: with ``weighted_graph_check``, OpenFGA v1.18.3 reports an object
+    carrying a control character as ``internal_error`` (measured), which :func:`is_object_id` keeps from
+    ever being sent.
+    """
+
+    def __init__(self, unanswered: dict[str, CheckError]) -> None:
+        self.transient = not any(error.input_error for error in unanswered.values())
+        named = ", ".join(f"{obj} ({error.input_error or error.internal_error}: {error.message})" for obj, error in sorted(unanswered.items()))
+        super().__init__(f"OpenFGA could not answer {len(unanswered)} batch item(s): {named}")
+
+
 # Every exception class the read/write paths fail CLOSED on (→ 503), never propagate.
-_FAIL_CLOSED: tuple[type[BaseException], ...] = (ApiException, *_TRANSIENT_NETWORK)
+_FAIL_CLOSED: tuple[type[BaseException], ...] = (ApiException, _UnansweredBatchItems, *_TRANSIENT_NETWORK)
 
 # Reading every tuple on one object (revoke-on-delete) is paginated; bound the page loop so a
 # pathological store / continuation-token bug can't spin forever. One object's grants are few, so
@@ -156,6 +178,34 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relat
 def load_model() -> dict[str, Any]:
     """Load the authorization model JSON shipped with the app."""
     return json.loads(_MODEL_PATH.read_text())
+
+
+@functools.cache
+def model_types() -> frozenset[str]:
+    """The object types the bundled authorization model defines."""
+    return frozenset(str(definition["type"]) for definition in load_model()["type_definitions"])
+
+
+def is_object_id(obj: str) -> bool:
+    """Whether OpenFGA v1.18.3 accepts ``obj`` as an object id at all.
+
+    Check refuses the whole request when an object has a space or other ASCII whitespace or is outside
+    2..256 runes (``CheckRequestTupleKey.object``, ``^[^\\s]{2,256}$``), and refuses the item when it is
+    not ``<type>:<id>`` with exactly one ``:``, no ``#`` and no control character (``tuple.IsValidObject``).
+    Write applies the same grammar, so no tuple can name such an object: "not granted" is its true
+    answer, not a guess. Measured against v1.18.3 through Dagger (2026-09-27): a control character, a
+    second ``:`` and ``#`` fail the item, a space, a tab and 257 runes fail the request.
+    """
+    kind, _, identifier = obj.partition(":")
+    return (
+        2 <= len(obj) <= 256
+        and bool(kind)
+        and bool(identifier)
+        and ":" not in identifier
+        and "#" not in obj
+        and " " not in obj
+        and not any(unicodedata.category(char) == "Cc" for char in obj)
+    )
 
 
 def load_model_dsl() -> str:
@@ -236,10 +286,13 @@ def _is_transient(exc: BaseException) -> bool:
     (``aiohttp.ClientError`` / ``TimeoutError`` / ``OSError``) — the dominant outage
     mode — so those are retried. OpenFGA HTTP errors arrive as ``ApiException``; only
     429/5xx (and the SDK's status==0 prep failures) are transient. Definitive 4xx
-    client errors (other than 429) are permanent and never retried.
+    client errors (other than 429) are permanent and never retried. A BatchCheck whose
+    unanswered items are all server-side faults is transient on the same reasoning.
     """
     if isinstance(exc, _TRANSIENT_NETWORK):
         return True
+    if isinstance(exc, _UnansweredBatchItems):
+        return exc.transient
     if not isinstance(exc, ApiException):
         return False
     if exc.status in (0, None):
@@ -917,12 +970,27 @@ async def batch_check(
     A read-only/idempotent authorization path, so it gets the same bounded retry +
     fail-closed treatment as :func:`check` (transient OpenFGA/transport faults retried;
     outage → ``ServiceUnavailableError`` → 503).
+
+    An item OpenFGA answers with an error (a per-check timeout, a resolution too complex, a relation
+    the pinned model lacks) fails the whole call the same way, because the SDK hands it back as
+    ``allowed=False`` and ``{object: bool}`` has no third value. A server-side item fault is retried
+    like a 5xx; an input fault is not, like a 400.
+
+    An object that is not an object id (:func:`is_object_id`) is answered ``False`` without being sent:
+    no tuple can name it, and sending it would fail the item, or the whole request, for every object
+    beside it.
     """
-    items = [ClientBatchCheckItem(user=f"user:{user}", relation=relation, object=o, context=condition_context(context)) for o in objects]
+    unaskable = {o: False for o in objects if not is_object_id(o)}
+    items = [ClientBatchCheckItem(user=f"user:{user}", relation=relation, object=o, context=condition_context(context)) for o in objects if o not in unaskable]
+    if not items:
+        return unaskable
 
     async def _do_batch_check() -> dict[str, bool]:
         response = await client.batch_check(ClientBatchCheckRequest(checks=items))
-        return {r.request.object: bool(r.allowed) for r in response.result}
+        unanswered = {r.request.object: r.error for r in response.result if r.error is not None}
+        if unanswered:
+            raise _UnansweredBatchItems(unanswered)
+        return unaskable | {r.request.object: bool(r.allowed) for r in response.result}
 
     return await _guarded(
         _do_batch_check,

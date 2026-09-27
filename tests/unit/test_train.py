@@ -18,6 +18,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
+from openfga_sdk.client.models import ClientBatchCheckRequest, ClientCheckRequest, ClientTuple, ClientWriteRequest
+from openfga_sdk.client.models.batch_check_response import ClientBatchCheckResponse
+from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
+from openfga_sdk.models.check_error import CheckError
+from openfga_sdk.models.check_response import CheckResponse
 
 from medallion.api.dependencies import get_dapr, get_settings
 from medallion.api.train import router
@@ -206,6 +211,63 @@ def test_consumer_fga_outage_retries(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(train.fga, "batch_check", outage)
     result = asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=object()))
     assert result == {"status": "RETRY"}  # outage ≠ denial
+
+
+class _TrainerOpenFga:
+    """An OpenFGA client answering through the SDK's own response classes, so the REAL `fga.*` gate
+    runs. Every input is readable except those in ``unanswered``, which BatchCheck returns as the SDK
+    hands back an item the server could not evaluate: ``allowed=False`` beside a ``CheckError``."""
+
+    def __init__(self, unanswered: set[str]) -> None:
+        self._unanswered = unanswered
+        self.written: list[Any] = []
+
+    async def batch_check(self, body: ClientBatchCheckRequest, options: dict[str, Any] | None = None) -> ClientBatchCheckResponse:
+        del options
+        result = []
+        for index, item in enumerate(body.checks):
+            error = CheckError(input_error="validation_error", message="relation not found in the pinned model") if item.object in self._unanswered else None
+            # The SDK hands the batch ITEM back as `request` (client.py `map_response`); its annotation says ClientTuple.
+            result.append(ClientBatchCheckSingleResponse(allowed=error is None, request=cast("ClientTuple", item), correlation_id=f"c{index}", error=error))
+        return ClientBatchCheckResponse(result)
+
+    async def check(self, body: ClientCheckRequest, options: dict[str, Any] | None = None) -> CheckResponse:
+        del body, options
+        return CheckResponse(allowed=True)
+
+    async def write(self, body: ClientWriteRequest, options: dict[str, Any] | None = None) -> None:
+        del options
+        self.written.append(body)
+
+
+def _submits(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    submitted: list[str] = []
+
+    async def submit(*_a: Any, token: str, **_kw: Any) -> str:
+        submitted.append(token)
+        return "submitted"
+
+    monkeypatch.setattr(train.ray_submit, "submit_train_job", submit)
+    return submitted
+
+
+def test_the_sdk_harness_trains_on_inputs_openfga_answered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without this, the RETRY below could be a gate that never reached OpenFGA."""
+    submitted = _submits(monkeypatch)
+    client = _TrainerOpenFga(unanswered=set())
+
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client)) == {"status": "SUCCESS"}
+    assert submitted == ["t1"] and len(client.written) == 1
+
+
+def test_an_input_openfga_could_not_answer_retries_rather_than_drops(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A DROP is terminal, and D2 never resubmits training, so an unanswered input read as a deny
+    would lose the trigger to an OpenFGA fault as if the trainer lacked the grant."""
+    submitted = _submits(monkeypatch)
+    client = _TrainerOpenFga(unanswered={"table:silver$features"})
+
+    assert asyncio.run(train.handle_train_trigger(_settings(), _EVENT, fga_client=client)) == {"status": "RETRY"}
+    assert submitted == [] and client.written == []
 
 
 def test_consumer_seeds_the_model_parent_link_before_submit(monkeypatch: pytest.MonkeyPatch) -> None:

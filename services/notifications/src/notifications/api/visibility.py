@@ -83,11 +83,14 @@ def _as_object(name: str) -> str:
     the container types as well, so a grant on a warehouse is now asked about the WAREHOUSE rather
     than about a table that never existed.
 
-    A dataset name cannot collide with this: the estate's are `<namespace>$<table>`, delimiter-joined
-    and colon-free. An output named with a URI-ish namespace would pass through unqualified and answer
-    False — exactly as it answers False today under the prefix, since no tuple exists for it either.
+    A stamped prefix is honoured only when it names a type the model defines. The estate's dataset
+    names are `<namespace>$<table>`, delimiter-joined and colon-free, but an output named like a URI
+    (`s3://bucket/run1`) also carries a `:`; passed through, OpenFGA answers `type 's3' not found` per
+    item on every attempt (measured on v1.18.3), so the delivery would retry forever. Qualified as a
+    table, it is no object id, and `fga.batch_check` answers it not visible without asking.
     """
-    return name if ":" in name else f"{FGA_OBJECT_TYPE}:{name}"
+    kind, sep, _rest = name.partition(":")
+    return name if sep and kind in fga.model_types() else f"{FGA_OBJECT_TYPE}:{name}"
 
 
 class Visibility:

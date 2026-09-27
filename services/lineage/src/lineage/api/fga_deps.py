@@ -95,7 +95,8 @@ async def _denied_objects(client: OpenFgaClient, *, user: str, relations: tuple[
     """The names the subject may NOT record against — denied under EVERY acceptable relation.
 
     Batched per relation rather than per object, and short-circuited: the common case is one relation
-    and one round trip. A name still denied after the last relation is genuinely refused.
+    and one round trip. A name still denied after the last relation is genuinely refused, and so is one
+    whose ``<type>:<name>`` is no object id, which ``fga.batch_check`` answers False unasked.
     """
     remaining = list(names)
     for relation in relations:
@@ -121,7 +122,9 @@ async def _none_are_governed(client: OpenFgaClient, *, names: list[str], object_
     """
     try:
         for name in names:
-            if await fga.read_object_tuples(client, f"{object_type}:{name}"):
+            # A name that is no object id holds no tuple, and reading it would fail the request.
+            obj = f"{object_type}:{name}"
+            if fga.is_object_id(obj) and await fga.read_object_tuples(client, obj):
                 return False
     except Exception as exc:  # noqa: BLE001 — unreadable is not evidence of absence
         log.warning("ingest_governance_probe_unreadable", extra={"outputs": names, "error": str(exc)})
@@ -569,7 +572,9 @@ class DatasetFilter:
             raise UnauthenticatedError("authentication required")
         object_type = self._settings.fga_object_type
         # Dedupe before the round trip: callers legitimately pass per-item dataset names (one per
-        # column in the subgraph view), and a duplicate-laden batch payload is pure wasted checks.
+        # column in the subgraph view), and a duplicate-laden batch payload is pure wasted checks. A
+        # name whose `<type>:<name>` is no object id (an external `s3://` vertex, say) is answered False
+        # by `fga.batch_check` without being sent; other external names are sent and answered not granted.
         unique = list(dict.fromkeys(names))
         allowed = await fga.batch_check(
             client,

@@ -32,6 +32,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pyarrow as pa
@@ -49,6 +50,10 @@ from lance_namespace import (
     ListTablesResponse,
     ServiceUnavailableError,
 )
+from openfga_sdk.client.models import ClientBatchCheckRequest, ClientTuple
+from openfga_sdk.client.models.batch_check_response import ClientBatchCheckResponse
+from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
+from openfga_sdk.models.check_error import CheckError
 
 from catalog.api.v1.endpoints.access import _can_relations as _model_can_relations
 from catalog.core.config import Settings, get_settings
@@ -784,6 +789,61 @@ def test_batch_commit_deregister_requires_owner_tier(client: TestClient, fake_ns
     resp = client.post("/v1/table/batch-commit", json=body, headers={"Authorization": "Bearer t"})
     assert resp.status_code == 403
     assert captured[-1] == {"user": "alice", "relation": "can_deregister", "obj": "table:db1$a"}
+
+
+class _BatchOpenFga:
+    """An OpenFGA client whose BatchCheck answers through the SDK's own response classes.
+
+    Every object is allowed except those in ``unanswered``, which come back as the SDK hands back an
+    item the server could not evaluate: ``allowed=False`` beside a ``CheckError``.
+    """
+
+    def __init__(self, unanswered: set[str]) -> None:
+        self._unanswered = unanswered
+        self.asked: list[str] = []
+
+    async def batch_check(self, body: ClientBatchCheckRequest, options: dict | None = None) -> ClientBatchCheckResponse:
+        del options
+        result = []
+        for index, item in enumerate(body.checks):
+            self.asked.append(item.object)
+            error = CheckError(input_error="validation_error", message="relation not found in the pinned model") if item.object in self._unanswered else None
+            # The SDK hands the batch ITEM back as `request` (client.py `map_response`); its annotation says ClientTuple.
+            result.append(ClientBatchCheckSingleResponse(allowed=error is None, request=cast("ClientTuple", item), correlation_id=f"c{index}", error=error))
+        return ClientBatchCheckResponse(result)
+
+    async def close(self) -> None:
+        return None
+
+
+_TWO_TABLE_COMMIT = {
+    "operations": [{"create_table_version": {"id": ["db1", t], "version": 2, "manifest_path": "_versions/2.manifest"}} for t in ("a", "b")],
+}
+
+
+def test_the_batch_harness_reaches_openfga_through_the_real_batch_check(client: TestClient, fake_ns: MagicMock) -> None:
+    """The control for the test below: with every item answered, the guard lets the request reach the
+    door, which answers its own 406 ([[LH-206]]) rather than the guard's 403 or 503."""
+    _wire(client)
+    double = _BatchOpenFga(unanswered=set())
+    client.app.state.fga = double
+
+    resp = client.post("/v1/table/batch-commit", json=_TWO_TABLE_COMMIT, headers={"Authorization": "Bearer t"})
+
+    assert resp.status_code == 406, resp.text
+    assert sorted(double.asked) == ["table:db1$a", "table:db1$b"]
+
+
+def test_batch_commit_answers_503_when_openfga_cannot_answer_an_item(client: TestClient, fake_ns: MagicMock) -> None:
+    """CONTRACT: an item OpenFGA could not evaluate is an outage, not a denial — the same 503 the
+    single-object guard answers, never a 403 naming a table the caller may well hold a grant on."""
+    _wire(client)
+    client.app.state.fga = _BatchOpenFga(unanswered={"table:db1$b"})
+
+    resp = client.post("/v1/table/batch-commit", json=_TWO_TABLE_COMMIT, headers={"Authorization": "Bearer t"})
+
+    assert resp.status_code == 503, f"an unanswered item was refused as a permission: {resp.status_code} {resp.text}"
+    fake_ns.batch_commit_tables.assert_not_called()
 
 
 def test_batch_malformed_body_fails_closed(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
