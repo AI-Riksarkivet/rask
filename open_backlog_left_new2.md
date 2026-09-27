@@ -1,21 +1,19 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-306, XC-107, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-307, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **XC-104** — An Arrow body that declares far more than it carries: one small request takes the annotator or catalog to its memory limit.
-   Why now: owner ruling 2026-09-26 admitted it as a counted Phase 1 row, right after LH-199.
-2. **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
+1. **LH-144**, **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
    Why now: next in review; LH-144 now has its precondition (staged and bus-delivered drops reach the graph since LH-199), and LH-201 waits on LH-200.
-3. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
+2. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
    Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
-4. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
+3. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
    Why now: without it, "Phase 1 done" means only that every row closed.
-5. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
+4. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
    Why now: unchanged; XC-049 starts when the owner confirms the htr-batch team has the note.
 <!-- FOCUS:END -->
 
@@ -38,6 +36,7 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - **XC-104 admitted (2026-09-26)** — a counted Phase 1 row, right after LH-199.
 - **LH-303 admitted (2026-09-26)** — counted, before XC-104; fixed and closed at helm rev 246.
 - **LH-304 admitted (2026-09-26)** — counted, before XC-104; fixed and closed at helm rev 247. LH-305 stays parked.
+- **XC-104 scope (2026-09-27)** — the row closes when no small body can outgrow the catalog's cap at its write doors (declared values, compressed inflation, and the insert coercion's cast), not only on its two named bodies; it is the lakehouse only. The annotator passes its cap to the shared decoder, and its import's per-row materialisation is parked as annotation-plane work (XC-107). Compression is capped, not refused: lancedb's remote client and pandas `to_feather` send it. Closed at helm rev 248.
 
 ## Decisions still open
 
@@ -74,7 +73,7 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**248 open items**, of which **10 are blocked on a decision** and **238 can be picked up today**; 60 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**247 open items**, of which **10 are blocked on a decision** and **237 can be picked up today**; 59 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -1400,14 +1399,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *Closes when:* On a main push, e2e-stack and e2e-ray bring every pod Ready and run their suites, recorded with run ids, and the core lane renders no WorkflowRuntime without a Ray head.
 - *Evidence:* gh run 36148029490 (jobs 108118325356, 108118325294) · gh run 36116165165 (job 108014986505) · scripts/e2e_stack.sh:13-14,107-119,413-416 · chart/values.yaml:1342,2492,2507 · services/medallion/src/medallion/stage_runner.py:89-100 · services/medallion/src/medallion/producer.py:109-129 · verify-phase1-done/e2e-stack.log, e2e-stack-36116.log, e2e_history.py, ray_defaults.py
 
-**XC-104 · An Arrow body can declare far more than it carries: 224 bytes make the annotator allocate ~6 GB, and a 66 KB zstd body inflates to ~2 GiB, in the catalog and the annotator**
-`service-kit, catalog, annotator` · **HIGH**
-- *What is left:* The validating decoder (`service_kit.lancekit.arrow_ipc`) refuses buffers that lie about what the body holds and a compressed buffer whose declared length is absurd (2**50), but nothing bounds what a body honestly DECLARES. A buffer-free column (null type, empty struct, fixed_size_binary(0), run-end-encoded) or a zero-column batch states a row count no buffer has to back, so 144-496 bytes declare up to 2**62 rows: measured, 30M rows from 224 bytes, and the annotator's `to_pylist` of them peaked at 6.18 GB RSS in 10.5 s; pylance wrote 1e9 null rows in 9.6 s. An honest zstd or lz4 body inflates ~66 KB to ~2 GiB. A zero-column batch of length -1 decodes as 0 rows.
-- *Why:* Criterion 5: one request can take the annotator or catalog pod to its memory limit, the same one-request class as LH-278.
-- *How:* In the one decoder: refuse a table with more rows than 8 × the body's bytes (a row of any buffer-backed column costs at least one bit, so only buffer-free types pass the bound), and refuse a negative batch length. For compression: lance_docs/ns_catalog/spec.yaml says nothing about IPC compression, and lancedb's namespace client writes default, uncompressed streams (lancedb/namespace.py:262,275); pylance's compiled Rust client is still to be measured on the wire. Refuse compressed bodies if it sends none, else cap the decompressed total at the body cap. RED first at the decoder and at both doors.
-- *Closes when:* A 224-byte `pa.nulls(10**6)` body and a 66 KB zstd body are refused 400 at the catalog's write doors and the annotator's import, the deployed pods' memory does not move under them, and a mutation check kills each bound.
-- *Evidence:* XC-097 review round, probe `framing` (workflow wf_6f183f3b-bfe) · commit 74bb87cf's parked list · owner ruling 2026-09-26: admitted as a counted Phase 1 row, after LH-199
-
 ## PHASE 2 · COMPUTE
 
 **LH-129 · Ray jobs sign with a static S3 key and lineage tokens from pod env; they should open tables through the namespace with a projected SA token**
@@ -2178,3 +2169,8 @@ Found by the XC-097 review round (2026-09-26) and parked under the same rule. Me
 - LH-305 · MEDIUM · The catalog's control-event broadcast consumer is ephemeral by design (one per replica, no queue group), so a NATS restart removes it and the sidecar does not re-create it: its `GET /v1/events` ring buffer and cross-replica binding-cache invalidation stay deaf until the catalog restarts. Measured 2026-09-26: after NATS returned, CATALOG_CONTROL held only the two durables until the catalog restarted at 20:16:12Z. A shared durable cannot serve a broadcast · `catalog, chart`
 - XC-105 · LOW · The annotator's import converts a VALID body row by row (`to_pylist`, then `Shape`), and decimal, odd-timezone timestamp and duplicate-struct-name columns raise there and answer 500 · `annotator`
 - XC-106 · LOW · `scripts/k3s-pins.sh --check-only` stages `chart/values-live-pins.yaml.tmp` INSIDE the chart directory and removes it on exit, so a `helm template chart/` running at the same moment fails with `lstat ... .tmp: no such file or directory`; measured once in the suite under `-n auto` (test_a_declared_bucket_is_never_reported_as_an_orphan, which passes alone) · `scripts, tests`
+
+Found by the XC-104 review round (2026-09-27) and parked under the same rule. Measurements: the XC-104 commit (634b2196) and the rev 248 deploy record.
+
+- XC-107 · HIGH · The annotator's task import materialises every row an honest body carries through `to_pylist` before any row check, so a small body still exhausts the pod: a 440-byte zstd body of 30M booleans grew it 5.8 GB, and a value shared by many rows is copied per row (1 MB bodies: +402 MB as a dictionary, +3,188 MB as a list_view). The shared decoder bounds only what a body declares and how far it inflates; the fix is an import row limit and an expansion bound at the annotator. Annotation plane, not Phase 1, by owner ruling · `annotator`
+- LH-306 · MEDIUM · pylance 12's RestNamespace sends no Content-Type on create, insert or merge_insert (measured on the wire), and the catalog's write load-shed recognises a bulk write only by `content-type: application/vnd.apache.arrow.stream` (load_shed.py:41-49), so the stock Lance client's writes are never counted against `catalog.maxConcurrentWrites` · `catalog`
