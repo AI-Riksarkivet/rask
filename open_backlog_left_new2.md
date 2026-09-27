@@ -1,13 +1,13 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-308, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-309, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-206**, **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
+1. **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
    Why now: next in review; LH-201 waits on LH-200.
 2. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
    Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
@@ -66,14 +66,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 108 | 106 | 30 |
+| **PHASE 1 · LAKEHOUSE** | 107 | 105 | 29 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**246 open items**, of which **10 are blocked on a decision** and **236 can be picked up today**; 58 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**245 open items**, of which **10 are blocked on a decision** and **235 can be picked up today**; 57 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -157,14 +157,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Now: refuse at create any endpoint other than the estate's unless a resolvable credential_ref comes with it, and make every existing foreign-endpoint record fail closed at open until a ref is consumed end to end. Per-base credentials are Lance's own mechanism (BasePath carries locations; credentials arrive as base_store_params / base_<id>.*, lance_docs/file_format.md:3079-3110). Lakekeeper validates the storage credential at warehouse create (crates/lakekeeper/src/api/management/v1/warehouse/mod.rs:97-110); keep rask's reference-only model.
 - *Closes when:* No open, provision or vend signs with the estate pair toward a non-estate endpoint, refused at create and fail-closed at open under test.
 - *Evidence:* services/catalog/src/catalog/schemas.py:738-747,768-773 · services/catalog/src/catalog/services/warehouses.py:124 · services/catalog/src/catalog/api/v1/endpoints/warehouses.py:156,205,223,567,930 · services/catalog/src/catalog/core/config.py:652-665
-
-**LH-206 · Version-delete removes tagged and current manifests and lets version numbers be reused; version/create and the batch doors publish client manifests unjudged**
-`catalog` · **HIGH**
-- *What is left:* POST /v1/table/{id}/version/delete forwards to the dir backend's raw manifest delete with no check for tags, the latest version or branch parents: `{start_version:0,end_version:-1}` makes the table unopenable while describe answers 200, and a range ending at latest rolls the table back so the next append mints the same number again. version/create accepts the table's own committed manifests. Measured through rask's guard `_refuse_a_manifest_this_table_does_not_own` and the native call versions.py:420 makes: passing v2's manifest as version 4 moved it into slot 4. The table then opened as v2 [1,2], checkout of v2 failed, the next append failed 'Commit conflict for version 3 … after 20 retries', and restore failed 'v2.manifest not found'. Passing version=N with the table's own vN manifest is accepted for ANY existing N and deletes vN. At N=latest the table rolls back and the next append re-mints N; at N<latest a tag on N breaks ('2.manifest was not found'). The versions.py:362-364 docstring ('The backend refuses any version but latest + 1') is false. A fix exists unintegrated on wip/td-LH-206 (66759245). Batch sub-operations skip protection, the manifest guard and lineage (9563eb87 names these doors as not covered).
-- *Why:* Criteria 1 and 2: docs/DATA-CONTRACT.md:22 promises a pinned (dataset, version) is bit-identical forever; a reused number makes a change-feed consumer skip rows for good. Owner's next row (row 4).
-- *How:* The spec defines these ops over version TRACKING records paired with managed_versioning (spec.yaml:807-812,2920), which rask never advertises. While managed_versioning is false answer 406 on CreateTableVersion, BatchCreateTableVersions and BatchCommitTables (spec.yaml:732,846,889; no rask service calls them), and back version/delete with pylance 12's `cleanup_old_versions(versions=[...], error_if_tagged_old_versions=True)`, which refuses tagged versions and spares the current one; always refuse a range that reaches latest; map the door to can_drop. RED from the scratch repro. If the door is ever re-enabled, the body.version == latest+1 check must be rask's own; the backend does not provide it.
-- *Closes when:* No catalog door can remove a tagged or current manifest or make a version number reusable, and version/create plus the batch doors answer 406 while managed_versioning is false, each pinned by a route test.
-- *Evidence:* services/catalog/src/catalog/api/v1/endpoints/versions.py:146-215,331-375,419-431,456-475 · services/catalog/src/catalog/api/fga_deps.py:199,306-311,351-381 · git 9563eb87 (NOT COVERED paragraph) · docs/audits/2026-09-25/02-lance-and-lakekeeper-practice.md LK05 · fga_deps.py:312-329 (version/create on can_write_data) · unverified-claims-b/version_create.py · verify-unverified-claims-b/v_vc.py, v_vc_self.py
 
 **LH-207 · Classification is laundered or hidden from the vend check: drop_columns, a same-type re-type, or a label on a nested or branch-local field leaves the raw bytes directly vendable**
 `catalog, maintenance` · **HIGH**
@@ -2170,3 +2162,7 @@ Found by the XC-104 review round (2026-09-27) and parked under the same rule. Me
 Found by the LH-144 live proof (2026-09-27) and parked under the same rule. Measurements: the rev 249 deploy record.
 
 - LH-307 · LOW · 38 lineage Dataset nodes name 18 buckets that no longer exist (test and proof warehouses such as `e2edel-*` and `durproof-wh`, and the retired `lakehouse` and `landing` buckets); the reconcile reports each as `ungoverned` with a NoSuchBucket reason on every tick, and nothing retires a graph node whose bucket was deleted · `lineage, maintenance`
+
+Found by the LH-206 review round (2026-09-27) and parked under the same rule. Measurements: the LH-206 commit (2acef77e).
+
+- LH-308 · MEDIUM · A tag or branch created while a version reclaim runs is not seen by it: Lance reads the refs once per `cleanup_old_versions` and no door serializes `tags/create`, `tags/update` or `branches/create` with a reclaim, so the new ref names a deleted version (a tag cannot be checked out; a branch cut from it loses its data files). Measured on pylance 12.0.0 with concurrent races on a local store: version/delete 31 of 60 (tags) and 94 of 120 (branches), maintenance/run 59 of 60; the sweep reclaims on every tick. Needs a per-table serialization of ref creation with every reclaim, or an upstream Lance answer · `catalog, maintenance`
