@@ -67,7 +67,7 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
 | **PHASE 1 · LAKEHOUSE** | 109 | 107 | 31 |
-| **PHASE 1 · CROSS-CUTTING** | 56 | 50 | 21 |
+| **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
