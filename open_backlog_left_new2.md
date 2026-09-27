@@ -7,8 +7,8 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-200** → **LH-201**, **XC-076**, **LH-183** — Fixes implemented or half-done on wip/td-* branches.
-   Why now: next in review; LH-201 waits on LH-200.
+1. **LH-201**, **XC-076**, **LH-183** — LH-201's precondition (LH-200) is live; the other two are half-done on wip/td-* branches.
+   Why now: LH-201 must land before any model.fga change (LH-221, LH-222, LH-076).
 2. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
    Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
 3. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
@@ -66,14 +66,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 107 | 105 | 29 |
+| **PHASE 1 · LAKEHOUSE** | 106 | 104 | 28 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**245 open items**, of which **10 are blocked on a decision** and **235 can be picked up today**; 57 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**244 open items**, of which **10 are blocked on a decision** and **234 can be picked up today**; 56 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -109,14 +109,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Call the captured previous handler after mark_draining; RED with a real uvicorn, not a patched os.kill (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 measured uvicorn 0.51.0 alive 12 s after SIGTERM). Test resilience.md §9's per-vend object-store client hypothesis: 10k opens of one S3 dataset with constant vs per-open-distinct credentials, heaptrack or a jemalloc A/B. Lakekeeper disables the AWS SDK identity cache for unbounded partition growth and runs jemalloc (crates/io/src/s3.rs:75-91). Set --timeout-graceful-shutdown from the lifecycle (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 step 3).
 - *Closes when:* The holder is named by measurement (filed upstream if external), and a recycle is observed exiting and being replaced cleanly.
 - *Evidence:* packages/service-kit/src/service_kit/draining.py:137-188 · services/maintenance/src/maintenance/services/rewrite_slot.py:94-119,147-170 · services/maintenance/src/maintenance/api/work.py:117 · commit 854a0cf2 (34.5 h soak)
-
-**LH-200 · `fga.batch_check` drops the per-item error, so an OpenFGA fault on one item reads as a permission denial**
-`service-kit (consumers: catalog, lineage, ingest, medallion, notifications)` · **HIGH**
-- *What is left:* `_do_batch_check` returns `{object: bool(allowed)}` and never reads `r.error`, so a per-item timeout, a too-complex resolution or a relation the pinned model lacks becomes a denial instead of the 503 `check()` raises. A fix exists unintegrated on wip/td-LH-200 (5bb622dd); `_do_batch_check` at ea8c5ff8 still ignores r.error (fga.py:923-925).
-- *Why:* Criterion 2. Catalog batch routes answer 403, notifications hides inbox items and the train-input gate refuses, all recorded as decisions; it also hides LH-201's stale-model window.
-- *How:* RED with a fake client returning allowed=False plus a CheckError; then raise when any `r.error` is set so the existing `_guarded` retry and ServiceUnavailableError apply. Keep the `{object: bool}` contract. No Lance surface.
-- *Closes when:* A batch item carrying an error raises ServiceUnavailableError under test, and every lakehouse service runs the fixed service-kit.
-- *Evidence:* packages/service-kit/src/service_kit/governed/fga.py:879-881 · services/catalog/src/catalog/api/fga_deps.py:698,704,715 · services/lineage/src/lineage/api/fga_deps.py:104,508,547 · services/medallion/src/medallion/services/train.py:256
 
 **LH-201 · The FGA model hook picks stores[0] and writes after new pods start, and non-catalog services pin whichever model was newest at boot**
 `service-kit, chart, lineage, medallion, maintenance` · **HIGH**
