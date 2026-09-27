@@ -17,32 +17,39 @@ WHY THE CHECK IS AFFORDABLE, which is what decides where it goes. OpenFGA refuse
 `tuple_key` whose object id is empty, so the naive shape is one call per dataset — 356 a tick, the
 kind of price that gets an axis switched off. Omitting `tuple_key` ENTIRELY is a different call and
 pages the whole store: measured, 51 pages and 5027 tuples in 0.1 s. So the governed set is read once
-per sweep and passed in, and an ungoverned dataset costs no storage I/O at all because the check sits
-ahead of the read.
+per sweep and passed in, and an ungoverned dataset costs one storage version read and nothing else.
 
 AND IT IS REPORTED, NOT SKIPPED. The `dropped` stamp beside it `continue`s silently, which is right
-for a deliberate drop. This is not that: an ungoverned table is either residue nobody cleaned up or a
-live table that lost its grants, and both are things an operator should be able to see. Folding it
-into `storage_loss` to keep it visible would be the mistake this file exists to undo.
+for a deliberate drop. This is not that, and its bytes say which of three it is ([[LH-144]], D14(4)):
+cleanly gone is a drop no event announced, which the sweep records so it is skipped from the next tick;
+present is a live table nobody governs, the finding an operator should act on; unreadable says nothing,
+and nothing is recorded on it. Folding any of them into `storage_loss` would be the mistake this file
+exists to undo.
 """
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest import mock
 
+import pytest
+
 from lineage.api import reconcile_cron
-from lineage.core.reconcile import reconcile_all
+from lineage.core.reconcile import StorageUnreadable, reconcile_all
 from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
 
 
 class _Repo:
     """A graph holding one dataset at version 3 with an absolute URI storage cannot find."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, *, stamp_takes: bool = True) -> None:
         self._name = name
+        self._stamp_takes = stamp_takes
+        self.observed_drops: list[tuple[str, str, str]] = []
 
     async def list_datasets(self, namespace: str | None = None, tag: str | None = None) -> list[DatasetSummary]:
         return [DatasetSummary(name=self._name)]
@@ -62,6 +69,10 @@ class _Repo:
     async def backfill_write(self, name: str, version: int, schema: object | None = None) -> None:
         raise AssertionError("a dataset absent from storage is not a lost write and must never be back-filled")
 
+    async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool:
+        self.observed_drops.append((name, uri, observed_at))
+        return self._stamp_takes
+
 
 async def _absent(_uri: str) -> int | None:
     """Storage says the dataset is not there — the condition that reaches MISSING_ON_STORAGE."""
@@ -70,13 +81,6 @@ async def _absent(_uri: str) -> int | None:
 
 def _sweep(*, governed: set[str] | None) -> list[ReconcileStatus]:
     return asyncio.run(reconcile_all(cast(Any, _Repo("probe$nonexistent")), _absent, backfill=True, governed=governed))
-
-
-def test_a_dataset_with_no_tuples_is_not_reported_as_storage_loss() -> None:
-    """THE GATE. Every dataset the live sweep calls loss is one of these."""
-    statuses = _sweep(governed=set())
-
-    assert statuses[0].status is ReconcileState.UNGOVERNED, "a table nobody holds a tuple on is not a governed table whose data was lost — it is its own state"
 
 
 def test_a_governed_dataset_absent_from_storage_is_STILL_loss() -> None:
@@ -106,13 +110,17 @@ def test_the_report_gives_it_its_own_line_and_keeps_it_out_of_loss() -> None:
     """Visible, not folded. `storage_loss` stays the operator's page for data a person must answer for."""
     report = reconcile_cron.summarize_sweep(
         [
-            ReconcileStatus(dataset="residue", in_sync=False, status=ReconcileState.UNGOVERNED),
+            ReconcileStatus(dataset="residue", in_sync=False, status=ReconcileState.UNGOVERNED, unreadable_reason="NoSuchBucket"),
+            ReconcileStatus(dataset="live", in_sync=False, status=ReconcileState.UNGOVERNED_LIVE),
+            ReconcileStatus(dataset="dropped", in_sync=False, status=ReconcileState.DROP_OBSERVED),
             ReconcileStatus(dataset="gone", in_sync=False, status=ReconcileState.MISSING_ON_STORAGE),
         ]
     )
 
-    assert report.ungoverned == ["residue"], "an ungoverned dataset is its own finding"
-    assert report.storage_loss == ["gone"], "and it must not be counted as data the estate lost"
+    assert (report.ungoverned, report.ungoverned_live, report.drops_observed) == ({"residue": "NoSuchBucket"}, ["live"], ["dropped"]), (
+        "each ungoverned kind is its own finding"
+    )
+    assert report.storage_loss == ["gone"], "and none of them is counted as data the estate lost"
 
 
 def test_a_store_that_cannot_be_enumerated_degrades_to_unknown_not_to_empty() -> None:
@@ -146,25 +154,58 @@ def test_fga_switched_off_asks_nothing_and_says_so() -> None:
     assert asyncio.run(reconcile_cron.governed_tables(cast(Any, request), cast(Any, settings))) is None
 
 
-def test_an_ungoverned_dataset_costs_no_storage_read() -> None:
-    """The check sits AHEAD of the read, and that ordering is load-bearing twice over.
+async def _unreadable(_uri: str) -> int | None:
+    raise StorageUnreadable("404 Not Found: <Code>NoSuchBucket</Code>")
 
-    Correctness: every axis below the read reasons about a table someone owns, so running them against
-    one nobody can reach produces findings no person can act on — an ungoverned table reported
-    `unreadable` is the same miscategorisation one class over. Cost: residue is the population that
-    grows, and it now pays no object-store round-trips at all. Measured 2026-09-11, 11 of the estate's
-    swept datasets take this branch.
-    """
-    reads: list[str] = []
 
-    async def _counting_read(uri: str) -> int | None:
-        reads.append(uri)
+async def _present(_uri: str) -> int | None:
+    return 3
+
+
+@pytest.mark.parametrize(
+    ("read", "backfill", "state", "recorded"),
+    [
+        pytest.param(_absent, True, ReconcileState.DROP_OBSERVED, True, id="cleanly-gone-is-a-drop-nobody-announced"),
+        pytest.param(_absent, False, ReconcileState.DROP_OBSERVED, False, id="a-read-only-sweep-records-nothing"),
+        pytest.param(_present, True, ReconcileState.UNGOVERNED_LIVE, False, id="present-is-a-live-table-nobody-governs"),
+        pytest.param(_unreadable, True, ReconcileState.UNGOVERNED, False, id="a-missing-bucket-says-nothing"),
+    ],
+)
+def test_an_ungoverned_dataset_is_classified_by_what_storage_holds(
+    read: Callable[[str], Awaitable[int | None]], backfill: bool, state: ReconcileState, recorded: bool
+) -> None:
+    """A drop is recorded only on the narrow not-found, never on a bucket or a read the sweep could not make."""
+    repo = _Repo("probe$nonexistent")
+
+    [status] = asyncio.run(reconcile_all(cast(Any, repo), read, backfill=backfill, governed=set()))
+
+    assert status.status is state
+    assert [(name, uri) for name, uri, _at in repo.observed_drops] == ([("probe$nonexistent", "s3://a-bucket/probe$nonexistent")] if recorded else [])
+
+
+def test_an_observation_the_graph_overtook_stays_ungoverned_and_says_why() -> None:
+    """The repository refuses a drop when the source moved or a newer fact landed during the read."""
+    repo = _Repo("probe$nonexistent", stamp_takes=False)
+
+    [status] = asyncio.run(reconcile_all(cast(Any, repo), _absent, backfill=True, governed=set()))
+
+    assert status.status is ReconcileState.UNGOVERNED
+    assert "during the read" in (status.unreadable_reason or "")
+
+
+def test_an_observed_drop_is_timed_before_the_read() -> None:
+    """A create that lands while storage is read is newer than the observation, and must win."""
+    read_at: list[str] = []
+
+    async def _absent_when_read(_uri: str) -> int | None:
+        read_at.append(datetime.now(UTC).isoformat(timespec="microseconds"))
         return None
 
-    statuses = asyncio.run(reconcile_all(cast(Any, _Repo("probe$nonexistent")), _counting_read, backfill=True, governed=set()))
+    repo = _Repo("probe$nonexistent")
+    asyncio.run(reconcile_all(cast(Any, repo), _absent_when_read, backfill=True, governed=set()))
 
-    assert statuses[0].status is ReconcileState.UNGOVERNED
-    assert reads == [], "a table nobody governs is not worth an object-store round-trip, and its answer would change nothing"
+    [(_name, _uri, observed_at)] = repo.observed_drops
+    assert observed_at <= read_at[0]
 
 
 def test_the_denominator_does_not_shrink() -> None:

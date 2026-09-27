@@ -169,7 +169,7 @@ def list_runs_page(limit: int) -> LiteralString:
 
     THE BOUND IS AN INT LITERAL, not a bound parameter. AGE does not bind `$param` reliably outside a
     MATCH — this module records the same hazard for a SET after an edge MERGE — and every other bounded
-    query here (`SOURCE_URI`, `DATASET_LAST_SUCCESS_OP`) writes its LIMIT as a literal for that reason.
+    query here (`SOURCE_URI`) writes its LIMIT as a literal for that reason.
 
     So it is VALIDATED BEFORE INTERPOLATION, exactly as `walk_query` validates its depth: every constant
     in this module is a `LiteralString` by construction because `core.age._sql` embeds it as raw SQL
@@ -210,17 +210,38 @@ MERGE_DATASET: Final = "MERGE (d:Dataset {name:$name}) SET d.namespace=$ns RETUR
 # Storage location is SET only when the event carries it; tags are UNIONed into the node's set (#49 —
 # the property also holds human-curated governance tags, which a producer's facet must never clobber).
 SET_DATASET_SRC: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.source_uri=$src RETURN 1"
-# Terminal lifecycle (2026-07-11): dropped-ness is DERIVED AT READ TIME from run history — the most
-# recent SUCCESSFUL run that wrote the dataset being a drop_table means "deliberately dropped", so
-# the reconcile sweep skips it (absence on storage is the EXPECTED state, not storage loss — it
-# previously WARNed missing_on_storage forever via the stale source_uri). Derivation instead of a
-# mutable stamp is deliberate (review 2026-07-11): a stamped flag was last-DELIVERY-wins — a stale
-# redelivered drop event after a recreate would re-stamp a LIVE dataset and silently remove it from
-# the sweep. Run nodes MERGE idempotently on run_id, so ordering by their event_time at read time is
-# redelivery-proof by construction. FAILed runs keep WROTE edges (producers() shows the attempt), so
-# the event_type=COMPLETE filter is load-bearing: a failed drop asserts nothing.
-DATASET_LAST_SUCCESS_OP: Final = (
-    "MATCH (r:Run)-[:WROTE]->(d:Dataset) WHERE d.name = $name AND r.event_type = 'COMPLETE' RETURN r.operation, r.event_time ORDER BY r.event_time DESC LIMIT 1"
+# Terminal lifecycle ([[LH-144]]). Whether a dataset is dropped is the newer of two facts: the Dataset
+# node's lifecycle STAMP and the newest run that wrote it (`DATASET_LAST_EXISTENCE_RUN`). The stamp exists
+# because a catalog drop is a DatasetEvent and leaves no run; run history stays a source because it holds
+# every drop the graph recorded before the stamp did, and a later write proves the table is back.
+#
+# The stamp is set from every CREATE or DROP fact, and ONLY by one newer than the stamp it replaces. Set
+# unconditionally it would be last-DELIVERY-wins: a stale redelivered drop after a recreate would re-stamp
+# a live dataset and drop it out of the reconcile sweep. Guarded by event time it is last-EVENT-wins, and a
+# tie goes to CREATE, so any delivery order converges and an ambiguous pair never hides a live table.
+# `$tm` is normalised to one UTC spelling by the caller: producers spell it three ways, and a string
+# comparison orders correctly only within one spelling. On the node rather than in the feed, because
+# retention prunes the feed. Measured on AGE 1.5.0 against a scratch graph: `IS NULL`, the string `<`,
+# the tie branch and the guarded SET behave as read here.
+SET_DATASET_LIFECYCLE: Final = (
+    "MATCH (d:Dataset) WHERE d.name = $name AND (d.lifecycle_at IS NULL OR d.lifecycle_at < $tm OR (d.lifecycle_at = $tm AND $state = 'CREATE'))"
+    " SET d.lifecycle = $state, d.lifecycle_at = $tm RETURN 1"
+)
+DATASET_LIFECYCLE: Final = "MATCH (d:Dataset) WHERE d.name = $name RETURN d.lifecycle, d.lifecycle_at"
+# The reconcile's observed drop, held to the URI it read: a dataset whose source moved while the sweep read
+# the old location is not dropped. RETURNs a row only when the stamp took, so the caller writes its feed row
+# only then (measured on the same scratch graph: a mismatched URI returns nothing).
+SET_OBSERVED_DROP: Final = (
+    "MATCH (d:Dataset) WHERE d.name = $name AND d.source_uri = $uri AND (d.lifecycle_at IS NULL OR d.lifecycle_at < $tm)"
+    " SET d.lifecycle = 'DROP', d.lifecycle_at = $tm RETURN 1"
+)
+# The newest COMPLETE run that wrote the dataset, maintenance excluded: a compaction or an index build after
+# a drop is not a recreate. FAILed runs keep their WROTE edges, so the COMPLETE filter is load-bearing: a
+# failed drop asserts nothing. The list is `models.MAINTENANCE_OPERATIONS` as a literal, because a constant
+# here is embedded as raw SQL and must stay a LiteralString; `tests/unit/test_lineage.py` pins them equal.
+DATASET_LAST_EXISTENCE_RUN: Final = (
+    "MATCH (r:Run)-[:WROTE]->(d:Dataset) WHERE d.name = $name AND r.event_type = 'COMPLETE'"
+    " AND NOT r.operation IN ['compaction', 'compact_table', 'create_index'] RETURN r.operation, r.event_time ORDER BY r.event_time DESC LIMIT 1"
 )
 SET_DATASET_TAGS: Final = "MATCH (d:Dataset) WHERE d.name = $name SET d.tags=$tags RETURN 1"
 # Governance metadata (#49) — human-curated tags + description on the Dataset node, with last-writer

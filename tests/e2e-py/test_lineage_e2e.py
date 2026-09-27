@@ -678,33 +678,29 @@ def test_events_feed_and_read_audit_against_postgres(dsn: str) -> None:
 
 
 def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
-    """Batch 5 (2026-07-11) — the three new Cypher shapes live on real AGE (unit tests only pin the
-    issued query STRINGS; AGE 1.5.0 has a history of quirks only a live run catches).
+    """The lifecycle statements and the column GC on real AGE, which unit tests can only simulate: AGE
+    1.5.0 has a history of quirks only a live run catches ([[LH-144]]).
 
-    ASSERTS, in order: (1) after a successful drop_table event, ``dropped_at()`` returns the drop's
-    event time (the read-time derivation over run history executes on AGE, incl. the
-    event_type='COMPLETE' filter + ORDER BY/LIMIT); (2) after a later create_table on the same
-    name, ``dropped_at()`` is None again (the recreate outranks the drop — no stored flag to
-    clear); (3) an overwrite-shaped event whose schema facet replaces {a,b} with {x,y} leaves
-    ``dataset_column_graph()`` listing ONLY the new fields (the NOT..IN list-param DELETE of
-    HAS_COLUMN links executes on AGE), while a STALE redelivery of the old-schema event afterwards
-    changes nothing (the recency gate consults the real WROTE version).
+    ASSERTS, in order: (1) a COMPLETE drop_table run makes ``dropped_at()`` fire at the drop's time, in the
+    stamp's normalised spelling; (2) a later create_table run brings it back; (3) an overwrite-shaped
+    event whose schema facet replaces {a,b} with {x,y} leaves ``dataset_column_graph()`` listing ONLY the
+    new fields, and a STALE redelivery of the old-schema event changes nothing; (4) the catalog's own drop,
+    a DatasetEvent with no run, is recognised; (5) a stale create redelivered after it does not undo it,
+    and a create at the same instant does (the guard and its tie); (6) a compaction after a drop does not
+    bring the table back and a write does (the run query's maintenance exclusion); (7) an observed drop
+    is recorded only at the location the node names.
     """
     from lineage_boot import booted_repository
 
     from lineage.core.age import make_pool
-    from lineage.models import RunEvent
+    from lineage.models import DatasetEvent, RunEvent
 
-    # UNIQUE PER RUN, and this is the whole reason the test could only pass once. The name and the
-    # three run ids were fixed literals, so a second run met its own `lc-3` recreate (09:10) already in
-    # the graph — outranking the 09:05 drop this run had just written, making `dropped_at` correctly
-    # return None and the assertion fail. The suite was self-poisoning, with no production collision
-    # involved at all.
+    # UNIQUE PER RUN: a fixed name met its own earlier recreate already in the graph on a second run.
     unique = uuid.uuid4().hex[:8]
     name = f"e2e$lifecycle_gc_{unique}"
 
     def event(run_id: str, op: str, tm: str, fields: list[str] | None, version: str | None) -> RunEvent:
-        facets: dict = {}
+        facets: dict = {"dataSource": {"name": "e2e", "uri": f"s3://e2e/{name}"}}
         if fields is not None:
             facets["schema"] = {"fields": [{"name": f, "type": "int64"} for f in fields]}
         if version is not None:
@@ -719,29 +715,61 @@ def test_terminal_lifecycle_and_column_gc_against_age(dsn: str) -> None:
             }
         )
 
-    async def run() -> tuple[str | None, str | None, list[str], list[str]]:
+    def static(op: str, tm: str) -> DatasetEvent:
+        """The catalog's own shape for DDL: a DatasetEvent, no run and no job."""
+        lifecycle = {"create_table": "CREATE", "drop_table": "DROP"}[op]
+        return DatasetEvent.model_validate(
+            {
+                "eventTime": tm,
+                "producer": "https://example.invalid/catalog",
+                "dataset": {
+                    "namespace": "e2e",
+                    "name": name,
+                    "facets": {"lifecycleStateChange": {"_producer": "p", "_schemaURL": "s", "lifecycleStateChange": lifecycle}, "lance": {"operation": op}},
+                },
+            }
+        )
+
+    async def run() -> dict[str, object]:
         pool = make_pool(dsn)
         await pool.open()
+        seen: dict[str, object] = {}
         try:
             repo = await booted_repository(pool)
-            # v1 with schema {a,b} → drop → dropped_at derives the drop
             await repo.ingest_event(event(f"lc-1-{unique}", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
             await repo.ingest_event(event(f"lc-2-{unique}", "drop_table", "2026-07-11T09:05:00Z", None, None))
-            dropped = await repo.dropped_at(name)
-            # recreate at v2 with the REPLACED schema {x,y} → alive again, inventory pruned to {x,y}
+            seen["run_drop"] = await repo.dropped_at(name)
             await repo.ingest_event(event(f"lc-3-{unique}", "create_table", "2026-07-11T09:10:00Z", ["x", "y"], "2"))
-            alive = await repo.dropped_at(name)
-            inventory = [c.field for c in (await repo.dataset_column_graph(name)).columns]
-            # STALE redelivery of the v1 old-schema event — the recency gate must not resurrect {a,b}
+            seen["run_recreate"] = await repo.dropped_at(name)
+            seen["inventory"] = [c.field for c in (await repo.dataset_column_graph(name)).columns]
             await repo.ingest_event(event(f"lc-1-{unique}", "create_table", "2026-07-11T09:00:00Z", ["a", "b"], "1"))
-            after_stale = [c.field for c in (await repo.dataset_column_graph(name)).columns]
-            return dropped, alive, inventory, after_stale
+            seen["after_stale"] = [c.field for c in (await repo.dataset_column_graph(name)).columns]
+            await repo.ingest_dataset_event(static("drop_table", "2026-07-11T09:15:00Z"))
+            seen["catalog_drop"] = await repo.dropped_at(name)
+            await repo.ingest_dataset_event(static("create_table", "2026-07-11T09:12:00Z"))
+            seen["stale_create"] = await repo.dropped_at(name)
+            await repo.ingest_dataset_event(static("create_table", "2026-07-11T09:15:00Z"))
+            seen["tied_create"] = await repo.dropped_at(name)
+            await repo.ingest_dataset_event(static("drop_table", "2026-07-11T09:20:00Z"))
+            await repo.ingest_event(event(f"lc-4-{unique}", "compaction", "2026-07-11T09:25:00Z", None, "3"))
+            seen["after_compaction"] = await repo.dropped_at(name)
+            await repo.ingest_event(event(f"lc-5-{unique}", "insert", "2026-07-11T09:30:00Z", None, "4"))
+            seen["after_write"] = await repo.dropped_at(name)
+            seen["observed_elsewhere"] = await repo.record_observed_drop(name, "s3://e2e/somewhere-else", "2026-07-11T09:35:00.000000+00:00")
+            seen["observed_here"] = await repo.record_observed_drop(name, f"s3://e2e/{name}", "2026-07-11T09:35:00.000000+00:00")
+            seen["after_observed"] = await repo.dropped_at(name)
+            return seen
         finally:
             await pool.close()
 
-    dropped, alive, inventory, after_stale = asyncio.run(run())
-    assert dropped == "2026-07-11T09:05:00Z"  # (1) the drop is derived from real run history
-    assert alive is None  # (2) the recreate outranks it — nothing stored, nothing to clear
+    seen = asyncio.run(run())
+    assert seen["run_drop"] == "2026-07-11T09:05:00.000000+00:00", seen  # (1)
+    assert seen["run_recreate"] is None, seen  # (2)
+    inventory, after_stale = seen["inventory"], seen["after_stale"]
+    assert seen["catalog_drop"] == "2026-07-11T09:15:00.000000+00:00", seen  # (4)
+    assert seen["stale_create"] is not None and seen["tied_create"] is None, seen  # (5)
+    assert seen["after_compaction"] is not None and seen["after_write"] is None, seen  # (6)
+    assert seen["observed_elsewhere"] is False and seen["observed_here"] is True and seen["after_observed"] is not None, seen  # (7)
     assert inventory == ["x", "y"]  # (3) the replaced columns are GONE from the CURRENT inventory
     assert after_stale == ["x", "y"]  # …and a stale redelivery cannot bring them back
 

@@ -774,37 +774,6 @@ def test_list_runs_folds_progress_onto_the_status_board(monkeypatch: pytest.Monk
 # --------------------------------------------------------------------------- #
 
 
-def test_dropped_at_derives_from_the_latest_successful_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    # ASSERTS: dropped_at() is READ-TIME DERIVATION over run history (never a stored flag — a
-    # stored flag was last-delivery-wins under redelivery): latest successful op drop_table → the
-    # drop's event time; latest successful op create_table (the recreate) → None; no runs → None.
-    # Also pins the load-bearing filter: FAILed runs keep WROTE edges, so the query MUST restrict
-    # to event_type COMPLETE or a failed drop would count.
-    import lineage.services.repository as repo_mod
-
-    seen_queries: list[str] = []
-    canned: list[list[object]] = []
-
-    async def _fake_fetch(_pool: object, _graph: str, query: str, params: dict, *, columns: int = 1):
-        seen_queries.append(query)
-        assert params == {"name": "table:doomed"} and columns == 2
-        return canned
-
-    monkeypatch.setattr(repo_mod, "fetch", _fake_fetch)
-    repo = repo_mod.LineageRepository(cast(Any, _FakePool()), "g")
-
-    canned[:] = [["drop_table", "2026-07-11T09:00:00Z"]]
-    assert asyncio.run(repo.dropped_at("table:doomed")) == "2026-07-11T09:00:00Z"
-
-    canned[:] = [["create_table", "2026-07-11T10:00:00Z"]]  # the recreate outranks the drop
-    assert asyncio.run(repo.dropped_at("table:doomed")) is None
-
-    canned[:] = []
-    assert asyncio.run(repo.dropped_at("table:doomed")) is None
-
-    assert all("r.event_type = 'COMPLETE'" in q for q in seen_queries)  # failed drops assert nothing
-
-
 def _capture_with_graph_version(monkeypatch: pytest.MonkeyPatch, event: dict[str, Any], graph_version: str | None) -> list[tuple[str, dict]]:
     """Ingest one event; the fake answers the latest-WROTE-version probe with ``graph_version``."""
     import lineage.services.repository as repo_mod

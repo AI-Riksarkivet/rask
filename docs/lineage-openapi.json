@@ -584,7 +584,7 @@
         "type": "object"
       },
       "DlqEvent": {
-        "description": "One staged-but-not-yet-drained lineage event in the transactional outbox (#83 ops view).\n\nA file's presence in the outbox means \"committed write, lineage not yet confirmed delivered\" \u2014 the\nat-risk set the reconcile relay drains. ``parseable=False`` marks a poison object (the relay would drop\nit): its run_id is the filename, the rest is unknown.",
+        "description": "One staged-but-not-yet-drained lineage event in the transactional outbox (#83 ops view).\n\nA file's presence in the outbox means \"committed write, lineage not yet confirmed delivered\" \u2014 the\nat-risk set the reconcile relay drains. ``parseable=False`` marks a poison object (the relay would drop\nit): its run_id is the filename, the rest is unknown. A catalog DDL change (a ``DatasetEvent``) names no\nrun, so it lists under its staged key too, with its event time and dataset but no type, job or inputs.",
         "properties": {
           "event_time": {
             "anyOf": [
@@ -1323,7 +1323,9 @@
           "missing_on_storage",
           "absent",
           "unreadable",
-          "ungoverned"
+          "ungoverned",
+          "ungoverned_live",
+          "drop_observed"
         ],
         "title": "ReconcileState",
         "type": "string"
@@ -1916,7 +1918,7 @@
     },
     "/admin/dlq/{run_id}/replay": {
       "post": {
-        "description": "Re-ingest one staged event on demand, then drop it \u2014 the manual twin of the reconcile relay's drain.\n\nA replay IS a re-ingest, so it carries the SAME authz as a fresh ingest: ``can_write_data`` on the\nevent's outputs + ``can_get_metadata`` on its inputs (:func:`enforce_output_authz`, fail-closed). The\ningest MERGEs on ``run_id`` (idempotent), the durable feed insert is ON CONFLICT DO NOTHING, and the drop\nis only reached on success \u2014 a failed re-ingest leaves the object staged for the relay to retry.\n\nNon-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a\nrun whose datasets the caller cannot SEE (or an unparseable poison object, which the governed list also\nhides) returns the SAME 404 as a missing run \u2014 never a distinct 422 or a 403 echoing hidden dataset\nnames. Only an event the caller could have listed reaches ``enforce_output_authz``.",
+        "description": "Re-ingest one staged event on demand, re-publish it, then drop it \u2014 the manual twin of the reconcile relay's drain.\n\nA replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on\nthe staged bytes (:func:`enforce_bus_authz` \u2014 signature and stamped author) and the ingest door's on the\noperator (:func:`enforce_output_authz` \u2014 ``can_write_data`` on the outputs, ``can_get_metadata`` on the\ninputs, fail-closed). Both doors are idempotent: a run MERGEs on its run id, a static change on its\nderived feed id, and the durable feed insert is ON CONFLICT DO NOTHING. The staged bytes are re-published\nto the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as\nthe graph. The drop is only reached on success \u2014 a failed re-ingest or re-publish leaves the object\nstaged for the relay to retry, and a failed re-publish answers 503 because the graph is already\nrepaired.\n\nNon-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a\nrun whose datasets the caller cannot SEE (or an unparseable poison object, which the governed list also\nhides) returns the SAME 404 as a missing run \u2014 never a distinct 422 or a 403 echoing hidden dataset\nnames. Only an event the caller could have listed reaches ``enforce_output_authz``.",
         "operationId": "replay_dlq_admin_dlq__run_id__replay_post",
         "parameters": [
           {

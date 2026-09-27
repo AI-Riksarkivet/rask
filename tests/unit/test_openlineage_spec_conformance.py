@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from jsonschema import Draft202012Validator, FormatChecker
@@ -327,6 +327,43 @@ def test_reconcile_backfill_event_conforms() -> None:
         "outputs": [{"namespace": "", "name": "alpha$bronze$images"}],
     }
     _assert_conforms(event)
+
+
+def test_reconcile_observed_drop_event_conforms(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ASSERTS the DROP the reconcile records when it finds bytes cleanly gone ([[LH-144]]) is a real
+    # DatasetEvent, read off the feed row the repository actually writes rather than a mirror of it.
+    import asyncio
+
+    import lineage.services.repository as repo_mod
+
+    written: list[tuple[object, ...]] = []
+
+    class _Conn:
+        def transaction(self) -> _Conn:
+            return self
+
+        async def __aenter__(self) -> _Conn:
+            return self
+
+        async def __aexit__(self, *_a: object) -> bool:
+            return False
+
+        async def execute(self, _statement: object, params: tuple[object, ...]) -> None:
+            written.append(params)
+
+    class _Pool:
+        def connection(self) -> _Conn:
+            return _Conn()
+
+    async def _took(*_args: object, **_kwargs: object) -> list[list[object]]:
+        return [[1]]
+
+    monkeypatch.setattr(repo_mod, "run_cypher", _took)
+    repository = repo_mod.LineageRepository(cast("Any", _Pool()), "g")
+
+    assert asyncio.run(repository.record_observed_drop("alpha$bronze$images", "s3://bucket/images", _EVENT_TIME))
+    [row] = written
+    _assert_conforms(json.loads(str(row[-1])))
 
 
 def test_ingest_reads_facets_from_the_spec_typed_slots() -> None:

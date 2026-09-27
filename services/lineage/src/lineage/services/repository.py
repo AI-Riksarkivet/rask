@@ -20,11 +20,12 @@ failed run produced no data, so it must not assert lineage.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Final, LiteralString, TypedDict, cast
 
 import psycopg
@@ -65,7 +66,7 @@ from lineage.schemas import (
 from lineage.services import cypher as cy
 from lineage.services import postgres as pg
 from service_kit.lakehouse.schema import SchemaFields
-from service_kit.openlineage import RUN_EVENT_SCHEMA_URL, custom_facet, run_id_for
+from service_kit.openlineage import DATASET_EVENT_SCHEMA_URL, RUN_EVENT_SCHEMA_URL, custom_facet, lifecycle_facet, lifecycle_state, run_id_for
 
 
 log = logging.getLogger(__name__)
@@ -78,6 +79,46 @@ _CREATE_OPS: Final = frozenset({"create_table", "register_table", "declare_table
 # OpenLineage ``producer`` URI for the back-fill's synthetic event — spec-required, and what a Marquez-style
 # consumer records as the event source (here: the lineage service repairing its own graph, not a producer).
 _RECONCILE_PRODUCER: Final = "https://github.com/AI-Riksarkivet/rask/tree/main/services/lineage/src/lineage/services/repository.py"
+
+#: The lifecycle states that decide whether a dataset EXISTS, from the spec's `lifecycleStateChange` values:
+#: OVERWRITE replaces a dataset and so asserts it exists; ALTER, RENAME and TRUNCATE decide nothing about
+#: existence ([[LH-144]]).
+_EXISTENCE_BY_LIFECYCLE: Final = {"CREATE": "CREATE", "OVERWRITE": "CREATE", "DROP": "DROP"}
+
+#: How far ahead of this service's clock a lifecycle fact may be dated and still be stamped. The stamp is
+#: last-EVENT-wins on a producer-chosen time, so a fact dated far ahead would pin it against every real
+#: later event; beyond this it is refused rather than trusted.
+_LIFECYCLE_CLOCK_SKEW: Final = timedelta(minutes=5)
+
+
+def _existence_state(dataset: Dataset, operation: str | None) -> str | None:
+    """CREATE or DROP when this change decides whether ``dataset`` exists, else None.
+
+    The spec's own `lifecycleStateChange` dataset facet first, because it is what every OpenLineage
+    producer sets; rask's `lance.operation` only when the facet is absent, which is how a producer that
+    sets only the operation (a run-shaped drop) still counts.
+    """
+    facet = dataset.facet("lifecycleStateChange")
+    declared = facet.get("lifecycleStateChange") if facet else None
+    state = declared if isinstance(declared, str) else lifecycle_state(operation or "")
+    return _EXISTENCE_BY_LIFECYCLE.get(state or "")
+
+
+def _lifecycle_time(event_time: str, *, received: datetime | None) -> str | None:
+    """``event_time`` in one UTC spelling, or None when it names no instant or one too far ahead of ``received``.
+
+    The feed holds three spellings of the same instant (``…Z``, ``…+00:00``, ``….ffffff+00:00``), and the
+    lifecycle stamp is compared as a string, which orders correctly across spellings only to the second.
+    A drop and a recreate inside one second is what a test run does, so the stamp is written in one form.
+    ``received`` is None when reading a fact already recorded, whose time was judged when it arrived.
+    """
+    try:
+        parsed = datetime.fromisoformat(event_time)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None or (received is not None and parsed > received + _LIFECYCLE_CLOCK_SKEW):
+        return None
+    return parsed.astimezone(UTC).isoformat(timespec="microseconds")
 
 
 def _tags_from(value: object) -> list[str]:
@@ -413,6 +454,9 @@ class LineageRepository:
                         cy.LINK_CREATED,
                         {"name": event.author, "ds": ds.name, "tm": event.event_time},
                     )
+            if event.is_success:
+                for ds in event.outputs:
+                    await self._stamp_lifecycle(conn, ds, event.operation, event.event_time)
             # LAST, inside the same transaction: the append-only observation of what arrived. Ordered
             # after the graph so the lock order is the same at every call site (AGE label tables, then
             # public.lineage_events) and two concurrent ingests cannot form a cycle.
@@ -442,6 +486,7 @@ class LineageRepository:
         async with self._pool.connection() as conn, conn.transaction():
             await self._merge_dataset(conn, event.dataset)
             await self._ingest_columns(conn, event)
+            await self._stamp_lifecycle(conn, event.dataset, event.operation, event.event_time)
             # A table-origination event carries the verified author → the same first-class
             # `(:User)-[:CREATED]->(:Dataset)` edge a run-shaped create recorded, on the same ops.
             if event.operation in _CREATE_OPS and event.author:
@@ -465,6 +510,23 @@ class LineageRepository:
                 outputs=[event.dataset.name],
                 event=event.model_dump(by_alias=True),
             )
+
+    async def _stamp_lifecycle(self, conn: psycopg.AsyncConnection, dataset: Dataset, operation: str | None, event_time: str) -> None:
+        """Stamp ``dataset`` CREATE or DROP when this change decides its existence, unless a newer fact already did.
+
+        Keyed on the vertex name, the one identity every other statement of the ingest writes under. A
+        fact whose time names no instant, or one dated too far ahead, is logged and not stamped: guessing
+        its place in the order would be worse than missing it, and a drop missed here is still caught by
+        the reconcile, which records one when it finds the bytes gone.
+        """
+        state = _existence_state(dataset, operation)
+        if state is None:
+            return
+        at = _lifecycle_time(event_time, received=datetime.now(UTC))
+        if at is None:
+            log.warning("lineage_lifecycle_time_refused", extra={"dataset": dataset.vertex_name, "state": state, "event_time": event_time})
+            return
+        await run_cypher(conn, self._graph, cy.SET_DATASET_LIFECYCLE, {"name": dataset.vertex_name, "state": state, "tm": at})
 
     async def _schema_is_current(self, conn: psycopg.AsyncConnection, name: str, version: str) -> bool:
         """True when ``version`` is at least the newest WROTE version the graph records for ``name``
@@ -786,20 +848,68 @@ class LineageRepository:
         return versions
 
     async def dropped_at(self, name: str) -> str | None:
-        """When ``name`` is TERMINALLY dropped — the event time of its most recent SUCCESSFUL run
-        being a ``drop_table`` — else None.
+        """When ``name`` stopped being catalogued at this id — a drop or a deregister — else None.
 
-        DERIVED from run history at read time, never a stored flag (review 2026-07-11: a mutable
-        stamp was last-delivery-wins under at-least-once redelivery — a stale redelivered drop
-        after a recreate would remove a live dataset from the reconcile sweep). A recreate is
-        simply a newer successful non-drop run, so the derivation flips back automatically. The
-        reconcile sweep skips dropped datasets: after a deliberate drop, absence on storage is the
-        EXPECTED state — flagging it missing_on_storage forever was the false-alarm bug.
+        The newer of two facts decides, a tie going to existence: the node's lifecycle stamp (every CREATE
+        or DROP fact, `cy.SET_DATASET_LIFECYCLE`) and the newest COMPLETE run that wrote it, maintenance
+        excluded (`cy.DATASET_LAST_EXISTENCE_RUN`). A catalog drop is a DatasetEvent and leaves no run, so
+        run history alone cannot see it; a data write after a drop, as an undrop or a producer's recreate
+        makes, is a run, and proves the table is back. A compaction proves nothing, so it cannot un-drop.
+        The reconcile sweep skips a dropped dataset, because its absence on storage is then the expected
+        state ([[LH-144]]).
         """
-        rows = await fetch(self._pool, self._graph, cy.DATASET_LAST_SUCCESS_OP, {"name": name}, columns=2)
-        if rows and rows[0][0] == "drop_table":
-            return rows[0][1] or ""
-        return None
+        stamp, run = await asyncio.gather(
+            fetch(self._pool, self._graph, cy.DATASET_LIFECYCLE, {"name": name}, columns=2),
+            fetch(self._pool, self._graph, cy.DATASET_LAST_EXISTENCE_RUN, {"name": name}, columns=2),
+        )
+        facts: list[tuple[str, str]] = []
+        if stamp and stamp[0][0] in {"CREATE", "DROP"} and stamp[0][1]:
+            facts.append((str(stamp[0][1]), str(stamp[0][0])))
+        if run and (at := _lifecycle_time(str(run[0][1] or ""), received=None)) is not None:
+            facts.append((at, "DROP" if lifecycle_state(str(run[0][0] or "")) == "DROP" else "CREATE"))
+        if not facts:
+            return None
+        at, state = max(facts, key=lambda fact: (fact[0], fact[1] == "CREATE"))
+        return at if state == "DROP" else None
+
+    async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool:
+        """Record that the reconcile found ``name``'s bytes cleanly gone at ``uri``: a DROP, as a DatasetEvent in the feed.
+
+        The drop no event announced (D14(4)). Stamped only if the node still names ``uri`` and holds no
+        newer lifecycle fact (`cy.SET_OBSERVED_DROP`), so a table recreated or moved while the sweep read
+        the old location is not dropped; and the feed row is written only when the stamp took, so a
+        blocked observation does not append a DROP on every tick. ``observed_at`` is the time the sweep
+        read storage, taken before the read. ``name`` is the vertex key, used as is. True when recorded.
+        """
+        async with self._pool.connection() as conn, conn.transaction():
+            took = await run_cypher(conn, self._graph, cy.SET_OBSERVED_DROP, {"name": name, "uri": uri, "tm": observed_at})
+            if not took:
+                return False
+            event = {
+                "eventTime": observed_at,
+                "producer": _RECONCILE_PRODUCER,
+                "schemaURL": DATASET_EVENT_SCHEMA_URL,
+                "dataset": {
+                    "namespace": "",
+                    "name": name,
+                    "facets": {
+                        "lifecycleStateChange": lifecycle_facet(_RECONCILE_PRODUCER, "drop_table"),
+                        "lance": custom_facet(_RECONCILE_PRODUCER, operation="drop_table", observed="absent on storage", uri=uri),
+                    },
+                },
+            }
+            await self._insert_feed_row(
+                conn,
+                run_id=DatasetEvent.model_validate(event).feed_id,
+                event_type="COMPLETE",
+                event_time=observed_at,
+                job=None,
+                author="reconcile",
+                inputs=[],
+                outputs=[name],
+                event=event,
+            )
+            return True
 
     async def source_uri(self, name: str) -> str | None:
         """The storage location (``dataSource`` URI) recorded for ``name``, or ``None`` if unknown. (#23)"""

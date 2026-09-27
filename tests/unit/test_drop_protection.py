@@ -403,7 +403,7 @@ def test_undrop_re_registers_from_the_trash_record_and_clears_it(tmp_path: Any) 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     _drop_table(settings, ns)
-    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
     assert "register_table:pages.lance" in ns.calls, "the RELATIVE form register_table accepts"
     assert trash.get(settings.registry_root, settings.storage_options(), "bronze$pages") is None
 
@@ -416,7 +416,7 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> None:
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     with pytest.raises(TableNotFoundError, match="no recoverable drop"):
-        asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
+        asyncio.run(t_ep.undrop_table(id="bronze$gone", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
 
 
 def test_the_tasks_door_shows_the_pending_expiry(tmp_path: Any) -> None:
@@ -486,7 +486,7 @@ def test_undrop_registers_a_RELATIVE_location(tmp_path: Any) -> None:
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     _drop_table(settings, ns)
-    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
+    asyncio.run(t_ep.undrop_table(id="bronze$pages", ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()))
     registered = [c for c in ns.calls if c.startswith("register_table:")]
     assert registered == ["register_table:pages.lance"], registered
     assert "://" not in registered[0], "an absolute URI reached register_table — the live 400"
@@ -699,7 +699,9 @@ def test_namespace_undrop_rebuilds_the_whole_subtree(tmp_path: Any) -> None:
     _drop_namespace_cascade(settings, ns)
     ns.calls.clear()
 
-    asyncio.run(n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
+    asyncio.run(
+        n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage())
+    )
 
     creates = [c for c in ns.calls if c.startswith("create_namespace:")]
     assert creates == ["create_namespace:bronze:exist_ok", "create_namespace:bronze$inner:exist_ok"], "parents must exist before children"
@@ -717,7 +719,11 @@ def test_namespace_undrop_without_a_record_is_an_honest_404(tmp_path: Any) -> No
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _CascadableNamespace()  # structural stand-in, same as every door test here
     with pytest.raises(NamespaceNotFoundError, match="no recoverable drop"):
-        asyncio.run(n_ep.undrop_namespace(id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter()))
+        asyncio.run(
+            n_ep.undrop_namespace(
+                id="bronze", request=_request_stub(), ns=ns, settings=settings, token=None, control=NoopControlEmitter(), emitter=_NoopLineage()
+            )
+        )
 
 
 def test_namespace_tasks_reports_the_pending_expiry(tmp_path: Any) -> None:

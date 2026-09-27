@@ -45,7 +45,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_format
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, reconcile_body_id, require_safe_segments
-from catalog.core.lineage_emit import DROP_TABLE, emit_write_event
+from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE, emit_write_event
 
 # `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
 # over the same tree disagreed about how deep it may go, and a second copy of the number would let
@@ -668,17 +668,16 @@ async def drop_namespace(
     # ("the dataset node persists in the graph, named a `drop_table` run"). Those children die inside the
     # one native call and never reach that door, so without this nothing records that they went.
     #
-    # `repository.dropped_at` derives from run history rather than a stored flag — the most recent
-    # SUCCESSFUL run being a `drop_table` — so a table with no such run stays indistinguishable from a
-    # live one and `lineage_reconcile_ungoverned` names it every tick, forever, for bytes that no longer
-    # exist. Measured 2026-09-18: 20 datasets reported ungoverned on the live estate, 8 of them tables
-    # this repo's own suites had cascade-dropped hours earlier.
+    # `repository.dropped_at` reads a drop from these events ([[LH-144]]), so a table nothing records
+    # stays indistinguishable from a live one and `lineage_reconcile_ungoverned` names it every tick.
+    # Measured 2026-09-18: 20 datasets reported ungoverned on the live estate, 8 of them tables this
+    # repo's own suites had cascade-dropped hours earlier.
     #
     # BEFORE THE REVOKE, the ordering the table door states and for its reason: on the http transport
     # the caller's bearer authorizes ingest against their still-live write grant, so revoking first
     # would 403 the very event that records who dropped the table. Emitted for a recoverable drop too,
-    # matching that door — an undrop re-registers the table and a later successful run flips the
-    # derivation back.
+    # matching that door — the undrop emits a `register_table` marker per table, which lineage reads as
+    # the table existing again.
     # GUARDED PER TABLE, which the single-table door does not need and this does. That door emits once;
     # this emits N times and the FGA revoke runs AFTER. An exception escaping mid-loop would skip both
     # the remaining tables' records and the revoke — trading a missing lineage row for orphan grants,
@@ -736,6 +735,8 @@ async def undrop_namespace(
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
+    emitter: LineageEmitterDep,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> CreateNamespaceResponse:
     """Recover a cascade-dropped SUBTREE from the trash (#96) — the plural undrop.
 
@@ -841,6 +842,22 @@ async def undrop_namespace(
             except TableAlreadyExistsError:
                 log.info("undrop_table_already_registered", extra={"table": t_id})
             await run_in_threadpool(warn_if_mixed_file_versions, location, so, table=t_id)
+            # Each re-registered table exists again, and lineage has to hear it, for the reason the table
+            # undrop states ([[LH-144]]). Guarded per table like the cascade's own emits: one table's
+            # failed announcement must not strand the rest of the recovery.
+            try:
+                await emit_write_event(
+                    emitter,
+                    parse_identifier(t_id, settings.delimiter),
+                    delimiter=settings.delimiter,
+                    author=token.sub if token is not None else None,
+                    version=None,
+                    operation=REGISTER_TABLE,
+                    authorization=authorization,
+                    source_uri=location,
+                )
+            except Exception:
+                log.exception("undrop_lineage_emit_failed", extra={"table": t_id})
         else:
             skipped += 1
             log.warning("undrop_skipped_declared_only_table", extra={"table": t_id})

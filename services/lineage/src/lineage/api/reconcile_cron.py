@@ -49,18 +49,23 @@ log = logging.getLogger(__name__)
 class SweepReport(BaseModel):
     """One cron tick's findings — the tick's response body and the shape its log line counts.
 
-    A model rather than a hand-built ``dict[str, Any]``: the tick reports NINE independent finding classes
-    plus two counters, and the response was assembled twice in one function body (once as a log ``extra``,
-    once as the return) from literal keys that could drift apart silently.
+    A model rather than a hand-built ``dict[str, Any]``: the tick reports independent finding classes and
+    counters, and the response was assembled twice in one function body (once as a log ``extra``, once as
+    the return) from literal keys that could drift apart silently.
     """
 
     checked: int = 0
     backfilled: list[str] = Field(default_factory=list)
     storage_loss: list[str] = Field(default_factory=list)
-    #: Datasets carrying NO authorization tuple — not governed tables, so not data anyone lost. Its own
-    #: field rather than a share of `storage_loss` for the reason the `graph_ahead` split already
-    #: established here: an alarm that is mostly benign is one an operator learns to skim.
-    ungoverned: list[str] = Field(default_factory=list)
+    #: Datasets carrying NO authorization tuple whose storage could not be read, with the reason — not
+    #: governed tables, so not data anyone lost. Its own field rather than a share of `storage_loss` for
+    #: the reason the `graph_ahead` split already established here: an alarm that is mostly benign is one
+    #: an operator learns to skim.
+    ungoverned: dict[str, str | None] = Field(default_factory=dict)
+    #: Ungoverned datasets whose bytes are still on storage ([[LH-144]]).
+    ungoverned_live: list[str] = Field(default_factory=list)
+    #: Ungoverned datasets whose bytes were cleanly gone, and whose drop this tick recorded.
+    drops_observed: list[str] = Field(default_factory=list)
     graph_ahead: list[str] = Field(default_factory=list)
     unreadable: dict[str, str | None] = Field(default_factory=dict)
     dangling_blobs: dict[str, list[str]] = Field(default_factory=dict)
@@ -151,7 +156,9 @@ def summarize_sweep(statuses: list[ReconcileStatus], *, governed: set[str] | Non
         checked=len(statuses),
         backfilled=[s.dataset for s in statuses if s.status in BACKFILLABLE_STATES],
         storage_loss=[s.dataset for s in statuses if s.status is ReconcileState.MISSING_ON_STORAGE],
-        ungoverned=[s.dataset for s in statuses if s.status is ReconcileState.UNGOVERNED],
+        ungoverned={s.dataset: s.unreadable_reason for s in statuses if s.status is ReconcileState.UNGOVERNED},
+        ungoverned_live=[s.dataset for s in statuses if s.status is ReconcileState.UNGOVERNED_LIVE],
+        drops_observed=[s.dataset for s in statuses if s.status is ReconcileState.DROP_OBSERVED],
         graph_ahead=[s.dataset for s in statuses if s.status is ReconcileState.GRAPH_AHEAD],
         unreadable={s.dataset: s.unreadable_reason for s in statuses if s.status is ReconcileState.UNREADABLE},
         dangling_blobs={s.dataset: s.dangling_blob_columns for s in statuses if s.dangling_blob_columns},
@@ -212,10 +219,15 @@ def log_sweep(report: SweepReport) -> None:
         log.warning("lineage_reconcile_storage_loss", extra={"datasets": report.storage_loss, "count": len(report.storage_loss)})
     if report.ungoverned:
         # ITS OWN BODY, like `graph_ahead` beside it and for the same reason. A dataset here holds no
-        # authorization tuple, so nobody — including whoever created it — can read, maintain, drop or
-        # re-create it; its bytes being absent is not something a person can answer for. Measured
-        # 2026-09-11, all three datasets the loss line named were this.
+        # authorization tuple and its storage could not be read, so nothing can be said of its bytes; the
+        # reason says which of a missing bucket, a denied read or a relative URI it is.
         log.warning("lineage_reconcile_ungoverned", extra={"datasets": report.ungoverned, "count": len(report.ungoverned)})
+    if report.ungoverned_live:
+        # ITS OWN BODY: bytes nobody governs are the one ungoverned kind a person has to decide about.
+        log.warning("lineage_reconcile_ungoverned_live", extra={"datasets": report.ungoverned_live, "count": len(report.ungoverned_live)})
+    if report.drops_observed:
+        # INFO, not a warning: a drop nobody announced, now recorded, and skipped from the next tick on.
+        log.info("lineage_reconcile_drops_observed", extra={"datasets": report.drops_observed, "count": len(report.drops_observed)})
     if report.graph_ahead:
         # ITS OWN BODY, because the two findings differ in kind and an operator filters on the body. A
         # dataset here was READ successfully and sits at an older version than the graph — an e2e run
@@ -253,6 +265,8 @@ def log_sweep(report: SweepReport) -> None:
             "backfilled": len(report.backfilled),
             "storage_loss": len(report.storage_loss),
             "ungoverned": len(report.ungoverned),
+            "ungoverned_live": len(report.ungoverned_live),
+            "drops_observed": len(report.drops_observed),
             "graph_ahead": len(report.graph_ahead),
             "unreadable": len(report.unreadable),
             "dangling_blobs": len(report.dangling_blobs),

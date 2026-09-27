@@ -22,13 +22,21 @@ class ReconcileState(StrEnum):
     # unreadable dataset is usually a reader/format mismatch (an unsupported manifest feature flag,
     # a bad endpoint, missing credentials). Collapsing them reported six live datasets as destroyed.
     UNREADABLE = "unreadable"
-    # The dataset carries no authorization tuple, so it is not a live governed table — neither loss nor
-    # health, exactly like UNREADABLE above and for the same reason. A table nobody holds a tuple on
-    # cannot be read, maintained, dropped or re-created by anyone including its creator, so its bytes
-    # being absent is not an incident a person can act on; reporting it as MISSING_ON_STORAGE sends an
-    # operator after data nobody lost. Measured 2026-09-11: all three datasets the live sweep called
-    # storage loss were this.
+    # The dataset carries no authorization tuple and its storage could not be read (a missing bucket, a
+    # denied read, a relative URI), so nothing can be said of its bytes. Not loss: a table nobody holds a
+    # tuple on cannot be read, maintained, dropped or re-created by anyone including its creator, and
+    # reporting it as MISSING_ON_STORAGE sends an operator after data nobody lost. Measured 2026-09-11:
+    # all three datasets the live sweep then called storage loss were ungoverned. Its reason rides
+    # `unreadable_reason`.
     UNGOVERNED = "ungoverned"
+    # [[LH-144]] Nobody governs it and its bytes are still there: a live table that lost its grants, or
+    # residue nobody cleaned up. The finding in the ungoverned population worth a person's time, split
+    # out so it is not skimmed past with the tables whose storage could not be read.
+    UNGOVERNED_LIVE = "ungoverned_live"
+    # Nobody governs it and its bytes are cleanly gone (the narrow not-found, never a missing bucket or a
+    # denied read): a drop the graph never heard of. The sweep records the drop it observed (D14(4)), so
+    # from the next tick it is skipped like every other drop.
+    DROP_OBSERVED = "drop_observed"
 
 
 class ReconcileStatus(BaseModel):

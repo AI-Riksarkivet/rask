@@ -941,6 +941,8 @@ async def undrop_table(
     settings: SettingsDep,
     token: CurrentToken,
     control: ControlEmitterDep,
+    emitter: LineageEmitterDep,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> RegisterTableResponse:
     """Recover a dropped table from the trash (#75) — re-register its still-present bytes at its old
     id and clear the record. Owner-gated (``undrop`` maps to the drop rung: restoring an object into
@@ -1009,6 +1011,20 @@ async def undrop_table(
     # With the seed gone, nothing between the register and the clear can fail in a way that needs
     # compensating — the register is idempotent above, and a failed clear converges on retry — so the
     # `_undo_undrop` deregister went with it.
+    # THE TABLE EXISTS AGAIN, and lineage has to hear it: the drop stamped the dataset DROP, and without a
+    # CREATE fact the reconcile would skip a live governed table for good ([[LH-144]]). The same
+    # versionless marker the register door sends, at the absolute location the record kept. Before the
+    # clear, so a failed clear that is retried re-announces nothing it has not already announced.
+    await emit_write_event(
+        emitter,
+        segments,
+        delimiter=settings.delimiter,
+        author=token.sub if token is not None else None,
+        version=None,
+        operation=REGISTER_TABLE,
+        authorization=authorization,
+        source_uri=location,
+    )
     await run_in_threadpool(trash.clear, settings.registry_root, so, canonical)
     await emit_control(
         control,
@@ -1136,10 +1152,10 @@ async def rename_table(
     # the sibling drop/deregister endpoints emit-before-revoke for exactly this reason (audit 2026-07-14).
     #
     # DEREGISTER, NOT DROP, and the distinction is the whole change: the bytes survive under the new id.
-    # A DROP marker says the data is gone — `dropped_at()` fires and the reconciler stops expecting the
-    # location — which would be a lie about a dataset that is still there, still governed, and still the
-    # destination's own history. DEREGISTER says exactly what happened at this id: no longer catalogued
-    # here, bytes retained. The destination's REGISTER marker below completes the pair.
+    # Lineage reads both as this id leaving the catalog — `dropped_at()` fires and the reconcile stops
+    # expecting the location under THIS id ([[LH-144]]) — and only DEREGISTER says the bytes were kept.
+    # The destination's REGISTER marker below completes the pair: the same location, still governed,
+    # now expected under the new id.
     await emit_write_event(
         emitter,
         segments,

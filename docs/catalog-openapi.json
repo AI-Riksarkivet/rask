@@ -14722,6 +14722,22 @@
           },
           {
             "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
             "name": "dapr-api-token",
             "required": false,
             "schema": {
@@ -14766,6 +14782,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],
@@ -18851,6 +18883,22 @@
           },
           {
             "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
             "name": "dapr-api-token",
             "required": false,
             "schema": {
@@ -18895,6 +18943,22 @@
                 }
               ],
               "title": "Dapr-Caller-App-Id"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-lance-originator",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Lance-Originator"
             }
           }
         ],

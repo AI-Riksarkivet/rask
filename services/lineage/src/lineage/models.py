@@ -6,7 +6,7 @@ OpenLineage is an external standard whose wire format is camelCase (``eventType`
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -48,6 +48,13 @@ class OutputStatistics(BaseModel):
 
     row_count: int | None = None
     size_bytes: int | None = None
+
+
+#: The run operations that maintain a table rather than write it: they need `can_maintain` at the ingest
+#: door, and they prove nothing about whether the table exists (a compaction after a drop is not a
+#: recreate). `cy.DATASET_LAST_EXISTENCE_RUN` spells the same set as a Cypher literal, pinned equal by
+#: `tests/unit/test_lineage.py`.
+MAINTENANCE_OPERATIONS: Final = frozenset({"compaction", "compact_table", "create_index"})
 
 
 def vertex_name_for(namespace: str, name: str) -> str:

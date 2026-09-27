@@ -549,7 +549,9 @@ def test_cron_route_post_with_token_returns_sweep_report(monkeypatch: pytest.Mon
         # was paged about data nobody could have lost. Present when empty is the assertion that the axis
         # RAN — absent when clean, "nothing is ungoverned" and "this build does not ask OpenFGA" would
         # read identically, and the second is exactly what a store outage produces.
-        "ungoverned": [],
+        "ungoverned": {},
+        "ungoverned_live": [],
+        "drops_observed": [],
         "graph_ahead": [],
         "unreadable": {},
         "provenance_holes": {},

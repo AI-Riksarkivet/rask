@@ -41,7 +41,7 @@ from openfga_sdk import OpenFgaClient
 from lineage.api.dependencies import RepositoryDep, SettingsDep
 from lineage.api.security import CurrentToken, Principal
 from lineage.core.config import LineageSettings
-from lineage.models import DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
+from lineage.models import MAINTENANCE_OPERATIONS, DatasetEvent, RunEvent, UnauthoredRunError, UngovernedOutputError, author_sub_from_payload
 from lineage_kit.signing import signature_of, verify_signed_event
 from service_kit.governed import fga
 from service_kit.governed.dapr_auth import SecretStoreUnreadable, dedicated_token_from_store
@@ -69,7 +69,6 @@ log = logging.getLogger(__name__)
 #: every restart replay. Nothing downstream notices: this path does not dead-letter a refusal, the
 #: outbox has already dropped its staged copy, and the reconciler excludes `Rewrite` from holes.
 #: `maintenance/services/arrival.py` has named both spellings all along — this list was the one adrift.
-_MAINTENANCE_OPERATIONS: Final = frozenset({"compaction", "compact_table", "create_index"})
 
 #: The relation a data write demands. Named once so the two doors cannot drift on it.
 _WRITE_RELATIONS: Final = ("can_write_data",)
@@ -89,7 +88,7 @@ def relations_for_operation(operation: str | None) -> tuple[str, ...]:
     maintainer path is strictly additive; it takes nothing away from a writer. Same shape as the
     catalog's `_ALTERNATIVE_RUNGS`, and for the same reason.
     """
-    return _MAINTENANCE_RELATIONS if operation in _MAINTENANCE_OPERATIONS else _WRITE_RELATIONS
+    return _MAINTENANCE_RELATIONS if operation in MAINTENANCE_OPERATIONS else _WRITE_RELATIONS
 
 
 async def _denied_objects(client: OpenFgaClient, *, user: str, relations: tuple[str, ...], names: list[str], object_type: str) -> list[str]:

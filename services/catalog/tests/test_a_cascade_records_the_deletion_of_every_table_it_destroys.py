@@ -4,10 +4,9 @@
 dataset node persists in the graph, named a `drop_table` run". A CASCADE destroys its children inside
 one native call, and those children never reach that door, so nothing recorded their deletion.
 
-WHAT THAT COSTS IS A GRAPH THAT NEVER FORGETS. `repository.dropped_at` derives from run history — the
-most recent SUCCESSFUL run being a `drop_table` — never a stored flag. A table with no such run stays
-indistinguishable from a live one, so `lineage_reconcile_ungoverned` names it on every tick, forever,
-for bytes that no longer exist. Measured on the live estate 2026-09-18: 20 datasets reported
+WHAT THAT COSTS IS A GRAPH THAT NEVER FORGETS. `repository.dropped_at` reads a drop from the events
+that record it; a table nothing records stays indistinguishable from a live one, so
+`lineage_reconcile_ungoverned` names it on every tick, for bytes that no longer exist. Measured on the live estate 2026-09-18: 20 datasets reported
 ungoverned, 8 of them tables this repo's own suites had cascade-dropped hours earlier.
 
 It is also condition 1 read backwards. A write's provenance is supposed to survive it; a DELETE is a

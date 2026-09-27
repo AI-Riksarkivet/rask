@@ -278,6 +278,7 @@ class _ReconcileRepo(Protocol):
     async def list_datasets(self, namespace: str | None = ..., tag: str | None = ...) -> list[DatasetSummary]: ...
     async def source_uri(self, name: str) -> str | None: ...
     async def dropped_at(self, name: str) -> str | None: ...
+    async def record_observed_drop(self, name: str, uri: str, observed_at: str) -> bool: ...
     async def latest_write_version(self, name: str) -> int | None: ...
     async def write_versions(self, name: str) -> set[int]: ...
     async def backfill_write(self, name: str, version: int, schema: SchemaFields | None = None) -> None: ...
@@ -402,22 +403,19 @@ async def reconcile_all(
         if uri is None:
             continue
         if dropped:
-            # Deliberately drop_table'd (terminal lifecycle stamp, 2026-07-11): absence on storage
-            # is the EXPECTED state — sweeping it would WARN missing_on_storage forever on every
-            # tick. A recreate clears the stamp on ingest and re-enters the sweep automatically.
+            # Dropped (its lifecycle stamp is a DROP): absence on storage is the EXPECTED state, and
+            # sweeping it would WARN missing_on_storage forever on every tick. A recreate stamps it
+            # CREATE on ingest and re-enters the sweep automatically.
             continue
         if governed is not None and summary.name not in governed:
-            # NOT A GOVERNED TABLE, so nothing below can say anything true about it: every axis here
-            # reasons about a table someone owns, and this one nobody can read, maintain, drop or
-            # re-create. Placed AHEAD of the storage read because the answer does not depend on it —
-            # which also means residue costs no object-store I/O at all.
-            #
-            # REPORTED rather than skipped, unlike the drop stamp above. A drop is a decision someone
-            # made; this is either residue nobody cleaned up or a live table that lost its grants, and
-            # an operator should be able to see which. `governed is None` means nobody asked OpenFGA —
-            # FGA off, or a store this sweep could not reach — and absent evidence must not become a
-            # verdict, so the classification is then left exactly as it was.
-            results.append(ReconcileStatus(dataset=summary.name, graph_version=graph_version, in_sync=False, status=ReconcileState.UNGOVERNED))
+            # NOT A GOVERNED TABLE, so no axis below can say anything true about it: every one reasons
+            # about a table someone owns, and this one nobody can read, maintain, drop or re-create.
+            # REPORTED rather than skipped, unlike the drop stamp above: a drop is a decision someone
+            # made, and this is a drop nobody announced, residue, or a live table that lost its grants.
+            # Its bytes tell them apart. `governed is None` means nobody asked OpenFGA — FGA off, or a
+            # store this sweep could not reach — and absent evidence must not become a verdict, so the
+            # classification is then left exactly as it was.
+            results.append(await _ungoverned(repository, summary, uri, graph_version, read_version=read_version, backfill=backfill))
             continue
         # A dataset this reader cannot OPEN is classified UNREADABLE and skips every downstream axis
         # below: with no storage version there is nothing to compare, no blob pointer to probe, no
@@ -492,6 +490,41 @@ async def reconcile_all(
             )
         results.append(status)
     return results
+
+
+async def _ungoverned(
+    repository: _ReconcileRepo,
+    summary: DatasetSummary,
+    uri: str,
+    graph_version: int | None,
+    *,
+    read_version: Callable[[str], Awaitable[int | None]],
+    backfill: bool,
+) -> ReconcileStatus:
+    """An ungoverned dataset, classified by what storage holds ([[LH-144]]).
+
+    - Cleanly absent (the narrow not-found of `reads_as_absent`): a drop the graph never heard of. The
+      sweep records it (D14(4)), writing only when ``backfill``, as every write here does, so the next
+      tick skips it like any other drop. DROP_OBSERVED. Timed before the read and bound to the URI read,
+      so a table recreated or moved during the read is not dropped: UNGOVERNED, with that reason.
+    - Present: a live table nobody governs. UNGOVERNED_LIVE, the finding an operator should act on.
+    - Unreadable (a missing bucket, a denied read, anything `reads_as_absent` does not recognise):
+      nothing can be said, so nothing is recorded. UNGOVERNED.
+    """
+
+    def status(state: ReconcileState, reason: str | None = None) -> ReconcileStatus:
+        return ReconcileStatus(dataset=summary.name, graph_version=graph_version, in_sync=False, status=state, unreadable_reason=reason)
+
+    observed_at = datetime.now(UTC).isoformat(timespec="microseconds")
+    try:
+        storage_version = await read_version(uri)
+    except StorageUnreadable as exc:
+        return status(ReconcileState.UNGOVERNED, str(exc))
+    if storage_version is not None:
+        return status(ReconcileState.UNGOVERNED_LIVE)
+    if backfill and not await repository.record_observed_drop(summary.name, uri, observed_at):
+        return status(ReconcileState.UNGOVERNED, "absent at the location read, but the graph moved it or recorded a newer lifecycle fact during the read")
+    return status(ReconcileState.DROP_OBSERVED)
 
 
 #: How far below the tip the drift path will look for the newest version that wrote data.
