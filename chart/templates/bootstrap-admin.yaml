@@ -24,14 +24,9 @@
    controls that could not fire, behind a values key that has nothing to do with any of them. Who the
    first HUMAN owner is, is a deployment's choice; that the sweep may maintain and that ingest may stage
    are properties of the software.
-   There is no fga CLI image, so the Job reuses the catalog image (ships httpx) and speaks the OpenFGA
-   HTTP API directly: use the PINNED store id when auth.fgaStoreId sets one (rendered as
-   RASK_FGA_STORE_ID — the same env the catalog reads, so a pinned prod store can never diverge from
-   the store this Job grants into), else resolve the store id by name (the catalog's startup provision
-   creates/reuses the `lance-catalog` store — services/common/fga.py), CHECK the grant first (the clean
-   idempotence guard), and only then write the tuple, treating a duplicate-write 400/409 as success. On
-   the name-lookup path the store appears only once the catalog has booted with FGA on, so the resolve
-   loop waits for it (weight 5 = after the openfga-migrate hook at -5).
+   There is no fga CLI image, so the Job reuses the catalog image and speaks the OpenFGA HTTP API with
+   service_kit's own store and model rules, CHECKS each grant first (the idempotence guard), and only
+   then writes it, treating a duplicate-write 400/409 as success.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -101,44 +96,42 @@ spec:
             - |
               import os, sys, time
               import httpx
+              from service_kit.governed.auth.write_model import STORE_NAME, history, model_document
+              from service_kit.governed.fga import newest_store
 
               api = os.environ["FGA_API_URL"].rstrip("/")
-              # Render-time constants (not env: the dead-chart-env invariant only sees services/ consumers).
-              # store name must match what the catalog provisions (services/common/fga.py provision()).
-              store_name = "lance-catalog"
               obj = os.environ["FGA_ROOT_OBJECT"]
-              # THE ESTATE ROOT ([[LH-055]], ruling docs/DECISIONS.md:2240). A render-time constant for
-              # the reason `store_name` is: an env read only by this inline script is reported as dead
-              # chart config by `test_no_dead_chart_env_vars`, which scans services/ for a consumer.
-              #
-              # SEEDED BEFORE ANYTHING CHECKS IT, deliberately. This hook is post-install/post-upgrade,
-              # so the fleet's pods are already rolling when it runs; writing the tuples one release
-              # AHEAD of the repoint is what keeps the window between them from being a window of 403s.
+              # THE ESTATE ROOT ([[LH-055]], ruling docs/DECISIONS.md:2240), SEEDED BEFORE ANYTHING
+              # CHECKS IT. This hook is post-install/post-upgrade, so the fleet's pods are already
+              # rolling when it runs; writing the tuples one release AHEAD of the repoint is what keeps
+              # the window between them from being a window of 403s.
               # `test_the_estate_root_is_seeded_before_anything_checks_it` holds the two in that order.
               estate_obj = "estate:rask"
               subject = {{ .Values.auth.bootstrapAdmin | quote }}
               user = subject if ":" in subject else f"user:{subject}"
 
-              # Pinned store id wins (RASK_FGA_STORE_ID, auth.fgaStoreId) — no name lookup, no wait.
-              # Fallback: the catalog provisions the store at startup (post-install races its first
-              # boot) — wait for it by name.
-              store_id = os.environ.get("RASK_FGA_STORE_ID") or None
+              # The store the services use (RASK_FGA_STORE_ID pins one), and in it the model THIS image
+              # carries ([[LH-201]]). A tuple naming no model is checked against the store's newest, i.e.
+              # whichever image wrote last: in the LH-201 review (OpenFGA v1.18.3) a legacy image's newer,
+              # narrower model failed every estate write on `type 'estate' not found`. Both exist once the
+              # catalog has booted and the openfga-model hook has run, so wait for them.
+              store_id, model_id = os.environ.get("RASK_FGA_STORE_ID"), None
               deadline = time.monotonic() + 600
-              while store_id is None and time.monotonic() < deadline:
+              while model_id is None:
                   try:
-                      r = httpx.get(f"{api}/stores", timeout=5)
-                      r.raise_for_status()
-                      stores = [s for s in r.json().get("stores", []) if s.get("name") == store_name]
-                      if stores:
-                          # Newest wins — same tie-break as fga.provision().
-                          store_id = max(stores, key=lambda s: s.get("created_at") or "")["id"]
-                          break
-                      print(f"store {store_name!r} not provisioned yet (catalog boots it); waiting", flush=True)
-                  except httpx.HTTPError as exc:
+                      if not store_id:
+                          r = httpx.get(f"{api}/stores", timeout=5)
+                          r.raise_for_status()
+                          store_id = (newest_store(r.json().get("stores", []), STORE_NAME) or {}).get("id")
+                      carrying = history(api, store_id, model_document()).carrying if store_id else None
+                      model_id = carrying and carrying["id"]
+                  except (httpx.HTTPError, OSError) as exc:
                       print(f"openfga not ready: {exc}", flush=True)
-                  time.sleep(5)
-              if store_id is None:
-                  sys.exit(f"timed out waiting for OpenFGA store {store_name!r} at {api}")
+                  if model_id is None:
+                      if time.monotonic() > deadline:
+                          sys.exit(f"store {store_id!r} at {api} holds no model carrying this image's body")
+                      print(f"waiting for store {STORE_NAME!r} ({store_id!r}) to hold this image's model", flush=True)
+                      time.sleep(5)
 
               # The admin's `owner`, then one `reader` per SERVICE principal that must READ the estate.
               #
@@ -153,11 +146,7 @@ spec:
               # Delivery is re-authorized per recipient at fan-out (can_be_notified) and again at read
               # (can_get_metadata), so this widens what the SERVICE observes, never what a PERSON gets.
               #
-              # A RENDER-TIME LITERAL rather than an env var, for the reason stated 30 lines up and
-              # then promptly ignored once: `test_no_dead_chart_env_vars` scans services/, packages/,
-              # runners/ and frontend/ for each env the chart injects, and an env consumed only by THIS
-              # inline script is read by none of them — so it is reported as dead config and fails the
-              # suite. The identity still comes from the one values path services.yaml uses to build
+              # A RENDER-TIME LITERAL from the one values path services.yaml uses to build
               # LINEAGE_SERVICE_SUBJECTS, so the subject lineage admits cannot drift from the one
               # granted here.
               #
@@ -286,14 +275,14 @@ spec:
               for target, pairs in ((obj, grants), (estate_obj, estate_grants)):
                 for subject_id, relation in pairs:
                   tuple_key = {"user": subject_id, "relation": relation, "object": target}
-                  r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key}, timeout=10)
+                  r = httpx.post(f"{api}/stores/{store_id}/check", json={"tuple_key": tuple_key, "authorization_model_id": model_id}, timeout=10)
                   if r.status_code == 200 and r.json().get("allowed"):
                       print(f"bootstrap-admin: {subject_id} already {relation} of {target} — nothing to do")
                       continue
 
                   r = httpx.post(
                       f"{api}/stores/{store_id}/write",
-                      json={"writes": {"tuple_keys": [tuple_key]}},
+                      json={"writes": {"tuple_keys": [tuple_key]}, "authorization_model_id": model_id},
                       timeout=10,
                   )
                   if r.status_code == 200:

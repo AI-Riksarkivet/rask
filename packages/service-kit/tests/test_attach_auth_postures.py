@@ -51,18 +51,21 @@ class _Recorder:
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.kwargs: dict[str, dict[str, object]] = {}
 
 
 @pytest.fixture
 def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
     rec = _Recorder()
 
-    async def provision(api_url: str, **_: object) -> tuple[str, str]:
+    async def provision(api_url: str, **kwargs: object) -> tuple[str, str]:
         rec.calls.append("provision")
+        rec.kwargs["provision"] = kwargs
         return "01PROVISIONED", "01MODEL"
 
-    async def resolve(api_url: str, **_: object) -> tuple[str, str] | None:
+    async def resolve(api_url: str, **kwargs: object) -> tuple[str, str] | None:
         rec.calls.append("resolve")
+        rec.kwargs["resolve"] = kwargs
         return ("01RESOLVED", "01MODEL")
 
     def make_client(api_url: str, store_id: str, model_id: str, **_: object) -> object:
@@ -89,11 +92,10 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) -> None:
     """Behavioural baseline for every service but the ONE bootstrap — saying nothing must not publish.
 
-    `fga.provision` writes a new immutable authorization model on every call and `fga.resolve` returns
-    the NEWEST, so a default that provisions makes the estate's authoritative model a function of boot
-    order. Measured live 2026-09-09: 1,256 models in the store and three services carrying an older
-    `model.fga` with no `maintainer` rung, one restart from withdrawing it estate-wide. The catalog
-    opts in explicitly; everything else reads.
+    `fga.provision` writes a new immutable authorization model for a body the store lacks, so a default
+    that provisions lets every image, older ones included, add its own body to the history. Measured live
+    2026-09-09: 1,256 models in the store and three services carrying an older `model.fga` with no
+    `maintainer` rung. The catalog opts in explicitly; everything else reads.
     """
     app = FastAPI()
     await attach_auth(app, _Settings(), service="t")
@@ -129,6 +131,33 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(monkeypatch: p
     await attach_auth(app, _Settings(), service="t", provision=False)
 
     assert getattr(app.state, "fga", None) is None
+    assert not any(c.startswith("make_client") for c in fga_calls.calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provision", [False, True], ids=["resolve", "provision"])
+async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, provision: bool) -> None:
+    """The hook and `bootstrap-admin` write into a pinned store; a service that looked its store up by
+    name instead would check against a different one ([[LH-201]])."""
+    await build_fga_client(_Settings(fga_store_id="01PINNED"), service="t", provision=provision)
+
+    assert fga_calls.kwargs["provision" if provision else "resolve"].get("store_id") == "01PINNED"
+
+
+@pytest.mark.asyncio
+async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
+    """The medallion stage runner and the train trigger read a missing client as "authorization off".
+    A fatal caller whose resolve finds no store, or no model its image carries, must crash rather than
+    come up open ([[LH-201]])."""
+
+    async def resolve(api_url: str, **_: object) -> tuple[str, str] | None:
+        fga_calls.calls.append("resolve")
+        return None
+
+    monkeypatch.setattr(fga_mod, "resolve", resolve)
+
+    with pytest.raises(Exception, match="no model this image carries"):
+        await build_fga_client(_Settings(), service="stage-runner", provision=False, fatal=True)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
 
@@ -221,4 +250,4 @@ async def test_resolve_by_name_emits_the_structured_diagnostic(caplog: pytest.Lo
         await build_fga_client(_Settings(), service="maintenance", provision=False)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_resolved_by_name"), None)
     assert rec is not None, "the unpinned resolve-by-name diagnostic (was maintenance's reconcile_fga_resolved_by_name) is gone"
-    assert getattr(rec, "store_id", None) and getattr(rec, "hint", None), "the diagnostic lost its store_id/hint extra"
+    assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the diagnostic lost its store_id/model_id extra"

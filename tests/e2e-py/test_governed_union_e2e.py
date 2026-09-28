@@ -47,12 +47,16 @@ import requests
 from promotion_review import approve_if_held
 from topology import OUTSIDER
 
+from service_kit.governed.auth.write_model import carried_model
+
 
 LANCERAY = os.environ.get("LANCE_E2E_LANCERAY_URL", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 DEX_SECRET = os.environ.get("LANCE_E2E_DEX_SECRET", "lance-catalog-secret")
 FGA = os.environ.get("LANCE_E2E_FGA", "")
+#: The store `scripts/e2e_live.sh` found the catalog using (its pin, else the newest `lance-catalog`).
+STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 DAPR_TOKEN = os.environ.get("LANCE_E2E_DAPR_TOKEN", "")
 #: Whether the estate MEASURES quality, exported by `scripts/e2e_live.sh` from the running stage runner.
 #: The two legs below assert `quality_passed` on a WROTE edge, and only `assert_quality` ever produces the
@@ -267,23 +271,23 @@ def stack() -> tuple[str, str]:
 
 @pytest.fixture(scope="module")
 def fga_store(stack: tuple[str, str]) -> tuple[str, str]:
-    """The lance-catalog OpenFGA store + latest authorization model id (raw HTTP, like the services)."""
+    """The store the estate uses and the model this checkout carries in it ([[LH-201]], `write_model.carried_model`).
+
+    Never the store's newest model: a legacy image's narrower body can be the newest, and a grant or check it
+    refuses would read further down as the door under test denying.
+    """
     _ = stack  # gate on the stack fixture's env + reachability (+ auth-on) skips BEFORE touching OpenFGA
     try:
-        stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
-    except Exception:
+        return carried_model(FGA, pinned=STORE)
+    except OSError as exc:
         # Unreachable/unset FGA must SKIP, not ERROR: an unguarded request raises out of a module-scoped
         # fixture, which pytest reports as an error for every test that uses it — indistinguishable in CI
         # from a real failure, on a suite that is supposed to be inert without a live stack.
-        pytest.skip(f"openfga not reachable at {FGA or '<unset>'}")
-    store = next((s["id"] for s in stores if s["name"] == "lance-catalog"), None)
-    if store is None:
-        # A bare next() raises StopIteration here — an unseeded stack is a skip, not a failure.
-        pytest.skip("no 'lance-catalog' OpenFGA store — the stack is not seeded (scripts/seed_medallion_fga.sh)")
-    models = requests.get(f"{FGA}/stores/{store}/authorization-models", timeout=10).json()["authorization_models"]
-    if not models:
-        pytest.skip("the lance-catalog OpenFGA store carries no authorization model")
-    return store, models[0]["id"]
+        pytest.skip(f"openfga not reachable at {FGA or '<unset>'}: {exc}")
+    except LookupError as exc:
+        # An auth-on stack whose store lacks this checkout's model is one every service built from it fails
+        # closed on; a skip would read as green over it.
+        pytest.fail(str(exc))
 
 
 def _tuples(fga_store: tuple[str, str], *, writes: list[dict] | None = None, deletes: list[dict] | None = None) -> None:

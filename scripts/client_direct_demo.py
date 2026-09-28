@@ -4,6 +4,10 @@ The point being proven: the catalog receives ZERO data bytes. This process write
 fragments straight to RustFS with storage creds; only the tiny serialized FragmentMetadata + read_version
 cross the wire to the catalog's governed /commit. Run against the kind stack with port-forwards set
 (CD_CATALOG / CD_DEX / CD_FGA / CD_S3). Exits non-zero on any failed assertion.
+
+The grant goes to the store and model every service uses (`write_model.carried_model`, [[LH-201]]): the
+``RASK_FGA_STORE_ID`` pin, else the newest store named ``lance-catalog``, and in it the model whose body is
+this checkout's ``model.json``, never the store's newest, which a legacy image's narrower body can be.
 """
 
 from __future__ import annotations
@@ -15,6 +19,8 @@ import os
 import lance
 import pyarrow as pa
 import requests
+
+from service_kit.governed.auth.write_model import carried_model
 
 
 CATALOG = os.environ["CD_CATALOG"].rstrip("/")
@@ -48,15 +54,8 @@ def _sub(tok: str) -> str:
     return json.loads(base64.urlsafe_b64decode(p))["sub"]
 
 
-def _store_model() -> tuple[str, str]:
-    stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
-    st = max(stores, key=lambda s: s["created_at"])["id"]
-    m = requests.get(f"{FGA}/stores/{st}/authorization-models", timeout=10).json()
-    return st, m["authorization_models"][0]["id"]
-
-
 def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
-    requests.post(
+    r = requests.post(
         f"{FGA}/stores/{st}/write",
         json={
             "writes": {"tuple_keys": [{"user": f"user:{sub}", "relation": rel, "object": obj}]},
@@ -64,12 +63,14 @@ def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
         },
         timeout=10,
     )
+    # A re-run finds the grant held; any other refusal would surface later as a 403 on the create.
+    assert r.status_code == 200 or (r.status_code == 400 and "already exists" in r.text), f"grant {rel} on {obj} refused ({r.status_code}): {r.text}"
 
 
 def main() -> None:
     tok = _token()
     sub = _sub(tok)
-    st, m = _store_model()
+    st, m = carried_model(FGA, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
     h = {"Authorization": f"Bearer {tok}"}
     # alice needs writer on the warehouse to create the namespace + table underneath it.
     _grant(st, m, sub, "writer", "warehouse:lance_catalog")

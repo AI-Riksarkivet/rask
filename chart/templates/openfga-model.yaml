@@ -11,9 +11,8 @@ the code reasons about and could not be written, so `bootstrap-admin` — the ho
 CrashLooped on `Invalid tuple '…#maintainer@user:service-maintenance'` and wedged the release in
 `pending-upgrade`, which refuses every later upgrade.
 
-WEIGHT 0: after `openfga-migrate` (-5) has made the store's schema, before `bootstrap-admin` (5)
-writes tuples against it. That ordering is the defect, not a nicety — tuples cannot name a relation
-the model has not defined yet.
+PRE-UPGRADE ([[LH-201]]): each service resolves its image's model at boot, so it must exist before new
+pods start; `post-install` covers a first install. Either way it precedes `bootstrap-admin` (weight 5).
 
 READ FROM THE IMAGE, never a ConfigMap. `service_kit/governed/auth/` ships `model.fga`,
 `model.fga.yaml` and `model.json` inside the catalog image, so the hook reads the same bytes the
@@ -22,7 +21,7 @@ copies had already drifted — the exact shape of this row.
 
 IDEMPOTENT BY COMPARISON, not by blind write. An OpenFGA model is immutable and versioned, so writing
 unconditionally would mint a new id on every upgrade and grow the store forever (50 models already).
-The hook compares the store's newest against the image's and writes only on a difference.
+It writes only a model the store has never held; a body held anywhere in it is not written again.
 */}}
 apiVersion: batch/v1
 kind: Job
@@ -31,7 +30,7 @@ metadata:
   labels:
     {{- include "rask.componentLabels" (list . "openfga-model") | nindent 4 }}
   annotations:
-    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook": post-install,pre-upgrade
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:

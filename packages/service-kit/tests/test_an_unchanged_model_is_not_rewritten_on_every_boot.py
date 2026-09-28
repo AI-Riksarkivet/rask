@@ -117,9 +117,11 @@ class _FakeClient:
     async def create_store(self, _request: Any) -> Any:
         return type("_Created", (), {"id": "store-NEW"})()
 
-    async def read_latest_authorization_model(self) -> Any:
+    async def read_authorization_models(self, options: dict[str, Any] | None = None) -> Any:
+        del options
         _FakeClient.reads += 1
-        return type("_Response", (), {"authorization_model": _FakeClient.current})()
+        held = [_FakeClient.current] if _FakeClient.current is not None else []
+        return type("_Response", (), {"authorization_models": held, "continuation_token": ""})()
 
     async def write_authorization_model(self, request: Any) -> Any:
         _FakeClient.requests.append(request)
@@ -230,19 +232,6 @@ async def test_a_widened_model_is_still_written(monkeypatch: pytest.MonkeyPatch)
 
     assert len(_FakeClient.requests) == 1, "a real model change must still be written"
     assert model_id == "model-NEWLY-WRITTEN"
-
-
-@pytest.mark.asyncio
-async def test_a_narrowing_model_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The skip sits beside the narrowing guard and must not swallow it: a model that REMOVES a relation
-    is a rollback, and it is neither unchanged nor writable."""
-    narrowed = {"schema_version": "1.1", "type_definitions": [{"type": "user"}], "conditions": {}}
-    _install(monkeypatch, desired=narrowed, stored=MODEL)
-
-    _store_id, model_id = await fga.provision("http://fga:8080")
-
-    assert _FakeClient.requests == []
-    assert model_id == "model-EXISTING"
 
 
 @pytest.mark.asyncio

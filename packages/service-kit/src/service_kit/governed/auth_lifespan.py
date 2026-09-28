@@ -13,12 +13,13 @@ were not stylistic variants; they encoded three decisions, and a single-posture 
 them survived the first extraction:
 
   * **`provision`** — whether this service may CREATE the store and PUBLISH the authorization model.
-    **False by default, and the default is the control.** `fga.provision` writes the model
-    unconditionally and OpenFGA mints a new immutable id per call, while `fga.resolve` returns the
-    NEWEST — so the estate's authoritative model is decided by boot order unless exactly one service
-    publishes. Measured live 2026-09-09: 1,256 models in the store, the oldest carrying no
-    `pass_grants`, `managed_access` or `maintainer`, and three services running images whose vendored
-    `model.fga` had no `maintainer` rung at all — one restart from silently withdrawing it estate-wide.
+    **False by default, and the default is the control.** `fga.provision` writes a model the store
+    does not hold and OpenFGA mints a new immutable id per write, so every publisher grows the history
+    and an older image that publishes adds its older body; one publisher keeps that to the catalog.
+    Every service checks against the model its own image carries (`fga.resolve`, [[LH-201]]).
+    Measured live 2026-09-09: 1,256 models in the store, the oldest carrying no `pass_grants`,
+    `managed_access` or `maintainer`, and three services running images whose vendored `model.fga` had
+    no `maintainer` rung at all.
     Pinned by `tests/unit/test_only_one_service_may_publish_the_authorization_model.py`. Older text
     read `ingest` and `maintenance` pass
     `False`: a data writer that mints a store and writes an authorization model becomes the source of
@@ -47,6 +48,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Protocol
 
+from lance_namespace import ServiceUnavailableError
 from starlette.concurrency import run_in_threadpool
 
 
@@ -117,8 +119,9 @@ async def build_fga_client(
     twelfth copy would have been justified.
 
     `provision=False` takes the read-only half — `fga.resolve` finds the store the estate already uses
-    and can never create one. `None` back from it means the estate is not bootstrapped, so no client is
-    built and the caller's gate keeps answering 503, which is the honest answer.
+    and the model this image carries, and can never create either. `None` back from it means neither was
+    there by its deadline: a non-fatal caller builds no client and its gate answers 503; a fatal one
+    raises, because a fatal caller reads a missing client as "authorization off".
 
     Disposal belongs to the caller's lifespan: `service_kit.governed.fga.dispose`.
     """
@@ -131,7 +134,7 @@ async def build_fga_client(
         pinned = bool(store_id and model_id)
         if not pinned:
             if provision:
-                store_id, model_id = await fga.provision(settings.fga_api_url)
+                store_id, model_id = await fga.provision(settings.fga_api_url, store_id=store_id)
                 # STRUCTURED, not a printf: `openfga_provisioned` is a documented INFO audit-tier
                 # event (`service_kit.obs`, severity 9), and it had two hand-written emitters
                 # (catalog + lineage) before this became the single bootstrap. One structured
@@ -139,22 +142,24 @@ async def build_fga_client(
                 # dropped the tier obs.py raises to OTLP.
                 log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
             else:
-                resolved = await fga.resolve(settings.fga_api_url)
+                resolved = await fga.resolve(settings.fga_api_url, store_id=store_id)
                 if resolved is None:
-                    # Fails CLOSED, and never by provisioning: an absent store means nobody has
-                    # bootstrapped this estate, and the service that noticed must not be the one that
-                    # decides what everyone is allowed to do. Structured, carrying the reason —
-                    # maintenance's `reconcile_fga_unpinned` diagnostic, now shared.
+                    # Fails CLOSED, and never by provisioning: the service that noticed must not be the
+                    # one that decides what everyone is allowed to do. A FATAL caller raises: the
+                    # medallion stage runner and the train trigger read a missing client as
+                    # "authorization off", so returning here would open them.
+                    if fatal:
+                        raise ServiceUnavailableError(f"{service}: no OpenFGA store, or no model this image carries, within the resolve deadline")
                     log.warning(
                         "openfga_unpinned",
                         extra={
                             "service": service,
-                            "reason": "FGA enabled but no provisioned store to resolve — governed routes/authz categories report unavailable",
+                            "reason": "no store, or no model this image carries, within the resolve deadline; governed routes report unavailable",
                         },
                     )
                     return None
                 store_id, model_id = resolved
-                log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "hint": "pin the store/model ids for production"})
+                log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "model_id": model_id})
         client = fga.make_client(settings.fga_api_url, store_id, model_id, timeout_seconds=settings.fga_timeout_seconds)
         if pinned and provision:
             # A PIN SKIPS `provision`, WHICH IS THE POINT AND ALSO THE BLIND SPOT. Nothing above reads

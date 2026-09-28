@@ -29,8 +29,20 @@ class _Store:
 
 
 class _Model:
-    def __init__(self, mid: str) -> None:
+    """A stored model: an id, and the body `resolve` compares against the image's (defaults to another)."""
+
+    def __init__(self, mid: str, body: dict[str, Any] | None = None) -> None:
         self.id = mid
+        body = body or {"schema_version": "1.1", "type_definitions": [{"type": "user"}]}
+        self.schema_version = body["schema_version"]
+        self.type_definitions = body["type_definitions"]
+        self.conditions = body.get("conditions")
+
+
+def _bundled() -> dict[str, Any]:
+    from service_kit.governed import fga
+
+    return fga.load_model()
 
 
 class _FakeClient:
@@ -59,9 +71,10 @@ class _FakeClient:
         _FakeClient.calls.append("list_stores")
         return type("R", (), {"stores": _FakeClient.stores})()
 
-    async def read_authorization_models(self) -> Any:
+    async def read_authorization_models(self, options: dict[str, Any] | None = None) -> Any:
+        del options
         _FakeClient.calls.append("read_authorization_models")
-        return type("R", (), {"authorization_models": _FakeClient.models})()
+        return type("R", (), {"authorization_models": _FakeClient.models, "continuation_token": ""})()
 
     async def create_store(self, *_: object, **__: object) -> Any:
         _FakeClient.calls.append("create_store")
@@ -85,14 +98,15 @@ def fake_fga(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_it_resolves_the_existing_store_and_its_current_model(fake_fga) -> None:
-    """The regression: unpinned must find the store the rest of the estate already uses."""
+async def test_it_resolves_the_existing_store_and_the_model_its_image_carries(fake_fga) -> None:
+    """The regression: unpinned must find the store the rest of the estate already uses, and check
+    against the model this image carries even when a newer one is stored ([[LH-201]])."""
     from service_kit.governed import fga
 
     fake_fga.stores = [_Store("01STORE", "lance-catalog", 1)]
-    fake_fga.models = [_Model("01MODEL"), _Model("01OLDER")]
+    fake_fga.models = [_Model("01NEWER"), _Model("01MODEL", _bundled())]
 
-    assert await fga.resolve("http://fga:8080") == ("01STORE", "01MODEL"), "the CURRENT model is the newest — read_authorization_models answers newest-first"
+    assert await fga.resolve("http://fga:8080") == ("01STORE", "01MODEL")
 
 
 @pytest.mark.anyio
@@ -102,7 +116,7 @@ async def test_it_NEVER_provisions(fake_fga) -> None:
     from service_kit.governed import fga
 
     fake_fga.stores = [_Store("01STORE", "lance-catalog", 1)]
-    fake_fga.models = [_Model("01MODEL")]
+    fake_fga.models = [_Model("01MODEL", _bundled())]
 
     await fga.resolve("http://fga:8080")
 
@@ -118,7 +132,7 @@ async def test_no_store_means_None_not_a_new_one(fake_fga) -> None:
 
     fake_fga.stores = []
 
-    assert await fga.resolve("http://fga:8080") is None
+    assert await fga.resolve("http://fga:8080", deadline_seconds=0.0) is None
     assert "create_store" not in fake_fga.calls
 
 
@@ -132,7 +146,7 @@ async def test_a_store_with_no_model_is_also_None(fake_fga) -> None:
     fake_fga.stores = [_Store("01STORE", "lance-catalog", 1)]
     fake_fga.models = []
 
-    assert await fga.resolve("http://fga:8080") is None
+    assert await fga.resolve("http://fga:8080", deadline_seconds=0.0) is None
     assert "write_authorization_model" not in fake_fga.calls
 
 
@@ -144,7 +158,7 @@ async def test_it_takes_the_NEWEST_store_when_names_collide(fake_fga) -> None:
     from service_kit.governed import fga
 
     fake_fga.stores = [_Store("01OLD", "lance-catalog", 1), _Store("01NEW", "lance-catalog", 9)]
-    fake_fga.models = [_Model("01MODEL")]
+    fake_fga.models = [_Model("01MODEL", _bundled())]
 
     resolved = await fga.resolve("http://fga:8080")
     assert resolved is not None and resolved[0] == "01NEW"
@@ -157,4 +171,4 @@ async def test_it_ignores_stores_with_a_DIFFERENT_name(fake_fga) -> None:
 
     fake_fga.stores = [_Store("01OTHER", "something-else", 5)]
 
-    assert await fga.resolve("http://fga:8080") is None
+    assert await fga.resolve("http://fga:8080", deadline_seconds=0.0) is None

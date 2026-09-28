@@ -28,17 +28,25 @@ Usage (needs the OpenFGA API reachable — ``kubectl port-forward svc/rask-openf
     uv run python scripts/fga_seed_demo.py --map alice=<sub> --map bob=<sub>
 
 Idempotent: a duplicate write is a success, so re-running after a partial seed is the normal case.
+
+The store and model are the ones every service uses (`write_model.carried_model`, [[LH-201]]): the
+``RASK_FGA_STORE_ID`` pin, else the newest store named ``lance-catalog``, and in it the model whose body
+is this checkout's ``model.json``. A write naming no model is validated against the store's newest, and
+a legacy image's narrower body can be the newest.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from service_kit.governed.auth.write_model import carried_model
 
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "packages/service-kit/src/service_kit/governed/auth/model.fga.yaml"
@@ -62,11 +70,6 @@ def _post(base: str, path: str, payload: dict) -> dict:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=20) as res:  # noqa: S310 — a fixed localhost base
-        return json.loads(res.read() or b"{}")
-
-
-def _get(base: str, path: str) -> dict:
-    with urllib.request.urlopen(f"{base}{path}", timeout=20) as res:  # noqa: S310
         return json.loads(res.read() or b"{}")
 
 
@@ -130,16 +133,17 @@ def main() -> int:
             print(f"    {t['user'][:44]:44} --{t['relation']:12}--> {t['object']}")
         return 0
 
-    stores = _get(args.api, "/stores").get("stores") or []
-    if not stores:
-        print("!! no FGA store — is auth.enabled and the catalog up?", file=sys.stderr)
+    try:
+        store, model = carried_model(args.api, pinned=os.environ.get("RASK_FGA_STORE_ID", ""))
+    except LookupError as exc:
+        print(f"!! {exc} — is auth.enabled and the catalog up?", file=sys.stderr)
         return 1
-    store = stores[0]["id"]
+    print(f"  store {store}, model {model}")
 
     written = skipped = failed = 0
     for t in tuples:
         try:
-            _post(args.api, f"/stores/{store}/write", {"writes": {"tuple_keys": [t]}})
+            _post(args.api, f"/stores/{store}/write", {"writes": {"tuple_keys": [t]}, "authorization_model_id": model})
             written += 1
             print(f"  + {t['object']}#{t['relation']}@{t['user'][:40]}")
         except urllib.error.HTTPError as exc:

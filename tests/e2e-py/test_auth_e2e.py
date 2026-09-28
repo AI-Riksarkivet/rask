@@ -18,10 +18,14 @@ import uuid
 import pytest
 import requests
 
+from service_kit.governed.auth.write_model import carried_model
+
 
 SERVER = os.environ.get("LANCE_E2E_AUTH_SERVER", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 FGA = os.environ.get("LANCE_E2E_FGA", "http://localhost:8080")
+#: The store `scripts/e2e_live.sh` found the catalog using (its pin, else the newest `lance-catalog`).
+STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 
 #: The catalog joins identifier segments with this, NOT a dot. `catalog/core/config.py` defaults it to
 #: `$` and `.docker/docker-compose.yml` sets `LANCE_NS_DELIMITER: "$$"` (compose-escaped `$`). Read from
@@ -106,20 +110,30 @@ def _sub(token: str) -> str:
 
 
 def _store_and_model() -> tuple[str, str]:
-    stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
-    store = max(stores, key=lambda s: s["created_at"])["id"]
-    models = requests.get(f"{FGA}/stores/{store}/authorization-models", timeout=10).json()
-    return store, models["authorization_models"][0]["id"]
+    """The store the estate uses and the model this checkout carries in it ([[LH-201]]).
+
+    Never the store's newest model: a legacy image's narrower body can be the newest, and a grant it
+    refuses reads further down as the door under test denying. No such model fails the suite.
+    """
+    try:
+        return carried_model(FGA, pinned=STORE)
+    except LookupError as exc:
+        pytest.fail(str(exc))
 
 
 def _grant(store: str, model: str, sub: str, relation: str, obj: str) -> None:
-    requests.post(
+    resp = requests.post(
         f"{FGA}/stores/{store}/write",
         json={
             "writes": {"tuple_keys": [{"user": f"user:{sub}", "relation": relation, "object": obj}]},
             "authorization_model_id": model,
         },
         timeout=10,
+    )
+    # A re-run against a long-lived estate finds the grant held. Any other refusal fails here, where it
+    # names itself, rather than later as a 403 from the catalog.
+    assert resp.status_code == 200 or (resp.status_code == 400 and "already exists" in resp.text), (
+        f"OpenFGA refused the grant {relation} on {obj} ({resp.status_code}): {resp.text}"
     )
 
 

@@ -8,12 +8,15 @@
 # Revoke the last grant (`fga tuple delete ... validator namespace:gold`) to SEE the enforcement: the
 # silver→gold stage runner is then denied and the cascade stops at silver — a plain writer cannot promote.
 #
-# Prereq: the catalog has provisioned the model, and OpenFGA is reachable. Port-forward first:
+# Prereq: the store holds this checkout's model (the openfga-model hook or the catalog wrote it), and
+# OpenFGA is reachable. Port-forward first:
 #   kubectl port-forward svc/lance-ns-openfga 8081:8080 &
 #   OPENFGA_API_URL=http://localhost:8081 scripts/seed_medallion_fga.sh
+# RASK_FGA_STORE_ID pins the store, as it does for the catalog.
 set -euo pipefail
 
-BIN="$(cd "$(dirname "$0")/.." && pwd)/.localbin"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BIN="$ROOT/.localbin"
 API="${OPENFGA_API_URL:-http://localhost:8081}"
 # The ESTATE-level warehouse the unqualified `bronze|silver|gold` namespaces hang from.
 # Overridable because an estate has more than one: measured on the k3s estate 2026-09-24,
@@ -24,9 +27,20 @@ API="${OPENFGA_API_URL:-http://localhost:8081}"
 # takes its zone warehouse as an argument for the same reason.)
 WAREHOUSE="${WAREHOUSE:-warehouse:lance_catalog}"
 
-SID="$("$BIN/fga" store list --api-url "$API" \
-  | python3 -c "import sys,json;print([s['id'] for s in json.load(sys.stdin)['stores'] if s['name']=='lance-catalog'][0])")"
-echo "store: $SID"
+# THE STORE AND MODEL EVERY SERVICE USES ([[LH-201]], `write_model.carried_model`): the pin, else the newest
+# store named `lance-catalog`, and in it the model whose body is this checkout's `model.json`. A write naming
+# no model is validated against the store's NEWEST, and a legacy image's narrower body can be the newest.
+# Absent, this exits non-zero naming the store, rather than seeding against whichever image wrote last.
+STORE_MODEL="$(uv run --project "$ROOT" python -c '
+import os, sys
+from service_kit.governed.auth.write_model import carried_model
+try:
+    print(*carried_model(sys.argv[1], pinned=os.environ.get("RASK_FGA_STORE_ID", "")))
+except LookupError as exc:
+    sys.exit(f"!! {exc}")' "$API")"
+SID="${STORE_MODEL% *}"
+MODEL="${STORE_MODEL#* }"
+echo "store: $SID model: $MODEL"
 
 # Idempotent write: a duplicate-tuple error is fine (re-run), ANY OTHER failure aborts the script
 # (set -e) so callers see a non-zero exit — a blanket `|| true` here made the Makefile's seed-failure
@@ -34,7 +48,7 @@ echo "store: $SID"
 # relation failed every write while the script still printed "✓ seeded" and exited 0).
 w() {
   local out
-  if out=$("$BIN/fga" tuple write --api-url "$API" --store-id "$SID" "$@" 2>&1); then return 0; fi
+  if out=$("$BIN/fga" tuple write --api-url "$API" --store-id "$SID" --model-id "$MODEL" "$@" 2>&1); then return 0; fi
   case "$out" in
     *already\ exists*|*duplicate*) return 0 ;;
     *) echo "!! seed write failed: $* — $out" >&2; return 1 ;;
@@ -151,7 +165,7 @@ w user:service-blesser validator namespace:models
 # on the warehouse so its rung cascades to can_get_metadata on every dataset, exactly like a warehouse
 # reader human. Read-only; never a writer. Pairs with LINEAGE_SERVICE_SUBJECTS + web.serviceIdentity.
 
-echo "✓ seeded medallion grants (stage runner writers + media lane, silver→gold validator, trainer reader/models-writer, stage/table parent links) into store $SID"
+echo "✓ seeded medallion grants (stage runner writers + media lane, silver→gold validator, trainer reader/models-writer, stage/table parent links) into store $SID against model $MODEL"
 
 # --- Per-TENANT enablement (#84, optional args: PROJECT [ZONE_WAREHOUSE]) -------------------------------
 # A tenant cascade (`/produce?project=<p>`) targets the project-QUALIFIED namespaces (`<p>-bronze` …),

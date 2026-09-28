@@ -583,8 +583,8 @@ class Settings(
         return f"{self.model_artifacts_root}/{model}"
 
     # OIDC authentication + OpenFGA authorization (both opt-in, both inherited from
-    # `GovernedAuthSettings`). When store/model ids are unset, the app provisions them at startup
-    # (dev/e2e); in production, provision once and pin both ids.
+    # `GovernedAuthSettings`). The app finds the store (or the pinned `RASK_FGA_STORE_ID`) at startup and
+    # checks against the model its own image carries, writing that model when the store lacks it.
 
     # Compliance audit trail (#41): emit a structured event on the dedicated `lance.audit` logger for every
     # security-relevant action — authn success/failure, authz allow/deny, credential vending — carrying

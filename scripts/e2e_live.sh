@@ -156,27 +156,43 @@ export LANCE_E2E_ADMIN_TOKEN="$ALICE"
 # So the token is offered only when the estate agrees it is non-admin, and the suite SKIPS otherwise —
 # an honest skip beats a red test that alleges something untrue.
 if [ -n "$FGA" ]; then
-  STORE_ID="$(curl -s -m 10 "http://$FGA/stores" | uv run python -c "
-import sys, json
-print((json.load(sys.stdin).get('stores') or [{}])[0].get('id',''))" 2>/dev/null || true)"
-  # EXPORTED so a suite reads the SAME store this runner picked. Two independent "first store" picks
-  # agree until an estate holds two, and then they disagree silently — which is the shape of every
-  # drift this file's other notes record.
+  # THE STORE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store named
+  # `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
+  # EXPORTED so a suite reads the SAME store this runner picked: a second pick by another rule agrees
+  # only while the estate holds one store.
+  STORE_ID="$(kubectl get deploy "$RELEASE-catalog" -o jsonpath='{.spec.template.spec.containers[?(@.name=="catalog")].env[?(@.name=="RASK_FGA_STORE_ID")].value}' 2>/dev/null || true)"
+  [ -n "$STORE_ID" ] || STORE_ID="$(curl -s -m 10 "http://$FGA/stores" | uv run python -c "
+import json, sys
+from service_kit.governed.auth.write_model import STORE_NAME
+from service_kit.governed.fga import newest_store
+named = newest_store(json.load(sys.stdin).get('stores') or [], STORE_NAME)
+print(named['id'] if named else '')" 2>/dev/null || true)"
   [ -n "$STORE_ID" ] && export LANCE_E2E_FGA_STORE_ID="$STORE_ID"
+  # IN THAT STORE, THE MODEL THIS CHECKOUT CARRIES (`write_model.carried_model`). A check naming no model is
+  # answered by the store's NEWEST, which a legacy image's narrower body can be. Absent, the probe below
+  # does not run and the non-admin legs skip; the deployed-model check names the drift.
+  MODEL_ID=""
+  [ -z "$STORE_ID" ] || MODEL_ID="$(uv run python -c "
+import sys
+from service_kit.governed.auth.write_model import carried_model
+try:
+    print(carried_model(sys.argv[1], pinned=sys.argv[2])[1])
+except LookupError as exc:
+    sys.exit(f'   note: {exc}')" "http://$FGA" "$STORE_ID" || true)"
   sub_of() { TOK="$1" uv run python -c "
 import base64, json, os
 b = os.environ['TOK'].split('.')[1]; b += '=' * (-len(b) % 4)
 print(json.loads(base64.urlsafe_b64decode(b))['sub'])" 2>/dev/null || true; }
   can_administer() {
     curl -s -m 10 -X POST "http://$FGA/stores/$STORE_ID/check" -H 'content-type: application/json' \
-      -d "{\"tuple_key\":{\"user\":\"user:$1\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \
+      -d "{\"authorization_model_id\":\"$MODEL_ID\",\"tuple_key\":{\"user\":\"user:$1\",\"relation\":\"can_administer\",\"object\":\"project:${LANCE_E2E_PROJECT:-acme}\"}}" \
       | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed'))" 2>/dev/null || true
   }
   # ASK THE ESTATE WHICH IDENTITY IS ACTUALLY NON-ADMIN rather than naming one. The suite asserts a
   # 403, so offering a token that turns out to hold `can_administer` makes it fail on a false premise
   # and read as a governance hole — which is exactly what happened with bob. Candidates in the
   # deployed Dex configmap are tried in order and the first genuine non-admin wins.
-  if [ -n "$STORE_ID" ]; then
+  if [ -n "$MODEL_ID" ]; then
     for CAND_NAME in publisher bob; do
       eval "CAND_TOK=\${$(echo "$CAND_NAME" | tr '[:lower:]' '[:upper:]'):-}"
       [ -n "$CAND_TOK" ] || continue

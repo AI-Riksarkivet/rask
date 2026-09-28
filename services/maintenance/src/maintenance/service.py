@@ -69,7 +69,7 @@ async def _make_fga_client(settings: MaintenanceSettings) -> Any | None:  # noqa
     Neither may AUTHOR the estate's model, so this passes ``provision=False`` — the estate-wide
     default since 2026-09-09, stated here because the sweep runs outside a lifespan: the shared bootstrap
     then takes `fga.resolve`, which is read-only, can never create a store or write a model, and
-    returns ``None`` when the estate is not bootstrapped. That principle once covered the LOOKUP too,
+    returns ``None`` when there is no store, or no model this image carries, by its deadline. That principle once covered the LOOKUP too,
     and the cost is recorded in `fga.resolve`'s own docstring — on the chart's DEFAULT posture
     (`auth.fgaStoreId: ""`, a per-cluster ULID that cannot be a committed default) refusing to look up
     meant reporting every authz category unavailable against an estate that was right there. Reading

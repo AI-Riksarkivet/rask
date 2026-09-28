@@ -44,8 +44,13 @@ bash scripts/helm.sh upgrade rask ./chart --reset-then-reuse-values --set image.
 ```
 
 then pack it as Go does: compact JSON with `<`, `>`, `&` escaped to `\u003c` `\u003e` `\u0026`,
-UTF-8 kept, gzip **level 6**, base64. That lands within 0.2% of the real stored size. Python's
-default `gzip.compress` is level 9 and **under-counts by ~0.9%** — enough to read "fits" for a
+UTF-8 kept, gzip, base64. Helm writes with Go's `gzip.BestCompression` (`pkg/storage/driver/util.go:43`),
+and Go's deflate and Python's zlib do not produce the same size at any level: measured on revision 251,
+Python at level 6 read 1,044,692 bytes for a release stored at 1,047,760 (99.92%), 3,068 short. So take
+the LIVE revision's stored size (the decoded `data.release` of `sh.helm.release.v1.rask.v<N>`) and add
+the difference your change makes to the Python-packed render; an absolute Python number reads "fits"
+for a revision the API server refuses. Python's default `gzip.compress` is level 9 and **under-counts
+further** — enough to read "fits" for a
 revision that the API server refuses.
 
 `.helmignore` keeps non-runtime files out of `chart.files`. `alerting/rules_test.yml` (promtool's

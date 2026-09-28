@@ -215,7 +215,7 @@ async def test_an_unchanged_TYPE_RESTRICTION_served_with_the_stores_fills_report
 
 @pytest.mark.asyncio
 async def test_an_unreadable_pinned_model_leaves_the_boot_SERVING() -> None:
-    """The posture difference from `_current_model`, stated as a test because it is the whole reason
+    """The posture difference from `_model_history`, stated as a test because it is the whole reason
     this read is not under `_guarded`: that read gates a WRITE, so failing closed stops a narrowing
     model reaching the store. This one gates nothing — it only reports — and an estate must not be taken
     down because its diagnostic could not run."""

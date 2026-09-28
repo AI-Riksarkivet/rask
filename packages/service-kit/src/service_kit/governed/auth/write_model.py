@@ -7,18 +7,23 @@ relations behind: measured 2026-09-18 it defined 26/27/26 on warehouse/namespace
 repo's 30/29/29, so `warehouse#maintainer` could not be written and the tuple-granting hook CrashLooped
 on it, wedging the release.
 
-IT LIVES HERE, BESIDE THE MODEL IT WRITES, rather than inline in the chart's hook. The comparison
-below is the part that matters and the part a YAML heredoc cannot test: an OpenFGA model is immutable
+IT LIVES HERE, BESIDE THE MODEL IT WRITES, rather than inline in the chart's hook. The history read
+(:func:`history`) is the part that matters and the part a YAML heredoc cannot test: an OpenFGA model is immutable
 and versioned, so writing unconditionally mints a new id on every upgrade — the store already held 50.
 """
 
 from __future__ import annotations
 
 import json
+import urllib.parse
 from importlib.resources import files
-from typing import Any
+from typing import Any, Final
 
-from service_kit.governed.fga import canonical_model
+from service_kit.governed.fga import MODEL_MAX_PAGES, MODEL_PAGE_SIZE, ModelHistory, ModelHistoryTooLongError, canonical_model, newest_store
+
+
+#: The store the estate uses, found the way every service finds it: `fga.newest_store`.
+STORE_NAME: Final = "lance-catalog"
 
 
 def model_document() -> dict[str, Any]:
@@ -37,24 +42,6 @@ def shape(model: dict[str, Any]) -> dict[str, list[str]]:
     return {t["type"]: sorted(t.get("relations") or {}) for t in model.get("type_definitions", [])}
 
 
-def needs_write(stored: dict[str, Any] | None, desired: dict[str, Any]) -> bool:
-    """Whether the store's newest model differs from this package's, in canonical form.
-
-    Compared in :func:`service_kit.governed.fga.canonical_model`'s form — the one the catalog's
-    boot-time ``provision`` skips on, so the hook and the catalog agree about what "unchanged" means.
-    That form reads only ``schema_version``, ``type_definitions`` and ``conditions``, never the
-    server-assigned ``id``, and drops the empty values the store fills in while keeping the grammar's
-    empty messages (``this``, ``wildcard``), so the store's copy of an unchanged model compares equal
-    and a rule body or a ``[user]``/``[user:*]`` restriction that changed does not.
-
-    It is a comparison of the written form, not of meaning: a model that evaluates identically but is
-    written differently — a union's branches reordered — counts as a difference and is written.
-
-    ``None`` — an empty store — is a write: there is nothing for the services to check against.
-    """
-    return stored is None or canonical_model(stored) != canonical_model(desired)
-
-
 def _call(api: str, path: str, body: dict[str, Any] | None = None, *, timeout: float = 30.0) -> dict[str, Any]:
     import json as _json
     import urllib.request
@@ -66,13 +53,59 @@ def _call(api: str, path: str, body: dict[str, Any] | None = None, *, timeout: f
         return json.loads(response.read() or b"{}")
 
 
-def main() -> int:
-    """The chart's `openfga-model` hook. Writes this package's model unless the store already has it.
+def history(api: str, store: str, desired: dict[str, Any]) -> ModelHistory:
+    """The store's models read against ``desired``, newest first and stopped at the first that carries it.
 
-    Run as a module rather than a heredoc in the Job's `args` so the comparison above is covered by
-    `packages/service-kit/tests/test_the_model_is_written_only_when_it_differs.py` — the idempotency
-    is the part that decides between growing the store forever and never converging, and neither
-    failure announces itself.
+    The same rule the catalog's boot and every service's resolve apply (``fga.ModelHistory``), over
+    OpenFGA's HTTP API. A history longer than ``MODEL_MAX_PAGES`` raises rather than reading as absent,
+    because absent is what makes this hook write.
+    """
+    wanted = canonical_model(desired)
+    read, token = ModelHistory(), ""
+    for _ in range(MODEL_MAX_PAGES):
+        query = f"page_size={MODEL_PAGE_SIZE}" + (f"&continuation_token={urllib.parse.quote(token)}" if token else "")
+        page = _call(api, f"/stores/{store}/authorization-models?{query}")
+        read = read.read(page.get("authorization_models") or [], wanted)
+        token = page.get("continuation_token") or ""
+        if read.carrying is not None or not token:
+            return read
+    raise ModelHistoryTooLongError(f"store {store}'s model history exceeded {MODEL_MAX_PAGES} pages; refusing to read it as absent")
+
+
+def carried_model(api: str, *, pinned: str = "") -> tuple[str, str]:
+    """``(store, model)`` for a tool that checks or writes tuples: the estate's store, and this code's model in it.
+
+    A tuple request naming no ``authorization_model_id``, or naming the store's newest, is validated against
+    whichever image wrote last ([[LH-201]]). In the LH-201 review (OpenFGA v1.18.3) a legacy image's narrower
+    newest model refused every ``estate`` tuple on ``type 'estate' not found``. So the rule is the one the hook,
+    ``bootstrap-admin`` and every service share: the ``pinned`` store (``RASK_FGA_STORE_ID``) when given, else
+    the newest named ``STORE_NAME``, and in it the model whose canonical body is this package's ``model.json``.
+
+    Raises:
+        LookupError: there is no such store, or it holds no model carrying this body. No id is right to send
+            then, and the store's newest is the one wrong answer.
+    """
+    store = pinned
+    if not store:
+        named = newest_store(_call(api, "/stores").get("stores") or [], STORE_NAME)
+        if named is None:
+            raise LookupError(f"OpenFGA at {api} holds no store named {STORE_NAME!r} and none is pinned")
+        store = str(named["id"])
+    carrying = history(api, store, model_document()).carrying
+    if carrying is None:
+        raise LookupError(f"store {store} at {api} holds no model carrying this code's model.json: neither the openfga-model hook nor the catalog wrote it")
+    return store, str(carrying["id"])
+
+
+def main() -> int:
+    """The chart's `openfga-model` hook: write this image's model unless the store already holds it.
+
+    Pre-upgrade, so a new image's model exists before its pods resolve it ([[LH-201]]). The store is the
+    newest one named `lance-catalog` unless `RASK_FGA_STORE_ID` pins one, and a held body is not written
+    again wherever it sits in the history. Nothing to pre-write exits 0 rather than failing the upgrade:
+    with no store yet, or OpenFGA unreachable, the catalog writes its image's model when it boots, and a
+    failed pre-upgrade hook would refuse the very upgrade that repairs OpenFGA. Run as a module rather
+    than a heredoc in the Job's `args` so :func:`history` is covered by tests.
     """
     import os
     import sys
@@ -86,22 +119,24 @@ def main() -> int:
         try:
             stores = _call(api, "/stores").get("stores") or []
             break
-        except Exception as exc:  # any transport error here means "not ready yet"; the last attempt re-raises
+        except Exception as exc:  # any transport error here means "not ready yet"
             if attempt == 59:
-                print(f"openfga never became reachable: {exc}", file=sys.stderr)
-                raise
+                print(f"OpenFGA unreachable ({exc}); nothing pre-written, the catalog writes this image's model when it boots", file=sys.stderr)
+                return 0
             time.sleep(2)
 
-    store = os.environ.get("RASK_FGA_STORE_ID", "") or (stores[0]["id"] if stores else "")
+    named = newest_store(stores, STORE_NAME)
+    store = os.environ.get("RASK_FGA_STORE_ID", "") or (str(named["id"]) if named else "")
     if not store:
-        print("no OpenFGA store exists yet and none is pinned; nothing to write a model into", file=sys.stderr)
-        return 1
+        print("no OpenFGA store yet and none pinned; nothing pre-written, the catalog creates it and writes this image's model when it boots")
+        return 0
 
     desired = model_document()
     desired.pop("id", None)
-    existing = _call(api, f"/stores/{store}/authorization-models?page_size=1").get("authorization_models") or []
-    if not needs_write(existing[0] if existing else None, desired):
-        print(f"model already current in store {store} ({len(shape(desired))} types); nothing to write")
+    held = history(api, store, desired)
+    if held.carrying is not None:
+        where = f"below the store's newest {held.newest['id']}" if held.held_below_newest else "as the store's newest"
+        print(f"store {store} already holds this image's model {held.carrying['id']} ({len(shape(desired))} types) {where}; nothing written")
         return 0
 
     written = _call(api, f"/stores/{store}/authorization-models", desired, timeout=60)

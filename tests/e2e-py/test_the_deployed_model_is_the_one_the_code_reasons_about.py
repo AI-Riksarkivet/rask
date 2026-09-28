@@ -1,4 +1,4 @@
-"""The model in the STORE is the model this repo ships — the third copy, checked at last.
+"""The store the estate uses HOLDS the model this repo ships — the third copy, checked at last.
 
 [[LH-174]]. `model.fga` is the source of truth for every `can_*` the services derive, and there are
 three copies of it: the `.fga` source, the `model.json` the package ships, and whatever OpenFGA
@@ -10,16 +10,25 @@ store could not express. `warehouse#maintainer` was one, so `rask-bootstrap-admi
 CrashLooped writing a tuple naming it, `make k3s-up` hung, and the release wedged in `pending-upgrade`,
 which refuses every later upgrade. Nine relations behind, and not one test went red.
 
-THE WRITE IS NOW A HOOK (`chart/templates/openfga-model.yaml`, weight 0 — after the DB migration,
+THE WRITE IS A HOOK (`chart/templates/openfga-model.yaml`, pre-upgrade — before the new pods start,
 before tuples). This is the other half: a hook that writes and a check that the write LANDED are
 different assertions, and only the second one notices a hook that silently stopped running.
 
-TWO GRAINS. The name checks (`service_kit.governed.auth.write_model.shape`) say WHICH type or relation
-is missing or extra, which is what an operator needs from a red run. The body check asks the question
-the writer decides on (`write_model.needs_write`): does the store hold this repo's rules, not only its
-names — a `can_*` narrowed under an unchanged name passes every name check. Neither compares whole
-documents: a stored model carries a server-assigned `id` and default fills the shipped document does
-not, so that comparison would fail permanently and for the wrong reason.
+THE QUESTION IS THE ONE EVERY SERVICE ASKS ([[LH-201]]): does the store hold a model whose canonical body
+is this checkout's `model.json`, at any depth of its history (`write_model.history`, the hook's own
+read)? A service checks against the model its own image carries, so a body held below the newest (an
+older image, a revert, a writer that wrote since) is one every pod built from this checkout resolves,
+and the hook writes only a body the store lacks. The store is `LANCE_E2E_FGA_STORE_ID` when the runner
+exports it (`scripts/e2e_live.sh`, which honours the catalog's pin), else the newest named
+`lance-catalog` (`fga.newest_store`). No such store FAILS the run: a skip would read as green over an
+estate whose services all fail closed.
+
+A RED RUN NAMES THE DIFF against the store's newest model per type and relation
+(`service_kit.governed.auth.write_model.shape`), which is what an operator needs from it. Bodies are
+compared canonically, never as whole documents: a stored model carries a server-assigned `id` and
+default fills the shipped document does not, so that comparison would fail permanently and for the
+wrong reason. A rule narrowed under unchanged names leaves the name diff empty, and the message says
+so rather than reading as a match.
 """
 
 from __future__ import annotations
@@ -27,10 +36,12 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
+from typing import Any
 
 import pytest
 
-from service_kit.governed.auth.write_model import model_document, needs_write, shape
+from service_kit.governed.auth.write_model import STORE_NAME, history, model_document, shape
+from service_kit.governed.fga import ModelHistory, newest_store
 
 
 #: ALREADY CARRIES ITS SCHEME. `scripts/e2e_live.sh`'s `url` helper exports `http://<host>`, so
@@ -42,61 +53,47 @@ STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 pytestmark = pytest.mark.e2e
 
 
-def _get(path: str) -> dict:
+def _get(path: str) -> dict[str, Any]:
     with urllib.request.urlopen(f"{FGA}{path}", timeout=30) as response:  # noqa: S310 — in-cluster address from the runner
         return json.loads(response.read() or b"{}")
 
 
 @pytest.fixture(scope="module")
-def deployed() -> dict:
+def held() -> tuple[str, ModelHistory]:
+    """The store the estate uses, and its history read against this checkout's model."""
     if not FGA:
         pytest.skip("set LANCE_E2E_FGA (a deployed OpenFGA) — scripts/e2e_live.sh discovers it")
     try:
         stores = _get("/stores").get("stores") or []
     except Exception as exc:  # noqa: BLE001 — an unreachable store is a skip, not a drift failure
         pytest.skip(f"openfga not reachable: {type(exc).__name__}")
-    store = STORE or (stores[0]["id"] if stores else "")
+    named = newest_store(stores, STORE_NAME)
+    store = STORE or (str(named["id"]) if named else "")
     if not store:
-        pytest.skip("the deployed OpenFGA holds no store")
-    models = _get(f"/stores/{store}/authorization-models?page_size=1").get("authorization_models") or []
-    if not models:
-        pytest.skip(f"store {store} holds no authorization model at all")
-    return models[0]
+        pytest.fail(f"the deployed OpenFGA holds no store named {STORE_NAME!r} and none is pinned: the catalog never provisioned the estate's store")
+    return store, history(FGA, store, model_document())
 
 
-def test_the_store_defines_every_type_the_repo_does(deployed: dict) -> None:
-    missing = set(shape(model_document())) - set(shape(deployed))
-
-    assert not missing, f"the deployed model is missing whole types the code reasons about: {sorted(missing)}"
-
-
-def test_the_store_defines_every_RELATION_the_repo_does(deployed: dict) -> None:
-    """The drift that actually happened. All nine missing relations were on types that already
-    existed, so a check keyed on type names alone would have reported no change forever."""
-    shipped, live = shape(model_document()), shape(deployed)
+def _absent(store: str, read: ModelHistory) -> str:
+    """What a red run tells an operator: the store's newest model against this checkout's, by name."""
+    if read.newest is None:
+        return f"store {store} holds no authorization model at all: neither the `openfga-model` hook nor the catalog has written one"
+    shipped, live = shape(model_document()), shape(read.newest)
     missing = {t: sorted(set(rels) - set(live.get(t, []))) for t, rels in shipped.items() if set(rels) - set(live.get(t, []))}
-
-    assert not missing, (
-        "the deployed model cannot express relations this repo's code checks, so a tuple naming one is "
-        f"refused and whatever depends on it fails at runtime: {missing}"
-    )
-
-
-def test_the_store_carries_nothing_the_repo_has_dropped(deployed: dict) -> None:
-    """The other direction. A relation left in the store after the repo dropped it is a grant path
-    nothing in this tree describes — which is worse than a missing one, because it still works."""
-    shipped, live = shape(model_document()), shape(deployed)
     extra = {t: sorted(set(rels) - set(shipped.get(t, []))) for t, rels in live.items() if set(rels) - set(shipped.get(t, []))}
-
-    assert not extra, f"the deployed model grants through relations this repo no longer defines: {extra}"
-
-
-def test_the_store_holds_every_RULE_the_repo_does(deployed: dict) -> None:
-    """The drift the name checks above cannot see: the same types and relations, one rule different.
-    A `can_*` narrowed in `model.fga` and never written leaves the store granting through the path the
-    repo removed, and every check still answers — so nothing downstream reports it."""
-    assert not needs_write(deployed, model_document()), (
-        "the deployed model's rules differ from this repo's `model.json`, so the store authorizes by rules "
-        "the code does not define. With the name checks green, a rule changed and the store never took it: "
-        "the `openfga-model` hook has not run since, or ran from a catalog image older than this checkout"
+    names = (
+        f"relations this repo's code checks that it cannot express: {missing}; relations it grants through that this repo no longer defines: {extra}"
+        if missing or extra
+        else "every type and relation name matches, so a rule differs under an unchanged name"
     )
+    return (
+        f"store {store} holds no model carrying this checkout's `model.json`, so every service built from it fails closed. "
+        f"Against the newest model {read.newest['id']}, {names}. The `openfga-model` hook and the catalog's boot each "
+        "write a model the store lacks, so no release carrying this checkout has rolled, or its write failed"
+    )
+
+
+def test_the_store_holds_this_checkouts_model(held: tuple[str, ModelHistory]) -> None:
+    store, read = held
+
+    assert read.carrying is not None, _absent(store, read)

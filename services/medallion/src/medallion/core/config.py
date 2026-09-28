@@ -270,9 +270,9 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
     # stage before emitting. The silver→gold stage runner checks `can_promote` (validator-only); the others check
     # `can_create_table` (writer). It checks as its own service identity, so a stage runner not granted the role
     # is DENIED — the cascade then ENFORCES the model, not just describes it. Off by default. -------------
-    # The client knobs are `FgaSettings`' (`RASK_FGA_*`). Pinned store/model ids (production posture,
-    # same as catalog/lineage): set → no boot-time provision, no model rewrite, read-only OpenFGA
-    # access suffices. Unset (dev/e2e) → provision-by-name. Only the two subjects below are medallion's.
+    # The client knobs are `FgaSettings`' (`RASK_FGA_*`): the store by name or the pinned
+    # `RASK_FGA_STORE_ID`, and the model this image carries, read-only. Only the two subjects below are
+    # medallion's.
     # BARE subject (no ``user:`` prefix) — ``service_kit.governed.fga.check`` adds ``user:`` itself, so ``user:service-*``
     # here would double-prefix (``user:user:service-*``) and the gate would always deny. Matches the
     # catalog's convention (it passes the bare OIDC sub to fga.check).

@@ -15,7 +15,14 @@ from typing import Any
 
 import pytest
 
-from service_kit.governed.auth.write_model import model_document, needs_write, shape
+from service_kit.governed.auth.write_model import model_document, shape
+from service_kit.governed.fga import ModelHistory, canonical_model
+
+
+def needs_write(stored: dict[str, Any] | None, desired: dict[str, Any]) -> bool:
+    """What the hook decides for a store holding only ``stored``: write unless it carries ``desired``,
+    through the comparison the hook, the catalog's boot and every service's resolve share."""
+    return ModelHistory().read([] if stored is None else [stored], canonical_model(desired)).carrying is None
 
 
 _READER: dict[str, Any] = {"computedUserset": {"relation": "reader"}}

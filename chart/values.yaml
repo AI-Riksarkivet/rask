@@ -960,12 +960,10 @@ auth:
   # into LANCE_AUDIT_ENABLED only when auth is on (that is where a real subject exists); set false to silence
   # the stream even with auth on.
   audit: true
-  # Pin the OpenFGA store (and optionally model) id — the production posture service_kit.governed.fga
-  # documents. When set, EVERY FGA consumer (catalog, lineage, medallion) receives its
-  # *_FGA_STORE_ID/*_FGA_MODEL_ID env from these SAME values, and the bootstrap-admin Job grants into the
-  # pinned store — one value, every consumer, so the store the Job grants into can never diverge from the
-  # store the services check against. Empty (default) = provision-by-name at boot (the `lance-catalog`
-  # store — dev/e2e, where the store id changes per cluster).
+  # Pin the OpenFGA store id. When set, EVERY FGA consumer (the services, the openfga-model hook and the
+  # bootstrap-admin Job) uses that store; empty (default) = the newest store named `lance-catalog`. A
+  # MODEL pin makes every service check against that one model whatever its image carries; no deployment
+  # sets it, and removing the knob is parked as LH-309.
   fgaStoreId: ""
   fgaModelId: ""
   # First estate admin, seeded BY THE CHART (goal cond 4): a Dex subject (the id_token's `sub`) granted

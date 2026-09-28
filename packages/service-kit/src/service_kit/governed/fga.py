@@ -37,7 +37,7 @@ from collections.abc import Awaitable, Callable, Iterable
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Final, Literal, NamedTuple, cast
+from typing import Any, Final, Literal, NamedTuple, Self, cast
 
 import aiohttp
 from lance_namespace import InvalidInputError, ServiceUnavailableError
@@ -71,6 +71,7 @@ from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 from openfga_sdk.models.relationship_condition import RelationshipCondition as RelationshipCondition
 from openfga_sdk.models.user_type_filter import UserTypeFilter
 from openfga_sdk.models.write_authorization_model_request import WriteAuthorizationModelRequest
+from pydantic import BaseModel, ConfigDict
 from tenacity import (
     RetryCallState,
     retry,
@@ -546,31 +547,94 @@ def _narrowings(incoming: dict[str, frozenset[str]], current: dict[str, frozense
     return sorted(lost)
 
 
-async def _current_model(
+#: 50 is OpenFGA's default page of models; v1.18.3 serves up to 100 (measured 2026-09-28), so the live
+#: store's 1,353 models are 14 pages.
+MODEL_PAGE_SIZE: Final = 100
+#: A history longer than this is refused rather than read as "absent", because absent means WRITE.
+MODEL_MAX_PAGES: Final = 400
+
+
+class ModelHistoryTooLongError(Exception):
+    """The store's model history runs past ``MODEL_MAX_PAGES``: unreadable as a whole, so never "absent".
+
+    Its own type, not an outage: `resolve` waits out an unavailable OpenFGA, and waiting cannot shorten
+    a history.
+    """
+
+
+#: How long a booting service waits for its store and its image's model before failing closed. It runs
+#: inside the fleet's startup budget (`lance.appProbes`: 30 x 10 s) beside the lifespan's other steps,
+#: the Dapr secret fetch alone up to ~80 s; pinned by `test_resolve_fits_the_startup_budget.py`.
+RESOLVE_DEADLINE_SECONDS: Final = 120.0
+
+
+def newest_store(stores: Iterable[Any], name: str) -> Any | None:
+    """The newest store named ``name``: the rule every reader and writer of the estate's model shares."""
+    named = [store for store in stores if _field(store, "name") == name]
+    return max(named, key=lambda store: _field(store, "created_at")) if named else None
+
+
+class ModelHistory(BaseModel):
+    """A store's models read against one body: its newest model, and the newest one carrying that body.
+
+    Nothing treats the store's newest model as authoritative ([[LH-201]]): every service, the hook and
+    `bootstrap-admin` use the id of the model their own image carries. ``carrying`` below ``newest``
+    is therefore no failure — an older image, a revert, or a writer that wrote since — and writing the
+    body again would only grow the history. ``carrying`` absent is a model the store has never held.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    newest: Any = None
+    carrying: Any = None
+
+    @property
+    def held_below_newest(self) -> bool:
+        return self.carrying is not None and str(_field(self.carrying, "id")) != str(_field(self.newest, "id"))
+
+    def read(self, models: Iterable[Any], wanted: str) -> Self:
+        """This history extended by the next page, newest first; ``wanted`` is the body's canonical form."""
+        newest, carrying = self.newest, self.carrying
+        for model in models:
+            newest = model if newest is None else newest
+            if carrying is None and canonical_model(model) == wanted:
+                carrying = model
+        return self.model_copy(update={"newest": newest, "carrying": carrying})
+
+
+async def _model_history(
     client: OpenFgaClient,
+    desired: Any,
     *,
+    known_newest: str | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
     retry_max_backoff_seconds: float = DEFAULT_RETRY_MAX_BACKOFF_SECONDS,
-) -> Any:
-    """The store's newest model, or ``None`` when a store that EXISTS has never been modelled.
+) -> ModelHistory:
+    """The store's models read against ``desired``, paged newest first and stopped at the first match.
 
-    UNDER THE MODULE'S OWN POSTURE — retry, then fail closed — and that is what gives the guard below
-    its teeth. A read that merely answered ``None`` on failure would let a flaky OpenFGA wave a
-    narrowing model through, which is exactly when a boot storm is most likely.
-
-    RAISING ABORTS THE BOOT, which is stronger than the 503 this once claimed. The only path that
-    reaches here is `provision=True`, which has exactly one caller — the catalog — and it passes
-    `fatal=True`, so `build_fga_client` re-raises and nothing catches it: the pod crash-loops instead of
-    serving. Right either way (an estate that cannot verify its own model does not get to overwrite it),
-    but an operator planning for a serving-but-refusing catalog would be planning for the wrong thing.
-
-    A store created moments ago never pays this read — see the caller.
+    ``known_newest`` is the newest id an earlier read already scanned past: models are listed newest first
+    and a new one can only be prepended, so paging stops there and a re-read costs one page. Under the
+    module's posture, retried then failed closed: an unread history is not an absent model, and absent is
+    what makes a writer write.
     """
+    wanted = canonical_model(desired)
 
-    async def _do_read() -> Any:
-        response = await client.read_latest_authorization_model()
-        return getattr(response, "authorization_model", None)
+    async def _do_read() -> ModelHistory:
+        history, token = ModelHistory(), ""
+        for _ in range(MODEL_MAX_PAGES):
+            options: dict[str, int | str | dict[str, int | str]] = {"page_size": MODEL_PAGE_SIZE}
+            if token:
+                options["continuation_token"] = token
+            response = await client.read_authorization_models(options=options)
+            page = list(response.authorization_models or [])
+            ids = [str(_field(model, "id")) for model in page]
+            reached = known_newest in ids
+            history = history.read(page[: ids.index(known_newest)] if reached else page, wanted)
+            token = response.continuation_token or ""
+            if history.carrying is not None or reached or not token:
+                return history
+        raise ModelHistoryTooLongError(f"the store's model history exceeded {MODEL_MAX_PAGES} pages; refusing to read it as absent")
 
     return await _guarded(
         _do_read,
@@ -585,71 +649,48 @@ async def provision(
     api_url: str,
     *,
     store_name: str = "lance-catalog",
+    store_id: str | None = None,
     retry_attempts: int = DEFAULT_RETRY_ATTEMPTS,
 ) -> tuple[str, str]:
     """Idempotently ensure the catalog store + model exist; return ``(store_id, model_id)``.
 
     REUSES an existing store of the same name instead of minting a fresh one on every
     unpinned boot — otherwise a restart strands every tuple written against the previous
-    store (creators silently lose access). A ``model.json`` edit takes effect on boot, but only in the
-    ADDING direction: a model that would REMOVE a type or relation the store already defines is refused
-    and the existing model id kept, because a narrower model is a rollback and image order must not
-    decide who may do what. Tuples live on the store and survive new model versions. For dev / e2e; in
-    production pin ``RASK_FGA_STORE_ID`` + ``RASK_FGA_MODEL_ID``.
+    store (creators silently lose access). This image's model is written when the store has never held
+    its body, removals included: every component checks against the model its own image carries, so a
+    narrower body governs only the pods built with it ([[LH-201]]). Tuples live on the store and survive
+    new model versions. A pinned ``store_id`` (``RASK_FGA_STORE_ID``) is used as is, the store the hook and
+    ``bootstrap-admin`` use too.
     """
     model = load_model()
-    async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
-        stores = await client.list_stores()
-        existing = [s for s in (stores.stores or []) if s.name == store_name]
-        if existing:
-            store_id = max(existing, key=lambda s: s.created_at).id
-            store_is_new = False
-        else:
-            created = await client.create_store(CreateStoreRequest(name=store_name))
-            store_id = created.id
-            store_is_new = True
+    store_is_new = False
+    if store_id is None:
+        async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
+            stores = await client.list_stores()
+            existing = newest_store(stores.stores or [], store_name)
+            if existing is not None:
+                store_id = str(existing.id)
+            else:
+                created = await client.create_store(CreateStoreRequest(name=store_name))
+                store_id = str(created.id)
+                store_is_new = True
     async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=store_id)) as client:
-        # A BOOT MAY ADD TO THE ESTATE'S MODEL AND MUST NEVER TAKE A RELATION AWAY. This write is
-        # unpinned, so whichever pod boots last decides the store's newest model — and a pod on an
-        # OLDER image ships an older `model.json`. Measured 2026-09-11: a routine upgrade rolled the
-        # catalog back one tag, the store lost `warehouse#event_stager`, and `rask-bootstrap-admin`
-        # crash-looped on a tuple naming a relation that no longer existed, blocking the upgrade so the
-        # estate could not converge — every re-apply booted the same pod and reverted the model again.
-        #
-        # A missing relation ERRORS rather than denies ("object relation does not exist"), which the
-        # fail-closed wrapper renders as "authorization service unavailable" for every caller of that
-        # door, so the loss reads as an outage rather than as a permissions change.
-        # A store minted moments ago holds nothing to narrow, so it never pays the read — which is
-        # also what keeps a first boot from depending on a model that cannot exist yet.
-        current = None if store_is_new else await _current_model(client, retry_attempts=retry_attempts)
-        if current is not None:
-            removed = _narrowings(_relation_index(model["type_definitions"]), _relation_index(current.type_definitions))
-            if removed:
-                # KEEP THE STORE'S OWN MODEL. A narrower model is a rollback, not an edit, so the
-                # honest answer is the id the estate is already answering with.
-                log.error(
-                    "openfga_model_narrowing_refused",
-                    extra={"store_id": store_id, "model_id": current.id, "removed": removed[:20], "removed_count": len(removed)},
-                )
-                return store_id, str(current.id)
-            # AN UNCHANGED MODEL IS NOT AN EDIT, AND OPENFGA HAS NO WAY TO SAY SO. Every
-            # `write_authorization_model` mints a new immutable version, and every catalog boot wrote
-            # one — so the count grew with catalog restarts, which on this estate is often.
-            #
-            # THE CATALOG, not every FGA-enabled service: `provision=True` has exactly one non-test
-            # caller (`catalog/main.py`), and `tests/unit/test_only_one_service_may_publish_the_
-            # authorization_model.py` fails the suite if a second service ever publishes. Saying
-            # otherwise here would read as licence to add one.
-            # Measured on the live store 2026-09-13: 1,316 model versions for a `model.json` that has
-            # changed a handful of times.
-            #
-            # The churn is not merely untidy: the store's "latest" model is whichever pod booted last,
-            # which is the value the narrowing guard above reads to decide whether a boot is a
-            # rollback, and it leaves an operator asking what the estate's authorization model says
-            # with 1,316 candidates to diff.
-            if canonical_model(current) == canonical_model(model):
-                log.info("openfga_model_unchanged", extra={"store_id": store_id, "model_id": current.id})
-                return store_id, str(current.id)
+        # A store minted moments ago holds no model, so it never pays the read, which is also what keeps
+        # a first boot from depending on a model that cannot exist yet.
+        history = ModelHistory() if store_is_new else await _model_history(client, model, retry_attempts=retry_attempts)
+        if history.carrying is not None:
+            # THE STORE ALREADY HOLDS THIS IMAGE'S MODEL, so nothing is written ([[LH-201]]). Every
+            # `write_authorization_model` mints an immutable version, so rewriting a held body grows the
+            # history on every boot (1,353 versions in the live store, 2026-09-27). Held below the newest,
+            # it is still this image's model: every consumer checks against its own, so the newest is no
+            # one's rules and re-promoting a body would only grow the history.
+            carrying_id = str(history.carrying.id)
+            if history.held_below_newest:
+                log.info("openfga_model_held_below_newest", extra={"store_id": store_id, "model_id": carrying_id, "newest_model_id": str(history.newest.id)})
+            else:
+                log.info("openfga_model_unchanged", extra={"store_id": store_id, "model_id": carrying_id})
+            return store_id, carrying_id
+        current = history.newest
         changed = _body_changes(_relation_bodies(model["type_definitions"]), _relation_bodies(current.type_definitions)) if current is not None else []
         written = await client.write_authorization_model(
             WriteAuthorizationModelRequest(
@@ -674,8 +715,16 @@ async def provision(
     return store_id, written.authorization_model_id
 
 
-async def resolve(api_url: str, *, store_name: str = "lance-catalog") -> tuple[str, str] | None:
-    """Find an EXISTING store + its current model by name. Read-only. ``None`` if either is absent.
+async def resolve(
+    api_url: str,
+    *,
+    store_name: str = "lance-catalog",
+    store_id: str | None = None,
+    deadline_seconds: float = RESOLVE_DEADLINE_SECONDS,
+    poll_seconds: float = 5.0,
+) -> tuple[str, str] | None:
+    """Find the EXISTING store (by name, or ``store_id`` when pinned) and the model THIS IMAGE carries.
+    Read-only. ``None`` when either is still absent at the deadline.
 
     THE HALF OF :func:`provision` THAT IS NOT A WRITE, split out because conflating them cost the
     ingest plane its entire user-bearer door.
@@ -692,26 +741,53 @@ async def resolve(api_url: str, *, store_name: str = "lance-catalog") -> tuple[s
     symptom reaches a user as ``{"message":"Internal Error"}`` from a form submit; the cause is a
     startup warning nobody reads.
 
-    Returning ``None`` rather than provisioning is the point: if the store does not exist yet, the
-    estate has not been bootstrapped, and the caller fails closed. This function can never create a
+    Returning ``None`` rather than provisioning is the point: if the store or this image's model does not
+    exist by the deadline, the caller fails closed. This function can never create a
     store, never write a model, and never change what anyone is allowed to do.
 
-    The model is the store's CURRENT one — ``read_authorization_models`` answers newest-first — which
-    is the same version :func:`provision` just wrote for the services that do bootstrap. Pinning
-    ``*_FGA_MODEL_ID`` remains the production posture; this is the dev/e2e path made survivable.
+    The model is the newest one whose canonical body equals the bundled ``model.json``, never merely the
+    store's newest ([[LH-201]]): the newest is whichever writer wrote last, so during a rollout or after an
+    older image boots, a relation this image reasons about can be missing or defined differently there.
+    On a first install, or while the chart's pre-upgrade hook has not written this image's model yet, the
+    store, the model or OpenFGA itself can be missing for a while; each is waited out, ``poll_seconds``
+    apart, until ``deadline_seconds`` have passed. The first read scans the whole history; a later one
+    stops at the newest model already scanned, so a wait costs one page per poll.
     """
+    model = load_model()
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    known_newest: str | None = None
+    reason = ""
+    while True:
+        try:
+            found = store_id or await _named_store_id(api_url, store_name)
+            if found is None:
+                reason = f"no store named {store_name!r}"
+            else:
+                async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=found)) as client:
+                    history = await _model_history(client, model, known_newest=known_newest, retry_attempts=1)
+                if history.carrying is not None:
+                    return found, str(history.carrying.id)
+                if history.newest is not None:
+                    known_newest = str(_field(history.newest, "id"))
+                reason = f"store {found} holds no model carrying this image's model.json"
+        except (*_FAIL_CLOSED, ServiceUnavailableError) as exc:
+            # The store lookup raises the transport's own errors; the history read raises them as
+            # ServiceUnavailableError through `_guarded`. Both are "not answering yet".
+            reason = f"OpenFGA unavailable: {exc}"
+        waited = loop.time() - started
+        if waited + poll_seconds > deadline_seconds:
+            log.warning("openfga_model_absent", extra={"store_name": store_name, "reason": reason, "waited_seconds": round(waited, 1)})
+            return None
+        await asyncio.sleep(poll_seconds)
+
+
+async def _named_store_id(api_url: str, store_name: str) -> str | None:
+    """The id of the newest store named ``store_name``, or ``None`` when there is none."""
     async with OpenFgaClient(ClientConfiguration(api_url=api_url)) as client:
         stores = await client.list_stores()
-        existing = [s for s in (stores.stores or []) if s.name == store_name]
-        if not existing:
-            return None
-        store_id = max(existing, key=lambda s: s.created_at).id
-    async with OpenFgaClient(ClientConfiguration(api_url=api_url, store_id=store_id)) as client:
-        models = await client.read_authorization_models()
-        found = models.authorization_models or []
-        if not found:
-            return None
-        return store_id, found[0].id
+    found = newest_store(stores.stores or [], store_name)
+    return None if found is None else str(found.id)
 
 
 class PinnedModelDrift(NamedTuple):
@@ -740,10 +816,10 @@ class PinnedModelDrift(NamedTuple):
 async def audit_pinned_model(client: OpenFgaClient, *, store_id: str, model_id: str) -> PinnedModelDrift:
     """Report whether the PINNED model still says what this image's ``model.json`` says.
 
-    Pinning ``RASK_FGA_STORE_ID`` + ``RASK_FGA_MODEL_ID`` is the production posture, and it works by
-    skipping :func:`provision` entirely — no boot rewrites the estate's model, so image order stops
-    being load-bearing for who may do what. It also means ``load_model()`` is never read, and that is
-    the half nothing announced: an edit to ``model.fga`` shipped in this image takes effect nowhere and
+    A pinned ``RASK_FGA_MODEL_ID`` overrides the model this image carries, which every unpinned service
+    resolves by body ([[LH-201]]); no deployment pins one, and removing the knob is parked as LH-309. A
+    pin skips :func:`provision` entirely, so ``load_model()`` is never read, and that is the half nothing
+    announced: an edit to ``model.fga`` shipped in this image takes effect nowhere and
     says so nowhere. The symptom is a door answering "object relation does not exist", which the
     fail-closed wrapper renders as "authorization service unavailable" — an outage-shaped signal for
     what is really a configuration difference, and the same symptom the unpinned rollback produced.
@@ -753,7 +829,7 @@ async def audit_pinned_model(client: OpenFgaClient, *, store_id: str, model_id: 
     crash-loop no redelivery can clear.
 
     THE ONE MODEL READ IN THIS MODULE THAT IS NOT UNDER ``_guarded``, and the difference is the point:
-    :func:`_current_model` gates a WRITE, where failing closed is what stops a narrowing model reaching
+    :func:`_model_history` gates a WRITE, where failing closed is what stops a narrowing model reaching
     the store. This gates nothing at all. Failing closed here would take a serving estate down because
     a diagnostic could not run.
 

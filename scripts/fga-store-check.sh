@@ -31,43 +31,42 @@ POD="${POD#pod/}"
 API="$(kubectl -n "$NS" exec "$POD" -c catalog -- printenv RASK_FGA_API_URL)"
 [ -n "$API" ] || { echo "!! the catalog declares no RASK_FGA_API_URL"; exit 1; }
 
-# COMPARED PER RELATION, not per type name. A type set alone cannot see a rung MOVING between two
-# types that both already exist — which is exactly what the estate-root port does: `can_observe_events`
-# leaves `warehouse` and appears on `estate`, eleven types before and eleven after. A store that kept
-# the old model would answer every estate check from a `warehouse` definition the repo no longer has,
-# and a type-name diff would call that a match.
-#
-# THE STORE'S MODEL IS FETCHED AS JSON AND FLATTENED BY THE SAME CODE as the repo's
-# (`scripts/_fga_model_rungs.py`). Two flatteners would be two more copies of the thing this check
-# exists to catch.
-REPO_RUNGS="$(python3 scripts/_fga_model_rungs.py packages/service-kit/src/service_kit/governed/auth/model.json)"
-
-STORE_MODEL="$(kubectl -n "$NS" exec "$POD" -c catalog -- python -c '
-import json, os, sys, urllib.request
+# THE POD HALF IS STDLIB ONLY AND DECIDES NOTHING. The store choice and the comparison run repo-side
+# (`scripts/_fga_store_check.py`) from the CHECKOUT's rule, because the image can lag the checkout, which
+# is the state this check exists to report. It streams raw JSON one page per line and holds one page at
+# a time: it runs in the catalog's container, so what it buffers is charged to that pod's memory limit,
+# and the live store held 1,353 models on 2026-09-27.
+FETCH='
+import json, os, sys, urllib.parse, urllib.request
 api = os.environ["RASK_FGA_API_URL"].rstrip("/")
-with urllib.request.urlopen(api + "/stores", timeout=15) as r:
-    stores = json.load(r).get("stores") or []
-if not stores:
-    print("{}"); sys.exit(0)
-sid = stores[0]["id"]
-with urllib.request.urlopen(f"{api}/stores/{sid}/authorization-models?page_size=1", timeout=15) as r:
-    models = json.load(r).get("authorization_models") or []
-print(json.dumps(models[0] if models else {}))
-')"
+def get(path):
+    with urllib.request.urlopen(api + path, timeout=30) as r:
+        return json.load(r)
+if sys.argv[1] == "stores":
+    print(json.dumps({"pinned": os.environ.get("RASK_FGA_STORE_ID", ""), "stores": get("/stores").get("stores") or []}))
+    raise SystemExit(0)
+store, bound, size, token = sys.argv[2], int(sys.argv[3]), int(sys.argv[4]), ""
+for _ in range(bound):
+    page = get(f"/stores/{store}/authorization-models?page_size={size}" + (f"&continuation_token={urllib.parse.quote(token)}" if token else ""))
+    print(json.dumps(page), flush=True)
+    token = page.get("continuation_token") or ""
+    if not token:
+        raise SystemExit(0)
+raise SystemExit(f"store {store}: model history longer than {bound} pages of {size}; this check reads it whole and refuses past the page bound the writers use")
+'
 
-STORE_RUNGS="$(printf '%s' "$STORE_MODEL" | python3 scripts/_fga_model_rungs.py)"
-[ -n "$STORE_RUNGS" ] || { echo "!! the store holds no authorization model — the openfga-model hook has not run"; exit 1; }
+# THE STORE IS THE ONE THE ESTATE USES: the catalog's `RASK_FGA_STORE_ID` pin, else the newest store
+# named `lance-catalog` (`fga.newest_store`), the rule the hook and every service share ([[LH-201]]).
+PLAN="$(kubectl -n "$NS" exec "$POD" -c catalog -- python -c "$FETCH" stores | uv run python scripts/_fga_store_check.py plan)"
+read -r STORE MAX_PAGES PAGE_SIZE <<<"$PLAN"
 
-if [ "$REPO_RUNGS" = "$STORE_RUNGS" ]; then
-  echo ">> the store's model matches the repo ($(echo "$REPO_RUNGS" | wc -l) relations over $(echo "$REPO_RUNGS" | cut -d'#' -f1 | sort -u | wc -l) types)"
-  exit 0
-fi
-
-echo "!! THE STORE'S AUTHORIZATION MODEL DOES NOT MATCH THIS REPO."
-echo "   in the repo and NOT in the store:"
-LC_ALL=C comm -23 <(echo "$REPO_RUNGS") <(echo "$STORE_RUNGS") | sed 's/^/     /'
-echo "   in the store and NOT in the repo:"
-LC_ALL=C comm -13 <(echo "$REPO_RUNGS") <(echo "$STORE_RUNGS") | sed 's/^/     /'
-echo "   Every live check is answered from the STORE. Re-run the chart's openfga-model hook"
-echo "   (helm upgrade, or the Job directly) and check it did not fail silently."
-exit 1
+# THE QUESTION IS WHETHER THE STORE HOLDS THIS CHECKOUT'S MODEL, at any depth of its history, not
+# whether its newest is this checkout's. Each service checks against the model its own image carries,
+# so a body held below the newest is one a pod built from this checkout resolves. When it is absent,
+# the report is PER RELATION against the newest (`scripts/_fga_model_rungs.py` flattens both sides): a
+# type-name diff cannot see a rung MOVING between two types that both exist, as `can_observe_events` did
+# from `warehouse` to `estate` with eleven types before and eleven after.
+PAGES="$(mktemp)"
+trap 'rm -f "$PAGES"' EXIT
+kubectl -n "$NS" exec "$POD" -c catalog -- python -c "$FETCH" models "$STORE" "$MAX_PAGES" "$PAGE_SIZE" > "$PAGES"
+uv run python scripts/_fga_store_check.py compare "$STORE" < "$PAGES"

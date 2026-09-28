@@ -23,10 +23,14 @@ import pytest
 import requests
 from topology import OUTSIDER, assert_parent_exists, create_top_level
 
+from service_kit.governed.auth.write_model import carried_model
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex").rstrip("/")
 FGA = os.environ.get("LANCE_E2E_FGA", "http://localhost:8080").rstrip("/")
+#: The store `scripts/e2e_live.sh` found the catalog using (its pin, else the newest `lance-catalog`).
+STORE = os.environ.get("LANCE_E2E_FGA_STORE_ID", "")
 S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900").rstrip("/")
 
 pytestmark = pytest.mark.e2e
@@ -72,20 +76,30 @@ def _sub(tok: str) -> str:
 
 
 def _store_model() -> tuple[str, str]:
-    stores = requests.get(f"{FGA}/stores", timeout=10).json()["stores"]
-    st = max(stores, key=lambda s: s["created_at"])["id"]
-    m = requests.get(f"{FGA}/stores/{st}/authorization-models", timeout=10).json()
-    return st, m["authorization_models"][0]["id"]
+    """The store the estate uses and the model this checkout carries in it ([[LH-201]]).
+
+    Never the store's newest model: a legacy image's narrower body can be the newest, and a grant it
+    refuses reads further down as the door under test denying. No such model fails the suite.
+    """
+    try:
+        return carried_model(FGA, pinned=STORE)
+    except LookupError as exc:
+        pytest.fail(str(exc))
 
 
 def _grant(st: str, m: str, sub: str, rel: str, obj: str) -> None:
-    requests.post(
+    r = requests.post(
         f"{FGA}/stores/{st}/write",
         json={
             "writes": {"tuple_keys": [{"user": f"user:{sub}", "relation": rel, "object": obj}]},
             "authorization_model_id": m,
         },
         timeout=10,
+    )
+    # A re-run against a long-lived estate finds the grant held. Any other refusal fails here, where it
+    # names itself, rather than later as a 403 from the catalog.
+    assert r.status_code == 200 or (r.status_code == 400 and "already exists" in r.text), (
+        f"OpenFGA refused the grant {rel} on {obj} ({r.status_code}): {r.text}"
     )
 
 

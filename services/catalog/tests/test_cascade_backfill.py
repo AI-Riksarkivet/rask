@@ -137,5 +137,9 @@ async def _provision(_url: str) -> tuple[str, str]:
     return ("store", "model")
 
 
-async def _resolve(_url: str) -> tuple[str, str]:
-    return ("store", "model")
+async def _resolve(
+    _url: str, *, store_name: str = "lance-catalog", store_id: str | None = None, deadline_seconds: float = 0.0, poll_seconds: float = 0.0
+) -> tuple[str, str]:
+    """`fga.resolve`'s whole signature, so a new keyword the caller passes reaches the double."""
+    del store_name, deadline_seconds, poll_seconds
+    return (store_id or "store", "model")
