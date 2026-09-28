@@ -975,6 +975,16 @@ lifecycle:
       command: ["sh", "-c", "sleep {{ .Values.lifecycle.preStopSeconds }}"]
 {{- end -}}
 
+{{/* values.yaml lifecycle. Arg: $root, or (list $root <pod grace>) */}}
+{{- define "rask.shutdownArg" -}}
+{{- $r := . -}}{{- $g := 0 -}}
+{{- if kindIs "slice" . }}{{ $r = index . 0 }}{{ $g = index . 1 }}{{ else }}{{ $g = .Values.lifecycle.terminationGracePeriodSeconds }}{{ end -}}
+{{- $l := $r.Values.lifecycle -}}
+{{- $t := sub $g (add $l.preStopSeconds (required "lifecycle.teardownSeconds" $l.teardownSeconds)) -}}
+{{- if or (le $t 0) (lt (int $l.teardownSeconds) 0) }}{{ fail "lifecycle: need 0 <= teardownSeconds < grace - preStopSeconds" }}{{ end -}}
+- "--timeout-graceful-shutdown={{ $t }}"
+{{- end -}}
+
 {{/* HTTP health probes for the FastAPI app workloads (catalog/lineage/producer/stage runners/compaction). Two
 distinct signals: readiness (/readyz) is dependency-aware (503 until the pool/namespace is up AND again once
 draining) so k8s only routes traffic to a truly-ready pod; liveness (/livez) is process-up only (never

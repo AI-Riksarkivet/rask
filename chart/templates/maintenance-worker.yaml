@@ -62,6 +62,7 @@ spec:
             - "maintenance.service:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
+            {{- include "rask.shutdownArg" (list . .Values.lifecycle.maintenanceTerminationGracePeriodSeconds) | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}

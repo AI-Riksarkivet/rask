@@ -689,6 +689,26 @@ resources:
 # `sidecarBlockShutdownSeconds` must sit BETWEEN the two: longer than preStopSeconds or the sidecar
 # still goes first, shorter than the grace period or the kubelet SIGKILLs it mid-flush having made it
 # decline to flush earlier.
+#
+# THE APP'S OWN BOUND, from the same numbers:
+#
+#     uvicorn --timeout-graceful-shutdown  =  the pod's grace - preStopSeconds - teardownSeconds
+#
+# The app gets SIGTERM only once preStop has slept. uvicorn then stops accepting, waits for the
+# requests in flight, and only after that runs the lifespan's `finally`. Its wait is unbounded by
+# default, so one slow request holds the process until SIGKILL and the teardown never runs. At the
+# bound uvicorn cancels the ASYNC work still running and runs the teardown, which keeps
+# `teardownSeconds` before the kubelet's SIGKILL: 40 - 5 - 10 = 25s for the 40s pods,
+# 120 - 5 - 10 = 105s for maintenance. Work in a THREAD (Starlette's run_in_threadpool, which runs
+# maintenance's execute_unit) is not interrupted by the bound: it ends by returning, or by that
+# SIGKILL at the pod's grace. uvicorn is the container's PID 1 (the command replaces the image's
+# tini), where the kernel drops its closing re-raise of SIGTERM, so the process waits for the thread
+# (measured 2026-09-28, uvicorn 0.51.0, 3s bound: a 25s threaded request kept a PID 1 up 25.1s after
+# SIGTERM, and ended with the process at 3.9s when uvicorn was not PID 1).
+# `teardownSeconds` is a budget, not a measurement of any lifespan. `rask.shutdownArg` renders the
+# bound into every uvicorn whose command the chart sets (the assist runner keeps its image's CMD) and
+# refuses to render a bound that is not positive or a negative teardownSeconds, whose bound would end
+# after the SIGKILL. Pinned by tests/unit/test_uvicorn_drains_inside_its_pods_grace_period.py.
 lifecycle:
   preStopSeconds: 5
   # 20s = 5 (preStop) + 10 (sidecar drain, the ~10s microservices.md budgets for Dapr flushing pending
@@ -696,6 +716,7 @@ lifecycle:
   terminationGracePeriodSeconds: 40
   sidecarBlockShutdownSeconds: 20
   maintenanceTerminationGracePeriodSeconds: 120
+  teardownSeconds: 10
 
 # --- Pod hardening (applied to every FIRST-PARTY app container via the lance.securityContext helper) --
 # This line used to say "every app container", and for six Deployments it was false: fleet.yaml and

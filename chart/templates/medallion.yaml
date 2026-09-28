@@ -54,6 +54,7 @@ spec:
             - "medallion.producer:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
+            {{- include "rask.shutdownArg" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
@@ -468,6 +469,7 @@ spec:
             - "medallion.stage_runner:app"
             - "--host=0.0.0.0"
             - "--port={{ $port }}"
+            {{- include "rask.shutdownArg" $root | nindent 12 }}
           ports: [{ name: http, containerPort: {{ $port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}

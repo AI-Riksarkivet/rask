@@ -61,6 +61,7 @@ spec:
             - {{ .Values.services.catalog.module | quote }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.catalog.port }}"
+            {{- include "rask.shutdownArg" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.catalog.port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}
@@ -558,6 +559,7 @@ spec:
             - {{ .Values.services.lineage.module | quote }}
             - "--host=0.0.0.0"
             - "--port={{ .Values.services.lineage.port }}"
+            {{- include "rask.shutdownArg" . | nindent 12 }}
           ports: [{ name: http, containerPort: {{ .Values.services.lineage.port }} }]
           env:
             {{- include "lance.allocatorEnv" (list $root) | nindent 12 }}

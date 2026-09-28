@@ -571,12 +571,10 @@ async def healthz(request: Request) -> JSONResponse:
     matches compute's/controlplane's ``/api/health`` and the lance plane's ``/livez``
     (the path differs by design — see above — the shape must not).
 
-    IT REPORTS THE DRAIN, which a constant cannot. This returned `Liveness()` unconditionally, and the
-    gateway is the INGRESS — every request in the estate passes through it — so a rolling update that
-    kept it in rotation through SIGTERM dropped in-flight requests at the one hop that has no
-    alternative. `arm_drain_on_sigterm` flips the flag when the signal ARRIVES rather than when the
-    lifespan unwinds, which is the only ordering that gets the kubelet out before uvicorn stops
-    accepting."""
+    IT REPORTS THE DRAIN, which a constant cannot, at the INGRESS every request in the estate passes
+    through. `arm_drain_on_sigterm` flips the flag the moment SIGTERM arrives and then hands the signal
+    to uvicorn, so a probe answered between the signal and uvicorn closing its listener already reads
+    draining."""
     if getattr(request.app.state, "shutting_down", False):
         return JSONResponse(
             status_code=503,
