@@ -1,6 +1,6 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-309, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-313, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
@@ -9,14 +9,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-201**, **LH-183**, **LH-279**, **LH-280**, **LH-281** — FGA/governance, maintenance, and the catalog's provenance and governance holes.
-   Why now: lakehouse components first (owner, 2026-09-28); LH-201 must land before any model.fga change (LH-221, LH-222, LH-076).
+1. **LH-183**, **LH-279**, **LH-280**, **LH-281** — maintenance, and the catalog's provenance and governance holes.
+   Why now: lakehouse components first (owner, 2026-09-28). LH-201 is live, so a model.fga change (LH-221, LH-222, LH-076) now reaches each service with its own image.
 2. **LH-064**, **LH-220** (with **XC-076** as LH-220's enabler: one ServiceAccount per service) — signed provenance and per-pod service identity.
    Why now: provenance and governance; XC-076 is taken for what LH-220 needs, not as chart work in itself.
 3. **XC-090** (with **XC-096** as its enabler: the CI lanes it runs on) — the Phase 1 acceptance proof.
    Why now: without it, "Phase 1 done" means only that every row closed.
 4. **LH-265**; **XC-049** only when a lakehouse chart fix needs the release space (Kueue is decoupled and low).
-   Why now: test cleanup stage 2; the release object has 816 bytes of headroom.
+   Why now: test cleanup stage 2; the release object has 1,652 bytes of headroom (rev 252).
 <!-- FOCUS:END -->
 
 ## Owner rulings in force
@@ -68,14 +68,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 106 | 104 | 28 |
+| **PHASE 1 · LAKEHOUSE** | 105 | 103 | 27 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**244 open items**, of which **10 are blocked on a decision** and **234 can be picked up today**; 56 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**243 open items**, of which **10 are blocked on a decision** and **233 can be picked up today**; 55 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -111,14 +111,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Call the captured previous handler after mark_draining; RED with a real uvicorn, not a patched os.kill (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 measured uvicorn 0.51.0 alive 12 s after SIGTERM). Test resilience.md §9's per-vend object-store client hypothesis: 10k opens of one S3 dataset with constant vs per-open-distinct credentials, heaptrack or a jemalloc A/B. Lakekeeper disables the AWS SDK identity cache for unbounded partition growth and runs jemalloc (crates/io/src/s3.rs:75-91). Set --timeout-graceful-shutdown from the lifecycle (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 step 3).
 - *Closes when:* The holder is named by measurement (filed upstream if external), and a recycle is observed exiting and being replaced cleanly.
 - *Evidence:* packages/service-kit/src/service_kit/draining.py:137-188 · services/maintenance/src/maintenance/services/rewrite_slot.py:94-119,147-170 · services/maintenance/src/maintenance/api/work.py:117 · commit 854a0cf2 (34.5 h soak)
-
-**LH-201 · The FGA model hook picks stores[0] and writes after new pods start, and non-catalog services pin whichever model was newest at boot**
-`service-kit, chart, lineage, medallion, maintenance` · **HIGH**
-- *What is left:* The hook and `scripts/fga-store-check.sh` pick stores[0] instead of the store named lance-catalog (write_model.py:95; fga-store-check.sh:52); the hook still runs post-install,post-upgrade (openfga-model.yaml:34); `fga.resolve()` pins the newest model at boot for the pod's life (fga.py:630-660; auth.fgaModelId defaults to "").
-- *Why:* Criterion 2. Must land before any model.fga change (LH-221, LH-222, LH-076): a repointed relation can be missing from the model a pod checks against, and batch_check reports that as silent denial.
-- *How:* Select the store by name (newest created_at); `resolve()` pages the store's models and returns the newest whose canonical body equals the bundled model.json, with a bounded wait, failing closed. Move the model hook to pre-upgrade (post-install kept for first install); models are immutable, so writing early is safe. Do not copy Lakekeeper's configured-version knob. Refuse when the store's newest model is not an ancestor of the image's, so an older image cannot roll rule bodies back.
-- *Closes when:* A body-only model change is written before new pods start, each service checks against the body its own image carries (pinned by tests), and fga-store-check selects the store by name, and a downgrade cannot rewrite rules.
-- *Evidence:* packages/service-kit/src/service_kit/governed/auth/write_model.py:27-43,83 · scripts/fga-store-check.sh:52 · packages/service-kit/src/service_kit/governed/fga.py:607-644 · chart/values.yaml:966-967 · the body comparison closed in 35d1067d: needs_write compares canonical_model bodies, and shape() is only an index (write_model.py:21-40)
 
 **LH-202 · A write-tier vend grants Put/Delete over the whole table prefix, one rung wider than the FGA model**
 `catalog` · **HIGH**
@@ -2160,3 +2152,10 @@ Found by the LH-144 live proof (2026-09-27) and parked under the same rule. Meas
 Found by the LH-206 review round (2026-09-27) and parked under the same rule. Measurements: the LH-206 commit (2acef77e).
 
 - LH-308 · MEDIUM · A tag or branch created while a version reclaim runs is not seen by it: Lance reads the refs once per `cleanup_old_versions` and no door serializes `tags/create`, `tags/update` or `branches/create` with a reclaim, so the new ref names a deleted version (a tag cannot be checked out; a branch cut from it loses its data files). Measured on pylance 12.0.0 with concurrent races on a local store: version/delete 31 of 60 (tags) and 94 of 120 (branches), maintenance/run 59 of 60; the sweep reclaims on every tick. Needs a per-table serialization of ref creation with every reclaim, or an upstream Lance answer · `catalog, maintenance`
+
+Found by the LH-201 review round (2026-09-28) and parked under the same rule. Measurements: the LH-201 commit (16c1025b) and the rev 252 deploy record.
+
+- LH-309 · LOW · `auth.fgaModelId` (`RASK_FGA_MODEL_ID`, values.yaml:968, rendered in six places across five templates) still pins every service to one model id and skips the by-body resolve, so set, it puts every image on one body whether its code carries it or not. Remove the knob, or refuse a pin whose body is not the image's own · `service-kit, chart`
+- LH-310 · LOW · A non-fatal service whose resolve runs out its 120 s deadline (OpenFGA down at boot, or the carried model not yet written) builds no FGA client and answers 503 on its gated doors until the pod restarts; nothing retries the resolve · `service-kit`
+- LH-311 · LOW · Five scripts and two JS e2e drivers still write or check tuples against the store's newest model (they name no model, or, in auth_chain.sh, `authorization_models[0]`), and three of them pick `stores[0]` or the newest store of any name: e2e_stack.sh:288-299,371, verify_control_events.sh:79-91, verify_cross_zone_oidc.sh:66-70, verify_produce_door.sh:93-96, auth_chain.sh:49-52, tests/e2e/verify_notifications_two_users.mjs:268, tests/e2e/verify_originator_lane.mjs:80 (lines at 16c1025b). Right while the hook's body is the newest; wrong once another image writes a newer one · `scripts, tests`
+- LH-312 · LOW · fga_seed_demo.py's `_TUPLE_RE` strips double quotes but keeps single quotes, so 21 of the 92 model.fga.yaml fixture tuples (for example `'namespace:depth_1'`) go out quoted and are refused; identical before LH-201 · `scripts`
