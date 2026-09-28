@@ -4,17 +4,19 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
+**Phase 1 is the lakehouse's components** (owner, 2026-09-28): medallion, catalog, provenance/lineage, FGA/governance, maintenance, and the bring-your-own workflow-engine seam. Compute comes after. Explorer/search, annotator, the models zone, flows and Kueue are decoupled services and LOW. A cross-cutting or infra row is taken only as the stated enabler of a named lakehouse row.
+
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-201**, **XC-076**, **LH-183** — LH-201's precondition (LH-200) is live; the other two are half-done on wip/td-* branches.
-   Why now: LH-201 must land before any model.fga change (LH-221, LH-222, LH-076).
-2. **LH-279**, **LH-280**, **LH-281**, **XC-096** — The remaining new HIGH rows from the 2026-09-26 lakehouse map, in its order.
-   Why now: a writer-planted base, a forgeable run marker and an erasure that writes the identifier it erases are live holes, and no ephemeral lane runs a suite until XC-096 lands.
-3. **XC-090** — The Phase 1 acceptance proof: the five criteria written down, and one scenario that drives them together.
+1. **LH-201**, **LH-183**, **LH-279**, **LH-280**, **LH-281** — FGA/governance, maintenance, and the catalog's provenance and governance holes.
+   Why now: lakehouse components first (owner, 2026-09-28); LH-201 must land before any model.fga change (LH-221, LH-222, LH-076).
+2. **LH-064**, **LH-220** (with **XC-076** as LH-220's enabler: one ServiceAccount per service) — signed provenance and per-pod service identity.
+   Why now: provenance and governance; XC-076 is taken for what LH-220 needs, not as chart work in itself.
+3. **XC-090** (with **XC-096** as its enabler: the CI lanes it runs on) — the Phase 1 acceptance proof.
    Why now: without it, "Phase 1 done" means only that every row closed.
-4. **LH-265**, **XC-049**, **LH-064**, **LH-220** — As before: stage 2 of the test cleanup, Kueue out of the release (parked on the htr-batch handover), the require-a-signature sequence, and D1.
-   Why now: unchanged; XC-049 starts when the owner confirms the htr-batch team has the note.
+4. **LH-265**; **XC-049** only when a lakehouse chart fix needs the release space (Kueue is decoupled and low).
+   Why now: test cleanup stage 2; the release object has 816 bytes of headroom.
 <!-- FOCUS:END -->
 
 ## Owner rulings in force
