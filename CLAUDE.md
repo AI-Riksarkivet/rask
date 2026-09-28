@@ -19,6 +19,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   that proves the defect, then the fix — not ad-hoc edits. (This used to name the "superpowers flow";
   that plugin is not installed, so the instruction pointed at nothing. `docs/superpowers/` is dated
   residue from when it was — do not treat those plans or specs as current.)
+- **Tests: invoke the testing skills first, every time.** Before writing, changing, deleting or auditing any test,
+  invoke `testing-python` and read `writing-python`'s `references/testing.md` (the principles, which hold for any
+  codebase; `fastapi`'s testing reference for a FastAPI door), then `rask-testing` (only rask's pytest wiring,
+  fixtures and the row rule). Integration tests (the real app over HTTP, real pylance on moto, a real OpenFGA, real uvicorn,
+  several services in one flow) are the keepers; a unit test earns its place only for a pure function's distinct
+  branches, and a unit test covering what an integration test covers is deleted, not kept. A change adds at most
+  one test per closes-when clause and replaces the test of the same seam rather than adding beside it; state the
+  net test delta in the commit. No test reads source text, an AST, prose or file names: a code-shape rule belongs in
+  ruff or an import-linter contract, or nowhere. Measured 2026-09-28: 12,066 tests in 1,291 files (231k test lines
+  against 120k production lines), and 2,743 of them (22.7%) execute no production line at all.
 - **No silent scope-cuts.** If you bound coverage, sample, or defer something, say so
   explicitly. Don't let "partially done" read as "done".
 - **No backward compatibility — the estate is pre-production.** No migration shims, dual read paths,
@@ -344,6 +354,7 @@ single file:
 | Whether a feature should tell a PERSON something — emitting a run/control event, a notification that never fired, a new `ControlAction`/`NotificationReason` | `rask-notifications` |
 | A Dapr component vs hand-rolling — queuing, scheduling, locking, config, secrets, middleware; which blocks this estate uses/refused and why | `rask-dapr` |
 | An authorization model, tuples, `.fga` files | `openfga` |
+| Writing, changing, deleting or auditing any test; a test audit or prune | `testing-python` + `rask-testing` |
 | Anything under `chart/`, a subchart or CRD, `helm upgrade`, a value that never reaches a pod, the 1 MiB release ceiling | `rask-helm` |
 
 These skills are maintained against the code and **will drift** — when you find a claim that contradicts a file, fix the skill in the same commit as the code.
