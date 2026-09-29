@@ -47,8 +47,9 @@ def _settings(**over: Any) -> MedallionSettings:
 
 
 def _event(object_id: str, project: str | None = "acme") -> dict[str, Any]:
+    """``project=None`` states no tenant; ``project=""`` states an EMPTY one, which is its own case."""
     extra: dict[str, Any] = {"from_version": 3, "to_version": 7, "location": "s3://b/t"}
-    if project:
+    if project is not None:
         extra["project"] = project
     return {"data": {"action": "table_published", "object_id": object_id, "event_id": "e1", "actor": "user:s", "extra": extra}}
 
@@ -81,3 +82,27 @@ class TestItDrivesOnlyDeclaredLanes:
         result = await handle_publication(dapr, _settings(), _event("table:acme-scratch$notes"))
         assert result == {"status": "SUCCESS"}
         assert dapr.published == []
+
+
+class TestItNeverGuesses:
+    """The head must not derive a tenant from the table id. A table id is `<namespace>$<table>` and
+    `project_namespace` joins with `-` while `PROJECT_PATTERN` permits `-` inside a project id, so
+    `acme-bronze` is genuinely ambiguous. The catalog resolves the tenant through the warehouse binding
+    and stamps it on the event; this head reads it."""
+
+    @pytest.mark.asyncio
+    async def test_a_QUALIFIED_namespace_with_no_stated_tenant_routes_NOWHERE(self) -> None:
+        """`acme-bronze` cannot be de-qualified without knowing the project, so it matches no declared
+        lane and the head drives nothing, rather than guessing `acme-bronze` is the tenant and firing a
+        trigger naming a project no registry knows."""
+        assert await _route("table:acme-bronze$pages", project=None) is None
+
+    @pytest.mark.asyncio
+    async def test_an_EMPTY_project_is_omitted_not_forwarded(self) -> None:
+        """`transform.py` treats a present-but-unsafe project as deterministic garbage and DROPs, so
+        an empty string would refuse every trigger carrying one."""
+        routed = await _route("table:bronze$pages", project="")
+
+        assert routed is not None
+        _topic, trigger = routed
+        assert "project" not in trigger

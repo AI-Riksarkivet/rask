@@ -2,7 +2,8 @@
 
 The cascade head is provenance-fabricatable, so the ADMIN door added for the UI must not be bypassable:
 an invalid bearer 401s, a non-admin 403s, an FGA outage 503s (never a silent allow), and a request carrying
-no credential 403s. The service-token path is UNCHANGED, and dev (no APP_API_TOKEN) stays open.
+no credential 403s. An UNCONFIGURED door (no app token from either source) refuses unless the deployment
+sets `RASK_ALLOW_UNAUTHENTICATED_DAPR` ([[LH-175]]).
 
 Two layers: direct-function tests pin every fail-closed branch of :func:`authorize_produce` (sync via
 ``asyncio.run`` — no async-plugin dependency); the TestClient tests pin that it is actually WIRED onto the
@@ -21,7 +22,7 @@ from typing import Required, TypedDict, Unpack, cast
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
-from lance_namespace import LanceNamespaceError, ServiceUnavailableError, UnauthenticatedError
+from lance_namespace import LanceNamespaceError, PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from medallion.api import produce_auth
@@ -111,8 +112,52 @@ def _expect(monkeypatch: pytest.MonkeyPatch, status: int, **kw: Unpack[_RunArgs]
     assert status_for(int(exc.value.code)) == status
 
 
-def test_dev_open_when_no_service_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _run(monkeypatch, app_token=None) is None  # dev no-op, exactly like require_dapr_token
+# ── [[LH-175]] an UNCONFIGURED door admits nobody unless the deployment says it runs open ──────────
+# Owner ruling 2026-09-19 (`docs/DECISIONS.md`): `require_dapr_token` states the rule for every other
+# sidecar-delivered door, "the door cannot authenticate anybody, so it admits nobody", and this door
+# answers the same way. `RASK_ALLOW_UNAUTHENTICATED_DAPR` is how a deployment that means to run open says
+# so, explicitly and greppably, where an empty setting is neither.
+
+
+@pytest.fixture
+def no_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The UNSET-token condition: neither the Dapr secret store nor the settings resolve a token."""
+    monkeypatch.setattr(produce_auth.dapr_auth, "expected_app_token", lambda: "")
+
+
+class _Settings:
+    app_api_token = ""
+    produce_admin_project = "acme"
+
+
+def _hatch(monkeypatch: pytest.MonkeyPatch, *, open_door: bool) -> None:
+    monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true" if open_door else "false")
+
+
+async def _call(request: object = object()) -> str | None:
+    return await produce_auth.authorize_produce(cast(Request, request), cast(MedallionSettings, _Settings()), cast(OpenFgaClient, object()))
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_token")
+async def test_an_unconfigured_door_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    _hatch(monkeypatch, open_door=False)
+
+    with pytest.raises(PermissionDeniedError):
+        await _call()
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_token")
+async def test_the_hatch_still_opens_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The control. Without it, a door that refused unconditionally would pass the case above.
+
+    A deployment that means to run open says so, and gets exactly what it had before: admitted, with no
+    verified subject to carry as an originator.
+    """
+    _hatch(monkeypatch, open_door=True)
+
+    assert await _call() is None
 
 
 def test_invalid_bearer_is_401(monkeypatch: pytest.MonkeyPatch) -> None:

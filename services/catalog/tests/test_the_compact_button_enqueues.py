@@ -128,6 +128,31 @@ def test_the_protection_verdict_rides_the_unit(monkeypatch: pytest.MonkeyPatch, 
     assert item.protected_by == base_refs.normalise("s3://warehouse/aa3bed10_ns$events")
 
 
+def test_the_identity_survives_a_uri_no_parser_can_read(monkeypatch: pytest.MonkeyPatch, queued: TestClient, published: _Published) -> None:
+    """`s3://lance-catalog/medallion/bronze` yields no id to `table_id_from_uri`. The door still knows.
+
+    The executor asks the catalog for a credential scoped to the dataset it rewrites, and the catalog
+    is addressed by IDENTIFIER (`POST /management/v1/table/{id}/credentials`), never by location. Measured
+    over eleven top-level roots of the live warehouse, `table_id_from_uri` recovers an id from six: it
+    reads the flat `<uuid8>_<table_id>` layout and returns None for the rest, including `medallion/`, the
+    highest-churn writer in the estate. This door has the id in its own request path, so it stamps it.
+    """
+    from maintenance.core.lineage_emit import table_id_from_uri
+    from service_kit.lakehouse.work_items import DatasetWorkItem
+
+    class _MedallionDs:
+        # The MEDALLION layout on purpose: this is the URI shape `table_id_from_uri` cannot read, so a
+        # test using the flat layout would pass with the identity still coming from the path.
+        uri = "s3://lance-catalog/medallion/bronze"
+
+    monkeypatch.setattr(door, "open_dataset", lambda ns, so, segments, **kwargs: _MedallionDs())
+
+    queued.post("/management/v1/table/bronze%24events/maintenance/compact", json={})
+    item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
+    assert table_id_from_uri(item.uri) is None, "pick a URI the parser genuinely cannot read, or this proves nothing"
+    assert item.table_id == "bronze$events"
+
+
 def test_without_a_queue_the_door_stays_synchronous(inline: TestClient, published: _Published, compacted: list[str]) -> None:
     """No work topic means `register_work_route` registered no executor. A 202 here accepts work that
     nothing will ever perform."""

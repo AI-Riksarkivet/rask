@@ -53,3 +53,15 @@ def test_an_UNCLASSIFIED_action_is_treated_as_a_write() -> None:
     corrupts something during a maintenance window.
     """
     assert is_mutating("POST", "/v1/table/pages/some_future_operation")
+
+
+def test_is_mutating_classifies_methods() -> None:
+    """With no action in the path the METHOD decides: GET/HEAD/OPTIONS are served through the window
+    (dropping them refuses every plain GET, an unreadable catalog), every other verb is a write."""
+    assert not is_mutating("GET")
+    assert not is_mutating("head")
+    assert not is_mutating("OPTIONS")
+    assert is_mutating("POST")
+    assert is_mutating("delete")
+    assert is_mutating("PUT")
+    assert is_mutating("PATCH")

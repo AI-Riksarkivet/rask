@@ -156,19 +156,34 @@ def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: 
 # --------------------------------------------------------------------------- #
 
 
-def test_the_lineage_outbox_is_never_walked(tmp_path: Path) -> None:
-    """It is control-plane bookkeeping in the same class as `_warehouses` and `_trash`, and it was the
-    only one of the five not skipped.
+@pytest.mark.parametrize(
+    "control_dir",
+    [
+        pytest.param("_lineage_outbox/ev@COMPLETE.json/0cadeb18", id="lineage-outbox"),
+        pytest.param("_backups/control/20260914T163435Z/registry/deep/deeper", id="backups"),
+    ],
+)
+def test_a_control_prefix_is_never_walked(tmp_path: Path, control_dir: str) -> None:
+    """Control-plane bookkeeping holds no dataset, so the walk must not file it as an unscanned subtree.
 
-    Measured 2026-09-08 on the deployed estate: 10 of the primary bucket's 59 truncated prefixes were
+    `_lineage_outbox` is in the same class as `_warehouses` and `_trash`. Measured 2026-09-08 on the
+    deployed estate: 10 of the primary bucket's 59 truncated prefixes were
     `_lineage_outbox/<event>.json/<id>/` — dead ends filed as `IncompleteScan`, which BLOCKS the purge
     for a coverage gap that cannot exist. No dataset is ever written under it.
+
+    `_backups` holds the snapshots `scripts/control_root_backup.py` writes as
+    `_backups/control/<timestamp>/…`, which nest deeper than `discovery_max_depth`. Measured on the
+    deployed release 2026-09-16: the incomplete list was three `depth limit reached at
+    s3://lance-catalog/_backups/control/<timestamp>` entries, all backups, against 932 orphan files
+    across 8 datasets the purge could not touch. The depth bound itself stays loud for a governed
+    dataset nested too deep; what is not a coverage gap is failing to reach into a directory no dataset
+    may live in.
     """
-    (tmp_path / "_lineage_outbox" / "ev@COMPLETE.json" / "0cadeb18").mkdir(parents=True)
+    (tmp_path / control_dir).mkdir(parents=True)
     lance.write_dataset(pa.table({"id": [1]}), str(tmp_path / "real.lance"))
 
-    # The bound is set so that DESCENDING would truncate: `_lineage_outbox/ev@COMPLETE.json` sits at
-    # depth 2 and has a child. A walk that skips the outbox truncates nothing; one that enters it
+    # The bound is set so that DESCENDING would truncate: each control directory's second level sits
+    # at depth 2 and has a child. A walk that skips the prefix truncates nothing; one that enters it
     # files a dead end. Without this the assertion passes on any bound deep enough to exhaust the tree.
     result = discover_datasets(pafs.LocalFileSystem(), str(tmp_path), max_depth=2)
 

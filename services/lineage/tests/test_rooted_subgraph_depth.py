@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import pytest
 
-from lineage.services.cypher import bounded_walk
+from lineage.services import cypher as cy
+from lineage.services.cypher import MAX_WALK_DEPTH, bounded_walk
 
 
 def test_no_depth_keeps_the_unbounded_walk() -> None:
@@ -65,3 +66,15 @@ def test_the_bound_is_applied_to_every_variable_hop_in_the_query() -> None:
     """
     two = "MATCH (d)-[:DERIVED_FROM*1..]->(u) MATCH (d)<-[:DERIVED_FROM*1..]-(x) RETURN u, x"
     assert bounded_walk(two, 3).count("*1..3") == 2
+
+
+class TestTheCeilingsAreEnforcedNotAdvisory:
+    """`bounded_walk` refuses rather than clamps, and the reason is in its own docstring: the hop range
+    is SYNTAX interpolated into the query, so a value that is not a small positive integer is an
+    injection vector. Clamping would run a query the caller never asked for and hide that they tried."""
+
+    def test_a_depth_over_the_ceiling_is_refused(self) -> None:
+        with pytest.raises(ValueError, match="between 1 and"):
+            bounded_walk(cy.UPSTREAM, MAX_WALK_DEPTH + 1)
+        with pytest.raises(ValueError, match="between 1 and"):
+            bounded_walk(cy.COL_UPSTREAM, 0)

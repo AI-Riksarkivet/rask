@@ -39,6 +39,37 @@ async def test_the_client_is_reused_across_calls() -> None:
     await ray_submit.close_ray_client()
 
 
+def test_the_pooled_client_is_rebuilt_when_the_ray_address_moves() -> None:
+    """The property a per-call client had for free, which the pool must not lose.
+
+    `AsyncClient` binds `base_url` at construction, so a plain build-once cache would go on answering
+    with a client aimed at whatever address was configured the first time an activity ran. The pool is
+    keyed on the configured address, so a repointed `MEDALLION_RAY_ADDRESS` rebuilds it.
+    """
+    import asyncio
+
+    async def _drive() -> tuple[str, str]:
+        await ray_submit.close_ray_client()
+        ray_submit.get_settings.cache_clear()
+        first = await ray_submit.ray_client()
+        first_address = str(first.base_url)
+        import os
+
+        os.environ["MEDALLION_RAY_ADDRESS"] = "http://ray-moved:8265"
+        ray_submit.get_settings.cache_clear()
+        try:
+            second = await ray_submit.ray_client()
+            return first_address, str(second.base_url)
+        finally:
+            os.environ.pop("MEDALLION_RAY_ADDRESS", None)
+            ray_submit.get_settings.cache_clear()
+            await ray_submit.close_ray_client()
+
+    before, after = asyncio.run(_drive())
+    assert before != after, (before, after)
+    assert after.startswith("http://ray-moved:8265"), after
+
+
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
 #
 # AND THE POOL IS ONLY REAL IF THE LOOP IS. Everything above is true of the CLIENT and was false of

@@ -36,21 +36,42 @@ class _Action:
         return self.value
 
 
-class _Ctx:
-    """Replay-faithful double: records what was yielded, answers with scripted results."""
+def _recorded(payload: object) -> dict[str, Any]:
+    """An activity input as the RUNTIME records it: JSON, never the model instance.
 
-    def __init__(self, results: dict[str, Any] | None = None, *, external: Any = None, winner: str = "event") -> None:
+    Activities declare Pydantic inputs (DWF-ACT-009) and the SDK coerces on the worker side, so a
+    workflow body hands `call_activity` a MODEL while history keeps the serialized form. A fake that
+    stored the instance would let assertions read attributes the real recorded payload does not have.
+    """
+    dump = getattr(payload, "model_dump", None)
+    if callable(dump):
+        dumped = dump(mode="json")
+        return dumped if isinstance(dumped, dict) else {}
+    return payload if isinstance(payload, dict) else {}
+
+
+class _Ctx:
+    """Replay-faithful double: records what was yielded, answers with scripted results.
+
+    `fails` names an activity that RAISES at its yield point, which is what an exhausted
+    `ACTIVITY_RETRY` does to a workflow body; `_drive` throws it into the generator.
+    """
+
+    def __init__(self, results: dict[str, Any] | None = None, *, external: Any = None, winner: str = "event", fails: str = "") -> None:
         self.actions: list[str] = []
+        self.inputs: dict[str, Any] = {}
         self._results = dict(results or {})
         self.is_replaying = False
         self.instance_id = "promo-test"
         self.current_utc_datetime = datetime(2026, 8, 18, 12, 0, tzinfo=UTC)
         self._external = external
         self._winner = winner
+        self.fails = fails
 
     def call_activity(self, activity: Any, *, input: Any = None, retry_policy: Any = None) -> _Action:  # noqa: A002
         name = getattr(activity, "__name__", str(activity))
         self.actions.append(f"call_activity({name})")
+        self.inputs[name] = _recorded(input)
         return _Action("activity", name, self._results.get(name))
 
     def create_timer(self, delay: timedelta) -> _Action:
@@ -100,11 +121,16 @@ def _drive(ctx: _Ctx, spec: PromotionSpec, monkeypatch: pytest.MonkeyPatch) -> d
     monkeypatch.setattr(workflow_mod.wf, "when_any", ctx.pick)
     gen = promotion_review(cast(Any, ctx), spec.model_dump())
     sent: Any = None
+    throw: BaseException | None = None
     while True:
         try:
-            action = gen.send(sent)
+            action = gen.throw(throw) if throw is not None else gen.send(sent)
         except StopIteration as stop:
             return stop.value or {}
+        throw = None
+        if action.kind == "activity" and action.name == ctx.fails:
+            throw = RuntimeError(f"catalog refused publishing {spec.to_dataset}: refusing to move 'published' backwards")
+            continue
         sent = action.get_result()
 
 
@@ -146,6 +172,32 @@ class TestAnUnusualPromotionAsksAPerson:
         assert result["status"] == "REJECTED"
         assert result["decided_by"] == "CiQxYjZlMmY1YQ"
         assert "call_activity(publish_promotion)" not in ctx.actions
+
+
+def test_a_refused_publish_is_recorded_as_PROMOTION_FAILED_not_lost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An approved promotion whose publish is REFUSED must still reach the audit trail.
+
+    `publish_promotion` raises `RegisterError` on any catalog 4xx/5xx, and the trigger is deterministic:
+    the approval window defaults to 72 hours, and if a later version was published in it, the catalog
+    refuses to move `published` backwards, so every `ACTIVITY_RETRY` attempt fails identically. Unwrapped,
+    the exception takes the instance terminal FAILED and `emit_promotion_outcome`, the only writer of the
+    durable record, never runs: the validator got their 202 and the decision leaves no record. It is NOT
+    swallowed into PROMOTED either: the tag did not move, so `PROMOTION_FAILED` is its own status.
+    """
+    ctx = _Ctx(
+        {"resolve_review_policy": {"verdict": "review", "reasons": ["row_delta_band"]}, "request_approval": {"delivered": True}},
+        external={"approved": True, "subject": "CiQwOGE4Njg0Yi1kYjg4"},
+        fails="publish_promotion",
+    )
+
+    result = _drive(ctx, _spec(), monkeypatch)
+
+    assert result["status"] == "PROMOTION_FAILED"
+    assert result["decided_by"] == "CiQwOGE4Njg0Yi1kYjg4", "who approved it survives the failure — that is the part worth keeping"
+    assert "call_activity(emit_promotion_outcome)" in ctx.actions, "the durable record is the only place this decision survives"
+    outcome = ctx.inputs["emit_promotion_outcome"]["outcome"]
+    assert outcome["status"] == "PROMOTION_FAILED"
+    assert any("backwards" in reason for reason in outcome["reasons"]), f"the reason the publish was refused must ride along; got {outcome['reasons']}"
 
 
 class TestAnUnansweredHoldExpiresRatherThanWaitingForever:

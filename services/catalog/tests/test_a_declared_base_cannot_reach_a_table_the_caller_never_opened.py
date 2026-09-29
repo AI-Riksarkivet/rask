@@ -78,6 +78,19 @@ def test_a_base_outside_the_scope_and_the_sanction_is_dropped(base: str) -> None
     assert _base_resources(base) == []
 
 
+@pytest.mark.parametrize("base", ["s3://lakehouse", "s3://other-bucket//"])
+def test_a_base_at_a_bucket_root_is_refused(base: str) -> None:
+    """THE SHAPE GATE, a refusal: each of these widens one table's credential to a whole bucket.
+
+    With no prefix the READ resource collapses to `arn:aws:s3:::<bucket>/*`; measured 2026-09-11, base
+    `s3://lakehouse` rendered `BaseObjects0 arn:aws:s3:::lakehouse/*`. No legitimate base is a bucket root
+    (the spec's base path points at a dataset root or a file directory, `file_format.md`, Base Path
+    System), so raising cannot narrow a real table, and a malformed base is worth an operator's attention.
+    """
+    with pytest.raises(ValueError):
+        build_session_policy(BUCKET, PREFIX, "read", (base,))
+
+
 def test_a_base_the_operator_sanctioned_is_granted() -> None:
     """The other half: multi-base distribution is a supported layout and a guard that broke it would be
     worse than the hole. The allowlist is how an operator says a foreign bucket is legitimate."""

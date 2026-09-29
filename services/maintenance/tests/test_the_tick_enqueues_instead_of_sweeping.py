@@ -195,6 +195,67 @@ async def test_a_tick_with_no_sidecar_client_falls_back_to_the_serial_lane(monke
 
 
 @pytest.mark.asyncio
+async def test_the_queue_lane_closes_the_pair_the_planner_opened(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tick that completes records that it completed, on whichever lane it ran.
+
+    `record_run_started` lives in `plan_sweep`, which BOTH lanes call, so `record_run` must close the
+    pair on the queue lane too. Measured on the deployed estate 2026-09-06 against GreptimeDB, with it
+    closed on the serial lane only: `compaction_runs_started_total` 54, `compaction_datasets_swept_total`
+    7937, `compaction_runs_total` ABSENT, so `MaintenanceSweepMetricsMissing` (critical) fired
+    permanently while `MaintenanceSweepNotCompleting`, an `increase()` over a vector that does not
+    exist, could never fire. On this lane completion means the estate was PLANNED and the units durably
+    published; counting unit execution instead would emit hundreds of completions per tick and break
+    `started`'s pairing.
+    """
+    from typing import cast
+
+    from maintenance.api import routes
+    from maintenance.core.config import MaintenanceSettings
+    from maintenance.core.lineage_emit import MaintenanceEmitter
+
+    started: list[int] = []
+    completed: list[int] = []
+
+    monkeypatch.setattr(routes, "plan_sweep", lambda settings: (started.append(1), ([], []))[1])
+    monkeypatch.setattr(routes, "record_run", lambda: completed.append(1))
+
+    async def _no_units(*args: object, **kwargs: object) -> tuple[int, list[object]]:
+        return 0, []
+
+    async def _no_lineage(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(routes, "enqueue_units", _no_units)
+    monkeypatch.setattr(routes, "emit_sweep_lineage", _no_lineage)
+
+    class _S:
+        work_topic = "maintenance.work.v1"
+        work_pubsub = "maintenance-pubsub"
+        publish_timeout_seconds = 5.0
+        delimiter = "$"
+
+    class _Emitter:
+        """Never reached — `emit_sweep_lineage` is stubbed above — but the route's signature names the
+        protocol, so a bare `object()` is a type error rather than a shortcut."""
+
+        def emit_maintenance(self, *args: object, **kwargs: object) -> None:
+            return None
+
+    summary = await routes.on_cron(
+        cast(MaintenanceSettings, _S()),
+        cast(MaintenanceEmitter, _Emitter()),
+        _Publisher(),
+    )
+
+    assert summary["status"] == "enqueued", summary
+    assert completed == [1], (
+        "the queue lane planned and enqueued but recorded no completion — `compaction_runs_total` "
+        "stays absent, so MaintenanceSweepMetricsMissing pages forever and MaintenanceSweepNotCompleting "
+        "can never fire"
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_QUEUED_unit_reverifies_protection_before_acting(monkeypatch: pytest.MonkeyPatch) -> None:
     """A unit's protection verdict was computed when it was PLANNED, and it can sit in the queue.
 

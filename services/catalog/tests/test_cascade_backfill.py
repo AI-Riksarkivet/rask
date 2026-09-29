@@ -42,6 +42,35 @@ async def test_no_declared_writers_is_a_no_op() -> None:
 
 
 @pytest.mark.asyncio
+async def test_a_maintenance_only_estate_still_runs_the_backfill(monkeypatch) -> None:
+    """The guard must not skip on the cascade list alone, because the maintainer grant rides with it.
+
+    `backfill` early-returns when there is nothing to grant. With the maintainer grant in
+    `cascade_tuples` ([[LH-165]]), a guard that read `fga_cascade_writers` only would skip the whole
+    backfill for an estate that declares a maintenance identity and no stage runners, and log that it
+    had nothing to do: the silent-skip shape that leaves a new warehouse unmaintainable.
+    """
+    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])  # and NO cascade writers
+    skipped: list[str] = []
+
+    def _log_info(event: str, **kw: object) -> None:
+        if event == "cascade_backfill_skipped":
+            skipped.append(str(kw.get("extra") or {}))
+
+    monkeypatch.setattr(cascade_backfill.log, "info", lambda event, **kw: _log_info(event, **kw))
+
+    async def _no_client(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("reached the client build, so the guard did not skip")
+
+    monkeypatch.setattr(cascade_backfill, "build_fga_client", _no_client)
+
+    with pytest.raises(RuntimeError, match="did not skip"):
+        await cascade_backfill.backfill(settings)
+
+    assert skipped == [], f"a maintenance-only estate was skipped: {skipped}"
+
+
+@pytest.mark.asyncio
 async def test_a_record_without_a_project_is_REPORTED_not_guessed(monkeypatch) -> None:
     """The project edge is what makes the concentric cascade resolve.
 

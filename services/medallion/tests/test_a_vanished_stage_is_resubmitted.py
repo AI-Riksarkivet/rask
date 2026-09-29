@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from medallion.workflow import MAX_RESUBMITS
+from medallion.workflow import MAX_RESUBMITS, MAX_UNSEEN_POLLS
 
 from .test_stage_workflow import _Ctx, _drive, _spec
 
@@ -61,3 +61,44 @@ def test_the_training_watch_does_NOT_resubmit() -> None:
 
     assert out["verdict"] == "abandoned"
     assert "call_activity(submit_train)" not in ctx.actions
+
+
+# --------------------------------------------------------------------------- #
+# a submission the dashboard NEVER registered is bounded by its own short budget
+# --------------------------------------------------------------------------- #
+# `poll_stage` answers `None` for a 404, deliberately: a poll can land before the dashboard has
+# registered a just-submitted id. The same `None` arrives when the Ray head restarted and lost its job
+# table (verified against the live cluster 2026-08-31: after a head rollout the new head answered
+# `jobs: 0`). With `MAX_POLLS` 2880 at a 30 s interval, a watch that gave "has this id registered yet"
+# the running ceiling would ask a head that will never answer for twenty-four hours.
+
+
+def test_a_submission_that_never_registers_is_bounded_far_below_the_running_ceiling() -> None:
+    """The race grace is a SHORT budget, not the whole 24-hour ceiling.
+
+    Found by a live probe: the head was restarted in the 30 s gap between submit and the first poll, so
+    no poll ever saw a status and the watch fell straight back into the full ceiling. The two waits are
+    not the same question. "Has the dashboard registered this id yet" resolves in seconds; "is this job
+    still running" can honestly take hours. Giving the first the second's budget is what makes a lost
+    submission indistinguishable from a long one.
+    """
+    ctx = _Ctx({"submit_stage": [f"sub-{n}" for n in range(6)], "poll_stage": [None] * 200})
+    out = _drive(ctx, cast("Any", _spec(max_polls=2880)))
+
+    assert out["verdict"] == "abandoned"
+    polls = ctx.actions.count("call_activity(poll_stage)")
+    assert polls <= MAX_UNSEEN_POLLS * (MAX_RESUBMITS + 1), f"waited {polls} polls for an id the dashboard never registered"
+    assert polls >= 2, "must still tolerate a slow registration, not die on the first 404"
+
+
+def test_a_training_submission_that_never_registers_is_bounded_too() -> None:
+    """Both watches carry the same two budgets, because both poll the same job table."""
+    from .test_train_workflow import _Ctx as _TCtx
+    from .test_train_workflow import _drive as _tdrive
+    from .test_train_workflow import _spec as _tspec
+
+    ctx = _TCtx({"poll_train": [None] * 200})
+    out = _tdrive(ctx, cast("Any", _tspec(max_polls=2880)))
+
+    assert out["verdict"] == "abandoned"
+    assert ctx.actions.count("call_activity(poll_train)") <= 6

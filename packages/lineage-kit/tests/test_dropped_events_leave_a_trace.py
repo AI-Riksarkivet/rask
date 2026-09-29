@@ -23,7 +23,7 @@ from typing import Any, cast
 import pytest
 from openlineage.client import OpenLineageClient
 
-from lineage_kit import ClientEmitter, Job, Run, RunEvent, RunState
+from lineage_kit import ClientEmitter, Job, NoopEmitter, Run, RunEvent, RunState
 
 
 def _reader() -> Any:
@@ -120,3 +120,48 @@ def test_a_healthy_emit_counts_no_drop(metrics_reader: Any) -> None:
     ClientEmitter(_as_client(client)).emit(_event())
     assert client.calls == 1
     assert not _points(metrics_reader, "lineage.events.dropped")
+
+
+# --------------------------------------------------------------------------- #
+# `emit()` STATES the outcome it already computed, so a caller can decide to stage
+# --------------------------------------------------------------------------- #
+# The swallow stays (a run whose data landed must not be reported failed because the graph was
+# unreachable); what the caller gets is the answer. The bool means "this event needs no recovery", not "it
+# reached the graph", which is why `NoopEmitter` answers True: a deployment with lineage switched off has
+# lost nothing, and staging its events would grow an outbox nothing drains.
+
+
+def test_a_delivered_event_reports_true() -> None:
+    client = _RecordingClient()
+    assert ClientEmitter(_as_client(client)).emit(_event()) is True
+    assert client.calls == 1, "the happy path stopped emitting"
+
+
+def test_a_refused_door_reports_false() -> None:
+    """The shape of both recorded incidents: the transport refused, the run's data landed anyway, and
+    nothing downstream could tell."""
+    assert ClientEmitter(_as_client(_DeadClient())).emit(_event()) is False
+
+
+def test_an_unauthorable_event_reports_false_too() -> None:
+    """The OTHER failure mode, which the emitter deliberately keeps distinct: a producer that built an
+    unserialisable facet never reaches the transport at all, and is just as lost."""
+
+    class _Unauthorable(RunEvent):
+        def to_openlineage(self) -> Any:
+            raise ValueError("facet is not serialisable")
+
+    event = _Unauthorable.model_validate(_event().model_dump(by_alias=True))
+    client = _RecordingClient()
+    assert ClientEmitter(_as_client(client)).emit(event) is False
+    assert client.calls == 0, "an unauthorable event reached the transport"
+
+
+@pytest.mark.parametrize(
+    ("emitter", "expected"),
+    [(NoopEmitter(), True)],
+    ids=["noop"],
+)
+def test_the_emitters_that_lose_nothing_report_true(emitter: Any, expected: bool) -> None:
+    """`NoopEmitter` answers True because the bool means "needs no recovery", not "reached the graph"."""
+    assert emitter.emit(_event()) is expected

@@ -77,6 +77,23 @@ def test_require_dapr_token_REFUSES_a_public_caller_even_in_DEV(monkeypatch: pyt
         require_dapr_token(dapr_caller_app_id="gateway")
 
 
+def test_a_bad_token_is_refused_with_a_mappable_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The refusal is a `PermissionDeniedError`, the envelope every other error in the estate uses.
+
+    `PermissionDeniedError` rather than `service_kit.exceptions.ForbiddenError`: this module is shared by
+    both planes, and the four lance apps (catalog, lineage, maintenance, medallion) install
+    `install_problem_handlers` only, so a fleet `ForbiddenError` would fall to the catch-all and answer
+    500 there. A `LanceNamespaceError` is mapped by both planes.
+    """
+    from lance_namespace import PermissionDeniedError
+
+    from service_kit.governed import dapr_auth
+
+    monkeypatch.setenv("APP_API_TOKEN", "expected")
+    with pytest.raises(PermissionDeniedError):
+        dapr_auth.require_dapr_token(dapr_caller_app_id="medallion-producer", dapr_api_token="wrong")
+
+
 def test_the_LEGITIMATE_delivery_paths_are_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pub/sub delivery, binding delivery and a direct Service-DNS call carry NO caller app-id.
 

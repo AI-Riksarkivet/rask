@@ -21,7 +21,7 @@ import pytest
 
 from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import VendedCredentials
-from catalog.services.vend_probe import SCOPE_CHECK, ProbeCheck
+from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
 
 
 if TYPE_CHECKING:
@@ -52,10 +52,15 @@ class _Store:
 
     `scoped_to=None` is the over-permissive store: it accepts every key, which is exactly what a store
     that takes the inline session policy and drops it looks like from outside.
+
+    `conditional` selects the put-if-not-exists behaviour: ``honours`` refuses a conditional put on a key
+    that exists; ``ignores`` overwrites it; ``rejects`` raises on the header itself, which is what a store
+    with no support at all does.
     """
 
-    def __init__(self, *, scoped_to: str | None) -> None:
+    def __init__(self, *, scoped_to: str | None, conditional: str = "honours") -> None:
         self._scoped_to = scoped_to
+        self._conditional = conditional
         self.keys: dict[str, bytes] = {}
         #: Every key a PUT was attempted at, kept whether or not it survived. What the probe TRIED is a
         #: different question from what it left behind, and the probe now cleans up after itself — so a
@@ -69,8 +74,11 @@ class _Store:
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None) -> dict[str, Any]:  # noqa: N803 — boto3's own casing
         self.attempted.append(Key)
         self._check(Key)
-        if IfNoneMatch is not None and Key in self.keys:
-            raise FileExistsError("PreconditionFailed: the key already exists")
+        if IfNoneMatch is not None:
+            if self._conditional == "rejects":
+                raise ValueError("NotImplemented: this store does not support IfNoneMatch")
+            if self._conditional == "honours" and Key in self.keys:
+                raise FileExistsError("PreconditionFailed: the key already exists")
         self.keys[Key] = Body
         return {}
 
@@ -108,11 +116,11 @@ class _Installed:
 def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
     """Install a store in place of the real S3 client and hand back a handle to it."""
 
-    def _install(*, scoped: bool) -> _Installed:
+    def _install(*, scoped: bool, conditional: str = "honours") -> _Installed:
         installed = _Installed()
 
         def _client(endpoint_url: str | None = None, **kwargs: object) -> _Store:
-            store = _Store(scoped_to=installed.prefix if scoped else None)
+            store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional)
             installed.store = store
             return store
 
@@ -205,6 +213,52 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         assert outcomes["write_inside"] == "fail"
         assert [outcomes[n] for n in ("read_inside", SCOPE_CHECK, "cleanup")] == ["skip"] * 3
         assert endpoint.summarize_probe(checks).enforced is None
+
+
+class TestConditionalPut:
+    """A store that ignores put-if-not-exists loses a commit silently, and nothing asked it.
+
+    [[LH-040]]. `lance_docs/file_format.md` § "Commit Protocol" → "Storage Primitives" is the authority:
+    Lance commits rely on the object store's **put-if-not-exists**, which guarantees "that exactly one
+    writer succeeds when multiple writers attempt to create the same manifest file concurrently". Take
+    the primitive away and two writers both "succeed" writing the same manifest, and the loser's commit
+    is gone with no error anywhere. A warehouse names a BUCKET on the catalog's own endpoint, so there is
+    one store to ask, and the validate door is the place that asks an object store to prove something.
+
+    THREE BEHAVIOURS, NOT TWO, and the difference decides what an operator does. A store may honour the
+    header, IGNORE it (accepting the second write — the silent, dangerous case a naive probe would score
+    as a pass), or REJECT it outright (a loud failure that proves nothing about a second writer). The
+    first is safe, the second is unsafe, and the third is UNKNOWN — the same three-valued rule
+    `vend_probe` applies to `enforced`: an unexercised control must not be reported as a guarantee.
+    """
+
+    def test_a_store_that_IGNORES_the_header_is_reported_UNSAFE(self, store_factory: Callable[..., _Installed]) -> None:
+        """THE DANGEROUS CASE, and the reason a probe that only checked "did the write work" is worthless.
+
+        This store accepts both conditional puts. Every call returns 200, every log line reads normal, and
+        two concurrent Lance writers would both believe they committed the same manifest version.
+        """
+        store_factory(scoped=False, conditional="ignores")
+        report = endpoint.summarize_probe(_run(_Vendor(credentials=_creds())))
+
+        named = {c.name: c for c in report.checks}
+        assert named[CAS_CHECK].outcome == "fail", named[CAS_CHECK]
+        assert report.commit_safe is False, report
+        assert report.outcome == "fail", "a store that cannot hold a Lance commit must not pass its own validation"
+
+    def test_a_store_that_REJECTS_the_header_is_UNKNOWN_not_unsafe(self, store_factory: Callable[..., _Installed]) -> None:
+        """The third behaviour, kept apart from the second on purpose.
+
+        Rejecting the header is a loud failure that proves nothing about what a SECOND writer would see, so
+        reporting it as `commit_safe=False` would claim a measurement nobody made — the same rule
+        `vend_probe` states for `enforced`: an unexercised control is UNKNOWN.
+        """
+        store_factory(scoped=False, conditional="rejects")
+        report = endpoint.summarize_probe(_run(_Vendor(credentials=_creds())))
+
+        named = {c.name: c for c in report.checks}
+        assert named[CAS_CHECK].outcome == "skip", named[CAS_CHECK]
+        assert report.commit_safe is None, report
 
 
 class TestTheProbeAsksForTheCredentialItThenTests:

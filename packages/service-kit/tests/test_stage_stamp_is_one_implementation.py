@@ -159,3 +159,31 @@ class TestTheRepairReachesADatasetAMergeWrote:
 
         assert ensure_declared_dataset_id(uri, "") is False
         assert (lance.dataset(uri).schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
+
+    def test_the_correction_keeps_every_other_metadata_key(self, tmp_path: Path) -> None:
+        """Correcting the declared name must not cost the dataset the rest of its schema metadata.
+
+        Lance's spec calls the operation "Replace schema metadata", and a replace here would take
+        `lineage.namespace` and `lineage.create_run_id` with it, the self-describing coordinates a
+        governed table carries, while looking like it worked. An arbitrary user key is asserted beside
+        them, because `update_schema_metadata` is not supposed to know which keys are ours. Driven on a
+        real dataset: the question is what pylance does, and no double can answer it.
+        """
+        import lance
+
+        uri = str(tmp_path / "t.lance")
+        metadata = {
+            LINEAGE_DATASET_ID_KEY: "acme-bronze$events",
+            "lineage.namespace": "acme-bronze",
+            "lineage.create_run_id": "3ce6d47a-5059-4a50-900f-a649e22aef7b",
+            "description": "a table someone described",
+        }
+        lance.write_dataset(pa.table({"id": pa.array([1, 2, 3])}).replace_schema_metadata(metadata), uri, mode="create")
+
+        assert ensure_declared_dataset_id(uri, "acme-silver$features") is True
+
+        after = {k.decode(): v.decode() for k, v in (lance.dataset(uri).schema.metadata or {}).items()}
+        assert after[LINEAGE_DATASET_ID_KEY] == "acme-silver$features", "the name this exists to fix was not fixed"
+        assert after["lineage.namespace"] == "acme-bronze", "the namespace coordinate was destroyed by the correction"
+        assert after["lineage.create_run_id"] == "3ce6d47a-5059-4a50-900f-a649e22aef7b", "the creating run was destroyed"
+        assert after["description"] == "a table someone described", "a user's own metadata was destroyed"

@@ -47,6 +47,21 @@ def test_non_ascii_header_is_a_clean_403(monkeypatch: pytest.MonkeyPatch) -> Non
     assert problem_detail(PermissionDeniedError("x"))[0] == 403
 
 
+def test_the_escape_hatch_does_not_weaken_a_CONFIGURED_door(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The flag says "unconfigured is acceptable", never "wrong tokens are acceptable".
+
+    [[LH-162]]: an unconfigured door refuses unless somebody SETS `RASK_ALLOW_UNAUTHENTICATED_DAPR`, so
+    an open door is chosen and greppable instead of inherited from an empty variable (owner decision
+    2026-09-15). Without this test the hatch would be a master key: set it once for a dev convenience
+    and every deployment that inherited the setting would accept forged tokens too.
+    """
+    monkeypatch.setenv("APP_API_TOKEN", "the-real-token")
+    monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
+
+    with pytest.raises(PermissionDeniedError, match="invalid or missing"):
+        require_dapr_token(dapr_api_token="a-forged-token", dapr_caller_app_id="")
+
+
 # --------------------------------------------------------------------------- #
 # assert_app_token_configured — the fail-closed startup assert.
 # --------------------------------------------------------------------------- #

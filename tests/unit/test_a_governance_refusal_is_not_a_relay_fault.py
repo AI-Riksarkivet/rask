@@ -13,15 +13,21 @@ answer about a well-formed event — so folding it into `stranded` makes the num
 once, and `drained=0 stranded=6` then reads as a wedged relay when the relay is healthy (it drained
 `drained=1 stranded=0` the moment ingest's credential landed).
 
-WHY NOT RETIRE THE EVENT INSTEAD, which is the obvious remedy and is NOT available: moving it to a
-`<outbox>/_refused/` prefix is a PutObject, and the relay is denied that by policy —
-`test_the_lineage_plane_writes_nothing_it_does_not_own.py` asserts
-`not (allowed & {"s3:PutObject", ...})`, with DeleteObject scoped to `/_lineage_outbox/*`. Widening that
-grant to tidy a counter would trade a real least-privilege boundary for a cosmetic one. So the event
-stays staged and recoverable if the grant ever lands; what changes is which number counts it.
+WHY NOT MOVE THE EVENT ASIDE to a `<outbox>/_refused/` prefix: that is a PutObject, and the chart grants
+the relay exactly `s3:DeleteObject` on its own outbox (`DrainItsOwnOutboxAndNothingElse` in
+`chart/templates/minio-scoped-users.yaml`). Widening that grant to tidy a counter would trade a real
+least-privilege boundary for a cosmetic one. The durable copy of a refusal is a row instead: the verdict
+and the event go to `lineage_outbox_refusals` first ([[LH-182]]), and only then is the object dropped.
+Never destroy the only durable copy of a committed write's provenance to answer "you may not record this".
 
-THE EVENT IS STILL STRANDED IN THE LITERAL SENSE — left staged, not dropped — and that is deliberate.
-This splits the REPORTING, not the handling.
+STAGING AN EVENT IS NOT A WAY AROUND THE GATE PUBLISHING ONE HAS TO CLEAR. Four paths reach
+`repository.ingest_event`: the HTTP door (`enforce_author` then `enforce_output_authz`), the bus
+(`authorize(event)`, DROP on denial), the DLQ replay door (`enforce_output_authz`), and this outbox
+relay. The outbox is writable by the producers that stage there through the vended outbox credential
+(ingest, maintenance, medallion), so a relay that ingested unchecked would let a stager that cannot get
+an event past the bus door stage it instead. The relay calls the SAME `enforce_bus_authz`, which
+authorizes AS the subject the producer stamped, the only principal a cron tick has; a second copy of
+"may you record this" is how the two doors would drift.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from lineage.api import reconcile_cron
+from lineage.core.config import LineageSettings
 from medallion.schemas.events import build_run_event
 from service_kit.lakehouse import outbox
 
@@ -88,6 +95,53 @@ def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's s
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
     return asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _Repo()), _settings(uri), {}))
+
+
+def _governed_settings(outbox_uri: str) -> LineageSettings:
+    """The real settings, FGA on — the whole point: the other executing tests leave it off."""
+    auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
+    return LineageSettings.model_validate({"database_url": "postgresql://x/y", "outbox_uri": outbox_uri, "fga_enabled": True, **auth})
+
+
+def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The drain's outcomes mean different things, and a refusal is its own.
+
+    Poison is DROPPED because a malformed object wedges the drain forever. A refusal is well-formed and
+    deterministic, so it lands on `refused`, never `stranded`, and its object is retired only AFTER the
+    verdict and the event are recorded ([[LH-182]]): a drop first would destroy the only durable copy of
+    a committed write's provenance. DRIVEN, with the order observed at the two calls themselves.
+    """
+
+    async def _refuse(*_args: object, **_kwargs: object) -> None:
+        raise PermissionDeniedError("can_write_data required")
+
+    steps: list[str] = []
+    real_drop = outbox.drop_event
+
+    def _drop(*args: Any) -> None:  # noqa: ANN401 — forwards the drain's own arguments
+        steps.append("drop")
+        real_drop(*args)
+
+    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refuse)
+    monkeypatch.setattr(outbox, "drop_event", _drop)
+
+    uri = f"file://{tmp_path}/_lineage_outbox"
+    _staged(uri, author="mallory", run="bronze$events", token="order-probe")
+
+    class _OrderRepo:
+        async def ingest_event(self, _ev: Any) -> None:  # noqa: ANN401
+            steps.append("ingest")
+
+        async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
+            steps.append("record")
+
+    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
+    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", _OrderRepo()), _governed_settings(uri), {}))
+
+    assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (
+        f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"
+    )
+    assert steps == ["record", "drop"], f"the refusal path ran {steps}: the object must be retired only after its verdict is recorded"
 
 
 def test_a_TRANSIENT_failure_still_strands(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -45,6 +45,18 @@ lock. Two is the conventional container setting and already collapses 65 reserva
 
 NOT A SECRET, so the never-through-env rule does not reach it: this is a libc tunable with no
 confidentiality, read by glibc at startup and by nothing else.
+
+`MALLOC_ARENA_MAX` ONLY GOVERNS GLIBC, SO ARROW MUST ALLOCATE THROUGH GLIBC. Bounding the arenas alone
+drove the arena count 60 -> 0 on the maintenance worker and changed the RSS trend by nothing: the pod
+still died `OOMKilled, exit 137`, after 442m35s against a pre-fix 86m52s. Measured on the live process
+afterwards, two allocators besides glibc are resident and neither is reachable by that tunable:
+**mimalloc**, via pyarrow (`pa.default_memory_pool().backend_name` is `mimalloc` on pyarrow 25.0.0, and
+`arrow::mimalloc_memory_pool` is a symbol in the shipped `libarrow.so.2500`), and **jemalloc**, via
+duckdb (76 jemalloc references in its extension module and a live `jemalloc_bg_thd` thread).
+`ARROW_DEFAULT_MEMORY_POOL=system` routes Arrow's allocations through plain `malloc`, which
+`MALLOC_ARENA_MAX` then governs; the name was verified against the shipped `libarrow.so.2500` with
+`strings`. Both names ship together or neither does: the arena bound without the pool routing is the
+configuration already measured not to work, and it looks correct.
 """
 
 from __future__ import annotations
@@ -85,3 +97,11 @@ def test_the_container_bounds_its_arena_count(service: str) -> None:
         value = env["MALLOC_ARENA_MAX"]
         assert value.isdigit(), f"{where}/{service} sets MALLOC_ARENA_MAX={value!r}, which glibc cannot parse as a count"
         assert 1 <= int(value) <= MAX_ARENAS, f"{where}/{service} sets MALLOC_ARENA_MAX={value}, outside the stated budget of 1..{MAX_ARENAS}"
+
+
+def test_the_two_names_ship_TOGETHER() -> None:
+    """Either alone is the configuration already measured not to work, and it looks correct."""
+    envs = [(where, env_of(c)) for where, _name, c in _lakehouse_containers()]
+    half = [where for where, env in envs if bool(env.get("MALLOC_ARENA_MAX")) != bool(env.get("ARROW_DEFAULT_MEMORY_POOL"))]
+
+    assert not half, f"these carry one of the pair and not the other, which is the shape that fooled this row once: {half}"

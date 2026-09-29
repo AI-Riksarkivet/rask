@@ -118,3 +118,25 @@ async def test_the_backfill_writes_the_SAME_grants_minus_the_caller(monkeypatch)
     assert fga.ClientTuple(user="user:service-silver-to-gold", relation="publisher", object="warehouse:wh1") in seen
     assert fga.ClientTuple(user="project:acme", relation="project", object="warehouse:wh1") in seen
     assert not [t for t in seen if t.user.startswith("user:") and "service-" not in t.user], f"the backfill granted a non-service subject: {seen}"
+
+
+@pytest.mark.asyncio
+async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
+    """A warehouse is maintainable the moment it exists, or its tenant's data is never compacted.
+
+    [[LH-165]]. `warehouse.maintainer` has no `from parent`, so the sweep reaches a tenant's tables
+    through exactly one tuple, `warehouse:<id>#maintainer@<maintenance identity>`, and the create door is
+    where it has to be written: there is then no window in which a tenant exists and its data cannot be
+    maintained. It rides in `cascade_tuples`, which the create door and `backfill_cascade_grants` share,
+    so the two populations of warehouse cannot differ. Measured 2026-09-15 on the live estate: the 4 of
+    97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
+    """
+    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
+    token = IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1})
+
+    seen = await _captured_tuples(
+        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, token, warehouse_id="wh1", project="acme"),
+        monkeypatch,
+    )
+
+    assert ("user:service-maintenance", "maintainer", "warehouse:wh1") in [(t.user, t.relation, t.object) for t in seen]

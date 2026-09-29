@@ -112,6 +112,58 @@ def test_progress_facet_rides_the_running_events() -> None:
     }
 
 
+_DUMMY_LINEAGE_PATH = Path(__file__).parents[2] / "runners" / "dummy" / "src" / "dummy_runner" / "lineage.py"
+
+
+def _load_dummy_lineage() -> ModuleType:
+    """The dummy runner's lineage module, loaded by path: `runners/dummy` is sealed, not a member."""
+    spec = importlib.util.spec_from_file_location("pin_dummy_lineage", _DUMMY_LINEAGE_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_both_emitters_target_people_through_the_same_facet_keys() -> None:
+    """The notifiable() contract: `run.facets.lance.originator` + `.project`, exactly.
+
+    These targeting keys are the wire contract `notifiable()` reads, and coverage is decided at the
+    PRODUCER (`rask-notifications`): an event whose targeting keys are misnamed is not under-delivered
+    but UNDELIVERABLE, because `notifiable()` answers it with a SUCCESS ack. A renamed key in one
+    job-side emitter means that lane's runs reach nobody and nothing reports it.
+    """
+    train_event = job.build_event(
+        event_type="COMPLETE",
+        token="t1",
+        model="m1",
+        namespace="models",
+        features=[],
+        registry_uri="s3://models/registry",
+        version=3,
+        originator="user:alice",
+        project="proj-a",
+    ).to_wire()
+    dummy_event = (
+        _load_dummy_lineage()
+        .build_run_event(
+            event_type="COMPLETE",
+            run_id="00000000-0000-5000-8000-000000000001",
+            to_id="silver$dummy",
+            from_id="bronze$dummy",
+            rows=5,
+            version=3,
+            originator="user:alice",
+            project="proj-a",
+        )
+        .to_wire()
+    )
+    for name, event in (("train", train_event), ("dummy", dummy_event)):
+        lance = event["run"]["facets"].get("lance")
+        assert lance is not None, f"{name}: no `lance` run facet — every targeting hint is gone and notifiable() acks the loss as SUCCESS"
+        assert lance.get("originator") == "user:alice", f"{name}: the originator key drifted — this lane's runs reach nobody, silently"
+        assert lance.get("project") == "proj-a", f"{name}: the project key drifted — project watchers never hear about this lane"
+
+
 # --------------------------------------------------------------------------- #
 # registration (D4): bytes first, one atomic commit, token-keyed retry converges
 # --------------------------------------------------------------------------- #

@@ -90,6 +90,40 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
     assert "mixed" in refusal.lower(), f"the refusal should name the feature upstream calls it: {refusal}"
 
 
+#: Bit -> upstream symbol, read from `lance-format/lance` `rust/lance-table/src/feature_flags.rs`
+#: (measured 2026-09-19) rather than from the vendored docs bundle: `lance_docs/file_format.md` names only
+#: five of these, and `lance_docs/PROVENANCE.md` says a load-bearing citation from those bundles must be
+#: spot-checked against the live source.
+_UPSTREAM: dict[int, str] = {
+    1 << 0: "FLAG_DELETION_FILES",
+    1 << 1: "FLAG_STABLE_ROW_IDS",
+    1 << 2: "FLAG_USE_V2_FORMAT_DEPRECATED",
+    1 << 3: "FLAG_TABLE_CONFIG",
+    1 << 4: "FLAG_BASE_PATHS",
+    1 << 5: "FLAG_DISABLE_TRANSACTION_FILE",
+    1 << 6: "FLAG_UNSTABLE_DATA_OVERLAY_FILES",
+    1 << 7: "FLAG_COVERED_INDEX_METADATA",
+    1 << 8: "FLAG_MIXED_DATA_FILE_VERSIONS",
+    1 << 9: "FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS",
+    1 << 10: "FLAG_FRAGMENT_REUSE_INDEX",
+}
+
+
+def test_naming_did_not_widen_the_whitelist() -> None:
+    """The guard on naming. Naming a flag must never be mistaken for supporting it.
+
+    Widening `SUPPORTED` is a deliberate claim that compaction, version GC and the orphan pass have each
+    been checked against that layout on a real dataset, never a side effect of printing a bit by name.
+    """
+    supported_bits = {bit for bit in _UPSTREAM if features.SUPPORTED & bit}
+
+    assert supported_bits == {1 << 0, 1 << 1, 1 << 2, 1 << 3}, (
+        f"`SUPPORTED` changed to {sorted(supported_bits)} — widening it is a deliberate claim that "
+        "compaction, version GC and the orphan pass were each checked against that layout, not a "
+        "side effect of naming a bit"
+    )
+
+
 def test_an_ordinary_dataset_is_not_refused(tmp_path: pathlib.Path) -> None:
     """The negative that makes every refusal below meaningful: a gate that refused everything would
     pass all of them. Deletion files + stable row ids are the flags a normal rask table carries."""

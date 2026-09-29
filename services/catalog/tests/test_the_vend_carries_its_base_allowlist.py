@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from catalog.core.config import Settings
 from catalog.core.vending import StsVendor, make_vendor
 
 
@@ -81,3 +82,34 @@ def test_the_factory_hands_the_allowlist_to_the_vendor_it_builds() -> None:
     vendor.vend(table_location=TABLE, tier="read", bases=(FOREIGN,))
 
     assert _base_resources(sink["policy"]) == ["arn:aws:s3:::data-bases/acme/*"]
+
+
+# --------------------------------------------------------------------------- #
+# BOTH approved-base allowlists reach the vendor, not only `LANCE_MULTIBASE_DATA_BASES`
+# --------------------------------------------------------------------------- #
+# `LANCE_EXTERNAL_BLOB_BASES` decides which external `Blob.from_uri` pointers a create may reference, so a
+# base the create door accepted under it must survive into the credential the vend door issues. Measured
+# on the deployed catalog 2026-09-16 (image `main-9e5ff5b3`): with `LANCE_EXTERNAL_BLOB_BASES=
+# s3://lance-catalog/models/` on the pod, 1,836 `vend_base_path_unsanctioned` warnings in three hours, all
+# for that base, always with `sanctioned_count=0`. A dropped base surfaces later as a read denial at the
+# object store with nothing naming the base, so the union is derived on the settings object, where it
+# can be tested without standing up a lifespan.
+
+
+def test_both_allowlists_arrive_together() -> None:
+    settings = Settings(
+        LANCE_S3_ACCESS_KEY_ID="k",
+        LANCE_S3_SECRET_ACCESS_KEY="s",
+        LANCE_MULTIBASE_DATA_BASES="s3://other-wh/data/",
+        LANCE_EXTERNAL_BLOB_BASES="s3://lance-catalog/models/",
+    )
+
+    assert set(settings.vend_sanctioned_bases) == {"s3://other-wh/data/", "s3://lance-catalog/models/"}
+
+
+def test_sanctioning_nothing_stays_the_default() -> None:
+    """Empty must remain empty: the guard's value is that an unlisted foreign base is refused, and a
+    union that invented an entry would open the data-exfil door the allowlist exists to close."""
+    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s")
+
+    assert list(settings.vend_sanctioned_bases) == []

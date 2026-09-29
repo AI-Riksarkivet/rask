@@ -24,6 +24,8 @@ from typing import Any
 import pytest
 
 from medallion.services import ray_submit, stage_submit
+from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
+from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
 
 @pytest.fixture
@@ -118,3 +120,48 @@ async def test_an_undeclared_run_omits_the_key_rather_than_sending_a_blank(captu
     )
 
     assert "rask.transform" not in captured["body"]["metadata"]
+
+
+# --------------------------------------------------------------------------- #
+# [[LH-159]] the port's Ray adapter DERIVES the metadata from the order
+# --------------------------------------------------------------------------- #
+# The five facts are read BACK off the Jobs API: `rask.originator` recovers who a dead job was for, and
+# `rask.transform` names the declaration. All five live on the `WorkOrder` (`identity.originator`,
+# `identity.project`, `stamp.stage`, `stamp.token`, `stamp.transform`), so `RayJobsApiExecutor` derives
+# them rather than being handed them per call, which would let each adapter render the same facts its
+# own way. A run that names nobody is undeliverable rather than under-delivered
+# (`.claude/skills/rask-notifications`).
+
+
+def _order(**stamp: str) -> WorkOrder:
+    return WorkOrder(
+        task="transform",
+        source=WorkSource(uri="s3://lake/b", table_id="acme-bronze$events"),
+        destination=WorkDestination(uri="s3://lake/s", table_id="acme-silver$events"),
+        stamp=WorkStamp(stage="silver", cardinality="1:1", **stamp),
+        identity=WorkIdentity(run_id="r1", project="acme", originator="alice"),
+        idempotency_key="k1",
+    )
+
+
+def test_every_fact_the_lane_stamps_is_derivable() -> None:
+    """The five keys, from the order alone — no argument, no second source of truth."""
+    meta = RayJobsApiExecutor().job_metadata(_order(token="tok", transform="browserlane"))
+
+    assert meta["rask.originator"] == "alice", "the person a dead job was for must survive the submission"
+    assert meta["rask.project"] == "acme"
+    assert meta["rask.stage"] == "silver"
+    assert meta["rask.token"] == "tok"
+    assert meta["rask.transform"] == "browserlane"
+
+
+def test_an_absent_fact_is_omitted_rather_than_blanked() -> None:
+    """A key carrying `""` reads as a stamped fact that is simply absent — the lane omits, so does this.
+
+    Same rule [[XC-066]] settled for `runtime_env`: absent and empty are different claims, and only one
+    of them defers.
+    """
+    meta = RayJobsApiExecutor().job_metadata(_order())
+
+    assert "rask.token" not in meta, f"a blank token was stamped as a fact: {meta}"
+    assert "rask.transform" not in meta, f"a blank transform was stamped as a fact: {meta}"

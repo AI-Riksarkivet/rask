@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 from lance_namespace import InvalidInputError, ServiceUnavailableError
+from lance_namespace.errors import ErrorCode
 from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.v1.endpoints import access
@@ -22,6 +23,7 @@ from catalog.core.config import Settings
 from service_kit.control_emit import NoopControlEmitter
 from service_kit.governed.audit import AUDIT_LOGGER, FAILURE, SUCCESS, configure_audit
 from service_kit.governed.oidc import IDToken
+from service_kit.lakehouse.ns_errors import status_for
 
 
 def _run(
@@ -120,6 +122,43 @@ def test_derived_can_relation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> No
     # InvalidInput (400), not UnsupportedOperation (501): the rung NAME is client input — catalog-api-10.
     with pytest.raises(InvalidInputError):
         _run(monkeypatch, user="bob", relation="can_read_data", grant=True)
+
+
+# --------------------------------------------------------------------------- #
+# catalog-api-10 — an unknown relation NAME is the CLIENT's error on the check door too
+# --------------------------------------------------------------------------- #
+# The check door guards the body's ``relation`` against the compiled model, exactly as the estate-admin
+# door does (``access_admin.py`` raises ``InvalidInputError`` → 400). ``UnsupportedOperationError`` maps
+# to HTTP 406 in the spec taxonomy (``ns_errors.py``): a "not implemented" answer to a caller's typo, and a
+# different spec code than the sibling surface gives the identical mistake.
+
+
+def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``access/check`` with a relation the model does not define answers InvalidInput (400), not 406."""
+    monkeypatch.setattr(access, "_can_relations", lambda fga_type: ("can_get_metadata", "can_read_data"))
+    body = access.AccessCheckRequest(user="gina", relation="not_a_real_relation")
+    # The injected OpenFGA client is never used: the check refuses before any call.
+    client = cast(OpenFgaClient, object())
+    settings = cast(Settings, SimpleNamespace(fga_enabled=True, delimiter="$"))
+    token = cast(IDToken, SimpleNamespace(sub="alice"))
+    with pytest.raises(InvalidInputError) as exc:
+        asyncio.run(access._access_check(client, settings, token, "table", "db1$users", body))
+    assert status_for(int(exc.value.code)) == 400, "a client-supplied bad relation must surface as the client's error"
+
+
+def test_the_auth_off_answer_stays_unsupported() -> None:
+    """The capability statement ("this stack runs auth-off") is genuinely UNSUPPORTED — it must NOT be
+    swept into 400 by the bad-relation fix: the caller's request is well-formed, the deployment lacks
+    the feature."""
+    client = cast(OpenFgaClient, object())
+    settings = cast(Settings, SimpleNamespace(fga_enabled=False, delimiter="$"))
+    token = cast(IDToken, SimpleNamespace(sub="alice"))
+    body = access.AccessCheckRequest(user="gina", relation="can_read_data")
+    with pytest.raises(Exception) as exc:
+        asyncio.run(access._access_check(client, settings, token, "table", "db1$users", body))
+    assert (
+        status_for(int(getattr(exc.value, "code", ErrorCode.UNSUPPORTED))) == 406
+    )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
 
 
 def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -15,6 +15,13 @@ decorative), and the row is explicit that inferring one would be guessing.
 
 STOPPING SILENTLY WOULD BE THE ORIGINAL DEFECT WEARING A SETTING. The point of bounding the tick is to
 make the tail visible, so exhausting the budget logs what was executed and what remains.
+
+COVERAGE IS REPORTED PER BUCKET, maintained as well as discovered. `_discover_all` logs
+`compaction_bucket_discovered` with a dataset count per bucket, which says what the tick FOUND; a
+refusal, a failure or a pass the budget stopped makes what it MAINTAINED differ. Discovered-minus-
+maintained per bucket is the starvation signal: the buckets at the tail of a truncated pass report zero
+maintained beside their discovered count. The dataset shuffle spreads a bucket's datasets through the
+pass, so a truncated tick starves buckets PARTIALLY, and only a per-bucket count shows it.
 """
 
 from __future__ import annotations
@@ -60,3 +67,18 @@ def test_zero_budget_means_unlimited() -> None:
 
     assert executed == ["a", "b", "c"]
     assert len(out) == 3
+
+
+def test_coverage_is_reported_per_bucket(caplog: Any) -> None:
+    import logging
+
+    planned = ["s3://a-wh/one", "s3://a-wh/two", "s3://b-wh/three"]
+    maintained = ["s3://a-wh/one"]
+
+    with caplog.at_level(logging.INFO, logger="maintenance.services.sweep"):
+        sweep_mod.report_bucket_coverage(planned=planned, maintained=maintained)
+
+    rows = {r.bucket: r for r in caplog.records if r.message == "compaction_bucket_maintained"}
+    assert set(rows) == {"a-wh", "b-wh"}, f"expected one line per bucket, got {sorted(rows)}"
+    assert (rows["a-wh"].planned, rows["a-wh"].maintained) == (2, 1)
+    assert (rows["b-wh"].planned, rows["b-wh"].maintained) == (1, 0)

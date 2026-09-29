@@ -336,6 +336,35 @@ def test_an_openfga_outage_degrades_only_the_categories_that_needed_it(tmp_path:
     assert sum(report.counts.values()) == 3
 
 
+#: The categories whose answer is derived from BOTH the FGA tuple scan and the project registry. MAINT-10:
+#: one outage, one explanation. `_first` returns the first NON-EMPTY reason in argument order, so the order
+#: each category lists the pair in decides which store it blames when both are down.
+_TUPLES_AND_PROJECTS = {"ghost_projects", "unreferenced_projects", "orphaned_annotation_tasks"}
+
+
+def test_categories_over_the_same_two_sources_report_the_same_reason() -> None:
+    sources = mod.Sources()
+    sources.tuples_error = "openfga: ServiceUnavailableError"
+    sources.project_records_error = "registry: PermissionError"
+
+    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set(), fga_root_object="warehouse:root")
+
+    reasons = {u.category: u.reason for u in report.unavailable if u.category in _TUPLES_AND_PROJECTS}
+    assert set(reasons) == _TUPLES_AND_PROJECTS, f"a category over these two sources went missing: {reasons}"
+    assert len(set(reasons.values())) == 1, f"the same outage was explained {len(set(reasons.values()))} different ways: {reasons}"
+
+
+def test_a_single_failing_source_is_still_the_reason_every_time() -> None:
+    """The control: with only ONE of the pair down, every category must name that one."""
+    sources = mod.Sources()
+    sources.project_records_error = "registry: PermissionError"
+
+    report = mod.build_report(sources, warehouses_enabled=False, platform_buckets=set(), fga_root_object="warehouse:root")
+
+    reasons = {u.reason for u in report.unavailable if u.category in _TUPLES_AND_PROJECTS}
+    assert reasons == {"registry: PermissionError"}
+
+
 def test_a_dead_bucket_listing_degrades_only_orphan_buckets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The symmetric case from the other side: object storage forbidden, authz and the registries fine."""
     estate = _Estate(tmp_path)

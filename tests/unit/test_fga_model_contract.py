@@ -262,6 +262,33 @@ def test_access_disclosure_routes_are_owner_tier() -> None:
         assert _action_relation("namespace", suffix) == "can_delete", suffix
 
 
+@pytest.mark.parametrize("suffix", ["branches/delete", "tags/delete"])
+def test_a_destructive_door_is_owner_tier(suffix: str) -> None:
+    """CONTRACT (security): a door that destroys a table's versions or unpins them clears the OWNER bar
+    (``can_drop``), the same bar as ``maintenance/run``, which reclaims old versions and EXEMPTS tagged ones.
+
+    Undeclared a suffix is refused for every caller; on the writer map a plain data writer clears it.
+    ``tags/delete`` at the writer rung removes the pin that defeats the owner-tier rollback guard
+    (publication refuses to move ``published`` backwards, so a writer deletes the tag and republishes at
+    an older version). ``published`` is the estate's serving pointer, and Lance keeps the CAS in the
+    object store, so the pointer is a tag INSIDE the dataset and authorization carries the weight a
+    catalog transaction would carry elsewhere. A branch FORKS HISTORY (``branches/create``), so refusing a
+    writer the pointer's delete while permitting the fork's is incoherent.
+
+    Measured on the deployed catalog 2026-09-11, with a writer on ``bronze$events`` holding no owner rung:
+    ``branches/delete`` answered 422 (cleared authz, failed body validation) while ``tags/delete`` and
+    ``deregister`` answered 403.
+    """
+    from catalog.api.fga_deps import _action_relation
+
+    relation = _action_relation("table", suffix)
+
+    assert relation == "can_drop", f"{suffix!r} resolved to {relation!r}: a destructive door clears the owner bar, never the writer rung"
+    assert relation == _action_relation("table", "maintenance/run"), (
+        f"{suffix!r} is gated below the tag-respecting reclamation: the unguarded door must not be the cheaper one"
+    )
+
+
 def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
     """CONTRACT (security): a door that returns table DATA is authorized with ``can_read_data``.
 

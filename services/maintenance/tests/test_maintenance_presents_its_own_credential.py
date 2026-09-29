@@ -70,3 +70,32 @@ def test_an_UNREADABLE_store_raises_rather_than_downgrading(monkeypatch: pytest.
     monkeypatch.setenv("APP_API_TOKEN", "the-shared-bearer")
     with pytest.raises(RuntimeError, match="unreachable"):
         catalog_identity.service_headers(_settings())
+
+
+# --------------------------------------------------------------------------- #
+# the shared-bearer FALLBACK resolves the token the way the doors that verify it do
+# --------------------------------------------------------------------------- #
+# The fallback reads `expected_app_token`, the ONE resolver whose docstring says "a service door still
+# reading env while the Dapr door reads the store is a pod where half the credentials are configured and
+# nothing says which half". Measured on the deployed maintenance pod 2026-09-19: `app_token_from_store:
+# True`, `DaprDoorSettings().app_api_token: None`, `expected_app_token(): 'lance-dev-dapr-app-token-…'`.
+# With the token in the store and no dedicated identity, a fallback that read the env branch alone sends
+# NO service bearer at all.
+
+
+def test_the_fallback_uses_the_store_when_env_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE DEFECT: a token the estate has, that this fallback could not see."""
+    monkeypatch.setattr(catalog_identity, "dedicated_token_for", lambda _s: None)
+    monkeypatch.setattr(catalog_identity, "expected_app_token", lambda: "from-the-store")
+
+    headers = catalog_identity.service_headers(MaintenanceSettings())
+
+    assert headers.get("dapr-api-token") == "from-the-store"
+
+
+def test_neither_source_sends_NO_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An empty header is worse than none: it presents a credential the door must then reject."""
+    monkeypatch.setattr(catalog_identity, "dedicated_token_for", lambda _s: None)
+    monkeypatch.setattr(catalog_identity, "expected_app_token", lambda: "")
+
+    assert "dapr-api-token" not in catalog_identity.service_headers(MaintenanceSettings())
