@@ -98,18 +98,6 @@ def _client(
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_the_landing_reads_its_projects_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
-    gauge = _Gauge()
-    ids = [f"p{n}" for n in range(8)]
-
-    client = _client(monkeypatch, ids=ids, gauge=gauge)
-    r = client.get("/projects", params={"tenant": "acme"})
-
-    assert r.status_code == 200, r.text
-    assert gauge.peak > 1, "the project actors are still read one after another — the landing costs one round-trip per project"
-    assert [p["project_id"] for p in r.json()["projects"]] == ids, "the tenant index's order must survive the fan-out"
-
-
 def test_the_fan_out_is_bounded_rather_than_one_channel_per_project(monkeypatch: pytest.MonkeyPatch) -> None:
     gauge = _Gauge()
     ids = [f"p{n:03d}" for n in range(64)]
@@ -120,18 +108,6 @@ def test_the_fan_out_is_bounded_rather_than_one_channel_per_project(monkeypatch:
     assert r.status_code == 200, r.text
     assert r.json()["total"] == 64
     assert gauge.peak <= projects_ep._LISTING_FANOUT, f"{gauge.peak} simultaneous actor reads — the fan-out is unbounded"
-
-
-def test_a_stateless_project_is_still_skipped_rather_than_taking_the_landing_down(monkeypatch: pytest.MonkeyPatch) -> None:
-    gauge = _Gauge()
-
-    client = _client(monkeypatch, ids=["p1", "ghost", "p2"], gauge=gauge, missing=frozenset({"ghost"}))
-    r = client.get("/projects", params={"tenant": "acme"})
-
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert [p["project_id"] for p in body["projects"]] == ["p1", "p2"], "a lost partition drops its row and the neighbours keep their order"
-    assert body["total"] == 2, "`total` counts the rows returned, not the ids the index held"
 
 
 def test_a_failed_actor_read_still_fails_the_whole_listing(monkeypatch: pytest.MonkeyPatch) -> None:

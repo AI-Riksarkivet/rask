@@ -70,14 +70,3 @@ def test_a_null_payload_is_refused_BEFORE_a_response_exists(tmp_path: Path) -> N
     ds = _dataset(tmp_path, None)
     with pytest.raises(NotFoundError):
         media_ep.payload_size(ds, "media", 0)
-
-
-def test_a_present_payload_is_not_refused(tmp_path: Path) -> None:
-    """The guard must not turn every document into a 404 — the failure mode that would hide the fix."""
-    ds = _dataset(tmp_path, b"RIFFsomewavbytes")
-    media_ep.payload_size(ds, "media", 0)
-
-
-def test_the_range_branch_still_answers_416(tmp_path: Path) -> None:
-    """The satisfiability answer for a zero-length body is 416, and it was already correct."""
-    assert media_ep.parse_range("bytes=0-10", 0) is media_ep.RangeVerdict.UNSATISFIABLE

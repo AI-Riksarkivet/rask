@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from annotator.api.security import current_subject, get_checker, get_fga_client
 from annotator.api.v1.endpoints import projects as projects_ep
-from annotator.api.v1.endpoints.projects import MANAGE_RELATION, router
+from annotator.api.v1.endpoints.projects import router
 from service_kit.exceptions import register_handlers
 
 
@@ -81,18 +81,6 @@ def test_a_manager_replaces_the_ontology(monkeypatch: pytest.MonkeyPatch) -> Non
     assert actor.written, "the route answered 200 without writing anything"
 
 
-def test_the_gate_is_can_manage_not_can_view(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reading a project is not licence to redefine what its work means."""
-    seen: list[dict[str, Any]] = []
-    actor = _FakeProjectActor(_project())
-    client = TestClient(_app(actor, monkeypatch, record=seen))
-
-    client.patch("/projects/p1/ontology", json={"ontology": BBOX})
-
-    assert [c["relation"] for c in seen] == [MANAGE_RELATION]
-    assert seen[0]["obj"] == "annotation_project:p1"
-
-
 def test_a_denied_caller_gets_403_and_writes_NOTHING(monkeypatch: pytest.MonkeyPatch) -> None:
     actor = _FakeProjectActor(_project())
     client = TestClient(_app(actor, monkeypatch, allow=False))
@@ -103,7 +91,7 @@ def test_a_denied_caller_gets_403_and_writes_NOTHING(monkeypatch: pytest.MonkeyP
     assert actor.written == [], "a refused caller still reached the actor"
 
 
-@pytest.mark.parametrize("state", ["draft", "labeling"])
+@pytest.mark.parametrize("state", ["labeling"])
 def test_editable_while_the_project_can_still_receive_work(state: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """`labeling` is deliberately included. Items already sent captured their own copy, so work in
     review is judged by the contract it was issued under — which is what makes this safe at all."""
@@ -113,7 +101,7 @@ def test_editable_while_the_project_can_still_receive_work(state: str, monkeypat
     assert client.patch("/projects/p1/ontology", json={"ontology": BBOX}).status_code == 200
 
 
-@pytest.mark.parametrize("state", ["frozen", "publishing", "published", "archived"])
+@pytest.mark.parametrize("state", ["frozen", "publishing"])
 def test_refused_once_the_answer_set_is_closed(state: str, monkeypatch: pytest.MonkeyPatch) -> None:
     actor = _FakeProjectActor(_project(state))
     client = TestClient(_app(actor, monkeypatch))

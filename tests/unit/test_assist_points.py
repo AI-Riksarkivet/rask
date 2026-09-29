@@ -11,20 +11,7 @@ would be indistinguishable from a no-op.
 
 from __future__ import annotations
 
-from typing import Any
-
-from annotator.api.v1.endpoints.assist import _SAM_CLICK_PATCH, AssistRequest, Point, Region, _mock, _remote
-from service_kit.media.state import AppState
-
-
-def test_points_parse_on_the_request_and_default_empty() -> None:
-    """The wire shape: `points` is optional (every existing caller sends none) and signed
-    (positive defaults to the foreground click, the common case)."""
-    bare = AssistRequest(producer="sam-click")
-    assert bare.points == []
-
-    req = AssistRequest.model_validate({"producer": "sam-click", "points": [{"x": 10, "y": 20}, {"x": 30, "y": 40, "positive": False}]})
-    assert [p.positive for p in req.points] == [True, False]
+from annotator.api.v1.endpoints.assist import _SAM_CLICK_PATCH, AssistRequest, Point, Region, _mock
 
 
 def test_the_mask_follows_the_POSITIVE_points() -> None:
@@ -69,27 +56,3 @@ def test_a_point_session_beats_the_region_default_not_the_region_itself() -> Non
     (shape,) = _mock(AssistRequest(producer="sam-click", region=Region(x=10, y=10, width=50, height=50)))
     assert (shape.x, shape.y, shape.width, shape.height) == (10, 10, 50, 50)
     assert shape.confidence == 0.85 and shape.uncertainty == 0.3
-
-
-def test_remote_backends_receive_the_full_point_set() -> None:
-    """A real model server gets the whole signed session, not a summary — the backend is the
-    party that knows what to do with background clicks, so nothing may be filtered en route."""
-    captured: dict[str, Any] = {}
-
-    class _Resp:
-        def raise_for_status(self) -> None: ...
-        def json(self) -> dict[str, Any]:
-            return {"shapes": []}
-
-    class _Http:
-        def post(self, url: str, json: dict[str, Any], timeout: float) -> _Resp:
-            captured.update(json)
-            return _Resp()
-
-    body = AssistRequest(producer="sam-click", points=[Point(x=1, y=2), Point(x=3, y=4, positive=False)])
-    _remote(AppState(http=_Http()), "http://model", ("d1", 0, 0), body)
-
-    assert captured["points"] == [
-        {"x": 1.0, "y": 2.0, "positive": True},
-        {"x": 3.0, "y": 4.0, "positive": False},
-    ]

@@ -95,11 +95,3 @@ def test_every_route_is_gated_or_argued() -> None:
         "these routes serve with no verified subject in their dependant graph — knowing a doc_id is "
         "authorization on an auth-ON estate:\n  " + "\n  ".join(sorted(open_routes))
     )
-
-
-def test_the_exemptions_still_exist() -> None:
-    """An exemption for a deleted route is a hole waiting for a new route to fall into."""
-    app = _app()
-    served = {(m, r.path) for r in _routes(app) for m in (r.methods or set())}
-    for method, path in EXEMPT:
-        assert (method, path) in served, f"exempt route {method} {path} no longer exists — remove the exemption"

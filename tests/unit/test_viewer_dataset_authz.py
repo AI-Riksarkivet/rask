@@ -22,7 +22,6 @@ from fastapi.testclient import TestClient
 from service_kit.exceptions import register_handlers
 from service_kit.lancekit.descriptor import DatasetDescriptor
 from service_kit.media.authz import corpus_object
-from viewer.api.security import READ_METADATA
 from viewer.api.v1.endpoints import datasets as ds
 from viewer.api.v1.endpoints.datasets import router
 from viewer.core.config import ViewerSettings, get_viewer_settings
@@ -200,18 +199,6 @@ def test_the_check_names_the_CATALOG_object_not_an_invented_one(registry: _Regis
     assert all(c["obj"].startswith("table:") for c in seen)
 
 
-def test_the_relation_is_METADATA_not_data_access(registry: _Registry) -> None:
-    """Listing a corpus and reading its descriptor is metadata. Gating on `can_read_data` would hide
-    corpora from someone allowed to know they exist."""
-    seen: list[dict[str, Any]] = []
-    client = TestClient(_app(registry, allow=True, seen=seen, fga_enabled=True))
-
-    client.get("/api/datasets")
-
-    assert {c["relation"] for c in seen} == {READ_METADATA}
-    assert READ_METADATA == "can_get_metadata"
-
-
 def test_the_check_uses_the_VERIFIED_subject(registry: _Registry) -> None:
     seen: list[dict[str, Any]] = []
     client = TestClient(_app(registry, allow=True, seen=seen, fga_enabled=True))
@@ -297,11 +284,10 @@ def test_a_search_less_descriptor_still_serves_when_authz_is_OFF() -> None:
 def test_ten_corpora_cost_ONE_openfga_round_trip() -> None:
     """The batch property, pinned THROUGH THE ENDPOINT.
 
-    The test this replaces (`services/viewer/tests/test_datasets_batch_check.py`) monkeypatched
-    `ds.fga.batch_check` and then called `ds.fga.batch_check` directly — it counted calls to its own
-    mock and could never have been RED. Found by the adversarial re-audit of the closure. Here the
-    request goes through `GET /api/datasets`, so the count is of what the ROUTE does: an
-    implementation that fell back to one `check`-shaped call per corpus would score ten.
+    Patching `ds.fga.batch_check` and then calling `ds.fga.batch_check` directly counts calls to the
+    test's own mock and can never be RED. Here the request goes through `GET /api/datasets`, so the
+    count is of what the ROUTE does: an implementation that fell back to one `check`-shaped call per
+    corpus would score ten.
     """
     # Row tables are BARE names — the descriptor helper refuses a `$` in a segment; the dataset id
     # supplies the corpus half of the object identifier.

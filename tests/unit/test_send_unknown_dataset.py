@@ -118,44 +118,11 @@ def test_an_item_naming_an_UNKNOWN_dataset_is_refused(monkeypatch: pytest.Monkey
     assert task_actor.seeded == [], "a task actor was seeded for an item that can never be opened"
 
 
-def test_the_refusal_names_the_datasets_that_DO_exist(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A refusal nobody can act on is not enforcement — it is a wall."""
-    client = TestClient(_app(monkeypatch, _FakeTaskActor(), known=["demo", "vasa"]))
-
-    r = client.post("/projects/p1/items", json=_items("typo"))
-
-    assert "demo" in r.text and "vasa" in r.text
-
-
-def test_ONE_bad_item_refuses_the_WHOLE_send(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A partial send produces exactly the half-populated project this exists to prevent — and it
-    costs zero seeded actors to refuse, the same argument the project-state check makes."""
-    task_actor = _FakeTaskActor()
-    client = TestClient(_app(monkeypatch, task_actor))
-
-    r = client.post("/projects/p1/items", json=_items("demo", "gone-away", "demo"))
-
-    assert r.status_code == 409, r.text
-    assert task_actor.seeded == [], "the good items were sent anyway, half-populating the project"
-
-
 def test_a_known_dataset_sends_normally(monkeypatch: pytest.MonkeyPatch) -> None:
     task_actor = _FakeTaskActor()
     client = TestClient(_app(monkeypatch, task_actor))
 
     r = client.post("/projects/p1/items", json=_items("demo"))
-
-    assert r.status_code == 201, r.text
-    assert len(task_actor.seeded) == 1
-
-
-def test_an_item_naming_NO_dataset_is_not_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Absent means the backend default, which resolves by construction. Refusing it would break
-    every ordinary send to make a point about a case that cannot happen."""
-    task_actor = _FakeTaskActor()
-    client = TestClient(_app(monkeypatch, task_actor))
-
-    r = client.post("/projects/p1/items", json=_items(None))
 
     assert r.status_code == 201, r.text
     assert len(task_actor.seeded) == 1

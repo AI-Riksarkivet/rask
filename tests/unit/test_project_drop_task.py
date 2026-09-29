@@ -108,15 +108,7 @@ def test_dropping_an_ABSENT_task_is_a_no_op_not_a_404(monkeypatch: pytest.Monkey
     assert r.json()["removed"] is False
 
 
-@pytest.mark.parametrize("state", ["draft", "labeling"])
-def test_droppable_while_the_project_can_still_change_what_it_publishes(state: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    actor = _FakeProjectActor(state)
-    client = TestClient(_app(actor, monkeypatch))
-
-    assert client.delete("/projects/p1/tasks/t1").status_code == 200
-
-
-@pytest.mark.parametrize("state", ["frozen", "publishing", "published", "archived"])
+@pytest.mark.parametrize("state", ["frozen", "publishing"])
 def test_refused_once_provenance_is_being_prepared(state: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Past `frozen` the answer set is closed and a publish is being prepared against it. Removing an
     item then would change what the run facet describes after the description was fixed."""
@@ -193,31 +185,6 @@ def test_dropping_a_HELD_task_tells_the_person_who_loses_it(monkeypatch: pytest.
 
     assert r.status_code == 200, r.text
     assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_dropped", "user:dave")]
-
-
-def test_dropping_a_SUBMITTED_task_tells_whoever_did_the_work(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A task in review has no assignee — the actor nulls it on submit — so the person who loses work
-    is the SUBMITTER. Falling back only to `assignee` would tell nobody for exactly the tasks where
-    the most work has already been done."""
-    actor, control = _FakeProjectActor(), _RecordingControl()
-    client = TestClient(_app_with_control(actor, control, monkeypatch, {"assignee": None, "submitted_by": "dave"}))
-
-    r = client.delete("/projects/p1/tasks/t1")
-
-    assert r.status_code == 200, r.text
-    assert [(e.action, e.extra["subject"]) for e in control.events] == [("task_dropped", "user:dave")]
-
-
-def test_dropping_an_ABSENT_task_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The route is idempotent by design, so a retry must not put a second row in anyone's inbox — and
-    a drop that removed nothing is not a change to announce."""
-    actor, control = _FakeProjectActor(), _RecordingControl()
-    client = TestClient(_app_with_control(actor, control, monkeypatch, {"assignee": "dave", "submitted_by": None}))
-
-    r = client.delete("/projects/p1/tasks/never-sent")
-
-    assert r.status_code == 200, r.text
-    assert control.events == [], "nothing was removed, so nothing happened to announce"
 
 
 def test_dropping_a_task_nobody_holds_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

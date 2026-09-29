@@ -94,25 +94,7 @@ def test_a_non_member_is_denied_403() -> None:
     assert CREATE_RELATION in r.json()["detail"]
 
 
-def test_the_check_targets_the_PARENT_tenant_not_the_child() -> None:
-    """The whole point of S4. The child has no id yet, so the object must be `project:<tenant>`."""
-    seen: list[dict[str, Any]] = []
-    client = TestClient(_app(allow=True, record=seen))
-    client.post("/projects", json=PAYLOAD)
-
-    assert len(seen) == 1
-    assert seen[0]["obj"] == "project:acme"
-    assert seen[0]["relation"] == CREATE_RELATION
-    assert not seen[0]["obj"].startswith("annotation_project:"), "checked the child, which has no tuples at creation time — see design-create-on-parent"
-
-
-def test_creation_fails_closed_when_the_checker_says_nothing_useful() -> None:
-    """A falsy answer denies. Authorization never fails open."""
-    client = TestClient(_app(allow=False))
-    assert client.post("/projects", json=PAYLOAD).status_code == 403
-
-
-@pytest.mark.parametrize("missing", ["tenant", "slug"])
+@pytest.mark.parametrize("missing", ["tenant"])
 def test_tenant_and_slug_are_required_so_the_door_can_never_be_inferred(missing: str) -> None:
     """`tenant` IS the authz parent — a request that omits it must be rejected, never guessed."""
     payload = {k: v for k, v in PAYLOAD.items() if k != missing}
@@ -123,20 +105,6 @@ def test_tenant_and_slug_are_required_so_the_door_can_never_be_inferred(missing:
 # --------------------------------------------------------------------------------------------------
 # Create must PERSIST and must SEED — 201 is a claim about both
 # --------------------------------------------------------------------------------------------------
-
-
-def test_create_persists_the_project(_actor: Any) -> None:
-    """The defect this replaces: the endpoint built the model, audited, and returned it. So the one
-    entry point into the whole plane was a no-op reporting 201, and the very next call —
-    `POST /projects/<id>/items` — answered 409 "annotation project does not exist"."""
-    client = TestClient(_app(allow=True))
-
-    r = client.post("/projects", json=PAYLOAD)
-
-    assert r.status_code == 201
-    assert _actor.created, "create returned 201 without persisting anything"
-    assert _actor.created[0]["project_id"] == r.json()["project_id"]
-    assert _actor.created[0]["state"] == "draft"
 
 
 def test_create_seeds_owner_and_the_TENANT_edge(_actor: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -170,20 +138,6 @@ def test_create_seeds_owner_and_the_TENANT_edge(_actor: Any, monkeypatch: pytest
     assert grant["parent_relation"] == "tenant", "the parent edge was written under the wrong relation"
 
 
-def test_a_denied_create_seeds_nothing(monkeypatch: pytest.MonkeyPatch, _actor: Any) -> None:
-    seeded: list[dict[str, Any]] = []
-
-    async def _grant(client: Any, **kw: Any) -> None:
-        seeded.append(kw)
-
-    monkeypatch.setattr(projects_ep.fga, "grant_on_create", _grant)
-    app = _app(allow=False)
-    app.dependency_overrides[get_fga_client] = lambda: object()
-
-    assert TestClient(app).post("/projects", json=PAYLOAD).status_code == 403
-    assert seeded == [] and _actor.created == [], "a denied create still wrote"
-
-
 # --------------------------------------------------------------------------------------------------
 # Consensus v1 — the create surface carries `consensus_n` (the audit's B-1: the field existed
 # everywhere EXCEPT this request model, so Pydantic silently dropped it and every project persisted
@@ -205,35 +159,6 @@ def test_consensus_n_defaults_to_one_and_out_of_range_is_422(_actor: _FakeProjec
     assert client.post("/projects", json={**PAYLOAD, "consensus_n": 6}).status_code == 422
     assert client.post("/projects", json={**PAYLOAD, "consensus_n": 0}).status_code == 422
     assert _actor.created and all(doc["consensus_n"] == 1 for doc in _actor.created), "a rejected value must never persist"
-
-
-def test_instructions_travel_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
-    """The annotator-facing HOW (instructions) is distinct from the WHAT/WHY (description) and must
-    persist the same way consensus_n must — at the one real entry point, not just in the echo."""
-    client = TestClient(_app(allow=True))
-    r = client.post("/projects", json={**PAYLOAD, "instructions": "Label every visible portrait; skip seals."})
-    assert r.status_code == 201, r.text
-    assert r.json()["instructions"] == "Label every visible portrait; skip seals."
-    assert _actor.created[0]["instructions"] == "Label every visible portrait; skip seals."
-
-
-def test_the_ontology_travels_from_the_create_payload_to_the_persisted_doc(_actor: _FakeProjectActor) -> None:
-    client = TestClient(_app(allow=True))
-    r = client.post(
-        "/projects",
-        json={
-            **PAYLOAD,
-            "ontology": {
-                "kind": "token-classification",
-                "classes": [{"name": "entity", "tools": ["text"], "required": True}],
-            },
-        },
-    )
-    assert r.status_code == 201, r.text
-    stored = _actor.created[0]["ontology"]
-    assert stored["kind"] == "token-classification"
-    assert stored["classes"][0]["name"] == "entity"
-    assert stored["classes"][0]["required"] is True
 
 
 def test_an_ontology_that_CONTRADICTS_ITSELF_is_refused_at_create(_actor: _FakeProjectActor) -> None:

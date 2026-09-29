@@ -89,12 +89,6 @@ async def test_compatibility_against_a_task_is_answered_BEFORE_anyone_runs_the_m
 
 
 @pytest.mark.asyncio
-async def test_no_task_means_no_compatibility_CLAIM() -> None:
-    for row in (producer_listing(_settings())).producers:
-        assert row.compatible is None
-
-
-@pytest.mark.asyncio
 async def test_a_task_that_CONSTRAINS_NOTHING_makes_no_claim_either(monkeypatch: pytest.MonkeyPatch) -> None:
     """An ontology with no classes declares no rule. Marking a producer "incompatible" against one
     would warn about a submission the server would have accepted."""

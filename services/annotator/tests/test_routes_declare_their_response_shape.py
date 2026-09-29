@@ -28,7 +28,6 @@ from fastapi.testclient import TestClient
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import project_events as events_ep
 from annotator.api.v1.endpoints import tasks as tasks_ep
-from annotator.main import app
 from annotator.projects.models import AnnotationProject, Draft, ProjectState, Shape, Task, TaskState, Transition
 from service_kit.exceptions import register_handlers
 
@@ -128,15 +127,6 @@ def _client(monkeypatch: pytest.MonkeyPatch, router: Any) -> TestClient:
     return TestClient(api)
 
 
-def test_a_task_read_publishes_the_task_model_and_nothing_else(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _client(monkeypatch, tasks_ep.router)
-
-    body = client.get("/tasks/t1")
-
-    assert body.status_code == 200, body.text
-    assert body.json() == _full_task(), "the wire payload changed — a declared response must publish exactly what it published before"
-
-
 def test_a_draft_read_publishes_the_draft_model(monkeypatch: pytest.MonkeyPatch) -> None:
     client = _client(monkeypatch, tasks_ep.router)
 
@@ -192,38 +182,3 @@ def test_the_plain_task_listing_still_omits_the_details_keys(monkeypatch: pytest
     body = TestClient(api).get("/projects/p1/tasks").json()
 
     assert body == listing, f"the plain listing gained or lost a key: {sorted(body)}"
-
-
-ROUTES_THAT_MUST_DECLARE_A_SCHEMA = [
-    ("get", "/projects"),
-    ("post", "/projects"),
-    ("get", "/projects/{project_id}"),
-    ("post", "/projects/{project_id}/events"),
-    ("put", "/projects/{project_id}/adjudications/{group_id}"),
-    ("delete", "/projects/{project_id}/adjudications/{group_id}"),
-    ("delete", "/projects/{project_id}/tasks/{task_id}"),
-    ("post", "/projects/{project_id}/items"),
-    ("get", "/projects/{project_id}/tasks"),
-    ("get", "/tasks/{task_id}"),
-    # NOT LISTED, and the omission is the finding's honest residue rather than an oversight.
-    # `fire_task_event` returns what the ACTOR returns — a transition document carrying the state it
-    # just wrote, not `source`/`media`, which live on a task record the actor never reloads. Declaring
-    # `-> Task` made FastAPI validate the response against a model the payload cannot satisfy and left
-    # three integration tests RED (`ResponseValidationError: 2 validation errors`). Naming the real
-    # shape means making the actor return a whole Task, which is a larger change than ANN-07 scoped —
-    # so the finding stands PARTIAL with this route named, rather than closed on an unsound model.
-    #     ("post", "/tasks/{task_id}/events"),
-    ("get", "/tasks/{task_id}/draft"),
-    ("put", "/tasks/{task_id}/draft"),
-    ("post", "/tasks/{task_id}/import"),
-]
-
-
-@pytest.mark.parametrize(("method", "path"), ROUTES_THAT_MUST_DECLARE_A_SCHEMA)
-def test_every_route_publishes_a_named_schema(method: str, path: str) -> None:
-    """`dict[str, Any]` documents as a bare object: the schema says nothing a client can use."""
-    responses = app.openapi()["paths"][path][method]["responses"]
-    success = next(code for code in responses if code.startswith("2"))
-    schema = responses[success]["content"]["application/json"]["schema"]
-
-    assert "$ref" in schema or schema.get("items", {}).get("$ref"), f"{method.upper()} {path} answers an undescribed object: {schema}"

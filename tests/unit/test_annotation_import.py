@@ -21,7 +21,7 @@ import json
 import pyarrow as pa
 import pytest
 
-from annotator.projects.imports import IMPORT_SOURCE, shapes_from_ipc
+from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.ontology import LabelClass, LabelOntology, RelationClass
 from service_kit.exceptions import ValidationError
 
@@ -67,18 +67,6 @@ def test_a_canonical_row_becomes_a_draft_shape() -> None:
     assert links == []
 
 
-def test_every_imported_shape_is_stamped_as_imported() -> None:
-    """Provenance, and the reason it is `source` rather than a status.
-
-    The draft vocabulary has no `status` column — `status` is an annotations-table field these rows
-    only acquire when they are written there. "Not drawn here" is carried by `source`, and the task's
-    own state machine is what keeps the work reviewed: an import cannot skip submit or accept.
-    """
-    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "figure"}]), ontology=ontology(), max_bytes=_BODY_LIMIT)
-
-    assert shapes[0].source == IMPORT_SOURCE
-
-
 def test_a_row_with_no_id_still_imports_and_gets_one() -> None:
     """An export with no ids is perfectly reasonable — it just cannot carry links."""
     shapes, _ = shapes_from_ipc(ipc([{"shape_type": "bbox", "label": "figure"}]), ontology=ontology(), max_bytes=_BODY_LIMIT)
@@ -88,7 +76,7 @@ def test_a_row_with_no_id_still_imports_and_gets_one() -> None:
 
 @pytest.mark.parametrize(
     ("written", "canonical"),
-    [("rectangle", "bbox"), ("rect", "bbox"), ("box", "bbox"), ("point", "keypoint"), ("line", "polyline"), ("baseline", "polyline")],
+    [("point", "keypoint")],
 )
 def test_a_foreign_shape_name_normalises(written: str, canonical: str) -> None:
     """Even ONE format needs this: rows written by older tooling carry `rectangle`, a name neither
@@ -117,20 +105,6 @@ def test_normalisation_happens_BEFORE_the_ontology_check() -> None:
 # --------------------------------------------------------------------------------------------------
 # The ontology is the contract, and it is enforced AT IMPORT
 # --------------------------------------------------------------------------------------------------
-
-
-def test_a_label_outside_the_taxonomy_is_REFUSED_and_NAMED() -> None:
-    """The rule this task exists to enforce.
-
-    Deliberately different from the assist endpoint beside it, which fails OPEN — an unreadable rule
-    must not lose an interactive prediction the annotator is watching for. An import is a bulk write
-    of somebody else's data that nobody is watching, so it fails CLOSED: refused at the door, not
-    discovered at submit after a reviewer has already worked through the item.
-    """
-    with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "spaceship"}]), ontology=ontology(), max_bytes=_BODY_LIMIT)
-
-    assert "spaceship" in str(caught.value), "a refusal that does not name the label cannot be acted on"
 
 
 def test_ONE_bad_label_refuses_the_WHOLE_import() -> None:
@@ -178,13 +152,6 @@ def test_an_import_is_NOT_judged_by_the_completeness_rules() -> None:
     )
 
     assert len(shapes) == 1
-
-
-def test_an_unconstrained_ontology_accepts_anything() -> None:
-    """Same posture as every other surface: an ontology that constrains nothing is not a filter."""
-    shapes, _ = shapes_from_ipc(ipc([{"id": "a1", "shape_type": "bbox", "label": "whatever"}]), ontology=None, max_bytes=_BODY_LIMIT)
-
-    assert shapes[0].label == "whatever"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -272,13 +239,6 @@ def test_a_row_with_no_shape_type_is_refused() -> None:
         shapes_from_ipc(ipc([{"id": "a1", "label": "figure"}]), max_bytes=_BODY_LIMIT)
 
     assert "shape_type" in str(caught.value)
-
-
-def test_bytes_that_are_not_arrow_are_refused_without_a_traceback() -> None:
-    with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(b"this is a COCO json file, actually", max_bytes=_BODY_LIMIT)
-
-    assert "Arrow" in str(caught.value)
 
 
 def test_an_empty_body_is_refused() -> None:

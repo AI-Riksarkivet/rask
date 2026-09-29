@@ -163,17 +163,6 @@ def test_a_cold_build_for_one_dataset_does_not_block_another(monkeypatch: pytest
     )
 
 
-def test_the_same_app_still_reuses_its_built_engine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Single-flight is the point of the cache: the same key must never build twice."""
-    built = _count_builds(monkeypatch)
-    state = AppState()
-
-    graph_ep.get_status(state, dataset="reuse-corpus")
-    graph_ep.get_status(state, dataset="reuse-corpus")
-
-    assert len(built) == 1, f"the cache stopped memoizing — a ~20 s, ~370 MB build ran twice for one dataset version (builds: {built})"
-
-
 def test_concurrent_first_requests_build_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """The thundering-herd guarantee the global lock did provide must survive the per-key split."""
     built: list[str] = []

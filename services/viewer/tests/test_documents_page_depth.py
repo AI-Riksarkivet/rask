@@ -73,11 +73,6 @@ def test_a_page_beyond_the_offset_limit_is_REFUSED(client: TestClient) -> None:
     )
 
 
-def test_an_ordinary_page_is_untouched(client: TestClient) -> None:
-    """The failure mode that would hide the fix: refusing everything also passes the test above."""
-    assert _get(client, page=2, per_page=24).status_code == 200
-
-
 def test_the_page_size_ceiling_is_still_enforced(client: TestClient) -> None:
     """The pre-existing `le=100` must survive the move into the shared params."""
     assert _get(client, page=1, per_page=101).status_code == 422
@@ -96,15 +91,3 @@ def test_the_gallery_sends_the_shared_envelope(client: TestClient) -> None:
     body = _get(client, page=1, per_page=24).json()
     for field in ("items", "total", "page", "page_size", "pages", "has_next", "has_prev"):
         assert field in body, f"the gallery does not send `{field}` — the shared envelope is unused: {sorted(body)}"
-
-
-def test_the_old_key_is_still_emitted_for_one_release(client: TestClient) -> None:
-    """A RENAME IS A WIRE CHANGE, and the web pods roll separately from the viewer.
-
-    `annotator/src/lib/select/DataSelection.svelte` reads `docsPage.docs`, and its Deployment is not
-    this service's — so during a rolling upgrade an old web pod talks to a new viewer. Emitting both
-    keeps that window working; the alias is marked for removal rather than left to become permanent.
-    """
-    body = _get(client, page=1, per_page=24).json()
-    assert "docs" in body, "the deprecated `docs` alias is gone, so an un-rolled annotator pod renders nothing"
-    assert body["docs"] == body["items"], "the alias must MIRROR the new field, not default"

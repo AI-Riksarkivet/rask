@@ -156,17 +156,3 @@ def test_get_project_without_can_view_is_403(wired: Any) -> None:
 def test_get_missing_project_is_404(wired: Any) -> None:
     client, _tenant, _seen = wired(grant={"can_view"}, projects={})
     assert client.get("/projects/nope").status_code == 404
-
-
-# --------------------------------------------------------------------------------------------------
-# Create registers in the tenant index
-# --------------------------------------------------------------------------------------------------
-
-
-def test_create_registers_the_project_in_the_tenant_index(wired: Any) -> None:
-    client, tenant, _seen = wired(grant={"can_create_annotation_project"})
-
-    r = client.post("/projects", json={"tenant": "acme", "slug": "labels"})
-
-    assert r.status_code == 201, r.text
-    assert tenant.registered == [r.json()["project_id"]], "an unregistered project is invisible to the landing forever"

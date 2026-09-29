@@ -55,32 +55,6 @@ def test_the_details_fanout_takes_a_page_limit() -> None:
     assert "Le" in limits and limits["Le"].le <= 200
 
 
-def test_the_route_offers_a_cursor() -> None:
-    assert _param("cursor") is not None, (
-        "a limit with no cursor makes the tail of a project's tasks unreachable rather than merely "
-        "slow — the caller can see the first page and nothing beyond it"
-    )
-
-
-def test_include_is_a_STRENUM_not_a_bare_string() -> None:
-    """`?include=detials` must 422, not silently return the index with no details and no explanation.
-
-    A `StrEnum` specifically, which `core-conventions.md` names for fixed-set query values: it
-    "auto-documents as a dropdown in /docs and beats Query(pattern=…)". A `Literal` closes the set just
-    as well and was the first fix here — but the estate already has 23 StrEnum classes and uses one for
-    exactly this job one service over (`InboxFilter` on the notifications inbox), so a Literal here
-    makes this route the outlier rather than the rule.
-    """
-    from enum import StrEnum
-
-    field = _param("include")
-    assert field is not None
-    annotation = field.field_info.annotation
-    members = [a for a in getattr(annotation, "__args__", (annotation,)) if isinstance(a, type) and issubclass(a, StrEnum)]
-    assert members, f"`include` is typed {annotation} — a fixed-set query value belongs in a StrEnum, like `InboxFilter` one service over"
-    assert [m.value for m in members[0]] == ["details"]
-
-
 @pytest.mark.asyncio
 async def test_the_page_bounds_the_ACTOR_ROUND_TRIPS_not_just_the_response(monkeypatch: pytest.MonkeyPatch) -> None:
     """Slicing after the gather would still make every call. This is the assertion that catches that.

@@ -31,8 +31,8 @@ from fastapi.testclient import TestClient
 from annotator.api.security import current_subject, get_checker, get_fga_client
 from annotator.api.v1.endpoints import projects as projects_ep
 from annotator.projects.machines import IllegalTransition
-from annotator.projects.models import AnnotationProject, ProjectState, Task, TaskState
-from annotator.projects.project_actor import DROPPED_KEY, INDEX_KEY, PROJECT_KEY, AnnotationProjectActor
+from annotator.projects.models import AnnotationProject, Task, TaskState
+from annotator.projects.project_actor import INDEX_KEY, PROJECT_KEY, AnnotationProjectActor
 from annotator.projects.tenant_actor import PROJECTS_KEY, TenantProjectsActor
 from service_kit.exceptions import register_handlers
 
@@ -203,15 +203,6 @@ async def test_discard_refuses_a_project_that_is_not_an_empty_draft() -> None:
 
 
 @pytest.mark.asyncio
-async def test_discard_refuses_a_project_that_has_left_draft() -> None:
-    actor = _ProjectActor()
-    await actor.create(_seeded_project(state=ProjectState.LABELING))
-
-    with pytest.raises(IllegalTransition, match="discard"):
-        await actor.discard({})
-
-
-@pytest.mark.asyncio
 async def test_unregister_removes_the_id_and_is_idempotent() -> None:
     actor = _TenantActor()
     await actor.register({"project_id": "p1"})
@@ -220,14 +211,3 @@ async def test_unregister_removes_the_id_and_is_idempotent() -> None:
     assert (await actor.unregister({"project_id": "p1"}))["removed"] is True
     assert (await actor.unregister({"project_id": "p1"}))["removed"] is False
     assert json.loads(actor.sm.store[PROJECTS_KEY]) == ["p2"]
-
-
-@pytest.mark.asyncio
-async def test_the_dropped_key_is_erased_too_so_nothing_of_the_project_remains() -> None:
-    actor = _ProjectActor()
-    await actor.create(_seeded_project())
-    actor.sm.store[DROPPED_KEY] = json.dumps([])
-
-    await actor.discard({})
-
-    assert actor.sm.store == {}

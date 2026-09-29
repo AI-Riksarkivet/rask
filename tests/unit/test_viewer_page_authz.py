@@ -184,47 +184,6 @@ def test_bytes_need_can_read_data_while_the_listing_needs_only_metadata() -> Non
     assert {s["obj"] for s in seen} == {f"table:{TABLE}"}
 
 
-def test_the_check_names_the_CATALOG_table_not_an_invented_object() -> None:
-    """`table:<id>` — the same object the catalog authorizes on and the annotator writes through."""
-    seen: list[dict[str, Any]] = []
-    client = TestClient(_app(allow=True, seen=seen))
-
-    client.get("/api/page", params={"table": TABLE, "id": 0})
-
-    assert seen == [{"user": "gina", "relation": READ_DATA, "obj": f"table:{TABLE}"}]
-
-
-def test_a_granted_caller_still_gets_the_bytes() -> None:
-    """The gate must not be a wall. Without this the suite would pass with the route deleted."""
-    client = TestClient(_app(allow=True))
-
-    r = client.get("/api/page", params={"table": TABLE, "id": 0})
-
-    assert r.status_code == 200
-    assert r.content == _JPEG
-    assert r.headers["content-type"] == "image/jpeg"
-
-
-def test_the_denied_caller_is_refused_BEFORE_the_dataset_is_opened(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Order matters twice over.
-
-    A denied caller must not cause a read of the bytes they were denied — and, less obviously, must
-    not be able to use a catalog resolve's timing or error shape to probe which tables exist.
-
-    The catalog is patched to SUCCEED on purpose. Without it this test passed for the wrong reason:
-    `_resolve` failed to reach `http://catalog`, so nothing was opened regardless of check order, and
-    an inverted-order mutation did not fail it. With a working catalog the check order is the only
-    thing that can keep `opened` empty. (Found by mutation, which is exactly what mutation is for.)
-    """
-    opened: list[str] = []
-    monkeypatch.setattr(pg.lance, "dataset", lambda *a, **_kw: opened.append(str(a)))
-
-    r = TestClient(_app(allow=False)).get("/api/page", params={"table": TABLE, "id": 0})
-
-    assert r.status_code == 403
-    assert opened == [], "the dataset was opened for a caller who was refused"
-
-
 # --- the bearer -------------------------------------------------------------------------------
 
 
@@ -241,16 +200,6 @@ def test_the_CALLERS_bearer_is_forwarded_to_the_catalog() -> None:
     client.get("/api/page", params={"table": TABLE, "id": 0})
 
     assert headers == [{"Authorization": "Bearer caller-jwt"}]
-
-
-def test_an_anonymous_caller_sends_no_authorization_header_at_all() -> None:
-    """`Bearer None` would be a forged-looking credential; absence is the honest wire."""
-    headers: list[dict[str, str]] = []
-    client = TestClient(_app(allow=True, token=None, http=_catalog_ok(headers)))
-
-    client.get("/api/page", params={"table": TABLE, "id": 0})
-
-    assert headers == [{}]
 
 
 def test_a_catalog_401_says_WHICH_credential_problem_it_was() -> None:

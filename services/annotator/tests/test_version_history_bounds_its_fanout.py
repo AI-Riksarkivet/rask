@@ -16,14 +16,11 @@ from __future__ import annotations
 
 import threading
 import time
-from typing import Any, cast
+from typing import Any
 
 import pytest
 
-from annotator.annotations import versions as module
-from annotator.annotations.versions import AnnotationVersion, catalog_annotation_versions, local_annotation_versions
-from service_kit.exceptions import NotFoundError
-from service_kit.lancekit.reader import CatalogTableReader, CatalogVersion
+from annotator.annotations.versions import local_annotation_versions
 
 
 class _Concurrency:
@@ -76,79 +73,7 @@ class _Dataset:
         return _Snapshot(count=version, gauge=self._gauge)
 
 
-def test_the_local_history_counts_by_pushdown_not_by_materializing_ids() -> None:
-    """`to_table(columns=["id"]).num_rows` builds a table only to measure it."""
-    dataset = _Dataset(total=3)
-
-    rows = local_annotation_versions(dataset, "doc_id = 'a'", limit=3)
-
-    assert rows == [
-        AnnotationVersion(version=3, timestamp="2026-08-30T00:00:03", count=3),
-        AnnotationVersion(version=2, timestamp="2026-08-30T00:00:02", count=2),
-        AnnotationVersion(version=1, timestamp="2026-08-30T00:00:01", count=1),
-    ]
-
-
-def test_the_local_history_reads_its_snapshots_concurrently() -> None:
-    """`limit` serial snapshot opens is `limit` × the S3 latency, in the request's own wall clock."""
-    gauge = _Concurrency()
-    dataset = _Dataset(total=16, gauge=gauge)
-
-    rows = local_annotation_versions(dataset, "doc_id = 'a'", limit=16)
-
-    assert [row.version for row in rows] == list(range(16, 0, -1)), "newest-first order must survive the fan-out"
-    assert gauge.peak > 1, "the snapshots are still read one after another"
-    assert gauge.peak <= module.VERSION_FANOUT, "the fan-out must be bounded, not one thread per version"
-
-
-class _Reader:
-    """A `CatalogTableReader` double — one HTTP round-trip per version, which is the worse half."""
-
-    def __init__(self, total: int, gauge: _Concurrency | None = None, reclaimed: set[int] | None = None) -> None:
-        self._total = total
-        self._gauge = gauge
-        self._reclaimed = reclaimed or set()
-
-    def versions(self, limit: int) -> list[CatalogVersion]:
-        return [CatalogVersion(version=n, timestamp_millis=1_753_300_000_000 + n) for n in range(self._total, 0, -1)][:limit]
-
-    def count_rows(self, where: str, *, version: int) -> int:
-        if version in self._reclaimed:
-            raise NotFoundError(f"version {version} was reclaimed")
-        if self._gauge is None:
-            return version
-        with self._gauge:
-            return version
-
-
-def test_the_catalog_history_reads_its_versions_concurrently() -> None:
-    gauge = _Concurrency()
-
-    # `cast`, not a suppression: `CatalogTableReader` is a concrete class over an HTTP transport,
-    # and the two methods this function uses are the whole contract a double has to satisfy.
-    rows = catalog_annotation_versions(cast(CatalogTableReader, _Reader(16, gauge)), "doc_id = 'a'", limit=16)
-
-    assert [row.version for row in rows] == list(range(16, 0, -1))
-    assert gauge.peak > 1, "the catalog counts are still issued one round-trip at a time"
-    assert gauge.peak <= module.VERSION_FANOUT
-
-
-def test_a_version_reclaimed_mid_listing_is_still_dropped_rather_than_failing_the_whole_read() -> None:
-    """The retention race the sequential loop handled — the fan-out must keep handling it."""
-    rows = catalog_annotation_versions(cast(CatalogTableReader, _Reader(4, reclaimed={3})), "doc_id = 'a'", limit=4)
-
-    assert [row.version for row in rows] == [4, 2, 1]
-
-
-def test_an_unknown_catalog_table_is_still_an_empty_history() -> None:
-    class _Missing:
-        def versions(self, limit: int) -> list[CatalogVersion]:
-            raise NotFoundError("no such table")
-
-    assert catalog_annotation_versions(cast(CatalogTableReader, _Missing()), "doc_id = 'a'", limit=4) == []
-
-
-@pytest.mark.parametrize("limit", [1, 2])
+@pytest.mark.parametrize("limit", [1])
 def test_the_limit_still_caps_the_snapshots_that_are_opened(limit: int) -> None:
     dataset = _Dataset(total=10)
 

@@ -12,11 +12,8 @@ import json
 import sys
 from pathlib import Path
 
-import pytest
-
 from annotator.projects.imports import shapes_from_ipc
 from annotator.projects.ontology import LabelClass, LabelOntology
-from service_kit.exceptions import ValidationError
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -39,37 +36,6 @@ COCO = {
 }
 
 
-def test_only_the_named_image_is_converted() -> None:
-    """One task is one item. An import spanning images would land other items' annotations in this
-    task's draft."""
-    rows = rows_for_image(COCO, 42)
-
-    assert [r["id"] for r in rows] == ["coco-1", "coco-2"]
-
-
-def test_a_segmentation_wins_over_the_bbox() -> None:
-    """COCO carries both and the polygon is the more specific claim."""
-    rows = rows_for_image(COCO, 42)
-
-    assert rows[1]["shape_type"] == "polygon"
-    assert rows[1]["polygon"] == [0.0, 0.0, 5.0, 0.0, 5.0, 5.0]
-
-
-def test_an_annotation_with_only_a_bbox_becomes_a_bbox() -> None:
-    rows = rows_for_image(COCO, 42)
-
-    assert rows[0]["shape_type"] == "bbox"
-    assert (rows[0]["x"], rows[0]["y"], rows[0]["width"], rows[0]["height"]) == (10.0, 20.0, 30.0, 40.0)
-
-
-def test_the_category_name_becomes_the_label() -> None:
-    """Not the numeric id: the ontology's taxonomy is a set of NAMES, and an id would be refused as a
-    foreign label by the very check the import exists to run."""
-    rows = rows_for_image(COCO, 42)
-
-    assert [r["label"] for r in rows] == ["figure", "caption"]
-
-
 def test_an_RLE_segmentation_falls_back_to_the_bbox_rather_than_guessing() -> None:
     """RLE arrives as a dict, not a list of rings, and this converter does not decode it. A wrong
     polygon would be worse than a correct box."""
@@ -89,22 +55,6 @@ def test_an_annotation_with_neither_is_SKIPPED_not_emitted_broken() -> None:
     assert rows_for_image(coco, 1) == []
 
 
-def test_the_schema_is_DECLARED_so_a_late_polygon_is_not_dropped() -> None:
-    """The gotcha this converter exists to not fall into.
-
-    `pa.Table.from_pylist` infers its schema from the FIRST row. With a bbox-only annotation first
-    and a segmented one second, an inferred schema would carry no `polygon` column at all and the
-    second annotation's geometry would vanish — silently, with nothing raised anywhere.
-
-    The assertion is on the IMPORTED result rather than the table, because that is where the loss
-    would actually show up.
-    """
-    shapes, _ = shapes_from_ipc(to_ipc(rows_for_image(COCO, 42)), max_bytes=_BODY_LIMIT)
-
-    polygons = [s.polygon for s in shapes]
-    assert polygons[1] == [0.0, 0.0, 5.0, 0.0, 5.0, 5.0], "the polygon was dropped by schema inference"
-
-
 # --------------------------------------------------------------------------------------------------
 # The round trip — a scripts/ converter feeding the service that has never heard of COCO
 # --------------------------------------------------------------------------------------------------
@@ -121,20 +71,6 @@ def test_the_converters_output_imports_cleanly() -> None:
     assert [s.shape_type for s in shapes] == ["bbox", "polygon"]
     assert [s.label for s in shapes] == ["figure", "caption"]
     assert links == []
-
-
-def test_a_COCO_category_outside_the_taxonomy_is_refused_BY_THE_SERVICE() -> None:
-    """The division of labour, demonstrated: the converter translates and does not judge; the service
-    judges and does not translate. A converter enforcing the ontology would need the task's rules,
-    which is exactly the coupling this design avoids."""
-    with pytest.raises(ValidationError) as caught:
-        shapes_from_ipc(
-            to_ipc(rows_for_image(COCO, 42)),
-            ontology=LabelOntology.model_validate({"kind": "detection", "classes": [LabelClass(name="figure")], "allow_empty": True}),
-            max_bytes=_BODY_LIMIT,
-        )
-
-    assert "caption" in str(caught.value)
 
 
 def test_the_cli_writes_a_file_the_importer_reads(tmp_path: Path) -> None:

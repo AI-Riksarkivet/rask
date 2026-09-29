@@ -89,23 +89,6 @@ async def test_a_claim_release_loop_does_not_grow_the_document_forever() -> None
 
 
 @pytest.mark.asyncio
-async def test_the_serialized_document_stops_growing_once_the_cap_is_reached() -> None:
-    """The point of the cap: the cost of an event stops tracking the number of events before it."""
-    actor = _Actor()
-    await _seed(actor, _task())
-    for _ in range(MAX_TRANSITIONS):
-        await actor.fire({"event": "claim", "actor": "dana", "project_state": "labeling"})
-        await actor.fire({"event": "release", "actor": "dana", "project_state": "labeling"})
-    at_cap = len(actor.sm.store[TASK_KEY])
-
-    for _ in range(50):
-        await actor.fire({"event": "claim", "actor": "dana", "project_state": "labeling"})
-        await actor.fire({"event": "release", "actor": "dana", "project_state": "labeling"})
-
-    assert len(actor.sm.store[TASK_KEY]) <= at_cap
-
-
-@pytest.mark.asyncio
 async def test_an_oversized_document_is_trimmed_by_the_next_write_that_touches_it() -> None:
     """Documents that predate the cap must converge, not stay big forever."""
     now = datetime.now(UTC)

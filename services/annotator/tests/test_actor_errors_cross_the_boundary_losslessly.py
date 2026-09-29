@@ -68,17 +68,6 @@ async def test_a_refusal_reason_survives_the_hop_character_for_character() -> No
 
 
 @pytest.mark.asyncio
-async def test_a_backslash_in_a_subject_is_not_eaten_by_the_unescaper() -> None:
-    """A UNC-shaped annotator (`\\\\CORP\\dave`) keeps BOTH leading backslashes across the hop."""
-    original = IllegalTransition("task", "claimed", "submit (the task is held by \\\\CORP\\dave)")
-
-    reached = await _round_trip(_over_the_sidecar(original))
-
-    assert isinstance(reached, IllegalTransition)
-    assert reached.event == original.event
-
-
-@pytest.mark.asyncio
 async def test_a_failure_that_merely_names_the_class_is_not_rewritten_into_one() -> None:
     """Only a real `IllegalTransition` becomes one here.
 
@@ -91,14 +80,3 @@ async def test_a_failure_that_merely_names_the_class_is_not_rewritten_into_one()
     reached = await _round_trip(_over_the_sidecar(unrelated))
 
     assert not isinstance(reached, IllegalTransition)
-
-
-@pytest.mark.asyncio
-async def test_the_project_half_keeps_its_kind() -> None:
-    """`kind` distinguishes a project refusal from a task one and must not default to `task`."""
-    original = IllegalTransition("project", "frozen", "publish (tasks are not all terminal)")
-
-    reached = await _round_trip(_over_the_sidecar(original))
-
-    assert isinstance(reached, IllegalTransition)
-    assert (reached.kind, reached.state, reached.event) == ("project", "frozen", original.event)

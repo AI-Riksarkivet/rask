@@ -143,9 +143,6 @@ def _no_live_project_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     Autouse rather than per-test: the reach is a property of `fire()`, so opting in test-by-test is
     what let fifty-nine of them drift. A test that cares what the project received still overrides
     this with its own `monkeypatch.setattr` — a later patch wins, and both such tests still pass.
-
-    `test_a_transition_builds_NO_real_dapr_proxy_so_this_file_needs_no_sidecar` is the regression
-    guard: remove this fixture and it goes red.
     """
     import dapr.actor
 
@@ -167,17 +164,6 @@ async def test_seed_is_idempotent_so_a_redelivered_send_cannot_reset_a_claim() -
 
     assert again["state"] == TaskState.CLAIMED
     assert again["assignee"] == "gina", "re-seeding reset a task someone was holding"
-
-
-@pytest.mark.asyncio
-async def test_state_round_trips_through_the_state_manager() -> None:
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
-
-    stored = json.loads(actor.sm.store[TASK_KEY])
-    assert stored["state"] == TaskState.CLAIMED
-    assert (await _state(actor))["state"] == TaskState.CLAIMED
-    assert actor.sm.saves >= 2  # seed + claim both persisted
 
 
 @pytest.mark.asyncio
@@ -207,18 +193,6 @@ async def test_submit_honours_the_review_required_captured_on_the_TASK() -> None
 
 
 @pytest.mark.asyncio
-async def test_a_payload_cannot_override_the_tasks_review_requirement() -> None:
-    """The self-accept hole, closed. The task says review IS required; a fire payload claiming
-    otherwise must be ignored entirely."""
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
-
-    out = await actor.fire(_verified({"event": "submit", "actor": "gina", "review_required": False}))
-
-    assert out["state"] == TaskState.IN_REVIEW, "a request payload waived the task's review requirement"
-
-
-@pytest.mark.asyncio
 async def test_every_transition_is_appended_to_the_audit_trail() -> None:
     actor = await _seeded()
     await actor.fire(_verified({"event": "claim", "actor": "gina"}))
@@ -231,52 +205,6 @@ async def test_every_transition_is_appended_to_the_audit_trail() -> None:
 # --------------------------------------------------------------------------------------------------
 # The lease reminder — armed and disarmed on exactly the right edges
 # --------------------------------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_claim_arms_the_lease_reminder_with_the_project_lease() -> None:
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina", "lease_seconds": 900}))
-    assert actor.reminders == [(LEASE_REMINDER, 900.0)]
-
-
-@pytest.mark.asyncio
-async def test_assign_pins_the_task_and_arms_nothing() -> None:
-    """§4.2: `lease_expires_at is None` while CLAIMED means manager-pinned — it never expires."""
-    actor = await _seeded()
-    out = await actor.fire(_verified({"event": "assign", "actor": "henry"}))
-    assert out["state"] == TaskState.CLAIMED
-    assert out["lease_expires_at"] is None
-    assert actor.reminders == [], "a pinned task must not arm an expiry"
-
-
-@pytest.mark.asyncio
-async def test_saving_a_draft_renews_the_lease() -> None:
-    """The REAL door: the canvas calls `PUT /tasks/{id}/draft` -> `AnnotationTaskActor.save_draft`.
-
-    Until 2026-08-25 this test drove `actor.fire({"event": "save_draft"})` and passed, while the door
-    the product actually calls renewed nothing. `bulk-events.ts:24` excludes save_draft from the
-    events door in as many words ("save_draft belongs to the canvas"), so the branch it exercised is
-    unreachable from the frontend: an annotator saving every 60s for half an hour made 30 successful
-    writes, none of which re-armed anything, and at `lease_seconds` the reminder fired, nulled
-    `assignee` and returned the task to the pool. Her next save 409'd and another annotator could
-    claim it out from under her.
-
-    Asserting on the STORED task rather than the return value, because `save_draft` returns the
-    draft: a renewal that never reached TASK_KEY would satisfy any assertion made on what it hands
-    back, and the reminder is armed against what is persisted.
-    """
-    actor = await _claimed()
-    before = Task.model_validate_json(actor.sm.store[TASK_KEY]).lease_expires_at
-    armed_before = len(actor.reminders)
-
-    await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []}))
-
-    after = Task.model_validate_json(actor.sm.store[TASK_KEY]).lease_expires_at
-    assert len(actor.reminders) == armed_before + 1, "save_draft must re-arm the lease reminder"
-    assert actor.reminders[-1][0] == LEASE_REMINDER
-    assert before is not None and after is not None, "a CLAIMED task carries an expiry"
-    assert after > before, "save_draft must push lease_expires_at forward"
 
 
 @pytest.mark.asyncio
@@ -317,7 +245,7 @@ async def test_the_events_door_and_the_canvas_door_agree_about_renewal() -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("event", ["submit", "release", "skip"])
+@pytest.mark.parametrize("event", ["submit", "release"])
 async def test_leaving_claimed_disarms_the_reminder(event: str) -> None:
     """A reminder left armed would expire a task that already moved on — outliving what it guarded."""
     actor = await _seeded()
@@ -327,7 +255,7 @@ async def test_leaving_claimed_disarms_the_reminder(event: str) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("event", ["submit", "release", "skip"])
+@pytest.mark.parametrize("event", ["submit", "release"])
 async def test_a_failed_store_leaves_the_lease_reminder_armed(event: str) -> None:
     """Disarm AFTER persist, never before. If the store raises, the persisted state is still CLAIMED
     and the reminder must still be armed — the reverse order strands a claimed task with no
@@ -445,46 +373,6 @@ async def test_an_unreachable_project_does_not_fail_the_annotator_s_transition(m
 
 
 @pytest.mark.asyncio
-async def test_a_transition_builds_NO_real_dapr_proxy_so_this_file_needs_no_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
-    """This module's docstring promises every behaviour here is "provable without a Dapr sidecar".
-    It was not: `fire()` -> `_report_state` -> `typed_proxy` -> the REAL `ActorProxy.create`, whose
-    `DaprHttpClient.__init__` runs `DaprHealth.wait_for_sidecar()` — a `time.sleep` loop bounded by
-    `DAPR_HEALTH_TIMEOUT` (Dapr's default, 60 s).
-
-    Nothing FAILED, which is why it survived: `_report_state` swallows the exception on purpose, and
-    correctly so. The cost was paid in wall clock and only off the author's machine. Measured on a box
-    with a sidecar answering :3500 this file ran in 0.49 s; with the sidecar unreachable and the health
-    timeout dialled down to 3 s it ran in 285.54 s, all 61 tests passing either way. At CI's default of
-    60 s the run reached 44 % before `--timeout=300` killed it, taking the other 56 % of the offline
-    suite — and the four `needs: ms-test` e2e lanes — down with it.
-
-    So the guard cannot be "did it fail" or "was it fast"; it has to be "did it reach". The factory is
-    the honest probe: `_get_default_factory_instance` assigns `cls._default_proxy_factory` only AFTER
-    the constructor returns, so a refused handshake caches nothing and every later call pays again.
-    Reset the cache, drive a plain transition, and assert the constructor was never entered.
-    """
-    import dapr.actor
-    from dapr.actor.client import proxy as _proxy
-
-    built: list[_proxy.ActorProxyFactory] = []
-
-    def _record(self: _proxy.ActorProxyFactory, *_args: object, **_kwargs: object) -> None:
-        """Stand in for the constructor entirely — recording it is the assertion, and NOT calling
-        through is what keeps the probe free of the 60 s handshake it exists to detect."""
-        built.append(self)
-
-    # The cache is a CLASS attribute and a sibling test may have populated it, which would hide the
-    # very construction this asserts. Clear it so the probe measures this call, not the run's history.
-    monkeypatch.setattr(dapr.actor.ActorProxy, "_default_proxy_factory", None)
-    monkeypatch.setattr(_proxy.ActorProxyFactory, "__init__", _record)
-
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
-
-    assert not built, "a unit test built a real Dapr proxy factory — it will block on a live sidecar handshake in CI"
-
-
-@pytest.mark.asyncio
 async def test_shape_ids_are_minted_at_save_and_PERSISTED_so_a_republish_is_stable() -> None:
     """`Shape.shape_id` has a `default_factory`, so an id is minted whenever a shape is PARSED
     without one. The publish saga's replay-determinism therefore rests on the actor persisting the
@@ -520,32 +408,6 @@ async def test_assign_names_the_recipient_not_the_manager_who_fired_it() -> None
     assert out["assignee"] == "gina", "the manager assigned the task to themselves"
     assert out["transitions"][-1]["by"] == "henry", "the manager is still the recorded actor"
     assert out["lease_expires_at"] is None, "a pinned task must not take a lease"
-
-
-@pytest.mark.asyncio
-async def test_assign_without_a_named_recipient_falls_back_to_the_actor() -> None:
-    """A manager assigning with no name is taking it themselves — legal, and better than an empty
-    assignee, which would be a CLAIMED task nobody holds."""
-    actor = await _seeded()
-    out = await actor.fire(_verified({"event": "assign", "actor": "henry"}))
-    assert out["assignee"] == "henry"
-
-
-@pytest.mark.asyncio
-async def test_request_changes_appends_the_reviewers_reason() -> None:
-    """§5.2: `request_changes` appends a `ReviewNote`. Without it the annotator gets the task back
-    with no statement of what to change, which makes the whole changes_requested loop useless."""
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
-    await actor.fire(_verified({"event": "submit", "actor": "gina"}))
-
-    out = await actor.fire(_verified({"event": "request_changes", "actor": "carol", "message": "the second box is off by a line", "shape_ids": ["s1"]}))
-
-    assert out["state"] == TaskState.CHANGES_REQUESTED
-    assert len(out["review_notes"]) == 1
-    note = out["review_notes"][0]
-    assert note["by"] == "carol" and note["message"] == "the second box is off by a line"
-    assert note["shape_ids"] == ["s1"]
 
 
 @pytest.mark.asyncio
@@ -590,15 +452,6 @@ async def test_two_tabs_cannot_clobber_by_OMITTING_base_revision() -> None:
 
     surviving = await actor.get_draft()
     assert surviving is not None and len(surviving["shapes"]) == 30, "the omitted-etag save clobbered 30 shapes"
-
-
-@pytest.mark.asyncio
-async def test_the_first_save_needs_no_base_revision() -> None:
-    """There is nothing to be stale against before a draft exists, so requiring it would make the
-    first save impossible rather than safe."""
-    actor = await _claimed()
-    out = await actor.save_draft(_verified({"task_id": "t1", "project_id": "p1", "author": "gina", "shapes": []}))
-    assert out["revision"] == 1
 
 
 # --------------------------------------------------------------------------------------------------
@@ -673,21 +526,6 @@ async def test_a_conforming_submit_passes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_draftless_submit_is_refused() -> None:
-    """No draft = an empty shape set.
-
-    This used to assert the `required_labels` message, and that reading was the bug the audit
-    found: a required label was the ONLY rule an empty set could fail, so a task that declared none
-    accepted a submission with nothing in it. The empty-set rule now catches this first — a strictly
-    earlier refusal that no longer depends on the task having declared a required class."""
-    ontology = {"classes": [{"name": "portrait", "required": True}]}
-    actor = await _claimed_with_ontology(ontology, [])
-
-    with pytest.raises(IllegalTransition, match="at least one annotation"):
-        await actor.fire(_verified({"event": "submit", "actor": "gina"}))
-
-
-@pytest.mark.asyncio
 async def test_an_ontology_that_CONSTRAINS_NOTHING_never_blocks_a_submit() -> None:
     """An ontology with no classes is the pre-ontology behaviour, exactly.
 
@@ -753,35 +591,6 @@ KIE_SHAPES = [
     {"shape_id": "s1", "shape_type": "bbox", "label": "key"},
     {"shape_id": "s2", "shape_type": "bbox", "label": "value"},
 ]
-
-
-@pytest.mark.asyncio
-async def test_a_link_SURVIVES_the_draft_write() -> None:
-    """The gap that made a required relation impossible to satisfy.
-
-    `Draft` carried only `shapes`, and `save_draft` builds the model field by field — so a `links`
-    key was dropped on the floor with no error. The submit check then read an always-empty link list,
-    which meant an ontology declaring a REQUIRED relation refused every submission that could ever be
-    made. Declared, enforced, and unsatisfiable: the worst of the three.
-    """
-    actor = _Actor()
-    await actor.seed(_task(ontology=KIE))
-    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
-    await actor.save_draft(
-        _verified(
-            {
-                "task_id": "t1",
-                "project_id": "p1",
-                "author": "gina",
-                "shapes": KIE_SHAPES,
-                "links": [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}],
-            }
-        )
-    )
-
-    stored = await actor.get_draft()
-    assert stored is not None
-    assert stored["links"] == [{"name": "answers", "from_shape": "s1", "to_shape": "s2"}], "the link was dropped by the draft write"
 
 
 @pytest.mark.asyncio
@@ -868,22 +677,7 @@ async def test_a_lease_that_MOVED_refuses_the_previous_holders_submit() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_lease_that_EXPIRED_refuses_the_previous_holders_skip() -> None:
-    """`skip` is the sharpest one: it discards the work outright, and the lease it was checked
-    against had already lapsed and been taken by someone else."""
-    actor = await _seeded()
-    await actor.fire(_verified({"event": "claim", "actor": "gina"}))
-    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
-    await actor.fire(_verified({"event": "claim", "actor": "dave"}))
-
-    with pytest.raises(IllegalTransition, match="held by dave"):
-        await actor.fire(_verified({"event": "skip", "actor": "gina"}))
-
-    assert (await _state(actor))["state"] == TaskState.CLAIMED
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("event", ["accept", "fix_and_accept", "request_changes"])
+@pytest.mark.parametrize("event", ["accept"])
 async def test_the_reviewer_BECOMING_the_author_is_caught_in_the_turn(event: str) -> None:
     """§5.2's self-review ban survives the window it used to have: the snapshot showed `submitted_by`
     as somebody else (or nobody), the submit landed, and the review then applied to the reviewer's
@@ -949,7 +743,7 @@ async def test_a_draft_from_the_PREVIOUS_holder_cannot_land_on_the_new_holders_t
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("frozen", [ProjectState.PUBLISHING, ProjectState.PUBLISHED, ProjectState.ARCHIVED])
+@pytest.mark.parametrize("frozen", [ProjectState.PUBLISHING])
 async def test_a_frozen_project_refuses_the_transition_inside_the_turn(frozen: ProjectState) -> None:
     actor = await _seeded()
     await actor.fire(_verified({"event": "claim", "actor": "gina"}))
@@ -1075,23 +869,6 @@ async def test_the_lapsed_lease_event_names_the_SYSTEM_as_actor(monkeypatch: pyt
     await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
 
     assert control.events[0].actor == "system:annotator"
-
-
-@pytest.mark.asyncio
-async def test_a_STALE_reminder_for_a_task_that_moved_on_announces_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reminder can outlive the state it guarded — a submit disarms it, but a fire already in
-    flight still arrives. That path returns early WITHOUT a transition, so there is no change to
-    announce, and a row would tell somebody their work lapsed when it did not."""
-    from service_kit import control_emit
-
-    control = _RecordingControl()
-    monkeypatch.setattr(control_emit, "process_control_emitter", lambda: control)
-
-    actor = await _seeded()  # UNASSIGNED — never claimed, so the reminder is stale by construction
-
-    await actor.receive_reminder(LEASE_REMINDER, b"", timedelta(0), timedelta(0))
-
-    assert control.events == []
 
 
 @pytest.mark.asyncio

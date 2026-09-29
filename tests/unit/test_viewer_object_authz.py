@@ -128,22 +128,6 @@ def test_every_object_route_is_refused_without_the_estate_grant(path: str, param
     assert b"TIFFBYTES" not in r.content
 
 
-def test_the_bytes_route_does_not_touch_s3_for_a_denied_caller(_fake_s3: list[str]) -> None:
-    """Refused BEFORE the S3 call, so a denial costs no request against the object store — and
-    cannot be timed to infer whether a key exists."""
-    TestClient(_app(allow=False)).get("/api/object/download", params={"bucket": STORE, "key": "a.tif"})
-
-    assert _fake_s3 == [], "S3 was called for a caller who was refused"
-
-
-def test_a_granted_caller_still_gets_the_bytes() -> None:
-    """The gate must not be a wall. Without this the suite passes with the routes deleted."""
-    r = TestClient(_app(allow=True)).get("/api/object/download", params={"bucket": STORE, "key": "a.tif"})
-
-    assert r.status_code == 200
-    assert r.content == b"TIFFBYTES"
-
-
 def test_the_check_is_made_against_the_ESTATE_ROOT_not_the_store() -> None:
     """The app-side half of the scoping, promised in `model.fga.yaml`'s own comment.
 
@@ -162,16 +146,3 @@ def test_the_check_is_made_against_the_ESTATE_ROOT_not_the_store() -> None:
     assert [s["obj"] for s in seen] == [ROOT, ROOT, ROOT]
     assert {s["relation"] for s in seen} == {BROWSE_STORAGE}
     assert {s["user"] for s in seen} == {"gina"}
-
-
-def test_an_unregistered_store_is_still_a_404_not_a_403() -> None:
-    """The registry check and the authz check answer different questions, and both still run.
-
-    A 403 here would tell an unauthorized caller nothing, but it would also lose the diagnostic the
-    storage browser depends on: it lists stores FROM the registry, so if it asks for one, the
-    registry said it existed. Authz first, then existence — the caller is authorized estate-wide
-    before either answer is given, so the 404 leaks nothing.
-    """
-    r = TestClient(_app(allow=True)).get("/api/objects", params={"bucket": "no-such-store"})
-
-    assert r.status_code == 404

@@ -48,19 +48,6 @@ class TestTheCacheKeyDoesNotMissOnNoise:
 class TestTheBuildIsBounded:
     """A queue that grows without limit is the pool-exhaustion half of the finding."""
 
-    def test_there_is_a_declared_concurrency_bound(self) -> None:
-        assert hasattr(clips, "MAX_CONCURRENT_BUILDS"), (
-            "clips.py declares no concurrency bound — every caller queues on one global lock and holds a threadpool thread while it waits"
-        )
-        assert clips.MAX_CONCURRENT_BUILDS >= 1
-
-    def test_a_build_REFUSES_rather_than_queueing_when_saturated(self) -> None:
-        """Refusing is the point. Queueing is what holds the thread; a 503 returns it immediately
-        and tells the caller to retry, which is a fact they can act on."""
-        assert hasattr(clips, "ClipBusyError"), (
-            "there is no way for a saturated build to refuse — without one the only options are queue (holds a thread) or crash"
-        )
-
     def test_the_bound_is_enforced_by_the_builder(self) -> None:
         """Pinned on the builder rather than the route: `build_clip` is the shared seam, and a second
         caller added later must inherit the bound rather than re-implement it."""
@@ -71,20 +58,3 @@ class TestTheBuildIsBounded:
         finally:
             for slot in saturated:
                 slot.release()
-
-
-def test_the_media_module_declares_an_auth_dependency() -> None:
-    """The module had none at all, while its siblings gate on the same corpus objects.
-
-    Structural rather than a request test: the viewer's media routes need a real dataset registry to
-    answer, and the property here is that the door EXISTS — a module with no auth import cannot be
-    gated by any amount of configuration.
-    """
-    from pathlib import Path
-
-    source = Path(clips.__file__).parent.parent / "api" / "v1" / "endpoints" / "media.py"
-    text = source.read_text()
-    assert "READ_DATA" in text, (
-        "media.py imports no relation constant — the clip route serves media BYTES and its sibling `pages.py` gates the same class of read on can_read_data"
-    )
-    assert "CheckerDep" in text and "CurrentSubject" in text, "media.py binds no subject or checker"

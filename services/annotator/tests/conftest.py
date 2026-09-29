@@ -53,13 +53,10 @@ def refuse_sidecar_secret_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     its own text suggests — the test asserts only that "any failure proves the branch was entered", so
     a connect timeout satisfied it and hid which door was being knocked on.
 
-    Refusing makes that failure immediate and NAMED, which is what the test wanted: it proves the mint
-    branch was entered and that the error does not mention the deleted `catalog_token` field.
+    Refusing makes that failure immediate and NAMED.
 
-    The two tests that genuinely exercise the transport (`test_publish_transport_parses_once`,
-    `test_publish_transport_pools_and_retries`) already stub this themselves; a test-level
-    `monkeypatch.setattr` runs after an autouse fixture, so theirs wins and nothing here has to know
-    their names.
+    A test that genuinely exercises the transport stubs this itself; a test-level `monkeypatch.setattr`
+    runs after an autouse fixture, so its stub wins and nothing here has to know its name.
     """
     from service_kit.governed import secrets as sk_secrets
 

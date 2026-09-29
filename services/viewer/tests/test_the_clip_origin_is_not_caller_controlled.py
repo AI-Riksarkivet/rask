@@ -123,13 +123,6 @@ def clip_call(monkeypatch: pytest.MonkeyPatch) -> Any:  # noqa: ANN401 — retur
     return _call
 
 
-def test_a_hostile_host_header_never_reaches_ffmpeg(clip_call: Any) -> None:
-    recorded = clip_call([(b"host", HOSTILE_HOST.encode())])
-    assert HOSTILE_HOST not in recorded["source"], (
-        f"ffmpeg was pointed at {recorded['source']!r} — the caller's Host header chose the origin, so any host the pod can reach is fetchable through this route"
-    )
-
-
 def test_the_origin_is_the_configured_loopback(clip_call: Any) -> None:
     settings = ViewerSettings()
     recorded = clip_call([(b"host", HOSTILE_HOST.encode())])

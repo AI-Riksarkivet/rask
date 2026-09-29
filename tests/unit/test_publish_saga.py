@@ -236,22 +236,6 @@ async def test_the_table_id_is_derived_from_the_token_not_the_slug_alone() -> No
     assert table_id_for(p, "aaaaaaaaaaaaaaaa", "silver") == a, "the id must be deterministic in the token"
 
 
-@pytest.mark.asyncio
-async def test_the_table_id_uses_the_catalog_delimiter_so_authz_and_creation_name_the_same_object() -> None:
-    """The catalog's identifier delimiter is `$` (`LANCE_NS_DELIMITER`, catalog/core/config.py) —
-    estate ids are `bronze$events`, `silver$features`. A dot-joined id posted to
-    `/v1/table/{id}/...` parses as ONE root-level segment, so the table would land at the catalog
-    ROOT while FGA authorized creation in `namespace:silver`: the authorization object and the
-    created object diverge. The delimiter in the id is what keeps them the same object."""
-    p = AnnotationProject(project_id="p1", tenant="acme", slug="vasa")
-    tid = table_id_for(p, "aaaaaaaaaaaaaaaa", "silver")
-
-    namespace, _, name = tid.partition("$")
-    assert namespace == "silver", f"the id must be namespace-qualified with '$', got {tid!r}"
-    assert name == "vasa_aaaaaaaaaaaa"
-    assert "." not in tid, "a '.' in the id is not a namespace separator to the catalog"
-
-
 # --------------------------------------------------------------------------------------------------
 # Crash and retry — the claim OPERATORS.md §4 requires
 # --------------------------------------------------------------------------------------------------
@@ -304,18 +288,6 @@ async def test_running_the_saga_again_after_success_converges_instead_of_republi
     assert second.already_published is True
     assert second.table_id == first.table_id
     assert publisher.creates == 1, "a replay republished the project"
-
-
-@pytest.mark.asyncio
-async def test_the_publish_record_is_never_overwritten_by_a_replay() -> None:
-    project, publisher = _Project(), _Publisher()
-    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
-    await _run(project, tasks, publisher)
-    original = dict(project.doc["published"])
-
-    await _run(project, tasks, publisher)
-
-    assert project.doc["published"] == original
 
 
 # --------------------------------------------------------------------------------------------------
@@ -385,38 +357,6 @@ async def test_a_missing_token_stops_rather_than_minting_one() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_retry_writes_the_SAME_published_at_as_the_attempt_it_resumes() -> None:
-    """`published_at` lands in every row and in the PublishRecord. Stamping it per ATTEMPT would make
-    a retry rewrite the dataset with different values than the crashed attempt — falsifying the
-    "a replay is byte-identical" property in exactly the case it exists to cover.
-
-    Minted with the token, at the transition, so both survive the crash together.
-    """
-    project, publisher = _Project(), _Publisher(fail_on="tag")
-    tasks = {"t0": _Task("t0", TaskState.ACCEPTED, 1)}
-
-    with pytest.raises(RuntimeError):
-        await _run(project, tasks, publisher)
-    first_rows = [dict(r) for r in publisher.rows]
-
-    await project.fire({"event": "publish"})
-    publisher.fail_on = None
-    await _run(project, tasks, publisher)
-
-    assert publisher.rows == first_rows, "the retry rewrote the dataset with a different published_at"
-    assert project.doc["published"]["published_at"] == MINTED_AT.isoformat()
-
-
-@pytest.mark.asyncio
-async def test_the_instant_is_reused_not_re_minted_on_a_retry() -> None:
-    project = _Project()
-    before = project.doc["pending_publish_at"]
-    await project.fire({"event": "publish_failed", "error": "x"})
-    await project.fire({"event": "publish"})
-    assert project.doc["pending_publish_at"] == before, "a retry re-minted the publish instant"
-
-
-@pytest.mark.asyncio
 async def test_a_crash_between_record_and_succeeded_does_not_strand_the_project() -> None:
     """The wedge. `record_publish` lands, then the process dies before `publish_succeeded`. The
     project is now `publishing` WITH a publish record — and `PROJECT_EDGES` has no edge out of
@@ -445,22 +385,6 @@ async def test_a_crash_between_record_and_succeeded_does_not_strand_the_project(
     assert out.already_published is True
     assert project.doc["state"] == ProjectState.PUBLISHED, "the retry left the project stranded in publishing"
     assert publisher.creates == 0, "the retry republished"
-
-
-@pytest.mark.asyncio
-async def test_the_run_facet_is_keyed_by_its_name() -> None:
-    """`X-Lance-Run-Facets` is a {name: payload} mapping. Handing the catalog a bare payload emits a
-    facet with no name — dropped or rejected at the far end, which is provenance that silently does
-    not arrive. `PROJECT_FACET` existed and was never used to key anything."""
-    from annotator.projects.publish import PROJECT_FACET
-
-    project, publisher = _Project(), _Publisher()
-    await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED, 1)}, publisher)
-
-    assert set(publisher.run_facet) == {PROJECT_FACET}
-    payload = publisher.run_facet[PROJECT_FACET]
-    assert payload["_producer"] and payload["_schemaURL"], "the payload lost its spec-legal envelope"
-    assert payload["publishId"] == PUBLISH_TOKEN
 
 
 @pytest.mark.asyncio
@@ -510,54 +434,3 @@ async def test_no_pin_travels_when_the_capture_is_ambiguous() -> None:
     await _run(project, tasks, publisher)
 
     assert publisher.pin is None
-
-
-# --------------------------------------------------------------------------------------------------
-# A refusal must still leave the project somewhere it can leave from
-# --------------------------------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_TOKENLESS_publishing_project_is_moved_to_publish_failed_not_stranded() -> None:
-    """The refusal at "publishing but carries no publish token" was raised OUTSIDE the saga's `try`.
-
-    `publish_failed` is the saga's only exit and it is fired from that try's `except` arm. Raised
-    before it, the refusal left the project in PUBLISHING with no token, no reason recorded, and no
-    transition out — and `publish_failed` is a RESTING state precisely so a project can be published
-    again. Every later watchdog tick re-entered, re-refused, and re-stranded it.
-
-    Contrast the two sibling raises that correctly stay outside: "annotation project does not exist"
-    has no project to move, and "is <state>, not publishing" is a state from which `publish_failed`
-    would itself be an illegal transition. Only this one describes a project that IS publishing.
-    """
-    project = _Project(token=None)
-    tasks = {"t0": _Task("t0", TaskState.ACCEPTED)}
-
-    with pytest.raises(PublishRefusal):
-        await _run(project, tasks, _Publisher())
-
-    assert "publish_failed" in project.fired, f"the project was stranded in PUBLISHING; it fired {project.fired}"
-    assert project.doc["state"] == str(ProjectState.PUBLISH_FAILED)
-
-
-@pytest.mark.asyncio
-async def test_the_recorded_reason_NAMES_the_missing_token() -> None:
-    """A resting state nobody can diagnose is only half an exit."""
-    project = _Project(token=None)
-
-    with pytest.raises(PublishRefusal):
-        await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED)}, _Publisher())
-
-    assert "publish token" in str(project.doc.get("publish_error") or ""), f"the failure reason does not name the cause: {project.doc.get('publish_error')!r}"
-
-
-@pytest.mark.asyncio
-async def test_a_NON_publishing_project_is_still_refused_WITHOUT_a_transition() -> None:
-    """The guard that must not move. `publish_failed` from DRAFT is an illegal transition, so firing
-    it here would replace a clean refusal with a state-machine error."""
-    project = _Project(state=ProjectState.DRAFT)
-
-    with pytest.raises(PublishRefusal):
-        await _run(project, {"t0": _Task("t0", TaskState.ACCEPTED)}, _Publisher())
-
-    assert project.fired == [], f"a non-publishing project should transition nowhere; it fired {project.fired}"

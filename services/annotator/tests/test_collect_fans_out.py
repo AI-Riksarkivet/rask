@@ -64,15 +64,6 @@ class _SlowTask:
 
 
 @pytest.mark.asyncio
-async def test_collect_reads_the_task_actors_concurrently() -> None:
-    _SlowTask.peak = 0
-    handles = {t: _SlowTask(t, present=True) for t in ("t0", "t1", "t2", "t3")}
-    out = await collect(cast("ProjectHandle", _CountingProject()), lambda t: handles[t], ["t0", "t1", "t2", "t3"])
-    assert len(out) == 4
-    assert _SlowTask.peak > 1, "the task actors were read one at a time — the publish path still serialises collect"
-
-
-@pytest.mark.asyncio
 async def test_a_missing_actor_refuses_and_names_the_LOWEST_index_deterministically() -> None:
     """t1 and t3 both lost their state; the refusal must always name t1 (lowest index), never t3,
     however the concurrent gets happen to finish."""

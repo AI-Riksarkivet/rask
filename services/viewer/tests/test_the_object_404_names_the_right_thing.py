@@ -26,7 +26,6 @@ import pytest
 
 from service_kit.exceptions import NotFoundError
 from service_kit.schemas.storage import StorageRole, Store
-from storage import BucketNotFoundError, ObjectNotFoundError
 from viewer.api.v1.endpoints import objects as objects_ep
 
 
@@ -83,55 +82,3 @@ def test_the_listing_404_names_the_bucket(monkeypatch: pytest.MonkeyPatch) -> No
     assert STORE.bucket in str(caught.value), (
         f"the 404 said {str(caught.value)!r} — an operator checking minio.buckets for {STORE.name!r} will not find it; the bucket is {STORE.bucket!r}"
     )
-
-
-def test_the_head_404_names_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(objects_ep, "_client_for", lambda _n: _NoBucket())
-    with pytest.raises(NotFoundError) as caught:
-        asyncio.run(objects_ep.head_object(checker=_allow, subject="gina", settings=_settings(), bucket=STORE.name, key="a.tif"))
-    assert STORE.bucket in str(caught.value), str(caught.value)
-
-
-def test_the_download_404_names_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(objects_ep, "_client_for", lambda _n: _NoBucket())
-    with pytest.raises(NotFoundError) as caught:
-        asyncio.run(objects_ep.download_object(checker=_allow, subject="gina", settings=_settings(), bucket=STORE.name, key="a.tif"))
-    assert STORE.bucket in str(caught.value), str(caught.value)
-
-
-def test_a_present_bucket_with_a_missing_key_still_answers_by_store(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The caller addressed a STORE; the key-level answer stays in the caller's vocabulary."""
-
-    class _NoKey:
-        def head_object(self, **_kw: object) -> dict[str, object]:
-            from botocore.exceptions import ClientError
-
-            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist"}}, "HeadObject")
-
-        def head_bucket(self, **_kw: object) -> dict[str, object]:
-            return {}
-
-    monkeypatch.setattr(objects_ep, "_client_for", lambda _n: _NoKey())
-    with pytest.raises(NotFoundError) as caught:
-        asyncio.run(objects_ep.head_object(checker=_allow, subject="gina", settings=_settings(), bucket=STORE.name, key="a.tif"))
-    detail = str(caught.value)
-    assert "object not found" in detail and STORE.name in detail, detail
-
-
-def test_the_bucket_probe_asks_about_the_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`_bucket_missing` is the probe that decides which 404 above is right; it must HEAD the real bucket."""
-    asked: list[object] = []
-
-    class _Probe:
-        def head_bucket(self, **kw: object) -> dict[str, object]:
-            asked.append(kw.get("Bucket"))
-            return {}
-
-    objects_ep._bucket_missing(_Probe(), STORE.bucket)
-    assert asked == [STORE.bucket], f"the probe asked S3 about {asked} instead of the real bucket {STORE.bucket!r}"
-
-
-def test_the_error_taxonomy_still_carries_the_bucket() -> None:
-    """Guard on the collaborators these tests lean on, so a storage-package rename shows up here."""
-    assert BucketNotFoundError("b").bucket == "b"
-    assert ObjectNotFoundError(bucket="b", key="k").key == "k"

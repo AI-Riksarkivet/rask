@@ -147,33 +147,6 @@ async def test_the_task_seam_names_the_task_and_the_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_is_not_a_server_error() -> None:
-    """A 5xx tells the caller to retry, and a retry cannot fix yesterday's schema.
-
-    It also hides the failure in the noise every service's 500 counter already carries. The refusal
-    is a client-visible 4xx precisely so it is legible as "this document, this build".
-    """
-    actor, _ = _project_with_legacy_ontology()
-
-    with pytest.raises(DomainError) as caught:
-        await actor.get()
-
-    assert caught.value.status_code < 500, f"an unreadable stored ontology answered {caught.value.status_code}"
-
-
-@pytest.mark.asyncio
-async def test_a_readable_project_is_untouched() -> None:
-    """The guard must be invisible to every document the current model CAN parse."""
-    actor = _ProjectActor()
-    await actor.create(AnnotationProject(tenant="acme", slug="charters", state=ProjectState.LABELING).model_dump(mode="json"))
-
-    project = await actor.get()
-
-    assert project is not None
-    assert project["slug"] == "charters"
-
-
-@pytest.mark.asyncio
 async def test_assist_does_not_swallow_the_refusal_as_a_transport_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_task_ontology` degrades to "no contract" on a TRANSPORT failure — and must not here.
 

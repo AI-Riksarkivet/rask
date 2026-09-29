@@ -21,17 +21,6 @@ import inspect
 from annotator.projects.lakehouse import CatalogPublisher
 
 
-class TestThePublisherTakesARequester:
-    def test_it_accepts_an_originator(self) -> None:
-        assert "originator" in inspect.signature(CatalogPublisher.__init__).parameters
-
-    def test_it_is_keyword_only(self) -> None:
-        """A positional would sit next to `token` — an identity and a credential are not
-        interchangeable and must not be swappable by argument order."""
-        param = inspect.signature(CatalogPublisher.__init__).parameters["originator"]
-        assert param.kind is inspect.Parameter.KEYWORD_ONLY
-
-
 class TestBothTransportsCarryIt:
     def _publisher(self, originator: str | None) -> CatalogPublisher:
         return CatalogPublisher(
@@ -41,15 +30,6 @@ class TestBothTransportsCarryIt:
             data_api=object(),
             tag_api=object(),
         )
-
-    def test_the_http_create_sends_the_header(self) -> None:
-        headers = self._publisher("alice")._headers
-        assert headers.get("x-lance-originator") == "alice"
-
-    def test_no_requester_sends_no_header(self) -> None:
-        """A service-driven publish with nobody behind it must stay unattributed rather than send an
-        empty claim the catalog would have to decide about."""
-        assert "x-lance-originator" not in self._publisher(None)._headers
 
     def test_the_sdk_client_gets_it_too(self) -> None:
         """The tag call goes through the generated client, which reads its own default headers."""

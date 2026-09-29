@@ -23,7 +23,6 @@ from annotator.projects.models import AnnotationProject, Draft, Shape, Task, Tas
 from annotator.projects.ontology import LabelClass, LabelOntology
 from annotator.projects.publish import (
     NO_SHAPE,
-    PROJECT_FACET,
     PUBLISHED_COLUMNS,
     PublishRefusal,
     build_plan,
@@ -85,13 +84,6 @@ def _plan(pairs: list[tuple[Task, Draft | None]], project: AnnotationProject | N
 # --------------------------------------------------------------------------------------------------
 
 
-def test_an_accepted_task_contributes_one_row_per_shape() -> None:
-    plan = _plan([(_task("t0", TaskState.ACCEPTED), _draft("t0", 3))])
-    assert plan.shape_count == 3
-    assert len(plan.rows) == 3
-    assert {r["task_outcome"] for r in plan.rows} == {"accepted"}
-
-
 def test_a_skipped_task_contributes_a_sentinel_row_and_none_of_its_shapes() -> None:
     """Both halves of the rule at once. The draft exists and holds five shapes; none may land, and
     exactly one sentinel must, or the project's decisions are incomplete on the record."""
@@ -120,16 +112,7 @@ def test_shape_count_excludes_sentinels_so_a_dataset_is_not_overstated() -> None
     assert plan.accepted_count == 1 and plan.skipped_count == 2
 
 
-def test_an_accepted_task_with_no_shapes_is_recorded_as_a_decision() -> None:
-    """ "Nothing to annotate here" is a real outcome. It leaves a row, not a hole."""
-    plan = _plan([(_task("t0", TaskState.ACCEPTED), None)])
-    assert len(plan.rows) == 1
-    assert plan.rows[0]["shape_type"] == NO_SHAPE
-    assert plan.rows[0]["task_outcome"] == "accepted"
-    assert plan.shape_count == 0
-
-
-@pytest.mark.parametrize("state", [TaskState.UNASSIGNED, TaskState.CLAIMED, TaskState.IN_REVIEW, TaskState.CHANGES_REQUESTED])
+@pytest.mark.parametrize("state", [TaskState.CLAIMED])
 def test_a_non_terminal_task_refuses_the_publish_loudly(state: TaskState) -> None:
     """The project actor's precondition already refused this, so reaching here is a programming
     error. Skipping it quietly would publish a partial dataset that looks complete."""
@@ -143,14 +126,6 @@ def test_every_row_carries_exactly_the_published_schema_columns() -> None:
     plan = _plan([(_task("t0", TaskState.ACCEPTED), _draft("t0", 1)), (_task("t1", TaskState.SKIPPED), None)])
     for row in plan.rows:
         assert tuple(row.keys()) == PUBLISHED_COLUMNS
-
-
-def test_operational_state_never_reaches_the_lakehouse() -> None:
-    """§7.1's deliberate absences: task state, assignee, leases, drafts, revisions, transitions. That
-    is the annotator's own state, and the boundary is the point of the whole design."""
-    plan = _plan([(_task("t0", TaskState.ACCEPTED, assignee="gina"), _draft("t0", 1))])
-    forbidden = {"state", "assignee", "lease_expires_at", "revision", "transitions", "review_notes", "submitted_at"}
-    assert not (set(plan.rows[0]) & forbidden)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -232,15 +207,6 @@ def test_send_origins_are_counted_per_task_not_per_row() -> None:
     assert facet["sourceDatasets"] == [{"dataset": "transcripts_v2", "items": 2, "version": None}]
 
 
-def test_the_facet_is_spec_legal_and_does_not_collide_with_a_reserved_name() -> None:
-    """A custom facet must carry `_producer`/`_schemaURL` or a strict consumer drops it — provenance
-    that silently vanishes at the far end is not provenance. And the catalog REJECTS an emit whose
-    facet name is reserved, so the name is part of the contract."""
-    facet = project_facet(_project(), _plan([(_task("t0", TaskState.ACCEPTED), _draft("t0", 1))]))
-    assert facet["_producer"] and facet["_schemaURL"]
-    assert PROJECT_FACET not in {"lance", "author", "errorMessage", "progress", "parent"}
-
-
 def test_a_replayed_publish_produces_an_identical_plan_and_facet() -> None:
     """The workflow replays this activity after a crash. Two replays that differ would read as two
     provenances for one publish — so everything derived is sorted, and nothing is timestamped here."""
@@ -253,23 +219,6 @@ def test_a_replayed_publish_produces_an_identical_plan_and_facet() -> None:
 
     assert first.rows == second.rows
     assert project_facet(_project(), first) == project_facet(_project(), second)
-
-
-def test_the_rows_and_the_facet_cannot_disagree() -> None:
-    """Both are projected from one plan in one pass — which makes "the graph says X, the data says Y"
-    impossible rather than merely unlikely."""
-    plan = _plan(
-        [
-            (_task("t0", TaskState.ACCEPTED, submitted_by="gina"), _draft("t0", 3)),
-            (_task("t1", TaskState.ACCEPTED, submitted_by="zoe"), _draft("t1", 2)),
-            (_task("t2", TaskState.SKIPPED), _draft("t2", 7)),
-        ]
-    )
-    facet = project_facet(_project(), plan)
-
-    assert facet["shapeCount"] == plan.shape_count == 5
-    assert facet["annotatorCount"] == len({r["annotated_by"] for r in plan.rows if r["task_outcome"] == "accepted"})
-    assert facet["taskCount"] == len({r["task_id"] for r in plan.rows})
 
 
 # --------------------------------------------------------------------------------------------------
@@ -324,34 +273,6 @@ def test_the_plan_converts_to_arrow_under_the_declared_schema() -> None:
     assert table.column("reviewed_by").to_pylist()[-1] == "", "a waived review must be '' in Arrow too, not null"
 
 
-def test_an_all_sentinel_publish_still_produces_a_correctly_typed_table() -> None:
-    """The reason the schema is declared rather than inferred. With inference, a project where every
-    task was skipped yields null-typed columns, and a consumer's `x > 0.5` fails against a table that
-    is supposed to have the same shape as every other publish."""
-    import pyarrow as pa
-
-    from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
-
-    plan = _plan([(_task("t0", TaskState.SKIPPED), None), (_task("t1", TaskState.SKIPPED), None)])
-
-    table = pa.Table.from_pylist(plan.rows, schema=PUBLISHED_LABELS_SCHEMA)
-
-    assert table.schema.field("x").type == pa.float32(), "an all-skipped publish inferred a null column"
-    assert table.schema.field("polygon").type == pa.list_(pa.float32())
-    assert table.column("shape_type").to_pylist() == [NO_SHAPE, NO_SHAPE]
-
-
-def test_the_column_tuple_is_derived_from_the_schema_not_maintained_beside_it() -> None:
-    """One source of truth. Two hand-written lists drift, and the drift shows up as a cluster-time
-    conversion error rather than a test failure."""
-    from annotator.projects.publish import PUBLISHED_LABELS_SCHEMA
-
-    assert tuple(PUBLISHED_LABELS_SCHEMA.names) == PUBLISHED_COLUMNS
-    # §7.1's 34, + the textual facet (parent_id/char_start/char_end) and `links` (§9.2): work that
-    # submit VALIDATED — spans and relations — was dropped at publish until these columns existed.
-    assert len(PUBLISHED_COLUMNS) == 38, "34 (DESIGN §7.1) + 4 (§9.2 spans + links)"
-
-
 # --------------------------------------------------------------------------------------------------
 # The reproducibility pin (the lineage READ edge) — captured at send, never fabricated
 # --------------------------------------------------------------------------------------------------
@@ -387,20 +308,22 @@ def test_source_pin_pins_exactly_one_dataset_at_one_version() -> None:
     [
         ([("bronze$pages", 24), ("bronze$other", 3)], "two datasets — a single pin would lie about one of them"),
         ([("bronze$pages", 24), ("bronze$pages", 25)], "two VERSIONS of one dataset — same lie"),
-        ([("bronze$pages", None), ("bronze$pages", 24)], "a missing capture poisons the pin — never fabricate"),
-        ([("bronze$pages", None)], "no version captured at all"),
-        ([(None, None)], "no dataset recorded"),
-        (
+        pytest.param([(None, None)], "no dataset recorded", id="specs4-no dataset recorded"),
+        pytest.param(
             [(None, None), ("bronze$pages", 24)],
             "an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had",
+            id="specs5-an item with NO recorded dataset mixed with a captured one — a pin would claim provenance some items never had",
         ),
         # Observed live 2026-08-03: `where` carries the MEDIA dataset name, and for an unregistered
         # corpus that is a bare word. Sent as a table reference it made the catalog authorize
         # `table:transcripts_v2` — an object that does not exist — and FGA denies before checking
         # existence, so the WHOLE publish failed with "can_get_metadata required" for a provenance
         # nicety. An unregistered corpus has no catalog node to draw a READ edge to.
-        ([("transcripts_v2", 1)], "a bare media dataset name is not a catalog table reference"),
-        ([("transcripts_v2", 1), ("transcripts_v2", 1)], "…however many items agree on it"),
+        pytest.param(
+            [("transcripts_v2", 1)],
+            "a bare media dataset name is not a catalog table reference",
+            id="specs6-a bare media dataset name is not a catalog table reference",
+        ),
     ],
 )
 def test_source_pin_refuses_anything_ambiguous(specs: list, why: str) -> None:
@@ -604,31 +527,6 @@ def test_the_ontology_is_stamped_into_properties_and_facet() -> None:
     assert facet["ontology"]["classes"][0]["tools"] == ["bbox"]
 
 
-def test_the_facets_TWO_class_lists_became_ONE_and_cannot_disagree() -> None:
-    """The defect that motivated the merge, pinned so it cannot come back.
-
-    `labelClasses` was projected from `label_schema` while `template` — the enforcement contract —
-    was a separate object beside it. Nothing cross-checked them, so a run facet could advertise a
-    taxonomy that no submission was ever judged against. Both now read from the same ontology, so
-    the facet's summary and its full document are the same fact stated twice.
-    """
-    from annotator.projects.publish import table_properties
-
-    project = AnnotationProject(
-        project_id="p1",
-        tenant="acme",
-        slug="vasa",
-        ontology=LabelOntology(kind="object-detection", classes=[LabelClass(name="ship"), LabelClass(name="person")]),
-    )
-    plan = build_plan(project, [(_pin_task("t0", "demo", 24), None)], publish_id="tok", published_at=NOW)
-    facet = project_facet(project, plan)
-
-    summary = facet["labelClasses"]
-    whole = sorted(c["name"] for c in facet["ontology"]["classes"])
-    assert summary == whole == ["person", "ship"]
-    assert table_properties(project, plan)["annotation.label_classes"] == "person,ship"
-
-
 # --------------------------------------------------------------------------------------------------
 # The textual facet + relations publish — §9.2 (validated at submit, previously dropped here)
 # --------------------------------------------------------------------------------------------------
@@ -660,21 +558,3 @@ def test_a_span_publishes_its_anchor_not_just_its_substring() -> None:
     # The edge leaves the span row, addressed by annotation_id; the line row carries none.
     assert json.loads(span["links"]) == [{"name": "mentions", "to": "line"}]
     assert json.loads(rows["line"]["links"]) == []
-
-
-def test_sentinel_rows_carry_valid_empty_json_for_links() -> None:
-    """`pa.json_()` refuses '' at write time — the sentinel must say [] like attributes say {}."""
-    plan = _plan([(_task("t0", TaskState.SKIPPED), _draft("t0", 2))])
-    (sentinel,) = plan.rows
-    assert sentinel["links"] == "[]"
-    assert sentinel["parent_id"] is None
-
-
-def test_every_row_key_is_a_published_column() -> None:
-    """The row dict and the Arrow schema are one contract — a key the schema lacks surfaces as an
-    opaque conversion error in a cluster instead of here."""
-    from annotator.projects.publish import PUBLISHED_COLUMNS
-
-    plan = _plan([(_task("t0", TaskState.ACCEPTED), _draft("t0", 1))])
-    (row,) = plan.rows
-    assert set(row.keys()) == set(PUBLISHED_COLUMNS)

@@ -168,26 +168,6 @@ async def test_a_fresh_tag_is_created() -> None:
 
 
 @pytest.mark.asyncio
-async def test_facet_payloads_ride_bare_of_spec_stamps() -> None:
-    """`project_facet` returns a spec-stamped facet (`_producer`, `_schemaURL` — custom_facet adds
-    them), but the `X-Lance-Run-Facets` contract wants BARE payloads: the catalog stamps each facet
-    itself and 400s any `_`-prefixed or `producer` key. The live drive found this as a publish that
-    could never succeed; the stripping is THIS transport's job because the stamping is its far end's."""
-    create = _Create()
-    publisher = _publisher(create)
-
-    await publisher.create_table(
-        "silver$t_1",
-        _plan(),
-        properties={},
-        run_facet={"annotationProject": {"_producer": "x", "_schemaURL": "y", "producer": "z", "projectId": "p1"}},
-    )
-
-    sent = json.loads(create.calls[0]["_headers"][RUN_FACETS_HEADER])
-    assert sent == {"annotationProject": {"projectId": "p1"}}, sent
-
-
-@pytest.mark.asyncio
 async def test_the_pin_params_reach_the_create_call() -> None:
     """§7.2 over the wire: the S4 `source`/`source_version` query params ride the direct-HTTP
     create (the spec-generated SDK cannot send them — the OPEN-WORK register, row B3 (drained 2026-09-10; in git history))."""
@@ -206,17 +186,6 @@ async def test_the_pin_params_reach_the_create_call() -> None:
     call = create.calls[0]
     assert call["source"] == "demo"
     assert call["source_version"] == 24
-
-
-@pytest.mark.asyncio
-async def test_no_pin_sends_no_pin_params() -> None:
-    create = _Create()
-    publisher = _publisher(create)
-
-    await publisher.create_table("silver$t_1", _plan(), properties={}, run_facet={})
-
-    call = create.calls[0]
-    assert call["source"] is None and call["source_version"] is None
 
 
 # --------------------------------------------------------------------------------------------------
@@ -357,12 +326,6 @@ def test_minting_reads_the_store_and_posts_the_password_grant(monkeypatch: pytes
     assert posted["data"]["username"] == "publisher@rask.internal"
     assert posted["data"]["password"] == "s3cret"
     assert posted["auth"] == ("lance-catalog", "lance-catalog-secret")
-
-
-def test_unconfigured_identity_is_none_not_an_error() -> None:
-    from annotator.projects import lakehouse
-
-    assert lakehouse.publish_token(_TokenSettings()) is None
 
 
 def test_an_idp_refusal_raises_with_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:

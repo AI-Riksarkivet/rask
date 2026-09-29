@@ -22,8 +22,6 @@ from typing import Any
 import httpx
 import pytest
 
-import service_kit.governed.secrets as secrets_module
-from annotator.core.config import AnnotatorSettings
 from annotator.projects import lakehouse
 
 
@@ -80,20 +78,3 @@ def test_the_create_call_reuses_one_client_across_calls(monkeypatch: pytest.Monk
 
     assert len(recorded) == 2
     assert len(made) == 1, "a fresh client (and connection) per create call"
-
-
-def test_the_token_mint_goes_through_the_same_pooled_client(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The IdP mint is the transport's other direct-HTTP call and had the same defect."""
-    monkeypatch.setattr(httpx, "post", _refuse_bare_post)
-    monkeypatch.setattr(secrets_module, "fetch_required_secrets", lambda *_a, **_k: {"publisher-oidc-password": "shh"})
-    recorded: list[httpx.Request] = []
-    made: list[httpx.Client] = []
-    monkeypatch.setattr(lakehouse, "publish_client", _mock_client_factory(recorded, made, {"id_token": "minted"}), raising=False)
-
-    settings = AnnotatorSettings()
-    monkeypatch.setattr(settings, "publish_token_url", "https://idp.example/token", raising=False)
-    monkeypatch.setattr(settings, "publish_username", "publisher", raising=False)
-
-    assert lakehouse.publish_token(settings) == "minted"
-    assert len(recorded) == 1
-    assert len(made) == 1

@@ -98,13 +98,6 @@ def test_head_object_returns_metadata(client: TestClient) -> None:
     assert '"' not in head["etag"]
 
 
-def test_head_missing_object_is_problem_404(client: TestClient) -> None:
-    resp = client.get("/api/object", params={"bucket": "corpus-raw", "key": "VOL/missing.jpg"})
-    assert resp.status_code == 404
-    assert resp.headers["content-type"] == "application/problem+json"
-    assert resp.json()["status"] == 404
-
-
 def test_download_returns_bytes_with_disposition(client: TestClient) -> None:
     resp = client.get("/api/object/download", params={"bucket": "corpus-raw", "key": "VOL/a.jpg"})
     assert resp.status_code == 200

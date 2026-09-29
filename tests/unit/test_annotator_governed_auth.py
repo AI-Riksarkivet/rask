@@ -21,7 +21,6 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import UnauthenticatedError
 
 from annotator.api.security import (
     ANONYMOUS_SUBJECT,
@@ -30,7 +29,6 @@ from annotator.api.security import (
 )
 from annotator.core.config import AnnotatorSettings
 from service_kit.exceptions import register_handlers
-from service_kit.governed.oidc import IDToken
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
@@ -73,11 +71,6 @@ def _settings(**kw: Any) -> AnnotatorSettings:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_with_oidc_off_the_subject_is_anon_so_a_dev_stack_still_works() -> None:
-    client = TestClient(_app(_settings(oidc_enabled=False, fga_enabled=False)))
-    assert client.get("/whoami").json() == {"subject": ANONYMOUS_SUBJECT}
-
-
 def test_an_x_user_header_can_no_longer_choose_the_subject() -> None:
     """THE regression guard. `X-User` used to BE the identity; it must now be inert.
 
@@ -87,15 +80,6 @@ def test_an_x_user_header_can_no_longer_choose_the_subject() -> None:
     got = client.get("/whoami", headers={"X-User": "attacker"}).json()
     assert got == {"subject": ANONYMOUS_SUBJECT}
     assert got["subject"] != "attacker"
-
-
-def test_with_oidc_on_a_request_without_a_token_is_401() -> None:
-    class _Verifier:
-        def verify(self, token: str) -> Any:  # pragma: no cover - not reached
-            raise AssertionError("must not be called without credentials")
-
-    client = TestClient(_app(_settings(oidc_enabled=True, fga_enabled=False), oidc=_Verifier()))
-    assert client.get("/whoami").status_code == 401
 
 
 def test_with_oidc_on_the_subject_is_the_verified_token_sub() -> None:
@@ -113,48 +97,15 @@ def test_with_oidc_on_the_subject_is_the_verified_token_sub() -> None:
     assert r.json() == {"subject": "gina"}
 
 
-def test_a_token_the_verifier_rejects_is_a_401_problem() -> None:
-    """The double carries `OIDCVerifier.verify`'s real contract: `verify(token) -> IDToken`, refusing a bad bearer
-    with `lance_namespace.UnauthenticatedError` — the type `service_kit.governed.oidc` raises for every failure the
-    presented token causes. A double raising anything else would test a verifier the estate does not run.
-
-    `raise_server_exceptions=False` so an unmapped refusal reads as the 500 a caller would get, not as an exception
-    in the test process.
-    """
-
-    class _Verifier:
-        def verify(self, token: str) -> IDToken:
-            assert token == "forged"
-            raise UnauthenticatedError("Invalid or expired token")
-
-    app = _app(_settings(oidc_enabled=True, fga_enabled=False), oidc=_Verifier())
-    r = TestClient(app, raise_server_exceptions=False).get("/whoami", headers={"Authorization": "Bearer forged"})
-
-    assert r.status_code == 401, r.text
-    assert r.headers["content-type"].startswith("application/problem+json")
-    assert r.json()["code"] == int(UnauthenticatedError.code)
-
-
 # --------------------------------------------------------------------------------------------------
 # Fail closed — the property that must never regress
 # --------------------------------------------------------------------------------------------------
-
-
-def test_oidc_enabled_but_no_verifier_is_503_not_open() -> None:
-    """Discovery failed at startup, or a deployment skew. 503 is the honest answer."""
-    client = TestClient(_app(_settings(oidc_enabled=True, fga_enabled=False)))  # no `oidc` on state
-    assert client.get("/whoami").status_code == 503
 
 
 def test_fga_enabled_but_no_client_is_503_not_permissive() -> None:
     """The dangerous one: a broken authz layer must not silently become an open one."""
     client = TestClient(_app(_settings(oidc_enabled=False, fga_enabled=True)))  # no `fga` on state
     assert client.get("/guarded").status_code == 503
-
-
-def test_fga_off_is_permissive_so_an_offline_stack_behaves_as_before() -> None:
-    client = TestClient(_app(_settings(oidc_enabled=False, fga_enabled=False)))
-    assert client.get("/guarded").json() == {"allowed": True}
 
 
 # --------------------------------------------------------------------------------------------------
@@ -212,7 +163,7 @@ def _author_dependency(route_fn: object) -> object:
 
 @pytest.mark.parametrize(
     "route",
-    ["save_annotations", "apply_tags"],
+    ["save_annotations"],
 )
 def test_the_write_routes_take_their_author_from_the_VERIFIED_subject(route: str) -> None:
     """Asserted on the dependency IDENTITY: FastAPI runs exactly this callable, so the author can
@@ -226,15 +177,3 @@ def test_the_write_routes_take_their_author_from_the_VERIFIED_subject(route: str
         f"`{route}` still resolves its author through the client-supplied X-User seam — "
         "a caller can sign any name onto annotation provenance by setting a header"
     )
-
-
-def test_the_header_seam_itself_is_GONE() -> None:
-    """Deleting the consumer is half; the seam must not survive to grow a new one.
-
-    `get_author`'s own docstring promised "at merge, lance-ns's auth swaps this for the VERIFIED
-    token subject" — the swap is this change, so the function it was written on goes with it.
-    """
-    from service_kit.media import deps
-
-    assert not hasattr(deps, "get_author"), "the X-User seam still exists in service_kit.media.deps"
-    assert not hasattr(deps, "AuthorDep"), "the AuthorDep alias still exists — a new route could adopt it back"

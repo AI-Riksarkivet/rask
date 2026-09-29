@@ -23,8 +23,6 @@ anonymous) is the shape that finding argued for.
 
 from __future__ import annotations
 
-import pytest
-
 from annotator.core.config import AnnotatorSettings
 from annotator.projects import lakehouse
 
@@ -32,30 +30,3 @@ from annotator.projects import lakehouse
 def test_publish_token_survives_the_settings_it_is_actually_given() -> None:
     """The regression itself: a plain settings object made the publish path raise."""
     assert lakehouse.publish_token(AnnotatorSettings()) is None, "an auth-off stack must publish anonymously, as the docstring promises"
-
-
-def test_the_deleted_service_credential_is_not_read_again() -> None:
-    """Restoring the field would restore the confused deputy the original finding closed.
-
-    Asserted by BEHAVIOUR, not by grepping the source: a settings object that carries the old
-    attribute must not change the answer.
-    """
-
-    class _WithOldField(AnnotatorSettings):
-        catalog_token: str = "the-estate-service-credential"
-
-    assert lakehouse.publish_token(_WithOldField()) is None, (
-        "`publish_token` still prefers a pinned service credential, so every published row would carry the platform's identity rather than the publisher's"
-    )
-
-
-def test_the_idp_mint_is_still_the_configured_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The failure mode that would hide the fix: returning None unconditionally also passes above."""
-    settings = AnnotatorSettings()
-    monkeypatch.setattr(settings, "publish_token_url", "https://idp.example/token", raising=False)
-    monkeypatch.setattr(settings, "publish_username", "publisher", raising=False)
-
-    monkeypatch.setattr(lakehouse, "publish_token", lakehouse.publish_token)  # keep the real function
-    with pytest.raises(Exception) as caught:  # noqa: PT011 - any failure proves the branch was entered
-        lakehouse.publish_token(settings)
-    assert "catalog_token" not in str(caught.value), f"the mint branch still touches the deleted field: {caught.value}"

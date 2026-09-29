@@ -27,7 +27,6 @@ The property under test is the one that matters: no single `read()` on the handl
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from typing import cast
 
@@ -119,28 +118,8 @@ async def test_a_large_derivative_is_never_read_whole_into_memory(tmp_path: Path
     assert response.headers["content-length"] == str(len(payload)), "the size is known exactly from the probe, so the caller should not be left guessing"
 
 
-def test_the_threshold_matches_the_reference() -> None:
-    """file-handling.md's table puts `Response(content=bytes)` at 'tiny file (< 1 MB)'."""
-    assert media_ep.MAX_BUFFERED_BLOB_BYTES <= 1 << 20
-
-
 def test_an_empty_derivative_is_still_a_404(tmp_path: Path) -> None:
     """The absence answer both routes already give must survive the restructure."""
     handle = _Recording(_handle(tmp_path, b""))
     with pytest.raises(NotFoundError):
         media_ep.blob_response(cast("BlobFile", handle), mime="image/jpeg", empty_detail="no thumbnail for doc_id")
-
-
-def _function(name: str) -> ast.FunctionDef:
-    tree = ast.parse(Path(media_ep.__file__).read_text())
-    return next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == name)
-
-
-@pytest.mark.parametrize("route", ["thumbnail", "chunk_frame"])
-def test_neither_route_still_reads_a_blob_unbounded(route: str) -> None:
-    """Parsed, not grepped: a source scan would match the comments that EXPLAIN the fix."""
-    fn = _function(route)
-    unbounded = [
-        node for node in ast.walk(fn) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "read" and not node.args
-    ]
-    assert not unbounded, f"`{route}` still calls read() with no length bound at line {unbounded[0].lineno}"

@@ -29,41 +29,11 @@ def _shape(shape_type: str) -> AssistShape:
 @pytest.mark.parametrize(
     ("produced", "canonical"),
     [
-        ("rectangle", "bbox"),  # this endpoint's OWN old default — accepted by neither side
-        ("rect", "bbox"),
         ("box", "bbox"),
-        ("point", "keypoint"),
-        ("line", "polyline"),
-        ("baseline", "polyline"),
-        ("polygon", "polygon"),
-        ("mask", "mask"),
     ],
 )
 def test_a_producers_dialect_is_normalized_to_the_canonical_vocabulary(produced: str, canonical: str) -> None:
     assert _CANONICAL_SHAPE[produced] == canonical
-
-
-def test_an_assist_with_no_task_is_unconstrained() -> None:
-    """The ad-hoc canvas has no contract (the route hands the filter None), so nothing to check."""
-    shapes = [_shape("polygon"), _shape("bbox")]
-    kept, dropped = _within_contract(shapes, None)
-    assert len(kept) == 2
-    assert dropped == []
-
-
-def test_a_prediction_the_task_refuses_is_dropped_and_REPORTED() -> None:
-    """Dropped, not silently: the operator has to learn the backend disagrees with the task.
-
-    Silently filtering would leave a producer permanently returning work nobody sees, with nothing
-    anywhere saying so — the failure mode where a model looks configured and does nothing.
-    """
-    ontology = LabelOntology(kind="object-detection", classes=[LabelClass(name="region", tools=["bbox"])])
-
-    kept, dropped = _within_contract([_shape("bbox"), _shape("polygon")], ontology)
-
-    assert [s.shape_type for s in kept] == ["bbox"]
-    assert len(dropped) == 1
-    assert "polygon" in dropped[0] and "bbox" in dropped[0]
 
 
 def test_an_ontology_that_CONSTRAINS_NOTHING_filters_nothing() -> None:

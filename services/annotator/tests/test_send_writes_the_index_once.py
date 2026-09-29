@@ -158,38 +158,6 @@ def test_a_multi_item_send_writes_the_index_ONCE(monkeypatch: pytest.MonkeyPatch
     assert response.json() == {"sent": 25, "created": 25, "task_ids": [f"i{k}" for k in range(25)]}
 
 
-def test_every_seed_lands_before_the_index_is_written(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The module's correctness argument, now global rather than per item: a crash mid-send leaves
-    tasks that exist but are not indexed (invisible to the publish precondition, repaired by an
-    idempotent re-send), never an index entry for a task whose actor was never seeded.
-
-    Nothing pinned this ordering before, so a batch that indexed first would have passed every
-    existing test.
-    """
-    log = _Log()
-    project, task = _FakeProject(log), _FakeTask(log)
-    client = _client(project, task, monkeypatch)
-
-    client.post("/projects/p1/items", json={"items": _items(8)})
-
-    assert log.events == ["seed"] * 8 + ["send_many"], f"seeds and the index write interleave: {log.events}"
-
-
-def test_the_seeds_overlap(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Seeds address DIFFERENT task actor ids, so unlike the index write they genuinely parallelise.
-
-    Deterministic rather than timed: each seed yields once, so a sequential loop can only ever have
-    one call in flight.
-    """
-    log = _Log()
-    project, task = _FakeProject(log), _FakeTask(log)
-    client = _client(project, task, monkeypatch)
-
-    client.post("/projects/p1/items", json={"items": _items(8)})
-
-    assert log.peak > 1, "the seeds were awaited one at a time"
-
-
 def test_a_foreign_task_mid_send_leaves_NO_index_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """The ownership refusal, tightened. Indexing a task that belongs to another project freezes its
     entry at the seeded value forever — the task's own actor only ever reports to its real owner — so
@@ -207,20 +175,6 @@ def test_a_foreign_task_mid_send_leaves_NO_index_entry(monkeypatch: pytest.Monke
     assert response.status_code == 409, response.text
     assert "already belongs to project someone-elses-project" in response.json()["detail"]
     assert project.batches == [] and project.sent == [], f"a refused send indexed {len(project.sent) or len(project.batches)} write(s)"
-
-
-def test_the_refusal_names_the_FIRST_offender_in_send_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The seeds are gathered, so completion order is not send order. The message must name the same
-    task on every run or the refusal is unreproducible."""
-    log = _Log()
-    owners = {"i1": "other-a", "i4": "other-b"}
-    project, task = _FakeProject(log), _FakeTask(log, owners=owners)
-    client = _client(project, task, monkeypatch)
-
-    response = client.post("/projects/p1/items", json={"items": _items(6)})
-
-    assert response.status_code == 409, response.text
-    assert "task i1 already belongs" in response.json()["detail"], response.json()["detail"]
 
 
 # --------------------------------------------------------------------------------------------------

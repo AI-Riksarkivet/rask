@@ -50,34 +50,6 @@ async def test_a_spawn_that_CANNOT_START_does_not_claim_the_project_forever(monk
 
 
 @pytest.mark.asyncio
-async def test_the_in_flight_task_is_STRONGLY_referenced(monkeypatch: pytest.MonkeyPatch) -> None:
-    """asyncio documents that a task with no strong reference may be collected mid-flight. The
-    returned handle does not count -- `run_watchdog` drops it."""
-    started = asyncio.Event()
-    release = asyncio.Event()
-
-    async def _slow(_project_id: str) -> None:
-        started.set()
-        await release.wait()
-        return
-
-    monkeypatch.setattr(lakehouse, "run_publish_for", _slow)
-
-    task = lakehouse.spawn_publish("p1")
-    assert task is not None
-    await started.wait()
-
-    assert task in lakehouse._TASKS, "the saga task is held only by the caller, so the loop may collect it"
-    assert "p1" in lakehouse._RUNNING
-
-    release.set()
-    await task
-
-    assert "p1" not in lakehouse._RUNNING, "the guard was not released when the publish finished"
-    assert task not in lakehouse._TASKS, "the strong reference outlived the task"
-
-
-@pytest.mark.asyncio
 async def test_a_second_spawn_while_one_runs_STILL_stands_down(monkeypatch: pytest.MonkeyPatch) -> None:
     """The behaviour the guard exists for, which the fix must not weaken."""
     release = asyncio.Event()

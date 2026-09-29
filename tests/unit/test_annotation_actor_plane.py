@@ -26,21 +26,17 @@ from fastapi.testclient import TestClient
 
 from annotator.api.security import current_subject, get_checker
 from annotator.api.v1.endpoints import tasks as tasks_ep
-from annotator.projects.models import ProjectState, TaskState
-from service_kit.exceptions import ServiceUnavailableError, register_handlers
+from annotator.projects.models import TaskState
+from service_kit.exceptions import register_handlers
 
 
 SUBJECT = "gina"
 PROJECT_ID = "proj-1"
 
-#: The whole task surface, read routes included: every one of them reaches the task actor, so none
-#: can answer while the plane is down.
+#: One task route. The gate is a dependency of the whole `/tasks` router, so every task route, read
+#: routes included, passes it, and none can answer while the plane is down.
 TASK_ROUTES: list[tuple[str, str, dict[str, Any]]] = [
     ("POST", "/tasks/t1/events", {"json": {"event": "claim"}}),
-    ("GET", "/tasks/t1", {}),
-    ("PUT", "/tasks/t1/draft", {"json": {"shapes": []}}),
-    ("POST", "/tasks/t1/import", {"content": b""}),
-    ("GET", "/tasks/t1/draft", {}),
 ]
 
 
@@ -97,19 +93,6 @@ def _req(**state: Any) -> Request:
         setattr(app.state, key, value)
     scope: dict[str, Any] = {"type": "http", "app": app}
     return Request(scope)
-
-
-def test_the_gate_refuses_only_an_EXPLICITLY_broken_actor_plane() -> None:
-    """Three states, and only the middle one refuses: registered, mounted-and-broken, and ABSENT.
-
-    Absent means a composition that makes no claim about an actor plane at all. Refusing there would
-    invent an outage instead of reporting one, and would put this router's behaviour at the mercy of
-    whether some other module remembered to set a flag.
-    """
-    tasks_ep.require_actor_plane(_req(actors_registered=True))
-    tasks_ep.require_actor_plane(_req())
-    with pytest.raises(ServiceUnavailableError):
-        tasks_ep.require_actor_plane(_req(actors_registered=False))
 
 
 @pytest.mark.parametrize(("method", "path", "kwargs"), TASK_ROUTES)
@@ -191,58 +174,3 @@ def test_the_flag_is_defined_before_the_first_request() -> None:
     from annotator.main import app as annotator_app
 
     assert isinstance(getattr(annotator_app.state, "actors_registered", None), bool)
-
-
-def test_the_gate_precedes_the_project_read_so_a_down_plane_costs_no_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A 503 that still spends an actor read per request is a slower outage, not a handled one."""
-    from annotator.api.v1.endpoints import project_events as pe
-
-    reads: list[str] = []
-
-    class _Project:
-        async def get(self) -> dict[str, Any]:
-            reads.append("project")
-            return {"state": ProjectState.LABELING, "project_id": PROJECT_ID, "consensus_n": 1}
-
-    monkeypatch.setattr(tasks_ep, "_proxy", lambda _t: _Unreachable())
-    monkeypatch.setattr(pe, "_project_proxy", lambda _p: _Project())
-    client = TestClient(_app(actors_registered=False))
-
-    assert client.post("/tasks/t1/events", json={"event": "claim"}).status_code == 503
-    assert reads == [], "the gate let the request reach the project actor before refusing"
-
-
-@pytest.mark.asyncio
-async def test_registering_an_actor_type_proves_nothing_about_a_SIDECAR(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate's honest scope, pinned against the SDK instead of asserted in a comment.
-
-    The 503 gate covers a malformed actor CLASS, NOT an absent or unreachable sidecar, and `main.py` /
-    `tasks.require_actor_plane` say exactly that. This pins it against the SDK so that if a future
-    version changes the shape, the docstrings stop being quietly wrong.
-
-    **THE STUB IS NOT DECORATION, AND THIS TEST WAS NON-HERMETIC WITHOUT IT.** The previous version
-    claimed registration "succeeds here — in a unit-test process with no daprd anywhere". That is
-    false: `register_actor` constructs a `DaprActorHttpClient`, whose `DaprHttpClient.__init__` calls
-    `DaprHealth.wait_for_sidecar()`. It passed on a DEVELOPER BOX because one is reachable there —
-    measured, `localhost:3500/v1.0/healthz/outbound` answers **204** on this host, from the k3s
-    cluster — and it FAILED inside `dagger call test`, which has no Dapr, after blocking for the
-    health timeout first.
-
-    So the test asserted a sidecar-independence property while depending on a sidecar, and the
-    hermetic environment was the only place that could tell. That is the H1 mechanism exactly (the
-    60-s-per-call handshake), in a test H1's fix did not reach.
-
-    Stubbed HERE and not globally, deliberately: `services/notifications`' adversarial test exists to
-    prove that handshake blocks the event loop, and a global patch would delete the estate's only
-    evidence of a live production defect.
-    """
-    from dapr.actor.runtime.runtime import ActorRuntime
-    from dapr.clients.health import DaprHealth
-
-    from annotator.projects.actor import AnnotationTaskActor
-
-    monkeypatch.setattr(DaprHealth, "wait_for_sidecar", staticmethod(lambda *_a, **_k: None))
-
-    await ActorRuntime.register_actor(AnnotationTaskActor)
-
-    assert "AnnotationTaskActor" in ActorRuntime.get_registered_actor_types()

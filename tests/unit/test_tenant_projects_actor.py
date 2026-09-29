@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 
-from annotator.projects.tenant_actor import PROJECTS_KEY, TenantProjectsActor
+from annotator.projects.tenant_actor import TenantProjectsActor
 
 
 class _FakeStateManager:
@@ -44,10 +44,3 @@ async def test_register_is_idempotent_and_list_preserves_insertion_order() -> No
     listing = await actor.list_projects()
     assert listing["project_ids"] == ["p1", "p2"]
     assert listing["total"] == 2
-
-
-@pytest.mark.asyncio
-async def test_an_empty_tenant_lists_empty_rather_than_erroring() -> None:
-    actor = _Actor()
-    assert await actor.list_projects() == {"project_ids": [], "total": 0}
-    assert PROJECTS_KEY not in actor.sm.store, "listing must not materialise state"

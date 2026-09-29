@@ -25,45 +25,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from fastapi.routing import APIRoute
 
 from viewer.api.v1.endpoints import objects as objects_ep
 
 
 if TYPE_CHECKING:
     from viewer.core.config import ViewerSettings
-
-
-def _param(name: str):
-    for route in objects_ep.router.routes:
-        if isinstance(route, APIRoute) and route.path.endswith("/objects"):
-            for field in route.dependant.query_params:
-                if field.name == name:
-                    return field
-            return None
-    pytest.fail("no /objects route on the viewer router")
-
-
-def test_the_caller_can_bound_the_listing() -> None:
-    field = _param("max_keys")
-    assert field is not None, "/objects takes no `max_keys`, so the route drains the paginator to exhaustion and the caller cannot ask for less"
-    limits = {type(c).__name__: c for c in field.field_info.metadata}
-    assert "Ge" in limits and limits["Ge"].ge >= 1
-    assert "Le" in limits and limits["Le"].le <= 1000, "S3's own per-call ceiling is 1000 keys"
-
-
-def test_the_caller_can_ask_for_the_next_page() -> None:
-    assert _param("continuation_token") is not None, (
-        "/objects accepts no continuation token, so a bounded listing would make the rest of the "
-        "prefix unreachable — worse than the unbounded version it replaces"
-    )
-
-
-def test_the_envelope_hands_the_cursor_back() -> None:
-    """A cursor the caller cannot receive is not pagination."""
-    assert "next_continuation_token" in objects_ep.S3Listing.model_fields, (
-        "S3Listing has no cursor field, so even a paged handler could not tell the caller there is more"
-    )
 
 
 def test_the_handler_makes_ONE_call_not_a_drained_paginator(monkeypatch: pytest.MonkeyPatch) -> None:

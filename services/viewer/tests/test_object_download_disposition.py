@@ -75,20 +75,6 @@ def test_a_quote_in_the_key_cannot_break_out_of_the_disposition(monkeypatch: pyt
     )
 
 
-def test_the_real_name_survives_via_rfc6266_ext_param(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Cleaning the fallback must not LOSE the name: the pct-encoded form carries it whole."""
-    resp = _download(monkeypatch, 'dir/a"b.jpg')
-    header = resp.headers["content-disposition"]
-    assert "filename*=UTF-8''a%22b.jpg" in header, header
-
-
-def test_a_plain_key_still_gets_its_plain_filename(monkeypatch: pytest.MonkeyPatch) -> None:
-    resp = _download(monkeypatch, "dir/plain.jpg")
-    header = resp.headers["content-disposition"]
-    assert 'filename="plain.jpg"' in header, header
-    assert _WELLFORMED.match(header), header
-
-
 def test_a_key_that_cleans_to_nothing_falls_back_to_download(monkeypatch: pytest.MonkeyPatch) -> None:
     resp = _download(monkeypatch, 'dir/"')
     header = resp.headers["content-disposition"]

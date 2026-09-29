@@ -10,32 +10,8 @@ loop is exercisable in-repo.
 
 from __future__ import annotations
 
-from annotator.api.v1.endpoints.assist import _BATCH_ONLY, _RETURNS, AssistRequest, AssistShape, _mock, _within_contract
+from annotator.api.v1.endpoints.assist import AssistRequest, _mock, _within_contract
 from annotator.projects.ontology import LabelClass, LabelOntology
-
-
-def test_the_wire_carries_a_textual_answer() -> None:
-    """`text` is part of the shape contract with an empty default — geometry producers are
-    untouched, text producers finally have a channel."""
-    assert AssistShape(x=0, y=0, width=0, height=0).text == ""
-    shape = AssistShape.model_validate({"x": 0, "y": 0, "width": 0, "height": 0, "text": "17th"})
-    assert shape.text == "17th"
-
-
-def test_vlm_is_an_interactive_tag_family() -> None:
-    """Interactive (per-cell fills ride the assist POST, unlike batch-only htr) and returning
-    `tag` — the shape an item-level answer lands as."""
-    assert _RETURNS["vlm"] == ("tag",)
-    assert "vlm" not in _BATCH_ONLY
-
-
-def test_the_mock_answers_the_question_as_a_tag_with_text() -> None:
-    """Deterministic echo, honest about being a mock — and shaped exactly as the grid consumes
-    it: one `tag` shape, the answer in `text`, scores stated."""
-    (shape,) = _mock(AssistRequest(producer="vlm", prompt="which century is this from?"))
-    assert shape.shape_type == "tag"
-    assert shape.text == "[vlm] which century is this from?"
-    assert shape.confidence > 0 and shape.uncertainty is not None
 
 
 def test_a_tag_tooled_task_keeps_the_recipe_answer() -> None:

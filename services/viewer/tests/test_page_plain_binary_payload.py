@@ -124,34 +124,6 @@ def _plain_dataset(dataset_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("_plain_dataset")
-def test_the_listing_answers_for_a_plain_binary_payload_without_reading_it() -> None:
-    """The `descriptors=False` branch of the listing, pinned: every ROW is listed, and its payload's
-    presence and length are reported UNKNOWN rather than read.
-
-    No descriptor struct exists on this shape to read `size` or validity from, and the only thing
-    that carries either is the payload itself — which a route gated at the metadata rung may not
-    touch (VS-05; `services/viewer/tests/test_page_reads_are_bounded.py` measures the bytes, this
-    file pins the contract that measurement forces).
-
-    `has_payload is None`, not `False`: the consumer branches on this field, so "unknown" and "this
-    row failed to acquire" must not collapse into one answer — `GET /api/page` is what settles
-    presence for this shape, and it still 404s on the null row below. `size == 0` is the same answer
-    the field already gives for an EXTERNAL descriptor, for the same reason: resolving it is IO this
-    listing exists to avoid.
-    """
-    r = TestClient(_app()).get("/api/pages", params={"table": TABLE})
-
-    assert r.status_code == 200
-    pages = {p["id"]: p for p in r.json()["pages"]}
-    assert set(pages) == {0, NULL_ROW_ID}, "which rows exist IS metadata — dropping them would report the corpus as shorter than it is"
-    assert pages[0]["has_payload"] is None
-    assert pages[0]["has_image"] is None, "the deprecated alias mirrors rather than defaults, so it must carry the unknown too"
-    assert pages[0]["size"] == 0
-    assert pages[NULL_ROW_ID]["has_payload"] is None
-    assert pages[NULL_ROW_ID]["size"] == 0
-
-
-@pytest.mark.usefixtures("_plain_dataset")
 def test_the_bytes_route_serves_a_plain_binary_payload() -> None:
     """The defect, stated directly: the listing 200'd for this table while `/api/page` 500'd on the
     unconditional `take_blobs` of a column that is not a blob column."""

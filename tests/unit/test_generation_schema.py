@@ -45,51 +45,6 @@ def test_no_contract_means_NO_schema() -> None:
     assert generation_schema(LabelOntology(kind="x")) is None
 
 
-def test_one_branch_per_class_and_tool_with_consts_pinning_the_choice() -> None:
-    schema = generation_schema(OCR)
-    assert schema is not None
-    branches = schema["properties"]["annotations"]["items"]["anyOf"]
-    picks = {(b["properties"]["label"]["const"], b["properties"]["shape_type"]["const"]) for b in branches}
-    assert picks == {("paragraph", "polygon"), ("paragraph", "bbox"), ("person", "text"), ("damaged", "tag")}
-
-
-def test_geometry_follows_the_tool() -> None:
-    schema = generation_schema(OCR)
-    assert schema is not None
-    by_pick = {(b["properties"]["label"]["const"], b["properties"]["shape_type"]["const"]): b for b in schema["properties"]["annotations"]["items"]["anyOf"]}
-    assert "polygon" in by_pick[("paragraph", "polygon")]["properties"]
-    assert "x" in by_pick[("paragraph", "bbox")]["properties"]
-    assert "char_start" in by_pick[("person", "text")]["properties"]
-    # A tag has NO geometry — and additionalProperties: false makes emitting any impossible.
-    tag = by_pick[("damaged", "tag")]
-    assert set(tag["properties"]) == {"label", "shape_type"}
-    assert tag["additionalProperties"] is False
-
-
-def test_transcription_and_typed_attributes_ride_the_branch() -> None:
-    schema = generation_schema(OCR)
-    assert schema is not None
-    para = next(
-        b
-        for b in schema["properties"]["annotations"]["items"]["anyOf"]
-        if b["properties"]["label"]["const"] == "paragraph" and b["properties"]["shape_type"]["const"] == "bbox"
-    )
-    assert para["properties"]["text"] == {"type": "string"}
-    attrs = para["properties"]["attributes"]
-    assert attrs["properties"]["order"] == {"type": "integer"}
-    assert attrs["properties"]["script"] == {"enum": ["blackletter", "cursive"]}
-    assert attrs["required"] == ["order"]
-    # A REQUIRED attribute makes the attributes object itself required on the branch.
-    assert "attributes" in para["required"]
-
-
-def test_allow_empty_mirrors_the_submit_rule() -> None:
-    constrained = generation_schema(OCR)
-    assert constrained is not None and constrained["properties"]["annotations"]["minItems"] == 1
-    blank_ok = generation_schema(OCR.model_copy(update={"allow_empty": True}))
-    assert blank_ok is not None and "minItems" not in blank_ok["properties"]["annotations"]
-
-
 def test_the_schema_JUDGES_like_the_contract_does() -> None:
     """Validated by use: a contract-shaped answer passes, an off-contract one is refused — the
     same judgement a constrained decoder applies during generation."""

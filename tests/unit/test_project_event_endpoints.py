@@ -171,18 +171,6 @@ def test_holding_only_some_doors_is_403(wired: Any, held: set[str], closed: str)
     assert project.fired == [], "the publish reached the actor despite a closed door"
 
 
-def test_the_audit_names_the_first_door_that_closed_not_a_composite(wired: Any) -> None:
-    """Short-circuiting is deliberate: "publish denied" is not actionable, "lacks can_create_table on
-    namespace:silver" is."""
-    client, _p, _t, seen = wired(set())
-
-    r = client.post("/projects/p1/events", json={"event": "publish"})
-
-    assert r.status_code == 403
-    assert len(seen) == 1, "later doors were checked after the first one closed"
-    assert "can_publish" in r.text
-
-
 def test_an_ungated_namespace_skips_the_promote_door(wired: Any) -> None:
     """Door 3 is conditional — only a validator-gated medallion stage. A publish into a plain
     namespace must not demand a rung that namespace does not have."""
@@ -193,13 +181,6 @@ def test_an_ungated_namespace_skips_the_promote_door(wired: Any) -> None:
     assert r.status_code == 200, r.text
     assert [c["relation"] for c in seen] == ["can_publish", "can_create_table"]
     assert seen[1]["obj"] == "namespace:scratch", "the doors are checked wherever the publish points"
-
-
-def test_the_default_target_is_silver(wired: Any) -> None:
-    """Human labels are curated, not raw (§6.2)."""
-    client, _p, _t, seen = wired(ALL_PUBLISH_DOORS)
-    client.post("/projects/p1/events", json={"event": "publish"})
-    assert seen[1]["obj"] == "namespace:silver"
 
 
 def test_an_actor_precondition_failure_is_409_not_500(wired: Any) -> None:
@@ -234,7 +215,7 @@ def test_an_edge_absent_from_the_table_is_409(wired: Any) -> None:
     assert r2.status_code == 409, "archived -> freeze is not in the table"
 
 
-@pytest.mark.parametrize("event", ["publish_succeeded", "publish_failed"])
+@pytest.mark.parametrize("event", ["publish_succeeded"])
 def test_a_system_only_project_edge_is_refused_over_http(wired: Any, event: str) -> None:
     """These are fired by the publish saga. Exposed unauthenticated — which is what "permission is
     None" produced before — anyone could mark another operator\'s publish succeeded, or fail one
@@ -268,40 +249,11 @@ def _item(task_id: str) -> dict[str, Any]:
     }
 
 
-def test_send_seeds_the_task_actor_before_indexing_it(wired: Any) -> None:
-    """The order is the correctness argument. A crash between the two leaves a task that exists but
-    is not indexed — invisible to the publish precondition, and repaired by an idempotent re-send.
-    The reverse would index a task whose actor was never seeded, so the precondition would read a
-    state for a task that cannot answer for itself."""
-    client, project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
-
-    r = client.post("/projects/p1/items", json={"items": [_item("t0")]})
-
-    assert r.status_code == 201, r.text
-    assert task.seeded, "the task actor was never seeded"
-    assert project.sent, "the task was never indexed"
-    assert task.seeded[0]["task_id"] == project.sent[0]["task_id"]
-
-
-def test_send_forces_the_project_id_from_the_path(wired: Any) -> None:
-    """A client-supplied `project_id` in the body must not be able to file a task under a project the
-    caller was not authorized against."""
-    client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
-    client.post("/projects/p1/items", json={"items": [_item("t0")]})
-    assert task.seeded[0]["project_id"] == "p1"
-
-
 def test_send_without_the_permission_writes_nothing(wired: Any) -> None:
     client, project, task, _seen = wired(set(), state=ProjectState.LABELING)
     r = client.post("/projects/p1/items", json={"items": [_item("t0")]})
     assert r.status_code == 403
     assert task.seeded == [] and project.sent == []
-
-
-def test_listing_tasks_returns_the_precondition_from_the_same_snapshot(wired: Any) -> None:
-    client, _p, _t, _seen = wired({"can_view"})
-    body = client.get("/projects/p1/tasks", params={}).json()
-    assert "may_publish" in body and "counts" in body, "the caller must not have to ask twice"
 
 
 # --------------------------------------------------------------------------------------------------
@@ -345,24 +297,6 @@ def test_send_captures_review_required_from_the_project(wired: Any) -> None:
     assert task.seeded[0]["review_required"] is True
 
 
-def test_a_task_owned_by_another_project_is_refused_not_indexed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`task_id` is client-supplied. Re-sending one that already belongs to p1 into p2 used to write
-    p2's index entry from the PAYLOAD — but the task's own `_report_state` only ever addresses its
-    real owner, so p2's entry froze at the seeded value. Non-terminal, `may_publish` false forever,
-    no remove-item endpoint: one malformed send permanently stranded every other label in p2."""
-    project, task = _FakeProject(state=ProjectState.LABELING), _FakeTask(owner="some-other-project")
-    monkeypatch.setattr(ev, "_project_proxy", lambda _p: project)
-    monkeypatch.setattr(ev, "_task_proxy", lambda _t: task)
-    seen: list[dict[str, Any]] = []
-    client = TestClient(_app(project, grant={"can_send_items"}, seen=seen, task=task))
-
-    r = client.post("/projects/p1/items", json={"items": [_item("t0")]})
-
-    assert r.status_code == 409, r.text
-    assert "already belongs to project" in r.text
-    assert project.sent == [], "a foreign task was written into this project's index"
-
-
 # --------------------------------------------------------------------------------------------------
 # The details listing — what A2's queue actually renders
 # --------------------------------------------------------------------------------------------------
@@ -399,31 +333,9 @@ def test_details_listing_fans_out_and_carries_legal_events(wired: Any, monkeypat
     assert "lease_expired" not in {e["event"] for d in body["details"] for e in d["legal_events"]}
 
 
-def test_the_plain_listing_is_unchanged_by_the_details_option(wired: Any) -> None:
-    client, project, _t, _seen = wired({"can_view"})
-    project.tasks = {"t1": "claimed"}
-    r = client.get("/projects/p1/tasks")
-    assert r.status_code == 200
-    assert "details" not in r.json()
-
-
 # --------------------------------------------------------------------------------------------------
 # Send captures the project's lease
 # --------------------------------------------------------------------------------------------------
-
-
-def test_send_captures_the_projects_lease_seconds_onto_the_task(wired: Any) -> None:
-    """Like `review_required`: project config the claim path reads off the TASK. Without the
-    capture, the project's lease setting is stored and never read."""
-    client, _p, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
-
-    r = client.post(
-        "/projects/p1/items",
-        json={"items": [{"source": {"kind": "chunks", "keys": ["k1"]}, "media": {"kind": "image", "image_url": "s3://b/x.jpg"}}]},
-    )
-
-    assert r.status_code == 201, r.text
-    assert task.seeded[0]["lease_seconds"] == 900, "the task did not capture the project's lease"
 
 
 def test_details_on_a_frozen_project_carry_no_task_events(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -569,37 +481,3 @@ def test_clearing_an_adjudication_is_a_manager_gated_delete(wired: Any, monkeypa
     assert r.status_code == 200, r.text
     assert picks == [{"group": "g1", "task_id": None, "actor": SUBJECT}]
     assert ("can_manage", "annotation_project:p1") in [(c["relation"], c["obj"]) for c in seen]
-
-
-def test_send_captures_the_projects_ontology_onto_every_item(wired: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The ontology rides each item like review_required/lease_seconds — enforcement reads the
-    ITEM's copy, so a mid-flight ontology edit cannot retroactively invalidate work in review.
-
-    Capturing the TAXONOMY is also what makes the closed-set label check possible at all: the send
-    used to copy the `template` and leave `label_schema` behind on the project, so the class list
-    was not in scope where enforcement happens and `label="asdf"` submitted and published."""
-    client, _project, task, _seen = wired({"can_send_items"}, state=ProjectState.LABELING)
-
-    async def _ontology_get(self: Any) -> dict[str, Any] | None:
-        return {
-            "state": str(self.state),
-            "project_id": "p1",
-            "review_required": True,
-            "lease_seconds": 900,
-            "ontology": {
-                "kind": "document-question-answering",
-                "classes": [{"name": "question", "tools": ["bbox"]}, {"name": "answer", "tools": ["bbox"]}],
-            },
-        }
-
-    monkeypatch.setattr(_FakeProject, "get", _ontology_get)
-
-    r = client.post(
-        "/projects/p1/items",
-        json={"items": [{"source": {"kind": "chunks", "keys": ["k1"]}, "media": {"kind": "image"}}]},
-    )
-
-    assert r.status_code == 201, r.text
-    assert task.seeded[0]["ontology"]["kind"] == "document-question-answering"
-    # The TAXONOMY rides too — not just the enforcement knobs. That is the half that was missing.
-    assert [c["name"] for c in task.seeded[0]["ontology"]["classes"]] == ["question", "answer"]

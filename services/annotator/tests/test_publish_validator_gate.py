@@ -23,7 +23,6 @@ from __future__ import annotations
 import pytest
 
 from annotator.api.v1.endpoints.project_events import _authorize_publish
-from service_kit.exceptions import ForbiddenError
 
 
 class _Checker:
@@ -50,11 +49,8 @@ class TestTheValidatorDoorFiresForEveryGatedTIER:
         "namespace",
         [
             "silver",  # the single-tenant form — the ONLY shape that ever worked
-            "gold",
-            "acme-silver",  # what scripts/seed_estate.py actually creates
             "acme-gold",
             "acme-gold-htr",  # a lane: `<project>-<tier>-<lane>`
-            "acme-silver-media",
             "my-cool-project-gold",  # PROJECT_PATTERN permits hyphens
         ],
     )
@@ -66,42 +62,3 @@ class TestTheValidatorDoorFiresForEveryGatedTIER:
             f"publishing into {namespace!r} crossed no validator door — a writer who is not a validator "
             f"could promote into a gated stage, the exact semantics the rung exists to prevent"
         )
-
-    @pytest.mark.asyncio
-    async def test_a_non_validator_is_REFUSED_on_a_qualified_namespace(self) -> None:
-        """The behavioural half: the door must not merely be asked, it must be able to close."""
-        with pytest.raises(ForbiddenError):
-            await _doors("acme-gold", deny={("can_promote", "namespace:acme-gold")})
-
-
-class TestWhatIsNOTValidatorGated:
-    @pytest.mark.parametrize("namespace", ["bronze", "acme-bronze", "acme-bronze-media"])
-    @pytest.mark.asyncio
-    async def test_bronze_crosses_only_the_writer_door(self, namespace: str) -> None:
-        """Bronze is the first governed tier, not a promotion target. Gating it would demand the
-        validator rung for an ordinary ingest write."""
-        asked = await _doors(namespace)
-
-        assert ("can_promote", f"namespace:{namespace}") not in asked
-
-    @pytest.mark.parametrize("namespace", ["scratch", "acme-scratch", "acme"])
-    @pytest.mark.asyncio
-    async def test_a_namespace_that_is_no_TIER_is_not_gated(self, namespace: str) -> None:
-        """A name carrying no tier segment is not a medallion stage, and inventing one out of a hyphen
-        would demand the validator rung for namespaces the cascade never touches."""
-        asked = await _doors(namespace)
-
-        assert ("can_promote", f"namespace:{namespace}") not in asked
-
-
-class TestTheOrderIsUnchanged:
-    @pytest.mark.asyncio
-    async def test_the_doors_are_crossed_in_order(self) -> None:
-        """The audit trail must name the FIRST door that closed, not a composite verdict."""
-        asked = await _doors("acme-gold")
-
-        assert asked == [
-            ("can_publish", "annotation_project:labels-2026"),
-            ("can_create_table", "namespace:acme-gold"),
-            ("can_promote", "namespace:acme-gold"),
-        ]

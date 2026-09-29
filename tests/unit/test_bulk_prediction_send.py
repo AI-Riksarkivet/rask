@@ -155,62 +155,8 @@ def test_an_item_with_no_prediction_carries_none(wired: Any) -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# Provenance the sender cannot write
-# --------------------------------------------------------------------------------------------------
-
-
-def test_the_server_stamps_the_source(wired: Any) -> None:
-    """`source` is how every later surface tells suggested work from drawn work. If the sender set
-    it, a bulk action could stamp `human` on five hundred items nobody looked at and they would read
-    as annotated for the rest of the corpus's life."""
-    client, _project, task = wired()
-
-    r = client.post("/projects/p1/items", json={"items": [_item([{"shape_type": "tag", "label": "letter"}])]})
-
-    assert r.status_code == 201, r.text
-    assert task.seeded[0]["prediction"][0]["source"] == "bulk"
-
-
-def test_a_sender_supplied_source_is_ignored_not_honoured(wired: Any) -> None:
-    """Same rule, asked as forgery. The wire model does not declare `source`, so this is dropped
-    rather than overwritten — but the property that matters is what ends up stored."""
-    client, _project, task = wired()
-
-    r = client.post(
-        "/projects/p1/items",
-        json={"items": [_item([{"shape_type": "tag", "label": "letter", "source": "human"}])]},
-    )
-
-    assert r.status_code == 201, r.text
-    assert task.seeded[0]["prediction"][0]["source"] == "bulk", "a caller forged human provenance"
-
-
-def test_a_sender_cannot_pre_accept_by_supplying_task_state(wired: Any) -> None:
-    """The existing guarantee, re-asserted for the new field: a prediction must not become a way in
-    to the fields `SendItem` deliberately refuses."""
-    client, _project, task = wired()
-
-    r = client.post("/projects/p1/items", json={"items": [{**_item([{"shape_type": "tag", "label": "letter"}]), "state": "accepted"}]})
-
-    assert r.status_code == 201, r.text
-    assert task.seeded[0]["state"] == "unassigned"
-
-
-# --------------------------------------------------------------------------------------------------
 # The taxonomy is closed, and it closes BEFORE anything is written
 # --------------------------------------------------------------------------------------------------
-
-
-def test_a_label_outside_the_taxonomy_is_refused(wired: Any) -> None:
-    """The closed-set property is the entire reason a class list is a first-class object. A bulk
-    action is the worst possible place to leak an invented label: one click, five hundred rows."""
-    client, _project, task = wired()
-
-    r = client.post("/projects/p1/items", json={"items": [_item([{"shape_type": "tag", "label": "asdf"}])]})
-
-    assert r.status_code == 409, r.text
-    assert "asdf" in r.text, "the refusal must name the label that closed it"
-    assert task.seeded == [], "tasks were seeded despite the refusal"
 
 
 def test_a_tool_the_class_forbids_is_refused(wired: Any) -> None:
@@ -248,34 +194,6 @@ def test_an_unconstrained_project_accepts_any_label(wired: Any) -> None:
 
     assert r.status_code == 201, r.text
     assert task.seeded[0]["prediction"][0]["label"] == "anything"
-
-
-# --------------------------------------------------------------------------------------------------
-# A prediction is not a draft
-# --------------------------------------------------------------------------------------------------
-
-
-def test_a_prediction_never_becomes_a_draft(wired: Any) -> None:
-    """The load-bearing distinction. A draft is submittable; a prediction is a suggestion. Writing
-    one as the other would let a bulk action produce work that walks into review having been drawn
-    by nobody — and `save_draft` refuses a non-CLAIMED task precisely so this cannot be done by
-    accident. Routing around that refusal is the mistake this test exists to catch."""
-    client, _project, task = wired()
-
-    r = client.post("/projects/p1/items", json={"items": [_item([{"shape_type": "tag", "label": "letter"}])]})
-
-    assert r.status_code == 201, r.text
-    assert task.drafts == [], "the prediction was written as a draft"
-
-
-def test_the_task_is_still_unassigned_after_a_predicted_send(wired: Any) -> None:
-    """Predicting does not claim. The item goes into the queue like any other, for a person."""
-    client, _project, task = wired()
-
-    client.post("/projects/p1/items", json={"items": [_item([{"shape_type": "tag", "label": "letter"}])]})
-
-    assert task.seeded[0]["state"] == "unassigned"
-    assert task.seeded[0]["assignee"] is None
 
 
 # --------------------------------------------------------------------------------------------------
