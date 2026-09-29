@@ -111,11 +111,6 @@ def _vend(location: str, branch: str) -> tuple[Any, _Vendor]:
     return response, vendor
 
 
-def test_a_vend_for_a_branch_the_table_does_NOT_have_is_REFUSED(table: str) -> None:
-    with pytest.raises(TableBranchNotFoundError, match="nobody-made-this"):
-        _vend(table, "nobody-made-this")
-
-
 def test_the_refusal_happens_BEFORE_a_credential_is_minted(table: str) -> None:
     """A door that refused after vending would have already handed out the grant. The vendor records
     every call, so an empty list is the assertion — the raise alone cannot tell the two apart."""

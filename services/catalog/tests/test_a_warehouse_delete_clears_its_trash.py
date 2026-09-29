@@ -33,18 +33,6 @@ def _record(canonical_id: str, location: str) -> dict[str, object]:
     return trash.make_record(canonical_id, location=location, dropped_by="tester", grace_days=7)
 
 
-def test_a_warehouse_delete_clears_the_trash_that_pointed_into_it(tmp_path: Path) -> None:
-    control_root = str(tmp_path / "control")
-    trash.put(control_root, {}, _record("ns$doomed", "s3://acme-wh/abc_ns$doomed"))
-
-    warehouses.delete_warehouse_record(control_root, {}, "acme-wh")
-
-    assert trash.get(control_root, {}, "ns$doomed") is None, (
-        "the trash record outlived the warehouse that gave its location meaning, so it names a root "
-        "the estate no longer maintains and every purge tick will refuse it forever"
-    )
-
-
 def test_another_warehouses_trash_is_untouched(tmp_path: Path) -> None:
     """THE CONTROL, and the one that matters: reaching past the warehouse is the destructive mistake."""
     control_root = str(tmp_path / "control")

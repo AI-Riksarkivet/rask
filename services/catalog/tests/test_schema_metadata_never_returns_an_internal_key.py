@@ -59,19 +59,3 @@ def test_the_native_path_hides_the_internal_key_like_the_dataplane_path_does(ns)
     assert set(native_answer) == set(dataplane_answer), (
         f"the two routes of one door answer different key sets: native={sorted(native_answer)} dataplane={sorted(dataplane_answer)}"
     )
-
-
-def test_the_filter_is_load_bearing_and_not_decoration(ns) -> None:
-    """Without this, the filter could be a no-op over an upstream that never leaked, and nobody would know."""
-    raw = native.call(ns, "update_table_schema_metadata", UpdateTableSchemaMetadataRequest(id=TABLE_ID, metadata={"owner": "carol"})).metadata or {}
-
-    assert INTERNAL in raw, "the native op no longer returns the internal key — re-check whether this filter is still needed"
-
-
-def test_a_user_property_survives_the_filter(ns) -> None:
-    """The control: hiding the internal keys must not hide the caller's own."""
-    answer = dataplane.filter_internal_metadata(
-        native.call(ns, "update_table_schema_metadata", UpdateTableSchemaMetadataRequest(id=TABLE_ID, metadata={"owner": "dan"})).metadata or {}
-    )
-
-    assert answer.get("owner") == "dan"

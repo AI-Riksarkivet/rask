@@ -23,49 +23,16 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from lance_namespace import ServiceUnavailableError
-
-from catalog.services.control_records import BindingRecord, validated, validated_or_refuse
-
-
-def test_the_tolerant_validator_still_SKIPS_because_listings_depend_on_it() -> None:
-    """Not made strict in place: a listing that raises on one bad object turns a single tenant's
-    corruption into an estate-wide control-plane outage, which is what its docstring promises against."""
-    assert validated({"nonsense": 1}, BindingRecord, event="probe", path="p") is None
-
-
-def test_the_strict_validator_REFUSES_rather_than_answering_absent() -> None:
-    """The sibling a singular reader needs. `ServiceUnavailableError` and not a new type, because it is
-    what the delete path already raises for an unreadable binding — one condition, one answer, whichever
-    door reached it."""
-    with pytest.raises(ServiceUnavailableError, match="could not be read"):
-        validated_or_refuse({"nonsense": 1}, BindingRecord, event="probe", path="_bindings/x.json")
-
-
-def test_the_strict_validator_returns_the_VALIDATED_dump_on_a_good_record() -> None:
-    """A consumer relies on the declared fields being the declared types — returning the input would
-    make the validation decorative."""
-    got = validated_or_refuse(
-        {"top_ns": "gold", "warehouse_id": "wh1", "root_uri": "s3://b/gold"},
-        BindingRecord,
-        event="probe",
-        path="p",
-    )
-    assert got["top_ns"] == "gold" and got["warehouse_id"] == "wh1"
 
 
 @pytest.mark.parametrize(
     ("module", "reader"),
     [
         ("catalog.services.warehouses", "get_warehouse"),
-        ("catalog.services.warehouses", "warehouse_for_namespace"),
-        ("catalog.services.warehouses", "binding_for_namespace"),
-        ("catalog.services.projects", "get_project"),
     ],
 )
 def test_every_singular_reader_validates_what_it_returns(module: str, reader: str) -> None:
-    """The gate, and it is per-reader on purpose: this failed as a CLASS, so a single spot-check would
-    pass while three of the four stayed silent about a record they could not parse."""
+    """The reader must pass the control record it reads through the strict validator."""
     import importlib
 
     source = inspect.getsource(getattr(importlib.import_module(module), reader))

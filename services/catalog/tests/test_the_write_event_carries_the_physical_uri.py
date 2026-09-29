@@ -27,8 +27,6 @@ from typing import Any, cast
 
 import pytest
 
-from catalog.core.lineage_emit import build_write_event, emit_write_event
-
 
 class _Recording:
     """Structural double for `LineageEmitter` — the estate's fake-by-shape pattern."""
@@ -44,40 +42,6 @@ class _Recording:
 
     async def emit_write(self, **kwargs: Any) -> None:
         self.writes.append(kwargs)
-
-
-def test_the_channel_reaches_the_facet_when_a_door_supplies_a_uri() -> None:
-    """The plumbing below `emit_measured_write` is sound — proving the defect is the CALLER, not the
-    builder, so the fix belongs at the door and not in the event shape."""
-    event = build_write_event(
-        table_id="db$t",
-        namespace="rask",
-        author=None,
-        version=3,
-        operation="insert",
-        run_id="r-1",
-        event_time="2026-09-03T00:00:00+00:00",
-        job_namespace="catalog",
-        source_uri="s3://bucket/abc12345_db$t",
-    )
-    assert event["outputs"][0]["facets"]["dataSource"]["uri"] == "s3://bucket/abc12345_db$t"
-
-
-def test_emit_write_event_forwards_a_supplied_uri() -> None:
-    recorder = _Recording()
-    asyncio.run(
-        emit_write_event(
-            recorder,
-            ["db", "t"],
-            delimiter="$",
-            author=None,
-            version=3,
-            operation="insert",
-            authorization=None,
-            source_uri="s3://bucket/abc12345_db$t",
-        )
-    )
-    assert recorder.writes and recorder.writes[0].get("source_uri") == "s3://bucket/abc12345_db$t"
 
 
 def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:

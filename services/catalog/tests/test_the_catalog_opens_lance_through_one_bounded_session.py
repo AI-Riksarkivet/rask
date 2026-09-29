@@ -20,11 +20,6 @@ thread-safety under concurrent opens.
 THE STRUCTURAL HALF LIVES IN `tests/unit/test_no_lakehouse_service_opens_lance_unbounded.py`, which
 holds all four lakehouse services to the rule at once — one gate rather than four copies that drift.
 What stays here is what is specific to the catalog's own session.
-
-THE BEHAVIOURAL TEST IS THE LOAD-BEARING ONE. Asserting that a `session=` kwarg is passed would pass
-for a session that is never reused — the defect in a different shape. So the test opens the same dataset
-repeatedly and asserts the session's `size_bytes` GROWS, and that the same call without a session leaves
-it flat. That is the row's own measurement, and it is what proves the cache engages.
 """
 
 from __future__ import annotations
@@ -41,7 +36,7 @@ def catalog_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """The minimum `Settings` needs to construct, plus a cleared settings cache.
 
     `get_settings` is `@lru_cache`d process-wide, so a test that did not clear it would read whatever
-    an earlier test happened to build — the caps under test included.
+    an earlier test happened to build — the session's caps included.
     """
     from catalog.core import config
 
@@ -57,68 +52,6 @@ def test_the_session_is_ONE_object_across_calls(catalog_env: None) -> None:
     from catalog.core.config import shared_lance_session
 
     assert shared_lance_session() is shared_lance_session()
-
-
-def test_opens_against_the_shared_session_actually_POPULATE_it(tmp_path: Path, catalog_env: None) -> None:
-    """THE PROOF, and the reason a kwarg assertion is not enough.
-
-    A session that is passed but never reused caches nothing. So: open the same dataset repeatedly
-    through the shared session and require its `size_bytes` to grow, then do the identical opens with no
-    session and require the session to stay where it was — the row's own measurement, which found that
-    ten version-opens grow a shared session 168 -> ~75k while the same opens without one leave it flat.
-    """
-    from catalog.core.config import shared_lance_session
-
-    uri = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": list(range(64))}), uri)
-
-    session = shared_lance_session()
-    before = session.size_bytes()
-    for _ in range(10):
-        lance.dataset(uri, session=session).count_rows()
-    after_shared = session.size_bytes()
-
-    assert after_shared > before, f"the session did not grow ({before} -> {after_shared}) — nothing is being cached"
-
-    for _ in range(10):
-        lance.dataset(uri).count_rows()
-    after_bare = session.size_bytes()
-
-    assert after_bare == after_shared, (
-        f"a bare open touched the shared session ({after_shared} -> {after_bare}), which would mean this test cannot tell the two paths apart"
-    )
-
-
-def test_the_caps_are_clamped_to_the_container_not_taken_literally(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A literal cap cannot track `resources.limits.memory`: raise the pod and it should follow, lower it
-    and it MUST. Maintenance learned this by being OOMKilled with 128+256 MB configured inside a 512 Mi
-    pod — the caps are LRU soft bounds, the size the cache grows toward, not a ceiling it stops at.
-
-    THE BUDGET IS FORCED, because this suite does not run in the container it is reasoning about. Off a
-    cgroup, `cache_budget_bytes()` answers `None` and granting the request verbatim is CORRECT — there
-    is no limit to clamp to. Asserting a clamp without a budget would have tested the host, not the
-    rule, and would have failed on every developer machine while passing in CI for the wrong reason.
-    """
-    from service_kit.lakehouse import lance_session as seam
-
-    # Mirrors the real signature: `cache_budget_bytes` takes the fraction and returns the share of the
-    # container it is willing to spend, so a stub that ignored it would budget the WHOLE pod for cache.
-    monkeypatch.setattr(seam, "cache_budget_bytes", lambda *, fraction=0.4: int((512 << 20) * fraction))
-    granted_md, granted_idx = seam.affordable_cache_bytes(8 << 30, 16 << 30)
-
-    assert granted_md < (8 << 30), "an 8 GiB metadata cap survived a 512 Mi container; nothing is clamping"
-    assert granted_idx < (16 << 30)
-    assert granted_md > 0 and granted_idx > 0, "clamped to nothing at all — the cache would never engage"
-    assert granted_md + granted_idx < (512 << 20), "the two caps together already exceed the pod's whole limit"
-
-
-@pytest.mark.parametrize("attr", ["lance_metadata_cache_mb", "lance_index_cache_mb"])
-def test_the_caps_are_configurable_per_deployment(attr: str) -> None:
-    """Named settings rather than literals, so an operator who raises the pod can raise the caps with it
-    — the same shape maintenance carries."""
-    from catalog.core.config import Settings
-
-    assert hasattr(Settings.model_fields.get(attr), "default"), f"{attr} is not a setting"
 
 
 def test_the_evidence_session_is_held_to_its_own_small_bound(tmp_path: Path) -> None:

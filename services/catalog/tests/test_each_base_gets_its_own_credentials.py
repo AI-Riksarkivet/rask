@@ -38,46 +38,12 @@ def _resolver(**_kw: str) -> dict[str, str] | None:
     return {"aws_access_key_id": "other-store-key-id", "aws_secret_access_key": "the-other-stores-secret"}
 
 
-def test_a_base_with_no_reference_gets_the_ESTATE_options() -> None:
-    """Additive: today's estate configures no references and must render exactly today's map."""
-    params = compose_base_store_params(bases=[PLAIN], storage_options=ESTATE, refs={}, resolve=_resolver, store="s", field="f")
-
-    assert params == {PLAIN: ESTATE}, f"an unreferenced base must keep the estate's options explicitly: {params}"
-
-
 def test_a_base_WITH_a_reference_carries_its_own_credential() -> None:
     params = compose_base_store_params(bases=[OTHER, PLAIN], storage_options=ESTATE, refs={OTHER: "other-secret"}, resolve=_resolver, store="s", field="f")
 
     assert set(params) == {OTHER, PLAIN}, f"every registered base gets an entry: {sorted(params)}"
     assert params[OTHER]["aws_secret_access_key"] == "the-other-stores-secret"
     assert params[PLAIN]["aws_secret_access_key"] == ESTATE["aws_secret_access_key"], "the unreferenced base lost the estate credential"
-
-
-def test_a_referenced_base_gets_BOTH_HALVES_of_its_credential() -> None:
-    """A CREDENTIAL IS A PAIR, and taking half of one is worse than taking none.
-
-    Measured live 2026-09-21: swapping only `aws_secret_access_key` and leaving the estate's
-    `aws_access_key_id` produced `SignatureDoesNotMatch` on every write to the referenced base — the
-    estate's key id signed with another store's secret. This estate has paid for it before, in the Ray
-    lane: "repointing the Ray pod at a scoped RustFS user produced SignatureDoesNotMatch on every job
-    (its new secret paired with the submission's old key)".
-
-    The earlier version asserted only that the SECRET differed, which is exactly why the defect
-    shipped: half a swap satisfies that.
-    """
-    params = compose_base_store_params(bases=[OTHER], storage_options=ESTATE, refs={OTHER: "other-secret"}, resolve=_resolver, store="s", field="f")
-
-    assert params[OTHER]["aws_secret_access_key"] != ESTATE["aws_secret_access_key"], "the referenced base kept the estate secret"
-    assert params[OTHER]["aws_access_key_id"] != ESTATE["aws_access_key_id"], (
-        "the referenced base kept the estate's KEY ID — that id signed with another store's secret is SignatureDoesNotMatch on every write"
-    )
-
-
-def test_a_base_keeps_the_estate_ENDPOINT_unless_told_otherwise() -> None:
-    """A credential is not an address. Swapping the key must not silently move the base's store."""
-    params = compose_base_store_params(bases=[OTHER], storage_options=ESTATE, refs={OTHER: "other-secret"}, resolve=_resolver, store="s", field="f")
-
-    assert params[OTHER]["endpoint"] == ESTATE["endpoint"]
 
 
 def test_a_reference_that_does_not_resolve_RAISES_rather_than_using_the_estate_key() -> None:

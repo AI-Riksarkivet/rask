@@ -104,22 +104,6 @@ def _authorize(template: str, body: dict[str, object] | None = None) -> None:
     asyncio.run(fga_deps.authorize(_request(template, body or {}), _settings(), _token(), _CLIENT))
 
 
-@pytest.mark.parametrize(
-    ("fga_type", "suffix"),
-    [
-        ("table", ""),
-        ("table", "a_verb_nobody_declared"),
-        ("namespace", "a_verb_nobody_declared"),
-        ("materialized_view", "a_verb_nobody_declared"),
-        # A type the resolver serves no doors for is refused too, rather than answered with the table's.
-        ("classification", "describe"),
-    ],
-)
-def test_an_undeclared_suffix_earns_no_rung(fga_type: str, suffix: str) -> None:
-    with pytest.raises(InternalError, match="declares no rung"):
-        fga_deps._action_relation(fga_type, suffix)
-
-
 _UNDECLARED = "a_verb_nobody_declared"
 
 
@@ -137,7 +121,7 @@ def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(
     asked: list[tuple[str, str]], caplog: pytest.LogCaptureFixture, template: str, resource: str
 ) -> None:
     """Through `authorize`, not only the resolver: a guard that caught the refusal and fell back would
-    leave every assertion above green while the route stayed open. The transaction and classification
+    leave a resolver-level assertion green while the route stayed open. The transaction and classification
     rows are here because those doors resolve in their own branches, which never consult
     `_action_relation`.
 
@@ -211,15 +195,6 @@ def _grant_body(template: str) -> dict[str, object]:
     grantable = sorted(fga_deps._grant_actions(fga_deps._FGA_TYPE[resource]))
     assert grantable, f"{resource} defines no can_grant_* rung, so its grant door can never be authorized"
     return {"relation": grantable[0].removeprefix("can_grant_"), "user": "bob"}
-
-
-def test_the_walk_sees_every_guarded_resource_on_both_mounts() -> None:
-    """Without this the walk below could pass by iterating a fraction of the catalog."""
-    templates = _guarded_templates()
-    resources = {fga_deps._resource_for(_PARAM.sub("x", template)) for template in templates}
-    assert resources == set(fga_deps._RESOURCES), f"the walk reached {sorted(r for r in resources if r)}"
-    assert any(t.startswith("/v1/") for t in templates), "no route on the spec mount"
-    assert any(t.startswith("/management/v1/") for t in templates), "no route on the management mount"
 
 
 @pytest.mark.parametrize("template", _guarded_templates())

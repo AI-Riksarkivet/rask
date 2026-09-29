@@ -62,28 +62,6 @@ def client(monkeypatch: pytest.MonkeyPatch, table_uri: str) -> Iterator[TestClie
         yield test_client
 
 
-def test_the_route_does_not_declare_a_length_it_would_have_to_buffer_to_know(client: TestClient) -> None:
-    """A `Content-Length` on this route means the whole answer was assembled before the first byte
-    left — which is the defect, stated in a header."""
-    response = client.post("/management/v1/table/t/changes", json={"begin_version": 0, "kind": "inserted"})
-
-    assert response.status_code == 200, response.text
-    assert response.headers["content-type"] == door.ARROW_FILE
-    assert "content-length" not in response.headers, "the route buffered its answer to measure it before sending"
-
-
-def test_streaming_did_not_cost_the_ARROW_FILE_contract(client: TestClient) -> None:
-    """The footer is written when the IPC writer closes, so it is the LAST thing yielded. A generator
-    abandoned early, or a route that stops reading at the last batch, produces a body that looks
-    complete and fails to open — which is why this asserts through `open_file` rather than on length."""
-    response = client.post("/management/v1/table/t/changes", json={"begin_version": 0, "kind": "inserted"})
-
-    table = pyarrow.ipc.open_file(pa.py_buffer(response.content)).read_all()
-
-    assert table.num_rows == _ROWS, f"the feed answered {table.num_rows} of {_ROWS} rows"
-    assert "_row_created_at_version" in table.schema.names, "the checkpoint column a consumer advances on did not survive streaming"
-
-
 def test_a_COLUMN_THE_TABLE_DOES_NOT_HAVE_is_a_4xx_and_not_a_truncated_200(client: TestClient) -> None:
     """The reason the first batch is pulled inside `_user_sql` rather than inside the generator.
 

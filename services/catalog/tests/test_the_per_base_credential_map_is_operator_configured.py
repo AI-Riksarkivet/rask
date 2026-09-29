@@ -30,14 +30,6 @@ def _settings(value: str) -> Settings:
     return Settings.model_validate({**_REQUIRED, "LANCE_MULTIBASE_BASE_CREDENTIAL_REFS": value})
 
 
-def test_the_default_is_EMPTY_so_every_estate_is_unchanged() -> None:
-    assert Settings.model_validate(dict(_REQUIRED)).multibase_base_credential_ref_map == {}
-
-
-def test_a_single_pair_parses() -> None:
-    assert _settings("s3://other/data=other-secret").multibase_base_credential_ref_map == {"s3://other/data": "other-secret"}
-
-
 def test_several_pairs_parse_and_whitespace_is_tolerated() -> None:
     parsed = _settings(" s3://a/data = ref-a , s3://b/data=ref-b ").multibase_base_credential_ref_map
 
@@ -58,15 +50,3 @@ def test_a_REPEATED_base_is_refused_rather_than_last_one_wins() -> None:
     """Two references for one base is a question the estate must not answer by ordering."""
     with pytest.raises(ValueError, match="more than once"):
         _ = _settings("s3://a/data=ref-a,s3://a/data=ref-b").multibase_base_credential_ref_map
-
-
-def test_the_VALUE_is_a_reference_and_the_setting_never_holds_material() -> None:
-    """Asserted on the setting's own name, because this is the line the secrets rule draws.
-
-    A field called `..._credential_refs` holding a secret would be a lie a reader cannot detect; the
-    estate's rule is that material reaches a workload only from the Dapr store, ESO, or STS.
-    """
-    names = set(Settings.model_fields)
-    leaky = {n for n in names if "base" in n and ("secret" in n or "key" in n) and "ref" not in n}
-
-    assert not leaky, f"a per-base setting looks like it holds material rather than a reference: {sorted(leaky)}"

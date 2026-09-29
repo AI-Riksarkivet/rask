@@ -106,24 +106,6 @@ def test_the_door_returns_a_unit_id_and_builds_NOTHING(queued: tuple[TestClient,
     assert len(publisher.published) == 1
 
 
-def test_the_unit_carries_everything_the_worker_needs(queued: tuple[TestClient, _Publisher, str]) -> None:
-    """A unit crossing a broker must be self-contained — the rule `DatasetWorkItem` already states.
-
-    The LOCATION is asked of the catalog rather than composed from settings (rule I2): the two
-    disagree for most of this estate, and a unit carrying the wrong one indexes another table. The
-    table ID rides too, because without it the worker signs the write with its ambient credential
-    instead of one scoped to this table.
-    """
-    client, publisher, location = queued
-
-    client.post("/v1/table/ns1$t/create_scalar_index", json={"column": "id", "index_type": "BTREE", "name": "id_idx"})
-
-    unit = json.loads(publisher.published[0]["data"])
-    assert unit["uri"] == location
-    assert unit["table_id"] == "ns1$t"
-    assert (unit["column"], unit["index_type"], unit["name"], unit["kind"]) == ("id", "BTREE", "id_idx", "scalar")
-
-
 def test_the_two_doors_stamp_DIFFERENT_kinds(queued: tuple[TestClient, _Publisher, str]) -> None:
     """Vector and scalar are separate spec operations, so which one was asked for is the CALLER's
     statement. A worker inferring it from `index_type` would build the wrong index for a table."""

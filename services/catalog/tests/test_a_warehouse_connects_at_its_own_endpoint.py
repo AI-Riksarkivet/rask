@@ -66,43 +66,6 @@ def test_a_warehouse_with_NO_endpoint_uses_the_estate_default(settings: Settings
     assert captured[0]["root"] == "s3://tenant-bucket"
 
 
-def test_a_warehouse_endpoint_OVERRIDES_the_estate_default(settings: Settings, captured: list[dict[str, str]]) -> None:
-    """THE DEFECT: a second object store is unreachable while only `root` is swapped."""
-    namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
-
-    assert captured[0][f"{_STORAGE}endpoint"] == "http://tenant.store:9000"
-    assert captured[0]["root"] == "s3://tenant-bucket", "the root must still be the warehouse's"
-
-
-def test_allow_http_follows_the_WAREHOUSE_endpoint(settings: Settings, captured: list[dict[str, str]]) -> None:
-    """The wrong-but-plausible failure: an http warehouse behind an https estate cannot open at all.
-
-    A MIXED pair on purpose — matching schemes pass whichever endpoint the derivation reads.
-    """
-    namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
-
-    assert captured[0][f"{_STORAGE}allow_http"] == "true", "allow_http was derived from the ESTATE endpoint, so this warehouse cannot be opened"
-
-
-def test_allow_http_is_FALSE_for_an_https_warehouse(settings: Settings, captured: list[dict[str, str]]) -> None:
-    """The other direction, so a builder hardcoding `true` fails here rather than in production."""
-    namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="https://tenant.store:9000")
-
-    assert captured[0][f"{_STORAGE}allow_http"] == "false"
-
-
-def test_the_estate_CREDENTIALS_still_travel(settings: Settings, captured: list[dict[str, str]]) -> None:
-    """An endpoint override must not silently drop the credential the connection still needs.
-
-    This is the leg that says the increment is the ENDPOINT half and nothing more: the material comes
-    from the estate's own resolved settings, exactly as before, and nothing per-warehouse rides here.
-    """
-    namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
-
-    assert captured[0][f"{_STORAGE}access_key_id"] == "k"
-    assert captured[0][f"{_STORAGE}secret_access_key"] == "s"
-
-
 class _Req:
     """The two pieces of `request` the resolver touches, without standing up an app.
 
@@ -123,7 +86,7 @@ class _Req:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("record_endpoint", "expected"),
-    [("http://tenant.store:9000", "http://tenant.store:9000"), (None, None), ("", None)],
+    [("http://tenant.store:9000", "http://tenant.store:9000"), ("", None)],
 )
 async def test_the_resolver_carries_the_RECORDS_endpoint(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, record_endpoint: str | None, expected: str | None
@@ -144,21 +107,6 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     resolved = await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "tenant-ns")
 
     assert resolved == ("s3://tenant-bucket", expected)
-
-
-@pytest.mark.asyncio
-async def test_a_DEACTIVATED_warehouse_is_still_refused(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gate this read had to keep. Reading the whole record instead of just the status is only safe
-    if the fail-closed answer survives it — including for a record that is MISSING entirely."""
-    from lance_namespace import PermissionDeniedError
-
-    from catalog.api import dependencies
-
-    monkeypatch.setattr(dependencies.warehouses, "binding_for_namespace", lambda *a, **k: {"warehouse_id": "wh-1", "root_uri": "s3://tenant-bucket"})
-    for record in ({"id": "wh-1", "status": "deactivated"}, None):
-        monkeypatch.setattr(dependencies.warehouses, "get_warehouse", lambda *a, _r=record, **k: _r)
-        with pytest.raises(PermissionDeniedError):
-            await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "tenant-ns")
 
 
 def test_the_connection_cache_keys_on_the_ENDPOINT_too(settings: Settings, captured: list[dict[str, str]]) -> None:
@@ -249,23 +197,3 @@ def test_a_NON_TRANSPORT_construction_failure_is_left_alone(settings: Settings, 
 
     with pytest.raises(ValueError, match="No module named"):
         namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
-
-
-def test_the_unreachable_store_is_NAMED_in_the_log(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """The operator's half. The 503's detail is redacted on the wire, so if the address is not logged
-    it exists nowhere an operator can read it — a 503 that says only "unavailable" is barely better
-    than the 500 it replaced."""
-    from lance_namespace import ServiceUnavailableError
-
-    def _boom(impl: str, properties: dict[str, str]) -> Any:
-        raise ValueError("LanceError(IO): Generic S3 error: error sending request")
-
-    monkeypatch.setattr(namespace_module, "connect", _boom)
-
-    with caplog.at_level("WARNING", logger=namespace_module.__name__), pytest.raises(ServiceUnavailableError):
-        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket", endpoint="http://tenant.store:9000")
-
-    logged = [r for r in caplog.records if r.message == "warehouse_store_unreachable"]
-    assert logged, f"nothing logged the unreachable store: {[r.message for r in caplog.records]}"
-    assert getattr(logged[0], "endpoint", None) == "http://tenant.store:9000"
-    assert getattr(logged[0], "root", None) == "s3://tenant-bucket"

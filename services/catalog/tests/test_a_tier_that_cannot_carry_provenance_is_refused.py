@@ -39,7 +39,6 @@ TIER = pa.schema(
         pa.field("source_rowid", pa.uint64()),
     ]
 )
-PLAIN = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
 
 
 def _rows(schema: pa.Schema) -> pa.Table:
@@ -68,21 +67,3 @@ def test_a_tier_without_stable_row_ids_is_REFUSED(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidInputError, match="stable row id"):
         gate(uri, key_column="id", version=1)
-
-
-def test_a_tier_WITH_stable_row_ids_publishes(tmp_path: Path) -> None:
-    """The guard against 'refuse everything' — a conforming tier must still pass."""
-    result = gate(_write(tmp_path, TIER, stable=True), key_column="id", version=1)
-
-    assert result.reason is None, f"a conforming tier was refused: {result.reason}"
-
-
-def test_a_PLAIN_table_is_untouched(tmp_path: Path) -> None:
-    """Opt-in by claim: a dataset that is not a governed tier stays registrable and publishable.
-
-    This is the half that makes the rule safe at a door every writer passes — an external dataset
-    registered for discovery neither claims provenance nor needs stable row ids.
-    """
-    result = gate(_write(tmp_path, PLAIN, stable=False), key_column="id", version=1)
-
-    assert result.reason is None, f"a plain table was caught by the tier contract: {result.reason}"

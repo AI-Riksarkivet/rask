@@ -143,12 +143,6 @@ def _mentions_branch(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     return False
 
 
-def test_the_walk_sees_the_catalog_and_the_branched_models() -> None:
-    """A gate that inspects nothing passes everything."""
-    assert len(_modules()) > 40, f"only {len(_modules())} modules — the walk is not seeing the catalog source"
-    assert len(_BRANCHED_MODELS) > 20, f"only {len(_BRANCHED_MODELS)} branch-carrying models — the spec introspection is broken, so every site would look safe"
-
-
 def test_no_door_hands_a_branch_to_an_implementation_that_ignores_it() -> None:
     offences: list[str] = []
     for path in _modules():

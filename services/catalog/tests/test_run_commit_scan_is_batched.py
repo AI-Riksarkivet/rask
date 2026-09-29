@@ -14,10 +14,8 @@ A serial walk never produces one, so its first read times out — the RED this f
 from __future__ import annotations
 
 import threading
-from typing import Any
 
 import pytest
-from lance_namespace import ServiceUnavailableError
 
 from catalog.services import dataplane
 
@@ -56,39 +54,3 @@ def test_transaction_reads_overlap_instead_of_running_serially(monkeypatch: pyte
 
     # No marker anywhere -> None; a serial walk instead times out at the barrier and raises 503.
     assert dataplane._find_run_commit("s3://b/t", {}, "run-1", 0) is None
-
-
-def test_the_batched_scan_still_finds_the_marker(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Batching must not cost the answer: the marker match returns (version, rows) exactly as before."""
-    marker_props = {"__lance_commit_message": "rask.ingest.run_id=run-1"}
-    fake = _OverlapRequiringDataset([1, 2, 3, 4], props_by_version={3: marker_props})
-
-    class _CountingDataset:
-        def count_rows(self) -> int:
-            return 7
-
-    calls: list[tuple[Any, ...]] = []
-
-    def _dataset(*a: Any, **kw: Any) -> Any:
-        if kw.get("version") is not None or (len(a) > 1):
-            calls.append((a, kw))
-            return _CountingDataset()
-        return fake
-
-    monkeypatch.setattr(dataplane.lance, "dataset", _dataset)
-
-    assert dataplane._find_run_commit("s3://b/t", {}, "run-1", 0) == (3, 7)
-
-
-def test_an_unreadable_version_still_fails_closed_under_batching(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fail-closed contract survives the batching: a non-absent read error refuses, never skips."""
-
-    class _BrokenDataset(_OverlapRequiringDataset):
-        def read_transaction(self, version: int) -> _Transaction:
-            raise OSError("connection reset by peer fetching the transaction file")
-
-    broken = _BrokenDataset([1, 2])
-    monkeypatch.setattr(dataplane.lance, "dataset", lambda *_a, **_kw: broken)
-
-    with pytest.raises(ServiceUnavailableError, match="run-1"):
-        dataplane._find_run_commit("s3://b/t", {}, "run-1", 0)

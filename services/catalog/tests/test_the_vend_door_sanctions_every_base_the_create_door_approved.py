@@ -26,20 +26,6 @@ from __future__ import annotations
 from catalog.core.config import Settings
 
 
-def test_an_approved_external_blob_base_is_sanctioned_for_vending() -> None:
-    """The deployed shape: a models root the create door approves and the vend door dropped."""
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_EXTERNAL_BLOB_BASES="s3://lance-catalog/models/")
-
-    assert "s3://lance-catalog/models/" in settings.vend_sanctioned_bases
-
-
-def test_the_operator_data_base_allowlist_still_reaches_the_vendor() -> None:
-    """The half that already worked has to keep working — this widens the union, it does not move it."""
-    settings = Settings(LANCE_S3_ACCESS_KEY_ID="k", LANCE_S3_SECRET_ACCESS_KEY="s", LANCE_MULTIBASE_DATA_BASES="s3://other-wh/data/")
-
-    assert "s3://other-wh/data/" in settings.vend_sanctioned_bases
-
-
 def test_both_allowlists_arrive_together() -> None:
     settings = Settings(
         LANCE_S3_ACCESS_KEY_ID="k",

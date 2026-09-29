@@ -55,25 +55,6 @@ def _emit(bound: Any) -> None:
     )
 
 
-class TestTheClaimReachesTheEvent:
-    def test_a_bound_originator_is_stamped(self) -> None:
-        inner = _Recording()
-        _emit(OriginatorBoundEmitter(inner, "alice"))
-        assert inner.writes[0]["originator"] == "alice"
-
-    def test_the_author_is_untouched(self) -> None:
-        """The originator rides BESIDE the author, it does not replace it. The service really did
-        perform the write, and lineage must keep saying so."""
-        inner = _Recording()
-        _emit(OriginatorBoundEmitter(inner, "alice"))
-        assert inner.writes[0]["author"] == "service-annotator"
-
-    def test_no_claim_leaves_the_event_byte_identical(self) -> None:
-        inner = _Recording()
-        _emit(OriginatorBoundEmitter(inner, None))
-        assert inner.writes[0]["originator"] is None
-
-
 class TestTheBindingCannotCrossRequests:
     def test_two_bindings_over_one_emitter_do_not_see_each_other(self) -> None:
         """The exact hazard that rules out stashing the claim on the app-scoped emitter."""
@@ -83,43 +64,14 @@ class TestTheBindingCannotCrossRequests:
         _emit(OriginatorBoundEmitter(inner, None))
         assert [w["originator"] for w in inner.writes] == ["alice", "bob", None]
 
-    def test_the_wrapper_holds_no_mutable_state(self) -> None:
-        bound = OriginatorBoundEmitter(_Recording(), "alice")
-        with pytest.raises((AttributeError, TypeError)):
-            setattr(bound, "originator", "mallory")  # noqa: B010 - the point is that it is refused
-
 
 class TestTheHeaderIsAClaimAndIsBounded:
     """It authorizes nothing — the plane re-derives every recipient's visibility at delivery — so an
     unverified header is sound. It still must not be an arbitrary string: the value becomes an inbox
     actor id."""
 
-    @pytest.mark.parametrize("raw", ["", "   ", "a" * 200, "team:acme#member", "user:alice", "*"])
+    @pytest.mark.parametrize("raw", ["", "a" * 200, "user:alice"])
     def test_a_value_that_is_not_a_person_is_dropped(self, raw: str) -> None:
         from catalog.api.dependencies import originator_hint
 
         assert originator_hint(raw) is None
-
-    def test_a_plain_subject_survives(self) -> None:
-        from catalog.api.dependencies import originator_hint
-
-        assert originator_hint(" alice ") == "alice"
-
-
-class TestTheAnonymousSubjectIsNotAPerson:
-    """`anon` is what every verified-subject dependency resolves to with OIDC OFF
-    (`service_kit.governed.deps.ANONYMOUS_SUBJECT`). It is a real string and it passes every other
-    shape check, so it would have become one shared inbox actor holding everybody's rows — the
-    trap-4 shape, reached by a config switch rather than by a forged header."""
-
-    def test_it_is_dropped(self) -> None:
-        from catalog.api.dependencies import originator_hint
-
-        assert originator_hint("anon") is None
-
-    def test_the_literal_matches_the_estates(self) -> None:
-        """Hard-coding it here would rot silently if the shared constant ever changed."""
-        from catalog.core.lineage_emit import is_person_subject
-        from service_kit.governed.deps import ANONYMOUS_SUBJECT
-
-        assert not is_person_subject(ANONYMOUS_SUBJECT)

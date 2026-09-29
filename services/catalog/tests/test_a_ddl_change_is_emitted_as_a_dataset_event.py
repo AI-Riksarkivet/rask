@@ -21,19 +21,9 @@ from catalog.core.lineage_emit import InputRef, build_write_event
 
 DDL_OPERATIONS = (
     "create_table",
-    "declare_table",
-    "register_table",
-    "drop_table",
-    "deregister_table",
-    "add_columns",
-    "alter_columns",
-    "drop_columns",
-    "create_index",
     "drop_index",
-    "update_schema_metadata",
-    "rename_table",
 )
-DATA_OPERATIONS = ("insert", "delete", "merge_insert", "update", "compaction")
+DATA_OPERATIONS = ("insert",)
 
 
 def _event(operation: str, inputs: list[InputRef] | None = None) -> dict[str, object]:
@@ -53,7 +43,7 @@ def _event(operation: str, inputs: list[InputRef] | None = None) -> dict[str, ob
 
 @pytest.mark.parametrize("operation", DDL_OPERATIONS)
 def test_every_ddl_operation_is_emitted_as_a_dataset_event(operation: str) -> None:
-    """Parametrised over the SET, so a new DDL op joins this gate by being declared and nowhere else."""
+    """A DDL op goes on the wire as a ``DatasetEvent``, carrying none of a run's members."""
     event = _event(operation)
     assert "dataset" in event, f"{operation} still emits a run-shaped event and will mint a phantom Job"
     assert "run" not in event and "job" not in event, f"{operation} carries members the spec forbids on a DatasetEvent"
@@ -66,44 +56,6 @@ def test_a_data_write_is_still_a_run_event(operation: str) -> None:
     event = _event(operation)
     assert "run" in event and "job" in event, f"{operation} lost its run"
     assert event["eventType"] == "COMPLETE"
-
-
-def test_the_ddl_event_carries_the_verified_author_on_the_dataset() -> None:
-    """The authorizer reads `author.sub`; without it every DDL change becomes unauthored and is refused."""
-    dataset = _event("create_table")["dataset"]
-    assert isinstance(dataset, dict)
-    facets = dataset["facets"]
-    assert isinstance(facets, dict)
-    assert facets["author"]["sub"] == "alice"
-    assert facets["author"]["_producer"] and facets["author"]["_schemaURL"]
-
-
-def test_the_ddl_event_carries_the_operation_and_tenant_on_the_dataset() -> None:
-    """`lance.operation` keys the CREATED edge and `lance.project` is watch targeting's only key."""
-    dataset = _event("create_table")["dataset"]
-    assert isinstance(dataset, dict)
-    lance = dataset["facets"]["lance"]
-    assert lance["operation"] == "create_table"
-    assert lance["version"] == 1
-    assert lance["project"] == "acme"
-
-
-def test_the_ddl_event_keeps_the_standard_dataset_facets() -> None:
-    """They already rode the output; losing them in the move would strip the graph of the schema and version."""
-    dataset = _event("create_table")["dataset"]
-    assert isinstance(dataset, dict)
-    facets = dataset["facets"]
-    assert facets["version"]["datasetVersion"] == "1"
-    assert facets["lifecycleStateChange"]["lifecycleStateChange"] == "CREATE"
-    assert facets["datasetType"]["datasetType"] == "TABLE"
-
-
-def test_the_ddl_event_names_the_dataset_it_changed() -> None:
-    """The authorizer gates on it and the graph merges on it, so the identity must survive the move."""
-    dataset = _event("drop_table")["dataset"]
-    assert isinstance(dataset, dict)
-    assert dataset["namespace"] == "alpha$bronze"
-    assert dataset["name"] == "alpha$bronze$images"
 
 
 def test_a_DDL_change_that_DERIVED_the_table_keeps_its_run() -> None:

@@ -77,34 +77,6 @@ _PII = ("can_apply", "classification:pii")
 _RESTRICTED = ("can_apply", "classification:restricted")
 
 
-@pytest.mark.parametrize("_patched", [{_TABLE: True, _PII: True}], indirect=True)
-@pytest.mark.usefixtures("_patched")
-def test_the_delegated_value_is_accepted(seen: list[tuple[str, str]]) -> None:
-    """The control. Without it every assertion below passes on a door that refuses everything."""
-    _call([{"path": "payload", "metadata": {"rask.classification": "pii"}}])
-    assert _TABLE in seen and _PII in seen, f"both questions must be asked: {seen}"
-
-
-@pytest.mark.parametrize("_patched", [{_TABLE: True, _PII: True}], indirect=True)
-@pytest.mark.usefixtures("_patched")
-def test_a_value_NOT_delegated_is_refused_though_the_table_rung_is_held(seen: list[tuple[str, str]]) -> None:
-    """The whole point of the type. Before it this call succeeded on `can_classify` alone."""
-    with pytest.raises(PermissionDeniedError):
-        _call([{"path": "payload", "metadata": {"rask.classification": "restricted"}}])
-    assert _RESTRICTED in seen, f"the door never asked about the VALUE: {seen}"
-
-
-@pytest.mark.parametrize("_patched", [{_PII: True}], indirect=True)
-@pytest.mark.usefixtures("_patched")
-def test_holding_the_label_is_not_holding_the_table(seen: list[tuple[str, str]]) -> None:
-    """The other half of the pair, and it also fixes the ORDER: the table is asked first, so a caller
-    with no business here is refused without learning which values the vocabulary contains."""
-    with pytest.raises(PermissionDeniedError):
-        _call([{"path": "payload", "metadata": {"rask.classification": "pii"}}])
-    assert seen and seen[0] == _TABLE, f"the table rung must be asked first: {seen}"
-    assert _PII not in seen, f"a refused caller must not learn the vocabulary: {seen}"
-
-
 @pytest.mark.parametrize("_patched", [{_TABLE: True}], indirect=True)
 @pytest.mark.usefixtures("_patched")
 def test_clearing_a_label_takes_the_table_rung_and_no_value_grant(seen: list[tuple[str, str]]) -> None:

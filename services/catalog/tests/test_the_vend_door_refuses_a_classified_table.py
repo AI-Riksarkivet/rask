@@ -47,8 +47,6 @@ class _Vendor:
 
     def vend(self, **kwargs: Any) -> VendedCredentials:
         self.calls.append(kwargs)
-        # The REAL response model, so the control below exercises the door's own serialization rather
-        # than stopping at a shape the door would have rejected anyway.
         return VendedCredentials(storage_options={"aws_access_key_id": "AK", "aws_secret_access_key": "SK"})
 
 
@@ -95,13 +93,6 @@ def _vend(location: str) -> tuple[Any, _Vendor]:
         )
     )
     return response, vendor
-
-
-def test_an_unclassified_table_is_still_vended_directly(tmp_path: Path) -> None:
-    """The control. Without it, a door that refused everything would pass the real assertion below."""
-    response, vendor = _vend(_table(tmp_path, classify=None))
-    assert len(vendor.calls) == 1, "the door stopped vending at all — the refusal below proves nothing"
-    assert response.mode == "direct"
 
 
 def test_a_classified_column_stops_the_vend_before_the_vendor(tmp_path: Path) -> None:

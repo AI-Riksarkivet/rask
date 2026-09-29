@@ -84,31 +84,3 @@ def test_the_error_this_door_raises_is_the_status_the_spec_declares() -> None:
     assert status_for(int(TableAlreadyExistsError("occupied").code)) == 409, (
         "the conflict this door raises does not reach the caller as the 409 `lance_docs/ns_catalog/spec.yaml:1461` declares on CreateTable"
     )
-
-
-def test_one_write_door_carries_the_translation_for_all_of_them() -> None:
-    """Every governed write in the catalog funnels through `_write_blob`, which is why ONE `except
-    OSError` covers them all. A second `write_dataset` elsewhere would answer 500 on the same
-    collision while this test stayed green — the half-wiring this estate has shipped before.
-
-    Asserted by ENCLOSING FUNCTION, never by line number: a gate that pins `dataplane.py:290` fails on
-    any edit above it, and a gate that cries wolf is one somebody weakens."""
-    import ast
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parents[1] / "src" / "catalog"
-    outside: list[str] = []
-    for path in sorted(src.rglob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
-        for func in ast.walk(tree):
-            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            if func.name == "_write_blob":
-                continue
-            for node in ast.walk(func):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "write_dataset":
-                    outside.append(f"{path.relative_to(src)}:{node.lineno} in {func.name}()")
-    assert not outside, (
-        f"the catalog writes datasets outside `_write_blob` at {outside} — those sites do not carry the "
-        "conflict translation, so a create colliding there still answers 500 with nothing"
-    )

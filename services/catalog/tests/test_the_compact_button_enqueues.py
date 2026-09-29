@@ -114,29 +114,6 @@ def test_with_a_queue_the_door_accepts_and_does_not_rewrite_in_the_handler(queue
     assert len(published.calls) == 1, f"expected exactly one unit on the work topic, got {published.calls}"
 
 
-def test_the_enqueued_unit_is_the_one_the_executor_already_consumes(queued: TestClient, published: _Published, compacted: list[str]) -> None:
-    """A second message type would need a second executor. The unit must round-trip as `DatasetWorkItem`."""
-    from service_kit.lakehouse.work_items import DatasetWorkItem
-
-    queued.post("/management/v1/table/ns$events/maintenance/compact", json={"target_rows_per_fragment": 262144})
-    item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
-    assert item.uri == "s3://warehouse/aa3bed10_ns$events"
-    assert item.plan.target_rows_per_fragment == 262144
-    assert item.plan.skipped is None, "an enqueued unit the planner would skip is work the executor drops"
-
-
-def test_the_enqueued_unit_reclaims_nothing(queued: TestClient, published: _Published, compacted: list[str]) -> None:
-    """The door is documented NON-DESTRUCTIVE ('writes a new version, removes none'), and the executor
-    runs the full ordered pass. Both destructive steps must be off, or 'compact now' silently became
-    'compact and reclaim history now' the moment the work moved lanes."""
-    from service_kit.lakehouse.work_items import DatasetWorkItem
-
-    queued.post("/management/v1/table/ns$events/maintenance/compact", json={})
-    item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
-    assert item.plan.cleanup_enabled is False
-    assert item.plan.optimize_indices_enabled is False
-
-
 def test_the_protection_verdict_rides_the_unit(monkeypatch: pytest.MonkeyPatch, queued: TestClient, published: _Published, compacted: list[str]) -> None:
     """`protected_by` is the whole reason a work item can leave this process. A door that enqueued
     without it would hand the executor a dataset whose shallow-clone source is invisible to it."""

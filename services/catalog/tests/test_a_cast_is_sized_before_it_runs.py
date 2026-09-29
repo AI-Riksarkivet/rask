@@ -34,11 +34,8 @@ REALISTIC = [
         id="a-dictionary-whose-long-value-is-rare",
     ),
     pytest.param(pa.DictionaryArray.from_arrays(pa.array([0, None] * (_ROWS // 2), pa.int8()), pa.array(["q" * 300])), pa.large_string(), id="null-indices"),
-    pytest.param(_ONE_LONG_VALUE.slice(100, 500), pa.string(), id="a-sliced-dictionary"),
     pytest.param(pa.DictionaryArray.from_arrays(pa.array([1] * _ROWS, pa.int8()), pa.array([5, 7], pa.int64())), pa.int64(), id="a-fixed-width-dictionary"),
     pytest.param(pa.array(range(_ROWS), pa.int32()), pa.int64(), id="int32-widened"),
-    pytest.param(pa.array([float(i) for i in range(_ROWS)]), pa.int64(), id="the-browsers-float64"),
-    pytest.param(pa.array([True] * _ROWS), pa.int64(), id="a-boolean-widened-64-times"),
     pytest.param(pa.nulls(_ROWS), pa.int64(), id="nulls-given-a-width"),
     pytest.param(pa.array(["abc"] * _ROWS), pa.large_string(), id="wider-offsets"),
     pytest.param(

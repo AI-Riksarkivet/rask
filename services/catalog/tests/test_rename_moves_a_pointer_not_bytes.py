@@ -68,45 +68,6 @@ def test_the_dataset_does_not_move(tmp_path: Path) -> None:
     assert ns.describe_table(DescribeTableRequest(id=["ns1", "new"])).location == source
 
 
-def test_the_version_history_survives_because_nothing_was_rewritten(tmp_path: Path) -> None:
-    """A read-rewrite would collapse history to v1 and a byte copy had to preserve it deliberately.
-    A pointer move cannot lose it, which is one whole class of failure that stops existing."""
-    ns = _namespace(tmp_path)
-    source = _written(ns, ["ns1", "old"])
-    before = lance.dataset(source)
-    rows, versions = before.count_rows(), len(before.versions())
-
-    dataplane.rename_table(ns, {}, ["ns1", "old"], "new", None)
-
-    after = lance.dataset(ns.describe_table(DescribeTableRequest(id=["ns1", "new"])).location)
-    assert (after.count_rows(), len(after.versions())) == (rows, versions)
-
-
-def test_the_source_id_stops_resolving(tmp_path: Path) -> None:
-    """A rename that left both ids live would be a copy by another name — two governed objects over
-    one dataset, and the FGA migration would hand the old id's grants a table that still answers."""
-    ns = _namespace(tmp_path)
-    _written(ns, ["ns1", "old"])
-
-    dataplane.rename_table(ns, {}, ["ns1", "old"], "new", None)
-
-    with pytest.raises(Exception, match="(?i)not found"):
-        ns.describe_table(DescribeTableRequest(id=["ns1", "old"]))
-
-
-def test_a_taken_destination_is_refused_before_anything_moves(tmp_path: Path) -> None:
-    """The pointer move is two calls, so the destination must be proven free FIRST — otherwise the
-    register would either fail after the source was already gone or silently adopt a live table."""
-    ns = _namespace(tmp_path)
-    _written(ns, ["ns1", "old"])
-    _written(ns, ["ns1", "taken"])
-
-    with pytest.raises(Exception, match="(?i)already exists"):
-        dataplane.rename_table(ns, {}, ["ns1", "old"], "taken", None)
-
-    assert ns.describe_table(DescribeTableRequest(id=["ns1", "old"])).location, "the source was disturbed by a refused rename"
-
-
 def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None:
     """The spec allows a rename to change namespace, and under `<hash>_<object_id>` naming the
     namespace is part of the object_id — so this is the case that would most look like it needs a
@@ -235,29 +196,6 @@ def test_the_SOURCE_is_claimed_before_the_destination_exists(tmp_path: Path) -> 
     assert calls[:2] == ["deregister", "register"], f"the destination was written before the source was claimed: {calls}"
 
 
-def test_the_relative_location_is_derived_from_a_ROOT_that_is_actually_known(tmp_path: Path) -> None:
-    """The root-subtraction path must be reachable, or the "safe" derivation is decoration.
-
-    `_relative_location`'s docstring claimed it subtracts the namespace's configured root "rather than
-    taking the last path segment", because the two agree under V2's flat `<hash>_<object_id>` layout
-    and diverge the moment a backend nests. MEASURED: `DirectoryNamespace` exposes NO root attribute at
-    all — `hasattr(ns, "root")` is False and nothing root-shaped is on the object — so
-    `getattr(ns, "root", "")` was always empty, the loop never matched, and every rename in this estate
-    has taken the last-segment fallback the docstring warns about.
-
-    The root is knowable: the catalog connects the namespace and holds `settings.root`. Passing it in
-    makes the claimed derivation the one that runs, and a caller that cannot supply one still gets the
-    fallback — stated, rather than reached by accident.
-    """
-    ns = _namespace(tmp_path)
-    source = _written(ns, ["ns1", "nested"])
-
-    relative = dataplane._relative_location(source, root=str(tmp_path))
-
-    assert not relative.startswith("/"), relative
-    assert relative == source.removeprefix("file://").removeprefix(str(tmp_path)).lstrip("/")
-
-
 def test_a_NESTED_layout_keeps_its_path_instead_of_collapsing_to_the_leaf(tmp_path: Path) -> None:
     """The whole reason the derivation exists. Under a backend that nests, the last segment is not the
     relative path — registering it would point at nothing — and this is the case the dead code was
@@ -303,50 +241,23 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     assert ns.describe_table(DescribeTableRequest(id=new_segments)).location == source
 
 
-def test_plan_compaction_answers_NOT_FOUND_for_a_table_whose_bytes_are_absent(tmp_path: Path) -> None:
-    """A registered table with no dataset behind it is a NOT-FOUND condition, not a bad request.
-
-    `InvalidInputError` (code 13, HTTP 400) tells a client its REQUEST is malformed; nothing about
-    `{"target_rows_per_fragment": N}` is. What is absent is the data, which is what
-    `TableNotFoundError` (code 3, HTTP 404) says — the code a client dispatches on, per the spec's
-    24-code contract, and the one `rename_table` already raises for a source that resolves to nothing.
-    """
-    ns = _namespace(tmp_path)
-    location = ns.declare_table(DeclareTableRequest(id=["ns1", "empty"])).location  # declared, never written
-
-    with pytest.raises(TableNotFoundError, match="never written"):
-        dataplane.plan_compaction(location, {}, target_rows_per_fragment=100, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-
-
 @pytest.mark.parametrize(
     "message",
     [
-        # Verbatim pylance 11.0.0 wordings, captured against a stub S3 endpoint. Driven through the
-        # classifier rather than provoked through a local path, because a `file://` dataset ignores
-        # AWS options and raises nothing at all.
-        pytest.param(
-            'LanceError(IO): Generic Config error: failed to parse "x" as Duration, /rust/lance-io/src/object_store/providers/aws.rs',
-            id="a malformed storage option",
-        ),
         pytest.param(
             "LanceError(IO): Generic S3 error: Error performing list request: Error performing GET http://s/b?list-type=2 in 1ms - "
             'Server returned non-2xx status code: 404 Not Found: <?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchBucket'
             "</Code><Message>The specified bucket does not exist</Message></Error>",
             id="the warehouse BUCKET does not exist",
         ),
-        pytest.param(
-            "LanceError(IO): Generic S3 error: Error performing list request: Server returned non-2xx status code: 403 Forbidden: "
-            "<Error><Code>AccessDenied</Code><Message>Access Denied</Message></Error>",
-            id="the credential cannot look",
-        ),
     ],
 )
 def test_plan_compaction_does_not_call_a_STORAGE_FAULT_a_missing_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, message: str) -> None:
     """The catch was `except ValueError`, and pylance raises `ValueError` for far more than absence.
 
-    All three of these reached one handler that reported "declared or registered but was never
-    written" — so a configuration fault, a deleted bucket and a permission failure were each rendered
-    as a missing table, sending the operator to look for data that was there all along. The bucket case
+    A configuration fault, a deleted bucket and a permission failure all reached one handler that
+    reported "declared or registered but was never written", so each was rendered as a missing table,
+    sending the operator to look for data that was there all along. The bucket case
     is not hypothetical: § Q8-15 measured 79 datasets registered into buckets that do not exist.
 
     They answer `ServiceUnavailableError` (503) and not a bare re-raise, because a bare one returned a

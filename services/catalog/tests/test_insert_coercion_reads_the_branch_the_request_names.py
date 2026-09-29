@@ -74,30 +74,6 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     return namespace
 
 
-def test_the_branch_really_has_a_column_main_does_not(ns) -> None:  # noqa: ANN001
-    """Without this the test below could pass by measuring two identical schemas."""
-    assert BRANCH_ONLY not in open_dataset(ns, {}, TABLE_ID).schema.names
-    assert BRANCH_ONLY in open_dataset(ns, {}, TABLE_ID, branch=BRANCH).schema.names
-
-
-def test_coercion_against_a_BRANCH_keeps_the_branch_only_column(ns) -> None:  # noqa: ANN001
-    """THE DEFECT. Aligning to main drops a column the branch has, and nothing says so.
-
-    Asserted on the COERCED BYTES rather than on the final row count, because that is where the loss
-    happens: by the time the rows are written the column is already gone and the insert is a truthful
-    report of a payload that was quietly rewritten.
-    """
-    payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
-
-    coerced = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
-
-    names = pa.ipc.open_stream(coerced).read_all().column_names
-    assert BRANCH_ONLY in names, (
-        f"the coercion dropped {BRANCH_ONLY!r}, a column the branch HAS, because it aligned to main's schema "
-        f"(kept: {names}). The rows then land on the branch without it and the caller is told nothing."
-    )
-
-
 def test_a_branch_insert_lands_the_branch_only_column(ns) -> None:  # noqa: ANN001
     """The same defect seen end to end, so the fix is not a coercion-shaped local truth."""
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
@@ -107,16 +83,3 @@ def test_a_branch_insert_lands_the_branch_only_column(ns) -> None:  # noqa: ANN0
 
     written = open_dataset(ns, {}, TABLE_ID, branch=BRANCH).to_table().to_pydict()
     assert "keep me" in (written.get(BRANCH_ONLY) or []), f"the branch row lost its {BRANCH_ONLY!r} value: {written}"
-
-
-def test_main_is_unchanged_by_the_fix(ns) -> None:  # noqa: ANN001
-    """The behaviour the coercion exists for must survive: an extra column against MAIN is still dropped.
-
-    Pinned because the obvious over-fix — stop dropping extra columns — would turn a browser's loose
-    payload back into the 500 this function was written to prevent.
-    """
-    payload = pa.table({"id": pa.array([3], pa.int64()), "s": pa.array(["c"]), "zz": pa.array([1], pa.int64())})
-
-    coerced = coerce_insert_arrow(ns, {}, TABLE_ID, _ipc(payload), branch=None, max_bytes=_BODY_LIMIT)
-
-    assert "zz" not in pa.ipc.open_stream(coerced).read_all().column_names

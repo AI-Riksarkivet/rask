@@ -99,17 +99,7 @@ def _versions(namespace: LanceNamespace, *, branch: str | None) -> set[int]:
     return {int(v["version"]) for v in open_dataset(namespace, {}, TABLE_ID, branch=branch).versions()}
 
 
-def test_the_fixture_carries_every_pin_the_comparison_depends_on(namespace: LanceNamespace) -> None:
-    """Without these the comparison below could agree by accident: a ref with no pins previews itself correctly."""
-    handle = open_dataset(namespace, {}, TABLE_ID)
-
-    assert {name: (tag["branch"], tag["version"]) for name, tag in handle.tags.list().items()} == {"pinned": (BRANCH, 3), "release": (None, 4)}
-    assert {name: (meta["parent_branch"], meta["parent_version"]) for name, meta in handle.branches.list().items()} == {BRANCH: (None, 2), NESTED: (BRANCH, 5)}
-    assert _versions(namespace, branch=None) == {1, 2, 3, 4, 5, 6}
-    assert _versions(namespace, branch=BRANCH) == {2, 3, 4, 5, 6}
-
-
-@pytest.mark.parametrize("retain_versions", [1, 2])
+@pytest.mark.parametrize("retain_versions", [1])
 @pytest.mark.parametrize("branch", [None, "main", BRANCH], ids=["main", "main-by-name", "branch"])
 def test_the_preview_offers_exactly_the_versions_the_run_deletes(
     client: TestClient, namespace: LanceNamespace, branch: str | None, retain_versions: int

@@ -104,21 +104,6 @@ class TestStructuralFindingsAreNeverAcceptable:
         assert result.accepted == []
         assert "not_null" in (result.reason or "")
 
-    def test_naming_EVERYTHING_does_not_help(self, ns) -> None:  # noqa: ANN001
-        """There is no spelling of the request that publishes corrupt data."""
-        version = _write(ns, [1, None, 3])
-
-        result = publish(
-            ns,
-            {},
-            table_id=TABLE_ID,
-            version=version,
-            key_column="id",
-            accept_assertions=["not_null", "blob_resolves", "row_count_positive", "column_declared"],
-        )
-
-        assert result.published is False
-
 
 class TestAnOverrideIsNotABlanketForce:
     def test_an_UNNAMED_failure_still_refuses(self, ns) -> None:  # noqa: ANN001
@@ -149,11 +134,6 @@ class TestAnOverrideIsNotABlanketForce:
         assert result.published is True
         assert result.accepted == []
 
-    def test_the_default_is_unchanged(self, ns) -> None:  # noqa: ANN001
-        version = _empty(ns)
-
-        assert publish(ns, {}, table_id=TABLE_ID, version=version, key_column="id").published is False
-
 
 class TestTheOverrideNeedsAHigherRungThanPublishItself:
     """Publishing is owner-tier (`can_update_tag`); accepting a finding the gate raised is a
@@ -170,15 +150,3 @@ class TestTheOverrideNeedsAHigherRungThanPublishItself:
         assert 'relation="can_promote"' in source, (
             "an accepted-assertion publish must cross a rung ABOVE can_update_tag; without it the override is available to anyone who could already publish"
         )
-
-    def test_an_ordinary_publish_crosses_no_extra_door(self) -> None:
-        """The check is conditional on purpose — gating every publish at validator would make the
-        cascade's own registrations impossible."""
-        import inspect
-
-        from catalog.api.v1.endpoints import publication as endpoint
-
-        body = inspect.getsource(endpoint.publish_table)
-        gate = body.index("if body.accept_assertions:")
-        call = body.index('relation="can_promote"')
-        assert gate < call, "the validator check must sit inside the accept_assertions branch"

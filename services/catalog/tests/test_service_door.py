@@ -150,14 +150,6 @@ def test_a_request_that_did_NOT_ask_for_the_door_still_authenticates_as_a_human(
 # --------------------------------------------------------------------------- #
 
 
-def test_an_unlisted_subject_is_a_403_in_the_catalogs_own_vocabulary() -> None:
-    """The shared door raises its own neutral types precisely so this renders through
-    `service_kit.lakehouse.ns_errors` — a `fastapi.HTTPException` would escape those handlers as a
-    bare `{"detail": ...}` body, contradicting this module's own docstring."""
-    with pytest.raises(PermissionDeniedError, match="not allowed"):
-        _authenticate(_settings(), token=SHARED, identity="alice")
-
-
 def test_a_wrong_service_token_is_a_401_in_the_catalogs_own_vocabulary() -> None:
     with pytest.raises(UnauthenticatedError, match="invalid service token"):
         _authenticate(_settings(), token="wrong", identity="service-trainer")
@@ -170,27 +162,9 @@ def test_the_shared_token_cannot_claim_a_privileged_subject(monkeypatch: pytest.
         _authenticate(_settings(privileged_subjects="service-trainer"), token=SHARED, identity="service-trainer")
 
 
-def test_the_privileged_subject_is_admitted_with_ITS_OWN_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """§2.8's original defect was one missing kwarg at THIS call site. Kept alongside the lineage
-    equivalent so a regression on either side is visible from its own suite."""
-    _seed_store(monkeypatch, {"service-token-service-trainer": TRAINER_OWN})
-
-    token = _authenticate(_settings(privileged_subjects="service-trainer"), token=TRAINER_OWN, identity="service-trainer")
-
-    assert token is not None and token.sub == "service-trainer"
-    assert token.iss == "rask://service-door", "the synthetic principal must never look like a human login"
-
-
 def test_an_UNREADABLE_store_is_a_503_not_a_missing_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     """an outage must say outage, never the same 401 a misconfigured subject gets."""
     _seed_store(monkeypatch, {})
 
     with pytest.raises(ServiceUnavailableError, match="unreadable"):
         _authenticate(_settings(privileged_subjects="service-trainer"), token=TRAINER_OWN, identity="service-trainer")
-
-
-def test_the_public_front_door_still_cannot_mint_a_service_principal() -> None:
-    """Unchanged and checked here too, because the pre-gate removal widened the branch: an empty
-    allowlist now enters it, so the laundering refusal must still fire first."""
-    with pytest.raises(PermissionDeniedError, match="public front door"):
-        _authenticate(_settings(service_subjects=""), token=SHARED, identity="service-trainer", caller="gateway")

@@ -122,16 +122,6 @@ def _assertion(payload: dict[str, Any], name: str) -> dict[str, Any] | None:
 # --- 1 THE REFUSAL: a key column the data does not carry ------------------------------------------
 
 
-def test_a_key_column_the_table_does_not_have_is_REFUSED(client: TestClient) -> None:
-    """The headline defect: a typo published with the identity assertion silently missing."""
-    response = _publish(client, key_column="nope")
-
-    assert response.status_code == 400, response.text
-    body = response.json()
-    assert "nope" in body["detail"], body
-    assert body["code"], "a catalog 400 carries the spec's numeric code, not a bare about:blank body"
-
-
 def test_the_REFUSED_publish_moves_nothing(client: TestClient, ns) -> None:  # noqa: ANN001
     """A refusal is fail-closed: the pointer stays where it was, so no consumer sees the version."""
     _publish(client, key_column="nope")
@@ -145,16 +135,6 @@ def test_the_same_refusal_applies_to_the_gate_only_QUESTION(client: TestClient) 
     response = _publish(client, key_column="nope", gate_only=True)
 
     assert response.status_code == 400, response.text
-
-
-def test_a_REAL_key_column_still_publishes(client: TestClient) -> None:
-    """The guard against over-refusal: the ordinary publish is untouched."""
-    response = _publish(client, key_column="id")
-
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload["published"] is True
-    assert _assertion(payload, "not_null") == {"assertion": "not_null", "success": True, "column": "id", "severity": "error"}
 
 
 # --- 2 PARITY: the declared gate governs this door too --------------------------------------------

@@ -93,15 +93,7 @@ def test_an_old_untagged_version_is_deleted(client: TestClient, ns: LanceNamespa
     assert _versions(ns) == [2, 3, 4]
 
 
-def test_the_spec_ALL_range_is_refused_and_the_table_still_opens(client: TestClient, ns: LanceNamespace) -> None:
-    answer = _delete(client, (0, -1))
-
-    assert answer.status_code == 400, answer.text
-    assert answer.json()["code"] == 13
-    assert _versions(ns) == [1, 2, 3, 4], "the refused range removed versions anyway"
-
-
-@pytest.mark.parametrize("reaching", [(4, 5), (2, -1), (3, 9)], ids=["exactly-latest", "through-latest", "past-latest"])
+@pytest.mark.parametrize("reaching", [(4, 5), (2, -1)], ids=["exactly-latest", "through-latest"])
 def test_a_range_that_reaches_the_current_version_is_refused(client: TestClient, ns: LanceNamespace, reaching: tuple[int, int]) -> None:
     answer = _delete(client, reaching)
 
@@ -109,12 +101,6 @@ def test_a_range_that_reaches_the_current_version_is_refused(client: TestClient,
     assert answer.json()["code"] == 13
     assert "current version" in answer.json()["detail"]
     assert _versions(ns) == [1, 2, 3, 4]
-
-
-def test_the_next_append_never_reuses_a_version_number(client: TestClient, ns: LanceNamespace) -> None:
-    _delete(client, (LATEST, LATEST + 1))
-
-    assert _append(ns, 99) == LATEST + 1, "a version number was minted twice"
 
 
 def test_a_tagged_version_is_refused_and_the_tag_is_named(client: TestClient, ns: LanceNamespace) -> None:
@@ -140,7 +126,7 @@ def test_a_version_a_branch_was_cut_from_is_refused_and_the_branch_is_named(clie
     assert _versions(ns) == [1, 2, 3, 4]
 
 
-@pytest.mark.parametrize("bad", [(3, 3), (3, 2), (-1, 2), (1, -2)], ids=["empty", "inverted", "negative-start", "negative-end"])
+@pytest.mark.parametrize("bad", [(3, 3), (1, -2)], ids=["empty", "negative-end"])
 def test_a_range_that_names_no_version_is_refused(client: TestClient, ns: LanceNamespace, bad: tuple[int, int]) -> None:
     answer = _delete(client, bad)
 

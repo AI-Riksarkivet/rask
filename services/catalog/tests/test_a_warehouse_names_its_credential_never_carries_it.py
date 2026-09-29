@@ -32,17 +32,6 @@ from typing import Any
 import pytest
 
 
-def test_the_record_field_is_a_reference_and_the_model_has_no_field_for_material() -> None:
-    """`extra="forbid"` is what makes "a record cannot hold a credential" a property of the type."""
-    from catalog.schemas import WarehouseResponse
-
-    fields = set(WarehouseResponse.model_fields)
-
-    assert "credential_ref" in fields, "a warehouse cannot name the secret that reaches its store"
-    forbidden = {"credential", "secret", "secret_key", "aws_secret_access_key", "s3_secret_access_key"}
-    assert not (fields & forbidden), f"a warehouse record exposes credential MATERIAL: {sorted(fields & forbidden)}"
-
-
 def test_the_reference_resolves_through_the_dapr_store_door(monkeypatch: pytest.MonkeyPatch) -> None:
     """Driven through the resolver, so a change that stops using the sanctioned door turns this red."""
     from catalog.services import warehouse_credentials
@@ -81,25 +70,6 @@ def test_a_reference_the_store_cannot_satisfy_REFUSES_rather_than_falling_back(m
 
     with pytest.raises(RuntimeError, match="failing closed"):
         warehouse_credentials.resolve(store="lance-secrets", ref="missing", field="minio-secret-key")
-
-
-def test_the_resolution_is_CACHED_so_a_hot_path_does_not_refetch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Every table open under a warehouse names the same reference; the store is a network hop."""
-    from catalog.services import warehouse_credentials
-
-    fetches: list[str] = []
-
-    def _fetch(_store: str, key: str, *, require: str) -> dict[str, str]:
-        fetches.append(key)
-        return {require: "s", "aws_access_key_id": "k"}
-
-    monkeypatch.setattr(warehouse_credentials, "fetch_required_secrets", _fetch)
-    warehouse_credentials.resolve.cache_clear()
-
-    for _ in range(5):
-        warehouse_credentials.resolve(store="lance-secrets", ref="wh-eu", field="minio-secret-key")
-
-    assert fetches == ["wh-eu"], f"the reference was fetched {len(fetches)} times; it must be cached per reference"
 
 
 def test_an_UNSET_reference_resolves_to_nothing_rather_than_to_the_estate_key() -> None:

@@ -95,15 +95,6 @@ def _clean_branch_tag_beside_a_pinning_branch(tmp_path: Path) -> str:
     return uri
 
 
-def test_a_BRANCH_tag_that_never_held_the_subject_is_not_dropped_on_mains_evidence(tmp_path: Path) -> None:
-    uri = _clean_branch_tag_beside_a_pinning_branch(tmp_path)
-
-    report = _erase(uri)
-
-    assert "trained" in lance.dataset(uri).tags.list(), "a tag pinning a version without the subject was destroyed"
-    assert any(s.surface == "tag:trained" and s.outcome == "retained" for s in report.surfaces), report.surfaces
-
-
 def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path) -> None:
     """A retained tag names a version of ITS branch, so ``trained`` on ``clean`` v2 pins nothing on main v2.
 

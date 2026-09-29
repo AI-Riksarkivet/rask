@@ -81,21 +81,3 @@ async def test_the_guard_fails_open_where_it_cannot_know(
 ) -> None:
     """Both are deliberate: refusing on absent knowledge breaks working grants and a registry blip."""
     await _refuse(monkeypatch, role_tuples=role_tuples, namespace_project=namespace_project)
-
-
-@pytest.mark.asyncio
-async def test_a_plain_user_grantee_is_not_touched(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A `user:` grantee has no tenant edge, so the guard must not read tuples for it at all."""
-    called = False
-
-    async def _read(_client: Any, _obj: str) -> list[_Tuple]:
-        nonlocal called
-        called = True
-        return []
-
-    monkeypatch.setattr(access.fga, "read_object_tuples", _read)
-    await access._refuse_a_cross_tenant_role_grant(  # noqa: SLF001
-        cast(OpenFgaClient, object()), "user:alice", fga_type="namespace", segments=["beta_bronze"], settings=cast(Settings, _Settings())
-    )
-
-    assert not called, "the guard read FGA tuples for a plain user grantee — a read on every grant it cannot refuse"

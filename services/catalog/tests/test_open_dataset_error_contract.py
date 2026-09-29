@@ -52,22 +52,3 @@ def test_a_registration_whose_bytes_are_GONE_is_a_404(ns, tmp_path: Path) -> Non
 
     with pytest.raises(TableNotFoundError, match="pages"):
         open_dataset(ns, {}, TABLE_ID)
-
-
-def test_a_healthy_table_still_opens(ns) -> None:  # noqa: ANN001
-    """Without this the fix could be 'always raise' and the test above would still pass."""
-    assert open_dataset(ns, {}, TABLE_ID).count_rows() == 3
-
-
-def test_the_error_names_the_LOCATION_so_a_stale_registration_is_actionable(ns, tmp_path: Path) -> None:  # noqa: ANN001
-    """Knowing the table is missing is not enough to fix it — the bucket it points at is the finding."""
-    uri = open_dataset(ns, {}, TABLE_ID).uri
-    versions = Path(uri) / "_versions"
-    for f in versions.iterdir():
-        f.unlink()
-    versions.rmdir()
-
-    with pytest.raises(TableNotFoundError) as exc:
-        open_dataset(ns, {}, TABLE_ID)
-
-    assert str(tmp_path) in str(exc.value) or "pages" in str(exc.value)

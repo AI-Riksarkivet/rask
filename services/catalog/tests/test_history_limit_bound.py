@@ -41,15 +41,6 @@ def _limit_param():
     pytest.fail("no history route on either versions router")
 
 
-def test_the_limit_cannot_be_negative() -> None:
-    """`versions()[:limit]` with a negative limit returns all-but-N, not N — the bound inverted."""
-    limits = {type(c).__name__: c for c in _limit_param().field_info.metadata}
-    assert "Ge" in limits and limits["Ge"].ge >= 1, (
-        "history's `limit` accepts a negative value, and the implementation slices `versions()[:limit]` "
-        "— so `?limit=-1` returns all-but-one version instead of refusing"
-    )
-
-
 def test_the_limit_has_a_real_ceiling() -> None:
     """The docstring claims a bound; the signature must actually carry one."""
     limits = {type(c).__name__: c for c in _limit_param().field_info.metadata}

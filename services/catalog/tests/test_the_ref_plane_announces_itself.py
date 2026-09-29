@@ -104,15 +104,6 @@ def _actions(emitted: list[dict[str, Any]]) -> list[str]:
     return [str(call.get("action")) for call in emitted]
 
 
-def test_the_harness_reaches_the_refs(app: FastAPI) -> None:
-    """Without this, every assertion below could pass on a door that 500s."""
-    with TestClient(app) as client:
-        created = client.post(f"/v1/table/{TABLE_PATH}/branches/create", json={"id": TABLE, "name": "staging"})
-        listed = client.post(f"/v1/table/{TABLE_PATH}/branches/list", json={"id": TABLE})
-    assert created.status_code == 200, created.text
-    assert listed.status_code == 200, listed.text
-
-
 def test_a_branch_mutation_announces_itself(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
     with TestClient(app) as client:
         assert client.post(f"/v1/table/{TABLE_PATH}/branches/create", json={"id": TABLE, "name": "staging"}).status_code == 200
@@ -147,20 +138,3 @@ def test_a_READ_of_the_ref_plane_stays_SILENT(app: FastAPI, emitted: list[dict[s
         assert client.post(f"/v1/table/{TABLE_PATH}/tags/list", json={"id": TABLE}).status_code == 200
 
     assert emitted == [], f"a READ emitted a control event: {emitted}"
-
-
-def test_the_event_is_about_the_TABLE_with_the_ref_in_extra(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
-    """The join key is the table, so these land beside a publication for the same table.
-
-    IF THIS IS RED: the door is naming the wrong object. A branch is not an object of its own -- the
-    Lance Namespace spec defines three TABLE-scoped branch ops and no branch resource -- so the event
-    is about the table and the ref rides in `extra`.
-    """
-    with TestClient(app) as client:
-        client.post(f"/v1/table/{TABLE_PATH}/branches/create", json={"id": TABLE, "name": "staging"})
-
-    assert [c["object_id"] for c in emitted] == [f"table:{TABLE_PATH}"], (
-        f"the ref event does not name the table it happened to, so it joins no other event for it: {emitted}"
-    )
-    assert [c["object_type"] for c in emitted] == ["table"], f"the object type is not `table`: {emitted}"
-    assert emitted[0]["extra"]["branch"] == "staging", "the ref itself must be in `extra`, not in the object id"

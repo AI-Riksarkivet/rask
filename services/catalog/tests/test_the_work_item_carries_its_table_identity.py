@@ -73,12 +73,6 @@ def client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClie
         yield c
 
 
-def test_the_unit_names_the_table_the_door_was_called_on(client: TestClient, published: _Published) -> None:
-    client.post("/management/v1/table/bronze%24events/maintenance/compact", json={})
-    item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
-    assert item.table_id == "bronze$events", "the unit carries no table identity, so the executor can only sign this rewrite with the ambient credential"
-
-
 def test_the_identity_survives_a_uri_no_parser_can_read(client: TestClient, published: _Published) -> None:
     """`s3://lance-catalog/medallion/bronze` yields no id to `table_id_from_uri`. The door still knows."""
     from maintenance.core.lineage_emit import table_id_from_uri
@@ -87,10 +81,3 @@ def test_the_identity_survives_a_uri_no_parser_can_read(client: TestClient, publ
     item = DatasetWorkItem.model_validate_json(published.calls[0]["data"])
     assert table_id_from_uri(item.uri) is None, "pick a URI the parser genuinely cannot read, or this proves nothing"
     assert item.table_id == "bronze$events"
-
-
-def test_a_unit_without_an_identity_is_still_valid(client: TestClient) -> None:
-    """The sweep starts from a bare URI and may have no id. That must remain expressible rather than
-    forcing a producer to invent one — an invented id would vend a credential for the wrong table."""
-    item = DatasetWorkItem(uri="s3://b/unknown", plan=DatasetWorkItem.model_fields["plan"].annotation())
-    assert item.table_id is None

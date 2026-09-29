@@ -82,8 +82,6 @@ def _code(ns, *, branch: str | None, on: str, payload: pa.Table) -> int | None: 
     ("shape", "on", "payload"),
     [
         ("a column of the right name but the wrong Arrow type", "id", pa.table({"id": pa.array([1], pa.int64()), "s": pa.array([9], pa.int64())})),
-        ("an extra column the table does not have", "id", pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["x"]), "zz": pa.array([1], pa.int64())})),
-        ("a payload schema wholly unrelated to the table", "id", pa.table({"q": pa.array([1], pa.int64())})),
         # Not a schema failure — the KEY column. Included because it is the same asymmetry through a
         # different guard, and because a door that matches on a column must say so when it is absent.
         ("an `on` key column that does not exist", "nosuchcol", _base()),

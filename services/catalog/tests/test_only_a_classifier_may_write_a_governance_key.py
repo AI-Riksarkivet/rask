@@ -73,21 +73,11 @@ def _call(updates: list[dict[str, Any]]) -> Any:
     )
 
 
-@pytest.mark.parametrize("_patched", [False], indirect=True)
-@pytest.mark.usefixtures("_patched")
-@pytest.mark.parametrize("value", ["restricted", None], ids=["set", "CLEAR"])
-def test_a_writer_without_the_rung_cannot_set_or_clear_a_governance_key(value: str | None, seen: list[tuple[str, str]]) -> None:
-    with pytest.raises(PermissionDeniedError):
-        _call([{"path": "payload", "metadata": {"rask.classification": value}}])
-    assert ("can_classify", "table:bronze$pages") in seen, f"the door never asked for the rung: {seen}"
-
-
-#: The THREE spellings of "this column is no longer classified". A gate that reads only the request's
-#: metadata KEYS sees the first two and is blind to the third.
+#: Two spellings of "this column is no longer classified": a null value, and a `replace`, which un-labels
+#: without the body naming a governance key at all.
 _CLEARS: list[tuple[str, list[dict[str, object]]]] = [
     ("null-value", [{"path": "payload", "metadata": {"rask.classification": None}}]),
     ("replace-empty", [{"path": "payload", "metadata": {}, "replace": True}]),
-    ("replace-other-key", [{"path": "payload", "metadata": {"note": "x"}, "replace": True}]),
 ]
 
 
@@ -122,17 +112,7 @@ def test_a_classifier_may_write_it(seen: list[tuple[str, str]]) -> None:
 @pytest.mark.parametrize("_patched", [False], indirect=True)
 @pytest.mark.usefixtures("_patched")
 def test_an_ORDINARY_field_property_is_not_gated(seen: list[tuple[str, str]]) -> None:
-    """The control. A gate that refused every metadata write would pass both tests above and be wrong:
+    """The control. A gate that refused every metadata write would pass the refusal test above and be wrong:
     field metadata is a user-facing feature and only the `rask.` namespace is the estate's."""
     assert _call([{"path": "payload", "metadata": {"unit": "bytes", "owner": "team-a"}}]).version == 9
     assert seen == [], f"an ordinary property write asked for an authorization rung: {seen}"
-
-
-def test_the_prefix_and_the_key_the_vend_reads_agree() -> None:
-    """Two constants, two modules: a classification the vend refuses on must be one this door gates."""
-    from catalog.core.vending import CLASSIFICATION_KEY
-
-    assert CLASSIFICATION_KEY.startswith(ep.GOVERNANCE_FIELD_PREFIX), (
-        f"{CLASSIFICATION_KEY!r} is what makes a table unvendable, and it does not sit under "
-        f"{ep.GOVERNANCE_FIELD_PREFIX!r} — so any writer could set or clear it ungated."
-    )

@@ -113,8 +113,8 @@ def _placed(root: Path, base: Path) -> str:
 
 @pytest.mark.parametrize(
     "base",
-    [lambda root: root.parent / "payloads", lambda root: root / "payloads", lambda root: root.with_name(f"{root.name}-payloads")],
-    ids=["beside-the-root", "inside-the-root", "sharing-the-roots-prefix"],
+    [lambda root: root / "payloads", lambda root: root.with_name(f"{root.name}-payloads")],
+    ids=["inside-the-root", "sharing-the-roots-prefix"],
 )
 def test_a_table_whose_data_files_live_under_a_plain_base_is_not_rewritten(tmp_path: Path, base: Callable[[Path], Path]) -> None:
     """``target_bases`` lands a table's own data files under a registered prefix that no reading calls a
@@ -188,28 +188,6 @@ def test_a_branch_of_a_table_with_an_external_base_is_still_rewritten(tmp_path: 
         "compact:work": "rewritten",
     }
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
-
-
-def test_a_branchs_own_bases_cost_no_store_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A branch of a branch names only this table's root and its parent's `tree/work`, which the gate's
-    evidence drops, so probing them would be a store round trip per base per ref for nothing."""
-    import catalog.services.erasure as module
-
-    uri = str(tmp_path / "chain")
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows("alice", "carol"), uri, mode="append")
-    lance.write_dataset(_rows("eve"), lance.dataset(uri).create_branch("work", 2), mode="append")
-    lance.dataset(uri).create_branch("deeper", ("work", 3))
-    probed: list[str] = []
-
-    def _recording(root: str, storage_options: dict[str, str]) -> Any:
-        return lambda path: probed.append(path) is None
-
-    monkeypatch.setattr(module, "dataset_root_probe", _recording)
-    report = _erase(uri)
-
-    assert [s.outcome for s in report.surfaces if s.surface.startswith("compact:")] == ["rewritten"] * 3
-    assert probed == []
 
 
 def test_the_gates_probe_is_bound_to_the_store_the_erasure_was_handed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

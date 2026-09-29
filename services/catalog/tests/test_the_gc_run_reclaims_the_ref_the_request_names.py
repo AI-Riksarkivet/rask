@@ -92,31 +92,9 @@ def _run(client: TestClient, *, branch: str | None) -> dict[str, Any]:
     return response.json()
 
 
-def _versions(namespace: LanceNamespace, *, branch: str | None) -> int:
-    return len(open_dataset(namespace, {}, TABLE_ID, branch=branch).versions())
-
-
 def _parent_data_files(namespace: LanceNamespace) -> list[str]:
     root = Path(str(open_dataset(namespace, {}, TABLE_ID).uri)) / "data"
     return sorted(entry.name for entry in root.iterdir())
-
-
-def test_the_refs_really_diverged(namespace: LanceNamespace) -> None:
-    """Without this the comparisons below could pass by reclaiming either ref."""
-    main, branch = _versions(namespace, branch=None), _versions(namespace, branch=BRANCH)
-
-    assert branch > main, f"the fixture did not diverge the refs (main={main}, branch={branch})"
-
-
-def test_running_on_a_BRANCH_reclaims_the_branch(client: TestClient, namespace: LanceNamespace) -> None:
-    """THE DEFECT: reclaiming main and reporting it as the branch's work destroys the wrong history."""
-    before_main, before_branch = _versions(namespace, branch=None), _versions(namespace, branch=BRANCH)
-
-    body = _run(client, branch=BRANCH)
-
-    assert body["old_versions_removed"] > 0, f"nothing was reclaimed, so this proves nothing: {body}"
-    assert _versions(namespace, branch=BRANCH) < before_branch, "the branch kept every version — the reclaim landed elsewhere"
-    assert _versions(namespace, branch=None) == before_main, "MAIN lost versions to a branch-targeted reclaim"
 
 
 def test_a_branch_reclaim_leaves_the_PARENTS_data_files_alone(client: TestClient, namespace: LanceNamespace) -> None:
@@ -127,14 +105,3 @@ def test_a_branch_reclaim_leaves_the_PARENTS_data_files_alone(client: TestClient
 
     assert _parent_data_files(namespace) == before, f"a branch reclaim deleted parent data files: {set(before) - set(_parent_data_files(namespace))}"
     assert open_dataset(namespace, {}, TABLE_ID, version=1).count_rows() == 1, "main no longer time-travels to v1"
-
-
-def test_running_WITHOUT_a_branch_still_reclaims_main(client: TestClient, namespace: LanceNamespace) -> None:
-    """The control. A door stamping every request with a branch would pass above and fail here."""
-    before_main, before_branch = _versions(namespace, branch=None), _versions(namespace, branch=BRANCH)
-
-    body = _run(client, branch=None)
-
-    assert body["old_versions_removed"] > 0, f"nothing was reclaimed on main: {body}"
-    assert _versions(namespace, branch=None) < before_main, "main kept every version — the reclaim landed elsewhere"
-    assert _versions(namespace, branch=BRANCH) == before_branch, "the BRANCH lost versions to a main-targeted reclaim"

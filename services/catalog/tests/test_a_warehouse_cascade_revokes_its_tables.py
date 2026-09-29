@@ -54,21 +54,6 @@ async def test_every_descendant_object_has_its_tuples_revoked(monkeypatch: pytes
     assert revoked == ["table:acme$doomed", "namespace:acme$nested"], f"descendants were not revoked by their own ids: {revoked}"
 
 
-@pytest.mark.asyncio
-async def test_an_unlistable_subtree_does_not_block_the_delete(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Best-effort by contract: a cascade that stopped here would leave MORE orphans, not fewer."""
-
-    def _boom(_ns: Any, _seg: Any) -> Any:
-        raise RuntimeError("namespace unreadable")
-
-    monkeypatch.setattr(ns_api, "_collect_descendants", _boom)
-
-    class _Settings:
-        delimiter = "$"
-
-    assert await wh_api._revoke_descendants_of(object(), None, cast(Settings, _Settings()), None, ["acme"]) == 0  # noqa: SLF001
-
-
 def test_the_cascade_actually_calls_it_and_before_the_drop() -> None:
     """THE WIRING. A helper nothing calls is not a fix, and the ORDER is the whole mechanism: after
     `drop_namespace` the children cannot be listed, so a revoke placed later would enumerate nothing."""

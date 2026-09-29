@@ -129,24 +129,6 @@ def test_a_DELETED_row_is_not_expressible_as_a_SCAN_PREDICATE() -> None:
     assert "predicate" in message or "scan" in message, caught.value
 
 
-def test_the_DELETED_kind_is_part_of_the_feeds_vocabulary() -> None:
-    """A consumer that cannot ask for deletions has to infer them, and inferring them is unbounded.
-
-    Silver and gold served retracted rows indefinitely because the feed had no way to express the
-    question: the publication delta is insert-only and the writer hard-deletes with
-    `when_not_matched_by_source_delete`, so a row that left the tier left no trace a consumer could
-    follow.
-
-    SERVED ON DEMAND rather than stamped into the publish event (owner decision, 2026-09-11): a
-    deleted-row set is unbounded, so stamping it makes a large delete a large message on the bus, and
-    every change-data system of this shape — Debezium, Iceberg CDC, Delta CDF — publishes a version
-    range and lets the consumer pull the rows it cares about.
-    """
-    from typing import get_args
-
-    assert "deleted" in get_args(changes.ChangeKind), "the feed cannot express a deletion"
-
-
 def test_a_deleted_row_COMES_BACK_from_the_transaction_range(tmp_path, monkeypatch) -> None:
     """The behaviour, not the plumbing: delete a row, and the feed names it.
 

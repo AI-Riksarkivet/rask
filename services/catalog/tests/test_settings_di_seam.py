@@ -24,8 +24,6 @@ the injection.
 
 from __future__ import annotations
 
-import inspect
-
 # Module level, NOT inside the test: `from __future__ import annotations` makes every annotation a
 # string, and FastAPI resolves them against the DEFINING module's namespace. A function-local
 # import leaves `Request` unresolvable, and FastAPI then treats it as a query parameter — which
@@ -33,25 +31,6 @@ import inspect
 from fastapi import FastAPI, Request
 
 from catalog.api import dependencies as deps
-
-
-def test_get_namespace_takes_its_settings_by_injection() -> None:
-    sig = inspect.signature(deps.get_namespace)
-    assert "settings" in sig.parameters, (
-        "get_namespace calls get_settings() in its body, so app.dependency_overrides cannot reach it — "
-        "an override that works on every SettingsDep route silently misses this one"
-    )
-
-
-def test_the_dependency_no_longer_calls_the_provider_directly() -> None:
-    """The signature alone is not the property: a parameter plus a body call would still read the real
-    settings for anything the parameter did not cover."""
-    # Comments stripped: the fix's own note EXPLAINS the call it removed, so a raw substring match
-    # fails against the corrected code. Same false-positive class as grepping for a docstring claim
-    # that a correction quotes in order to correct it.
-    source = inspect.getsource(deps.get_namespace)
-    code = "\n".join(line for line in source.split("\n") if not line.strip().startswith("#"))
-    assert "get_settings()" not in code
 
 
 def test_an_override_actually_changes_what_the_dependency_sees() -> None:

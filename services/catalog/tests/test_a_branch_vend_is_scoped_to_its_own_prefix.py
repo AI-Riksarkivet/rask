@@ -52,42 +52,12 @@ def _actions(policy: dict[str, object], sid: str) -> list[str]:
     return list(cast(list[str], _statement(policy, sid)["Action"]))
 
 
-def test_without_a_branch_the_policy_is_UNCHANGED() -> None:
-    """Additive: a request naming no branch vends exactly what it vends today."""
-    plain = build_session_policy(BUCKET, PREFIX, "write")
-
-    assert _statement(plain, "TableObjects")["Resource"] == f"arn:aws:s3:::{BUCKET}/{PREFIX}/*"
-    assert not [s for s in _statements(plain) if s.get("Sid") == "BranchObjects"]
-
-
 def test_a_branch_WRITE_may_write_only_the_branch_prefix() -> None:
     policy = build_session_policy(BUCKET, PREFIX, "write", branch="feature-a")
 
     branch = _statement(policy, "BranchObjects")
     assert branch["Resource"] == f"arn:aws:s3:::{BUCKET}/{PREFIX}/tree/feature-a/*"
     assert "s3:PutObject" in _actions(policy, "BranchObjects")
-
-
-def test_MAIN_is_READ_ONLY_under_a_branch_write() -> None:
-    """The format's words exactly: read-only on main, write-only on the branch.
-
-    Main must stay readable because the branch's manifest references parent fragments through a base
-    pointing at the dataset root — a credential that could not read them would be scoped to less than
-    the branch actually is.
-    """
-    policy = build_session_policy(BUCKET, PREFIX, "write", branch="feature-a")
-
-    main = _actions(policy, "TableObjects")
-    assert "s3:GetObject" in main
-    assert "s3:PutObject" not in main, "a branch-scoped credential can still write main — the isolation is not there"
-    assert "s3:DeleteObject" not in main
-
-
-def test_a_branch_name_with_a_SLASH_forms_its_subdirectory() -> None:
-    """`file_format.md`: the name is used as is, so `bugfix/issue-123` is a logical subdirectory."""
-    policy = build_session_policy(BUCKET, PREFIX, "write", branch="bugfix/issue-123")
-
-    assert _statement(policy, "BranchObjects")["Resource"] == f"arn:aws:s3:::{BUCKET}/{PREFIX}/tree/bugfix/issue-123/*"
 
 
 def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:

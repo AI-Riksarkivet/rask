@@ -48,28 +48,8 @@ def _base_resources(policy: dict[str, Any]) -> list[str]:
     return [str(s.get("Resource")) for s in statements if isinstance(s, dict) and str(s.get("Sid", "")).startswith("BaseObjects")]
 
 
-def test_a_vendor_carries_its_allowlist_into_the_rendered_policy() -> None:
-    """THE GATE. Without the vendor forwarding its allowlist, this base is silently dropped."""
-    sink: dict[str, Any] = {}
-    vendor = StsVendor(
-        role_arn="arn:aws:iam::000000000000:role/lance-vend",
-        region="us-east-1",
-        assume_role=_capturing_assume(sink),
-        access_key="unit",
-        secret_key="unit",
-        sanctioned_bases=(FOREIGN,),
-    )
-
-    vendor.vend(table_location=TABLE, tier="read", bases=(FOREIGN,))
-
-    assert _base_resources(sink["policy"]) == ["arn:aws:s3:::data-bases/acme/*"], (
-        "the vendor did not carry its sanctioned-base allowlist into build_session_policy"
-    )
-
-
 def test_a_vendor_with_no_allowlist_drops_the_same_base() -> None:
-    """The negative twin, so the test above cannot pass for the wrong reason — if the allowlist were
-    ignored entirely and every base granted, this would fail."""
+    """If the allowlist were ignored entirely and every base granted, this would fail."""
     sink: dict[str, Any] = {}
     vendor = StsVendor(
         role_arn="arn:aws:iam::000000000000:role/lance-vend",

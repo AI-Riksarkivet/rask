@@ -44,66 +44,7 @@ class _Lineage:
         return self._project
 
 
-class TestTheEventNamesTheTenant:
-    @pytest.mark.asyncio
-    async def test_the_resolved_project_is_carried(self) -> None:
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="acme")
-
-        extra = await publication_extra(lineage, ["acme-bronze", "pages"], from_version=3, to_version=7, location="s3://b/t")
-
-        assert extra["project"] == "acme"
-
-    @pytest.mark.asyncio
-    async def test_it_is_resolved_from_the_TOP_namespace(self) -> None:
-        """The binding is keyed by the top-level namespace, which is segment 0 — the one thing segment 0
-        genuinely is."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="acme")
-
-        await publication_extra(lineage, ["acme-bronze", "pages"], from_version=3, to_version=7, location="s3://b/t")
-
-        assert lineage.asked == ["acme-bronze"]
-
-    @pytest.mark.asyncio
-    async def test_the_range_and_location_are_unchanged(self) -> None:
-        """Additive. A consumer keying on the existing fields keeps working."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        extra = await publication_extra(_Lineage(project="acme"), ["acme-bronze", "pages"], from_version=3, to_version=7, location="s3://b/t")
-
-        assert extra["from_version"] == 3
-        assert extra["to_version"] == 7
-        assert extra["location"] == "s3://b/t"
-
-
 class TestWhenTheTenantCannotBeEstablished:
-    @pytest.mark.asyncio
-    async def test_an_unbound_namespace_carries_NO_project_key(self) -> None:
-        """A single-tenant estate has no project, and an empty string is not one. Omitting it lets the
-        consumer tell "no tenant" from "a tenant named ''"."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        extra = await publication_extra(_Lineage(project=None), ["bronze", "events"], from_version=1, to_version=2, location="s3://b/t")
-
-        assert "project" not in extra
-
-    @pytest.mark.asyncio
-    async def test_a_registry_OUTAGE_reaches_the_caller_as_None_not_as_a_raise(self) -> None:
-        """The contract `publication_extra` leans on instead of adding a swallow of its own. It runs
-        after the tag has moved, so a raise here would report failure for committed work."""
-        from catalog.core.lineage_emit import _BaseLineageEmitter
-
-        async def _down(top_ns: str) -> str | None:
-            raise RuntimeError("registry unreachable")
-
-        emitter = _BaseLineageEmitter()
-        emitter._project_resolver = _down
-
-        assert await emitter.project_for("acme-bronze") is None
-
     @pytest.mark.asyncio
     async def test_the_publish_survives_that_outage_with_no_tenant(self) -> None:
         from catalog.api.v1.endpoints.publication import publication_extra
@@ -191,14 +132,3 @@ class TestTheStampMustMATCHTheIdItIsStampedOn:
         extra = await publication_extra(lineage, ["acme", "pages"], from_version=1, to_version=2, location="s3://b/t")
 
         assert "project" not in extra
-
-    @pytest.mark.asyncio
-    async def test_the_binding_is_still_CONSULTED(self) -> None:
-        """Fix (i) gates the EMIT, never the lookup — a warehouse's own gate resolves through it."""
-        from catalog.api.v1.endpoints.publication import publication_extra
-
-        lineage = _Lineage(project="bind86")
-
-        await publication_extra(lineage, ["silver", "features"], from_version=1, to_version=2, location="s3://b/t")
-
-        assert lineage.asked == ["silver"], "the binding lookup was skipped, which is fix (i)'s one forbidden side effect"

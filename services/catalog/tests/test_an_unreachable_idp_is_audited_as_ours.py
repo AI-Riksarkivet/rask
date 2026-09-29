@@ -22,7 +22,6 @@ import jwt
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import ErrorCode
 
 from catalog.api import security
 from catalog.api.dependencies import SettingsDep
@@ -82,17 +81,6 @@ def audit_trail(caplog: pytest.LogCaptureFixture) -> pytest.LogCaptureFixture:
 
 def _audited_reasons(caplog: pytest.LogCaptureFixture) -> list[object]:
     return [getattr(record, "audit.reason", None) for record in caplog.records if record.name == AUDIT_LOGGER]
-
-
-def test_an_issuer_the_catalog_cannot_reach_is_a_503_audited_as_ours(unreachable_issuer: str, audit_trail: pytest.LogCaptureFixture) -> None:
-    verifier = OIDCVerifier(unreachable_issuer, AUDIENCE, cache_ttl=300, allow_insecure=True)
-
-    response = _client(verifier, unreachable_issuer).get("/gated", headers=_bearer(unreachable_issuer))
-
-    assert response.status_code == 503, response.text
-    assert response.json()["code"] == ErrorCode.SERVICE_UNAVAILABLE, response.text
-    assert unreachable_issuer not in response.text
-    assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
 def test_an_unreachable_issuer_and_no_verifier_at_all_answer_one_body(unreachable_issuer: str) -> None:

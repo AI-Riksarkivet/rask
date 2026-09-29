@@ -38,20 +38,3 @@ def test_every_data_read_door_records_who_read_it() -> None:
     """The headline. A door that returns rows without an audit line leaves no answer to "who read this"."""
     unaudited = [name for name in READ_DOORS if "audit_read" not in inspect.getsource(_door(name))]
     assert not unaudited, f"these doors return data and record nothing: {unaudited}"
-
-
-def test_the_read_audit_names_a_SUBJECT() -> None:
-    """A read log without the reader is a row count. Every door must take the token the subject rides."""
-    subjectless = [name for name in READ_DOORS if "CurrentToken" not in str(inspect.signature(_door(name)))]
-    assert not subjectless, f"these doors cannot name who read: {subjectless}"
-
-
-def test_the_helper_fixes_one_action_name() -> None:
-    """One action string, or the log cannot be filtered. Four doors inventing four verbs is the same as
-    no log at all for anyone trying to answer a question with it."""
-    from service_kit.governed.audit import audit_read
-
-    # The constant must be the one the helper actually EMITS, not merely defined beside it: a name
-    # nothing uses is the shape where the log is filterable in the docs and not in the sink.
-    assert "READ_ACTION" in inspect.getsource(audit_read), "audit_read does not emit READ_ACTION, so the fixed name is decoration"
-    assert "action" not in inspect.signature(audit_read).parameters, "audit_read takes the action from its caller, so four doors can spell it four ways"

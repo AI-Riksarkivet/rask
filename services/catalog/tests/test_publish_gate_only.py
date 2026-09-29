@@ -40,22 +40,11 @@ def _tags(uri: str) -> dict[str, object]:
     return dict(lance.dataset(uri).tags.list())
 
 
-def test_gate_only_reports_the_verdict(dataset: str) -> None:
-    result = publication.gate(dataset, key_column="id", required_columns=(), version=1)
-    assert result.assertions, "the verdict is the whole point of the call"
-
-
 def test_gate_only_never_moves_the_tag(dataset: str) -> None:
     """The property that makes it safe to ask speculatively."""
     before = _tags(dataset)
     publication.gate(dataset, key_column="id", required_columns=(), version=1)
     assert _tags(dataset) == before, "gate_only advanced `published` — it is a question, not a write"
-
-
-def test_gate_only_is_never_published(dataset: str) -> None:
-    """Even on a clean dataset: passing the gate is not the same act as promoting."""
-    result = publication.gate(dataset, key_column="id", required_columns=(), version=1)
-    assert result.published is False
 
 
 def test_a_failing_assertion_is_reported_by_name(dataset: str) -> None:

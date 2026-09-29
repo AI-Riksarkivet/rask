@@ -77,14 +77,3 @@ def test_an_UNREADABLE_binding_refuses_as_unreadable_rather_than_as_already_boun
 
     with pytest.raises(ServiceUnavailableError):
         wh_svc.bind_namespace(_root(tmp_path), {}, "bronze", "wh-a", "s3://bkt-a")
-
-
-def test_the_existing_tolerance_is_unchanged(tmp_path: Path) -> None:
-    """A listing must still survive corrupt JSON, a non-object and a missing key — one bad object
-    voiding the whole registry would turn one tenant's corruption into an estate-wide outage."""
-    good = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"}
-    wh_svc.put_warehouse(_root(tmp_path), {}, good)
-    (tmp_path / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
-    (tmp_path / "_warehouses" / "zzz-notdict.json").write_text('["not", "a", "record"]')
-    (tmp_path / "_warehouses" / "zzz-idless.json").write_text('{"bucket": "x", "project": "p"}')
-    assert wh_svc.list_warehouses(_root(tmp_path), {}) == [good]

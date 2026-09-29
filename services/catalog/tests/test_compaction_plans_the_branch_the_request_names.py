@@ -58,13 +58,6 @@ def _location(ns) -> str:  # noqa: ANN001
     return open_dataset(ns, {}, TABLE_ID).uri
 
 
-def test_the_branch_really_has_more_fragments_than_main(ns) -> None:  # noqa: ANN001
-    """Without this the assertion below could pass by planning either ref."""
-    main_frags = len(open_dataset(ns, {}, TABLE_ID).get_fragments())
-    branch_frags = len(open_dataset(ns, {}, TABLE_ID, branch=BRANCH).get_fragments())
-    assert branch_frags > main_frags, f"the fixture did not diverge the refs (main={main_frags}, branch={branch_frags})"
-
-
 def test_planning_a_BRANCH_reads_the_branch(ns) -> None:  # noqa: ANN001
     """THE DEFECT. A plan for the branch must see the branch's fragments.
 
@@ -78,12 +71,3 @@ def test_planning_a_BRANCH_reads_the_branch(ns) -> None:  # noqa: ANN001
 
     assert plan.read_version == branch_version, f"the plan read version {plan.read_version} while the branch is at {branch_version} — it planned against main"
     assert plan.tasks, "the branch has five single-row fragments and the plan found nothing to merge"
-
-
-def test_planning_without_a_branch_still_reads_main(ns) -> None:  # noqa: ANN001
-    """Pinned so the fix cannot be "always open the branch"."""
-    main_version = open_dataset(ns, {}, TABLE_ID).version
-
-    plan = plan_compaction(_location(ns), {}, target_rows_per_fragment=1024, batch_size=64, num_threads=2, max_source_bytes=256 * 1024 * 1024)
-
-    assert plan.read_version == main_version

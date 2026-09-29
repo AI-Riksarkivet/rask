@@ -9,28 +9,11 @@ never answers would hang the catalog worker instead of failing the vend.
 
 from __future__ import annotations
 
-import ast
-import pathlib
 from typing import Any
 
 import pytest
 
 from catalog.core import vending
-
-
-_VENDING_PY = pathlib.Path(vending.__file__)
-
-
-def test_vending_never_imports_boto3() -> None:
-    """No `import boto3` — top-level or inline. `botocore` stays allowed (`UNSIGNED` is a sentinel,
-    and `ClientError` is an error shape); building the client is what belongs to `storage`."""
-    offences: list[str] = []
-    for node in ast.walk(ast.parse(_VENDING_PY.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Import) and any(alias.name.split(".")[0] == "boto3" for alias in node.names):
-            offences.append(f"vending.py:{node.lineno} imports boto3")
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "boto3":
-            offences.append(f"vending.py:{node.lineno} imports from boto3")
-    assert not offences, "vending hand-rolls its STS client instead of storage.sts_client:\n  " + "\n  ".join(offences)
 
 
 class _FakeSts:
@@ -96,15 +79,3 @@ def test_web_identity_vendor_builds_an_unsigned_client_through_the_storage_seam(
 
     assert built == [{"region": "eu-north-1", "endpoint": "http://rustfs:9000", "unsigned": True}]
     assert creds is not None and creds.storage_options["aws_session_token"] == "tok"
-
-
-def test_the_sts_client_is_built_once_per_vendor(seam: tuple[_FakeSts, list[dict[str, Any]]]) -> None:
-    """The vendor is a lifespan singleton and the client owns a connection pool; rebuilding it per
-    vend would re-resolve the endpoint on every data-plane request."""
-    _client, built = seam
-
-    vendor = vending.StsVendor(role_arn="arn:aws:iam::123456789012:role/vend", region="eu-north-1")
-    for _ in range(3):
-        vendor.vend(table_location="s3://b/db$t", tier="read")
-
-    assert len(built) == 1

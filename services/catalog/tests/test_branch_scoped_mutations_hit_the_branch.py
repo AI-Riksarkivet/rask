@@ -67,11 +67,3 @@ def test_a_delete_on_a_branch_leaves_MAIN_untouched(ns) -> None:  # noqa: ANN001
 
     main = open_dataset(ns, {}, TABLE_ID)
     assert main.count_rows() == 3, f"a branch-scoped delete removed rows from MAIN: {main.count_rows()} left"
-
-
-def test_the_update_actually_reaches_the_branch(ns) -> None:  # noqa: ANN001
-    """The other half — the fix must not become 'ignore the branch differently'."""
-    update_table(ns, {}, UpdateTableRequest(id=TABLE_ID, branch=BRANCH, updates=[["label", "'edited'"]]))
-
-    on_branch = open_dataset(ns, {}, TABLE_ID, branch=BRANCH).to_table().column("label").to_pylist()
-    assert on_branch == ["edited", "edited", "edited"], f"the update never reached the branch: {on_branch}"

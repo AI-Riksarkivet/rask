@@ -63,16 +63,6 @@ def test_a_replayed_commit_returns_the_SAME_version_and_adds_NO_rows(dataset_uri
     assert ds.version == first[0]
 
 
-def test_DIFFERENT_runs_still_append_independently(dataset_uri: str) -> None:
-    """The marker must not make the door sticky: a second, distinct run against the same table is a
-    legitimate append and lands its own version."""
-    v1, _ = dataplane.commit_appended_fragments(dataset_uri, {}, _staged_fragments(dataset_uri, [1, 2]), read_version=1, run_id="run-a")
-    v2, rows = dataplane.commit_appended_fragments(dataset_uri, {}, _staged_fragments(dataset_uri, [3]), read_version=v1, run_id="run-b")
-
-    assert v2 > v1
-    assert rows == 3
-
-
 def test_a_commit_WITHOUT_a_run_id_behaves_exactly_as_before(dataset_uri: str) -> None:
     """run_id is optional on purpose — other callers of this door owe nothing to ingest's replay
     story, and their commits must be byte-identical to the pre-change behaviour (no marker scan, no

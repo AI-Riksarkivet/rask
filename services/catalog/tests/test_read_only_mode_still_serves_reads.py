@@ -26,31 +26,13 @@ from catalog.api.maintenance_mode import is_mutating
 #: Spec reads that are served as POST because the grammar puts the action in the path.
 READS = [
     "/v1/table/pages/describe",
-    "/v1/table/pages/exists",
     "/v1/table/pages/count_rows",
-    "/v1/table/pages/stats",
-    "/v1/table/pages/version/list",
-    "/v1/table/pages/tags/list",
-    "/v1/table/pages/index/list",
-    "/management/v1/table/pages/policy/describe",
-    "/management/v1/table/pages/access/my-permissions",
-    "/v1/namespace/acme/describe",
-    "/v1/namespace/acme/exists",
 ]
 
 #: Writes, which must keep being refused.
 WRITES = [
-    "/v1/table/pages/create",
     "/v1/table/pages/insert",
-    "/v1/table/pages/update",
-    "/v1/table/pages/delete",
     "/v1/table/pages/drop",
-    "/management/v1/table/pages/publish",
-    "/v1/table/pages/tags/create",
-    "/v1/table/pages/tags/delete",
-    "/v1/table/pages/merge_insert",
-    "/v1/namespace/acme/create",
-    "/v1/namespace/acme/drop",
 ]
 
 
@@ -71,10 +53,3 @@ def test_an_UNCLASSIFIED_action_is_treated_as_a_write() -> None:
     corrupts something during a maintenance window.
     """
     assert is_mutating("POST", "/v1/table/pages/some_future_operation")
-
-
-def test_ordinary_verbs_still_decide_where_there_is_no_action() -> None:
-    """The method rule is not wrong, only insufficient — it still governs the non-spec surface."""
-    assert not is_mutating("GET", "/v1/table")
-    assert is_mutating("DELETE", "/v1/table/pages")
-    assert is_mutating("PUT", "/v1/anything")

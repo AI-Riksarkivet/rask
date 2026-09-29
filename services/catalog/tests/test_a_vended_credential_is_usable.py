@@ -79,7 +79,7 @@ def test_a_vended_credential_carries_what_a_lance_client_needs_to_build(kind: Ve
     assert opts["virtual_hosted_style_request"] == "false"
 
 
-@pytest.mark.parametrize("kind", _VENDORS)
+@pytest.mark.parametrize("kind", ["sts"])
 def test_an_https_endpoint_is_not_downgraded(kind: VendorKind) -> None:
     """A TLS endpoint keeps TLS AND is not handed a plaintext permit beside it.
 

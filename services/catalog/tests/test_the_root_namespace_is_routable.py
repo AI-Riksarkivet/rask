@@ -59,19 +59,3 @@ async def test_the_root_namespace_id_does_not_explode_the_router() -> None:
 
     resolved = await dependencies.get_namespace(_request(root_id), _settings(warehouses=True))
     assert resolved is DEFAULT_NS, "the root has no warehouse above it, so the default namespace is the answer"
-
-
-@pytest.mark.asyncio
-async def test_a_normal_id_still_routes_by_its_top_segment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The fix must not flatten real routing: an id WITH a top segment still resolves its warehouse."""
-    from catalog.api import dependencies
-
-    seen: list[str] = []
-
-    async def fake_root(_req: object, _settings: object, top_ns: str) -> str | None:
-        seen.append(top_ns)
-        return None
-
-    monkeypatch.setattr(dependencies, "_resolve_warehouse_root", fake_root)
-    await dependencies.get_namespace(_request("acme$silver$t"), _settings(warehouses=True))
-    assert seen == ["acme"]

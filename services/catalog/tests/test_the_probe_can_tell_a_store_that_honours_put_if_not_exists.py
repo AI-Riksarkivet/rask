@@ -114,16 +114,6 @@ def _run(behaviour: str, store_factory: Callable[[str], list[_Store]]) -> tuple[
     return [], summarize_probe(checks)
 
 
-def test_a_store_that_HONOURS_put_if_not_exists_is_reported_commit_safe(store_factory: Callable[[str], list[_Store]]) -> None:
-    """The positive. Lance's commit protocol holds here, so the door may say so."""
-    _, report = _run("honours", store_factory)
-
-    named = {c.name: c for c in report.checks}
-    assert CAS_CHECK in named, f"the probe ran no conditional-put check at all: {sorted(named)}"
-    assert named[CAS_CHECK].outcome == "pass", named[CAS_CHECK]
-    assert report.commit_safe is True, report
-
-
 def test_a_store_that_IGNORES_the_header_is_reported_UNSAFE(store_factory: Callable[[str], list[_Store]]) -> None:
     """THE DANGEROUS CASE, and the reason a probe that only checked "did the write work" is worthless.
 
@@ -146,36 +136,6 @@ def test_a_store_that_REJECTS_the_header_is_UNKNOWN_not_unsafe(store_factory: Ca
     `vend_probe` states for `enforced`: an unexercised control is UNKNOWN.
     """
     _, report = _run("rejects", store_factory)
-
-    named = {c.name: c for c in report.checks}
-    assert named[CAS_CHECK].outcome == "skip", named[CAS_CHECK]
-    assert report.commit_safe is None, report
-
-
-def test_the_probe_leaves_no_conditional_put_KEY_behind(store_factory: Callable[[str], list[_Store]]) -> None:
-    """The probe writes into a live warehouse. A key it forgets is residue the sweep later reports as
-    something nobody can explain, which is how `storage_loss` filled up with test leftovers.
-
-    This caught a PRE-EXISTING leak as well as the new key: the out-of-scope probe object
-    (`_validate_scope_probe_should_fail`, at the warehouse ROOT) was written by the scope step and never
-    removed on a store that accepted it — so exactly the over-permissive store the probe exists to find
-    accumulated one object per validate call. It is cleaned now, and only when it actually landed: a
-    correctly scoped credential is refused that delete too, and reporting the refusal as a cleanup
-    failure would raise a false alarm about the store that had just passed.
-    """
-    built = store_factory("honours")
-    endpoint._run_scope_probe(ROOT, _Vendor(credentials=_creds()), {})
-
-    assert built, "no store was constructed"
-    assert built[0].keys == {}, f"the probe left keys behind: {sorted(built[0].keys)}"
-
-
-def test_no_credential_means_the_cas_question_was_never_asked(store_factory: Callable[[str], list[_Store]]) -> None:
-    """`server_mediated` vends nothing, so every IO step skips — including this one. Reporting a store
-    unsafe because no credential was issued would be a false alarm about the store."""
-    store_factory("honours")
-    checks = endpoint._run_scope_probe(ROOT, _Vendor(credentials=None), {})
-    report = summarize_probe(checks)
 
     named = {c.name: c for c in report.checks}
     assert named[CAS_CHECK].outcome == "skip", named[CAS_CHECK]

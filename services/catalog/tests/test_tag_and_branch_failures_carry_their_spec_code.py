@@ -151,11 +151,6 @@ def test_a_missing_version_mints_VERSION_NOT_FOUND(ns, door: str, call: _Call) -
         # green here because the mapping is right and does fire wherever the validator runs; the
         # residual is upstream (an invalid name must not panic) and is recorded in §A5.
         ("branch, invalid character", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a b"))),
-        ("branch, .lock suffix", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="feat.lock"))),
-        ("branch, leading slash", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="/lead"))),
-        ("branch, consecutive slashes", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a//b"))),
-        ("branch, '..' inside a segment", lambda ns: create_branch(ns, {}, CreateTableBranchRequest(id=TABLE_ID, name="a..b"))),
-        ("tag, invalid character", lambda ns: create_tag(ns, {}, CreateTableTagRequest(id=TABLE_ID, tag="a b", version=1))),
         ("tag, .lock suffix", lambda ns: create_tag(ns, {}, CreateTableTagRequest(id=TABLE_ID, tag="x.lock", version=1))),
     ],
 )

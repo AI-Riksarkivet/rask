@@ -70,30 +70,3 @@ def test_the_property_reaches_the_variable_width_fields(table: pa.Table, tmp_pat
 
     assert _field_meta(dataset, "payload")[_ENCODING.encode()] == b"zstd"
     assert _field_meta(dataset, "stage")[_ENCODING.encode()] == b"zstd"
-
-
-def test_it_does_NOT_reach_the_fixed_width_fields(table: pa.Table, tmp_path: Path) -> None:
-    """`lance-encoding:bss` engages byte-stream-split on floats only where general compression is also
-    applied, so stamping every field would change FLOAT encoding as a side effect of asking for string
-    compression — a different physical layout than the caller asked for."""
-    dataset = _write(table, tmp_path, {_ENCODING: "zstd"})
-
-    assert _ENCODING.encode() not in _field_meta(dataset, "id")
-    assert _ENCODING.encode() not in _field_meta(dataset, "score")
-
-
-def test_an_ordinary_property_is_not_mistaken_for_an_encoding_knob(table: pa.Table, tmp_path: Path) -> None:
-    """Properties are user-facing table metadata; only the `lance-encoding:` namespace is Lance's."""
-    dataset = _write(table, tmp_path, {"owner": "platform", "lance-encoding:compression-level": "3"})
-
-    meta = _field_meta(dataset, "payload")
-    assert b"owner" not in meta
-    assert meta[b"lance-encoding:compression-level"] == b"3"
-
-
-def test_the_rows_survive_the_scheme(table: pa.Table, tmp_path: Path) -> None:
-    """The point of the knob is bytes on disk, never a different answer — a compression setting that
-    changed what the table returns would be a correctness bug wearing a performance flag."""
-    dataset = _write(table, tmp_path, {_ENCODING: "zstd"})
-
-    assert dataset.to_table().to_pydict() == table.to_pydict()

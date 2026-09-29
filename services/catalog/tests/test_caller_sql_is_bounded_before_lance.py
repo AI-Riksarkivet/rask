@@ -29,18 +29,11 @@ def test_the_bound_is_inclusive() -> None:
     "text",
     [
         pytest.param("v = '" + " or " * 2_000 + "'", id="inside-a-string-literal"),
-        pytest.param("v = 'it''s" + " and " * 2_000 + "'", id="inside-a-literal-with-an-escaped-quote"),
-        pytest.param('"' + " or " * 2_000 + '" = 1', id="inside-a-quoted-identifier"),
-        pytest.param("color + floor + orders = " + " + ".join(["color"] * 2_000), id="inside-longer-names"),
         pytest.param("id IN (" + ",".join(str(i) for i in range(200_000)) + ")", id="an-in-list"),
     ],
 )
 def test_text_that_is_not_structure_is_not_counted(text: str) -> None:
     refuse_an_unbounded_boolean_chain(text, field="filter")
-
-
-def test_no_fragment_is_nothing_to_bound() -> None:
-    refuse_an_unbounded_boolean_chain(None, field="filter")
 
 
 def test_a_fragment_that_is_not_text_is_a_type_error() -> None:

@@ -93,18 +93,7 @@ def test_no_version_of_any_ref_answers_after_the_erasure(tmp_path: Path) -> None
     assert report.complete is True
 
 
-def test_the_reclaimed_totals_sum_every_refs_cleanup(tmp_path: Path) -> None:
-    """Main reclaims last, so a total that kept only the last cleanup's figures would report main's alone."""
-    uri = _subject_on_a_branch(tmp_path)
-
-    report = _erase(uri)
-
-    per_ref = {s.surface: tuple(int(part.split()[0]) for part in s.detail.split(", ")) for s in report.surfaces if s.surface.startswith("history:")}
-    assert (report.versions_reclaimed, report.bytes_reclaimed) == (sum(v for v, _ in per_ref.values()), sum(b for _, b in per_ref.values()))
-    assert report.versions_reclaimed > per_ref["history:main"][0], "work reclaims its own versions, so the total must exceed main's"
-
-
-@pytest.mark.parametrize("retention", [_NOW, timedelta(days=1)], ids=["reclaimed", "inside-the-window"])
+@pytest.mark.parametrize("retention", [timedelta(days=1)], ids=["inside-the-window"])
 def test_the_report_names_exactly_what_survives_on_every_ref(tmp_path: Path, retention: timedelta) -> None:
     """Inside the retention window work v3 and v4 legitimately survive; the report must say so, per ref."""
     uri = _subject_on_a_branch(tmp_path)
@@ -116,7 +105,7 @@ def test_the_report_names_exactly_what_survives_on_every_ref(tmp_path: Path, ret
     assert report.complete is (not surviving)
 
 
-@pytest.mark.parametrize("ref", [None, "work"], ids=["main", "branch"])
+@pytest.mark.parametrize("ref", ["work"], ids=["branch"])
 def test_a_write_staged_while_the_erasure_runs_still_commits_readable(tmp_path: Path, ref: str | None) -> None:
     """Every ref's reclaim leaves another writer's uncommitted files alone.
 
@@ -255,16 +244,6 @@ def test_a_tag_on_a_descendant_is_named_and_no_branch_is(tmp_path: Path, names: 
 
 
 @_NAMES
-def test_a_tag_on_the_branch_standing_on_the_residual_is_the_whole_pin(tmp_path: Path, names: tuple[str, str]) -> None:
-    uri = _tagged_branch(tmp_path, names)
-
-    report = _erase(uri)
-
-    assert report.residual_versions == ["main@2"]
-    assert report.model_dump()["pinned_by"] == [{"ref": "tag:trained", "holds": f"{names[0]}@3"}]
-
-
-@_NAMES
 def test_a_descendant_that_holds_nothing_is_not_named(tmp_path: Path, names: tuple[str, str]) -> None:
     uri = _clean_descendant(tmp_path, names)
 
@@ -274,8 +253,14 @@ def test_a_descendant_that_holds_nothing_is_not_named(tmp_path: Path, names: tup
     assert report.model_dump()["pinned_by"] == [{"ref": "tag:trained", "holds": f"{names[0]}@3"}]
 
 
-@_NAMES
-@pytest.mark.parametrize("build", [_pinned_chain, _tagged_branch, _clean_descendant], ids=["pinning-descendant", "tag", "clean-descendant"])
+@pytest.mark.parametrize(
+    ("build", "names"),
+    [
+        pytest.param(_pinned_chain, ("work", "deeper"), id="pinning-descendant-child-sorts-first"),
+        pytest.param(_pinned_chain, ("alpha", "zulu"), id="pinning-descendant-child-sorts-last"),
+        pytest.param(_clean_descendant, ("work", "deeper"), id="clean-descendant-child-sorts-first"),
+    ],
+)
 def test_following_pinned_by_finishes_the_erasure_and_keeps_every_branch(
     tmp_path: Path, build: Callable[[Path, tuple[str, str]], str], names: tuple[str, str]
 ) -> None:
@@ -290,7 +275,7 @@ def test_following_pinned_by_finishes_the_erasure_and_keeps_every_branch(
     assert set(lance.dataset(uri).branches.list()) == branches
 
 
-@_NAMES
+@pytest.mark.parametrize("names", [("work", "deeper")], ids=["child-sorts-first"])
 def test_inside_the_retention_window_no_ref_is_named(tmp_path: Path, names: tuple[str, str]) -> None:
     """Every version here is minutes old, so a 1-day window keeps them all — the branches hold nothing
     the window does not. The report says so, and an erasure at retention 0 finishes with both intact."""

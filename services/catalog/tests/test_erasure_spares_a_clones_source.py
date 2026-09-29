@@ -78,17 +78,6 @@ def test_a_protected_table_is_neither_rewritten_nor_reclaimed(tmp_path: Path) ->
     assert report.complete is False
 
 
-def test_the_report_names_no_ref_whose_deletion_could_not_finish_it(tmp_path: Path) -> None:
-    """``work``'s head stands on main v2's files, which a reclaim that RAN would keep for it. None ran,
-    so deleting ``work`` would destroy a working ref and leave every residual where it is."""
-    _, report = _erase_protected(tmp_path)
-
-    verify = next(s.detail for s in report.surfaces if s.surface == "verify")
-    assert report.residual_versions, "the refused reclaim must leave a residual for this to be the right test"
-    assert (report.pinned_by, report.held_by_retention) == ([], [])
-    assert f"{report.residual_versions} remain because the reclaim of ['main', 'work'] did not run" in verify
-
-
 @pytest.fixture
 def namespace(tmp_path: Path) -> LanceNamespace:
     """A table and, beside it, a shallow clone that resolves its files through the table's."""

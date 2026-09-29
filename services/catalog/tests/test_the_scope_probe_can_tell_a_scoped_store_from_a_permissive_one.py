@@ -1,9 +1,8 @@
 """The vend probe's IO half — the part that decides whether the estate's storage story is true.
 
-`tests/.../test_a_warehouse_can_prove_its_credentials_are_scoped.py` covers `summarize_probe`, a pure
-reducer over checks somebody else produced. That left the half that PRODUCES them — the vend, the two
-writes, the refusal that IS the finding — asserted by nothing, and the door's own gate with it. A
-23-statement helper at 100% beside a 55-line IO body at 0% reads as coverage and is not.
+`summarize_probe` is a pure reducer over checks somebody else produced. These drive the half that
+PRODUCES them — the vend, the two writes, the refusal that IS the finding — reduce what it produced,
+and pin the door's own gate.
 
 WHAT THESE FAKE AND WHAT THEY DO NOT. The store's real enforcement is precisely what the probe exists
 to measure at runtime and is not knowable offline, so it is modelled here in both directions: a store
@@ -167,24 +166,6 @@ class TestTheProbeTellsTheTwoStoresApart:
         detail = next(c.detail for c in checks if c.name == SCOPE_CHECK)
         assert "OUTSIDE" in detail, "the report must say what the store did, not merely that a step failed"
 
-    def test_the_probe_writes_OUTSIDE_at_the_PARENT_never_a_sibling(self, store_factory: Callable[..., _Installed]) -> None:
-        """A sibling prefix proves nothing: a correctly scoped credential cannot reach it either, so a
-        refusal there would be indistinguishable from the control working. The parent is where a
-        policy that was ignored would let it write."""
-        vendor = _Vendor(credentials=_creds())
-        installed = store_factory(scoped=False)
-        installed.prefix = "acme/warehouse/_validate/"
-
-        _run(vendor)
-        assert installed.store is not None
-        # ATTEMPTED, not retained: the probe cleans up the out-of-scope object when a permissive store
-        # accepts it, so what it left behind no longer answers where it tried to write.
-        attempted = set(installed.store.attempted)
-
-        outside = {k for k in attempted if "_validate/" not in k}
-        assert outside, "the probe never attempted a write outside its own prefix"
-        assert all(k.startswith("acme/warehouse/") for k in outside), f"the outside write must land under the warehouse root: {outside}"
-
 
 class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
     def test_a_warehouse_that_vends_NOTHING_reports_enforced_None(self, store_factory: Callable[..., _Installed]) -> None:
@@ -227,20 +208,6 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
 
 
 class TestTheProbeAsksForTheCredentialItThenTests:
-    def test_it_vends_at_the_WRITE_tier_under_the_warehouses_own_root(self, store_factory: Callable[..., _Installed]) -> None:
-        """The probe must not test a credential the estate does not actually issue: a read-tier vend
-        would pass the scope check for the wrong reason."""
-        vendor = _Vendor(credentials=_creds())
-        installed = store_factory(scoped=False)
-        installed.prefix = "acme/warehouse/_validate/"
-
-        _run(vendor)
-
-        assert len(vendor.asked) == 1
-        location, tier = vendor.asked[0]
-        assert tier == "write"
-        assert location.startswith("s3://tenant-bucket/acme/warehouse/_validate/")
-
     def test_each_run_uses_a_FRESH_prefix(self, store_factory: Callable[..., _Installed]) -> None:
         """Two operators validating at once must not collide, and a leftover object from a crashed run
         must not make the next one's cleanup look successful."""

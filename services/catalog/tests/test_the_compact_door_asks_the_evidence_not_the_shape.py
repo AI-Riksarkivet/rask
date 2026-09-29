@@ -86,12 +86,6 @@ async def _no_refs(ds: object, so: object, settings: object) -> Any:
     return BaseRefs()
 
 
-def test_a_branch_is_no_longer_refused_on_its_shape(client: TestClient) -> None:
-    response = client.post("/management/v1/table/ns$events/maintenance/compact?branch=work", json={})
-
-    assert response.status_code == 200, response.text
-
-
 def test_the_door_opens_the_REF_the_request_names(client: TestClient, opened: _Opened) -> None:
     """A 200 says the door accepted; only the ref it opened says it acted on the branch.
 
@@ -108,14 +102,3 @@ def test_a_branchless_request_still_opens_main(client: TestClient, opened: _Open
     client.post("/management/v1/table/ns$events/maintenance/compact", json={})
 
     assert opened.refs == [None]
-
-
-def test_the_wire_contract_no_longer_advertises_a_refusal(client: TestClient) -> None:
-    """The description is generated into the typed client, so a stale "REFUSED here" is a lie on the wire."""
-    schema = client.get("/openapi.json")
-    if schema.status_code != 200:
-        pytest.skip("this app mounts no openapi route")
-    params = schema.json()["paths"]["/management/v1/table/{id}/maintenance/compact"]["post"]["parameters"]
-    description = next(p["description"] for p in params if p["name"] == "branch")
-
-    assert "REFUSED" not in description

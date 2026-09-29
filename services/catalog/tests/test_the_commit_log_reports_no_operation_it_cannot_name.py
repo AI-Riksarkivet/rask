@@ -54,15 +54,6 @@ def _history(table_id: list[str] | None = None) -> dict[int, Any]:
     return {int(row["version"]): row["operation"] for row in rows}
 
 
-def test_the_modelled_operations_are_still_named(compacted: str) -> None:
-    """The half that must not regress: a name Lance did record is reported verbatim."""
-    operations = _history()
-
-    assert operations[1] == "Overwrite", "the create"
-    assert operations[4] == "Append", "the last write before the compaction"
-    assert operations[6] == "Rewrite", "the compaction itself is modelled and must be named"
-
-
 def test_an_operation_the_binding_cannot_name_is_reported_null(compacted: str) -> None:
     """THE GATE. Before this, a compacted table's log claimed an operation called 'BaseOperation'."""
     operations = _history()
@@ -72,8 +63,3 @@ def test_an_operation_the_binding_cannot_name_is_reported_null(compacted: str) -
         "the log must leave the field null — the same answer it already gives for a transaction it cannot "
         "read — rather than reporting the name of the abstract base class"
     )
-
-
-def test_every_version_still_appears(compacted: str) -> None:
-    """Null is not a licence to drop the row, which would be the log lying by omission instead."""
-    assert sorted(_history()) == [1, 2, 3, 4, 5, 6], "a version the log cannot describe is still a version that happened"

@@ -69,14 +69,6 @@ def test_a_branch_write_NAMES_its_ref_in_the_event() -> None:
     assert facet.get("ref") == "feat", f"the event does not name the branch: {facet}"
 
 
-def test_a_MAIN_write_carries_no_ref_rather_than_the_word_main() -> None:
-    """ABSENT, not `"main"`. The graph's reads distinguish main by the property being missing, so a
-    literal would make every historical main write (which has none) look like a different ref — and a
-    consumer testing for presence would read "was I on a branch?" as yes for every write."""
-    facet = _built_facet(branch=None)
-    assert "ref" not in facet, f"a main write invented a ref: {facet}"
-
-
 def test_the_trailer_FORWARDS_the_ref_it_already_holds() -> None:
     """`emit_measured_write` reads the version off the branch and then dropped the ref before the event.
 

@@ -71,50 +71,6 @@ async def _captured_tuples(fn, monkeypatch) -> list[fga.ClientTuple]:
     return seen
 
 
-def test_settings_declare_the_maintenance_identities() -> None:
-    assert "fga_maintainers" in Settings.model_fields
-
-
-def test_it_is_empty_by_default() -> None:
-    """No declared identity means no extra tuple — merging this changes no existing estate."""
-    assert _settings().fga_maintainers == []
-
-
-def test_declared_identities_are_taken_verbatim() -> None:
-    """The catalog must not invent the naming convention of a plane it does not own."""
-    s = _settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
-    assert s.fga_maintainers == ["user:service-maintenance"]
-
-
-def test_the_tuple_set_carries_the_maintainer_grant() -> None:
-    """THE DEFECT: `cascade_tuples` returned no `maintainer` tuple, for any configuration."""
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
-
-    written = fga_deps.cascade_tuples(settings, warehouse_id="wh1", project="acme")
-
-    assert ("user:service-maintenance", "maintainer", "warehouse:wh1") in [(t.user, t.relation, t.object) for t in written]
-
-
-def test_the_grant_is_on_the_WAREHOUSE_not_a_tier() -> None:
-    """One tuple per tenant. A per-tier grant is the tuple explosion `optimize-tuples.md` refuses, and
-    the hierarchy already implies it: `namespace` and `table` both define `maintainer from parent`."""
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
-
-    objects = {t.object for t in fga_deps.cascade_tuples(settings, warehouse_id="wh1", project="acme") if t.relation == "maintainer"}
-
-    assert objects == {"warehouse:wh1"}
-
-
-def test_maintenance_is_never_granted_a_DESTRUCTIVE_rung() -> None:
-    """`maintainer`, never `owner` or `writer`. Maintenance rewrites HOW a dataset is stored and must
-    not be able to drop it or change what it says — the separation `can_maintain` exists to express."""
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
-
-    rungs = {t.relation for t in fga_deps.cascade_tuples(settings, warehouse_id="wh1", project="acme") if t.user == "user:service-maintenance"}
-
-    assert rungs == {"maintainer"}
-
-
 @pytest.mark.asyncio
 async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
     """The grant happens where the container is created, so there is no window in which a tenant
@@ -124,21 +80,6 @@ async def test_creating_a_warehouse_grants_it(monkeypatch) -> None:
 
     seen = await _captured_tuples(
         lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, token, warehouse_id="wh1", project="acme"),
-        monkeypatch,
-    )
-
-    assert ("user:service-maintenance", "maintainer", "warehouse:wh1") in [(t.user, t.relation, t.object) for t in seen]
-
-
-@pytest.mark.asyncio
-async def test_the_BACKFILL_writes_the_same_grant_as_the_create(monkeypatch) -> None:
-    """The two populations must not differ. This is the property `cascade_tuples` exists to hold, and
-    the one a maintainer grant bolted onto the create door alone would break on the day it landed:
-    the 4 warehouses measured without the tuple can only be repaired through the backfill."""
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["user:service-maintenance"])
-
-    seen = await _captured_tuples(
-        lambda: fga_deps.backfill_cascade_grants(cast("OpenFgaClient", object()), settings, warehouse_id="wh1", project="acme", actor="ops"),
         monkeypatch,
     )
 

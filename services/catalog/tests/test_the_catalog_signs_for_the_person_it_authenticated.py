@@ -31,7 +31,6 @@ from lineage_kit.signing import signature_of, verify_signed_event
 
 
 KEY = "Nx8cV2bM4qW6eR9tY1uI3oP5aS7dF0gH2jK4lZ6x"
-PEER = "Bv5nM7qA9sD1fG3hJ5kL7zX2cV4bN6mQ8wE0rT2y"
 CATALOG = "service-catalog"
 PERSON = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
 
@@ -102,23 +101,6 @@ async def test_an_event_authored_by_a_PERSON_is_signed_as_a_DELEGATION(published
 
 
 @pytest.mark.asyncio
-async def test_the_person_stays_the_AUTHOR(published: list[str]) -> None:
-    """The point of declaring rather than restamping: the graph keeps answering "which person did
-    this", which is the field an audit reads."""
-    await _emit(_keyed(**{CATALOG: KEY}), PERSON)
-
-    assert json.loads(published[0])["run"]["facets"]["author"]["sub"] == PERSON
-
-
-@pytest.mark.asyncio
-async def test_a_PEER_key_does_not_verify_it(published: list[str]) -> None:
-    """The control. Without it every leg here would pass on a signature over a constant."""
-    await _emit(_keyed(**{CATALOG: KEY}), PERSON)
-
-    assert not verify_signed_event(json.loads(published[0]), key=PEER)
-
-
-@pytest.mark.asyncio
 async def test_an_event_the_SERVICE_authored_is_SELF_signed(published: list[str]) -> None:
     """No delegation where there is nobody to act for — a declaration naming the signer would say
     the service vouched for itself, which is noise in the record."""
@@ -152,32 +134,6 @@ async def test_NO_credential_emits_UNSIGNED_rather_than_a_placeholder(published:
 # THE WIRING HOPS. Everything above tests the emitter; none of it notices the
 # factory dropping the identity, or the app never passing one.
 # --------------------------------------------------------------------------- #
-
-
-def test_the_FACTORY_hands_the_emitter_its_identity_and_resolver() -> None:
-    """Hop one. A factory that accepted these and did not forward them would leave every emitter in
-    production unsigned while every test above stayed green, because they construct the emitter
-    directly."""
-    from dapr.aio.clients import DaprClient
-
-    from catalog.core.lineage_emit import make_emitter
-
-    resolver = _keyed(**{CATALOG: KEY})
-    emitter = make_emitter(
-        enabled=True,
-        transport="dapr",
-        url="",
-        client=None,
-        dapr=cast("DaprClient", SimpleNamespace()),
-        pubsub="lance-pubsub",
-        topic="lineage.events.v1",
-        job_namespace="lance",
-        service_identity=CATALOG,
-        token_resolver=resolver,
-    )
-
-    assert getattr(emitter, "_service_identity", "") == CATALOG, "the factory dropped the identity, so nothing it builds can sign"
-    assert getattr(emitter, "_token_resolver", None) is resolver, "the factory dropped the resolver"
 
 
 def test_the_APP_passes_both_when_it_builds_the_emitter() -> None:

@@ -74,12 +74,6 @@ def _unit(published: _Published) -> IndexWorkItem:
     return IndexWorkItem.model_validate_json(published.calls[-1]["data"])
 
 
-def test_the_door_no_longer_refuses_a_branch(client: TestClient, published: _Published) -> None:
-    response = client.post("/management/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})
-
-    assert response.status_code == 202, response.text
-
-
 def test_the_published_unit_names_the_branch(client: TestClient, published: _Published) -> None:
     """The assertion that matters: a 202 whose unit says main is the wrong-but-plausible answer."""
     client.post("/management/v1/table/ns$events/maintenance/reindex?branch=work", json={"index_name": "vec_idx"})

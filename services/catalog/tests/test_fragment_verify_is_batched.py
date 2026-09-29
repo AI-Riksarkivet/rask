@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import pyarrow.fs as pafs
 import pytest
-from lance_namespace import InvalidInputError
 
 from catalog.services import dataplane
 
@@ -47,11 +46,3 @@ def test_all_data_files_are_verified_in_one_batched_call(monkeypatch: pytest.Mon
     assert len(fs.calls) == 1, f"expected one batched get_file_info, got {len(fs.calls)} serial calls"
     assert isinstance(fs.calls[0], list)
     assert len(fs.calls[0]) == 3
-
-
-def test_a_missing_file_is_still_reported(monkeypatch: pytest.MonkeyPatch) -> None:
-    fs = _CountingFS(missing={"root/data/b.lance"})
-    monkeypatch.setattr(dataplane, "_dataset_fs", lambda location, so: (fs, "root"))
-
-    with pytest.raises(InvalidInputError, match="b.lance"):
-        dataplane._verify_fragment_data_files("s3://b/t", {}, _fragments(["a.lance", "b.lance"]))

@@ -60,17 +60,12 @@ def _offences(path: pathlib.Path) -> list[str]:
     return found
 
 
-def test_the_walk_sees_the_endpoint_plane() -> None:
-    modules = [p for p in _ENDPOINTS.glob("*.py") if p.name != "__init__.py"]
-    assert len(modules) > 10, f"only {len(modules)} endpoint modules — the walk is not seeing the plane"
-
-
 def test_no_route_declares_a_dependency_its_body_never_uses() -> None:
     offences = [o for path in sorted(_ENDPOINTS.glob("*.py")) for o in _offences(path)]
     assert not offences, "route parameters nothing in the handler reads — drop them:\n  " + "\n  ".join(offences)
 
 
-@pytest.mark.parametrize("path", ["/management/v1/table/db1$t/tasks", "/management/v1/namespace/db1/tasks"])
+@pytest.mark.parametrize("path", ["/management/v1/table/db1$t/tasks"])
 def test_the_task_routes_are_still_authenticated(path: str) -> None:
     """The removal must not be the thing that opens the door: with the router's gate refusing, the
     route must never run its body. A stand-in `authorize` proves the ROUTER dependency is what

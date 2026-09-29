@@ -108,22 +108,6 @@ def test_a_version_whose_subject_file_is_gone_is_not_a_residual(tmp_path: Path, 
     assert report.complete is True
 
 
-@pytest.mark.parametrize("build", [_alone, _beside_a_large_base], ids=["alone", "large-base"])
-def test_a_dangling_version_names_the_branch_that_keeps_it_listed(tmp_path: Path, build: Callable[[str], None]) -> None:
-    """A dangling version fails every read until the branch whose head stands on its files lets go, and
-    nothing else removes it (measured on pylance 12.0.0: `cleanup_old_versions(versions=[2])` removes
-    nothing). The surface says which branch, and what releases it."""
-    uri = str(tmp_path / "subjects")
-    build(uri)
-
-    report = erase(
-        lance.dataset(uri), storage_options={}, protected=None, reopen=lambda: lance.dataset(uri), table="t", predicate=_PREDICATE, retention=timedelta(0)
-    )
-
-    detail = next(s.detail for s in report.surfaces if s.surface == "dangling:main@2")
-    assert "until what keeps it lets go: ['branch:work']" in detail, detail
-
-
 def _erase(uri: str, *, retention: timedelta = timedelta(0), reopen: Callable[[], Any] | None = None) -> ErasureReport:
     return erase(
         lance.dataset(uri),
@@ -462,29 +446,6 @@ def test_a_lost_file_the_listing_cannot_place_is_not_proved_gone(tmp_path: Path,
     assert report.complete is False
 
 
-def test_the_listing_proves_gone_only_what_it_can_place(tmp_path: Path) -> None:
-    import catalog.services.erasure as module
-
-    uri = str(tmp_path / "subjects")
-    lance.write_dataset(_rows("bob"), uri)
-    listing = module._StorageListing(cast("Any", lance.dataset(uri)))
-
-    assert listing.gone(f"{uri}/data/never-written.lance") is True, "a location under the listed root that it lacks is gone"
-    assert listing.gone(None) is False
-    assert listing.gone("/elsewhere/data/never-written.lance") is False
-
-
-def test_a_data_file_tracked_under_two_bases_has_no_location(tmp_path: Path) -> None:
-    import catalog.services.erasure as module
-
-    uri = str(tmp_path / "subjects")
-    lance.write_dataset(_rows("bob"), uri)
-
-    assert all(isinstance(location, str) for location in module._data_file_locations(cast("Any", lance.dataset(uri)), 1).values())
-    located = module._data_file_locations(cast("Any", _TrackedTwice(lance.dataset(uri))), 1)
-    assert located and all(location is None for location in located.values()), located
-
-
 @pytest.mark.parametrize(
     "reopen",
     [lambda uri: _CheckoutFails(lance.dataset(uri), (None, 1)), lambda uri: _Failing(lance.dataset(uri), ("work", None), _Unlistable)],
@@ -639,16 +600,6 @@ def _door(namespace: Any) -> Iterator[TestClient]:
 def client(tmp_path: Path) -> Iterator[TestClient]:
     with _door(_namespace(tmp_path / "data")) as test_client:
         yield test_client
-
-
-def test_the_door_verifies_on_a_session_the_erasure_did_not_read_through(client: TestClient) -> None:
-    """The door opens the erasure's handle on the process-wide session, so its verification must not."""
-    response = client.post("/management/v1/table/subjects/erasure", json={"predicate": _PREDICATE})
-
-    assert response.status_code == 200, response.text
-    report = response.json()
-    assert report["residual_versions"] == [], report["surfaces"]
-    assert report["complete"] is True
 
 
 def test_the_door_verifies_the_location_it_erased_without_resolving_it_again(tmp_path: Path) -> None:

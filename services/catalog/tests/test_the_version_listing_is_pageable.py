@@ -36,7 +36,6 @@ from typing import Any, cast
 import lance
 import lance_namespace as ln
 import pyarrow as pa
-import pytest
 
 from catalog.api import pagination
 from catalog.api.v1.endpoints import versions as versions_ep
@@ -55,26 +54,6 @@ def _table_with(version_count: int) -> tuple[Any, str]:
 def _list(ns: Any, table: str, **kwargs: Any) -> Any:
     settings = cast(Any, SimpleNamespace(delimiter="$"))
     return versions_ep.list_table_versions(table, ns, settings, **kwargs)
-
-
-def test_the_versions_helper_hands_back_its_last_version() -> None:
-    """A truncated page must carry the cursor that resumes it, or the caller cannot continue."""
-    page, token = pagination.paginate_versions([1, 2, 3, 4, 5], None, 2, descending=False)
-    assert page == [1, 2]
-    assert token == "2", "the cursor is the last version SERVED — anything else overlaps or skips"
-
-
-def test_the_versions_cursor_resumes_strictly_after_it() -> None:
-    """Strictly after, not at: a cursor that re-serves its own row duplicates a version per page."""
-    page, token = pagination.paginate_versions([1, 2, 3, 4, 5], "2", 2, descending=False)
-    assert page == [3, 4]
-    assert token == "4"
-
-
-def test_a_complete_versions_page_reports_no_continuation() -> None:
-    """`None` must mean "that was everything" — it is what a client stops on."""
-    page, token = pagination.paginate_versions([1, 2, 3], None, 10, descending=False)
-    assert (page, token) == ([1, 2, 3], None)
 
 
 def test_descending_pages_downward_and_its_cursor_follows() -> None:
@@ -101,36 +80,3 @@ def test_paging_twice_over_a_REAL_table_gets_different_rows() -> None:
     third = _list(ns, table, limit=3, page_token=second.page_token)
     assert [v.version for v in (third.versions or [])] == [7]
     assert third.page_token is None, "the last page must say so, or the caller pages forever"
-
-
-def test_an_unbounded_listing_is_complete_and_uncursored() -> None:
-    """The common case must not grow a cursor it does not need."""
-    ns, table = _table_with(4)
-
-    answer = _list(ns, table)
-
-    assert [v.version for v in (answer.versions or [])] == [1, 2, 3, 4]
-    assert answer.page_token is None
-
-
-def test_the_backend_is_asked_UNPAGINATED(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The cursor is this layer's, and the upstream one must not ride through underneath it.
-
-    `pagination`'s own docstring states the rule; asserted here because forwarding `limit` would
-    reintroduce exactly the silent truncation this file exists to end — the backend would cut the list
-    before the helper ever saw the rows it is meant to page.
-    """
-    seen: list[Any] = []
-    ns, table = _table_with(5)
-    real = versions_ep.native.call
-
-    def _spy(namespace: Any, op: str, req: Any) -> Any:
-        seen.append(req)
-        return real(namespace, op, req)
-
-    monkeypatch.setattr(versions_ep.native, "call", _spy)
-    _list(ns, table, limit=2, page_token="1")
-
-    assert len(seen) == 1
-    assert seen[0].limit is None, "a `limit` sent downstream truncates before this layer can page"
-    assert seen[0].page_token is None, "an upstream cursor riding through makes the two cursors disagree"

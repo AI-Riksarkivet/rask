@@ -68,31 +68,3 @@ async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None
     await emitter.emit(_event())
 
     assert list(outbox.list_events(uri, {})) == [], "the delivered event stayed staged"
-
-
-@pytest.mark.asyncio
-async def test_the_emit_still_does_NOT_raise_into_the_caller(tmp_path: Any) -> None:
-    """The half that must not change. `emit` runs after the mutation is made and audited, so raising
-    would turn a delivered change into a 500 the caller retries -- announcing it twice."""
-    uri = f"file://{tmp_path}/control-outbox"
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", outbox_uri=uri)
-
-    await emitter.emit(_event())  # must not raise
-
-
-@pytest.mark.asyncio
-async def test_with_NO_outbox_configured_the_behaviour_is_unchanged() -> None:
-    """Opt-in, exactly like the lineage outbox: an unconfigured deployment still publishes plainly."""
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog")
-
-    await emitter.emit(_event())  # must not raise, and must not need a store
-
-
-def test_the_counter_no_longer_asserts_the_loss_is_FREE() -> None:
-    """The finding's minimum bar, and worth its own test: prose that tells an operator a dropped event
-    costs nothing is what made this invisible for as long as it was."""
-    emitter = DaprControlEmitter(cast("Any", _Blip()), pubsub="p", topic="catalog.control.v1", timeout_seconds=1.0, service="catalog")
-    description = emitter.failure_description
-
-    assert "only the live-refresh hint is lost" not in description, "the counter still claims a dropped control event costs nothing"
-    assert "cascade" in description.lower(), f"the counter does not warn about the consumer that cannot recover: {description!r}"

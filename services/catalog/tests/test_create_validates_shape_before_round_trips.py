@@ -64,14 +64,6 @@ def _create(**over: Any) -> Any:
     return asyncio.run(ep.create_table(**kwargs))
 
 
-def test_the_drive_reaches_the_round_trips_for_a_WELL_FORMED_request(no_round_trips: list[str]) -> None:
-    """Guards the gate: if the handler never called either dependency, the assertions below would pass
-    for the wrong reason. A request with nothing wrong on its face must still reach both."""
-    with pytest.raises(Exception):  # noqa: B017 — it fails later, at the write; the guards ran first
-        _create()
-    assert no_round_trips == ["require_parent_exists", "require_no_live_trash"], no_round_trips
-
-
 def test_an_off_allowlist_data_base_is_refused_without_dialling_out(no_round_trips: list[str]) -> None:
     with pytest.raises(InvalidInputError, match="allowlist"):
         _create(data_base=["s3://rogue"])

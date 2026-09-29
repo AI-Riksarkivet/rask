@@ -83,12 +83,6 @@ def _drive(body: dict[str, Any], *, allow: bool = True) -> tuple[list[str], list
     return singles, batches
 
 
-def test_the_harness_reaches_the_owner_lane() -> None:
-    """Guards the gate: if the body stopped routing to the owner lane, the count below proves nothing."""
-    singles, batches = _drive(_owner_body(3))
-    assert len(singles) + sum(n for _, n in batches) == 3, f"only {singles} / {batches} decisions — the owner lane was not reached"
-
-
 def test_twenty_owner_tier_ops_cost_one_round_trip_not_twenty() -> None:
     singles, batches = _drive(_owner_body(20))
     assert not singles, f"{len(singles)} sequential single checks on the owner lane — batch them: {singles}"

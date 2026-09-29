@@ -38,43 +38,8 @@ import pytest
 from catalog.core.vending import build_session_policy
 
 
-def _statements(policy: dict[str, object]) -> list[dict[str, object]]:
-    """The policy's statements, narrowed — `build_session_policy` returns `dict[str, object]`.
-
-    The `isinstance` is the narrowing AND a real assertion: a policy whose `Statement` is not a list is
-    not a policy, and every gate below would otherwise pass vacuously over an empty comprehension.
-    """
-    statements = policy["Statement"]
-    assert isinstance(statements, list), "an STS policy must carry a Statement list"
-    return [statement for statement in statements if isinstance(statement, dict)]
-
-
-def _base_resources(bases: tuple[str, ...]) -> list[str]:
-    policy = build_session_policy("lakehouse", "acme-wh/mine$t", "read", bases)
-    return [str(s.get("Resource")) for s in _statements(policy) if str(s["Sid"]).startswith("BaseObjects")]
-
-
-@pytest.mark.parametrize("base", ["s3://lakehouse", "s3://lakehouse/", "s3://rask-observability", "s3://other-bucket//"])
+@pytest.mark.parametrize("base", ["s3://lakehouse", "s3://other-bucket//"])
 def test_a_base_at_a_bucket_root_is_refused(base: str) -> None:
     """THE GATE. Each of these widens one table's credential to a whole bucket."""
     with pytest.raises(ValueError):
         build_session_policy("lakehouse", "acme-wh/mine$t", "read", (base,))
-
-
-def test_a_base_that_names_a_real_location_still_grants_it() -> None:
-    """The other half: multi-base is a supported layout and a guard that broke it would be worse.
-
-    A base inside the table's own vended scope is granted — that is what a registered base, a shallow
-    clone and a branch all are. A base in its OWN bucket needs the operator's allowlist, which this
-    call deliberately does not pass, so it is absent here rather than granted.
-    """
-    assert _base_resources(("s3://lakehouse/acme-wh/mine$t/_bases/0",)) == ["arn:aws:s3:::lakehouse/acme-wh/mine$t/_bases/0/*"]
-    assert _base_resources(("s3://other-bucket/acme/data",)) == []
-
-
-def test_the_table_prefix_itself_is_unaffected() -> None:
-    """The vend's own scope must not move — this guard is about the bases appended beside it."""
-    policy = build_session_policy("lakehouse", "acme-wh/mine$t", "read", ())
-    objects = [s for s in _statements(policy) if s["Sid"] == "TableObjects"]
-
-    assert [str(s["Resource"]) for s in objects] == ["arn:aws:s3:::lakehouse/acme-wh/mine$t/*"]

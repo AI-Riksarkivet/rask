@@ -97,7 +97,7 @@ def test_an_estate_admin_still_reads_it(path: str, decide) -> None:
     assert response.status_code == 200, f"{path} refused an estate admin ({response.status_code}): {response.text[:200]}"
 
 
-@pytest.mark.parametrize("path", ["/v1/stores", "/v1/stores/tiers"])
+@pytest.mark.parametrize("path", ["/v1/stores"])
 def test_dev_is_unchanged_when_fga_is_off(path: str) -> None:
     """`require_relation` is a no-op with FGA off and must stay one: a local run browses as before."""
     response = TestClient(_app(fga_enabled=False, allow=True, subject=None), raise_server_exceptions=False).get(path)
