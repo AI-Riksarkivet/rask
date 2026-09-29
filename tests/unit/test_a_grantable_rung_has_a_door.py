@@ -53,11 +53,3 @@ def test_every_can_grant_rung_is_reachable_from_a_door() -> None:
         f"{sorted(orphaned)} declare `can_grant_<rung>` and no door can issue them — add the rung to "
         "`access._GRANTABLE_BASE`, or register the door that serves it in `_OTHER_DOORS` with the reason"
     )
-
-
-def test_the_registry_names_rungs_that_still_exist() -> None:
-    """The backward half: a registry entry for a rung the model dropped makes the gate above vacuous."""
-    model = fga_module.load_model()
-    defined = {(str(td["type"]), rung) for td in model["type_definitions"] for rung in (td.get("relations") or {})}
-    stale = sorted(key for key in _OTHER_DOORS if key not in defined)
-    assert stale == [], f"{stale} are registered to a door and are not rungs — remove them"

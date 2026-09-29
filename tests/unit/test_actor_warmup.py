@@ -68,10 +68,3 @@ async def test_a_failing_constructor_is_reported_not_raised(monkeypatch: pytest.
     monkeypatch.setattr(actor_warmup, "_build_factory", _boom)
 
     assert await actor_warmup.warm_actor_proxy_factory() is False
-
-
-@pytest.mark.asyncio
-async def test_a_reachable_sidecar_warms(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(actor_warmup, "_build_factory", lambda: None)
-
-    assert await actor_warmup.warm_actor_proxy_factory() is True

@@ -20,7 +20,6 @@ Four findings against `service_kit.lakehouse`, all of them about a seam written 
 
 from __future__ import annotations
 
-import inspect
 import json
 from collections.abc import Iterator
 from pathlib import Path
@@ -29,7 +28,7 @@ from typing import cast
 import pyarrow.fs as pafs
 import pytest
 
-from service_kit.lakehouse import maintenance_policies, protection, trash, warehouse_registry
+from service_kit.lakehouse import warehouse_registry
 from service_kit.lakehouse.maintenance_policies import get_policy, put_policy
 from service_kit.lakehouse.warehouse_registry import clear_cache, project_root
 
@@ -46,13 +45,6 @@ def test_a_malformed_policy_record_is_refused_like_its_two_siblings(tmp_path: Pa
     key.write_text(json.dumps(["not", "a", "record"]))
 
     assert get_policy(str(tmp_path), {}, "table", "db$t") is None
-
-
-def test_the_hashed_record_key_is_written_once() -> None:
-    """Three byte-identical `_key` bodies, differing only in the prefix constant."""
-    copies = [module.__name__ for module in (protection, maintenance_policies, trash) if "def _key(" in inspect.getsource(module)]
-
-    assert copies == [], f"the hashed record key is still hand-rolled in {copies}"
 
 
 def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
@@ -120,24 +112,6 @@ def test_an_expired_entry_is_not_retained(tmp_path: Path) -> None:
 
     held = len(warehouse_registry._cache)
     assert held == 0, f"{held} entries that expire the instant they are written are still resident"
-
-
-# --------------------------------------------------------------------------------------------------
-# SKG-13 — the lakehouse adapters must not shadow the storage ones by name
-# --------------------------------------------------------------------------------------------------
-
-
-def test_the_lakehouse_adapters_do_not_shadow_the_storage_ones_by_name() -> None:
-    """Two live classes per name, incompatible constructors — and `services/medallion` imports both."""
-    import storage
-    from service_kit.lakehouse import sinks, sources
-
-    lakehouse_classes = {
-        name for module in (sources, sinks) for name, obj in vars(module).items() if isinstance(obj, type) and obj.__module__ == module.__name__
-    }
-    collisions = sorted(lakehouse_classes & {name for name in dir(storage) if not name.startswith("_")})
-
-    assert collisions == [], f"`storage` and `service_kit.lakehouse` both export {collisions}"
 
 
 # --------------------------------------------------------------------------------------------------

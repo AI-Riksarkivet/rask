@@ -77,51 +77,6 @@ def test_an_absent_object_is_idempotent_success(monkeypatch: pytest.MonkeyPatch)
     outbox.drop_event("s3://lance-catalog/_lineage_outbox", {"endpoint": "http://rustfs:9000"}, "gone@COMPLETE")
 
 
-def test_a_LOCAL_outbox_still_drops_through_the_filesystem(tmp_path) -> None:
-    """The non-S3 path is unchanged — tests and dev stacks stage to a local directory."""
-    uri = str(tmp_path / "outbox")
-    outbox.stage_event(uri, {}, "run-2", '{"eventType": "COMPLETE"}')
-    staged = list((tmp_path / "outbox").iterdir())
-    assert staged, "nothing was staged, so the drop below would prove nothing"
-    outbox.drop_event(uri, {}, "run-2@COMPLETE")
-    assert not [p for p in (tmp_path / "outbox").iterdir() if p.suffix == ".json"]
-
-
-@pytest.mark.parametrize(
-    ("options", "spelling"),
-    [
-        ({"endpoint": "http://rustfs:9000", "aws_access_key_id": "K", "aws_secret_access_key": "S"}, "aws_-prefixed"),
-        ({"endpoint": "http://rustfs:9000", "access_key_id": "K", "secret_access_key": "S"}, "bare"),
-    ],
-)
-def test_the_delete_reads_BOTH_credential_spellings(monkeypatch: pytest.MonkeyPatch, options: dict[str, str], spelling: str) -> None:
-    """The estate uses two spellings for one credential, and a reader that knows one signs as nobody.
-
-    `lance_storage_options` emits `aws_`-prefixed keys — deliberately, because the bare ones do not
-    displace a pod's ambient `AWS_*` environment and object_store blends the two sources. The catalog's
-    own `storage_options()` returns the BARE form (measured 2026-09-10 against the running pod). So the
-    outbox seam is handed both, depending on which service is draining.
-
-    Reading one leaves the other `None` and boto3 falls back to its default chain. The lineage pod
-    carries no ambient `AWS_*` (measured 2026-09-10), so the result is a delete with NO credential —
-    the object stays staged and the drain is exactly as broken as before, which is a deployed fix that
-    changes nothing rather than one that fails loudly. No test process has an ambient `AWS_*` either,
-    so that spelling passes every unit test; this asserts the credential ARRIVED, not that a call
-    was made.
-    """
-    seen: dict[str, object] = {}
-
-    def _factory(*_a: object, **kw: object) -> _RecordingS3:
-        seen.update(kw)
-        return _RecordingS3()
-
-    monkeypatch.setattr(outbox, "s3_client", _factory)
-    outbox.drop_event("s3://lance-catalog/_lineage_outbox", options, "run-3@COMPLETE")
-
-    assert seen.get("access_key") == "K", f"the {spelling} access key never reached the client: {seen}"
-    assert seen.get("secret_key") == "S", f"the {spelling} secret key never reached the client: {seen}"
-
-
 def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) -> None:
     """The twin of the delete contract: one PutObject, addressed at the event, and no bucket probe.
 

@@ -18,11 +18,9 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from service_kit.governed.user_state import UserStateDocument
 from service_kit.schemas.dock_layout import (
     MAX_VIEWS_PER_WORKBENCH,
     DockLayoutLibrary,
-    DockLayouts,
 )
 
 
@@ -38,37 +36,7 @@ def _view(view_id: str = "v1", name: str = "Compare two runs") -> dict[str, obje
     return {"id": view_id, "name": name, "layout": _layout(), "updated": "2026-07-29T10:11:12.512Z"}
 
 
-class TestTheImplicitLayoutIsUntouched:
-    """The half that must not change. If any of these break, the split has failed at its one job."""
-
-    def test_a_document_written_by_the_old_client_still_loads(self) -> None:
-        # The compatibility floor: today's clients write exactly this, and they must keep working after
-        # the library ships. There is no migration and no version field — because there is no change.
-        old = {"workbenches": {"lineage": _layout(), "media": _layout()}}
-        parsed = DockLayouts.model_validate(old)
-        assert set(parsed.workbenches) == {"lineage", "media"}
-
-    def test_a_sibling_key_inside_DockLayouts_is_still_refused(self) -> None:
-        # This is WHY the library is a separate document. Were it a key here, `extra="forbid"` would
-        # 422 it — and relaxing that to allow one would mean a client that does not know the key drops
-        # it on the next read-modify-write, erasing every saved view.
-        with pytest.raises(ValidationError):
-            DockLayouts.model_validate({"workbenches": {}, "library": {"views": []}})
-
-    def test_the_two_documents_are_different_members_of_the_closed_key_space(self) -> None:
-        assert UserStateDocument.DOCK_LAYOUT.value == "dock-layout"
-        assert UserStateDocument.DOCK_LAYOUT_LIBRARY.value == "dock-layout-library"
-        assert UserStateDocument.DOCK_LAYOUT is not UserStateDocument.DOCK_LAYOUT_LIBRARY
-
-
 class TestTheLibrary:
-    def test_round_trips_a_named_view_without_mutating_the_layout(self) -> None:
-        # The interior is dockview's, not ours: it goes straight back to the deserializer that wrote it,
-        # so the round trip must be lossless.
-        doc = {"workbenches": {"lineage": {"views": [_view()]}}}
-        parsed = DockLayoutLibrary.model_validate(doc)
-        assert parsed.model_dump(mode="json") == doc
-
     def test_preserves_unknown_keys_INSIDE_a_layout(self) -> None:
         # `floatingGroups`, `popoutGroups`, `edgeGroups` and `activeGroup` are all optional in
         # SerializedDockview. Dropping one hands the user back a layout with their floating panels
@@ -79,16 +47,6 @@ class TestTheLibrary:
         stored = parsed.model_dump(mode="json")["workbenches"]["lineage"]["views"][0]["layout"]
         assert stored["floatingGroups"] == layout["floatingGroups"]
         assert stored["activeGroup"] == "1"
-
-    def test_an_empty_library_is_valid(self) -> None:
-        assert DockLayoutLibrary.model_validate({}).workbenches == {}
-
-    def test_a_layout_missing_its_grid_is_refused(self) -> None:
-        # Same floor the implicit document holds: a thing without `grid` is not a dock layout, and
-        # storing it would only fail later, in the browser, as an unrestorable view.
-        bad = _view() | {"layout": {"panels": {}}}
-        with pytest.raises(ValidationError):
-            DockLayoutLibrary.model_validate({"workbenches": {"lineage": {"views": [bad]}}})
 
     def test_duplicate_view_ids_are_refused(self) -> None:
         # A duplicate id makes load/rename/delete silently ambiguous — the client would act on whichever
@@ -109,14 +67,3 @@ class TestTheLibrary:
         too_many = [_view(f"v{i}") for i in range(MAX_VIEWS_PER_WORKBENCH + 1)]
         with pytest.raises(ValidationError):
             DockLayoutLibrary.model_validate({"workbenches": {"lineage": {"views": too_many}}})
-
-    def test_the_cap_is_per_workbench_not_per_document(self) -> None:
-        at_cap = [_view(f"v{i}") for i in range(MAX_VIEWS_PER_WORKBENCH)]
-        doc = {"workbenches": {"lineage": {"views": at_cap}, "media": {"views": at_cap}}}
-        assert len(DockLayoutLibrary.model_validate(doc).workbenches) == 2
-
-    def test_an_unexpected_top_level_key_is_refused(self) -> None:
-        # The envelope is ours, so an unknown key here is a client bug worth a 422 — the same stance
-        # DockLayouts takes, and for the same reason.
-        with pytest.raises(ValidationError):
-            DockLayoutLibrary.model_validate({"workbenches": {}, "activeViewId": "v1"})

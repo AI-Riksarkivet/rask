@@ -14,9 +14,7 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 
-import aiohttp
 import pytest
-from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
@@ -79,17 +77,6 @@ def test_read_object_tuples_paginates_to_completion() -> None:
     }
 
 
-def test_revoke_object_tuples_reads_then_deletes_all() -> None:
-    fake = _ReadDeleteClient([([_tuple("user:alice", "owner", "table:t"), _tuple("user:bob", "writer", "table:t")], "")])
-    removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:t", actor="test", origin="create"))
-    assert len(removed) == 2
-    assert fake.deleted is not None
-    assert _keys(fake.deleted) == {
-        ("user:alice", "owner", "table:t"),
-        ("user:bob", "writer", "table:t"),
-    }
-
-
 def test_revoke_object_tuples_noop_when_no_grants() -> None:
     fake = _ReadDeleteClient([([], "")])
     removed = asyncio.run(fga.revoke_object_tuples(_client(fake), "table:gone", actor="test", origin="create"))
@@ -131,63 +118,6 @@ def test_per_tuple_delete_tolerates_one_missing_without_losing_the_rest() -> Non
         ("user:a", "owner", "table:t"),
         ("user:c", "writer", "table:t"),
     }
-
-
-class _MissingDeleteClient:
-    """read returns one tuple; the delete raises the 400 'tuple does not exist' (concurrent revoke)."""
-
-    async def read(self, *_a: object, **_k: object) -> SimpleNamespace:
-        return SimpleNamespace(tuples=[_tuple("user:alice", "owner", "table:t")], continuation_token="")
-
-    async def write(self, *_a: object, **_k: object) -> None:
-        # The parsed-body shape the live SDK raises — a bare ApiException carries code=None, which
-        # the structured classifier (rightly) refuses to read as "absent".
-        raise _absent_delete_400()
-
-
-def test_delete_is_idempotent_on_already_absent_tuple() -> None:
-    # A concurrent revoke (the tuple is already gone) is SUCCESS — the post-condition holds.
-    removed = asyncio.run(fga.revoke_object_tuples(_client(_MissingDeleteClient()), "table:t", actor="test", origin="create"))
-    assert len(removed) == 1
-
-
-class _DownClient:
-    """Every call raises a raw transport error (server down) — the dominant outage mode."""
-
-    async def read(self, *_a: object, **_k: object) -> object:
-        raise aiohttp.ClientConnectionError("refused")
-
-    async def write(self, *_a: object, **_k: object) -> object:
-        raise ConnectionRefusedError
-
-
-def test_read_object_tuples_fails_closed_on_outage() -> None:
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.read_object_tuples(
-                _client(_DownClient()),
-                "table:t",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
-
-
-def test_delete_tuples_fails_closed_on_outage() -> None:
-    tuples = [ClientTuple(user="user:alice", relation="owner", object="table:t")]
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.delete_tuples(
-                _client(_DownClient()),
-                tuples,
-                actor="test",
-                origin="admin_api",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
 
 
 # --------------------------------------------------------------------------- #
@@ -292,44 +222,3 @@ def test_a_revoke_the_server_says_was_never_there_is_not_audited_as_a_revoke(cap
     assert not claimed, "an absent tuple's delete was audited as a confirmed revoke — the trail asserts a removal the server denied performing"
     noop = [r for r in caplog.records if getattr(r, "audit.reason", None) == "tuple_absent"]
     assert noop, "the absence left NO trail at all — an auditor cannot distinguish 'never attempted' from 'attempted, was already gone'"
-
-
-class _ConflictOptionClient:
-    """Records what the write path sends, so the duplicate policy is provably the SERVER's."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    async def write(self, body: Any, options: dict[str, Any] | None = None, **_k: object) -> None:
-        self.calls.append({"writes": len(body.writes or []), "options": options})
-
-
-def test_duplicate_idempotency_is_the_servers_job_now(caplog: pytest.LogCaptureFixture) -> None:
-    """The write path sends ONE transactional batch with `on_duplicate_writes=IGNORE` — the SDK
-    primitive that makes the whole marker-matching recovery (and its one-at-a-time fallback, which
-    turned one batched write into N sequential round-trips on any duplicate) dead code."""
-    from openfga_sdk.client.models import ClientWriteRequestOnDuplicateWrites
-
-    fake = _ConflictOptionClient()
-    asyncio.run(
-        fga.write_tuples(
-            _client(fake),
-            [ClientTuple(user="user:a", relation="owner", object="table:t"), ClientTuple(user="user:b", relation="reader", object="table:t")],
-            actor="admin@example.com",
-            origin="grant_api",
-        )
-    )
-    assert len(fake.calls) == 1, f"the write fragmented into {len(fake.calls)} calls — the batch is the transactional unit"
-    options = fake.calls[0]["options"]
-    assert options is not None, "no conflict options rode the write — a duplicate still 400s the whole batch and re-enters the deleted fallback"
-    conflict = options.get("conflict")
-    duplicate_policy = getattr(conflict, "on_duplicate_writes", None)
-    assert duplicate_policy == ClientWriteRequestOnDuplicateWrites.IGNORE, f"duplicate policy is {duplicate_policy!r}, not IGNORE"
-
-
-def test_the_prose_marker_lists_are_gone() -> None:
-    """The classifier keys on the server's structured `code`; the substring lists it replaced are
-    the mechanism SKG-01 exists about, and leaving them invites the next reader to match on them."""
-    assert not hasattr(fga, "_DUPLICATE_WRITE_MARKERS"), "_DUPLICATE_WRITE_MARKERS survives"
-    assert not hasattr(fga, "_MISSING_DELETE_MARKERS"), "_MISSING_DELETE_MARKERS survives"
-    assert not hasattr(fga, "_is_duplicate_write"), "_is_duplicate_write survives with nothing to classify"

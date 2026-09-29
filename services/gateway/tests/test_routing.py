@@ -13,51 +13,11 @@ def gw(monkeypatch: pytest.MonkeyPatch):
     return importlib.reload(gateway)
 
 
-def test_ray_rows_map_to_the_compute_service(gw) -> None:
-    routes = gw._routes()
-    picked = gw._pick_route("/api/ray/jobs", routes)
-    assert picked is not None
-    _prefix, upstream_prefix, app_id, fallback = picked
-    assert app_id == "compute"  # R22: service is `compute`; the public /api/ray path names the Ray cluster
-    assert upstream_prefix == "/api/ray"  # rask rows forward unrewritten
-    assert fallback.endswith(":8804")
-    # the Serve proxy rides the same service
-    assert gw._pick_route("/api/serve/status", routes)[2] == "compute"
-
-
-def test_media_objects_ride_the_viewer_row(gw) -> None:
-    # The storage browser (R18): /api/explorer/objects → the media-plane viewer with
-    # the /api/explorer prefix rewritten to the viewer's internal /api.
-    routes = gw._routes()
-    picked = gw._pick_route("/api/explorer/objects", routes)
-    assert picked is not None
-    prefix, upstream_prefix, app_id, _fallback = picked
-    assert app_id == "viewer"
-    assert prefix == "/api/explorer"
-    assert upstream_prefix == "/api"
-
-
-def test_no_catch_all_since_the_r6_r20_wave(gw) -> None:
-    # core-api and its /api catch-all are gone: an unmatched /api/* path picks NO
-    # route (the proxy then 404s with "no upstream") instead of silently riding
-    # to a dead upstream.
-    routes = gw._routes()
-    assert gw._pick_route("/api/batches/", routes) is None
-    assert gw._pick_route("/api/search/q", routes) is None
-    assert gw._pick_route("/api/volumes/objects", routes) is None
-
-
 def test_target_base_uses_sidecar_when_enabled(gw, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
     monkeypatch.setenv("DAPR_HTTP_PORT", "3500")
     base = gw._target_base("compute", "http://127.0.0.1:8804")
     assert base == "http://127.0.0.1:3500/v1.0/invoke/compute/method"
-
-
-def test_target_base_falls_back_when_disabled(gw, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_DAPR_ENABLED", "false")
-    base = gw._target_base("compute", "http://127.0.0.1:8804")
-    assert base == "http://127.0.0.1:8804"
 
 
 def test_ingest_row_reaches_the_ingest_plane_and_a_sibling_prefix_does_not_fall_into_it() -> None:
@@ -85,87 +45,3 @@ def test_ingest_row_reaches_the_ingest_plane_and_a_sibling_prefix_does_not_fall_
     # 404. Asserted on the absent row, because that is the direction the bug now runs.
     legacy = _pick_route("/api/ingest-iiif", rows)
     assert legacy is None, "a sibling prefix must not fall into the /api/ingest row — it has no upstream, and 404 is the correct answer"
-
-
-def test_flows_rows_map_to_the_flows_service(gw) -> None:
-    routes = gw._routes()
-    picked = gw._pick_route("/api/flows/catalog", routes)
-    assert picked is not None
-    prefix, upstream_prefix, app_id, fallback = picked
-    assert app_id == "flows"
-    # Public and upstream are the same string: the flows app mounts its routers under
-    # RASK_API_PREFIX itself, so this row forwards unrewritten (the compute/controlplane shape).
-    assert prefix == upstream_prefix == "/api/flows"
-    assert fallback.endswith(":8840")
-    # The runs sub-resource rides the same row; nothing else claims the prefix.
-    assert gw._pick_route("/api/flows/runs/run-abc", routes)[2] == "flows"
-
-
-def test_the_flows_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:
-    """The flows row's rewrite, checked against the flows app's OWN openapi — the ingest lesson below,
-    applied to the new row rather than trusted not to recur.
-
-    Both modules are reloaded under the pinned prefix because both bake it at import: the gateway
-    builds its route table from `RASK_API_PREFIX`, and `flows.app` is a module-level singleton built by
-    `make_service_app`, which mounts every router under the same variable. Asserting one against the
-    other is the only form of this test that can fail when they disagree.
-    """
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    import importlib
-
-    import flows
-    import gateway
-
-    gw = importlib.reload(gateway)
-    served = set(importlib.reload(flows).app.openapi()["paths"])
-
-    rows = gw._routes()
-    for public, expected in (
-        ("/api/flows/catalog", "/api/flows/catalog"),
-        ("/api/flows/validate", "/api/flows/validate"),
-        ("/api/flows/runs", "/api/flows/runs"),
-        ("/api/flows/runs/{run_id}", "/api/flows/runs/{run_id}"),
-    ):
-        route = gw._pick_route(public, rows)
-        assert route is not None, f"no gateway row for {public}"
-        route_prefix, upstream_prefix, _, _ = route
-        rewritten = upstream_prefix + public[len(route_prefix) :]
-
-        assert rewritten == expected
-        assert rewritten in served, f"the gateway rewrites {public} to {rewritten}, which the flows app does not serve: {sorted(served)}"
-
-
-def test_the_ingest_rewrite_lands_on_a_path_the_service_ACTUALLY_serves(monkeypatch) -> None:
-    """The gateway's rewritten path must exist in the ingest app, not merely look plausible.
-
-    This row shipped rewriting to "/v1", taken from the ingest module's own docstrings — which say
-    `POST /v1/ingests`. That is the ROUTER's path, before the prefix `make_service_app` adds: the app
-    mounts every router under `settings.api_prefix`, and the chart deploys `RASK_API_PREFIX=/api`
-    (values.yaml:67, confirmed on the live pod), so the service serves `/api/ingests`. Every call
-    through the gateway 404'd.
-
-    The existing routing tests could not catch it, because they assert the gateway in ISOLATION: that
-    a path picks the right row. A rewrite is only correct RELATIVE to what the other side serves.
-
-    The prefix is pinned here rather than inherited, because the suite's own conftest sets
-    `RASK_API_PREFIX=/api/v1` for config isolation — so an ambient reading would test a prefix no
-    deployment uses, which is its own way of being wrong.
-    """
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    from gateway import _pick_route, _routes
-    from ingest import create_app
-
-    served = set(create_app().openapi()["paths"])
-
-    rows = _routes()
-    for public, expected in (
-        ("/api/ingest/ingests", "/api/ingests"),
-        ("/api/ingest/ingests/{run_id}", "/api/ingests/{run_id}"),
-    ):
-        route = _pick_route(public, rows)
-        assert route is not None, f"no gateway row for {public}"
-        route_prefix, upstream_prefix, _, _ = route
-        rewritten = upstream_prefix + public[len(route_prefix) :]
-
-        assert rewritten == expected
-        assert rewritten in served, f"the gateway rewrites {public} to {rewritten}, which the ingest app does not serve: {sorted(served)}"

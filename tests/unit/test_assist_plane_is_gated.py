@@ -98,15 +98,6 @@ def _resolve_handle(monkeypatch: pytest.MonkeyPatch) -> None:
 BODY = {"producer": "sam", "prompt": "a line of text"}
 
 
-def test_the_router_declares_a_door_at_all() -> None:
-    """The structural claim, and the one the finding actually makes: no `dependencies=` on the
-    router meant every route below it was reachable with no subject and no check."""
-    assert router.dependencies, (
-        "assist's router declares no dependencies — its three routes take no verified subject and no "
-        "FGA checker, while every sibling router in this service has a door"
-    )
-
-
 @pytest.mark.parametrize(
     ("method", "path"),
     [

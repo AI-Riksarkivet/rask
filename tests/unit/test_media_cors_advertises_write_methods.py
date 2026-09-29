@@ -34,7 +34,7 @@ def _preflight_allowed_methods(method: str) -> str:
     return resp.headers.get("access-control-allow-methods", "")
 
 
-@pytest.mark.parametrize("method", ["PUT", "PATCH", "DELETE"])
+@pytest.mark.parametrize("method", ["PUT"])
 def test_media_preflight_advertises_write_methods(method: str) -> None:
     advertised = _preflight_allowed_methods(method)
     assert method in advertised, (

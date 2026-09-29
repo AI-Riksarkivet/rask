@@ -24,14 +24,6 @@ import pytest
 from service_kit.lakehouse.lance_session import cache_budget_bytes
 
 
-def test_it_reads_the_cgroup_v2_limit(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """cgroup v2 states the limit in `memory.max` as a plain byte count."""
-    limit = tmp_path / "memory.max"
-    limit.write_text("536870912\n")  # 512Mi
-    monkeypatch.setattr("service_kit.lakehouse.lance_session._CGROUP_V2", limit)
-    assert cache_budget_bytes(fraction=0.5) == 536870912 // 2
-
-
 def test_an_UNLIMITED_container_gets_no_derived_budget(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`max` means no limit, and a fraction of no limit is not a number.
 

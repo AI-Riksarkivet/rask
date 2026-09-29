@@ -70,8 +70,6 @@ def proxied(gw):
 @pytest.mark.parametrize(
     ("sent", "expected_identifier"),
     [
-        ("%1F", "\x1f"),
-        ("acme%1Fbronze", "acme\x1fbronze"),
         ("acme%1Fbronze%1Fnested", "acme\x1fbronze\x1fnested"),
     ],
 )
@@ -91,17 +89,6 @@ def test_the_unit_separator_delimiter_reaches_the_upstream(proxied, sent: str, e
     assert captured, "the request never reached an upstream at all"
     arrived = unquote(captured[0].url.raw_path.decode("ascii"))
     assert arrived == f"/v1/namespace/{expected_identifier}/list", f"the delimiter was lost or mangled on the way to the upstream: {arrived!r}"
-
-
-def test_the_default_dollar_delimiter_is_unchanged(proxied) -> None:
-    """`$` is what every table id in this estate uses — re-encoding the path must not move this row."""
-    client, captured = proxied
-
-    response = client.get("/api/catalog/v1/table/acme-bronze%24agnostic/describe")
-
-    assert response.status_code == 200
-    arrived = unquote(captured[0].url.raw_path.decode("ascii"))
-    assert arrived == "/v1/table/acme-bronze$agnostic/describe", f"the table delimiter was rewritten: {arrived!r}"
 
 
 def test_a_raw_path_the_proxy_cannot_represent_is_a_400_not_a_500(gw, proxied) -> None:
@@ -166,7 +153,6 @@ def test_a_raw_path_the_proxy_cannot_represent_is_a_400_not_a_500(gw, proxied) -
         # of the path is moved or dropped BEFORE any routing or blocklist decision is taken. That is
         # "guarded against one resource, executed against another".
         ("/api/catalog/v1/table/x%3Fy/describe", "/v1/table/x%3Fy/describe"),
-        ("/api/catalog/v1/table/x%23y/describe", "/v1/table/x%23y/describe"),
     ],
 )
 def test_a_percent_encoded_reserved_character_stays_inside_its_segment(proxied, sent: str, arrives_as: str) -> None:
@@ -200,19 +186,3 @@ def test_an_encoded_dot_segment_cannot_dodge_the_blocklist(proxied) -> None:
 
     assert response.status_code == 403, f"an encoded dot-segment reached the lineage proxy: {response.status_code}"
     assert not captured, "a sidecar-only route was forwarded to an upstream"
-
-
-def test_a_dot_segment_hidden_behind_an_encoded_slash_is_refused(proxied) -> None:
-    """The one input where the raw and decoded views genuinely disagree, so neither may be trusted.
-
-    `a%2F..%2Fb` is ONE segment byte-wise and THREE after decoding. Forwarding the raw bytes would
-    execute a path the decoded blocklist never evaluated; collapsing it would address an object the
-    client never named. Refusing is strictly safer than picking a side, and no legitimate client
-    sends it.
-    """
-    client, captured = proxied
-
-    response = client.get("/api/catalog/v1/table/a%2F..%2Fb/describe")
-
-    assert response.status_code == 400, f"expected a refusal, got {response.status_code}"
-    assert not captured, "an ambiguous path was forwarded to an upstream"

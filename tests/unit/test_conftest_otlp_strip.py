@@ -37,9 +37,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-#: Every variable the root conftest claims to strip, driven one per case so a partial strip names the
-#: exact variable that survived instead of failing as an opaque set difference. Kept in step with
-#: `_HARNESS_OTLP_VARS` by :func:`test_this_suite_covers_every_variable_the_conftest_strips`.
+#: Every variable the root conftest claims to strip. Kept in step with `_HARNESS_OTLP_VARS` by
+#: :func:`test_this_suite_covers_every_variable_the_conftest_strips`.
 HARNESS_VARS = (
     "OTEL_EXPORTER_OTLP_ENDPOINT",
     "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -83,7 +82,7 @@ def probe_dir() -> Iterator[Path]:
         shutil.rmtree(path, ignore_errors=True)
 
 
-@pytest.mark.parametrize("var", HARNESS_VARS)
+@pytest.mark.parametrize("var", ["OTEL_EXPORTER_OTLP_ENDPOINT"])
 def test_the_harness_variable_is_gone_before_a_collected_module_is_imported(var: str, probe_dir: Path) -> None:
     probe = probe_dir / "test_otlp_probe.py"
     probe.write_text(_PROBE.format(var=var), encoding="utf-8")

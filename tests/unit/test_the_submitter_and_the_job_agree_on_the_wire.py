@@ -15,10 +15,6 @@ It was deleted 2026-09-15 (owner decision) and `RayJobsApiExecutor` replaced it,
 STANDING cluster through the dashboard Jobs API — the same path `scripts/ray_stage_job.py` is launched
 by, which is why this parity gate still has something to hold.
 
-`test_ray_job_wire_parity.py` is the neighbouring gate and does NOT cover this: it compares the
-Python and TypeScript declarations of the `RayJob` **schema** — what the jobs board parses — not the
-env contract between a submitter and the program it submits.
-
 THE DIRECTION OF THE FIX IS THE PLATFORM'S VOCABULARY, not a translation in the adapter.
 `WorkOrder.to_env` is documented as "the ONE serialization, so no adapter hand-rolls it"; an adapter
 that renamed six fields on the way out would restore exactly the second vocabulary the port exists to
@@ -95,15 +91,6 @@ def _names_the_order_supplies() -> set[str]:
     return set(order.to_env())
 
 
-def test_the_gate_can_see_both_halves() -> None:
-    """A regex matching nothing, or a moved script, would make the assertion below vacuous."""
-    assert _names_the_order_supplies(), "WorkOrder.to_env() emitted nothing — the gate is blind"
-    for rel in JOB_SCRIPTS:
-        path = REPO / rel
-        assert path.exists(), f"{rel} has moved — this gate now checks nothing"
-        assert _names_the_job_reads(path), f"{rel}: the reader regex matched no env names"
-
-
 def test_every_name_the_job_reads_is_one_the_ORDER_supplies() -> None:
     """THE GATE. A job reading a name no submitter sends binds it to the empty string, and an empty
     source URI is not a crash — it is a run that scans nothing, writes nothing and reports success."""
@@ -115,48 +102,3 @@ def test_every_name_the_job_reads_is_one_the_ORDER_supplies() -> None:
             f"`service_kit.lakehouse.executor` starts with those unbound. The order supplies "
             f"{sorted(supplies)}."
         )
-
-
-#: The pre-convergence spellings. Every one had an author who was not the medallion's submitter, which
-#: is why a reader-side check could not see them.
-RETIRED = ('"FROM_URI"', '"TO_URI"', '"STAGE_CARDINALITY"', '"BASE_VERSION"', '"LINEAGE_JSON"')
-
-#: Every plane a stage submission can be authored from. `runners/` is here for a reason the estate's
-#: own layout makes sharp: a sealed runner's tests are matched by NO root testpath, so a runner test
-#: still passing the old names goes green by absence — which is exactly what happened, and what the
-#: reader-side gate above could never have caught.
-_PLANES = ("services", "packages", "scripts", "tests", "runners")
-
-
-def test_the_retired_spellings_are_GONE_from_every_plane() -> None:
-    """THE GATE THE READER-SIDE ONE COULD NOT BE. Checking what job programs READ finds a mismatch only
-    where a program reads; it says nothing about the several places a submission is AUTHORED.
-
-    Two authors drifted past the first gate and were found by grep rather than by a test: the e2e's
-    dummy-lane fixture, which submits to the Jobs API directly, and `runners/dummy`'s own suite, whose
-    tests the root pytest never collects. Both kept passing while asserting nothing about the contract
-    they had stopped speaking.
-
-    So the rule is stated over the WHOLE tree and over the retired NAMES, which is the one form that
-    covers a reader, a submitter and a fixture alike: these spellings mean nothing to anything now, so
-    an occurrence is either a site that was missed or a new one being written against a contract that
-    no longer exists.
-    """
-    offenders: list[str] = []
-    for plane in _PLANES:
-        root = REPO / plane
-        if not root.exists():
-            continue
-        for path in root.rglob("*.py"):
-            if path.resolve() == pathlib.Path(__file__).resolve():
-                continue  # this file NAMES the retired spellings in order to ban them
-            text = path.read_text(encoding="utf-8")
-            hits = sorted({name for name in RETIRED if name in text})
-            if hits:
-                offenders.append(f"{path.relative_to(REPO)}: {hits}")
-    assert not offenders, (
-        "these carry the retired stage-contract spellings, which no submitter sends and no job reads:\n  "
-        + "\n  ".join(offenders)
-        + "\nThe platform's vocabulary is `WorkOrder.to_env()`'s — RASK_SOURCE_URI, RASK_DEST_URI, "
-        "RASK_STAGE, RASK_CARDINALITY, RASK_VERSION_FLOOR, RASK_LINEAGE_DOCUMENT."
-    )

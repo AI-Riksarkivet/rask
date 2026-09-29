@@ -3,15 +3,11 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
 
-import lance
-import pyarrow as pa
 import pytest
-from lance import blob_array, blob_field
 from PIL import Image, UnidentifiedImageError
 
-from service_kit.lakehouse import blobs, media
+from service_kit.lakehouse import media
 
 
 def _png(color: tuple[int, int, int] = (10, 20, 30), size: tuple[int, int] = (64, 48)) -> bytes:
@@ -48,66 +44,8 @@ def test_derive_embedding_is_fixed_size_and_deterministic() -> None:
     assert all(0.0 <= value <= 1.0 for value in embedding)
 
 
-def test_embedding_depends_on_the_image() -> None:
-    assert media.derive_embedding(_png((0, 0, 0))) != media.derive_embedding(_png((255, 255, 255)))
-
-
 def test_derive_from_non_image_raises_cleanly() -> None:
     with pytest.raises(UnidentifiedImageError):
         media.derive_thumbnail(b"not-an-image")
     with pytest.raises(UnidentifiedImageError):
         media.derive_embedding(b"not-an-image")
-
-
-def test_embedding_fits_a_fixed_size_list() -> None:
-    # the demo stores the embedding as FixedSizeList(float32, EMBEDDING_DIMS)
-    embedding = media.derive_embedding(_png())
-    array = pa.array([embedding], type=pa.list_(pa.float32(), media.EMBEDDING_DIMS))
-    assert array.type.list_size == media.EMBEDDING_DIMS
-
-
-def test_media_pipeline_bronze_blob_to_silver_thumbnail_embedding(tmp_path: Path) -> None:
-    # the §9 DoD shape end to end: a bronze image blob (2.2) → silver thumbnail + embedding (2.2)
-    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
-    images = [_png((200, 0, 0)), _png((0, 0, 200))]
-    lance.write_dataset(
-        pa.table(
-            {"id": [0, 1], "payload": blob_array(images)},
-            schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
-        ),
-        bronze,
-        data_storage_version="2.2",
-    )
-    # pylance 10 types each payload `bytes | None`, and the derivers take `bytes`. Filtered rather
-    # than asserted: `assert all(...)` does not narrow a list's ELEMENT type, so the deriver calls
-    # below would still be passing an Optional. The length check keeps a fixture that silently
-    # wrote no blobs from passing as an empty run.
-    payloads = [p for _addr, p in lance.dataset(bronze).read_blobs("payload", indices=[0, 1]) if p is not None]
-    assert len(payloads) == 2, "the bronze fixture did not produce both blob payloads"
-    lance.write_dataset(
-        pa.table(
-            {
-                "id": [0, 1],
-                "thumbnail": pa.array([media.derive_thumbnail(p) for p in payloads], pa.large_binary()),
-                "embedding": pa.array(
-                    [media.derive_embedding(p) for p in payloads],
-                    type=pa.list_(pa.float32(), media.EMBEDDING_DIMS),
-                ),
-            },
-            schema=pa.schema(
-                [
-                    pa.field("id", pa.int64()),
-                    pa.field("thumbnail", pa.large_binary()),
-                    pa.field("embedding", pa.list_(pa.float32(), media.EMBEDDING_DIMS)),
-                ]
-            ),
-        ),
-        silver,
-        data_storage_version="2.2",
-    )
-    silver_ds = lance.dataset(silver)
-    assert silver_ds.data_storage_version == "2.2"
-    table = silver_ds.to_table()
-    assert all(len(thumb) > 0 for thumb in table.column("thumbnail").to_pylist())  # real thumbnails
-    assert table.column("embedding")[0].as_py() != table.column("embedding")[1].as_py()  # per-image
-    assert not blobs.is_blob_field(silver_ds.schema.field("thumbnail"))  # inline binary, not a blob

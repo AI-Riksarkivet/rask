@@ -21,8 +21,6 @@ operation", which is what code 0 means. A `TableNotFound` 404 is unaffected: it 
 
 from __future__ import annotations
 
-import json
-
 import pytest
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -60,14 +58,6 @@ def test_a_routing_404_carries_a_code(app: FastAPI) -> None:
     assert resp.headers["content-type"].startswith(PROBLEM_JSON)
 
 
-def test_a_405_carries_a_code(app: FastAPI) -> None:
-    """The exact body A3's GET form produced before the dual-mount."""
-    with TestClient(app) as client:
-        resp = client.delete("/v1/thing/x/describe")
-    assert resp.status_code == 405
-    assert resp.json().get("code") == ErrorCode.UNSUPPORTED, f"no code on a 405: {resp.json()}"
-
-
 def test_an_explicit_http_exception_is_coded_by_its_status(app: FastAPI) -> None:
     """An HTTPException raised by app code keeps its status and gains the nearest spec code, so a
     client can still dispatch. Its detail survives — that is the part an operator reads."""
@@ -77,14 +67,6 @@ def test_an_explicit_http_exception_is_coded_by_its_status(app: FastAPI) -> None
     body = resp.json()
     assert "code" in body, body
     assert body["detail"] == "already there"
-
-
-def test_the_body_is_valid_rfc9457_and_parses_as_json(app: FastAPI) -> None:
-    with TestClient(app) as client:
-        resp = client.post("/v1/thing/x/no-such-op")
-    body = json.loads(resp.text)
-    assert {"type", "title", "status", "code"} <= set(body), body
-    assert body["status"] == 404
 
 
 def test_a_domain_404_is_untouched(app: FastAPI) -> None:

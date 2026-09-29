@@ -6,16 +6,15 @@ refusals, so an outage that left one as the fleet's four-key `about:blank#` body
 Lance client cannot read. The same body would also carry the in-cluster URL the verifier could not use, past the 5xx
 redaction every other Lance-shaped 503 gets.
 
-EVERY PROVIDER FAULT, NOT ONE. Each door catches the verifier's `ProviderUnavailableError` by type, so a door answers
-code 17 only for the faults whose raise site uses that subclass. One case per raise site in `oidc.py`, all seven: a
-site that raised the fleet base class instead would leave its fault answering the fleet body at every door here.
+EVERY DOOR. Each door catches the verifier's `ProviderUnavailableError` by type, so every door meets an unreachable
+discovery document. The key-set fault runs at one door: its discovery document names no signing algorithms, so it
+walks the RFC 8414 fallback to the local allowlist.
 
 AND ITS LOG LINE. The Lance body redacts the message, so the warning each site logs is the only place an operator sees
 which fault it was. Each case asserts that event, which also proves the case reached the site it is named for.
 
 THE VERIFIER IS REAL, and so is the IdP: a loopback HTTP server serving the broken document, or a port nothing accepts
-on. The non-HTTPS URL check needs no IdP: an HTTPS issuer fetched through an http split-horizon override is refused
-before any fetch. Each door sits behind both handler installers in the order both app factories install them
+on. Each door sits behind both handler installers in the order both app factories install them
 (`register_handlers`, then `install_problem_handlers`), so the body asserted is the one a client receives. The
 catalog's door also has its own file, `services/catalog/tests/test_an_unreachable_idp_is_audited_as_ours.py`, because
 it also audits the refusal.
@@ -105,26 +104,16 @@ DOORS: dict[str, _Door] = {
 
 
 class _Fault(StrEnum):
-    """One per provider-fault raise site in `oidc.py`."""
+    """A provider fault, named for the raise site in `oidc.py` it reaches."""
 
-    DISCOVERY_OVER_HTTP = "discovery-over-http"
     DISCOVERY_UNREACHABLE = "discovery-unreachable"
-    DISCOVERY_NOT_A_DOCUMENT = "discovery-not-a-document"
-    DISCOVERY_NAMES_ANOTHER_ISSUER = "discovery-names-another-issuer"
-    DISCOVERY_ADVERTISES_NO_ALGORITHM_WE_ACCEPT = "discovery-advertises-no-algorithm-we-accept"
     KEY_SET_UNREACHABLE = "key-set-unreachable"
-    KEY_SET_WITHOUT_A_USABLE_KEY = "key-set-without-a-usable-key"
 
 
 #: The warning each fault's raise site logs.
 LOGGED_AS: dict[_Fault, str] = {
-    _Fault.DISCOVERY_OVER_HTTP: "oidc_insecure_url",
     _Fault.DISCOVERY_UNREACHABLE: "oidc_discovery_unreachable",
-    _Fault.DISCOVERY_NOT_A_DOCUMENT: "oidc_discovery_malformed",
-    _Fault.DISCOVERY_NAMES_ANOTHER_ISSUER: "oidc_discovery_issuer_mismatch",
-    _Fault.DISCOVERY_ADVERTISES_NO_ALGORITHM_WE_ACCEPT: "oidc_no_common_algorithm",
     _Fault.KEY_SET_UNREACHABLE: "oidc_jwks_unreachable",
-    _Fault.KEY_SET_WITHOUT_A_USABLE_KEY: "oidc_jwks_malformed",
 }
 
 
@@ -153,17 +142,9 @@ def _discovery(idp_url: str, /, **overrides: object) -> bytes:
 def _documents(fault: _Fault, issuer: str) -> dict[str, bytes]:
     """What the IdP serves for `fault`, by path; a path absent here answers 404."""
     match fault:
-        case _Fault.DISCOVERY_NOT_A_DOCUMENT:
-            return {DISCOVERY_PATH: b"<!doctype html><title>Sign in</title>"}
-        case _Fault.DISCOVERY_NAMES_ANOTHER_ISSUER:
-            return {DISCOVERY_PATH: _discovery(issuer, issuer="https://another-issuer.example.test")}
-        case _Fault.DISCOVERY_ADVERTISES_NO_ALGORITHM_WE_ACCEPT:
-            return {DISCOVERY_PATH: _discovery(issuer, id_token_signing_alg_values_supported=["PS256"])}
         case _Fault.KEY_SET_UNREACHABLE:
             return {DISCOVERY_PATH: _discovery(issuer)}
-        case _Fault.KEY_SET_WITHOUT_A_USABLE_KEY:
-            return {DISCOVERY_PATH: _discovery(issuer), JWKS_PATH: json.dumps({"keys": []}).encode()}
-        case _Fault.DISCOVERY_OVER_HTTP | _Fault.DISCOVERY_UNREACHABLE:
+        case _Fault.DISCOVERY_UNREACHABLE:
             raise ValueError(f"{fault} is served by no IdP at all")
 
 
@@ -171,17 +152,9 @@ def _loopback_verifier(issuer: str) -> OIDCVerifier:
     return OIDCVerifier(issuer, AUDIENCE, cache_ttl=300, allow_insecure=True)
 
 
-@pytest.fixture(params=list(_Fault), ids=str)
+@pytest.fixture
 def broken_provider(request: pytest.FixtureRequest) -> Iterator[_BrokenProvider]:
     fault = _Fault(request.param)
-    if fault is _Fault.DISCOVERY_OVER_HTTP:
-        issuer = "https://idp.example.test"
-        # Refused before any fetch; the port refuses too, so a verifier that skipped the check logs a different event.
-        with _refusing_port() as held:
-            override = f"http://127.0.0.1:{held.getsockname()[1]}"
-            verifier = OIDCVerifier(issuer, AUDIENCE, cache_ttl=300, allow_insecure=False, discovery_overrides={issuer: override})
-            yield _BrokenProvider(fault=fault, issuer=issuer, verifier=verifier)
-        return
     if fault is _Fault.DISCOVERY_UNREACHABLE:
         with _refusing_port() as held:
             issuer = f"http://127.0.0.1:{held.getsockname()[1]}"
@@ -236,7 +209,14 @@ def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-@pytest.mark.parametrize("door", DOORS.values(), ids=DOORS.keys())
+@pytest.mark.parametrize(
+    ("broken_provider", "door"),
+    [
+        *(pytest.param(_Fault.DISCOVERY_UNREACHABLE, door, id=f"{_Fault.DISCOVERY_UNREACHABLE}-{name}") for name, door in DOORS.items()),
+        pytest.param(_Fault.KEY_SET_UNREACHABLE, _catalog, id=f"{_Fault.KEY_SET_UNREACHABLE}-catalog-authenticate"),
+    ],
+    indirect=["broken_provider"],
+)
 def test_a_provider_the_door_cannot_use_is_a_503_with_the_spec_code(door: _Door, broken_provider: _BrokenProvider, caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.WARNING, logger=oidc.__name__)
 

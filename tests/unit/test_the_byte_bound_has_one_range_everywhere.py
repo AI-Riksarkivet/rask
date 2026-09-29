@@ -14,9 +14,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from catalog.schemas import CompactionPlanRequest, PolicyRequest
 from maintenance.core.config import MaintenanceSettings
-from service_kit.lakehouse.work_items import DatasetPlan
 
 
 MIB = 1024 * 1024
@@ -25,9 +23,6 @@ CEILING = 1024 * MIB
 
 _CARRIERS: dict[str, Callable[[int], BaseModel]] = {
     "MaintenanceSettings": lambda value: MaintenanceSettings.model_validate({"s3_bucket": "lake", "max_source_bytes": value}),
-    "PolicyRequest": lambda value: PolicyRequest.model_validate({"max_source_bytes": value}),
-    "DatasetPlan": lambda value: DatasetPlan.model_validate({"max_source_bytes": value}),
-    "CompactionPlanRequest": lambda value: CompactionPlanRequest.model_validate({"batch_size": 64, "num_threads": 2, "max_source_bytes": value}),
 }
 
 

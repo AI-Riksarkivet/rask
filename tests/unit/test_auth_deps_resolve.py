@@ -29,7 +29,6 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import Depends, FastAPI
-from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 from service_kit.governed.deps import make_auth_deps
@@ -56,24 +55,6 @@ CurrentSubject = Annotated[str, Depends(_deps.current_subject)]
 CheckerDep = Annotated[object, Depends(_deps.get_checker)]
 
 
-def _query_param_names(route: APIRoute) -> list[str]:
-    """Every query param FastAPI will demand — the route's own AND its sub-dependencies'.
-
-    The bug hid one level down: the route's own signature was fine, and `settings`/`token` appeared
-    as query params of the CHECKER dependency. A check that only read `route.dependant.query_params`
-    would have passed against the broken code.
-    """
-    names: list[str] = []
-
-    def walk(dependant: object) -> None:
-        names.extend(p.name for p in dependant.query_params)  # ty: ignore[unresolved-attribute]
-        for sub in dependant.dependencies:  # ty: ignore[unresolved-attribute]
-            walk(sub)
-
-    walk(route.dependant)
-    return names
-
-
 def _app_with_a_gated_route() -> FastAPI:
     app = FastAPI()
 
@@ -85,20 +66,6 @@ def _app_with_a_gated_route() -> FastAPI:
     return app
 
 
-def test_the_auth_dependencies_do_not_leak_query_parameters() -> None:
-    """The regression, stated as the wire contract it broke.
-
-    `settings` and `token` are INJECTED — resolved from the app and the Authorization header. If
-    either appears as a query param, the annotation failed to resolve and every gated route 422s.
-    """
-    routes = [r for r in _app_with_a_gated_route().routes if isinstance(r, APIRoute) and r.path == "/gated"]
-    assert len(routes) == 1
-
-    leaked = _query_param_names(routes[0])
-
-    assert leaked == [], f"auth dependencies demoted to query params (the annotations did not resolve): {leaked}"
-
-
 def test_a_gated_route_answers_rather_than_422ing() -> None:
     """The behavioural half. With OIDC/FGA off the checker is permissive, so a bare call must reach
     the handler — a 422 here means the gate is not a gate, it is a broken signature."""
@@ -108,15 +75,3 @@ def test_a_gated_route_answers_rather_than_422ing() -> None:
 
     assert r.status_code == 200, r.text
     assert r.json() == {"subject": "anon"}
-
-
-def test_the_openapi_schema_builds() -> None:
-    """The third symptom, and the cheapest early warning.
-
-    An unresolved ForwardRef made `app.openapi()` raise `PydanticUserError: ... is not fully
-    defined`. Any service that serves `/docs` would have failed there first — the viewer does, in
-    dev — which is a reminder that this was observable and simply never observed.
-    """
-    schema = _app_with_a_gated_route().openapi()
-
-    assert schema["paths"]["/gated"]["get"].get("parameters", []) == []

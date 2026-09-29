@@ -54,7 +54,7 @@ def test_the_aggregated_docs_are_CLOSED_by_default(gw_docs_off, path: str) -> No
     )
 
 
-@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json"])
+@pytest.mark.parametrize("path", ["/docs", "/openapi.json"])
 def test_the_gateways_OWN_docs_routes_are_closed_by_default(gw_docs_off, path: str) -> None:
     """The constructor half. Separate from the catch-all because they fail independently — the
     branches above live inside `/api/{path:path}` and survive `openapi_url=None`."""

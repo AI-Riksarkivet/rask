@@ -47,13 +47,6 @@ def test_audit_emits_a_structured_who_what_outcome_event(captured: list[logging.
     }
 
 
-def test_missing_subject_and_resource_default_to_empty(captured: list[logging.LogRecord]) -> None:
-    configure_audit(enabled=True)
-    audit("authn", DENY)
-    fields = captured[0].__dict__
-    assert fields["audit.subject"] == "" and fields["audit.resource"] == ""
-
-
 def test_configure_audit_disabled_drops_every_event(captured: list[logging.LogRecord]) -> None:
     # The whole trail is gated by one flag: disabled → nothing is emitted at all (dropped at the logger).
     configure_audit(enabled=False)

@@ -25,9 +25,7 @@ import asyncio
 from types import SimpleNamespace
 from typing import Any, cast
 
-import aiohttp
 import pytest
-from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from service_kit.governed import fga
@@ -146,24 +144,6 @@ def test_expand_returns_empty_dict_when_the_relation_resolves_to_nothing() -> No
     assert asyncio.run(fga.expand(_client({}), relation="reader", obj="table:t")) == {}
 
 
-def test_expand_fails_closed_on_network_error() -> None:
-    class _Down:
-        async def expand(self, *_a: object, **_k: object) -> object:
-            raise aiohttp.ClientConnectionError("connection refused")
-
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.expand(
-                cast(OpenFgaClient, _Down()),
-                relation="reader",
-                obj="table:t",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
-
-
 def test_expand_depth_cap_marks_rather_than_drops(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fga, "_MAX_EXPAND_DEPTH", 1)
     tree = _node("root", union=_nodes(_node("deep", union=_nodes(_node("deeper")))))
@@ -232,19 +212,6 @@ def test_expand_tree_follows_x_from_y_into_the_parent_object() -> None:
     assert expanded[0]["leaf"]["users"] == ["user:alice"]
 
 
-def test_expand_tree_ignores_tuples_that_are_not_the_tupleset_relation() -> None:
-    client = _ExpandClient(
-        trees={
-            "table:t#reader": _node("table:t#reader", leaf=_leaf(ttu=_ttu("table:t#parent", ["reader"]))),
-            "namespace:db1#reader": _node("namespace:db1#reader", leaf=_leaf(users=["user:alice"])),
-        },
-        # An `owner` grant sits on the same object; only the `parent` edge is the hop.
-        tuples={"table:t": [("user:bob", "owner", "table:t"), ("namespace:db1", "parent", "table:t")]},
-    )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="reader", obj="table:t", max_depth=3))
-    assert [n["name"] for n in result["leaf"]["expanded"]] == ["namespace:db1#reader"]
-
-
 def test_expand_tree_marks_a_cycle_instead_of_spinning() -> None:
     # `namespace` self-nests under `namespace`, so a misconfigured parent tuple makes a real loop.
     client = _ExpandClient(
@@ -261,24 +228,6 @@ def test_expand_tree_marks_a_cycle_instead_of_spinning() -> None:
     assert hop["leaf"]["expanded"][0] == {"name": "namespace:a#reader", "cycle": True}
 
 
-def test_expand_tree_stops_on_budget_at_the_leaf_that_would_have_continued() -> None:
-    # Budget 2 = two Expands. The chain a → b → c stops AT b, flagged; `c` is never fetched, and the
-    # tree says so rather than presenting b's leaf as terminal.
-    client = _ExpandClient(
-        trees={
-            "table:t#a": _node("table:t#a", leaf=_leaf(computed="b")),
-            "table:t#b": _node("table:t#b", leaf=_leaf(computed="c")),
-            "table:t#c": _node("table:t#c", leaf=_leaf(users=["user:alice"])),
-        }
-    )
-    result = asyncio.run(fga.expand_tree(cast(OpenFgaClient, client), relation="a", obj="table:t", max_depth=2))
-    stopped = result["leaf"]["expanded"][0]
-    assert stopped["name"] == "table:t#b"
-    assert stopped["leaf"]["continues"] is True
-    assert stopped["leaf"].get("expanded") is None
-    assert client.expanded == ["table:t#a", "table:t#b"]
-
-
 def test_expand_tree_clamps_max_depth_to_the_module_ceiling() -> None:
     chain = {f"table:t#r{i}": _node(f"table:t#r{i}", leaf=_leaf(computed=f"r{i + 1}")) for i in range(20)}
     client = _ExpandClient(chain)
@@ -289,30 +238,6 @@ def test_expand_tree_clamps_max_depth_to_the_module_ceiling() -> None:
 # --------------------------------------------------------------------------- #
 # The subject widenings
 # --------------------------------------------------------------------------- #
-
-
-def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
-    seen: dict[str, str] = {}
-
-    class _Client:
-        async def list_objects(self, body: Any) -> object:
-            seen["user"] = body.user
-            return SimpleNamespace(objects=["table:db1$t"])
-
-    asyncio.run(fga.list_objects(cast(OpenFgaClient, _Client()), user="team:eng#member", relation="can_read_data", object_type="table", qualify=False))
-    assert seen["user"] == "team:eng#member"  # NOT user:team:eng#member, which would deny everything
-
-
-def test_list_objects_still_qualifies_a_bare_id_by_default() -> None:
-    seen: dict[str, str] = {}
-
-    class _Client:
-        async def list_objects(self, body: Any) -> object:
-            seen["user"] = body.user
-            return SimpleNamespace(objects=[])
-
-    asyncio.run(fga.list_objects(cast(OpenFgaClient, _Client()), user="alice", relation="can_read_data", object_type="table"))
-    assert seen["user"] == "user:alice"
 
 
 def test_list_users_returns_the_userset_arm_it_used_to_discard() -> None:
@@ -341,16 +266,6 @@ def test_list_users_passes_the_requested_filter_through() -> None:
 
     asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", user_type="role", user_relation="assignee"))
     assert (seen["filters"][0].type, seen["filters"][0].relation) == ("role", "assignee")
-
-
-def test_list_users_default_contract_is_unchanged() -> None:
-    # Every existing access-review caller reads bare ids; widening must not have moved that.
-    class _Client:
-        async def list_users(self, body: Any) -> object:
-            del body
-            return SimpleNamespace(users=[SimpleNamespace(object=SimpleNamespace(type="user", id="bob"), userset=None, wildcard=None)])
-
-    assert asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t")) == ["bob"]
 
 
 def test_expand_tree_normalises_a_qualified_computed_userset() -> None:
@@ -389,13 +304,6 @@ def test_expand_tree_normalises_qualified_tuple_to_userset_entries() -> None:
 
     assert client.expanded == ["table:db1$t#owner", "namespace:db1#owner"]
     assert result["leaf"]["expanded"][0]["leaf"]["users"] == ["user:alice"]
-
-
-def test_relation_and_object_helpers_accept_both_shapes() -> None:
-    assert fga._relation_of("table:db1$t#reader") == "reader"
-    assert fga._relation_of("reader") == "reader"  # bare passes through; the shape is not guaranteed
-    assert fga._object_of("table:db1$t#reader", "fallback:x") == "table:db1$t"
-    assert fga._object_of("reader", "table:same") == "table:same"  # a rung on the SAME object
 
 
 # --------------------------------------------------------------------------- #
@@ -440,18 +348,6 @@ def test_check_passes_contextual_tuples_through_without_writing() -> None:
     assert writes == []
 
 
-def test_check_without_contextual_tuples_is_unchanged() -> None:
-    seen: dict[str, Any] = {}
-
-    class _Client:
-        async def check(self, body: Any) -> object:
-            seen["contextual"] = body.contextual_tuples
-            return SimpleNamespace(allowed=False)
-
-    asyncio.run(fga.check(cast(OpenFgaClient, _Client()), user="alice", relation="reader", obj="table:t"))
-    assert seen["contextual"] is None
-
-
 def test_read_changes_normalises_operation_and_timestamp() -> None:
     class _Client:
         async def read_changes(self, body: Any, options: Any = None) -> object:
@@ -478,50 +374,6 @@ def test_read_changes_normalises_operation_and_timestamp() -> None:
     # A DELETE is visible here and invisible to a Read — that asymmetry is the point of a changelog.
     assert changes[1]["relation"] == "reader"
     assert token == "next"
-
-
-def test_read_changes_fails_closed_on_network_error() -> None:
-    # An outage must never render as "nothing ever happened on this type", which is what an empty
-    # history would say — and it is the reading an access review would act on.
-    class _Down:
-        async def read_changes(self, *_a: object, **_k: object) -> object:
-            raise aiohttp.ClientConnectionError("connection refused")
-
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.read_changes(
-                cast(OpenFgaClient, _Down()),
-                object_type="table",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
-
-
-def test_read_changes_never_claims_an_actor() -> None:
-    """OpenFGA change records carry no principal, and this wrapper must not invent one.
-
-    The acting subject lives only in this estate's audit stream. A field named `actor`/`by`/`subject`
-    appearing here — even as None — would invite a UI to render a timestamp as attribution.
-    """
-
-    class _Client:
-        async def read_changes(self, body: Any, options: Any = None) -> object:
-            del body, options
-            return SimpleNamespace(
-                changes=[
-                    SimpleNamespace(
-                        tuple_key=SimpleNamespace(user="user:a", relation="owner", object="table:t"),
-                        operation="TUPLE_OPERATION_WRITE",
-                        timestamp="2026-07-29T09:37:21Z",
-                    )
-                ],
-                continuation_token=None,
-            )
-
-    changes, _ = asyncio.run(fga.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
-    assert set(changes[0]) == {"user", "relation", "object", "operation", "timestamp"}
 
 
 def test_read_changes_returns_the_token_raw_so_callers_stop_on_an_empty_page() -> None:

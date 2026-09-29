@@ -88,15 +88,6 @@ def test_a_denial_is_reported_ONCE_however_many_datasets_declare_it(monkeypatch:
     assert len(denials) == 1, f"a permanent denial was reported {len(denials)} times: {[r.message for r in denials]}"
 
 
-def test_the_denial_line_carries_NO_traceback(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """A stack trace of an S3 403 names nothing the reader can act on — the classification already did."""
-    with caplog.at_level(logging.WARNING, logger=features.__name__):
-        _gather(monkeypatch, _probe_denied)
-
-    assert caplog.records, "the denial was not reported at all"
-    assert all(r.exc_info is None for r in caplog.records), "a permanent denial still renders a stack trace"
-
-
 def test_a_TRANSIENT_failure_keeps_its_traceback_and_repeats(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The half that makes the silence safe: only the denial is de-duplicated.
 

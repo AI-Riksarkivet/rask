@@ -89,13 +89,3 @@ def test_the_manifest_wins_over_a_disagreeing_stamp(tmp_path: Path) -> None:
         initial_bases=[lance.DatasetBasePath(str(base), "source")],
     )
     assert blobs.external_base_of(lance.dataset(uri)) == str(base), "a stamp inherited from an upstream dataset outranked this dataset's own registered base"
-
-
-def test_no_module_still_claims_the_bases_are_unreadable() -> None:
-    """The claim justified two workarounds and was repeated in a second file. Falsified prose is
-    rewritten, not annotated (2026-08-30 ruling), so the sentence must be gone rather than corrected
-    in place."""
-    repo = Path(__file__).resolve().parents[2]
-    for path in ("packages/service-kit/src/service_kit/lakehouse/blobs.py", "services/ingest/src/ingest/lander.py"):
-        text = (repo / path).read_text().lower()
-        assert "no way to read a dataset's registered bases" not in text, f"{path} still carries the falsified claim"

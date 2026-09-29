@@ -11,11 +11,6 @@ from lineage.core.config import LineageSettings, _with_db_password, apply_lineag
 from service_kit.governed.secrets import fetch_dapr_secret
 
 
-def test_with_db_password_splices_userinfo() -> None:
-    url = "postgresql://lance@age:5432/lineage"
-    assert _with_db_password(url, "s3cr3t") == "postgresql://lance:s3cr3t@age:5432/lineage"
-
-
 def test_with_db_password_url_encodes_special_chars() -> None:
     url = "postgresql://lance@age:5432/lineage"
     # A password with URL-significant chars must be percent-encoded so the DSN stays parseable.

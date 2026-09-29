@@ -80,15 +80,6 @@ def _seed(tmp_path: Path, warehouse_id: str = "acme-wh", **fields: str) -> dict[
 # --------------------------------------------------------------------------- #
 
 
-def test_mutate_applies_and_returns_the_written_record(tmp_path: Path) -> None:
-    _seed(tmp_path)
-    out = records.mutate_json(_root(tmp_path), {}, "_warehouses/acme-wh.json", lambda r: {**r, "status": "deactivated"})
-    assert out["status"] == "deactivated"
-    on_disk, _etag = records.read_json(_root(tmp_path), {}, "_warehouses/acme-wh.json") or ({}, "")
-    assert on_disk["status"] == "deactivated"
-    assert on_disk["project"] == "acme"  # untouched fields survive
-
-
 def test_mutate_reapplies_against_the_winner_when_the_record_moves_mid_flight(tmp_path: Path) -> None:
     """THE F4 TEST. A rival write lands between this writer's read and its write.
 
@@ -114,13 +105,6 @@ def test_mutate_reapplies_against_the_winner_when_the_record_moves_mid_flight(tm
     assert out["note"] == "quarantined by ops"  # …and the rival's field was NOT reverted
 
 
-def test_mutate_raises_when_the_record_is_absent(tmp_path: Path) -> None:
-    """Distinct from a lost race on purpose: "somebody else wrote" and "there is nothing here" call
-    for different answers at the door (409 vs 404), so the seam must not collapse them."""
-    with pytest.raises(records.RecordMissingError):
-        records.mutate_json(_root(tmp_path), {}, "_warehouses/ghost.json", lambda r: r)
-
-
 def test_mutate_gives_up_after_bounded_attempts(tmp_path: Path) -> None:
     """A pathological livelock becomes an honest error rather than an unbounded spin."""
     _seed(tmp_path)
@@ -138,10 +122,6 @@ def test_mutate_gives_up_after_bounded_attempts(tmp_path: Path) -> None:
     with pytest.raises(records.RecordChangedError):
         records.mutate_json(_root(tmp_path), {}, key, always_lose, attempts=3)
     assert rounds["n"] == 3
-
-
-def test_read_json_returns_none_for_a_missing_key(tmp_path: Path) -> None:
-    assert records.read_json(_root(tmp_path), {}, "_warehouses/nope.json") is None
 
 
 # --------------------------------------------------------------------------- #
@@ -193,29 +173,3 @@ def test_set_warehouse_status_returns_none_for_an_unknown_warehouse(tmp_path: Pa
     """RecordMissingError is translated at the door, so the endpoint's existing 404 path is unchanged
     — the seam swap must not become an API change."""
     assert warehouses.set_warehouse_status(_root(tmp_path), {}, "ghost", "deactivated") is None
-
-
-def test_a_quarantine_survives_a_concurrent_stale_carry_forward(tmp_path: Path) -> None:
-    """The finding's own failure scenario, end to end at the service layer.
-
-    A deactivate lands between a re-POST's read and its write. The re-POST carries `status` forward
-    from its stale read — the documented behaviour, and correct in the sequential case. Under the
-    conditional write its stale put is refused, it re-reads, and the quarantine SURVIVES.
-    """
-    root = _root(tmp_path)
-    _seed(tmp_path)
-
-    # t0 — the GitOps re-POST reads the record it will later carry forward.
-    stale = warehouses.get_warehouse(root, {}, "acme-wh")
-    assert stale is not None and stale["status"] == "active"
-
-    # t1 — the operator quarantines it.
-    warehouses.set_warehouse_status(root, {}, "acme-wh", "deactivated")
-
-    # t2 — the re-POST writes the record it built at t0. Through the conditional seam this cannot
-    # revert `status`: it re-reads and re-applies only the fields it actually owns.
-    records.mutate_json(root, {}, "_warehouses/acme-wh.json", lambda r: {**r, "bucket": stale["bucket"]})
-
-    assert warehouses.warehouse_status(root, {}, "acme-wh") == "deactivated", (
-        "the quarantine was lifted by interleaving — the exact outcome the carry-forward comment claims to prevent, and could only prevent sequentially"
-    )

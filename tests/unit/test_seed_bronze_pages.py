@@ -91,27 +91,3 @@ def test_the_query_params_reach_the_image_url(seed: ModuleType) -> None:
     list(seed.IIIFVolumeSource(VOLUME, base_url=BASE, query_params="full/500,/0/gray.jpg", timeout=5.0, max_pages=1).iter_objects())
 
     assert route.called
-
-
-def test_the_adapter_satisfies_the_writer_it_is_handed_to(seed: ModuleType) -> None:
-    """`ingest_to_bronze` takes a `SourceAdapter`, whose whole surface is `iter_objects`.
-
-    Read off the Protocol rather than hardcoded, so a member added to `SourceAdapter` fails HERE
-    instead of at the next `make seed-dev`. `isinstance` is unavailable — the Protocol is not
-    `@runtime_checkable` — and `__protocol_attrs__` is a CPython implementation detail, so the members
-    are taken from the annotations and callables the Protocol declares.
-    """
-    from service_kit.lakehouse.sources import SourceAdapter
-
-    src = seed.IIIFVolumeSource(VOLUME, base_url=BASE, query_params="q", timeout=1.0, max_pages=1)
-    required = {name for name in vars(SourceAdapter) if not name.startswith("_")}
-
-    assert required, "the Protocol declared nothing — this assertion would pass against any object"
-    assert required <= {name for name in dir(src) if not name.startswith("_")}
-    assert callable(src.iter_objects)
-
-
-def test_the_module_imports_at_all(seed: ModuleType) -> None:
-    """The regression, stated plainly. This is what was broken for days, and what `make seed-dev`
-    step 3 needs: the module must import and expose a `main`."""
-    assert callable(seed.main)

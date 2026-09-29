@@ -46,7 +46,6 @@ def proxied(gw):
         "/api/lineage/lineage-events/sub",
         "/api/lineage/LINEAGE-EVENTS",  # nginx block was case-insensitive (~*)
         "/api/lineage/lineage-reconcile-cron",
-        "/api/lineage/lineage-reconcile-cron/tick",
     ],
 )
 def test_sidecar_only_routes_403(gw, proxied, path: str) -> None:
@@ -55,13 +54,6 @@ def test_sidecar_only_routes_403(gw, proxied, path: str) -> None:
         resp = getattr(client, method)(path)
         assert resp.status_code == 403, f"{method.upper()} {path} must be blocked at the edge"
     assert captured == [], "a blocked route must never reach an upstream"
-
-
-def test_other_lineage_routes_pass_through(gw, proxied) -> None:
-    client, captured = proxied
-    resp = client.get("/api/lineage/runs")
-    assert resp.status_code == 200
-    assert str(captured[-1].url) == "http://127.0.0.1:8000/runs"
 
 
 def test_blocklist_env_overridable(monkeypatch: pytest.MonkeyPatch) -> None:

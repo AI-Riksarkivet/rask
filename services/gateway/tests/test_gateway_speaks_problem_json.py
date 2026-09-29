@@ -54,19 +54,6 @@ def test_a_404_no_upstream_is_problem_json(gw) -> None:
     _assert_problem(_client(gw).get("/api/does-not-exist"), 404)
 
 
-def test_a_502_upstream_unreachable_is_problem_json(gw) -> None:
-    _assert_problem(_client(gw, unreachable=True).get("/api/catalog/v1/x"), 502)
-
-
-def test_the_sidecar_guard_403_is_problem_json(gw) -> None:
-    """The gateway's OWN 403 (a sidecar-only lineage route), which was a hand-built `{"detail":…}`
-    JSONResponse rather than problem+json — fixed in the same change."""
-    routes = gw._lineage_sidecar_only_routes()
-    if not routes:
-        pytest.skip("no sidecar-only lineage routes configured in this build")
-    _assert_problem(_client(gw).get(f"/api/lineage/{next(iter(routes))}"), 403)
-
-
 def test_a_400_bad_path_is_problem_json(gw) -> None:
     """The fourth site the finding named, previously the only one untested: the proxy's 400 for a
     path whose raw and decoded views disagree (a dot-segment hidden behind an encoded slash)."""

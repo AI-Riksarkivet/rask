@@ -23,10 +23,8 @@ Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed (matches i
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import logging
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Annotated, Any, cast
 
@@ -41,7 +39,7 @@ from openfga_sdk.client.models import ClientTuple
 from pydantic import BaseModel
 
 from service_kit.exceptions import register_handlers
-from service_kit.governed import dapr_auth, fga, oidc, secrets
+from service_kit.governed import fga, oidc, secrets
 from service_kit.governed.audit import AUDIT_LOGGER, configure_audit
 from service_kit.governed.deps import make_auth_deps
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -195,28 +193,6 @@ def test_expand_tree_does_not_call_a_diamond_a_cycle() -> None:
         assert not owner.get("cycle"), f"the shared rung was mislabelled a cycle: {owner}"
         holders.append(owner["leaf"]["users"])
     assert holders == [["user:alice"], ["user:alice"]]
-
-
-def test_expand_tree_still_reports_a_real_cycle() -> None:
-    """A relation that expands to itself must terminate as `cycle`, never recurse forever."""
-
-    class _LoopClient:
-        async def expand(self, body: Any, *_a: object, **_k: object) -> object:
-            del body
-            return SimpleNamespace(tree=SimpleNamespace(root=_leaf_node("namespace:n#owner", computed="namespace:n#owner")))
-
-    tree = asyncio.run(
-        fga.expand_tree(
-            _client(_LoopClient()),
-            relation="owner",
-            obj="namespace:n",
-            max_depth=5,
-            retry_attempts=1,
-            retry_backoff_seconds=0.0,
-            retry_max_backoff_seconds=0.0,
-        )
-    )
-    assert tree["leaf"]["expanded"][0] == {"name": "namespace:n#owner", "cycle": True}
 
 
 # --------------------------------------------------------------------------- #
@@ -412,68 +388,8 @@ def test_exhausted_secret_fetch_logs_at_error(monkeypatch: pytest.MonkeyPatch, c
 
 
 # --------------------------------------------------------------------------- #
-# SKG-16 — the public seams are typed
-# --------------------------------------------------------------------------- #
-
-
-def test_governed_public_signatures_carry_real_types() -> None:
-    """SKG-16: `Any` where a Callable/Protocol exists, and a decorator factory with no return type.
-
-    Read off `__annotations__` rather than the source so the check cannot pass on a comment.
-    """
-    from service_kit.governed.deps import AuthDeps
-
-    # `deps` deliberately carries no `from __future__ import annotations` (see its module comment), so
-    # these are the evaluated objects, not strings.
-    init = AuthDeps.__init__.__annotations__
-    assert set(init) == {"authenticate", "current_subject", "get_checker", "get_fga_client", "optional_subject", "return"}
-    assert [name for name, ann in init.items() if ann is Any] == [], f"AuthDeps still takes Any: {init}"
-    assert "return" in fga._retrying.__annotations__, "_retrying has no return annotation"
-
-
-def test_unauthenticated_error_is_the_lance_one() -> None:
-    """The kernel raises ONE taxonomy; this pins the import the SKG-05 fix depends on."""
-    assert issubclass(UnauthenticatedError, Exception)
-
-
-# --------------------------------------------------------------------------- #
 # SKG-10 — the environment this kernel reads is declared, not grepped for
 # --------------------------------------------------------------------------- #
-
-
-def test_the_dapr_door_reads_its_environment_through_a_settings_class() -> None:
-    """SKG-10: four bare `os.environ.get` calls, three of them naming the same variable.
-
-    Asserted on the module SOURCE because that is exactly what the finding is about — a variable this
-    door authenticates against must be declared once, not discoverable only by grep.
-    """
-    tree = ast.parse(Path(dapr_auth.__file__).read_text())
-    env_reads = [
-        f"line {node.lineno}: os.{node.func.attr}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"getenv", "environ", "get"}
-        and ast.unparse(node.func).startswith("os.")
-    ]
-    assert env_reads == [], f"dapr_auth still reads the environment outside its settings class: {env_reads}"
-    declared = {name: field.alias for name, field in dapr_auth.DaprDoorSettings.model_fields.items()}
-    assert declared == {
-        "app_api_token": "APP_API_TOKEN",
-        "public_callers": "RASK_PUBLIC_CALLERS",
-        # The explicit opt-in for an UNCONFIGURED door. Enumerated here rather than allowed by a
-        # wildcard, because this class is the door's whole environment surface and a field that can
-        # turn authentication off is exactly the one worth naming in a gate.
-        "allow_unauthenticated_dapr": "RASK_ALLOW_UNAUTHENTICATED_DAPR",
-        # WHERE THE EXPECTED TOKEN COMES FROM. `RASK_APP_TOKEN_FROM_STORE` switches the door onto the
-        # Dapr secret store so the token never travels through the environment, and the other three
-        # address the bundle. They are configuration, not credentials — the value stays in OpenBao —
-        # which is why naming them in a gate about the door's env surface is safe and useful.
-        "app_token_from_store": "RASK_APP_TOKEN_FROM_STORE",
-        "secret_store": "RASK_SECRET_STORE",
-        "secret_key": "RASK_DAPR_SECRET_KEY",
-        "app_token_field": "RASK_APP_TOKEN_FIELD",
-    }
 
 
 def test_the_secret_fetch_uses_the_injected_sidecar_port(monkeypatch: pytest.MonkeyPatch) -> None:

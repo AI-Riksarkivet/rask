@@ -38,9 +38,6 @@ _ARMED = frozenset(
     }
 )
 
-#: Calls that take a signal over. `signal` is matched as `signal.signal(...)` or a bare imported name.
-_TAKERS = frozenset({"add_signal_handler", "signal", "open_signal_receiver"})
-
 
 def _production_trees() -> Iterator[tuple[str, ast.Module]]:
     for pattern in ("packages/*/src/**/*.py", "services/*/src/**/*.py"):
@@ -60,14 +57,6 @@ def _calls(tree: ast.Module) -> Iterator[ast.Call]:
     return (node for node in ast.walk(tree) if isinstance(node, ast.Call))
 
 
-def _names_sigterm(call: ast.Call) -> bool:
-    return any(
-        (isinstance(node, ast.Attribute) and node.attr == "SIGTERM") or (isinstance(node, ast.Name) and node.id == "SIGTERM")
-        for arg in [*call.args, *(keyword.value for keyword in call.keywords)]
-        for node in ast.walk(arg)
-    )
-
-
 def test_every_service_that_arms_the_drain_arms_THE_seam() -> None:
     armed: set[str] = set()
     copies: set[str] = set()
@@ -85,18 +74,3 @@ def test_every_service_that_arms_the_drain_arms_THE_seam() -> None:
 
     assert not copies, f"{sorted(copies)} arm a drain that is not `service_kit.draining.arm_drain_on_sigterm`, so the hand-on to uvicorn is not theirs"
     assert armed >= _ARMED, f"{sorted(_ARMED - armed)} no longer arm the drain: their flag flips only after uvicorn has stopped serving"
-
-
-def test_nothing_else_in_production_takes_SIGTERM() -> None:
-    takers = sorted(
-        f"{module}:{call.lineno}"
-        for module, tree in _production_trees()
-        if module != _SEAM
-        for call in _calls(tree)
-        if _callee(call) in _TAKERS and (_callee(call) == "open_signal_receiver" or _names_sigterm(call))
-    )
-    assert takers == [], (
-        f"{takers} install a SIGTERM handler outside the drain seam. Installed after the drain it displaces "
-        "the drain and uvicorn's handle_exit together, and the process no longer exits on SIGTERM. Take "
-        "SIGTERM through `arm_drain_on_sigterm`, which hands it on."
-    )

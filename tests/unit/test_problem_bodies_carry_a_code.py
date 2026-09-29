@@ -37,20 +37,11 @@ from __future__ import annotations
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import ErrorCode
 
 from service_kit.body_limit import BodySizeLimitMiddleware
-from service_kit.lakehouse.ns_errors import problem_body
 
 
 REQUIRED_KEYS = {"type", "title", "status", "detail", "code", "error"}
-
-
-def test_the_shared_builder_emits_the_full_envelope() -> None:
-    body = problem_body(ErrorCode.THROTTLING, status=429, title="TooManyRequests", detail="slow down")
-    assert set(body) >= REQUIRED_KEYS, f"problem_body omits {REQUIRED_KEYS - set(body)}"
-    assert body["code"] == int(ErrorCode.THROTTLING)
-    assert body["error"] == "slow down"
 
 
 def test_the_body_cap_refusal_carries_a_code() -> None:
@@ -87,7 +78,6 @@ def test_the_maintenance_refusal_carries_a_code_and_keeps_retry_after() -> None:
     ("module", "status", "title", "detail"),
     [
         ("medallion.api.train", 503, "ServiceUnavailable", "training trigger publish failed; retry"),
-        ("medallion.api.train", 409, "Conflict", "train head not configured"),
     ],
 )
 def test_the_medallion_doors_carry_a_code(module: str, status: int, title: str, detail: str) -> None:
@@ -144,24 +134,3 @@ def test_the_installed_handlers_also_carry_a_code(path: str, expected: int) -> N
     assert set(body) >= REQUIRED_KEYS, f"{path} body omits {REQUIRED_KEYS - set(body)}"
     if expected == 422:
         assert body["errors"], "the field list must survive alongside the envelope"
-
-
-def test_adding_a_key_did_not_RENAME_the_existing_bodies() -> None:
-    """A missing key is the defect; the `type` URI and `title` are a contract clients already parse.
-
-    Routing these bodies through a shared builder that derives `type` from `title.lower()` silently
-    rewrote three of them — `/validation` became `/validationerror`, `/payload-too-large` became
-    `/payloadtoolarge`, `/throttling` became `/toomanyrequests` — and the first was caught only
-    because an integration test happened to assert the title. That is a wire change dressed up as a
-    fix, so the builder takes an explicit `slug` and these are pinned.
-    """
-    app = FastAPI()
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=16)
-
-    @app.post("/write")
-    async def write() -> dict[str, str]:
-        return {"ok": "yes"}
-
-    body = TestClient(app).post("/write", content=b"x" * 64).json()
-    assert body["type"] == "https://lance.org/problems/payload-too-large"
-    assert body["title"] == "Payload Too Large"

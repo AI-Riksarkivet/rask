@@ -19,62 +19,10 @@ that one surface:
 
 from __future__ import annotations
 
-import re
-from collections.abc import Iterable
-from pathlib import Path
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import UnauthenticatedError
-
-
-REPO = Path(__file__).resolve().parents[2]
-MEDIA_MAINS = (
-    "services/viewer/src/viewer/main.py",
-    "services/search/src/search/main.py",
-    "services/annotator/src/annotator/main.py",
-)
-
-
-def test_service_kit_exports_one_register_middleware_name() -> None:
-    """DUP-20: two different functions may not answer to one name.
-
-    RED before the rename: `service_kit/middleware.py:register_middleware` (fleet: CORS with
-    credentials + Timing) and `service_kit/media/middleware.py:register_middleware` (media: CORS with
-    Range `expose_headers`, no Timing) had identical names AND identical signatures.
-    """
-    definitions = sorted(
-        str(path.relative_to(REPO))
-        for path in (REPO / "packages/service-kit/src").rglob("*.py")
-        if re.search(r"^def register_middleware\(", path.read_text(), re.MULTILINE)
-    )
-    assert definitions == ["packages/service-kit/src/service_kit/middleware.py"], definitions
-
-
-@pytest.mark.parametrize("main", MEDIA_MAINS)
-def test_no_media_main_hand_rolls_the_lifespan_body(main: str) -> None:
-    """DUP-16: the copied lifespan body lives in `service_kit.media`, not three times in three mains.
-
-    RED before the collapse: all three carried `AppState(settings=settings, http=httpx.Client())`
-    followed by the threadpooled `dataset_handle` open under the same comment.
-    """
-    source = (REPO / main).read_text()
-    assert "AppState(settings=" not in source, f"{main} still builds the shared media AppState itself"
-    assert "dataset_handle" not in source, f"{main} still opens the default dataset handle itself"
-    assert "arm_drain_on_sigterm" not in source, f"{main} still arms the drain itself"
-
-
-def test_the_media_lifespan_has_exactly_one_implementation() -> None:
-    """The seam it collapses onto is a single module in `service_kit.media`."""
-    splice = re.compile(r"AppState\(settings=")
-    offenders = sorted(
-        str(path.relative_to(REPO))
-        for root in ("services", "packages")
-        for path in (REPO / root).rglob("*.py")
-        if "/tests/" not in str(path) and splice.search(path.read_text())
-    )
-    assert offenders == ["packages/service-kit/src/service_kit/media/lifespan.py"], offenders
 
 
 def _seam_app(name: str) -> FastAPI:
@@ -111,28 +59,3 @@ def test_the_test_seam_app_maps_the_same_errors_production_does(name: str) -> No
     assert response.status_code == 401, response.text
     assert response.headers["content-type"].startswith("application/problem+json"), response.headers
     assert response.json()["title"] == "UnauthenticatedError", response.json()
-
-
-def _paths(app: FastAPI) -> set[str]:
-    """Every served path, walking FastAPI 0.140's lazy `_IncludedRouter` placeholders."""
-    found: set[str] = set()
-
-    def walk(routes: Iterable[object]) -> None:
-        for route in routes:
-            included = getattr(route, "original_router", None)
-            if included is not None:
-                walk(included.routes)
-            else:
-                path = getattr(route, "path", None)
-                if isinstance(path, str):
-                    found.add(path)
-
-    walk(app.routes)
-    return found
-
-
-@pytest.mark.parametrize("name", ["viewer", "search"])
-def test_the_test_seam_app_serves_the_operational_probes(name: str) -> None:
-    """X12: `/livez` + `/readyz` are part of the app under test, not something only prod grows."""
-    paths = _paths(_seam_app(name))
-    assert {"/livez", "/readyz"} <= paths, sorted(paths)

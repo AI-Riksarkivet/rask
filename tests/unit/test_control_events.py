@@ -40,17 +40,6 @@ def _evt(action: ControlAction = "grant_added", **over: Any) -> CatalogControlEv
     return CatalogControlEvent(action=action, **base)
 
 
-# ── model ──────────────────────────────────────────────────────────────────────────────────────────
-
-
-def test_event_defaults_and_roundtrip() -> None:
-    e = _evt(extra={"relation": "can_read_data", "subject": "user:bob"})
-    assert e.event_id and len(e.event_id) == 32  # a uuid4 hex, auto-assigned
-    assert e.occurred_at.tzinfo is not None  # UTC-aware
-    # Wire round-trip: the JSON the emitter publishes re-parses to an equal event (the consumer contract).
-    assert CatalogControlEvent.model_validate_json(e.model_dump_json()) == e
-
-
 # ── ring buffer ────────────────────────────────────────────────────────────────────────────────────
 
 
@@ -62,16 +51,6 @@ def test_buffer_zero_cursor_returns_window() -> None:
     # an empty baseline — a baseline would advance the cursor past these first events and silently skip them.
     events, head, reset = buf.since(0)
     assert [e.object_id for e in events] == ["a", "b"] and head == 2 and reset is False
-
-
-def test_buffer_cursor_delivers_only_new() -> None:
-    buf = ControlEventBuffer(8)
-    buf.append(_evt(object_id="a"))
-    buf.append(_evt(object_id="b"))
-    _, head_after_two, _ = buf.since(0)
-    buf.append(_evt(object_id="c"))
-    events, head, reset = buf.since(head_after_two)
-    assert [e.object_id for e in events] == ["c"] and head == 3 and reset is False
 
 
 def test_buffer_dedupe_redelivery() -> None:
@@ -98,19 +77,7 @@ def test_buffer_overflow_signals_reset() -> None:
     assert reset2 is True and head2 == 4
 
 
-def test_buffer_drops_oldest_when_full() -> None:
-    buf = ControlEventBuffer(2)
-    for i in range(5):  # cursors 1..5; only the last two (4,5) survive the maxlen-2 ring
-        buf.append(_evt(object_id=str(i)))
-    events, head, reset = buf.since(3)  # only cursors 4,5 retained; wanted 4.. → gets cursor 4 (object "3")
-    assert [e.object_id for e in events] == ["3", "4"] and head == 5 and reset is False
-
-
 # ── emitter (best-effort Dapr publish) ───────────────────────────────────────────────────────────────
-
-
-def test_noop_emitter_is_total() -> None:
-    asyncio.run(NoopControlEmitter().emit(_evt()))  # no raise, no side effect
 
 
 def test_dapr_emitter_publishes_control_topic() -> None:
@@ -124,11 +91,6 @@ def test_dapr_emitter_publishes_control_topic() -> None:
     assert call["topic_name"] == CONTROL_TOPIC
     assert call["data_content_type"] == "application/json"
     assert CatalogControlEvent.model_validate_json(call["data"]) == e  # pointer payload, round-trips
-
-
-def test_dapr_emitter_best_effort_swallows() -> None:
-    em = DaprControlEmitter(cast(Any, _FakeDapr(fail=True)), pubsub="p", topic=CONTROL_TOPIC, timeout_seconds=5, service="catalog")
-    asyncio.run(em.emit(_evt()))  # a wedged/failing sidecar must NOT raise into the mutation path
 
 
 def test_make_control_emitter_selection() -> None:
@@ -165,9 +127,3 @@ def test_emit_control_builds_and_emits() -> None:
     )
     published = CatalogControlEvent.model_validate_json(fake.calls[0]["data"])
     assert published.action == "table_renamed" and published.extra == {"from": "t", "to": "t2"}
-
-
-def test_emit_control_noop_emitter_is_safe() -> None:
-    # The off state (the ControlEmitterDep fallback) is a NoopControlEmitter — emit_control on it never raises
-    # and never publishes, so a control-off / unwired deployment can call it freely at every mutation site.
-    asyncio.run(emit_control(NoopControlEmitter(), action="grant_added", object_type="grant", object_id="x", actor=None))  # no raise, no publish

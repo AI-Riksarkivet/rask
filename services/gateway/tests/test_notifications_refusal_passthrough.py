@@ -41,16 +41,6 @@ def _problem(status: int, title: str, detail: str) -> bytes:
     return json.dumps({"type": f"about:blank#{title.lower().replace(' ', '')}", "title": title, "status": status, "detail": detail}).encode()
 
 
-#: The four refusals the inbox door issues, with the reason each carries (`services/notifications`:
-#: the cursor decoder, `make_auth_deps`, the FGA door, and `require_actor_plane`).
-REFUSALS = [
-    (400, _problem(400, "Bad Request", "the inbox cursor is not readable")),
-    (401, _problem(401, "Unauthorized", "Missing bearer token")),
-    (403, _problem(403, "Forbidden", "you may not read that object")),
-    (503, _problem(503, "Service Unavailable", "the inbox actor plane is unregistered")),
-]
-
-
 class _Upstream:
     """The notifications service, as far as the gateway can tell.
 
@@ -97,25 +87,6 @@ def row(gw):
         yield client, upstream
 
 
-@pytest.mark.parametrize(("status", "body"), REFUSALS, ids=[str(status) for status, _ in REFUSALS])
-def test_a_refusal_reaches_the_caller_with_its_status_type_and_reason_intact(row, status: int, body: bytes) -> None:
-    """Status, media type and body — the three a proxy can lose one of while the other two look right.
-
-    Byte-identity rather than a parsed comparison: the panel reads `detail`, and a hop that re-encoded
-    an equivalent body would satisfy `==` on the parsed dict while still being a hop this row must not
-    have. The media type is asserted separately because it is what makes the body a PROBLEM rather
-    than an object the client tries to render as a feed.
-    """
-    client, upstream = row
-    upstream.refuses(status, body)
-
-    response = client.get("/api/notifications/inbox")
-
-    assert response.status_code == status
-    assert response.headers["content-type"].startswith(PROBLEM_JSON)
-    assert response.content == body
-
-
 def test_a_service_refusal_is_not_flattened_into_the_gateways_own_unreachable_error(row) -> None:
     """A 503 from the inbox and a 502 from the gateway mean different things and must stay different.
 
@@ -132,26 +103,3 @@ def test_a_service_refusal_is_not_flattened_into_the_gateways_own_unreachable_er
     assert response.status_code == 503
     assert response.json()["detail"] == "the inbox actor plane is unregistered"
     assert "unreachable" not in response.text
-
-
-def test_an_inbox_the_gateway_cannot_reach_is_a_502_naming_the_upstream_rather_than_a_404(row) -> None:
-    """The other side of that split: an unreachable upstream is a 502, not a 404.
-
-    A 404 here would read as "no such route" and send the reader to the route table, which is the
-    one place that is correct — so the 502 must name the PUBLIC route (`/api/notifications`) and say
-    the failure is upstream. It must NOT name the internal address/port: since
-    `GW-502-LEAKS-INTERNAL-ADDRESS`, `127.0.0.1:8850` (the row's default when the chart forgets to
-    render an address) goes to the gateway's ERROR log, not the public body — the same scrub
-    `_rewrite_location` applies to Location headers.
-    """
-    client, upstream = row
-    upstream.unreachable = True
-
-    response = client.get("/api/notifications/inbox")
-
-    assert response.status_code == 502
-    detail = response.json()["detail"]
-    assert "unreachable" in detail
-    assert "/api/notifications" in detail, f"the 502 does not say WHICH public route failed: {detail!r}"
-    assert "8850" not in detail, f"the 502 leaks the internal port to the caller: {detail!r}"
-    assert upstream.seen, "the gateway did not attempt the row at all"

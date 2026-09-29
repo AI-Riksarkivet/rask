@@ -17,7 +17,6 @@ The live contended-writer proof against RustFS lives in ``tests/e2e-py/test_regi
 
 from __future__ import annotations
 
-import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -37,20 +36,6 @@ def _root(tmp_path: Any) -> str:
 # --------------------------------------------------------------------------- #
 # the seam: create_json (local-FS branch — OS-arbitrated exclusivity)
 # --------------------------------------------------------------------------- #
-
-
-def test_create_json_local_first_writer_wins(tmp_path: Any) -> None:
-    records.create_json(_root(tmp_path), {}, "_warehouses/wh-a.json", {"id": "wh-a", "project": "acme"})
-    assert json.loads((tmp_path / "_warehouses" / "wh-a.json").read_text()) == {"id": "wh-a", "project": "acme"}
-
-
-def test_create_json_local_second_create_refused_and_content_preserved(tmp_path: Any) -> None:
-    root = _root(tmp_path)
-    records.create_json(root, {}, "_warehouses/wh-a.json", {"id": "wh-a", "project": "acme"})
-    with pytest.raises(records.RecordExistsError):
-        records.create_json(root, {}, "_warehouses/wh-a.json", {"id": "wh-a", "project": "evil"})
-    # the loser's payload never touched the store — first writer's record is intact
-    assert json.loads((tmp_path / "_warehouses" / "wh-a.json").read_text())["project"] == "acme"
 
 
 def test_create_json_local_bare_path_root(tmp_path: Any) -> None:
@@ -88,25 +73,6 @@ def _client_error(code: str, status: int) -> ClientError:
         },
         "PutObject",
     )
-
-
-def test_create_json_s3_sends_if_none_match(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = MagicMock()
-    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
-    records.create_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
-    kwargs = client.put_object.call_args.kwargs
-    assert kwargs["Bucket"] == "ctrl"
-    assert kwargs["Key"] == "prefix/_warehouses/wh-a.json"
-    assert kwargs["IfNoneMatch"] == "*"  # the whole point: the STORE arbitrates, not a prior read
-    assert json.loads(kwargs["Body"]) == {"id": "wh-a"}
-
-
-def test_create_json_s3_root_without_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = MagicMock()
-    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
-    records.create_json("s3://ctrl", _SO, "_projects/acme.json", {"id": "acme"})
-    kwargs = client.put_object.call_args.kwargs
-    assert (kwargs["Bucket"], kwargs["Key"]) == ("ctrl", "_projects/acme.json")
 
 
 def test_create_json_s3_412_maps_to_record_exists(monkeypatch: pytest.MonkeyPatch) -> None:

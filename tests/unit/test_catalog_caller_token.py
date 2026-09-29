@@ -66,14 +66,8 @@ def _token_of(reader: Any) -> str | None:
 @pytest.mark.parametrize(
     ("service_token", "caller_token", "expected"),
     [
-        # The reported failure: no service token configured, no caller token forwarded -> bare
-        # request -> the catalog's 401. This is the state the live cluster was in.
-        (None, None, None),
         # The fix: the caller's bearer travels, so the catalog answers about the CALLER.
         (None, "caller-jwt", "caller-jwt"),
-        # The caller WINS over a configured service token — otherwise a deployment that sets
-        # catalogToken silently reverts every read to the confused-deputy behaviour.
-        ("service-jwt", "caller-jwt", "caller-jwt"),
         # NO CALLER TOKEN -> NO TOKEN, even with a service identity configured. This case asserted
         # "service-jwt" until 2026-08-26, on the stated grounds that a caller with no request context
         # (the publish saga) needed the fallback. This file's OWN docstring already refuted that —

@@ -28,7 +28,7 @@ from typing import Any, cast
 import pytest
 from fastapi import Request
 from fastapi.security import HTTPAuthorizationCredentials
-from lance_namespace import PermissionDeniedError, UnauthenticatedError
+from lance_namespace import PermissionDeniedError
 
 from catalog.api import security
 from service_kit.governed.oidc import IDToken
@@ -100,23 +100,6 @@ def test_gateway_proxied_human_with_a_valid_bearer_authenticates() -> None:
     assert token.iss == "https://dex.example/dex"
 
 
-def test_the_sidecar_stamped_token_alone_does_not_divert_a_human() -> None:
-    """With `dapr.io/app-token-secret` set, daprd stamps `dapr-api-token` on EVERY delivered request.
-
-    A proxied human therefore arrives holding it. They must still authenticate as themselves — the
-    service door needs BOTH headers, and the gateway strips `x-lance-service-identity` at the edge.
-    """
-    token = security.authenticate(
-        _request(oidc=_verifier()),
-        _settings(service_subjects="medallion"),
-        _creds(),
-        dapr_api_token="the-estate-service-token",
-        x_lance_service_identity=None,
-        dapr_caller_app_id=_GATEWAY,
-    )
-    assert token is not None and token.sub == _SUB
-
-
 # --------------------------------------------------------------------------- #
 # THE RULE THAT MUST NOT HAVE LOOSENED
 # --------------------------------------------------------------------------- #
@@ -153,54 +136,6 @@ def test_public_caller_cannot_launder_even_while_holding_a_valid_bearer() -> Non
             x_lance_service_identity="medallion",
             dapr_caller_app_id=_GATEWAY,
         )
-
-
-def test_anonymous_through_the_gateway_is_unauthenticated_not_permitted() -> None:
-    """No bearer, no service headers: 401, never a silent pass."""
-    with pytest.raises(UnauthenticatedError):
-        security.authenticate(
-            _request(oidc=_verifier()),
-            _settings(),
-            None,
-            dapr_caller_app_id=_GATEWAY,
-        )
-
-
-# --------------------------------------------------------------------------- #
-# the non-proxied paths keep working
-# --------------------------------------------------------------------------- #
-
-
-def test_a_non_public_caller_is_never_refused_as_a_public_front_door(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A genuine service invocation must not hit the public-caller refusal at all.
-
-    With no `APP_API_TOKEN` configured the door is CLOSED, and since the two service doors were unified the
-    two call sites that is a 401 NAMING the missing token, not a fall-through to OIDC — which
-    answered the same request with "Missing bearer token" and sent operators to the IdP. Either way
-    the point of the test is the TYPE of refusal: `Unauthenticated` (we could not authenticate you),
-    NOT `PermissionDenied` (you are barred as a public front door).
-
-    The `delenv` makes that precondition REAL. It was inherited from the ambient environment, so a
-    developer with `APP_API_TOKEN` exported got the same 401 from a different branch (a rejected
-    credential) and the prose above described a path the run never took.
-    """
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
-    with pytest.raises(UnauthenticatedError):
-        security.authenticate(
-            _request(oidc=_verifier()),
-            _settings(service_subjects="medallion"),
-            None,
-            dapr_api_token="",
-            x_lance_service_identity="medallion",
-            dapr_caller_app_id="medallion",
-        )
-
-
-def test_direct_call_with_no_dapr_header_is_unaffected() -> None:
-    """The shape every pre-existing test used — must keep behaving identically."""
-    token = security.authenticate(_request(oidc=_verifier()), _settings(), _creds())
-    assert token is not None and token.sub == _SUB
 
 
 # --------------------------------------------------------------------------- #

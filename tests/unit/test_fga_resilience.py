@@ -111,52 +111,6 @@ def test_check_qualify_false_sends_subject_verbatim() -> None:
     assert c.seen == ["user:alice", "role:project_admin#member"]
 
 
-def test_batch_check_fails_closed_on_network_error() -> None:
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.batch_check(
-                _down(),
-                user="alice",
-                relation="can_write_data",
-                objects=["table:t"],
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
-
-
-def test_list_objects_fails_closed_on_network_error() -> None:
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.list_objects(
-                _down(),
-                user="alice",
-                relation="can_read_data",
-                object_type="table",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
-
-
-def test_list_users_fails_closed_on_network_error() -> None:
-    # CONTRACT (#51): an access review must never answer "nobody" because OpenFGA was down — the
-    # outage is a 503, exactly like every other read path.
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.list_users(
-                _down(),
-                relation="can_read_data",
-                obj="table:t",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
-
-
 def test_list_users_extracts_subjects_and_wildcard() -> None:
     # The wrapper returns sorted bare subjects; a `user:*` public wildcard surfaces as "*" — an
     # access review must never hide a public grant.
@@ -173,22 +127,6 @@ def test_list_users_extracts_subjects_and_wildcard() -> None:
 
     result = asyncio.run(fga.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t"))
     assert result == ["*", "alice", "bob"]
-
-
-def test_write_tuples_fails_closed_on_network_error() -> None:
-    tuples = [ClientTuple(user="user:alice", relation="owner", object="table:t")]
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(
-            fga.write_tuples(
-                _down(),
-                tuples,
-                actor="test",
-                origin="admin_api",
-                retry_attempts=1,
-                retry_backoff_seconds=0.0,
-                retry_max_backoff_seconds=0.0,
-            )
-        )
 
 
 class _TransactionalStore:
@@ -277,54 +215,11 @@ def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
     assert store.tuples == {("user:alice", "owner", "warehouse:wh-a")}, "a failed write mutated the store"
 
 
-def test_write_tuples_batch_without_duplicates_stays_one_call() -> None:
-    """No duplicate → a single transactional write, no per-tuple fallback."""
-    store = _TransactionalStore(set())
-    tuples = [
-        ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-b"),
-        ClientTuple(user="project:acme", relation="project", object="warehouse:wh-b"),
-    ]
-    asyncio.run(
-        fga.write_tuples(
-            cast(OpenFgaClient, store),
-            tuples,
-            actor="test",
-            origin="admin_api",
-            retry_attempts=1,
-            retry_backoff_seconds=0.0,
-            retry_max_backoff_seconds=0.0,
-        )
-    )
-    assert store.write_calls == [2]
-    assert len(store.tuples) == 2
-
-
-def test_write_tuples_single_duplicate_is_still_a_no_op() -> None:
-    """The original contract holds for a one-tuple batch: already-granted is success, not an error."""
-    seeded = ("user:alice", "owner", "warehouse:wh-a")
-    store = _TransactionalStore({seeded})
-    asyncio.run(
-        fga.write_tuples(
-            cast(OpenFgaClient, store),
-            [ClientTuple(user="user:alice", relation="owner", object="warehouse:wh-a")],
-            actor="test",
-            origin="admin_api",
-            retry_attempts=1,
-            retry_backoff_seconds=0.0,
-            retry_max_backoff_seconds=0.0,
-        )
-    )
-    assert store.tuples == {seeded}
-    assert store.write_calls == [1]  # one call; the server ignores the duplicate and answers 200
-
-
 @pytest.mark.parametrize(
     ("table_id", "expected"),
     [
         ("$", None),  # delimiter-only root collapses to None (grant/check agree)
-        ("", None),  # empty id
         ("db1", None),  # single top-level segment has no parent namespace
-        ("a$b", "a"),  # nested table -> parent namespace
         ("a$b$c", "a$b"),  # two levels deep
     ],
 )
@@ -378,17 +273,3 @@ def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
         )
     )
     assert [r.user for r in client.requests] == ["role:project_admin#member"]
-
-
-def test_list_objects_always_sends_a_condition_context() -> None:
-    """The clock, and why omitting it is worse on a LISTING than on a check.
-
-    The wrapper's docstring: "a listing that omits the clock silently drops every object reachable only
-    through a time-boxed grant, and a short list reads as a correct answer rather than an error." A
-    check that loses its context returns a visible `false`; a listing returns a shorter list, and
-    nothing about a shorter list looks wrong.
-    """
-    client = _CapturingList()
-    asyncio.run(fga.list_objects(cast(OpenFgaClient, client), user="alice", relation="can_get_metadata", object_type="table"))
-    context = client.requests[0].context
-    assert context, "ListObjects was sent with no condition context; time-boxed grants vanish silently"

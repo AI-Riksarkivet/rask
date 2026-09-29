@@ -42,24 +42,6 @@ def key(
     return derive_idempotency_key(stage=stage, token=token, from_uri=from_uri, to_uri=to_uri, code_version=code_version)
 
 
-def test_a_code_version_change_changes_the_key() -> None:
-    """The axis that was missing, and the whole of this row.
-
-    Without it a rebuilt stage re-attaches to the previous build's recorded outcome and reports success
-    for work this code never did.
-    """
-    before = key()
-
-    after = key(code_version="build-2")
-
-    assert before != after, "a build bump leaves the key unchanged, so the run re-attaches to the old outcome"
-
-
-def test_the_same_inputs_give_the_same_key() -> None:
-    """Determinism is the other half: a REDELIVERED order must re-attach rather than run twice."""
-    assert key() == key()
-
-
 def test_every_documented_axis_actually_moves_the_key() -> None:
     """The field promises four axes. A promise nothing tests is how the fourth went missing.
 

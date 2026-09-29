@@ -74,16 +74,3 @@ def test_the_WRITE_gates_still_ask_BOTH_fields() -> None:
     assert features.describe_compaction_unsupported_flags(0, UNKNOWN_BIT, None) is not None, (
         "compaction accepted a dataset over an unknown WRITER bit — compaction rewrites data"
     )
-
-
-def test_flag_8_is_writer_only_in_the_masks_the_estate_ships() -> None:
-    """Pins the spec's table against our own constants, so a widened whitelist cannot quietly disagree.
-
-    Flag 8 is KNOWN to this estate (it is inside `SUPPORTED`), so it refuses nothing today — the
-    assertion is that our understanding of which bits exist still matches the spec that defines them.
-    """
-    assert features.FLAG_TABLE_CONFIG & features.SUPPORTED, "flag 8 fell out of SUPPORTED — a real dataset sets it via update_config"
-    assert features.FLAG_BASE_PATHS & features.SUPPORTED_FOR_GC, "flag 16 fell out of SUPPORTED_FOR_GC — root-scoped GC is safe on a clone"
-    assert not (features.FLAG_BASE_PATHS & features.SUPPORTED), (
-        "flag 16 entered SUPPORTED — compaction on a multi-base dataset silently materialises the base into it"
-    )

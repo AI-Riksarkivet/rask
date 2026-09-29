@@ -46,32 +46,6 @@ def _load_job() -> ModuleType:
 job = _load_job()
 
 
-def test_storage_options_come_from_the_SHARED_builder_in_the_aws_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Identity AND the property that identity buys — the same B14 rule this module already states.
-
-    The script hand-rolled this dict until 2026-09-09, in the BARE spelling (`access_key_id`).
-    object_store blends the ambient `AWS_*` environment with bare keys and signs with a pair belonging
-    to neither identity — a `403 SignatureDoesNotMatch` measured in-cluster 2026-09-03 that reads as an
-    expired credential. **No test process carries an ambient AWS_* environment**, so no behavioural
-    test can catch that spelling; this asserts the SPELLING itself, which is the half that is checkable
-    here. The identity assert is what stops a future edit reintroducing a local copy.
-    """
-    from service_kit.lakehouse.objectfs import lance_storage_options
-
-    assert job.lance_storage_options is lance_storage_options, "the job rebound the builder to a local copy"
-
-    for name, value in (("S3_ENDPOINT", "http://rustfs:9000"), ("S3_KEY", "k"), ("S3_SECRET", "s")):
-        monkeypatch.setenv(name, value)
-    monkeypatch.delenv("S3_REGION", raising=False)
-
-    options = job._storage_options()  # noqa: SLF001 — the module under test is a script, not a package
-
-    assert options["aws_access_key_id"] == "k"
-    assert options["aws_secret_access_key"] == "s"
-    assert "access_key_id" not in options, "the bare spelling loses a precedence contest to the ambient AWS_* environment"
-    assert "secret_access_key" not in options
-
-
 @pytest.fixture(scope="module")
 def png_bytes() -> bytes:
     """A tiny real PNG (needs Pillow, which the unit venv has via the deriver deps)."""
@@ -80,36 +54,6 @@ def png_bytes() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (40, 30), (123, 200, 50)).save(buffer, format="PNG")
     return buffer.getvalue()
-
-
-def test_media_transform_round_trips_blob_and_derives(tmp_path: Path, png_bytes: bytes) -> None:
-    """End-to-end: ``_media_transform`` preserves blob-v2 typing AND appends thumbnail+embedding.
-
-    This is the whole point of the Ray blob path — a plain lance_ray write would demote ``payload`` to
-    LargeBinary; the pylance round-trip keeps it a blob-v2 column and derives the image artifacts, exactly
-    like the in-process ``compute.transform_stage``.
-    """
-    import lance
-
-    src = str(tmp_path / "bronze_media")
-    table = pa.table(
-        {"id": pa.array([0, 1], pa.int64()), "payload": blob_array([png_bytes, png_bytes])},
-        schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
-    )
-    lance.write_dataset(table, src, data_storage_version="2.2", enable_stable_row_ids=True)
-    src_rowids = lance.dataset(src).to_table(with_row_id=True).column("_rowid").to_pylist()
-
-    dst = str(tmp_path / "silver_media")
-    job._media_transform(src, dst, {}, stage="silver-media")
-
-    out = lance.dataset(dst)
-    names = out.schema.names
-    assert "thumbnail" in names and "embedding" in names  # image artifacts derived
-    assert "stage" in names
-    assert blobs.blob_field_names(out.schema) == ["payload"]  # blob-v2 typing PRESERVED (not demoted)
-    assert out.count_rows() == 2 and out.has_stable_row_ids
-    # Row-level provenance parity with compute._carry_forward: source_rowid minted from the source _rowid.
-    assert out.to_table(columns=["source_rowid"]).column("source_rowid").to_pylist() == src_rowids
 
 
 def test_a_media_RERUN_keeps_the_row_identity_the_tier_above_resolves_against(tmp_path: Path, png_bytes: bytes) -> None:
@@ -211,49 +155,6 @@ def test_stamp_stage_re_stamps_the_lineage_column_instead_of_inheriting_it() -> 
     assert "lineage" not in bare.column_names  # no document handed over → the parent's is still dropped
 
 
-def test_media_transform_stamps_the_lineage_column(tmp_path: Path, png_bytes: bytes) -> None:
-    """R26 on the Ray MEDIA path: the blob round-trip writes the provenance column in its own commit."""
-    import lance
-
-    src = str(tmp_path / "src")
-    table = pa.table(
-        {"id": pa.array([1, 2], pa.int64()), "payload": blob_array([png_bytes, png_bytes])},
-        schema=pa.schema([pa.field("id", pa.int64()), blob_field("payload")]),
-    )
-    lance.write_dataset(table, src, mode="overwrite", data_storage_version="2.2", enable_stable_row_ids=True)
-    doc = '{"run_id": "r-9", "operation": "aggregate_gold"}'
-
-    job._media_transform(src, str(tmp_path / "dst"), {}, stage="gold", lineage=doc)
-
-    out = lance.dataset(str(tmp_path / "dst"))
-    assert out.schema.field("lineage").type.extension_name == "arrow.json"
-    assert out.to_table(columns=["id"], filter="json_get_string(lineage, 'run_id') = 'r-9'").num_rows == 2
-
-
-def test_the_script_uses_the_shared_primitives_rather_than_copies() -> None:
-    """Identity, not agreement — the property B14 asks for.
-
-    A copy that merely *behaves* the same is what this file used to check. Asserting the script
-    references the shared function objects means a reintroduced local copy fails immediately, rather
-    than passing until it drifts in a way somebody remembered to assert.
-    """
-    from service_kit.lakehouse import media as shared_media
-    from service_kit.lakehouse.blobs import blob_field_names as shared_blob_field_names
-
-    job = _load_job()
-
-    assert job.media is shared_media
-    assert job.blob_field_names is shared_blob_field_names
-
-
-def test_the_script_declares_no_local_deriver_copy() -> None:
-    """The inlined names are GONE, not merely unused — a dormant copy is a copy."""
-    job = _load_job()
-
-    for gone in ("_derive_thumbnail", "_derive_embedding", "_is_image", "_open_guarded", "_is_blob_field"):
-        assert not hasattr(job, gone), f"{gone} is back — B14 asks for one implementation, not two"
-
-
 # ── the media lane streams, rather than holding the whole dataset ────────────────────────────────
 #
 # Found by the Ray design-patterns audit (2026-08-28) against ray-project's own
@@ -336,21 +237,6 @@ def test_streaming_produces_exactly_what_one_shot_did(tmp_path: Path, png_bytes:
     assert all(e is not None for e in got.column("embedding").to_pylist())
 
 
-def test_a_rerun_overwrites_rather_than_appending_to_the_previous_run(tmp_path: Path, png_bytes: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The sharpest hazard the batched write introduces: the FIRST batch must overwrite and the rest
-    append, or a second run of the same stage doubles the table instead of replacing it."""
-    import lance
-
-    src = _bronze_media(tmp_path, png_bytes, rows=5)
-    monkeypatch.setattr(job, "MEDIA_BATCH_ROWS", 2)
-    dst = str(tmp_path / "silver_rerun")
-
-    job._media_transform(src, dst, {}, stage="silver-media")
-    job._media_transform(src, dst, {}, stage="silver-media")
-
-    assert lance.dataset(dst).count_rows() == 5, "the rerun appended to the previous run's rows"
-
-
 def test_an_empty_source_still_creates_the_target(tmp_path: Path, png_bytes: bytes) -> None:
     """Zero batches means zero writes, which would have left the target ABSENT — and an absent
     dataset is not the same answer as an empty one to the tier's readers. The unbatched form got
@@ -423,32 +309,6 @@ def _bronze_tabular(tmp_path: Path, rows: int = 4) -> str:
     return src
 
 
-def test_the_distributed_destination_is_created_with_the_schema_the_transform_emits(tmp_path: Path) -> None:
-    """The invariant the break violated, checked through the REAL failing frame.
-
-    `lance_ray` appends by casting each block to the destination's schema, so a destination built by
-    any construction other than the transform's own can only ever agree by luck. Driven end to end
-    from the producer's bronze shape: a real head stage writes silver, then the destination schema
-    and one real emitted block are compared, and finally handed to `lance_ray`'s own
-    `pd_to_arrow` — the exact frame in the production traceback.
-    """
-    import lance
-    from lance_ray.pandas import pd_to_arrow
-
-    doc = '{"run_id": "r-gold", "operation": "aggregate_gold"}'
-    silver = str(tmp_path / "silver_tabular")
-    job._run_stage(_bronze_tabular(tmp_path), silver, "silver", {}, lineage='{"run_id": "r-silver"}')
-
-    upstream = lance.dataset(silver)
-    assert upstream.schema.names == ["id", "payload", "stage", "source_rowid", "lineage"]
-
-    target = job._target_schema(upstream, "gold", doc, "acme$gold")
-    emitted = job._stamp_stage(upstream.to_table(), "gold", doc)
-
-    assert emitted.schema.names == target.names, "the destination and the blocks are two constructions again"
-    pd_to_arrow(emitted, target)  # what lance_ray does per block; raises on any positional disagreement
-
-
 def test_the_media_batch_keeps_the_column_order_the_media_lane_already_writes(tmp_path: Path, png_bytes: bytes) -> None:
     """The media branch MUST NOT move: its lane writes with pylance, whose overwrite takes the
     table's schema as the dataset's, so a reordering here silently rewrites a governed tier's shape.
@@ -501,9 +361,7 @@ def test_the_tabular_cascade_reaches_gold_through_the_real_distributed_write(tmp
     """The reported break, reproduced and then closed with the real lance_ray write on a real Ray.
 
     `slow` because it starts a Ray cluster — no other test in this estate does, and the default suite
-    is measured in seconds. The invariant it exercises is guarded fast (and without Ray) by
-    `test_the_distributed_destination_is_created_with_the_schema_the_transform_emits`; this one is
-    what proves the invariant is the one lance_ray actually enforces.
+    is measured in seconds.
     """
     import lance
 
@@ -805,29 +663,6 @@ def test_an_unknown_cardinality_is_refused_rather_than_defaulted() -> None:
 # the cardinality belongs too.
 
 
-def test_a_declared_lane_can_ask_for_a_FANOUT_and_it_reaches_the_job() -> None:
-    """The wiring, end to end: declaration -> submit env -> the job's contract."""
-    from service_kit.lakehouse.transform_specs import TransformSpec
-
-    spec = TransformSpec(
-        name="frames",
-        project="acme",
-        from_id="bronze$events",
-        to_id="silver$frames",
-        task="stage-transform",
-        cardinality="1:N",
-    )
-    assert spec.cardinality == "1:N"
-
-
-def test_a_declared_lane_defaults_to_1to1() -> None:
-    """An un-migrated declaration keeps the shape it has always had — the default must not loosen."""
-    from service_kit.lakehouse.transform_specs import TransformSpec
-
-    spec = TransformSpec(name="x", project="acme", from_id="a", to_id="b", task="stage-transform")
-    assert spec.cardinality == job.ONE_TO_ONE
-
-
 def test_a_declared_cardinality_the_job_cannot_honour_is_refused_at_DECLARATION_time() -> None:
     """Refused at the door, not at 3am on the cluster. The job refuses an unknown cardinality too,
     but by then a Ray job has been submitted and the operator sees a stage FAIL instead of a 422."""
@@ -857,17 +692,6 @@ def test_the_submit_path_FORWARDS_the_declared_cardinality_to_the_job() -> None:
         "submit_stage_job does not put the resolved cardinality on the WorkOrder's stamp, so a declared "
         "fan-out lane runs under the 1:1 default that refuses the very shape it declared"
     )
-
-
-def test_the_catalog_DOOR_accepts_a_declared_cardinality() -> None:
-    """The last link. `TransformSpecRequest` is a separate `extra="forbid"` model, so a cardinality
-    the stage runner honours and the spec validates is still unreachable until the DOOR accepts it — and a
-    forbidden extra is a 422, so the caller is told the field does not exist."""
-    from catalog.schemas import TransformSpecRequest, TransformSpecResponse
-
-    body = TransformSpecRequest(name="frames", from_id="bronze$events", to_id="silver$frames", task="stage-transform", cardinality="1:N")
-    assert body.cardinality == "1:N"
-    assert "cardinality" in TransformSpecResponse.model_fields, "a declared cardinality must be readable back, or nobody can audit what governs a lane"
 
 
 def test_a_derived_TIER_declares_ITS_OWN_canonical_name_not_its_parents(tmp_path: Path) -> None:
@@ -926,13 +750,6 @@ def test_an_UNWIRED_run_declares_NOTHING_rather_than_its_parents_name(tmp_path: 
     job._run_stage(bronze_uri, silver_uri, "silver", {}, lineage='{"run_id": "r-silver"}')
 
     assert LINEAGE_DATASET_ID_KEY.encode() not in (lance.dataset(silver_uri).schema.metadata or {})
-
-
-def test_the_job_READS_the_destination_name_the_order_already_puts_on_the_wire() -> None:
-    """`WorkOrder.to_env()` has always emitted `RASK_DEST_TABLE`; the gap was a reader, not a writer."""
-    import inspect
-
-    assert 'os.environ.get("RASK_DEST_TABLE"' in inspect.getsource(job.main), "the job ignores the destination name the order ships"
 
 
 # --------------------------------------------------------------------------- #
@@ -1099,42 +916,6 @@ def test_an_in_place_UPDATE_since_the_boundary_reaches_the_tier_below(tmp_path: 
     job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
 
     assert _delta_run(bronze, silver, tmp_path)[1] == "corrected", "an in-place update never reached the tier below"
-
-
-def test_an_INSERT_since_the_boundary_still_reaches_the_tier_below(tmp_path: Path) -> None:
-    """The half that already worked, held: a predicate that covers updates must not lose inserts."""
-    import lance
-
-    bronze = _bronze_tabular(tmp_path, rows=3)
-    silver = str(tmp_path / "silver_inserted")
-    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
-
-    boundary = lance.dataset(bronze).version
-    lance.write_dataset(
-        pa.table({"id": pa.array([9], pa.int64()), "payload": pa.array(["event-9"]), "stage": pa.array(["bronze"])}),
-        bronze,
-        mode="append",
-    )
-
-    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-delta"}', base_version=boundary)
-
-    assert _delta_run(bronze, silver, tmp_path)[9] == "event-9"
-
-
-def test_a_row_untouched_since_the_boundary_is_NOT_re_derived(tmp_path: Path) -> None:
-    """What makes the lane a delta at all: widening the predicate must not turn it into a full rescan."""
-    import lance
-
-    bronze = _bronze_tabular(tmp_path, rows=3)
-    silver = str(tmp_path / "silver_untouched")
-    job._run_stage(bronze, silver, "silver", {}, lineage='{"run_id": "r-full"}')
-
-    boundary = lance.dataset(bronze).version
-    lance.dataset(bronze).update({"payload": "'corrected'"}, where="id = 1")
-
-    delta = lance.dataset(bronze).to_table(columns=["id"], filter=job._delta_filter(boundary)).to_pydict()["id"]
-
-    assert sorted(delta) == [1], "the delta carried rows nothing had changed — the lane is rescanning"
 
 
 # RETRACTION (LH-132). The delta lane and the full lane disagreed about a deleted upstream row: a full

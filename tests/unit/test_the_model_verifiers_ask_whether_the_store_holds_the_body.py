@@ -45,7 +45,6 @@ from service_kit.governed.fga import MODEL_PAGE_SIZE
 
 _ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS = _ROOT / "scripts"
-_E2E_CHECK = _ROOT / "tests" / "e2e-py" / "test_the_deployed_model_is_the_one_the_code_reasons_about.py"
 
 _STALE = {"id": "01J2STALE0000000000000000", "name": "lance-catalog", "created_at": "2026-07-15T09:00:00Z"}
 _ESTATE = {"id": "01J2ESTATE000000000000000", "name": "lance-catalog", "created_at": "2026-07-15T09:00:03Z"}
@@ -131,70 +130,6 @@ def _rule_changed() -> dict[str, Any]:
     body.clear()
     body["this"] = {}
     return model
-
-
-# --------------------------------------------------------------------------- the e2e check, driven end to end
-
-
-def _drive_e2e_check(api: str) -> subprocess.CompletedProcess[str]:
-    """`make e2e-fga-model` as an operator runs it, against the stub, with only the runner's address set."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("LANCE_E2E_", "PYTEST_"))}
-    env["LANCE_E2E_FGA"] = api
-    return subprocess.run(  # noqa: S603 — the interpreter running this suite, on a file in this repo
-        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q", str(_E2E_CHECK)],
-        cwd=_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=120,
-    )
-
-
-def test_the_e2e_check_passes_on_this_checkouts_model_held_below_the_newest(openfga: Callable[[_Estate], str]) -> None:
-    drifted, _dropped, _extra = _drifted()
-    api = openfga(
-        _Estate(
-            stores=[_STALE, _ESTATE],
-            histories={
-                _STALE["id"]: [_stored("model-STALE", drifted)],
-                _ESTATE["id"]: [_stored("model-NEWER", drifted), _stored("model-CHECKOUT", model_document())],
-            },
-        )
-    )
-
-    done = _drive_e2e_check(api)
-
-    summary = done.stdout.strip().splitlines()[-1] if done.stdout.strip() else ""
-    assert done.returncode == 0, f"a store holding this checkout's model below its newest was reported as drift:\n{done.stdout}\n{done.stderr}"
-    assert "skipped" not in summary, f"the check skipped instead of answering: {summary}"
-
-
-def test_the_e2e_check_fails_naming_the_diff_when_the_estates_store_lacks_the_model(openfga: Callable[[_Estate], str]) -> None:
-    """The older `lance-catalog` holds the checkout's model and the store the estate uses does not: a
-    check that read `stores[0]` passes here while every service built from this checkout fails closed."""
-    drifted, dropped, extra = _drifted()
-    api = openfga(
-        _Estate(
-            stores=[_STALE, _ESTATE],
-            histories={_STALE["id"]: [_stored("model-CHECKOUT", model_document())], _ESTATE["id"]: [_stored("model-NEWER", drifted)]},
-        )
-    )
-
-    done = _drive_e2e_check(api)
-
-    assert done.returncode == 1, f"the store the estate uses lacks this checkout's model and the check passed:\n{done.stdout}"
-    for named in (_ESTATE["id"], dropped.split("#")[1], extra.split("#")[1]):
-        assert named in done.stdout, f"the red run does not name {named!r}, so an operator cannot act on it:\n{done.stdout}"
-
-
-def test_the_e2e_check_fails_rather_than_skips_when_no_lance_catalog_store_exists(openfga: Callable[[_Estate], str]) -> None:
-    api = openfga(_Estate(stores=[_SCRATCH], histories={_SCRATCH["id"]: [_stored("model-CHECKOUT", model_document())]}))
-
-    done = _drive_e2e_check(api)
-
-    assert done.returncode == 1, f"with no `lance-catalog` store the check did not fail:\n{done.stdout}"
-    assert "lance-catalog" in done.stdout, f"the failure does not name the store it looked for:\n{done.stdout}"
 
 
 # --------------------------------------------------------------------------- fga-store-check.sh

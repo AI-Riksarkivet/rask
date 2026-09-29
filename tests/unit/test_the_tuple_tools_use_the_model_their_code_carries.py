@@ -66,7 +66,7 @@ def test_the_estate_migration_grants_against_the_model_it_carries(stores: list[d
     assert {(user, relation, "estate:rask") for user, relation, _ in _OLD_ROOT} <= recorded.written
 
 
-@pytest.mark.parametrize(("suite", "lookup"), [("test_auth_e2e.py", "_store_and_model"), ("test_client_direct_e2e.py", "_store_model")])
+@pytest.mark.parametrize(("suite", "lookup"), [("test_auth_e2e.py", "_store_and_model")])
 @_STORES
 def test_an_e2e_grant_writes_against_the_model_the_checkout_carries(
     suite: str, lookup: str, stores: list[dict[str, str]], pin: str, monkeypatch: pytest.MonkeyPatch

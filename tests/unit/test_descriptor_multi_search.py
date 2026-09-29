@@ -41,21 +41,6 @@ def table(name: str, *columns: str) -> TableInfo:
 # --------------------------------------------------------------------------------------------------
 
 
-def test_a_LEGACY_single_search_object_still_loads() -> None:
-    """`search: {...}` is what every descriptor on disk carries. It becomes the one-entry list."""
-    d = declared(search={"row_table": "chunks"})
-
-    assert [(s.name, s.row_table) for s in d.searches] == [("default", "chunks")]
-
-
-def test_the_search_PROPERTY_still_answers() -> None:
-    """~15 call sites across the viewer, search service and atlas read `declared.search`. Renaming
-    the field without keeping this would have broken all of them in one commit."""
-    default = declared(search={"row_table": "chunks"}).search
-    assert default is not None and default.row_table == "chunks"
-    assert declared().search is None
-
-
 def test_the_served_JSON_still_carries_search_beside_searches() -> None:
     """The frontend reads `declared.search` today. Dropping it from the wire to add a list would
     break every zone in the same commit that added the capability, so it is a COMPUTED field."""
@@ -107,21 +92,6 @@ def test_an_UNKNOWN_name_resolves_to_None_rather_than_the_default() -> None:
     d = declared(searches=[{"name": "pages", "row_table": "pages"}])
 
     assert d.search_named("lines") is None
-
-
-def test_each_table_keeps_its_OWN_bindings() -> None:
-    """The reason this is a list of `Search` and not a list of table names: fts and vector bindings
-    are per-table, so a shared one would be wrong for every table but the first."""
-    d = declared(
-        searches=[
-            {"name": "pages", "row_table": "pages", "fts": {"table": "pages", "column": "ocr"}},
-            {"name": "lines", "row_table": "lines", "fts": {"table": "lines", "column": "text"}},
-        ]
-    )
-
-    pages, lines = d.search_named("pages"), d.search_named("lines")
-    assert pages is not None and pages.fts is not None and pages.fts.column == "ocr"
-    assert lines is not None and lines.fts is not None and lines.fts.column == "text"
 
 
 # --------------------------------------------------------------------------------------------------

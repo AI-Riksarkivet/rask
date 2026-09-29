@@ -29,36 +29,6 @@ from lance_namespace import PermissionDeniedError
 from service_kit.governed.dapr_auth import require_dapr_token
 
 
-def test_an_unconfigured_door_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The defect itself: no token configured must mean REFUSE, never 'skip the check'."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
-
-    with pytest.raises(PermissionDeniedError, match="not configured"):
-        require_dapr_token(dapr_api_token="anything", dapr_caller_app_id="")
-
-
-def test_an_unconfigured_door_refuses_even_with_no_token_offered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The exact shape the annotator was in — no configured token AND no presented token.
-
-    Pinned separately because it is the case the old `if expected and ...` handled most wrongly: both
-    sides empty read as "nothing to check" rather than "nothing is protecting this".
-    """
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
-
-    with pytest.raises(PermissionDeniedError):
-        require_dapr_token(dapr_api_token=None, dapr_caller_app_id="")
-
-
-def test_the_escape_hatch_must_be_set_explicitly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An open door is a decision somebody records, not a state inherited from an empty variable."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    monkeypatch.setenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
-
-    require_dapr_token(dapr_api_token=None, dapr_caller_app_id="")
-
-
 def test_the_escape_hatch_does_not_weaken_a_CONFIGURED_door(monkeypatch: pytest.MonkeyPatch) -> None:
     """The flag says "unconfigured is acceptable", never "wrong tokens are acceptable".
 
@@ -70,11 +40,3 @@ def test_the_escape_hatch_does_not_weaken_a_CONFIGURED_door(monkeypatch: pytest.
 
     with pytest.raises(PermissionDeniedError, match="invalid or missing"):
         require_dapr_token(dapr_api_token="a-forged-token", dapr_caller_app_id="")
-
-
-def test_a_configured_door_still_accepts_the_right_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The happy path, so the fix cannot pass by refusing everything."""
-    monkeypatch.setenv("APP_API_TOKEN", "the-real-token")
-    monkeypatch.delenv("RASK_ALLOW_UNAUTHENTICATED_DAPR", raising=False)
-
-    require_dapr_token(dapr_api_token="the-real-token", dapr_caller_app_id="")

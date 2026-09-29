@@ -34,14 +34,6 @@ def test_the_catalog_names_itself() -> None:
     assert facet["warehouseUri"] == "s3://lance-catalog"
 
 
-def test_metadataUri_is_ABSENT_and_that_is_the_architecture() -> None:
-    """The spec's example is a JDBC string because Iceberg-style catalogs hold the commit pointer in a
-    database. Lance puts the CAS in the object store, which is why this estate needs no relational DB
-    at all — there is no metadata endpoint to name, and naming the REST door would describe a component
-    that is not where commits live."""
-    assert "metadataUri" not in _facet()
-
-
 def test_an_unnamed_catalog_renders_NO_facet() -> None:
     """`type` and `name` are the fields a consumer JOINS on, so a blank one is worse than an absent
     facet: it merges every unnamed catalog into a single node instead of leaving them unjoined."""
@@ -60,19 +52,3 @@ def test_a_governed_dataset_is_a_TABLE_and_a_source_is_a_FILE() -> None:
     and JOB_OUTPUT — none of which the catalog serves, so none is emitted."""
     assert dataset_type_facet(_PRODUCER, external=False)["datasetType"] == "TABLE"
     assert dataset_type_facet(_PRODUCER, external=True)["datasetType"] == "FILE"
-
-
-def test_no_subType_is_claimed() -> None:
-    """The spec's examples (MATERIALIZED, EXTERNAL, TEMPORARY) describe properties of a TABLE this
-    estate does not have: nothing is materialised from a query, nothing is temporary, and EXTERNAL is
-    already said by `datasetType` being FILE."""
-    assert "subType" not in dataset_type_facet(_PRODUCER, external=False)
-
-
-def test_both_carry_the_producer_and_a_pinned_schema_url() -> None:
-    """Every facet the estate emits is version-pinned in one place, so the eight-facet vocabulary
-    cannot drift per emitter — the property `test_the_openlineage_envelope_has_one_vocabulary` holds
-    across the whole producer set."""
-    for facet in (_facet(), dataset_type_facet(_PRODUCER, external=False)):
-        assert facet["_producer"] == _PRODUCER
-        assert str(facet["_schemaURL"]).startswith("https://openlineage.io/spec/facets/")

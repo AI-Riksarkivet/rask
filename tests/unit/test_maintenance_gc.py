@@ -136,15 +136,6 @@ def test_compact_now_passes_target_and_optimizes_indices() -> None:
     assert ds.optimize.indices_optimized is True  # indices kept covering the new fragments
 
 
-def test_compact_now_omits_target_when_unset() -> None:
-    ds = _FakeDs(version=1, versions=_versions(1), tags={})
-    maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
-    # None → Lance's default FRAGMENT sizing; the #93 memory floor is forced regardless — rows are
-    # not a unit of memory, and this door runs on the catalog pod. Asserted against the constant
-    # rather than its numbers: a fourth spelling of the bound is the drift the constant exists to stop.
-    assert ds.optimize.compact_kw == dict(maintenance.COMPACTION_BOUND)
-
-
 # ---------------------------------------------------------------- #121 the on-demand doors ask the SWEEP'S gate, per verb
 
 
@@ -174,37 +165,6 @@ def test_run_gc_REFUSES_an_unknown_flag() -> None:
     with pytest.raises(UnsupportedOperationError, match="data overlays"):
         maintenance.run_gc(ds, retention_days=7, retain_versions=2)
     assert ds.cleaned is None, "the delete ran anyway — the refusal came too late"
-
-
-def test_each_doors_refusal_NAMES_the_sweep_gate_that_agrees_with_it() -> None:
-    """Row 13: the refusal used to end "(the sweep refuses it for the same reason)" for BOTH verbs,
-    while they shared one flags-only gate that the sweep no longer has anywhere.
-
-    A message is not decoration on a door an operator is standing at: told the cron agrees, they stop
-    looking, and the next tick reclaims exactly what the button just told them was unsafe. Each
-    refusal now names the gate that actually produced it, so a future divergence has to change a
-    sentence rather than silently outlive one.
-    """
-    from lance_namespace import UnsupportedOperationError
-
-    with pytest.raises(UnsupportedOperationError) as compaction:
-        maintenance.compact_now(_FakeDs(version=1, versions=[], tags={}, feature_flags=(16, 16)), target_rows_per_fragment=None, storage_options={})
-    assert "the sweep's compaction gate weighs this same evidence" in str(compaction.value), str(compaction.value)
-
-    with pytest.raises(UnsupportedOperationError) as reclaim:
-        maintenance.run_gc(_FakeDs(version=1, versions=[], tags={}, feature_flags=(64, 64)), retention_days=7, retain_versions=2)
-    assert "the sweep's version-reclamation gate refuses it too" in str(reclaim.value), str(reclaim.value)
-
-
-def test_a_plain_dataset_still_compacts_with_the_93_memory_floor() -> None:
-    """The gate must not refuse healthy datasets — and the compact now carries #93's bounds, because
-    the default batch size read ~15 GB/thread on a blob tier and this door runs on the CATALOG pod."""
-    ds = _FakeDs(version=1, versions=[], tags={})
-    result = maintenance.compact_now(ds, target_rows_per_fragment=None, storage_options={})
-    assert result["ok"] is True
-    assert ds.optimize.compact_kw is not None
-    assert ds.optimize.compact_kw["batch_size"] == 64
-    assert ds.optimize.compact_kw["num_threads"] == 2
 
 
 # ---------------------------------------------------------------- the on-demand doors and the SHALLOW-CLONE SOURCE

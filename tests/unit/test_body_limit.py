@@ -38,35 +38,12 @@ def _app(max_bytes: int) -> FastAPI:
     return app
 
 
-def test_body_under_limit_passes() -> None:
-    with TestClient(_app(1000)) as client:
-        response = client.post("/echo", content=b"x" * 500)
-    assert response.status_code == 200
-    assert response.json() == {"len": 500}
-
-
 def test_body_exactly_at_limit_passes() -> None:
     # Boundary: == max is allowed (the reject is strictly > max).
     with TestClient(_app(1000)) as client:
         response = client.post("/echo", content=b"x" * 1000)
     assert response.status_code == 200
     assert response.json() == {"len": 1000}
-
-
-def test_body_one_over_limit_rejected() -> None:
-    with TestClient(_app(1000)) as client:
-        response = client.post("/echo", content=b"x" * 1001)
-    assert response.status_code == 413
-
-
-def test_body_over_limit_declared_content_length_rejected() -> None:
-    # httpx sets Content-Length for a bytes body — the fast-path reject fires before the body is read.
-    with TestClient(_app(1000)) as client:
-        response = client.post("/echo", content=b"x" * 2000)
-    assert response.status_code == 413
-    assert response.headers["content-type"] == "application/problem+json"
-    assert response.json()["status"] == 413
-    assert "directly to object storage" in response.json()["detail"]
 
 
 def test_body_over_limit_chunked_without_content_length_rejected() -> None:

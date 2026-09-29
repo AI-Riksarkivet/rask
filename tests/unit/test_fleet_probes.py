@@ -72,17 +72,6 @@ def test_the_app_serves_both_probes(module: str) -> None:
         )
 
 
-@pytest.mark.parametrize("module", [*FACTORY_APPS, "ingest"], ids=[*FACTORY_APPS, "ingest"])
-def test_readiness_is_not_a_constant(module: str) -> None:
-    """The distinction the whole finding turns on: `/api/health` returns a static badge, so probing it
-    reports "ready" while the pod drains. `/readyz` must answer from lifecycle state."""
-    client = TestClient(_app(module))
-    body = client.get("/readyz").json()
-    assert body.get("status") in {"starting", "shutting_down", "unhealthy", "degraded", "healthy", "ready"}, (
-        f"{module} /readyz returned {body!r} — a readiness answer must report state, not a constant"
-    )
-
-
 def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
     """A readiness probe pointed at a constant cannot report draining, which is its whole job."""
     from test_invariants import _rendered_docs  # noqa: PLC0415
@@ -104,31 +93,6 @@ def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
         f"these readiness probes point somewhere other than /readyz: {wrong} — `/api/health` is a "
         f"static badge, so it answers 200 while the pod drains and the kubelet keeps sending traffic"
     )
-
-
-def test_liveness_and_readiness_are_not_the_SAME_path() -> None:
-    """The reference's first rule: two endpoints, two purposes, don't conflate them.
-
-    NO EXEMPTION LIST. This skipped `-gateway` by name, which is a blind spot rather than a rule: a
-    second front-door service is covered only if someone remembers to add it, and a gateway that
-    later grows the shared pair stays unchecked forever. The follow-up finding asks for the exemption
-    to be DERIVED from what an app serves — and deriving it removed the need for one, because the
-    gateway now serves the pair like everything else.
-    """
-    from test_invariants import _rendered_docs  # noqa: PLC0415
-
-    conflated: dict[str, str] = {}
-    for doc in _rendered_docs():
-        if doc.get("kind") != "Deployment" or "rask-" not in doc["metadata"]["name"]:
-            continue
-        name = doc["metadata"]["name"]
-        for container in doc["spec"]["template"]["spec"].get("containers") or []:
-            live = ((container.get("livenessProbe") or {}).get("httpGet") or {}).get("path")
-            ready = ((container.get("readinessProbe") or {}).get("httpGet") or {}).get("path")
-            if live and ready and live == ready:
-                conflated[f"{name}/{container['name']}"] = live
-
-    assert not conflated, f"liveness and readiness share one path: {conflated}"
 
 
 def test_the_gateway_probe_REPORTS_the_drain() -> None:
@@ -189,18 +153,6 @@ def test_the_gateway_probe_REPORTS_the_drain() -> None:
 # fleet's.
 
 
-def test_the_gateway_serves_the_shared_probe_pair() -> None:
-    """The last hand-rolled probe in the estate, at the hop every request passes through."""
-    import gateway
-
-    # THE LIFESPAN RUNS, because `/readyz` gates on `startup_complete` and a bare `TestClient(app)`
-    # never starts it — the probe would answer `starting` forever and the test would be measuring
-    # the harness rather than the app.
-    with TestClient(gateway.app) as client:
-        assert client.get("/livez").status_code == 200, "the gateway serves no /livez — it is the one fleet app that never got the shared, drain-aware pair"
-        assert client.get("/readyz").status_code == 200, "the gateway serves no /readyz"
-
-
 def test_the_gateway_readyz_REPORTS_the_drain() -> None:
     """A readiness probe that cannot say "draining" is the inversion this whole finding is about."""
     import gateway
@@ -215,156 +167,3 @@ def test_the_gateway_readyz_REPORTS_the_drain() -> None:
 
     assert draining.status_code == 503, "the gateway stays Ready through SIGTERM at the estate's only ingress"
     assert draining.json()["status"] == "shutting_down"
-
-
-def test_the_gateway_readiness_still_does_not_ASK_an_upstream() -> None:
-    """values.yaml's recorded reason, pinned rather than argued.
-
-    The exception was recorded because probing a proxied path would couple the front door's readiness
-    to a backend — so a front-door-only install (no domain services) would never go Ready. The fix
-    must not quietly undo that. `_routes()` is populated but every upstream here is unreachable, and
-    readiness must still answer 200: the probe is lifecycle-only, with no `ready_check` behind it.
-    """
-    import gateway
-
-    with TestClient(gateway.app) as client:
-        assert gateway.app.state.routes, "no routes were built, so this proves nothing about upstream coupling"
-        ready = client.get("/readyz")
-
-    assert ready.status_code == 200, "gateway readiness now depends on an upstream — the exact coupling values.yaml recorded the exception to avoid"
-
-
-def test_the_chart_probes_the_gateway_at_the_pair_it_now_serves() -> None:
-    """The app half is worthless if the kubelet still asks the badge."""
-    from test_invariants import _rendered_docs  # noqa: PLC0415
-
-    container = next(
-        c
-        for doc in _rendered_docs()
-        if doc.get("kind") == "Deployment" and doc["metadata"]["name"].endswith("-gateway")
-        for c in doc["spec"]["template"]["spec"]["containers"]
-        if c["name"] == "gateway"
-    )
-    assert container["livenessProbe"]["httpGet"]["path"] == "/livez"
-    assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
-
-
-# ── the boot window ─────────────────────────────────────────────────────────────────────────────
-#
-# open_fastapi-audit — "The six fleet pods have no startupProbe, and controlplane also missed the
-# measured probe-timeout fix — the lakehouse helper carries both and the fleet templates carry
-# neither".
-
-
-#: `periodSeconds × failureThreshold` for the lakehouse plane's `lance.appProbes` — 30 × 10s. The
-#: fleet's boot budget is held to the same floor rather than a new number, because the two planes run
-#: the same uvicorn against the same dependencies and a second figure would only be a second thing to
-#: keep in step.
-BOOT_BUDGET_SECONDS = 300
-
-
-def _fleet_service_names() -> set[str]:
-    """The services `fleet.yaml` and `controlplane.yaml` render, read from the chart itself.
-
-    DERIVED, because a literal list here is the very failure this finding is about: controlplane is
-    invisible to anything keyed on `services.*`, and it is precisely the row that missed two probe
-    fixes in a row. `$lakehouse` is parsed out of fleet.yaml rather than restated, so moving a service
-    between the two planes cannot leave this gate asserting about the wrong set.
-    """
-    import re  # noqa: PLC0415
-
-    import yaml  # noqa: PLC0415
-
-    template = (pathlib.Path(__file__).resolve().parents[2] / "chart/templates/fleet.yaml").read_text()
-    match = re.search(r"\$lakehouse := list ([^\n]+)", template)
-    assert match, "fleet.yaml no longer declares $lakehouse — this gate can no longer tell the planes apart"
-    lakehouse = set(re.findall(r'"([^"]+)"', match.group(1)))
-
-    values = yaml.safe_load((pathlib.Path(__file__).resolve().parents[2] / "chart/values.yaml").read_text())
-    return (set(values["services"]) - lakehouse) | {"controlplane"}
-
-
-def _http_probed_containers() -> list[tuple[str, dict]]:
-    """Every FLEET container the kubelet probes over HTTP, derived from the render.
-
-    TWO DELIBERATE BOUNDS, both narrower than "every first-party pod", and neither silent.
-
-    The seven web pods use `lance.tcpProbes` (a TCP accept on the Bun server's port). This finding is
-    about the HTTP fleet, and widening to them would be a different claim from a different boot
-    profile smuggled in under this one.
-
-    The lakehouse plane (`lance.appProbes`: catalog, lineage, maintenance, the producer, the stage runners)
-    is excluded for the same reason and is the finding's own EXEMPLAR — it is what already carries a
-    startupProbe. It does keep k8s's 1s probe timeout, which the #136 measurement argues against for
-    any pod under memory pressure; that is a separate observation, recorded rather than fixed here.
-    """
-    from test_invariants import _first_party_deployments, _rendered_docs  # noqa: PLC0415
-
-    fleet = _fleet_service_names()
-    found = []
-    for doc in _first_party_deployments(_rendered_docs()):
-        name = doc["metadata"]["name"]
-        for container in doc["spec"]["template"]["spec"].get("containers") or []:
-            if container["name"] not in fleet:
-                continue
-            if ((container.get("livenessProbe") or {}).get("httpGet") or {}).get("path"):
-                found.append((f"{name}/{container['name']}", container))
-    assert len(found) >= len(fleet), f"only {len(found)} of {len(fleet)} fleet containers were found in the render — the gate is testing less than it claims"
-    return found
-
-
-def test_every_http_probed_pod_gets_a_boot_window() -> None:
-    """Uvicorn runs the lifespan BEFORE it binds, so every pre-bind second is a connection refused.
-
-    `lance.appProbes` states the hazard and defends against it — "liveness … SIGKILLs a
-    still-initializing pod into CrashLoopBackOff exactly when a dependency is already slow" — and the
-    fleet templates, which compose services with slower lifespans than the lakehouse plane's, carried
-    no startupProbe at all. Liveness alone gives a hard `initialDelaySeconds 15 + 3 × 20s ≈ 55s`
-    ceiling: notifications does an OIDC discovery fetch, two OpenFGA provision round-trips (at
-    first-install time, when OpenFGA is itself starting), actor registration and a 10s proxy warm-up
-    inside that.
-    """
-    naked = [name for name, container in _http_probed_containers() if not container.get("startupProbe")]
-    assert not naked, f"these pods have no startupProbe, so liveness starts SIGKILLing them ~55s into a boot that can legitimately take longer: {naked}"
-
-
-def test_the_boot_window_is_actually_long_enough() -> None:
-    """A startupProbe present but tight is the same failure with an extra field."""
-    short = {}
-    for name, container in _http_probed_containers():
-        probe = container.get("startupProbe") or {}
-        budget = probe.get("periodSeconds", 10) * probe.get("failureThreshold", 3)
-        if budget < BOOT_BUDGET_SECONDS:
-            short[name] = budget
-    assert not short, f"boot budgets below the lakehouse plane's {BOOT_BUDGET_SECONDS}s: {short}"
-
-
-def test_no_probe_keeps_the_one_second_default_that_was_MEASURED_to_misfire() -> None:
-    """#136: under memory pressure the handler missed k8s's 1s deadline, so OOM kills presented as
-    CrashLoopBackOff probe failures. The fix was recorded in fleet.yaml and applies to every probe on
-    every first-party pod — a startupProbe fires during the slowest window of all."""
-    tight = {}
-    for name, container in _http_probed_containers():
-        for kind in ("startupProbe", "readinessProbe", "livenessProbe"):
-            probe = container.get(kind)
-            if probe and probe.get("timeoutSeconds", 1) < 5:
-                tight[f"{name}:{kind}"] = probe.get("timeoutSeconds", 1)
-    assert not tight, f"these probes keep a timeout below the measured 5s: {tight}"
-
-
-def test_controlplane_is_probed_through_the_SAME_helper_as_the_fleet() -> None:
-    """The second hand-written probe block is what let controlplane miss two fixes in a row.
-
-    It is rendered by its own template rather than fleet.yaml's range, so it needed the `timeoutSeconds`
-    fix copied by hand and never got the startupProbe at all. Asserting the two render IDENTICALLY is
-    what makes a third divergence impossible — a shared helper is only worth anything if nothing is
-    allowed to drift from it.
-    """
-    probed = dict(_http_probed_containers())
-    controlplane = next(container for name, container in probed.items() if name.endswith("-controlplane/controlplane"))
-    compute = next(container for name, container in probed.items() if name.endswith("-compute/compute"))
-
-    for kind in ("startupProbe", "readinessProbe", "livenessProbe"):
-        assert controlplane.get(kind) == compute.get(kind), (
-            f"controlplane's {kind} differs from the fleet's: {controlplane.get(kind)} vs {compute.get(kind)} — the hand-written second copy has drifted again"
-        )

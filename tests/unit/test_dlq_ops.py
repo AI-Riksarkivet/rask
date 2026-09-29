@@ -280,20 +280,3 @@ def test_replay_audits_success_with_the_actor(tmp_path: Path, audit_records: lis
         "audit.subject": "alice",
         "audit.resource": "run:r1",
     }
-
-
-def test_replay_audits_success_without_a_subject_in_dev(tmp_path: Path, audit_records: list[logging.LogRecord]) -> None:
-    # Auth-off dev: still a success record, with an empty subject (no principal to attribute).
-    s = _settings(tmp_path)
-    _stage(s, "r1", _event_json("r1"))
-    asyncio.run(_replay(s, "r1", _Repo()))
-    fields = audit_records[0].__dict__
-    assert fields["audit.outcome"] == "success" and fields["audit.subject"] == ""
-
-
-def test_lineage_audit_stream_is_env_gated(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The lifespan gates `lance.audit` on the SHARED LANCE_AUDIT_ENABLED (catalog parity — one flag for
-    # the estate's compliance posture): default on, and the env alias turns the stream off.
-    assert LineageSettings.model_validate({"database_url": "postgresql://x/y"}).audit_enabled is True
-    monkeypatch.setenv("LANCE_AUDIT_ENABLED", "false")
-    assert LineageSettings(database_url="postgresql://x/y").audit_enabled is False

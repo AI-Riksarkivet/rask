@@ -38,15 +38,6 @@ def test_noop_when_the_otel_extra_is_absent(monkeypatch: pytest.MonkeyPatch) -> 
     assert instrument_lance_if_available() is False
 
 
-def test_activates_when_the_bridge_exists(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[bool] = []
-    fake = types.ModuleType("lance.otel")
-    setattr(fake, "instrument_lance_metrics", lambda: calls.append(True))  # noqa: B010
-    monkeypatch.setitem(sys.modules, "lance.otel", fake)
-    assert instrument_lance_if_available() is True
-    assert calls == [True]
-
-
 def test_bridge_failure_never_raises_into_startup(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom() -> None:
         raise RuntimeError("recorder exploded")

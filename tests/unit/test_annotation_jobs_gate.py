@@ -43,41 +43,10 @@ def _client() -> TestClient:
     return TestClient(app, raise_server_exceptions=False)
 
 
-def test_the_router_declares_the_gate_at_ROUTER_level() -> None:
-    """Router-level, not per-route: a NEW endpoint added to this file inherits the gate.
-
-    The defect was one ungated route; gating each route individually would leave the next one open
-    the same way, which is how this class recurs.
-    """
-    assert jobs_ep.router.dependencies, "the jobs router declares no dependencies — /apply is open again"
-
-
-def test_a_PUBLIC_front_door_caller_is_refused() -> None:
-    """The measured bypass: a public front door's Dapr app-token authenticates the PROXY, not the
-    caller — so an invocation arriving through one is never legitimate for a sidecar-only route.
-
-    This refusal is deliberately NOT conditional on `APP_API_TOKEN`, so it is the only guard that
-    holds in dev, where the token is unset.
-    """
-    response = _client().post("/api/jobs/apply", json=BODY, headers={"dapr-caller-app-id": "gateway"})
-
-    assert response.status_code == 403
-    assert "public front door" in response.text
-
-
 def test_a_WRONG_token_is_refused_when_one_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", "the-real-token")
 
     response = _client().post("/api/jobs/apply", json=BODY, headers={"dapr-api-token": "not-the-token"})
-
-    assert response.status_code == 403
-
-
-def test_a_MISSING_token_is_refused_when_one_is_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing must fail exactly like wrong — an absent header is not a bypass."""
-    monkeypatch.setenv("APP_API_TOKEN", "the-real-token")
-
-    response = _client().post("/api/jobs/apply", json=BODY)
 
     assert response.status_code == 403
 

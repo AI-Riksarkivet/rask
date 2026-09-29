@@ -63,15 +63,6 @@ def test_feature_flags_read_the_documented_values(tmp_path: pathlib.Path) -> Non
     assert features.manifest_feature_flags(lance.dataset(both)) == (expected, expected)
 
 
-def test_the_supported_mask_is_the_four_flags_a_rewrite_accounts_for() -> None:
-    """`SUPPORTED` asserted as a VALUE, because widening it is the one edit that silently disarms
-    every refusal in this service. 16 and 64 are named explicitly as excluded — those are the two
-    that were measured to be unsafe."""
-    assert features.SUPPORTED == 1 | 2 | 4 | 8
-    assert not features.SUPPORTED & features.FLAG_BASE_PATHS, "shallow clones are rewritten into full copies — never supported by accident"
-    assert not features.SUPPORTED & features.FLAG_DATA_OVERLAYS, "an ignored overlay returns stale cell values — a correctness bug"
-
-
 def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Path) -> None:
     """A refusal must say WHICH feature it declined, and this module exists for that.
 

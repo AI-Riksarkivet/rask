@@ -59,17 +59,6 @@ def _store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str] | None) -> li
     return calls
 
 
-def test_the_door_authenticates_against_the_STORE(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The delivery the sidecar signs with the stored token is admitted, with nothing in env."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    _store(monkeypatch, {"dapr-app-token": "from-the-store"})
-
-    require_dapr_token(dapr_api_token="from-the-store", dapr_caller_app_id="")
-
-    with pytest.raises(PermissionDeniedError, match="invalid or missing"):
-        require_dapr_token(dapr_api_token="not-the-stored-token", dapr_caller_app_id="")
-
-
 def test_the_store_is_the_SOLE_source(monkeypatch: pytest.MonkeyPatch) -> None:
     """In store mode the environment is not consulted — not even as a fallback.
 

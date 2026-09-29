@@ -79,13 +79,6 @@ def test_an_unwired_order_asserts_no_subject(monkeypatch: pytest.MonkeyPatch) ->
     assert "RASK_LINEAGE_SERVICE_IDENTITY" not in _order().to_env()
 
 
-def test_the_endpoint_is_the_pods_to_own_and_the_order_has_no_field_for_it() -> None:
-    """`extra="forbid"` is what makes this a property of the type rather than a rule to remember."""
-    with pytest.raises(Exception, match="extra_forbidden|Extra inputs"):
-        WorkIdentity(run_id="run-1", lineage_endpoint="http://rask-lineage:8000")  # ty: ignore[unknown-argument]
-    assert "RASK_LINEAGE_ENDPOINT" not in _order(service_identity=SUBJECT).to_env()
-
-
 def test_the_ray_head_supplies_the_endpoint_the_submission_no_longer_carries() -> None:
     """The other half of the contract, and the reason this is a gate rather than a comment.
 

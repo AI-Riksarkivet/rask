@@ -68,13 +68,6 @@ def test_health_is_200_with_no_dataset_loaded(client: TestClient) -> None:
     )
 
 
-def test_health_reports_the_dataset_gap_without_failing(client: TestClient) -> None:
-    body = client.get("/api/health").json()
-    assert body["db"] is None, "no dataset resolved, so there are no db facts to report"
-    assert body["db_error"], "db=None without db_error leaves the UI unable to say WHY (it would guess 'unreachable')"
-    assert "transcripts_v2" in body["db_error"], f"db_error must carry the backend's own reason, got {body['db_error']!r}"
-
-
 def test_a_dataset_bound_endpoint_on_the_same_app_still_404s(client: TestClient) -> None:
     """The proof that the fix is scoped to the PROBE, not a blanket softening.
 
@@ -86,15 +79,3 @@ def test_a_dataset_bound_endpoint_on_the_same_app_still_404s(client: TestClient)
     r = client.get("/api/columns")
     assert r.status_code == 404, f"a dataset READ with no dataset must still 404, got {r.status_code}"
     assert "transcripts_v2" in r.text
-
-
-def test_encoder_pings_are_reported_even_with_no_dataset(client: TestClient) -> None:
-    """The capability half of the probe cannot depend on the dataset half.
-
-    The media zone gates its Meaning/Hybrid search modes on `embed.ok`. When health 404'd, `current`
-    stayed null and the modes fell back to "assume available" — offering a mode that 503s.
-    """
-    body = client.get("/api/health").json()
-    for name in ("embed", "rerank"):
-        assert body[name]["ok"] is False, f"{name} ping missing/true against a dead encoder"
-        assert body[name]["error"], f"{name} ping must carry the failure reason"

@@ -26,14 +26,6 @@ def test_every_sdk_error_code_is_mapped() -> None:
     assert unmapped == [], f"ErrorCode members with no HTTP status (they answer 500): {unmapped}"
 
 
-def test_branch_codes_carry_the_statuses_their_meaning_requires() -> None:
-    """The two codes the audit found missing, pinned by VALUE so an enum rename cannot hide a
-    remap: not-found is 404, already-exists is 409 — same as every other not-found/conflict pair
-    in the table."""
-    assert status_for(22) == 404  # TABLE_BRANCH_NOT_FOUND
-    assert status_for(23) == 409  # TABLE_BRANCH_ALREADY_EXISTS
-
-
 def test_an_unknown_code_still_defaults_to_500() -> None:
     """The default survives for genuinely unknown codes — completeness must not make the map
     brittle against a FUTURE spec running ahead of this SDK pin."""

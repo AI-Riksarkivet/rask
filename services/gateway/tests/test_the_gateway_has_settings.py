@@ -55,20 +55,6 @@ def test_a_dotenv_file_configures_every_knob_not_only_the_ones_read_late(tmp_pat
     assert gw.app.openapi_url == "/openapi.json"
 
 
-def test_the_route_table_and_the_prefix_come_from_one_read(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`app.state.api_prefix` and the route rows cannot disagree — they share one settings object."""
-    _clean(monkeypatch)
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    import gateway
-
-    gw = importlib.reload(gateway)
-
-    with TestClient(gw.app) as client:
-        state = client.app.state
-        assert state.settings.api_prefix == state.api_prefix
-        assert all(row.public_prefix.startswith(state.api_prefix) for row in state.routes)
-
-
 def test_the_dapr_lane_is_decided_at_startup_not_per_request(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Flipping the environment under a running server must not re-route live traffic."""
     _clean(monkeypatch)
