@@ -52,10 +52,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   (XC-090 is the proof). Never add a row without asking the owner; a found problem goes to the register's
   parking list. A row closes when its fix is deployed and read back live, not when it merges.
   **Phase 1 IS the lakehouse's components, and nothing else comes first** (owner, 2026-09-28, said more than
-  once): **medallion** (bronze→silver→gold), **catalog**, **provenance/lineage**, **FGA/governance**,
-  **maintenance**, and the **bring-your-own workflow-engine** seam. Compute comes after. Explorer/search,
-  annotator, the models zone, flows and Kueue are decoupled services and LOW. A cross-cutting or infra row
-  (chart, CI, Kueue) is taken only as the stated enabler of a named lakehouse row.
+  once; widened 2026-09-29): **medallion** (bronze→silver→gold), **catalog**, **provenance/lineage**,
+  **FGA/governance**, **maintenance**, the **bring-your-own workflow-engine** seam, and the **controlplane** and
+  **notifications** services. Compute comes second. Search, the viewer (explorer), the annotator and flows are
+  ignored for now; the models zone and Kueue are decoupled and LOW. A cross-cutting or infra row (chart, CI,
+  Kueue) is taken only as the stated enabler of a named Phase 1 row.
 - **Owner decisions go through the multi-question tool**, each option with a concrete what, how and
   why — never as a question trailing a report.
 

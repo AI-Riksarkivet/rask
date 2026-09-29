@@ -9,14 +9,18 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-265** widened to every test file (the prune to the audit's keep list), then **LH-280**, **LH-281** — the test audit, and the catalog's provenance and governance holes.
-   Why now: lakehouse components first (owner, 2026-09-28). The suite reached 12,067 tests (231k test lines against 120k production lines; +3,500 since 2026-09-10), so every test file is audited for relevance and pruned now, in waves (owner, 2026-09-28: the prune is the priority); a row adds at most one test per closes-when clause.
+Scope (owner, 2026-09-29): catalog, lineage, medallion, maintenance, controlplane and notifications first; compute
+second; search, the viewer, the annotator and flows are ignored for now. A production triage of every Phase 1 row
+(blocks production, or hardening after launch) runs now; its short list goes to the owner for approval.
+
+1. **LH-280**, then **LH-281** — the catalog's provenance and governance holes.
+   Why now: lakehouse components first (owner, 2026-09-28); both are HIGH and in the catalog.
 2. **LH-064**, **LH-220** (with **XC-076** as LH-220's enabler: one ServiceAccount per service) — signed provenance and per-pod service identity.
    Why now: provenance and governance; XC-076 is taken for what LH-220 needs, not as chart work in itself.
 3. **XC-090** (with **XC-096** as its enabler: the CI lanes it runs on) — the Phase 1 acceptance proof.
    Why now: without it, "Phase 1 done" means only that every row closed.
-4. **LH-265**; **XC-049** only when a lakehouse chart fix needs the release space (Kueue is decoupled and low).
-   Why now: test cleanup stage 2; the release object has 408 bytes of headroom (rev 257).
+4. **XC-049** only when a lakehouse chart fix needs the release space (Kueue is decoupled and low).
+   Why now: the release object has 408 bytes of headroom (rev 257).
 <!-- FOCUS:END -->
 
 ## Owner rulings in force
@@ -68,14 +72,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 103 | 101 | 25 |
+| **PHASE 1 · LAKEHOUSE** | 102 | 100 | 25 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
+| **PHASE 1 · CONTROLPLANE AND NOTIFICATIONS** | 15 | 14 | 1 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
-| **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**241 open items**, of which **10 are blocked on a decision** and **231 can be picked up today**; 53 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**240 open items**, of which **10 are blocked on a decision** and **230 can be picked up today**; 53 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -623,14 +627,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Size by measured bytes per dataset (fragment bytes over physical_rows, about 1 GB per fragment, capped by max_bytes_per_file; lance_docs/guide.md:3100-3129); keep the policy override; rewrite the rationale.
 - *Closes when:* No tier-name or modality constant sizes compaction, and a text and an image bronze get targets from their own byte widths (test).
 - *Evidence:* services/maintenance/src/maintenance/services/tiers.py:1-59 · services/maintenance/src/maintenance/services/sweep.py:427 · docs/audits/2026-09-25/03-lance-docs-full-audit.md LD42
-
-**LH-265 · Delete 34 and merge 55 lakehouse test files that add nothing their neighbours do not**
-`tests` · **MEDIUM**
-- *What is left:* Widened by the owner (2026-09-28) to every test file: each of the 1,291 files (12,067 collected tests; 1,302 source-walk gates and 604 chart-render gates in tests/unit alone) is kept only if it fails under a mutation of the code it names, otherwise deleted or merged into its keeper. It includes the test audit's stage 2: 34 files to delete and 55 to merge, each verdict upheld by a skeptic that read the claimed replacement coverage; move every named assertion into its keeper first (the report names each).
-- *Why:* The suite should state what protects behaviour; source-text lints, tautologies and duplicates cost reading time and hide the tests that matter.
-- *How:* One commit, directory by directory, the suite green after each; any 'move assertion X first' done before the delete.
-- *Closes when:* The 89 files are gone or merged, their named assertions live in the keepers, and the suite is green.
-- *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Delete (34), § Merge (55)
 
 **LH-266 · Catalog tests: 26 rewrites and 36 trims**
 `catalog` · **MEDIUM**
@@ -1353,6 +1349,129 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *Closes when:* On a main push, e2e-stack and e2e-ray bring every pod Ready and run their suites, recorded with run ids, and the core lane renders no WorkflowRuntime without a Ray head.
 - *Evidence:* gh run 36148029490 (jobs 108118325356, 108118325294) · gh run 36116165165 (job 108014986505) · scripts/e2e_stack.sh:13-14,107-119,413-416 · chart/values.yaml:1342,2492,2507 · services/medallion/src/medallion/stage_runner.py:89-100 · services/medallion/src/medallion/producer.py:109-129 · verify-phase1-done/e2e-stack.log, e2e-stack-36116.log, e2e_history.py, ray_defaults.py
 
+## PHASE 1 · CONTROLPLANE AND NOTIFICATIONS
+
+**CTL-021 · The notifications reconciler never reconciles: the live pod runs a pre-fix image, and the walk reads the per-dataset-governed feed as an asserted identity**
+`notifications, lineage, chart` · **HIGH**
+- *What is left:* (1) rask-notifications runs main-467904ae, older than the fc1b8bfd feed_token fix, because values-live-pins.yaml:18 never captured the roll; 192 lines of 401 on invoke/lineage/method/events in an hour and 0 lineage_feed_reconciled. (2) The walk reads `/events` (filtered per dataset by can_get_metadata) with a `reader` grant on the default warehouse only, so tenant-warehouse runs are invisible, and `/events/projection`, built for it, is unused. (3) It asserts identity with `x-lance-service-identity` (reconciler.py:246).
+- *Why:* Criterion 4: the walk is the only lane for runs the bus never carries (ingest, Ray TRAIN, external producers), dead live and blind to tenants once alive.
+- *How:* Roll from HEAD and capture the pin (scripts/k3s-pins.sh), reading back the pod image before the behaviour. Move LineageFeedClient.page to `/events/projection`, gated on a new narrow estate rung (`estate.event_reader: [user]`, `can_read_event_feed: owner or event_reader`, the event_stager precedent at model.fga:141), not can_observe_events; grant it and drop the warehouse reader. Present the projected SA token as a bearer under D1 (LH-220), subject `kubernetes~system:serviceaccount:<ns>:<sa>`; measure first whether Authorization survives Dapr invocation. Lakekeeper keeps machines on narrow per-purpose relations (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
+- *Closes when:* The pod runs an image containing fc1b8bfd named by the pins file, every tick answers 200 and logs lineage_feed_reconciled, a tenant-warehouse run is scanned, and the reconciler holds no rung that creates projects or edits tuples.
+- *Evidence:* chart/values-live-pins.yaml:18 · services/notifications/src/notifications/api/reconciler.py:234-258,246 · services/notifications/src/notifications/api/service_identity.py:50-81 · services/lineage/src/lineage/api/v1/endpoints/runs.py:163-255 · services/lineage/src/lineage/api/fga_deps.py:149-171 · chart/templates/bootstrap-admin.yaml:143-171,208-218 · live rs and logs 2026-09-25
+
+**XC-009 · No Dapr accessControl on any callee, and the NetworkPolicy prose misstates k3s**
+`chart, gateway, notifications, annotator, medallion, ingest, flows` · **MEDIUM**
+- *What is left:* No Configuration carries accessControl, so any sidecar can invoke any app-id's routes; only secret-scoped apps have their own Configuration (gateway, compute and controlplane share lance-tracing); values.yaml:747-749 says k3s does not enforce NetworkPolicy, but this host's k3s runs the policy controller.
+- *Why:* Criterion 2, zero trust: a compromised pod reaches every app over sentry mTLS; accessControl keyed on the SPIFFE id is Dapr's form of 'identity from a verified credential'.
+- *How:* A per-app Configuration for every Dapr app-id (_helpers.tpl:246-250); `accessControl: {defaultAction: deny, trustDomain, policies}` per callee from gateway `_routes()` plus the ActorProxy and Workflow callers (DECISIONS.md:1693-1716); a WorkflowAccessPolicy; rewrite values.yaml:747-749; then P6.6's NetworkPolicy order (API-server-to-webhook allows, the OpenFGA selector, Job labels, then enable).
+- *Closes when:* Every callee's Configuration carries defaultAction: deny with per-caller policies, a cross-app workflow policy exists, and a live drive of every gateway route and cascade hop still succeeds.
+- *Evidence:* chart/templates/observability.yaml:75-81,99-110 · chart/templates/_helpers.tpl:237-250 · chart/values.yaml:747-761 · docs/DECISIONS.md:1693-1716 · /etc/systemd/system/k3s.service (no --disable-network-policy)
+
+**CTL-001 · The gateway proxies the catalog's and lineage's whole root: unlisted paths such as /dapr/subscribe and the demo UI answer at the edge**
+`gateway, chart` · **MEDIUM**
+- *What is left:* The catalog and lineage rows rewrite to '', and only a prefix blocklist (lineage_sidecar_guard) exists; live unauthenticated GETs at the edge: /api/lineage/dapr/subscribe and /api/catalog/dapr/subscribe 200 (topology), /api/lineage/ui/index.html 200, /api/lineage/lineage-dlq and /api/catalog/control-events reachable (405 on GET; POSTs refused in-service).
+- *Why:* Criterion 2, zero trust: a blocklist fails open for every new root route.
+- *How:* Give Route an `exposed` allowlist: catalog `/v1/` (every spec path is /v1/..., spec.yaml:89-2265) and `/management/v1/`; lineage's measured root-mounted prefixes (/datasets, /runs, /events, /events/projection, /graph, /jobs, /namespaces, /search, /admin/dlq, /api/v1/lineage), excluding /ui, /demo, /dapr/*, subscription routes and probes. A contract test imports both apps and asserts the allowlist equals their authorized routes minus those. Delete lineage_sidecar_guard, lineage_sidecar_only_routes and its helper/env. Comment the /api/catalog row citing DECISIONS.md:301-316. Lakekeeper nests only /catalog/v1, /management/v1, /lakekeeper/v1 and /health (crates/lakekeeper/src/api/router.rs:142-173).
+- *Closes when:* Under test the listed paths 404 at the gateway while allowlisted paths proxy, the contract test fails when a service adds an unlisted public route, the blocklist env and helper are gone, and the /api/catalog row carries its rationale comment.
+- *Evidence:* services/gateway/src/gateway/__init__.py:225-226,516-534 · services/gateway/src/gateway/config.py:71-98 · chart/templates/_helpers.tpl:851-873 · chart/templates/configmap.yaml:118-120 · services/lineage/src/lineage/main.py:187-219 · services/lineage/src/lineage/api/v1/router.py:19
+
+**CTL-006 · The gateway has no body cap, rate limit or access line, and lance-plane services built by the factory accept unbounded bodies**
+`gateway, service-kit, lineage, medallion, maintenance` · **MEDIUM**
+- *What is left:* (1) The gateway builds its own FastAPI with only RequestIDMiddleware: no body cap, no 429 and no structured per-request access line. (2) build_lance_service_app mounts no BodySizeLimitMiddleware, so lineage, maintenance, the medallion producer and stage runners have no cap on paths bypassing daprd's 32Mi; only catalog mounts one by hand.
+- *Why:* Criterion 5: POST /lineage, /produce and /train buffer bodies with no ceiling.
+- *How:* (1) Mount service_kit.body_limit.BodySizeLimitMiddleware on the gateway, outermost, with GatewaySettings.max_body_bytes; add a per-subject/IP bucket through service_kit.rate_limit honouring its single-replica gate, or re-scope the 429 to edge config per DECISIONS.md:301-316 and say so; one structured access line per proxied request keyed on the trace id (XC-048). (2) Make max_body_bytes a required keyword of build_lance_service_app (like docs_enabled) and delete catalog/main.py:338. Lakekeeper applies DefaultBodyLimit to the whole router (router.rs:153).
+- *Closes when:* RED tests show an over-cap body refused 413 at the gateway and at lineage, maintenance, the producer and a stage runner, catalog no longer mounts the cap itself, and the 429 and access-line clauses are met or explicitly re-scoped.
+- *Evidence:* services/gateway/src/gateway/__init__.py:442,513 · packages/service-kit/src/service_kit/lance_app.py:63-116 · services/catalog/src/catalog/main.py:316-342 · packages/service-kit/src/service_kit/rate_limit.py:8-22 · chart/values.yaml:2859-2862
+
+**CTL-022 · Notifications has no door that erases a subject's inbox, prefs, cursor and watch enrolment**
+`notifications, catalog` · **MEDIUM**
+- *What is left:* The only DELETE route removes one project watch; a principal's InboxActor state (rows, meta, cursor, prefs, digest, watches) and WatchIndexActor enrolment persist with no removal path. Consumes LH-233's principal-deleted event; this is keyed on a platform principal, not a data subject in a table.
+- *Why:* Criterion 2 (Art. 17): a deleted principal's state persists.
+- *How:* The notifications control lane consumes LH-233's principal-deleted CatalogControlEvent and calls a new idempotent InboxActor.erase that clears every key and unwatches each project in InboxWatches; per rask-notifications, add both a ControlAction and a NotificationReason. The inbox is already bounded by compaction; ActorStateTTL is not a substitute for erasure (it would un-enrol live people). Lakekeeper's user delete removes assignments and FGA state (crates/lakekeeper/src/api/management/v1/user.rs:525-570).
+- *Closes when:* After the door runs, a RED test shows the subject's inbox, prefs, cursor, digest and watches empty, the subject in no WatchIndexActor, and a replayed event does not recreate enrolment.
+- *Evidence:* services/notifications/src/notifications/api/watches.py:117 · services/notifications/src/notifications/inbox_actor.py:210-640 · services/notifications/src/notifications/watch_actor.py:61-95 · services/notifications/src/notifications/models.py:211,267,289,331,357
+
+**CTL-013 · The Python gateway still fronts every /api/* row**
+`gateway, chart, scripts, docs` · **MEDIUM**
+- *What is left:* Delete services/gateway, its dockerfile, values.yaml:405, its fleet/resiliency scope, ingress.yaml:66-72,118-124 and dev-micro.sh:65, after the edge carries: (a) one HTTPRoute rule per `_routes()` row with URLRewrite ReplacePrefixMatch on the 10 rewriting rows ('/' for empty rewrites), catalog and lineage rendered as CTL-001's allowlist; (b) the `_CLIENT_SPOOFABLE` strip as RequestHeaderModifier remove; (c) edge metrics and traces into the Collector feeding Fleet-RED and HttpServerErrorRatioHigh (today the gateway's own 502 is the only signal for a down backend); (d) retire the merged /docs and the compute zone's /compute/api-docs page and both nav entries; (e) replace the 502 contract in rask-services-fleet and the architecture docs with the edge's measured unreachable-upstream status.
+- *Why:* Criterion 2, zero trust: a proxy tier that enforces nothing (DECISIONS.md:302-311) but forces public-caller lists and header strips.
+- *How:* The installed Gateway API v1.5.1 standard CRD covers precedence, URLRewrite, header modifiers and timeouts. Lakekeeper runs no proxy tier; each service verifies the bearer (docs/audits/2026-09-25/lakekeeper-deep-read/authn.md T10; D1), so the edge mints nothing. Prerequisites: CTL-001, CTL-007, LH-220. Phase-3 sequencing, not a decision.
+- *Closes when:* services/gateway and every reference are gone, every /api/* row answers through the edge in-cluster and through the derived dev proxy from a browser, Fleet-RED and HttpServerErrorRatioHigh read an edge series, and the docs state the measured status.
+- *Evidence:* services/gateway/src/gateway/__init__.py:76-100,164-176,222-264,365-400,454,614-632,672-679 · chart/templates/ingress.yaml:55-72,113-124 · chart/templates/dapr-resiliency.yaml:148-160,240,264 · frontend/microfrontends/compute/src/routes/api-docs/+page.svelte:10,44 · frontend/packages/ui/src/lib/shell/nav-config.ts:426-430
+
+**CTL-025 · The inbox row cap is enforced only by a 6-hourly reminder, so each delivery rewrites an unbounded partition between ticks**
+`notifications` · **MEDIUM**
+- *What is left:* deliver reads the whole ROWS_KEY partition, appends and rewrites all of it; the only bound is compact() on a 21600 s reminder, so inbox_max_rows (200) does not stop a runaway producer between ticks.
+- *Why:* Criterion 5: write volume into the actor state store grows quadratically with a burst.
+- *How:* Apply compact(max_rows=inbox_max_rows) in deliver before _persist (it already drops handled rows before unread ones). RED: deliver cap+50 pointers without firing the reminder.
+- *Closes when:* A delivery never persists more than inbox_max_rows pointers, pinned by a test that fires no reminder.
+- *Evidence:* services/notifications/src/notifications/inbox_actor.py:233-239,308-352,414-431 · services/notifications/src/notifications/feed.py:61-80 · services/notifications/src/notifications/config.py:66-75
+
+**CTL-007 · No Gateway API edge exists; kgateway is only named in comments**
+`gateway, chart` · **LOW**
+- *What is left:* Render a Gateway API edge beside the Ingress behind `edge.gatewayApi.enabled`, one HTTPRoute rule per `_routes()` row from one table, with these acceptance clauses: (a) catalog and lineage as the path allowlist (CTL-001's per-row allowlist); (b) strip every `_CLIENT_SPOOFABLE` header including x-lance-service-identity and x-user, re-stamp X-Forwarded-* and move each service's forwarded-allow-ips to the edge, minting nothing (D1); (c) backend TLS origination or a recorded plaintext acceptance (the certificate source is XC-007's, parked); (d) per-backend timeout, retry and breaker parity keeping writeRetry's no-retry-on-500, then drop the `gateway` scope at dapr-resiliency.yaml:264; (e) dev-micro's /api table rendered from the HTTPRoutes with a divergence test; (f) zone rules and `/` with `timeouts.request: 0s` and the implementation's stream-idle timeout above KEEPALIVE_MS, header-buffer and body-size behaviour measured for zone and /api rules; (g) Envoy normalisation parity with `_normalize_path`/`_normalize_raw_path`, refusing the same ambiguous encodings with 400.
+- *Why:* R14 intends this edge, and each clause guards a property the Python gateway gives today that a naive cut-over would drop.
+- *How:* The controller and CRDs install outside the app release (XC-085); the app chart renders only Gateway and HTTPRoute objects. The installed HTTPRoute v1.5.1 CRD defines timeouts.request as the whole transaction and 0s as disabled.
+- *Closes when:* helm template renders a working Gateway plus HTTPRoutes with the toggle on and the Ingress with it off, a browser reaches /, /lakehouse, /compute and /api/catalog through it, a bell query.live stream holds past 90 s, and each clause is pinned by a test or render assertion.
+- *Evidence:* chart/templates/ingress.yaml:44-47,66-124 · services/gateway/src/gateway/__init__.py:76-119,213-265,276-318,647-648 · chart/templates/dapr-resiliency.yaml:146-155,255-264 · scripts/dev-micro.sh:34,65 · chart/values.yaml:840-849,2643-2665 · docs/architecture/lance-ns-merge.md:449
+
+**XC-027 · The prod overlay renders an Ingress with no TLS, and nothing refuses that render**
+`chart` · **LOW**
+- *What is left:* values-prod.yaml:221-224 has no ingress.tls and nothing fails a prod render without one; the guard needs neither a hostname nor an issuer.
+- *Why:* Criterion 2: once the edge is public, bearers, session cookies and vended credentials cross it in plaintext.
+- *How:* Lakekeeper takes TLS from a pre-created Secret named in values (lakekeeper-charts values.yaml:331-336). values-prod sets `ingress.requireTls: true` and ingress.yaml `fail`s when it is set, host is set and tls is empty; update scripts/prod_render_check.sh, which renders with a host and no tls at :40,175,185,195.
+- *Closes when:* `helm template -f values-prod.yaml --set ingress.host=x` fails without ingress.tls and renders a tls entry with `ingress.tls[].secretName`, and prod_render_check.sh asserts both.
+- *Evidence:* chart/values-prod.yaml:221-224 · chart/values.yaml:2666 · chart/templates/ingress.yaml:44-47 · scripts/prod_render_check.sh:40,175,185,195
+
+**CTL-017 · Nothing refuses a platform.rask.io CRD landing in this chart**
+`chart, controlplane` · **LOW**
+- *What is left:* A render-and-files invariant: no document in `helm template` output, chart/crds-bootstrap/ or a subchart crds/ defines a CustomResourceDefinition with group platform.rask.io; the RBAC reference stays allowed.
+- *Why:* Pins DECISIONS.md:919-925: a CRD without its controller yields stuck Project CRs.
+- *How:* Narrow group check now; widen to 'the app release renders zero CRDs' once XC-049 and XC-085 move operators out (Lakekeeper ships none, docs/audits/2026-09-25/lakekeeper-deep-read/chart.md §12). Mutation-check with a stub CRD.
+- *Closes when:* The test passes at HEAD and fails when a platform.rask.io CRD is added to templates/ or crds-bootstrap/.
+- *Evidence:* tests/unit/test_invariants.py:1063-1080,1806 · chart/templates/controlplane.yaml:126 · chart/crds-bootstrap/cnpg-crds.yaml · docs/DECISIONS.md:919-925
+
+**CTL-023 · A sidecar transport failure on an inbox or watch actor call answers 500 instead of 503**
+`notifications` · **LOW**
+- *What is left:* `_translating` re-raises anything not naming InboxUnreadable, so an aiohttp connection error or a 5xx DaprHttpError reaches the catch-all 500.
+- *Why:* Criterion 5: a sidecar outage should read 'wait and retry'.
+- *How:* Map the SDK's connection error (measure the exact type on the installed SDK) and non-InboxUnreadable Dapr errors to ServiceUnavailableError with Retry-After, the spec's 503 meaning (lance_docs/ns_catalog/spec.yaml:6685-6688). Separating per-pod from shared faults is rask's own improvement; Lakekeeper fails readiness on any shared fault (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md:194).
+- *Closes when:* A sidecar connection failure on any inbox, watch or prefs route answers 503 problem+json with Retry-After (unit test), and InboxUnreadable keeps its own 503.
+- *Evidence:* services/notifications/src/notifications/proxies.py:85-125 · packages/service-kit/src/service_kit/exceptions.py:127,191-212
+
+**CTL-024 · The rask-notifications skill contradicts services/notifications on the reason set, line refs and actors**
+`notifications, docs` · **LOW**
+- *What is left:* The skill says four reasons and six sources while NotificationReason has 12 members; notifiable, enforce_author, WatcherLookup and the no-project gate have moved; WatchIndexActor, named_subjects' userset expansion and /events/projection are missing. After CTL-021.
+- *Why:* CLAUDE.md requires skills to match code; a wrong reason count is how a producer ships an unhandled reason.
+- *How:* Rewrite SKILL.md:3,12,50,84,203,206,236 against the code, citing symbols rather than line numbers where a symbol suffices.
+- *Closes when:* Every reason, actor, door and reference in the skill matches services/notifications and services/lineage at HEAD.
+- *Evidence:* services/notifications/src/notifications/models.py:52-98 · services/notifications/src/notifications/api/lineage_events.py:225 · services/notifications/src/notifications/api/fanout.py:64,77,102 · .claude/skills/rask-notifications/SKILL.md
+
+**CTL-026 · Every 30 s reconcile tick re-reads the newest 500 full OpenLineage payloads, however few are new**
+`notifications, lineage` · **LOW**
+- *What is left:* Each tick starts at the head with limit=500 and summary=false and discards everything at or below the mark; on /events lineage also over-fetches 2000 rows and batch-checks FGA over them.
+- *Why:* Criterion 5: steady-state cost scales with page size and facet size, not work.
+- *How:* After CTL-021 moves the walk to /events/projection, add a symmetric lower bound (`since=<walk_floor>`) and send it; catch-up stays one page at a time. Lakekeeper only pushes events, so no parallel.
+- *Closes when:* A tick whose head equals the mark fetches no row at or below it (RED), and the per-page byte cost of new rows is bounded or recorded as accepted.
+- *Evidence:* services/notifications/src/notifications/api/reconciler.py:248-258,353-386 · services/notifications/src/notifications/api/settings.py:112-122 · services/lineage/src/lineage/api/v1/endpoints/runs.py:33-34,163-255
+
+**CTL-027 · A group-grant fan-out stops at the first failing member, so later members are never told**
+`notifications` · **LOW**
+- *What is left:* ingest_control_event delivers in order and returns RETRY on the first exception, so one permanently failing member blocks the rest until maxDeliver dead-letters the event; the comment promises the opposite.
+- *Why:* Criterion 4: one bad inbox drops a grant notification for the whole group.
+- *How:* Attempt every member with bounded concurrency (TaskGroup under a Semaphore, well under ackWait), collect per-member outcomes as fan_out does, RETRY only after all were attempted; delivery is idempotent on `<event_id>@<ACTION>`.
+- *Closes when:* A group whose second member's inbox raises InboxUnreadable still delivers to the third (test).
+- *Evidence:* services/notifications/src/notifications/api/control_events.py:84-134,172-215 · services/notifications/src/notifications/api/fanout.py:124-198
+
+**CTL-019 · The project admin split (security_admin, data_admin, role_creator) reaches no rung and no code**
+`service-kit (model.fga), catalog` · **LOW**
+- *What is left:* The three relations are defined at model.fga:68-73, referenced by no other relation and by no service code; only model.fga.yaml asserts they exist, so the model claims a separation of duties that confers nothing. Identity and role administration itself stays WONTFIX until an IdP sync (DECISIONS.md:412-420).
+- *Why:* Criterion 2: dormant relations read as governance that is not there.
+- *How:* Either wire them the Lakekeeper way (warehouse manage_grants gains `or security_admin from project`; data_admin gets a steward lifecycle rung that is not ownership; project.can_create_role: role_creator, the create door itself staying under the WONTFIX) or delete the three relations and their assertions; RED first either way (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 1).
+- *Closes when:* The three relations either gate named doors under RED tests or are gone from model.fga and model.fga.yaml.
+- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:68-73 · model.fga.yaml:51-53,210-224 · docs/DECISIONS.md:412-420 · docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8
+- **blocked:** Owner decision per docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 1: wire the admin split or delete it.
+
 ## PHASE 2 · COMPUTE
 
 **LH-129 · Ray jobs sign with a static S3 key and lineage tokens from pod env; they should open tables through the namespace with a projected SA token**
@@ -1634,129 +1753,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Lakekeeper gates tasks as can_get_tasks/can_control_tasks on the object touched (authz/openfga/v4.7/components/lakekeeper_table.fga:30-31); stamp Ray `metadata` with rask.project and the destination table; filter and gate through the existing FGA checker.
 - *Closes when:* DECISIONS.md records the ruling, and a principal without read on a job's project or table neither lists that job nor reads its logs (tests).
 - *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:41-738 · services/compute/src/compute/security.py:39-53 · services/compute/src/compute/routes.py:26,39-49 · services/medallion/src/medallion/services/ray_submit.py:200
-
-## PHASE 3 · CONTROLPLANE
-
-**CTL-021 · The notifications reconciler never reconciles: the live pod runs a pre-fix image, and the walk reads the per-dataset-governed feed as an asserted identity**
-`notifications, lineage, chart` · **HIGH**
-- *What is left:* (1) rask-notifications runs main-467904ae, older than the fc1b8bfd feed_token fix, because values-live-pins.yaml:18 never captured the roll; 192 lines of 401 on invoke/lineage/method/events in an hour and 0 lineage_feed_reconciled. (2) The walk reads `/events` (filtered per dataset by can_get_metadata) with a `reader` grant on the default warehouse only, so tenant-warehouse runs are invisible, and `/events/projection`, built for it, is unused. (3) It asserts identity with `x-lance-service-identity` (reconciler.py:246).
-- *Why:* Criterion 4: the walk is the only lane for runs the bus never carries (ingest, Ray TRAIN, external producers), dead live and blind to tenants once alive.
-- *How:* Roll from HEAD and capture the pin (scripts/k3s-pins.sh), reading back the pod image before the behaviour. Move LineageFeedClient.page to `/events/projection`, gated on a new narrow estate rung (`estate.event_reader: [user]`, `can_read_event_feed: owner or event_reader`, the event_stager precedent at model.fga:141), not can_observe_events; grant it and drop the warehouse reader. Present the projected SA token as a bearer under D1 (LH-220), subject `kubernetes~system:serviceaccount:<ns>:<sa>`; measure first whether Authorization survives Dapr invocation. Lakekeeper keeps machines on narrow per-purpose relations (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 items 2 and 4).
-- *Closes when:* The pod runs an image containing fc1b8bfd named by the pins file, every tick answers 200 and logs lineage_feed_reconciled, a tenant-warehouse run is scanned, and the reconciler holds no rung that creates projects or edits tuples.
-- *Evidence:* chart/values-live-pins.yaml:18 · services/notifications/src/notifications/api/reconciler.py:234-258,246 · services/notifications/src/notifications/api/service_identity.py:50-81 · services/lineage/src/lineage/api/v1/endpoints/runs.py:163-255 · services/lineage/src/lineage/api/fga_deps.py:149-171 · chart/templates/bootstrap-admin.yaml:143-171,208-218 · live rs and logs 2026-09-25
-
-**XC-009 · No Dapr accessControl on any callee, and the NetworkPolicy prose misstates k3s**
-`chart, gateway, notifications, annotator, medallion, ingest, flows` · **MEDIUM**
-- *What is left:* No Configuration carries accessControl, so any sidecar can invoke any app-id's routes; only secret-scoped apps have their own Configuration (gateway, compute and controlplane share lance-tracing); values.yaml:747-749 says k3s does not enforce NetworkPolicy, but this host's k3s runs the policy controller.
-- *Why:* Criterion 2, zero trust: a compromised pod reaches every app over sentry mTLS; accessControl keyed on the SPIFFE id is Dapr's form of 'identity from a verified credential'.
-- *How:* A per-app Configuration for every Dapr app-id (_helpers.tpl:246-250); `accessControl: {defaultAction: deny, trustDomain, policies}` per callee from gateway `_routes()` plus the ActorProxy and Workflow callers (DECISIONS.md:1693-1716); a WorkflowAccessPolicy; rewrite values.yaml:747-749; then P6.6's NetworkPolicy order (API-server-to-webhook allows, the OpenFGA selector, Job labels, then enable).
-- *Closes when:* Every callee's Configuration carries defaultAction: deny with per-caller policies, a cross-app workflow policy exists, and a live drive of every gateway route and cascade hop still succeeds.
-- *Evidence:* chart/templates/observability.yaml:75-81,99-110 · chart/templates/_helpers.tpl:237-250 · chart/values.yaml:747-761 · docs/DECISIONS.md:1693-1716 · /etc/systemd/system/k3s.service (no --disable-network-policy)
-
-**CTL-001 · The gateway proxies the catalog's and lineage's whole root: unlisted paths such as /dapr/subscribe and the demo UI answer at the edge**
-`gateway, chart` · **MEDIUM**
-- *What is left:* The catalog and lineage rows rewrite to '', and only a prefix blocklist (lineage_sidecar_guard) exists; live unauthenticated GETs at the edge: /api/lineage/dapr/subscribe and /api/catalog/dapr/subscribe 200 (topology), /api/lineage/ui/index.html 200, /api/lineage/lineage-dlq and /api/catalog/control-events reachable (405 on GET; POSTs refused in-service).
-- *Why:* Criterion 2, zero trust: a blocklist fails open for every new root route.
-- *How:* Give Route an `exposed` allowlist: catalog `/v1/` (every spec path is /v1/..., spec.yaml:89-2265) and `/management/v1/`; lineage's measured root-mounted prefixes (/datasets, /runs, /events, /events/projection, /graph, /jobs, /namespaces, /search, /admin/dlq, /api/v1/lineage), excluding /ui, /demo, /dapr/*, subscription routes and probes. A contract test imports both apps and asserts the allowlist equals their authorized routes minus those. Delete lineage_sidecar_guard, lineage_sidecar_only_routes and its helper/env. Comment the /api/catalog row citing DECISIONS.md:301-316. Lakekeeper nests only /catalog/v1, /management/v1, /lakekeeper/v1 and /health (crates/lakekeeper/src/api/router.rs:142-173).
-- *Closes when:* Under test the listed paths 404 at the gateway while allowlisted paths proxy, the contract test fails when a service adds an unlisted public route, the blocklist env and helper are gone, and the /api/catalog row carries its rationale comment.
-- *Evidence:* services/gateway/src/gateway/__init__.py:225-226,516-534 · services/gateway/src/gateway/config.py:71-98 · chart/templates/_helpers.tpl:851-873 · chart/templates/configmap.yaml:118-120 · services/lineage/src/lineage/main.py:187-219 · services/lineage/src/lineage/api/v1/router.py:19
-
-**CTL-006 · The gateway has no body cap, rate limit or access line, and lance-plane services built by the factory accept unbounded bodies**
-`gateway, service-kit, lineage, medallion, maintenance` · **MEDIUM**
-- *What is left:* (1) The gateway builds its own FastAPI with only RequestIDMiddleware: no body cap, no 429 and no structured per-request access line. (2) build_lance_service_app mounts no BodySizeLimitMiddleware, so lineage, maintenance, the medallion producer and stage runners have no cap on paths bypassing daprd's 32Mi; only catalog mounts one by hand.
-- *Why:* Criterion 5: POST /lineage, /produce and /train buffer bodies with no ceiling.
-- *How:* (1) Mount service_kit.body_limit.BodySizeLimitMiddleware on the gateway, outermost, with GatewaySettings.max_body_bytes; add a per-subject/IP bucket through service_kit.rate_limit honouring its single-replica gate, or re-scope the 429 to edge config per DECISIONS.md:301-316 and say so; one structured access line per proxied request keyed on the trace id (XC-048). (2) Make max_body_bytes a required keyword of build_lance_service_app (like docs_enabled) and delete catalog/main.py:338. Lakekeeper applies DefaultBodyLimit to the whole router (router.rs:153).
-- *Closes when:* RED tests show an over-cap body refused 413 at the gateway and at lineage, maintenance, the producer and a stage runner, catalog no longer mounts the cap itself, and the 429 and access-line clauses are met or explicitly re-scoped.
-- *Evidence:* services/gateway/src/gateway/__init__.py:442,513 · packages/service-kit/src/service_kit/lance_app.py:63-116 · services/catalog/src/catalog/main.py:316-342 · packages/service-kit/src/service_kit/rate_limit.py:8-22 · chart/values.yaml:2859-2862
-
-**CTL-022 · Notifications has no door that erases a subject's inbox, prefs, cursor and watch enrolment**
-`notifications, catalog` · **MEDIUM**
-- *What is left:* The only DELETE route removes one project watch; a principal's InboxActor state (rows, meta, cursor, prefs, digest, watches) and WatchIndexActor enrolment persist with no removal path. Consumes LH-233's principal-deleted event; this is keyed on a platform principal, not a data subject in a table.
-- *Why:* Criterion 2 (Art. 17): a deleted principal's state persists.
-- *How:* The notifications control lane consumes LH-233's principal-deleted CatalogControlEvent and calls a new idempotent InboxActor.erase that clears every key and unwatches each project in InboxWatches; per rask-notifications, add both a ControlAction and a NotificationReason. The inbox is already bounded by compaction; ActorStateTTL is not a substitute for erasure (it would un-enrol live people). Lakekeeper's user delete removes assignments and FGA state (crates/lakekeeper/src/api/management/v1/user.rs:525-570).
-- *Closes when:* After the door runs, a RED test shows the subject's inbox, prefs, cursor, digest and watches empty, the subject in no WatchIndexActor, and a replayed event does not recreate enrolment.
-- *Evidence:* services/notifications/src/notifications/api/watches.py:117 · services/notifications/src/notifications/inbox_actor.py:210-640 · services/notifications/src/notifications/watch_actor.py:61-95 · services/notifications/src/notifications/models.py:211,267,289,331,357
-
-**CTL-013 · The Python gateway still fronts every /api/* row**
-`gateway, chart, scripts, docs` · **MEDIUM**
-- *What is left:* Delete services/gateway, its dockerfile, values.yaml:405, its fleet/resiliency scope, ingress.yaml:66-72,118-124 and dev-micro.sh:65, after the edge carries: (a) one HTTPRoute rule per `_routes()` row with URLRewrite ReplacePrefixMatch on the 10 rewriting rows ('/' for empty rewrites), catalog and lineage rendered as CTL-001's allowlist; (b) the `_CLIENT_SPOOFABLE` strip as RequestHeaderModifier remove; (c) edge metrics and traces into the Collector feeding Fleet-RED and HttpServerErrorRatioHigh (today the gateway's own 502 is the only signal for a down backend); (d) retire the merged /docs and the compute zone's /compute/api-docs page and both nav entries; (e) replace the 502 contract in rask-services-fleet and the architecture docs with the edge's measured unreachable-upstream status.
-- *Why:* Criterion 2, zero trust: a proxy tier that enforces nothing (DECISIONS.md:302-311) but forces public-caller lists and header strips.
-- *How:* The installed Gateway API v1.5.1 standard CRD covers precedence, URLRewrite, header modifiers and timeouts. Lakekeeper runs no proxy tier; each service verifies the bearer (docs/audits/2026-09-25/lakekeeper-deep-read/authn.md T10; D1), so the edge mints nothing. Prerequisites: CTL-001, CTL-007, LH-220. Phase-3 sequencing, not a decision.
-- *Closes when:* services/gateway and every reference are gone, every /api/* row answers through the edge in-cluster and through the derived dev proxy from a browser, Fleet-RED and HttpServerErrorRatioHigh read an edge series, and the docs state the measured status.
-- *Evidence:* services/gateway/src/gateway/__init__.py:76-100,164-176,222-264,365-400,454,614-632,672-679 · chart/templates/ingress.yaml:55-72,113-124 · chart/templates/dapr-resiliency.yaml:148-160,240,264 · frontend/microfrontends/compute/src/routes/api-docs/+page.svelte:10,44 · frontend/packages/ui/src/lib/shell/nav-config.ts:426-430
-
-**CTL-025 · The inbox row cap is enforced only by a 6-hourly reminder, so each delivery rewrites an unbounded partition between ticks**
-`notifications` · **MEDIUM**
-- *What is left:* deliver reads the whole ROWS_KEY partition, appends and rewrites all of it; the only bound is compact() on a 21600 s reminder, so inbox_max_rows (200) does not stop a runaway producer between ticks.
-- *Why:* Criterion 5: write volume into the actor state store grows quadratically with a burst.
-- *How:* Apply compact(max_rows=inbox_max_rows) in deliver before _persist (it already drops handled rows before unread ones). RED: deliver cap+50 pointers without firing the reminder.
-- *Closes when:* A delivery never persists more than inbox_max_rows pointers, pinned by a test that fires no reminder.
-- *Evidence:* services/notifications/src/notifications/inbox_actor.py:233-239,308-352,414-431 · services/notifications/src/notifications/feed.py:61-80 · services/notifications/src/notifications/config.py:66-75
-
-**CTL-007 · No Gateway API edge exists; kgateway is only named in comments**
-`gateway, chart` · **LOW**
-- *What is left:* Render a Gateway API edge beside the Ingress behind `edge.gatewayApi.enabled`, one HTTPRoute rule per `_routes()` row from one table, with these acceptance clauses: (a) catalog and lineage as the path allowlist (CTL-001's per-row allowlist); (b) strip every `_CLIENT_SPOOFABLE` header including x-lance-service-identity and x-user, re-stamp X-Forwarded-* and move each service's forwarded-allow-ips to the edge, minting nothing (D1); (c) backend TLS origination or a recorded plaintext acceptance (the certificate source is XC-007's, parked); (d) per-backend timeout, retry and breaker parity keeping writeRetry's no-retry-on-500, then drop the `gateway` scope at dapr-resiliency.yaml:264; (e) dev-micro's /api table rendered from the HTTPRoutes with a divergence test; (f) zone rules and `/` with `timeouts.request: 0s` and the implementation's stream-idle timeout above KEEPALIVE_MS, header-buffer and body-size behaviour measured for zone and /api rules; (g) Envoy normalisation parity with `_normalize_path`/`_normalize_raw_path`, refusing the same ambiguous encodings with 400.
-- *Why:* R14 intends this edge, and each clause guards a property the Python gateway gives today that a naive cut-over would drop.
-- *How:* The controller and CRDs install outside the app release (XC-085); the app chart renders only Gateway and HTTPRoute objects. The installed HTTPRoute v1.5.1 CRD defines timeouts.request as the whole transaction and 0s as disabled.
-- *Closes when:* helm template renders a working Gateway plus HTTPRoutes with the toggle on and the Ingress with it off, a browser reaches /, /lakehouse, /compute and /api/catalog through it, a bell query.live stream holds past 90 s, and each clause is pinned by a test or render assertion.
-- *Evidence:* chart/templates/ingress.yaml:44-47,66-124 · services/gateway/src/gateway/__init__.py:76-119,213-265,276-318,647-648 · chart/templates/dapr-resiliency.yaml:146-155,255-264 · scripts/dev-micro.sh:34,65 · chart/values.yaml:840-849,2643-2665 · docs/architecture/lance-ns-merge.md:449
-
-**XC-027 · The prod overlay renders an Ingress with no TLS, and nothing refuses that render**
-`chart` · **LOW**
-- *What is left:* values-prod.yaml:221-224 has no ingress.tls and nothing fails a prod render without one; the guard needs neither a hostname nor an issuer.
-- *Why:* Criterion 2: once the edge is public, bearers, session cookies and vended credentials cross it in plaintext.
-- *How:* Lakekeeper takes TLS from a pre-created Secret named in values (lakekeeper-charts values.yaml:331-336). values-prod sets `ingress.requireTls: true` and ingress.yaml `fail`s when it is set, host is set and tls is empty; update scripts/prod_render_check.sh, which renders with a host and no tls at :40,175,185,195.
-- *Closes when:* `helm template -f values-prod.yaml --set ingress.host=x` fails without ingress.tls and renders a tls entry with `ingress.tls[].secretName`, and prod_render_check.sh asserts both.
-- *Evidence:* chart/values-prod.yaml:221-224 · chart/values.yaml:2666 · chart/templates/ingress.yaml:44-47 · scripts/prod_render_check.sh:40,175,185,195
-
-**CTL-017 · Nothing refuses a platform.rask.io CRD landing in this chart**
-`chart, controlplane` · **LOW**
-- *What is left:* A render-and-files invariant: no document in `helm template` output, chart/crds-bootstrap/ or a subchart crds/ defines a CustomResourceDefinition with group platform.rask.io; the RBAC reference stays allowed.
-- *Why:* Pins DECISIONS.md:919-925: a CRD without its controller yields stuck Project CRs.
-- *How:* Narrow group check now; widen to 'the app release renders zero CRDs' once XC-049 and XC-085 move operators out (Lakekeeper ships none, docs/audits/2026-09-25/lakekeeper-deep-read/chart.md §12). Mutation-check with a stub CRD.
-- *Closes when:* The test passes at HEAD and fails when a platform.rask.io CRD is added to templates/ or crds-bootstrap/.
-- *Evidence:* tests/unit/test_invariants.py:1063-1080,1806 · chart/templates/controlplane.yaml:126 · chart/crds-bootstrap/cnpg-crds.yaml · docs/DECISIONS.md:919-925
-
-**CTL-023 · A sidecar transport failure on an inbox or watch actor call answers 500 instead of 503**
-`notifications` · **LOW**
-- *What is left:* `_translating` re-raises anything not naming InboxUnreadable, so an aiohttp connection error or a 5xx DaprHttpError reaches the catch-all 500.
-- *Why:* Criterion 5: a sidecar outage should read 'wait and retry'.
-- *How:* Map the SDK's connection error (measure the exact type on the installed SDK) and non-InboxUnreadable Dapr errors to ServiceUnavailableError with Retry-After, the spec's 503 meaning (lance_docs/ns_catalog/spec.yaml:6685-6688). Separating per-pod from shared faults is rask's own improvement; Lakekeeper fails readiness on any shared fault (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md:194).
-- *Closes when:* A sidecar connection failure on any inbox, watch or prefs route answers 503 problem+json with Retry-After (unit test), and InboxUnreadable keeps its own 503.
-- *Evidence:* services/notifications/src/notifications/proxies.py:85-125 · packages/service-kit/src/service_kit/exceptions.py:127,191-212
-
-**CTL-024 · The rask-notifications skill contradicts services/notifications on the reason set, line refs and actors**
-`notifications, docs` · **LOW**
-- *What is left:* The skill says four reasons and six sources while NotificationReason has 12 members; notifiable, enforce_author, WatcherLookup and the no-project gate have moved; WatchIndexActor, named_subjects' userset expansion and /events/projection are missing. After CTL-021.
-- *Why:* CLAUDE.md requires skills to match code; a wrong reason count is how a producer ships an unhandled reason.
-- *How:* Rewrite SKILL.md:3,12,50,84,203,206,236 against the code, citing symbols rather than line numbers where a symbol suffices.
-- *Closes when:* Every reason, actor, door and reference in the skill matches services/notifications and services/lineage at HEAD.
-- *Evidence:* services/notifications/src/notifications/models.py:52-98 · services/notifications/src/notifications/api/lineage_events.py:225 · services/notifications/src/notifications/api/fanout.py:64,77,102 · .claude/skills/rask-notifications/SKILL.md
-
-**CTL-026 · Every 30 s reconcile tick re-reads the newest 500 full OpenLineage payloads, however few are new**
-`notifications, lineage` · **LOW**
-- *What is left:* Each tick starts at the head with limit=500 and summary=false and discards everything at or below the mark; on /events lineage also over-fetches 2000 rows and batch-checks FGA over them.
-- *Why:* Criterion 5: steady-state cost scales with page size and facet size, not work.
-- *How:* After CTL-021 moves the walk to /events/projection, add a symmetric lower bound (`since=<walk_floor>`) and send it; catch-up stays one page at a time. Lakekeeper only pushes events, so no parallel.
-- *Closes when:* A tick whose head equals the mark fetches no row at or below it (RED), and the per-page byte cost of new rows is bounded or recorded as accepted.
-- *Evidence:* services/notifications/src/notifications/api/reconciler.py:248-258,353-386 · services/notifications/src/notifications/api/settings.py:112-122 · services/lineage/src/lineage/api/v1/endpoints/runs.py:33-34,163-255
-
-**CTL-027 · A group-grant fan-out stops at the first failing member, so later members are never told**
-`notifications` · **LOW**
-- *What is left:* ingest_control_event delivers in order and returns RETRY on the first exception, so one permanently failing member blocks the rest until maxDeliver dead-letters the event; the comment promises the opposite.
-- *Why:* Criterion 4: one bad inbox drops a grant notification for the whole group.
-- *How:* Attempt every member with bounded concurrency (TaskGroup under a Semaphore, well under ackWait), collect per-member outcomes as fan_out does, RETRY only after all were attempted; delivery is idempotent on `<event_id>@<ACTION>`.
-- *Closes when:* A group whose second member's inbox raises InboxUnreadable still delivers to the third (test).
-- *Evidence:* services/notifications/src/notifications/api/control_events.py:84-134,172-215 · services/notifications/src/notifications/api/fanout.py:124-198
-
-**CTL-019 · The project admin split (security_admin, data_admin, role_creator) reaches no rung and no code**
-`service-kit (model.fga), catalog` · **LOW**
-- *What is left:* The three relations are defined at model.fga:68-73, referenced by no other relation and by no service code; only model.fga.yaml asserts they exist, so the model claims a separation of duties that confers nothing. Identity and role administration itself stays WONTFIX until an IdP sync (DECISIONS.md:412-420).
-- *Why:* Criterion 2: dormant relations read as governance that is not there.
-- *How:* Either wire them the Lakekeeper way (warehouse manage_grants gains `or security_admin from project`; data_admin gets a steward lifecycle rung that is not ownership; project.can_create_role: role_creator, the create door itself staying under the WONTFIX) or delete the three relations and their assertions; RED first either way (docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 1).
-- *Closes when:* The three relations either gate named doors under RED tests or are gone from model.fga and model.fga.yaml.
-- *Evidence:* packages/service-kit/src/service_kit/governed/auth/model.fga:68-73 · model.fga.yaml:51-53,210-224 · docs/DECISIONS.md:412-420 · docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8
-- **blocked:** Owner decision per docs/audits/2026-09-25/lakekeeper-deep-read/authz.md §8 item 1: wire the admin split or delete it.
 
 ## FRONTEND
 
