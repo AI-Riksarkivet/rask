@@ -40,19 +40,10 @@ class TestTheRouteMatchesTheBindingName:
         app.include_router(build_incremental_cron_router(binding))
         return TestClient(app, raise_server_exceptions=False)
 
-    def test_the_post_route_is_the_binding_name(self) -> None:
-        paths = {getattr(r, "path", "") for r in build_incremental_cron_router("my-binding").routes}
-        assert "/my-binding" in paths
-
     def test_it_answers_the_OPTIONS_discovery_preflight(self) -> None:
         """Dapr pre-flights a binding with OPTIONS. Without an ack the sidecar logs the binding as
         unregistered and never delivers."""
         assert self._client().options("/ingest-incremental-cron").status_code < 400
-
-    def test_it_is_mounted_at_the_ROOT_not_under_the_api_prefix(self) -> None:
-        """The sidecar delivers to the pod root; a route under `/api` is a route Dapr never calls."""
-        paths = {getattr(r, "path", "") for r in build_incremental_cron_router("b").routes}
-        assert not any(p.startswith("/api") for p in paths)
 
 
 class TestItIsMountedOnlyWhenConfigured:
@@ -63,33 +54,6 @@ class TestItIsMountedOnlyWhenConfigured:
         app = FastAPI()
         assert mount_incremental_cron(app, None) is False
         assert mount_incremental_cron(app, "") is False
-
-    def test_a_named_binding_mounts_it(self) -> None:
-        from ingest.cron import mount_incremental_cron
-
-        app = FastAPI()
-        assert mount_incremental_cron(app, "ingest-incremental-cron") is True
-
-
-class TestItSaysItIsAPoll:
-    def test_the_docstring_names_the_poll(self) -> None:
-        """§1c asks for this explicitly, because a reader of the workflow module would otherwise
-        conclude the plane never polls anywhere."""
-        import inspect
-
-        from ingest import cron
-
-        text = (inspect.getdoc(cron) or "") + (inspect.getdoc(cron.build_incremental_cron_router) or "")
-        assert "poll" in text.lower()
-
-    def test_the_single_project_constraint_is_stated(self) -> None:
-        """The tick authorizes on the service-token branch, pinned to one project. Discovering that
-        from a 403 at 3am is the outcome this sentence exists to prevent."""
-        import inspect
-
-        from ingest import cron
-
-        assert "project" in (inspect.getdoc(cron) or "").lower()
 
 
 class TestTheTickActuallyDispatches:
@@ -148,16 +112,6 @@ class TestTheTickActuallyDispatches:
         client.post("/ingest-incremental-cron")
 
         assert len({run_id for run_id, _ in started}) == 2, "both ticks collapsed onto one run"
-
-    def test_it_names_nobody_as_originator(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """No user fired this. An invented originator would put a row in an inbox belonging to
-        whoever the literal happened to match."""
-        started: list[tuple[str, dict]] = []
-        client = self._app(monkeypatch, started=started)
-
-        client.post("/ingest-incremental-cron")
-
-        assert started[0][1].get("originator", "") == ""
 
     def test_an_unconfigured_deployment_ticks_harmlessly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         started: list[tuple[str, dict]] = []

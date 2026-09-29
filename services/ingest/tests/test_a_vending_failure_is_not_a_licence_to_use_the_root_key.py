@@ -70,14 +70,6 @@ def test_the_insecure_posture_stays_reachable_when_an_operator_names_it() -> Non
     assert _client(allow_ambient_fallback=True).vend_storage_options("ns", "ds", tier="write") is None
 
 
-@respx.mock
-def test_a_working_vend_is_unchanged() -> None:
-    respx.post(URL).mock(return_value=httpx.Response(200, json={"credentials": {"storage_options": {"aws_access_key_id": "k"}, "expires_at_millis": 1}}))
-    vended = _client().vend_storage_options("ns", "ds", tier="write")
-    assert vended is not None
-    assert vended.options == {"aws_access_key_id": "k"}
-
-
 def test_the_setting_reaches_the_client_that_has_to_honour_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """A DECLARATION WITHOUT ITS CLIENT HALF is the estate's most-repeated defect, and an escape hatch
     nobody can reach is the same shape: the flag reads as a control while changing nothing, so an

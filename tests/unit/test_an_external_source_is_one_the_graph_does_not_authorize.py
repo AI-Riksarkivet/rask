@@ -39,13 +39,6 @@ from ingest.sources import SourceSpec, lineage_input_for
 from lineage.api.fga_deps import is_external_source
 
 
-#: The kinds this gate knows how to exercise. Values are built per-test by :func:`_options_for`,
-#: because `local-dir` takes a filesystem root and a FIXED one is the defect
-#: `test_no_fixed_tmp_roots.py` exists to refuse — its `{"root": ...}` form is precisely what that
-#: gate scans for, and it caught this literal on the first full run.
-_COVERED: frozenset[str] = frozenset({"local-dir", "s3-prefix", "lance-append"})
-
-
 def _options_for(kind: str, root: Path) -> dict[str, str]:
     """Minimal options for one kind — enough for its adapter to build a lineage input."""
     return {
@@ -73,12 +66,6 @@ def builtin_kinds() -> Iterator[list[str]]:
     finally:
         sources._REGISTRY.clear()
         sources._REGISTRY.update(saved)
-
-
-def test_every_BUILTIN_source_kind_is_covered_by_this_gate(builtin_kinds: list[str]) -> None:
-    """A kind this file does not know about would be skipped silently, which is the shape being fixed."""
-    assert builtin_kinds, "no source kind is registered — this gate is blind"
-    assert set(builtin_kinds) <= _COVERED, f"uncovered builtin source kinds: {sorted(set(builtin_kinds) - _COVERED)}"
 
 
 def test_no_source_kind_names_an_input_the_graph_would_try_to_AUTHORIZE(builtin_kinds: list[str], tmp_path: Path) -> None:

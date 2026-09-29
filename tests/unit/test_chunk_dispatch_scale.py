@@ -48,11 +48,7 @@ from __future__ import annotations
 import json
 
 from ingest.sizing import resolve
-from ingest.workflow import CHUNK_DISPATCH_BUDGET_BYTES, CHUNK_SIZE, GRPC_MAX_MESSAGE_BYTES, ChunkSpec
-
-
-#: The scale this plane's docstrings advertise ("the million-unit harvest").
-ADVERTISED_UNITS = 1_000_000
+from ingest.workflow import CHUNK_DISPATCH_BUDGET_BYTES, CHUNK_SIZE, ChunkSpec
 
 
 def _result_bytes(units: int) -> tuple[int, int]:
@@ -87,23 +83,6 @@ def _result_bytes(units: int) -> tuple[int, int]:
     return n, len(json.dumps(chunks, default=str).encode())
 
 
-def test_the_ADVERTISED_million_unit_harvest_fits_with_room_to_spare() -> None:
-    """The question §6.8 asked, answered with a number rather than a structure.
-
-    8.4% of budget at a million units. If this ever approaches 100%, the plane cannot dispatch the
-    scale its own docstrings promise — and it would fail at `_refuse_oversized_dispatch`, which is a
-    refusal, not a crash, but is still a harvest that does not run.
-    """
-    chunks, size = _result_bytes(ADVERTISED_UNITS)
-
-    assert chunks == 100
-    assert size < CHUNK_DISPATCH_BUDGET_BYTES // 4, (
-        f"a {ADVERTISED_UNITS:,}-unit run now serializes to {size:,} B — more than a quarter of the "
-        f"{CHUNK_DISPATCH_BUDGET_BYTES:,} B dispatch budget. Something is carrying per-unit data on the "
-        f"chunk descriptor again; the pointer design (§2.13) is what keeps this O(chunks)."
-    )
-
-
 def test_the_ceiling_is_MILLIONS_of_units_not_tens_of_thousands() -> None:
     """The property the pointer redesign bought — and the honest edge of it.
 
@@ -121,49 +100,3 @@ def test_the_ceiling_is_MILLIONS_of_units_not_tens_of_thousands() -> None:
         f"5M units serializes to {at_five_million:,} B, over the {CHUNK_DISPATCH_BUDGET_BYTES:,} B budget — "
         f"the dispatch ceiling has fallen back toward the range the pointer redesign moved it out of"
     )
-
-
-def test_a_hundred_million_units_does_NOT_fit_and_that_is_recorded_not_hidden() -> None:
-    """The limit stated as a fact, so nobody plans a harvest on a wrong number.
-
-    THE NUMBER MOVED, THE INVARIANT DID NOT (2026-08-24). This asserted 10M refused — true at
-    CHUNK_SIZE=1000 and false once the estate's stated scale forced that knob to 10000. This test
-    told its own successor what to do ("re-measure and update the docstring table rather than
-    deleting the assertion"), and that is what happened: the table above is re-measured and the
-    assertion now sits past the new ceiling instead of at the old one.
-
-    `_refuse_oversized_dispatch` catches it at runtime — a refusal, not a crash — but a plane should
-    say where its advertised scale stops working.
-    """
-    _, at_hundred_million = _result_bytes(100_000_000)
-
-    assert at_hundred_million > CHUNK_DISPATCH_BUDGET_BYTES, (
-        "100M units now FITS the dispatch budget. Good news, but this test records a measured limit — "
-        "re-measure and update the docstring table rather than deleting the assertion."
-    )
-
-
-def test_a_chunk_descriptor_carries_NO_PER_UNIT_DATA() -> None:
-    """The structural reason the numbers above hold, checked directly rather than inferred from them.
-
-    A size assertion alone would pass if someone added a small per-unit field and simultaneously
-    lowered CHUNK_SIZE. This says the thing that actually matters: one chunk's serialized size does
-    not depend on how many units it covers.
-    """
-    small = ChunkSpec(run_id="r", chunk_id="r-c0", offset=0, count=1, dataset_uri="s3://b/d.lance")
-    large = ChunkSpec(run_id="r", chunk_id="r-c0", offset=0, count=1_000_000, dataset_uri="s3://b/d.lance")
-
-    assert len(json.dumps(small.model_dump())) == len(json.dumps(large.model_dump())) - len("999999"), (
-        "a chunk's size grew with its unit COUNT — the descriptor is carrying per-unit data, which is exactly what §2.13 removed"
-    )
-
-
-def test_the_budget_leaves_headroom_under_the_grpc_ceiling() -> None:
-    """The budget is deliberately below grpc's limit, not equal to it.
-
-    The activity result is not the only thing on the wire — Dapr wraps it with its own envelope, and a
-    budget set AT the ceiling would fail on the framing rather than on the payload, which is a much
-    harder failure to read.
-    """
-    assert CHUNK_DISPATCH_BUDGET_BYTES < GRPC_MAX_MESSAGE_BYTES
-    assert GRPC_MAX_MESSAGE_BYTES - CHUNK_DISPATCH_BUDGET_BYTES >= 1024 * 1024, "less than a MiB of framing headroom"

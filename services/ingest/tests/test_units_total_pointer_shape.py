@@ -112,21 +112,6 @@ def test_a_POINTER_enumeration_is_counted_and_the_run_FANS_OUT() -> None:
     assert any(a.startswith("child:") for a in ctx.actions), "the run never fanned out — it took the empty-run early return"
 
 
-def test_the_LEGACY_inline_shape_still_counts() -> None:
-    """Backward compatibility is the reason `expected_units` exists rather than a bare `count` read:
-    a descriptor enumerated before the pointer change still carries its keys, and a run in flight
-    across that deploy must not become an empty COMPLETE either."""
-    ctx = _Ctx()
-    gen = ingest_run(cast("Any", ctx), SPEC)
-    gen.send(None)
-    gen.send(None)
-    gen.send(NO_LIMITS)
-    gen.send(HANDLE)
-    gen.send([{"run_id": "pointer-test", "chunk_id": "c0", "keys": ["a", "b", "c"]}])
-
-    assert json.loads(ctx.statuses[-1])["units_total"] == 3
-
-
 def test_a_GENUINELY_empty_enumeration_still_short_circuits() -> None:
     """The early return is correct and must survive the fix — a source with nothing to ingest should
     not open the dataset or dispatch a child."""

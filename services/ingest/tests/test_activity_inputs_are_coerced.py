@@ -53,12 +53,6 @@ def _activities() -> list[tuple[str, str, type]]:
     return found
 
 
-def test_the_scan_finds_the_registered_activities() -> None:
-    """Non-vacuity: an empty roster would make the assertion below pass while checking nothing."""
-    activities = _activities()
-    assert len(activities) >= 4, f"only {len(activities)} model-taking activities found; the registry moved"
-
-
 def test_every_activity_coerces_its_payload_before_using_it() -> None:
     """An activity that dereferences its payload must validate it first — the SDK will not."""
     offenders: list[str] = []

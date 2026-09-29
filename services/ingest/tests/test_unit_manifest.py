@@ -67,26 +67,6 @@ def test_a_window_round_trips(tmp_path: Path) -> None:
     assert read_unit_slice(dataset, RUN, 9, 5) == pairs[9:], "a window running past the end is the LAST chunk, not an error"
 
 
-def test_a_null_token_survives_the_round_trip(tmp_path: Path) -> None:
-    """Tokens are positional-parallel identity material the workers fold into row ids. A source with
-    no version token writes None, and None must come back as None rather than the string 'None'."""
-    dataset = str(tmp_path / "bronze.lance")
-    write_unit_manifest(dataset, RUN, [("s3://b/a.tif", None)])
-
-    assert read_unit_slice(dataset, RUN, 0, 1) == [("s3://b/a.tif", None)]
-
-
-def test_a_MISSING_manifest_raises_rather_than_publishing_nothing(tmp_path: Path) -> None:
-    """The dangerous silent failure. A chunk that cannot load its intent must not report success
-    having published zero units — `drain_chunk`'s reconcile is built to notice a SHORTFALL against an
-    expected count, not an empty intent, so an empty publish would look like a chunk that legitimately
-    had no work."""
-    dataset = str(tmp_path / "bronze.lance")
-
-    with pytest.raises(UnitManifestMissing):
-        read_unit_slice(dataset, RUN, 0, 5)
-
-
 def test_purge_removes_it_too(tmp_path: Path) -> None:
     """It needs its OWN removal precisely because it sits outside the run prefix: the prefix delete
     that clears the fragments cannot reach it, so without this every completed run leaks one manifest

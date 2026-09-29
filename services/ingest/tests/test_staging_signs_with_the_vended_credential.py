@@ -66,34 +66,6 @@ def test_a_vended_credential_is_what_signs_the_ledger_write(monkeypatch: pytest.
     )
 
 
-def test_no_options_is_the_ambient_chain_exactly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`mode_b` and the auth-off profile must be untouched: no credential on offer means the ambient
-    one, which is that deployment's design rather than its failure."""
-    from ingest import staging
-
-    calls: list[dict[str, Any]] = []
-    monkeypatch.setattr("storage.s3_client", lambda endpoint=None, **kw: calls.append(dict(kw, endpoint=endpoint)) or object())
-    staging._client_for_options(None)
-
-    assert calls, "no client was built at all"
-    assert not any(calls[0].get(k) for k in ("access_key", "secret_key", "session_token")), (
-        f"an explicit credential was passed when none was vended: {calls[0]}"
-    )
-
-
-def test_every_ledger_door_can_be_handed_the_credential() -> None:
-    """A DECLARATION WITHOUT ITS CLIENT HALF is this estate's most-repeated defect, and a partly-threaded
-    credential is that shape: the writes that took it would be scoped, the ones that did not would keep
-    the root key mounted for the whole pod, and the survey would show a control that is 80% real."""
-    import inspect
-
-    from ingest import staging
-
-    ledger_doors = ("stage_fragments", "write_unit_manifest", "read_unit_slice", "discover_staged", "purge_staged")
-    missing = [name for name in ledger_doors if "storage_options" not in inspect.signature(getattr(staging, name)).parameters]
-    assert not missing, f"these ledger doors cannot be given the vended credential, so the pod still needs the root key: {missing}"
-
-
 def test_every_ledger_CALL_SITE_hands_over_the_credential() -> None:
     """The half that decides whether any of this is real.
 

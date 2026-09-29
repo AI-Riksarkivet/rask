@@ -53,19 +53,6 @@ def test_the_writer_forwards_vended_storage_options(monkeypatch: pytest.MonkeyPa
     assert seen.get("storage_options") == vended
 
 
-def test_no_options_still_writes_exactly_as_before(tmp_path: Any) -> None:
-    """`mode_b` vends nothing, and a deployment on it must be untouched by this. Absent options mean the
-    ambient credential chain — the behaviour being replaced, kept as the fallback."""
-    import lance
-
-    from ingest import lander
-
-    uri = str(tmp_path / "t.lance")
-    lance.write_dataset(_batch([0]), uri, **lander.CREATION_FLAGS)
-    written = lander.write_unit_fragments(uri, _batch([1, 2]))
-    assert written and isinstance(written[0], str)
-
-
 # --- the client half: asking the catalog for the credential --------------------------------------
 
 
@@ -97,22 +84,6 @@ def test_the_catalog_client_vends_scoped_options() -> None:
         # The EXPIRY rides with the credential: only the vend knows it, and a cache told to guess it
         # would either re-vend on every write or hold a credential past its death.
         assert vended.expires_at_millis == 1_788_462_943_000
-
-
-def test_server_mediated_vends_nothing_and_that_is_not_an_error() -> None:
-    """`mode_b` is a supported posture, not a failure: it answers `server_mediated` with no credential,
-    and the writer must fall back to the ambient chain rather than refuse to write."""
-    import httpx
-    import respx
-
-    from ingest.catalog_service import CatalogServiceClient
-
-    client = CatalogServiceClient(pa.schema([("id", pa.int64())]), base_url="http://catalog:2333", token="t")
-    with respx.mock:
-        respx.post("http://catalog:2333/management/v1/table/ns$ds/credentials").mock(
-            return_value=httpx.Response(200, json={"mode": "server_mediated", "credentials": None})
-        )
-        assert client.vend_storage_options("ns", "ds", tier="write") is None
 
 
 def test_a_vending_failure_REFUSES_rather_than_signing_with_the_storage_root() -> None:

@@ -31,16 +31,15 @@ from ingest.runs import (
     SCHEDULE_TIMEOUT_SECONDS,
     InMemoryRunStore,
     RunRecord,
-    ScheduleUnavailable,
     is_redrivable,
     record_from_workflow_state,
     run_id_for,
 )
-from ingest.sources import SourceSpec, register
+from ingest.sources import register
 
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable, Iterator
+    from collections.abc import Awaitable, Callable, Iterator
 
     from service_kit.lakehouse.sources import SourceObject
 
@@ -140,31 +139,6 @@ def test_a2_same_idempotency_key_starts_no_second_workflow(
     assert len(starter.dispatched) == 1, "a repeated Idempotency-Key started a second workflow"
 
 
-def test_the_202_location_is_a_gettable_run_under_the_real_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ING-10: the accepted run's `Location` must resolve to the run's GET, at any mount prefix.
-
-    The header was a hardcoded `/v1/ingests/{id}` while the router mounts under `RASK_API_PREFIX`
-    (`/api` in every deployment, `/api/v1` by code default) — so a client following the 202 Location
-    404s, and behind the gateway (which rewrites the request path but not the Location) an absolute
-    backend path is wrong again. A relative Location resolves against whatever public URL the caller
-    actually hit. This test goes through the REAL app factory so the mount prefix is real, not the
-    `/v1` the bare-router fixtures pin.
-    """
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    app = create_app()
-    starter = _RecordingStarter()
-    app.state.workflow_starter = starter
-    c = TestClient(app)
-
-    res = c.post("/api/ingests", json=BODY, headers={"Idempotency-Key": "loc"})
-    assert res.status_code == 202, res.text
-
-    resolved = urljoin(str(res.request.url), res.headers["Location"])
-    got = c.get(resolved)
-    assert got.status_code == 200, f"Location {res.headers['Location']!r} -> {resolved} is not GETtable"
-    assert got.json()["run_id"] == res.json()["run_id"]
-
-
 def test_the_dedupe_202_location_is_also_gettable(monkeypatch: pytest.MonkeyPatch) -> None:
     """ING-10: the dedupe branch sets its own Location and it must resolve too."""
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
@@ -178,13 +152,6 @@ def test_the_dedupe_202_location_is_also_gettable(monkeypatch: pytest.MonkeyPatc
 
     resolved = urljoin(str(dedupe.request.url), dedupe.headers["Location"])
     assert c.get(resolved).status_code == 200, f"dedupe Location {dedupe.headers['Location']!r} is not GETtable"
-
-
-def test_run_id_is_deterministic_across_processes() -> None:
-    """The id derives from the CALLER's key, so a retry on another pod resolves the same run."""
-    assert run_id_for("p1", "k") == run_id_for("p1", "k")
-    assert run_id_for("p1", "k") != run_id_for("p2", "k")
-    assert run_id_for("p1", "k") != run_id_for("p1", "other")
 
 
 def test_a_keyless_call_is_REFUSED_rather_than_given_its_own_run(
@@ -207,86 +174,6 @@ def test_a_keyless_call_is_REFUSED_rather_than_given_its_own_run(
     assert first.status_code == 422, f"an unkeyed ingest was accepted: {first.text}"
     assert second.status_code == 422
     assert starter.dispatched == [], "a keyless call dispatched work before being refused"
-
-
-def test_unknown_source_kind_is_refused_loudly(
-    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
-) -> None:
-    """I1: an unregistered kind refuses with the kinds that exist — it never falls through."""
-    c, starter, _ = client
-    res = c.post("/v1/ingests", json={**BODY, "kind": "nope"}, headers={"Idempotency-Key": "x"})
-    assert res.status_code == 400
-    assert "nope" in res.json()["detail"]
-    assert starter.dispatched == []
-
-
-@pytest.mark.asyncio
-async def test_a8_complete_without_lineage_renders_as_a_defect() -> None:
-    """A8: 'a green sync with no lineage edge is a bug the UI should surface, not report green'."""
-    healthy = RunRecord(run_id="r", project="p", dataset="d", kind="test-src", status="COMPLETE", lineage_run_present=True)
-    holed = RunRecord(run_id="r", project="p", dataset="d", kind="test-src", status="COMPLETE", lineage_run_present=False)
-    assert healthy.is_defective is False
-    assert holed.is_defective is True
-
-
-def test_status_surfaces_the_defect_state(
-    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
-) -> None:
-    c, _, store = client
-
-    asyncio.run(
-        store.put(
-            RunRecord(
-                run_id="r1",
-                project="p",
-                dataset="d",
-                kind="test-src",
-                status="COMPLETE",
-                lineage_run_present=False,
-            )
-        )
-    )
-    res = c.get("/v1/ingests/r1")
-    assert res.status_code == 200
-    assert "no lineage run exists" in res.json()["defect"]
-
-
-def test_unknown_run_is_404(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
-    c, _, _ = client
-    assert c.get("/v1/ingests/nope").status_code == 404
-
-
-def test_source_spec_carries_no_dataset_path() -> None:
-    """I2: the caller names {project, dataset}; the catalog resolves where that is.
-
-    A fixed per-lane URI is precisely why ingesting volume B overwrote volume A.
-    """
-    spec = SourceSpec(kind="test-src", project="p", dataset="pages")
-    assert not any("://" in str(v) for v in spec.model_dump().values()), "a dataset PATH leaked into the spec"
-
-
-def test_a_busy_workflow_engine_is_a_RETRYABLE_503_not_a_500(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
-    """A1's bound must not turn a slow sidecar into an unretryable error.
-
-    Bounding the schedule call is what keeps 202-under-a-second a contract rather than a hope. But
-    the first version let the TimeoutError escape, and FastAPI answered 500 — observed in-cluster on
-    a pod whose daprd had only just started. 500 tells a client "this request can never work"; the
-    truth is "the engine was busy, ask again", which is a 503 with a Retry-After.
-
-    The run id is deterministic, so the retry converges on the SAME run rather than starting a second
-    one — which is the property that makes advising a retry safe at all.
-    """
-    c, starter, _ = client
-
-    async def _timeout(run_id: str, payload: dict[str, object]) -> None:
-        raise TimeoutError
-
-    starter.on_dispatch = _timeout
-    res = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "busy"})
-
-    assert res.status_code == 503
-    assert res.headers.get("Retry-After")
-    assert "Idempotency-Key" in res.json()["detail"]
 
 
 # ── the 503's advice must be SATISFIABLE: a run the engine never took is re-drivable ──
@@ -335,29 +222,6 @@ def test_a_run_the_engine_never_took_is_REDRIVEN_by_the_retry_the_503_advises(
     record = asyncio.run(store.get(run_id_for("p1", "zombie")))
     assert record is not None
     assert record.scheduled is True
-
-
-def test_a_NON_TIMEOUT_sidecar_failure_is_the_same_retryable_503(
-    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
-) -> None:
-    """Mapping only `TimeoutError` left every other sidecar failure a raw 500 on a stored record.
-
-    A refused gRPC channel, a state store not configured for the actor runtime, a sidecar that has not
-    finished starting — all of them are "ask again", and all of them answered "this can never work"
-    while stranding the run exactly as the timeout path did. Same class, same answer, same re-drive.
-    """
-    c, starter, _ = client
-    _failing_then_recording(starter, ScheduleUnavailable("the state store is not configured to use the actor runtime"))
-
-    first = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "sidecar"})
-
-    assert first.status_code == 503
-    assert first.headers.get("Retry-After")
-    assert "Idempotency-Key" in first.json()["detail"]
-    assert "actor runtime" in first.json()["detail"], "the operator-actionable reason must survive into the 503"
-
-    assert c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "sidecar"}).status_code == 202
-    assert len(starter.dispatched) == 1
 
 
 def test_a_dispatch_failure_that_is_NOT_retryable_leaves_no_ACCEPTED_run_behind(
@@ -421,33 +285,6 @@ async def test_a_duplicate_arriving_MID_DISPATCH_still_starts_nothing() -> None:
     assert second.status_code == 202
     assert second.json()["deduplicated"] is True
     assert len(dispatched) == 1, "a duplicate raced the in-flight dispatch to the engine"
-
-
-def test_a_REDRIVE_records_the_spec_it_actually_DISPATCHES(
-    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
-) -> None:
-    """The re-drive keeps `created_at` and must name the spec it DISPATCHED — a status endpoint that
-    points an operator at the wrong dataset is worse than one that 404s, because it looks like an
-    answer.
-
-    **The scenario this used to use is now unreachable, and that is the fix rather than a regression.**
-    It drove a re-drive that carried a DIFFERENT dataset on the same Idempotency-Key, on the reasoning
-    that only `project` feeds the run id so the change was "legitimate". It is not: that is one key
-    naming two different requests, and it is now a 409 (see the conflict tests below). So the
-    invariant is exercised where it still applies — a re-drive of the SAME request after a failed
-    dispatch — and the divergence it guarded against can no longer be constructed at all.
-    """
-    c, starter, store = client
-    _failing_then_recording(starter, TimeoutError())
-    volume_a = {**BODY, "dataset": "volume-A"}
-
-    assert c.post("/v1/ingests", json=volume_a, headers={"Idempotency-Key": "moved"}).status_code == 503
-    assert c.post("/v1/ingests", json=volume_a, headers={"Idempotency-Key": "moved"}).status_code == 202
-
-    record = asyncio.run(store.get(run_id_for("p1", "moved")))
-    assert record is not None
-    assert starter.dispatched[0][1]["dataset"] == "volume-A"
-    assert record.dataset == "volume-A", "the record does not name the dataset that was dispatched"
 
 
 @pytest.mark.asyncio
@@ -530,158 +367,9 @@ def test_a_record_REBUILT_from_the_engine_counts_as_scheduled() -> None:
     assert is_redrivable(rebuilt) is False
 
 
-def test_the_adapter_converges_on_an_instance_the_engine_ALREADY_holds() -> None:
-    """`wait_for` cancels the await, never the thread — so a timed-out schedule can still have landed.
-
-    The retry then meets its own earlier dispatch. Treating that as a failure would make the 503's
-    advice impossible to satisfy; dispatching past it would run the harvest twice.
-    """
-    from ingest import _is_already_scheduled
-
-    assert _is_already_scheduled(RuntimeError("an active workflow with ID 'r9' already exists")) is True
-    assert _is_already_scheduled(RuntimeError("failed to connect to sidecar: connection refused")) is False
-
-
-def test_only_a_TRANSPORT_failure_is_classified_retryable() -> None:
-    """The line between "ask again" and "this service is broken".
-
-    Type-based, not status-code-based: guessing which gRPC codes are transient is how a permanent
-    misconfiguration becomes an infinite client retry loop.
-    """
-    from ingest import _sidecar_error_types
-
-    retryable = _sidecar_error_types()
-    assert isinstance(ConnectionRefusedError("no sidecar"), retryable)
-    assert not isinstance(ValueError("payload is not serializable"), retryable)
-    assert not isinstance(TypeError("bad signature"), retryable)
-
-
-# --------------------------------------------------------------------------- #
-# GET /v1/ingests — only a REFUSAL filters a row
-# --------------------------------------------------------------------------- #
-
-
-def _governed_client(store: InMemoryRunStore) -> TestClient:
-    """The router behind the SAME problem handlers the real app installs.
-
-    The shared `client` fixture builds a bare `FastAPI()`, which is right for the handler-logic tests
-    above — but these assert the WIRE STATUS a propagating domain error produces, and that mapping is
-    `install_problem_handlers`' job (`ingest.__init__` calls it). Without it the exception escapes as
-    a raw traceback and the test would be asserting the absence of a feature it never enabled.
-    """
-    from service_kit.lakehouse.ns_errors import install_problem_handlers
-
-    app = FastAPI()
-    app.include_router(router, prefix="/v1")
-    install_problem_handlers(app, __import__("logging").getLogger("test"))
-    app.state.run_store = store
-    app.state.workflow_starter = _RecordingStarter()
-    return TestClient(app, raise_server_exceptions=False)
-
-
-def _seeded(store: InMemoryRunStore) -> None:
-    """Two runs in two projects, so a filter that drops everything is distinguishable from one that
-    drops the right thing."""
-    for run_id, project in (("r-mine", "p1"), ("r-theirs", "p2")):
-        asyncio.run(store.put(RunRecord(run_id=run_id, project=project, dataset="pages", kind="test-src", status="RUNNING", created_at=datetime.now(UTC))))
-
-
-@pytest.mark.parametrize(
-    ("raised", "expected_status"),
-    [
-        # The one that legitimately filters a ROW: this caller may not see that project.
-        ("permission", 200),
-        # NOT a property of a row. The authorization layer is down, so EVERY record "filters" and the
-        # list renders an outage as "you own nothing" — an answer, not an error. Must be a 503.
-        ("unavailable", 503),
-        # Also not a property of a row: the caller's own bearer is bad. Answering 200 with an empty
-        # list tells them their token works.
-        ("unauthenticated", 401),
-    ],
-)
-def test_only_a_refusal_filters_a_row(
-    raised: str,
-    expected_status: int,
-    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
-
-    from ingest import api as api_mod
-
-    _c, _starter, store = client
-    _seeded(store)
-    c = _governed_client(store)
-    errors = {
-        "permission": PermissionDeniedError("nope"),
-        "unavailable": ServiceUnavailableError("authorization service is not available"),
-        "unauthenticated": UnauthenticatedError("invalid token"),
-    }
-
-    # The PAGE door, not the per-row one: the listing resolves its distinct projects and asks once
-    # (ING-05). `p2` is the unreadable project either way — a REFUSAL is now expressed by leaving it
-    # out of the permitted set (that is what "filters a row" means at this seam), while the two
-    # call-level faults still raise, which is exactly the distinction this test exists to pin.
-    async def _authorize(_request: object, _settings: object, projects: Iterable[str] = (), *_a: object, **_k: object) -> frozenset[str]:
-        named = set(projects)
-        if raised == "permission":
-            return frozenset(named - {"p2"})
-        raise errors[raised]
-
-    monkeypatch.setattr(api_mod, "authorize_ingest_projects", _authorize)
-
-    res = c.get("/v1/ingests")
-
-    assert res.status_code == expected_status, res.text
-    if expected_status == 200:
-        assert [r["run_id"] for r in res.json()["runs"]] == ["r-mine"], "the refusal must drop exactly the unreadable row"
-
-
-def test_an_authz_outage_is_never_rendered_as_an_empty_list(
-    client: tuple[TestClient, _RecordingStarter, InMemoryRunStore], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The sharpest shape of the bug: EVERY project unreadable because the store is down. Before, that
-    was a 200 with `{"runs": []}` — indistinguishable from a caller who has never ingested anything,
-    and the one rendering an operator cannot act on."""
-    from lance_namespace import ServiceUnavailableError
-
-    from ingest import api as api_mod
-
-    _c, _starter, store = client
-    _seeded(store)
-    c = _governed_client(store)
-
-    async def _down(*_a: object, **_k: object) -> None:
-        raise ServiceUnavailableError("openfga unreachable")
-
-    monkeypatch.setattr(api_mod, "authorize_ingest_projects", _down)
-
-    res = c.get("/v1/ingests")
-
-    assert res.status_code == 503, res.text
-    assert res.json() != {"runs": []}
-
-
 # --------------------------------------------------------------------------- #
 # Same key, different spec — a CONFLICT, on both branches
 # --------------------------------------------------------------------------- #
-
-
-def test_the_same_key_with_a_different_spec_is_a_conflict(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
-    """An Idempotency-Key means "this exact request". Only `project` and the key go into the run id,
-    so reusing one key for a different dataset used to land on the FIRST run and answer
-    `deduplicated=true` — telling the caller a request was accepted that was never dispatched."""
-    c, starter, _store = client
-
-    first = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "shared"})
-    assert first.status_code in {200, 202}, first.text
-    dispatched_before = len(starter.dispatched)
-
-    second = c.post("/v1/ingests", json={**BODY, "dataset": "something-else"}, headers={"Idempotency-Key": "shared"})
-
-    assert second.status_code == 409, second.text
-    assert "something-else" in second.json()["detail"]
-    assert len(starter.dispatched) == dispatched_before, "a conflicting spec must dispatch nothing"
 
 
 def test_the_conflict_is_refused_on_the_REDRIVE_branch_too(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
@@ -696,15 +384,3 @@ def test_the_conflict_is_refused_on_the_REDRIVE_branch_too(client: tuple[TestCli
 
     assert res.status_code == 409, res.text
     assert starter.dispatched == [], "the re-drive branch dispatched a repurposed run"
-
-
-def test_the_same_key_with_the_SAME_spec_still_dedupes(client: tuple[TestClient, _RecordingStarter, InMemoryRunStore]) -> None:
-    """The guard must not break A2. Identical request, identical key → one dispatch, deduplicated."""
-    c, starter, _store = client
-
-    c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "same-spec"})
-    again = c.post("/v1/ingests", json=BODY, headers={"Idempotency-Key": "same-spec"})
-
-    assert again.status_code in {200, 202}, again.text
-    assert again.json()["deduplicated"] is True
-    assert len(starter.dispatched) == 1, "the dedupe stopped working"

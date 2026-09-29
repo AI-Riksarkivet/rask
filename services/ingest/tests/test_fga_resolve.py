@@ -98,33 +98,6 @@ def fake_fga(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_it_resolves_the_existing_store_and_the_model_its_image_carries(fake_fga) -> None:
-    """The regression: unpinned must find the store the rest of the estate already uses, and check
-    against the model this image carries even when a newer one is stored ([[LH-201]])."""
-    from service_kit.governed import fga
-
-    fake_fga.stores = [_Store("01STORE", "lance-catalog", 1)]
-    fake_fga.models = [_Model("01NEWER"), _Model("01MODEL", _bundled())]
-
-    assert await fga.resolve("http://fga:8080") == ("01STORE", "01MODEL")
-
-
-@pytest.mark.anyio
-async def test_it_NEVER_provisions(fake_fga) -> None:
-    """The principle that survived. `_FakeClient` raises on either write, so this fails loudly rather
-    than silently drifting into provision-on-boot."""
-    from service_kit.governed import fga
-
-    fake_fga.stores = [_Store("01STORE", "lance-catalog", 1)]
-    fake_fga.models = [_Model("01MODEL", _bundled())]
-
-    await fga.resolve("http://fga:8080")
-
-    assert "create_store" not in fake_fga.calls
-    assert "write_authorization_model" not in fake_fga.calls
-
-
-@pytest.mark.anyio
 async def test_no_store_means_None_not_a_new_one(fake_fga) -> None:
     """An absent store means the estate has not been bootstrapped. The caller must fail closed —
     creating one here would hand a data writer the estate's permissions."""

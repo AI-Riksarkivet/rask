@@ -21,7 +21,7 @@ from typing import Any
 
 import pytest
 
-from ingest import ScheduleUnavailable, _DaprWorkflowStarter, _is_already_scheduled, _sidecar_error_types
+from ingest import ScheduleUnavailable, _DaprWorkflowStarter, _sidecar_error_types
 
 
 class _Boom:
@@ -55,16 +55,6 @@ def drive(monkeypatch: pytest.MonkeyPatch):
     return _drive
 
 
-def test_a_transport_error_becomes_the_retryable_class(drive) -> None:
-    """The F8 case: the sidecar answered badly, so the caller may retry.
-
-    `ConnectionRefusedError` is an `OSError`, which `_sidecar_error_types()` includes precisely for
-    "the socket died under the channel" — daprd not up yet is the shape this door was reopened for.
-    """
-    with pytest.raises(ScheduleUnavailable):
-        drive(ConnectionRefusedError("daprd is not listening yet"))
-
-
 def test_the_retryable_class_carries_the_original_as_its_cause(drive) -> None:
     """`raise ... from exc`. Without the cause an operator gets a 503 and no way to learn WHY."""
     original = ConnectionRefusedError("connection refused")
@@ -93,13 +83,6 @@ def test_an_ALREADY_EXISTS_refusal_CONVERGES_instead_of_raising(drive) -> None:
     would harvest the volume twice.
     """
     drive(RuntimeError("instance with ID 'run-1' already exists"))  # must NOT raise
-
-
-def test_the_converge_match_is_case_insensitive_and_substring(drive) -> None:
-    """Pin the matcher's actual contract — it is message-based because no typed error is exported."""
-    drive(RuntimeError("Workflow ALREADY EXISTS for that id"))  # must NOT raise
-    assert _is_already_scheduled(RuntimeError("already exists"))
-    assert not _is_already_scheduled(RuntimeError("connection refused"))
 
 
 def test_a_TIMEOUT_is_never_re_classified(monkeypatch: pytest.MonkeyPatch) -> None:

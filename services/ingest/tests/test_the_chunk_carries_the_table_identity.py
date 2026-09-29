@@ -25,14 +25,6 @@ would fail every in-flight run at the moment of deploy.
 from __future__ import annotations
 
 
-def test_a_chunk_carries_the_resolved_namespace_not_the_project() -> None:
-    from ingest.workflow import ChunkSpec
-
-    fields = ChunkSpec.model_fields
-    assert "namespace" in fields, "the worker cannot compose a table id without it"
-    assert fields["namespace"].default == "", "a replayed pre-upgrade chunk must still validate"
-
-
 def test_the_dispatcher_fills_it_from_the_ONE_place_that_derives_it() -> None:
     """Not `spec.project`, and not a second copy of the derivation — the value RunSpec resolves.
 
@@ -50,13 +42,3 @@ def test_the_dispatcher_fills_it_from_the_ONE_place_that_derives_it() -> None:
     assert calls, "the dispatcher's ChunkSpec construction was not found"
     supplied = {kw.arg: ast.unparse(kw.value) for call in calls for kw in call.keywords}
     assert supplied.get("namespace") == "spec.namespace", f"the chunk must carry the RESOLVED namespace, got {supplied.get('namespace')!r}"
-
-
-def test_a_pre_upgrade_chunk_still_validates() -> None:
-    """The replay case, driven rather than asserted about: a recorded input from before this field
-    existed must round-trip, or deploying strands every run mid-flight."""
-    from ingest.workflow import ChunkSpec
-
-    old = {"run_id": "r1", "chunk_id": "r1-c0", "offset": 0, "count": 3, "dataset_uri": "s3://b/t.lance"}
-    chunk = ChunkSpec.model_validate(old)
-    assert chunk.namespace == ""

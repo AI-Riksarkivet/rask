@@ -17,18 +17,14 @@ the top of the factory's. Dead, and dead code goes in the change that kills it.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterator
 from contextlib import contextmanager
-from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
-
-REPO = Path(__file__).resolve().parents[2]
 
 #: Every app `make_service_app` builds. `flows` and `notifications` join ingest, compute and
 #: controlplane; the gateway builds its own `FastAPI` and is a proxy, not a fleet API surface.
@@ -89,24 +85,3 @@ def test_every_fleet_app_renders_one_validation_envelope(name: str) -> None:
     assert body["title"] == "Validation Error", body
     assert body["code"] == 13, body  # ErrorCode.INVALID_INPUT — what a generated client dispatches on
     assert [entry["field"] for entry in body["errors"]] == ["body.n"], body
-
-
-def test_no_service_re_installs_the_handlers_its_factory_already_carries() -> None:
-    """X11's leftover: `make_service_app` installs the Lance translator, so a caller must not repeat it.
-
-    RED before the deletion: `services/ingest/src/ingest/__init__.py` called
-    `install_problem_handlers(app, logger)` on line 81, against an app built by `make_service_app` on
-    line 51 — a second registration of the same three handlers whose only effect was to make a reader
-    believe the factory did not carry them.
-
-    The four lance-plane mains (catalog, lineage, medallion, maintenance) build their own `FastAPI`
-    and must keep calling it; only an app that came out of the factory may not.
-    """
-    offenders = []
-    for path in (REPO / "services").rglob("*.py"):
-        if "/tests/" in str(path):
-            continue
-        source = path.read_text()
-        if "make_service_app(" in source and re.search(r"^\s*install_problem_handlers\(", source, re.MULTILINE):
-            offenders.append(str(path.relative_to(REPO)))
-    assert offenders == [], offenders

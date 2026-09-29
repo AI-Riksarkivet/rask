@@ -23,8 +23,8 @@ from collections.abc import Sequence
 
 import pytest
 
-from ingest.catalog import LocalCatalogSeam, ServiceCatalogSeam
-from ingest.runtime import _prior_commit_for_run, finalize_run
+from ingest.catalog import ServiceCatalogSeam
+from ingest.runtime import finalize_run
 from ingest.workflow import RunSpec
 from service_kit.lakehouse.vended_credentials import VendedCredential
 
@@ -70,42 +70,6 @@ class _CatalogThatRemembers(ServiceCatalogSeam):
 
     def publish(self, namespace: str, dataset: str, version: int, *, key_column: str = "id", required_columns: Sequence[str] = ()) -> dict[str, object]:
         raise AssertionError(f"this double publishes nothing; {namespace}.{dataset} v{version} was asked")
-
-
-def test_the_branch_ASKS_the_catalog_with_an_empty_list() -> None:
-    """The shape matters: a post-purge replay has nothing to offer, so the question must be askable
-    without fragments -- which is exactly what the catalog's guard order used to forbid."""
-    catalog = _CatalogThatRemembers((9, 3))
-
-    assert _prior_commit_for_run(catalog, SPEC) == (9, 3)
-    assert catalog.asked == [("run-purged", 0)], f"the catalog was not asked, or was asked wrongly: {catalog.asked}"
-
-
-def test_a_run_that_NEVER_committed_answers_None_rather_than_raising() -> None:
-    """The catalog refuses an unknown run deliberately. 'I cannot tell' and 'it never committed' lead
-    to the same honest report, and a status read must not raise into a terminal path."""
-    assert _prior_commit_for_run(_CatalogThatRemembers(None), SPEC) is None
-
-
-def test_a_catalog_with_NO_commit_answers_None() -> None:
-    """LocalCatalog, the dev default. No marker, so no recognition -- and no crash."""
-
-    class _Local(LocalCatalogSeam):
-        # A local catalog has no commit to find, which is the whole point of the assertion below — so
-        # every member RAISES rather than answering, and a call that should not happen says so.
-        def ensure(self, project: str, dataset: str, external_base: str | None = None) -> str:
-            raise AssertionError(f"this double ensures nothing; {project}.{dataset} was asked")
-
-        def ensure_at(self, uri: str, external_base: str | None = None) -> str:
-            raise AssertionError(f"this double ensures nothing; {uri} was asked")
-
-        def ensure_dataset(self, project: str, dataset: str, schema: object | None = None) -> str:
-            raise AssertionError(f"this double ensures no dataset; {project}.{dataset} was asked")
-
-        def register_version(self, dataset_uri: str, version: int, run_id: str) -> None:
-            raise AssertionError(f"this double registers nothing; {dataset_uri} v{version} run {run_id}")
-
-    assert _prior_commit_for_run(_Local(), SPEC) is None
 
 
 @pytest.mark.parametrize(

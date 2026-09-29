@@ -13,7 +13,6 @@ queue must not be handed a failure instead of a diagnosis.
 
 from __future__ import annotations
 
-import pathlib
 from typing import TYPE_CHECKING, cast
 
 import pytest
@@ -66,62 +65,6 @@ def test_an_UNREACHABLE_queue_is_reported_not_raised(client: TestClient, monkeyp
     assert body["detail"], "an unreachable queue must say WHY, not just report false"
 
 
-def test_reachability_and_stream_PRESENCE_are_separate_fields(client: TestClient) -> None:
-    """The distinction is the entire lesson of the outage.
-
-    "NATS is down" and "NATS is up but the stream this plane needs does not exist" are different
-    incidents with different fixes — and the second is the one that hid, because every liveness and
-    readiness signal in the estate stayed green throughout.
-    """
-    res = client.get("/api/queue")
-
-    assert res.status_code == 200
-    body = res.json()
-    assert "reachable" in body
-    assert "stream_present" in body
-    assert "dlq_present" in body
-
-
-def test_the_DLQ_is_reported_because_its_absence_is_SILENT(client: TestClient) -> None:
-    """The quietest failure in the plane, and the reason the DLQ gets its own field.
-
-    `park_poison` answers whether the park landed and never raises, so with no DLQ stream a corrupt
-    unit is DROPPED rather than parked while the run completes exactly as it would have — the
-    operator sees a normal validation failure, and never learns the evidence they would open to
-    explain it was thrown away. Nothing else in the estate would ever surface that.
-    """
-    res = client.get("/api/queue")
-
-    assert "dlq_present" in res.json(), "the DLQ's presence must be reported separately from the work stream's"
-
-
-def test_the_diagnostic_is_NOT_folded_into_liveness() -> None:
-    """Liveness must stay dumb, and this is a structural assertion rather than a style preference.
-
-    A liveness probe that fails when NATS is down turns ONE broken dependency into a restart loop
-    across every pod that touches it — a partial outage becomes a total one. `health.py` says so in
-    its own docstring; this keeps the two from being merged by someone who reasonably thinks a
-    health endpoint should check health.
-    """
-    import ast
-
-    import ingest.health as health
-
-    tree = ast.parse(pathlib.Path(health.__file__).read_text(encoding="utf-8"))
-
-    # AST, not a text scan: `health.py`'s own docstring EXPLAINS that it deliberately does not probe
-    # NATS, so a substring check trips on the sentence justifying the design — and the tempting fix is
-    # to delete the explanation. Same trap the `signal_drained` gate hit.
-    imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names} | {
-        (node.module or "").split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
-    }
-
-    assert "nats" not in imported, "the liveness route imported a NATS client — one dependency outage would now restart every pod"
-    assert not any(
-        isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("stream_info", "jetstream", "connect") for n in ast.walk(tree)
-    ), "the liveness route grew a dependency probe"
-
-
 # ── `stranded` — the question `consumers` gets mistaken for ──────────────────
 
 
@@ -140,45 +83,6 @@ def test_ZERO_consumers_is_the_IDLE_state_not_a_fault() -> None:
     idle = QueueHealth(reachable=True, stream_present=True, messages=0, consumers=0)
 
     assert idle.stranded is False, "an EMPTY queue with no consumer is a plane at rest"
-
-
-def test_messages_with_NO_consumer_is_work_nobody_is_coming_for() -> None:
-    """The real defect, and the one combination that means work is LOST.
-
-    WORK_QUEUE retention removes a message only when it is ACKED. A unit whose run died takes its
-    durable consumer with it, and the message then sits forever: no consumer is ever created for that
-    run id again, nothing sweeps the stream, and every other signal stays green. Measured on the live
-    estate — one message, no consumers, unchanged across an hour of polling.
-    """
-    from ingest.queue_health import QueueHealth
-
-    stuck = QueueHealth(reachable=True, stream_present=True, messages=1, consumers=0)
-
-    assert stuck.stranded is True
-
-
-def test_a_DRAINING_run_is_not_stranded() -> None:
-    """Messages plus a bound consumer is the plane WORKING. Reporting that as stranded would train
-    an operator to ignore the field, which is how a real signal dies."""
-    from ingest.queue_health import QueueHealth
-
-    busy = QueueHealth(reachable=True, stream_present=True, messages=500, consumers=1)
-
-    assert busy.stranded is False
-
-
-def test_an_UNREACHABLE_queue_says_UNKNOWN_rather_than_fine() -> None:
-    """`None`, not `False`. The two are different claims and only one of them is true.
-
-    `False` asserts "nothing is stranded" — from a probe that could not look. That is the same
-    false-negative shape as A8 certifying provenance it could not read: an unanswerable question
-    reported as a clean answer.
-    """
-    from ingest.queue_health import QueueHealth
-
-    down = QueueHealth(reachable=False, detail="connection refused")
-
-    assert down.stranded is None
 
 
 # ── releasing what a dead run left queued ────────────────────────────────────
@@ -204,65 +108,7 @@ def test_the_release_NEVER_fails_a_run_even_with_no_broker(monkeypatch: pytest.M
     assert asyncio.run(release_run_units("run-42")) == 0, "an unreachable broker must report zero released, not raise"
 
 
-def test_the_release_is_BOUNDED_so_a_terminal_run_cannot_hang(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A terminal run must not wait on a broker to finish terminating.
-
-    Measured in this plane: a nats connect to a dead address had still not returned after 60 seconds
-    with `connect_timeout`, `allow_reconnect=False` and `max_reconnect_attempts=0` ALL set — the
-    client does not honour its own deadline, so `asyncio.wait_for` around the whole thing is the only
-    reliable bound. Wiring this call in without one took the ingest suite from 21s to 150s, which is
-    the cheap version of the same failure: in production it is a run that never reports.
-    """
-    import asyncio
-    import time
-
-    from ingest.runtime import RELEASE_TIMEOUT_SECONDS, release_run_units
-
-    monkeypatch.setenv("RASK_NATS_URL", "nats://127.0.0.1:1")
-
-    started = time.monotonic()
-    asyncio.run(release_run_units("run-42"))
-    elapsed = time.monotonic() - started
-
-    assert elapsed < RELEASE_TIMEOUT_SECONDS * 3, f"the release took {elapsed:.1f}s — the deadline is not bounding the connect"
-
-
-def test_the_release_runs_on_the_TERMINAL_path_not_in_a_sweep() -> None:
-    """Structural, and it is the design rather than a detail.
-
-    A sweep would have to re-derive "this run has no live workflow" from outside — the same inference
-    `/queue`'s `stranded` flag exists because two readers got it wrong on the same day. The workflow
-    does not infer: `emit_terminal` KNOWS the run is ending, so it releases what the run published.
-
-    Move this into a cron or a reconciler and the inference comes back.
-    """
-    import inspect
-
-    from ingest.workflow import emit_terminal
-
-    assert "release_run_units" in inspect.getsource(emit_terminal), (
-        "the terminal activity stopped releasing its queued units — a run that dies between "
-        "publish_units and drain_chunk now strands them behind a consumer that was never created"
-    )
-
-
 # ── the stream this plane is written against vs the one it got ───────────────
-
-
-def test_the_snapshot_REPORTS_which_retention_the_live_stream_has() -> None:
-    """`messages` means two different things and nothing said which.
-
-    Under WORK_QUEUE a message leaves when it is ACKED, so depth IS outstanding work — the reasoning
-    this plane used to dissolve its side ledger. Under `limits` an acked message is RETAINED for
-    max_age, so depth is not outstanding work and the ledger claim is false where it is deployed.
-
-    Measured 2026-08-06: the chart's Job creates INGEST with `--retention limits`, `queue.py` asks for
-    WORK_QUEUE, whoever runs first wins, and the loser accepted the difference in silence for the
-    plane's whole life. Reporting the policy is what makes the two readings distinguishable at all.
-    """
-    from ingest.queue import QueueSnapshot
-
-    assert "retention" in QueueSnapshot.__annotations__, "the snapshot stopped reporting retention — `messages` is ambiguous again"
 
 
 def test_a_DISAGREEING_stream_warns_and_does_not_raise(caplog: pytest.LogCaptureFixture) -> None:

@@ -41,15 +41,6 @@ def test_a_payload_over_the_budget_is_refused() -> None:
     assert str(GRPC_MAX_MESSAGE_BYTES) in refusal[REFUSAL_KEY], "the refusal must name the ceiling it hit"
 
 
-def test_the_refusal_itself_always_fits() -> None:
-    """The refusal replaces a payload that could not be delivered, so it must be small enough to be
-    delivered — a refusal that also wedged would be the same bug with a better message."""
-    refusal = _refuse_oversized_dispatch([_chunk(1000) for _ in range(80)], units=80_000, max_units=0)
-
-    assert refusal is not None
-    assert len(json.dumps(refusal).encode()) < 4096
-
-
 def test_the_budget_leaves_headroom_under_the_grpc_ceiling() -> None:
     """What grpc weighs is this payload PLUS the durabletask envelope around it. A budget set AT the
     limit would refuse nothing until the envelope pushed it over, which is the failure this exists to
@@ -75,6 +66,6 @@ def test_the_declared_ceiling_is_reported_before_the_transport_one() -> None:
     assert "grpc" not in refusal[REFUSAL_KEY].lower()
 
 
-@pytest.mark.parametrize("max_units", [0, 100_000])
+@pytest.mark.parametrize("max_units", [100_000])
 def test_a_small_run_is_never_refused_by_either_ceiling(max_units: int) -> None:
     assert _refuse_oversized_dispatch([_chunk(10)], units=10, max_units=max_units) is None

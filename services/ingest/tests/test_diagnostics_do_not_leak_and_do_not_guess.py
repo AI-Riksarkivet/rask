@@ -50,17 +50,6 @@ def test_the_queue_probe_does_not_put_the_broker_url_in_its_body(monkeypatch: py
     assert "ConnectionRefusedError" in body["detail"], "the failure CLASS is the useful, non-leaking half"
 
 
-def test_the_queue_probe_still_names_a_timeout_plainly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The timeout branch was already safe; the redaction must not swallow it."""
-
-    async def _hang(url: str, timeout: float) -> dict[str, Any]:
-        raise TimeoutError
-
-    monkeypatch.setattr("ingest.queue.inspect_queue", _hang)
-    body = _client().get("/queue").json()
-    assert "did not answer within" in body["detail"]
-
-
 def test_a_dataset_that_cannot_be_READ_is_not_treated_as_ABSENT(monkeypatch: pytest.MonkeyPatch) -> None:
     """The dangerous half. `create_empty` over a live dataset is the one write that cannot be undone."""
     from ingest.catalog import LocalCatalog

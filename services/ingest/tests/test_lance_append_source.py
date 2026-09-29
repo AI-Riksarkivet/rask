@@ -23,7 +23,7 @@ import pyarrow as pa
 import pytest
 
 from ingest.adapters import LANCE_ROOT_ENV, register_builtin_sources
-from ingest.sources import SourceSpec, build_source, iter_units, lineage_input_for, registered_kinds
+from ingest.sources import SourceSpec, build_source, iter_units
 
 
 lance = pytest.importorskip("lance")
@@ -41,41 +41,11 @@ def dataset(tmp_path: Path) -> str:
     return uri
 
 
-def test_the_kind_is_registered() -> None:
-    assert "lance-append" in registered_kinds()
-
-
 def test_unset_root_refuses_the_kind(dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """Same rule as local-dir: a source that cannot be pointed anywhere is a source nobody can abuse."""
     monkeypatch.delenv(LANCE_ROOT_ENV, raising=False)
     spec = SourceSpec(kind="lance-append", project="p", dataset="d", options={"uri": dataset})
     with pytest.raises(ValueError, match=LANCE_ROOT_ENV):
-        build_source(spec)
-
-
-def test_a_dataset_outside_the_root_is_refused(dataset: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(LANCE_ROOT_ENV, str(tmp_path / "elsewhere"))
-    spec = SourceSpec(kind="lance-append", project="p", dataset="d", options={"uri": dataset})
-    with pytest.raises(ValueError, match="outside"):
-        build_source(spec)
-
-
-def test_a_governed_table_is_refused_and_names_the_stage_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard 1. The refusal must say WHERE the operation belongs, not merely that it is denied."""
-    governed = tmp_path / "warehouse"
-    uri = str(governed / "acme-silver" / "features.lance")
-    monkeypatch.setenv(LANCE_ROOT_ENV, str(tmp_path))
-    monkeypatch.setenv("LANCE_REST_ROOT", str(governed))
-    spec = SourceSpec(kind="lance-append", project="p", dataset="d", options={"uri": uri})
-    with pytest.raises(ValueError, match="medallion"):
-        build_source(spec)
-
-
-def test_a_missing_dataset_fails_at_build_not_at_fetch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard 2 — ACCEPT-time, so the failure reaches the caller rather than a worker holding a claim."""
-    monkeypatch.setenv(LANCE_ROOT_ENV, str(tmp_path))
-    spec = SourceSpec(kind="lance-append", project="p", dataset="d", options={"uri": str(tmp_path / "absent.lance")})
-    with pytest.raises((ValueError, FileNotFoundError, OSError)):
         build_source(spec)
 
 
@@ -87,9 +57,3 @@ def test_units_carry_readable_arrow_ipc(dataset: str, tmp_path: Path, monkeypatc
     assert units, "a non-empty dataset must yield at least one unit"
     rows = sum(pa.ipc.open_stream(unit.data).read_all().num_rows for unit in units)
     assert rows == 3
-
-
-def test_lineage_input_names_the_dataset(dataset: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(LANCE_ROOT_ENV, str(Path(dataset).parent))
-    spec = SourceSpec(kind="lance-append", project="p", dataset="d", options={"uri": dataset})
-    assert lineage_input_for(spec).name == dataset

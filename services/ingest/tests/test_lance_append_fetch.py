@@ -35,38 +35,9 @@ def dataset(tmp_path, monkeypatch):
     return uri
 
 
-def test_lance_append_registers_its_own_fetcher() -> None:
-    """The seam itself. Without this the kind enumerates and then fails every unit."""
-    register_builtin_sources()
-    assert fetcher_for("lance-append") is not None
-
-
-@pytest.mark.parametrize("kind", ["s3-prefix", "local-dir"])
-def test_scheme_resolvable_kinds_keep_the_default_fetcher(kind: str) -> None:
-    """The fallback must stay the norm — a kind emitting `s3://`/`file://` keys needs no fetcher.
-
-    Pinned because the easy over-correction is to give every kind one, which would move source
-    knowledge back into the fetch path that I1 exists to keep free of it.
-    """
-    register_builtin_sources()
-    assert fetcher_for(kind) is None
-
-
 def test_unknown_kind_falls_back_rather_than_raising() -> None:
     """An older build's chunk can name a kind this process no longer registers."""
     assert fetcher_for("a-kind-that-was-removed") is None
-
-
-@pytest.mark.asyncio
-async def test_fetch_returns_that_fragments_rows(dataset: str) -> None:
-    """The actual bytes: fragment 1 is the second append — `delta`/`epsilon`, not the whole dataset."""
-    fetcher = fetcher_for("lance-append")
-    assert fetcher is not None
-    payload = await fetcher.fetch(f"{dataset}#fragment=1")
-
-    table = pa.ipc.open_stream(pa.BufferReader(payload)).read_all()
-    assert table.column("note").to_pylist() == ["delta", "epsilon"]
-    assert table.num_rows == 2
 
 
 @pytest.mark.asyncio

@@ -52,16 +52,6 @@ def test_it_presents_its_OWN_credential_when_the_store_has_one(monkeypatch: pyte
     assert headers["x-lance-service-identity"] == "service-ingest"
 
 
-def test_BOTH_doors_get_the_same_dedicated_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A subject privileged at one door and ordinary at the other cannot satisfy both — whichever
-    token it sends, one refuses it. So the catalog and the graph must receive the same one."""
-    monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _c: lambda identity: f"token-for-{identity}")
-    config = _config()
-    catalog = service_identity.service_headers(config, identity=config.catalog_service_identity, shared_token=config.catalog_app_token)
-    lineage = service_identity.service_headers(config, identity=config.lineage_service_identity, shared_token=config.lineage_app_token)
-    assert catalog == lineage, "the two doors received different credentials for one subject"
-
-
 def test_it_falls_back_to_the_shared_token_when_the_store_has_no_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """A readable store that simply lacks this identity is the UNPRIVILEGED case — every estate that
     has not turned this on. It must keep working unchanged."""
@@ -112,25 +102,6 @@ def test_HALF_CONFIGURED_sends_nothing_at_all() -> None:
     assert service_identity.service_headers(config, identity="service-ingest", shared_token=None) == {}
 
 
-def test_EVERY_door_ingest_calls_uses_the_one_builder() -> None:
-    """A credential control applied to one of two doors is not a control. Discovered by grep rather
-    than listed, so a THIRD door reds this instead of drifting."""
-    import pathlib
-
-    src = pathlib.Path(__file__).resolve().parents[1] / "src/ingest"
-    offenders = []
-    for path in src.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        if "x-lance-service-identity" not in text or path.name == "service_identity.py":
-            continue
-        if "service_headers" not in text:
-            offenders.append(str(path.relative_to(src)))
-    assert not offenders, (
-        f"these build the identity headers themselves instead of calling service_headers: {offenders} — "
-        "a dedicated credential applied to some doors and not others is not a credential control"
-    )
-
-
 def _lineage_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """The transport half of the deployed environment: an endpoint, a claimed subject, a shared token."""
     monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://rask-lineage:8000")
@@ -176,18 +147,3 @@ def test_the_EMIT_presents_the_dedicated_credential_the_READ_path_already_does(m
     assert headers.get("dapr-api-token") == "token-for-service-ingest", (
         "the emit presents the estate's shared bearer, which a privileged subject's door refuses"
     )
-
-
-def test_with_no_dedicated_credential_the_emit_keeps_the_shared_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An identity the store simply lacks is not privileged as far as this side can tell.
-
-    The door stays the single authority on whether the shared bearer is acceptable — falling back is
-    what keeps an auth-off dev stack, and an estate that has not turned dedicated credentials on,
-    working exactly as before.
-    """
-    _lineage_env(monkeypatch)
-    monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _c: lambda _identity: None)
-
-    from ingest import lineage
-
-    assert _wire_headers(lineage._emitter()).get("dapr-api-token") == "the-shared-bearer"

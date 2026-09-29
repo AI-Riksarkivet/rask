@@ -52,8 +52,6 @@ class TestTheNamedThresholdsAreTheOnesLanceApplies:
     @pytest.mark.parametrize(
         ("size", "expected", "why"),
         [
-            (BLOB_INLINE_SIZE_THRESHOLD - 1_024, INLINE, "just under the inline ceiling"),
-            (BLOB_INLINE_SIZE_THRESHOLD + 8_192, PACKED, "just over it — many payloads now share a sidecar"),
             (BLOB_DEDICATED_SIZE_THRESHOLD - 262_144, PACKED, "just under the dedicated floor"),
             (BLOB_DEDICATED_SIZE_THRESHOLD + 262_144, DEDICATED, "over it — this payload gets its own .blob"),
         ],

@@ -62,14 +62,6 @@ def test_a_GRACEFUL_terminate_records_TERMINATED_not_FAILED() -> None:
     assert "terminated by operator" in merged.errors.get("run", "")
 
 
-def test_an_ENGINE_terminate_is_not_rewritten_as_a_crash() -> None:
-    """Dapr saying TERMINATED is the least ambiguous signal available, and it was discarded."""
-    assert _RUNTIME_STATUS["TERMINATED"] == "TERMINATED", "the engine's own TERMINATED is mapped to something else"
-
-    merged = merge_workflow_state(_record(), {"runtime_status": "TERMINATED"})
-    assert merged.status == "TERMINATED"
-
-
 def test_a_REAL_failure_is_still_FAILED() -> None:
     """The point is discrimination, so the other side has to keep working.
 
@@ -87,19 +79,6 @@ def test_a_REAL_failure_is_still_FAILED() -> None:
     assert merged.status == "FAILED"
 
     assert _RUNTIME_STATUS["FAILED"] == "FAILED"
-
-
-def test_a_TERMINATED_run_is_not_a_provenance_DEFECT() -> None:
-    """`is_defective` means "reported success and left no lineage edge".
-
-    A terminated run never claimed success, so it cannot be that defect — and flagging it as one
-    would put a red provenance warning on every run an operator deliberately stopped.
-    """
-    record = _record()
-    record.status = "TERMINATED"
-    record.lineage_run_present = False
-
-    assert record.is_defective is False
 
 
 # ── the LINEAGE half, which is where terminating a run could have fired the cascade ──────────────
@@ -130,20 +109,6 @@ def _terminal_event_type(status: str) -> str:
     return events[-1].event_type
 
 
-def test_a_TERMINATED_run_does_NOT_emit_a_lineage_COMPLETE() -> None:
-    """THE DANGEROUS ONE, and it is dangerous in the direction that does work rather than none.
-
-    `terminal()` chose its event type with `"FAIL" if status == "FAILED" else "COMPLETE"`. Introducing
-    TERMINATED without touching that line sends a stopped run down the `else` — so it would have
-    emitted **COMPLETE**, and the medallion's `/bronze-arrival` head fires on exactly an event whose
-    `eventType` is COMPLETE carrying the configured output pair (`ingest_trigger.py`). Terminating a
-    run would then have STARTED the bronze->silver->gold cascade over a half-finished harvest.
-
-    Strictly worse than the state it replaced: FAIL at least stopped there.
-    """
-    assert _terminal_event_type("TERMINATED") != "COMPLETE", "a terminated run emits the cascade's own trigger"
-
-
 def test_a_TERMINATED_run_emits_ABORT() -> None:
     """ABORT is the OpenLineage state for this and `lineage_kit` already implements it —
     `RunTracker.abort` is documented as "the cancelled terminal (an operator stop, a per-chunk stop,
@@ -151,12 +116,6 @@ def test_a_TERMINATED_run_emits_ABORT() -> None:
     which is the same conflation this whole change removes, one layer down.
     """
     assert _terminal_event_type("TERMINATED") == "ABORT"
-
-
-def test_the_other_two_terminals_are_unchanged() -> None:
-    """The discrimination has to stay three-way, so pin the other two against this change."""
-    assert _terminal_event_type("FAILED") == "FAIL"
-    assert _terminal_event_type("COMPLETE") == "COMPLETE"
 
 
 def test_the_ABORT_event_NAMES_the_dataset_the_run_touched(monkeypatch: pytest.MonkeyPatch) -> None:

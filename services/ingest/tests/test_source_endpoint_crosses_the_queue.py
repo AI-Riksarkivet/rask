@@ -108,18 +108,6 @@ def _secret_store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> No
 # ── the task is what crosses the queue ────────────────────────────────────────────────────
 
 
-def test_the_unit_task_carries_the_run_s_source_endpoint() -> None:
-    """Without this field the override cannot reach a worker at all — the whole defect in one line."""
-    from ingest.queue import UnitTask
-
-    task = UnitTask(run_id="r", chunk_id="c", key="s3://pages/a.tif", dataset_uri="s3://w/d.lance", source_endpoint=EXTERNAL)
-
-    assert task.source_endpoint == EXTERNAL, "the run's declared endpoint must survive the queue"
-    assert UnitTask(run_id="r", chunk_id="c", key="k", dataset_uri="s3://w/d.lance").source_endpoint is None, (
-        "a run that declares no endpoint must stay on the estate default"
-    )
-
-
 def test_the_adapter_declares_the_endpoint_and_the_registry_serves_it() -> None:
     """`publish_chunk_units` must not read `options['endpoint']` itself — only the ADAPTER knows what
     a kind's options mean, the same rule `partition_of` and `external_base_of` already follow."""

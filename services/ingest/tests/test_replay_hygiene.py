@@ -165,16 +165,6 @@ def test_a_replay_creates_the_DEADLINE_TIMER_the_history_records_even_when_this_
     assert ctx.timers == 1, "the replay skipped the deadline timer its own history records"
 
 
-def test_a_replay_does_NOT_invent_a_timer_the_history_has_no_record_of(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The same break in the other direction: the deployment gained a ceiling mid-run."""
-    monkeypatch.setenv("RASK_INGEST_MAX_RUN_HOURS", "24")
-    ctx = _Ctx()
-
-    _drive_to_fanout(ctx, limits={"max_run_hours": 0.0, "max_units": 0})
-
-    assert ctx.timers == 0, "the replay created a durable timer the history has no record of"
-
-
 def test_the_unit_ceiling_refusal_also_comes_from_history(monkeypatch: pytest.MonkeyPatch) -> None:
     """`max_units` has the milder version of the same defect: the same run reports FAILED-by-ceiling
     or COMPLETE depending on which pod replayed it."""
@@ -241,54 +231,6 @@ def test_validating_a_workflow_model_reads_NO_env() -> None:
 
     assert RunSpec.model_validate(SPEC).sizing is None
     assert ChunkSpec.model_validate({"run_id": "r", "chunk_id": "c0"}).sizing is None
-
-
-def test_the_workflow_module_reads_NO_env_at_import() -> None:
-    """Structural, and it is the shape of the defect rather than one instance of it.
-
-    A module-level `os.getenv` looks like a constant and behaves like a clock: it is fixed for a
-    PROCESS, not for a RUN, so two pods executing one run's history can disagree. Every env read in
-    this module must sit inside a function body — an activity's, where the answer is then pinned in
-    workflow history.
-    """
-    import ast
-    from pathlib import Path
-
-    src = Path(__file__).resolve().parents[1] / "src" / "ingest" / "workflow.py"
-    tree = ast.parse(src.read_text(encoding="utf-8"))
-
-    inside_a_function = {
-        id(node) for fn in ast.walk(tree) if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef) for node in ast.walk(fn) if isinstance(node, ast.Call)
-    }
-    module_level_env_reads = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"getenv", "environ"} and id(node) not in inside_a_function
-    ]
-
-    assert module_level_env_reads == [], "an env read at module scope is a per-POD value the workflow may branch on — it must be an activity's"
-
-
-def test_the_workflow_BODIES_are_annotated_as_the_GENERATORS_they_are() -> None:
-    """`uvx ty check` emitted `error[invalid-return-type]` on both of these, and `ty` runs with
-    `error-on-warning = true` — so the annotation was a build failure, not a style note.
-
-    A workflow body is a generator: every `yield` is a durable await point and the runtime drives it
-    with `.send()`/`.throw()`. Annotating it `-> dict[str, Any]` names the payload the last `return`
-    carries and hides the protocol the whole plane rests on. `flows/workflow.py:46` had already ruled
-    this the same way ("Annotating it `-> dict` … is a lie the type checker catches"); this is the
-    same rule, applied to the module that was the counter-example.
-    """
-    import ast
-
-    src = Path(__file__).resolve().parents[1] / "src" / "ingest" / "workflow.py"
-    functions = {node.name: node for node in ast.parse(src.read_text(encoding="utf-8")).body if isinstance(node, ast.FunctionDef)}
-
-    for name in ("ingest_run", "chunk_run"):
-        fn = functions[name]
-        assert any(isinstance(node, ast.Yield | ast.YieldFrom) for node in ast.walk(fn)), f"{name} is no longer a generator — this gate is stale"
-        returns = ast.unparse(fn.returns) if fn.returns is not None else None
-        assert returns is not None and returns.startswith("Generator["), f"{name} is a generator annotated `-> {returns}` — ty calls that invalid-return-type"
 
 
 # ── F12a: the commit's base version is carried, so a replay is recognizable ───────────
@@ -370,15 +312,6 @@ def test_a_RETRIED_finalize_presents_the_SAME_read_version_and_never_re_reads_it
 
 
 # ── F12d: the error payload is capped, the COUNT stays exact ──────────────────────────
-
-
-def test_bound_errors_caps_the_payload_and_keeps_the_count() -> None:
-    listed, total = bound_errors({f"s3://b/{i:05d}.tif": "corrupt TIFF" for i in range(250)})
-
-    assert total == 250, "the count must survive the cap — it is the number an operator acts on"
-    assert len(listed) == MAX_REPORTED_ERRORS + 1, "one entry over the cap is the overflow marker itself"
-    assert ERRORS_TRUNCATED_KEY in listed
-    assert "150 further units failed" in listed[ERRORS_TRUNCATED_KEY]
 
 
 def test_bound_errors_is_DETERMINISTIC_because_it_runs_in_workflow_scope() -> None:

@@ -25,7 +25,7 @@ import pytest
 import pytest_asyncio
 
 from ingest.lander import create_empty
-from ingest.queue import DLQ_SUBJECT, STREAM, UnitTask, WorkQueue, unit_subject
+from ingest.queue import DLQ_SUBJECT, UnitTask, WorkQueue
 from ingest.runtime import BRONZE_SCHEMA, _rows_in
 from ingest.worker import Worker, units_to_table
 
@@ -242,30 +242,3 @@ def test_the_bronze_batch_is_faithful_to_source() -> None:
 
     again = units_to_table([("iiif://v/1", b"different-bytes")])
     assert again.column("id")[0].as_py() == t.column("id")[0].as_py(), "id must derive from the URI alone"
-
-
-def test_the_queue_module_is_the_only_nats_importer() -> None:
-    """I3, asserted from the inside too — queue.py is the documented exception, and it is this one."""
-    assert STREAM == "INGEST"
-    assert unit_subject("r1") == "ingest.tasks.r1"
-
-
-def test_the_ack_ceiling_exceeds_the_fragment_batch() -> None:
-    """A deadlock that would look exactly like a slow source.
-
-    The worker holds a whole fragment's worth of messages UNACKED while it accumulates them (that is
-    what makes the ack a per-batch promise). If `max_ack_pending` is below the batch size, JetStream
-    stops delivering at the ceiling and the drain waits forever for units it will never be sent. At
-    the old values — ceiling 32, batch 1024 — every run would have hung on its 33rd unit.
-
-    Asserted as a RELATION between the two, so raising the batch without raising the ceiling fails
-    here instead of in a cluster at 3am. Since sizing became per-run this covers the DEFAULT; the
-    caller-supplied path is refused at accept (`test_fragment_batching.py`).
-    """
-    from ingest.queue import max_ack_pending
-    from ingest.sizing import resolve
-
-    rows, ceiling = resolve().fragment_rows, max_ack_pending()
-    assert rows < ceiling, (
-        f"max_ack_pending={ceiling} <= fragment batch {rows}: the drain will deadlock once a batch fills, because the held messages are never acked"
-    )

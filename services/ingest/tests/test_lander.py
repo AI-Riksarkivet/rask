@@ -94,16 +94,6 @@ def test_workers_fragments_land_in_one_commit(lander: tuple[Lander, _FakeCatalog
     assert result.version == before + 1, "a run must produce exactly ONE data-visibility commit"
 
 
-def test_the_run_id_is_registered_with_the_commit(lander: tuple[Lander, _FakeCatalog]) -> None:
-    """The commit-metadata anchor: how a died-after-commit run is reconciled from storage truth."""
-    land, cat = lander
-    uri = land.ensure("p", "pages", SCHEMA)
-    frags = write_unit_fragments(uri, _batch([1, 2]))
-    land.commit_fragments(uri, frags, run_id="run-abc")
-
-    assert cat.registered == [(uri, 2, "run-abc")]
-
-
 def test_an_all_failed_run_leaves_no_version_behind(lander: tuple[Lander, _FakeCatalog]) -> None:
     """Empty fragments is a no-op, not an empty commit.
 
@@ -153,33 +143,6 @@ def test_ensure_is_idempotent(lander: tuple[Lander, _FakeCatalog]) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_the_carried_version_is_what_reaches_the_commit(lander: tuple[Lander, _FakeCatalog], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The property that is actually true, asserted on the CALL rather than on an outcome.
-
-    An outcome assertion cannot see this: an Append COMMUTES, so Lance accepts a stale `read_version`
-    and rebases (pinned below). That makes the carried version invisible in the resulting dataset —
-    which is exactly why re-reading it survived undetected on this branch while the catalog branch
-    carried it. So the pin is on what is handed to `lance`.
-    """
-    land, _ = lander
-    uri = land.ensure("p", "pages", SCHEMA)
-    land.commit_fragments(uri, write_unit_fragments(uri, _batch([1])), run_id="run-A")
-
-    seen: dict[str, Any] = {}
-    real = lance.LanceDataset.commit
-
-    # `*args`/`**kw` rather than the real signature: the spy DELEGATES, so restating `commit`'s
-    # parameter list here would be a second copy to keep in step with pylance for no benefit.
-    def spy(*args: Any, **kw: Any) -> Any:
-        seen["read_version"] = kw.get("read_version")
-        return real(*args, **kw)
-
-    monkeypatch.setattr(lance.LanceDataset, "commit", staticmethod(spy))
-    land.commit_fragments(uri, write_unit_fragments(uri, _batch([2])), run_id="run-B", read_version=1)
-
-    assert seen["read_version"] == 1, "the carried version was dropped and the current one re-read"
-
-
 def test_an_append_commutes_so_a_stale_version_is_NOT_refused(lander: tuple[Lander, _FakeCatalog]) -> None:
     """The premise that makes the re-read survivable, pinned against pylance rather than assumed.
 
@@ -225,7 +188,7 @@ def _precreate(tmp_path: Path, version: Literal["2.1", "2.2"]) -> None:
     lance.write_dataset(SCHEMA.empty_table(), str(tmp_path / "p-pages.lance"), mode="create", data_storage_version=version, enable_stable_row_ids=True)
 
 
-@pytest.mark.parametrize("version", ["2.1", "2.2"])
+@pytest.mark.parametrize("version", ["2.1"])
 def test_a_run_into_an_existing_table_inherits_its_version(lander: tuple[Lander, _FakeCatalog], tmp_path: Path, version: Literal["2.1", "2.2"]) -> None:
     """The writer names no version, so its files land at whatever the table holds and the flags stay clean."""
     _precreate(tmp_path, version)

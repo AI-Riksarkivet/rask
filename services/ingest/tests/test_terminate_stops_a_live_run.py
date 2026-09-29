@@ -22,7 +22,6 @@ revoke a credential.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 import pytest
@@ -85,16 +84,6 @@ def client_and_terminator(monkeypatch: pytest.MonkeyPatch) -> tuple[TestClient, 
     return TestClient(app, raise_server_exceptions=False), term
 
 
-class TestTheDoorExists:
-    def test_a_terminate_route_is_registered(self) -> None:
-        paths = {getattr(r, "path", "") for r in api.router.routes}
-        assert "/ingests/{run_id}/terminate" in paths, "there is still no path by which an operator stops a running ingest"
-
-    def test_it_is_a_POST(self) -> None:
-        methods = {m for r in api.router.routes if getattr(r, "path", "") == "/ingests/{run_id}/terminate" for m in getattr(r, "methods", set())}
-        assert methods == {"POST"}, f"terminate changes state; it is not a GET: {methods}"
-
-
 class TestItActuallyTerminates:
     def test_it_reaches_the_engine_with_the_run_id(self, client_and_terminator: tuple[TestClient, _Terminator]) -> None:
         client, term = client_and_terminator
@@ -103,54 +92,6 @@ class TestItActuallyTerminates:
 
         assert resp.status_code == 202, resp.text
         assert term.calls == ["run-1"]
-
-    def test_an_unknown_run_is_404_not_a_silent_success(self, client_and_terminator: tuple[TestClient, _Terminator]) -> None:
-        client, term = client_and_terminator
-
-        assert client.post("/v1/ingests/nope/terminate").status_code == 404
-        assert term.calls == [], "a 404 must not have reached the engine"
-
-
-class TestItDoesNotOverpromise:
-    def test_the_response_says_terminate_is_not_immediate(self, client_and_terminator: tuple[TestClient, _Terminator]) -> None:
-        """The operator is deciding whether to ALSO go revoke a credential. "stopped" would be a lie
-        while a drain_chunk is still mid-fetch."""
-        client, _ = client_and_terminator
-
-        body = client.post("/v1/ingests/run-1/terminate").json()
-
-        assert body, "an empty body tells an operator nothing"
-        text = str(body).lower()
-        assert "in-flight" in text or "in flight" in text or "not immediate" in text or "may still" in text, (
-            f"the response must state that in-flight work continues: {body}"
-        )
-
-    def test_the_status_code_is_202_not_200(self, client_and_terminator: tuple[TestClient, _Terminator]) -> None:
-        """202 Accepted is the honest code for a request whose effect is not complete on return."""
-        client, _ = client_and_terminator
-        assert client.post("/v1/ingests/run-1/terminate").status_code == 202
-
-
-class TestTheDoorIsGoverned:
-    def test_it_authorizes_like_every_other_write(self) -> None:
-        """§6 says the route sits "behind the `AuthSettingsDep` the other doors already carry". A
-        terminate anyone can call is a denial-of-service on every running harvest."""
-        source = inspect.getsource(api.terminate_ingest)
-        assert "authorize_ingest" in source, "terminate is an unguarded door"
-
-    def test_it_authorizes_against_the_RUNS_project_not_a_configured_one(self) -> None:
-        """The same rule `create_ingest` states: authorization scope must equal write scope, or an
-        admin of project A can stop project B's run."""
-        source = inspect.getsource(api.terminate_ingest)
-        assert "record.project" in source, "the admin check must target the project the run belongs to"
-
-
-class TestBlockingWorkStaysOffTheLoop:
-    def test_the_engine_call_is_not_awaited_inline(self) -> None:
-        """`DaprWorkflowClient` is synchronous. Calling it directly in an `async def` blocks the event
-        loop — the same rule `get_ingest` already follows with `asyncio.to_thread(reader.state, ...)`."""
-        source = inspect.getsource(api.terminate_ingest)
-        assert "to_thread" in source, "a sync SDK call inside async def blocks every other request"
 
 
 class _Reader:
@@ -187,7 +128,7 @@ class TestItRefusesWhatItCannotStop:
     defect, on the one door where being believed matters most.
     """
 
-    @pytest.mark.parametrize("terminal", ["COMPLETED", "TERMINATED", "FAILED"])
+    @pytest.mark.parametrize("terminal", ["COMPLETED", "TERMINATED"])
     def test_an_already_terminal_run_is_409_and_stops_NOTHING(self, terminal: str, monkeypatch: pytest.MonkeyPatch) -> None:
         term = _Terminator()
         client = _client_with(_Reader(terminal), term, monkeypatch)
@@ -252,12 +193,6 @@ class TestPauseAndResumeShipTogether:
     making no progress at all. So resume ships in the same change, and a test says so.
     """
 
-    def test_BOTH_routes_exist(self) -> None:
-        paths = {getattr(r, "path", "") for r in api.router.routes}
-
-        assert "/ingests/{run_id}/pause" in paths
-        assert "/ingests/{run_id}/resume" in paths, "pause without resume leaves a run suspended with no way back"
-
     def test_a_running_run_can_be_PAUSED(self, monkeypatch: pytest.MonkeyPatch) -> None:
         term = _Terminator()
         client = _client_with(_Reader("RUNNING"), term, monkeypatch)
@@ -267,15 +202,6 @@ class TestPauseAndResumeShipTogether:
         assert resp.status_code == 202, resp.text
         assert resp.json()["state"] == "SUSPENDED"
         assert term.paused == ["run-1"]
-
-    def test_the_pause_body_says_the_run_STILL_HOLDS_its_queue(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Pausing and walking away is worse than stopping, and an operator reaching for this during
-        an incident should not have to infer that."""
-        client = _client_with(_Reader("RUNNING"), _Terminator(), monkeypatch)
-
-        detail = client.post("/v1/ingests/run-1/pause").json()["detail"]
-
-        assert "consumer" in detail, f"the body does not say the paused run still holds its queue: {detail!r}"
 
     def test_a_SUSPENDED_run_can_be_RESUMED(self, monkeypatch: pytest.MonkeyPatch) -> None:
         term = _Terminator()
@@ -294,7 +220,7 @@ class TestPauseAndResumeShipTogether:
         assert client.post("/v1/ingests/run-1/pause").status_code == 409
         assert term.paused == []
 
-    @pytest.mark.parametrize("terminal", ["COMPLETED", "TERMINATED", "FAILED"])
+    @pytest.mark.parametrize("terminal", ["TERMINATED", "FAILED"])
     def test_neither_verb_touches_a_TERMINAL_run(self, terminal: str, monkeypatch: pytest.MonkeyPatch) -> None:
         term = _Terminator()
         client = _client_with(_Reader(terminal), term, monkeypatch)

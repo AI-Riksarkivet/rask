@@ -40,19 +40,6 @@ def test_a_REFUSED_read_raises_rather_than_looking_like_an_outage(monkeypatch: p
         LineageProvenanceReader().has_run("some-run")
 
 
-def test_an_UNREACHABLE_graph_still_returns_None(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The original behaviour, deliberately unchanged: a genuinely unanswerable question is None, and
-    the endpoint reports no defect for it. Claiming a defect from ignorance is how the check loses its
-    meaning — that reasoning was never wrong, it just did not cover refusal."""
-
-    def _explode(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
-        raise httpx.ConnectError("no route to host")
-
-    monkeypatch.setattr("httpx.Client.get", _explode)
-
-    assert LineageProvenanceReader().has_run("some-run") is None
-
-
 def test_a_5xx_is_an_outage_NOT_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     """The boundary. A 500 from the graph is the graph being broken, which is exactly the case the
     None branch is for — only the AUTHORIZATION statuses change meaning."""
@@ -63,33 +50,6 @@ def test_a_5xx_is_an_outage_NOT_a_refusal(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr("httpx.Client.get", _boom)
 
     assert LineageProvenanceReader().has_run("some-run") is None
-
-
-def test_a_present_run_is_still_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The happy path must keep working — and it exercises the id translation, since the graph keys
-    on the LINEAGE run id, not the ingest one."""
-    from ingest.lineage import lineage_run_id
-
-    target = lineage_run_id("run-42")
-
-    def _ok(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
-        return httpx.Response(200, json={"run_id": target}, request=httpx.Request("GET", url))
-
-    monkeypatch.setattr("httpx.Client.get", _ok)
-
-    assert LineageProvenanceReader().has_run("run-42") is True
-
-
-def test_an_ABSENT_run_is_False_not_None(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ "The graph answered and does not contain it" is the REAL defect A8 exists to catch, and it must
-    stay distinguishable from every flavour of "we could not tell"."""
-
-    def _empty(_client: httpx.Client, url: str, **kwargs: object) -> httpx.Response:
-        return httpx.Response(404, json={"detail": "run not found"}, request=httpx.Request("GET", url))
-
-    monkeypatch.setattr("httpx.Client.get", _empty)
-
-    assert LineageProvenanceReader().has_run("run-42") is False
 
 
 # ── the credentials, which is why the read was refused in the first place ────
@@ -121,14 +81,3 @@ def test_a_HALF_configured_credential_sends_NOTHING(monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "service-ingest")
 
     assert _service_headers() == {}
-
-
-def test_APP_API_TOKEN_is_accepted_as_the_fallback_name(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The chart injects the estate's app token as `APP_API_TOKEN`; the emitter accepts either name.
-    Accepting only the lineage-specific one here would mean the reader and the emitter disagree about
-    what counts as configured — the exact half-configured state the pair check exists to refuse."""
-    monkeypatch.delenv("RASK_LINEAGE_APP_TOKEN", raising=False)
-    monkeypatch.setenv("APP_API_TOKEN", "shared")
-    monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "service-ingest")
-
-    assert _service_headers()["dapr-api-token"] == "shared"

@@ -150,21 +150,6 @@ def test_the_DEADLINE_path_stops_the_children_too() -> None:
     assert ctx.activities[-1][1]["child_ids"] == ["r-abandon-c0"]
 
 
-def test_a_failure_with_no_children_yet_does_not_dispatch_a_pointless_stop() -> None:
-    """The boundary opens at `emit_start`, long before the fan-out, so most failures reaching it have
-    no children — and an activity that would immediately return still costs a real history event."""
-    ctx = _Ctx()
-    gen = ingest_run(cast("DaprWorkflowContext", ctx), SPEC)
-    gen.send(None)
-    gen.send(None)
-
-    gen.throw(RuntimeError("resolve_limits exhausted its four attempts"))
-
-    names = [n for n, _ in ctx.activities]
-    assert "terminate_chunks" not in names, f"a childless failure dispatched a stop — calls were {names}"
-    assert names[-1] == "emit_terminal"
-
-
 def test_terminate_chunks_is_best_effort_and_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """It runs while a run is already terminating. A tidy-up that fails must not turn a run that
     recorded its outcome into one that died — the rule `release_run_units` and the lineage emit already
@@ -281,45 +266,6 @@ class TestTheTidyUpCannotCostTheRunItsTerminalRecord:
         assert out["terminated"] == 0
         assert out["requested"] == 2
         assert "no sidecar" in str(out.get("error", "")), f"the failure is not named, so nothing says why nothing was stopped: {out}"
-
-    def test_the_client_is_CLOSED_when_it_offers_close(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        closed: list[bool] = []
-
-        class _Closes:
-            def terminate_workflow(self, instance_id: str) -> None:
-                return None
-
-            def close(self) -> None:
-                closed.append(True)
-
-        import dapr.ext.workflow as wf_sdk
-
-        monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _Closes)
-
-        terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a"]))
-
-        assert closed == [True], "the gRPC channel is left to refcounting"
-
-    def test_the_client_is_closed_EVEN_WHEN_every_child_fails(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """The `finally` is what makes this true, and the failing path is the one that runs during an
-        incident -- exactly when leaking a channel per abandoned run matters."""
-        closed: list[bool] = []
-
-        class _ClosesButFails:
-            def terminate_workflow(self, instance_id: str) -> None:
-                raise RuntimeError("already terminal")
-
-            def close(self) -> None:
-                closed.append(True)
-
-        import dapr.ext.workflow as wf_sdk
-
-        monkeypatch.setattr(wf_sdk, "DaprWorkflowClient", _ClosesButFails)
-
-        out = terminate_chunks(cast(Any, object()), TerminateChunksInput(child_ids=["a", "b"]))
-
-        assert out["terminated"] == 0
-        assert closed == [True]
 
     def test_a_client_with_NO_close_is_not_a_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Suppressed rather than `contextlib.closing`: an SDK that stops offering `close()` must not

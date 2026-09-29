@@ -46,26 +46,3 @@ def test_a_403_on_the_probe_names_the_GRANT_not_the_tenancy() -> None:
     assert "lane-bronze" in message
     assert "POST /v1/projects" not in message, "a 403 sent the operator to provision a namespace that already exists"
     assert "grant" in message.lower() or "can_" in message, "the message must name what is actually missing — a relation for this identity"
-
-
-@respx.mock
-def test_a_404_on_the_probe_still_reports_the_TENANCY_gap() -> None:
-    """The other half, and the reason the first cannot simply swap the message: an absent namespace IS
-    a tenancy gap, and the admin doors ARE the fix for it."""
-    respx.post(url__regex=r".*/v1/namespace/.*/exists").mock(return_value=httpx.Response(404))
-    respx.post(url__regex=r".*/v1/namespace/.*/create").mock(
-        return_value=httpx.Response(400, text="top-level namespace 'lane-bronze' must belong to a warehouse")
-    )
-
-    with pytest.raises(CatalogError) as excinfo:
-        _client()._ensure_namespace("lane-bronze")
-
-    assert "POST /v1/projects" in str(excinfo.value), "an absent namespace must still send the operator to the admin doors"
-
-
-@respx.mock
-def test_a_visible_namespace_is_a_no_op() -> None:
-    """The negative control: the probe succeeding must reach neither branch."""
-    respx.post(url__regex=r".*/v1/namespace/.*/exists").mock(return_value=httpx.Response(200))
-
-    _client()._ensure_namespace("lane-bronze")

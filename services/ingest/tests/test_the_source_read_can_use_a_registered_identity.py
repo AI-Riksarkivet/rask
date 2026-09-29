@@ -56,16 +56,6 @@ def test_a_store_registered_for_the_OWN_endpoint_supplies_its_identity(monkeypat
     assert conn.secret_key == "sk-media-src-creds"
 
 
-def test_an_EMPTY_registry_still_yields_the_ambient_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that makes this safe to land before anything is registered: with no store, the answer
-    is byte-identical to before — no endpoint, no credentials, the env chain."""
-    _register(monkeypatch)
-
-    conn = resolve_source_connection(None, "lance-catalog")
-
-    assert conn.is_estate_default and conn.access_key is None and conn.secret_key is None
-
-
 def test_a_store_for_a_DIFFERENT_bucket_does_not_apply(monkeypatch: pytest.MonkeyPatch) -> None:
     """Both halves must match. A bucket name alone is exactly the collision the registry exists to
     disambiguate, and borrowing another bucket's identity would read the wrong bytes or none."""

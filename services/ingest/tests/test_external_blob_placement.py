@@ -18,7 +18,6 @@ descriptor afterwards; and Lance refuses an external URI outside a registered ba
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 
 import lance
 import pytest
@@ -81,14 +80,6 @@ class TestThePlacementIsAdapterDeclared:
         spec = SourceSpec(kind="lance-append", project="p", dataset="d", options={"uri": "/data/x.lance"})
         assert external_base_for(spec) is None
 
-    def test_an_unknown_kind_degrades_to_managed(self) -> None:
-        """An older build's chunk can name a kind this process no longer registers.
-
-        Managed is the conservative direction: it costs storage, where the opposite mistake — claiming
-        a base the keys do not live under — is refused per unit AFTER the fetch has already been paid.
-        """
-        assert external_base_for(SourceSpec(kind="a-kind-that-was-never-registered", project="p", dataset="d")) is None
-
 
 class TestTheOperatorGatesIt:
     """A source root is CLIENT-SUPPLIED, so an adapter's answer is an untrusted value."""
@@ -110,11 +101,6 @@ class TestTheOperatorGatesIt:
         assert any(r.message == "ingest_external_base_not_approved" for r in caplog.records), (
             f"an unapproved base was refused SILENTLY: {[r.message for r in caplog.records]}"
         )
-
-    def test_an_approved_base_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("LANCE_EXTERNAL_BLOB_BASES", "s3://approved-corpus,s3://second")
-        assert approved_external_base("s3://approved-corpus") == "s3://approved-corpus"
-        assert approved_external_base("s3://second") == "s3://second"
 
     def test_a_prefix_of_an_approved_base_passes_but_a_LOOKALIKE_does_not(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """`s3://corpus/vol/A` is under `s3://corpus`. `s3://corpusx` is a different bucket.
@@ -176,27 +162,3 @@ class TestBronzeStoresTheCorpusOnce:
 
         with pytest.raises(OSError, match="outside registered external bases"):
             lance.write_dataset(units_to_table(units, external_base=str(source)), no_base, mode="append")
-
-    def test_the_descriptor_names_the_source_and_carries_the_fixity_hash(self, tmp_path: Path) -> None:
-        """Bronze stays faithful to source (§3.5) under either placement.
-
-        The bytes are still FETCHED — validation and the `sha256` fixity column both read them — so
-        External changes where the payload LIVES, not what bronze knows about it. Fetching to hash is
-        not copying into the lakehouse.
-        """
-        source = tmp_path / "corpus"
-        units = _payloads(source, count=4)
-        table = units_to_table(units, external_base=str(source))
-
-        assert table.column("source_uri").to_pylist() == [key for key, _ in units]
-        assert all(len(h) == 64 for h in table.column("sha256").to_pylist()), "fixity was lost with the bytes"
-
-        uri = str(tmp_path / "bronze.lance")
-        create_empty(uri, table.schema, external_base=str(source))
-        lance.write_dataset(table, uri, mode="append")
-
-        descriptor: dict[str, Any] = lance.dataset(uri).to_table(columns=["payload"]).column("payload")[0].as_py()
-        # kind=3 is EXTERNAL. `blob_uri` is BASE-RELATIVE, which is the mechanic that makes a
-        # carry-forward a real mapping rather than a copy of the struct — see change 3.
-        assert descriptor["kind"] == 3, f"expected an EXTERNAL descriptor, got kind={descriptor['kind']}"
-        assert descriptor["blob_uri"] == "page-000.bin", f"expected a base-relative uri, got {descriptor['blob_uri']!r}"

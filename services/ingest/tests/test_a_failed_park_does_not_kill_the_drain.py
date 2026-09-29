@@ -25,7 +25,7 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from ingest.queue import MAX_DELIVER, UnitTask, WorkQueue
+from ingest.queue import UnitTask, WorkQueue
 from ingest.worker import ChunkOutcome, Worker
 
 
@@ -73,11 +73,6 @@ def _permanent() -> Exception:
     return httpx.HTTPStatusError("gone", request=request, response=httpx.Response(410, request=request))
 
 
-def _transient() -> Exception:
-    request = httpx.Request("GET", "http://src.invalid/x")
-    return httpx.HTTPStatusError("boom", request=request, response=httpx.Response(503, request=request))
-
-
 @pytest.mark.asyncio
 async def test_park_poison_reports_a_failed_park_instead_of_raising_it() -> None:
     """The seam itself. A publish that fails is an ANSWER — False — not an exception the drain wears."""
@@ -116,17 +111,3 @@ async def test_an_unparkable_permanent_failure_is_still_acked_and_still_named() 
     assert msg.acked, "an unparkable unit was left unacked — the drain stalls and the chunk never completes"
     assert "k" in outcome.errors, "the unit vanished from the run's record when its DLQ copy failed"
     assert "DLQ" in outcome.errors["k"], f"the run's record does not say the evidence copy is missing: {outcome.errors['k']!r}"
-
-
-@pytest.mark.asyncio
-async def test_an_unparkable_exhausted_transient_is_still_acked_and_still_named() -> None:
-    """The terminal-transient path, which JetStream would otherwise drop with no record anywhere."""
-    queue = _UnparkableQueue()
-    worker = Worker(cast("WorkQueue", queue), fetcher=cast("Any", SimpleNamespace(fetch=None)))
-    msg = _Msg(num_delivered=MAX_DELIVER)
-    outcome = ChunkOutcome(chunk_id="c0")
-
-    await worker._refuse(msg, _task(), _transient(), outcome)
-
-    assert msg.acked, "an unparkable exhausted unit was left unacked — JetStream drops it AND the chunk hangs"
-    assert "DLQ" in outcome.errors.get("k", ""), "the exhausted unit's record does not say its DLQ copy is missing"

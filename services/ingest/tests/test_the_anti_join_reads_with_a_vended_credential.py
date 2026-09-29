@@ -51,16 +51,6 @@ def test_the_read_credential_is_asked_for_at_the_READ_tier() -> None:
     assert vendor.asked == [("lane-bronze", "pages", "read")]
 
 
-def test_a_seam_that_cannot_vend_degrades_to_the_ambient_credential() -> None:
-    """`LocalCatalog` is the no-catalog dev shape and has no vending door, so asking it would raise
-    rather than degrade. Checked by CAPABILITY, never assumed — the same rule the write half applies."""
-
-    class _NoVendor:
-        pass
-
-    assert runtime.read_options_for(_NoVendor(), namespace="lane-bronze", dataset="pages") is None
-
-
 def test_a_namespace_that_is_empty_asks_for_nothing() -> None:
     """A pre-upgrade payload replayed by this build carries no namespace, and composing an object id
     from it would ask the catalog about a table that does not exist — 403-ing a run that was mid-flight

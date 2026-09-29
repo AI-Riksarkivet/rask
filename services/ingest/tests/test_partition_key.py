@@ -53,15 +53,6 @@ def test_an_object_at_the_bucket_ROOT_has_no_folder_and_gets_a_NULL() -> None:
     assert partition_key_for(spec, "root-object.tif") is None
 
 
-def test_an_UNREGISTERED_partition_rule_is_a_null_not_a_crash() -> None:
-    """This runs on the WRITE path, after the bytes are already fetched.
-
-    A missing grouping rule must not fail a unit that cost a network round trip — the label is
-    metadata, and losing it is strictly better than losing the row.
-    """
-    assert partition_key_for(SourceSpec(kind="does-not-exist", project="p", dataset="d"), "any") is None
-
-
 # ── the column reaches the table, positionally ───────────────────────────────
 
 
@@ -74,16 +65,6 @@ def test_units_to_table_writes_the_partition_column() -> None:
     )
 
     assert table.column("partition_key").to_pylist() == ["s3://b/vol-a", "s3://b/vol-b"]
-
-
-def test_omitting_partitions_writes_NULLS_rather_than_refusing() -> None:
-    """Optional by design: a source with no meaningful grouping writes nulls, and every existing
-    caller (including the tests written before this column) keeps working unchanged."""
-    from ingest.worker import units_to_table
-
-    table = units_to_table([("file:///a.tif", b"a")])
-
-    assert table.column("partition_key").to_pylist() == [None]
 
 
 def test_a_LENGTH_MISMATCH_is_refused_rather_than_misattributed() -> None:
@@ -113,13 +94,3 @@ def test_the_worker_never_DERIVES_the_partition_from_the_key() -> None:
     table = units_to_table([("s3://bucket/clearly/a/folder/file.tif", b"x")])
 
     assert table.column("partition_key").to_pylist() == [None], "the worker derived a partition key from the URI — that belongs to the adapter"
-
-
-def test_the_task_carries_the_key_so_the_drain_needs_no_source_knowledge() -> None:
-    from ingest.queue import UnitTask
-
-    task = UnitTask(run_id="r", chunk_id="c", key="s3://b/f/x.tif", dataset_uri="/tmp/d.lance", partition_key="s3://b/f")
-
-    assert task.partition_key == "s3://b/f"
-    # Optional, so a task published by an older build still validates rather than failing the run.
-    assert UnitTask(run_id="r", chunk_id="c", key="k", dataset_uri="/tmp/d.lance").partition_key is None

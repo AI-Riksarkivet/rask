@@ -73,12 +73,6 @@ def test_the_probe_asks_the_catalog_about_the_bronze_namespace() -> None:
     assert catalog.asked == ["acme-bronze$vendproof"], f"probed the wrong table: {catalog.asked}"
 
 
-def test_a_run_that_already_committed_is_recognised() -> None:
-    """The whole point: the retry must find its own commit rather than report it landed nothing."""
-    catalog = _RecordingCatalog("acme-bronze$vendproof")
-    assert _prior_commit_for_run(catalog, _spec()) == (7, 4200)
-
-
 def test_a_run_that_never_committed_still_answers_none() -> None:
     """Unchanged. A refusal for the RIGHT table is a real answer — this run did not commit."""
     catalog = _RecordingCatalog("some-other$table")

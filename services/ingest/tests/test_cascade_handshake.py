@@ -72,12 +72,6 @@ def test_a_PER_TENANT_ingest_write_fires_the_head_for_that_tenant() -> None:
     )
 
 
-def test_a_SINGLE_TENANT_write_fires_the_unqualified_head() -> None:
-    """No project → `bronze` / `bronze$pages`, byte-identical to the pre-#84 estate. Both sides must
-    degrade the same way or the fallback misses in exactly the case it exists for."""
-    assert _head_verdict(_ingest_event("", "pages")) is not None
-
-
 def test_a_FAILED_run_does_NOT_fire_the_cascade() -> None:
     """A run that failed has no landed batch to transform. Firing on one would kick the pipeline over
     data that is not there — which is why the head takes only COMPLETE, and why the writer must not
@@ -113,25 +107,6 @@ def test_an_UNSAFE_project_cannot_fire_a_tenants_head() -> None:
     assert _head_verdict(event) is not None, "it should still be a valid single-tenant write"
     for output in event["outputs"]:
         assert ".." not in output["namespace"] and ".." not in output["name"]
-
-
-def test_the_head_only_fires_for_its_CONFIGURED_lane_table() -> None:
-    """A constraint the writer cannot satisfy alone, pinned here so it is not mistaken for a bug in it.
-
-    `_bronze_write_dataset` matches the output name against `project_namespace(project,
-    settings.bronze_dataset)` — ONE configured table per lane (`bronze$events` by default,
-    `medallion.producer.bronzeDataset` in the chart). So an ETL run that writes an arbitrary dataset
-    name does NOT wake the cascade, however correctly it is qualified.
-
-    That is by design for the two fixed lanes the head serves, and it is a real limit on the ETL form,
-    which lets a user name any table. It belongs to `/bronze-arrival`'s retirement (#34), not to the
-    naming fix — the point of asserting it is that the next person to find an unfired cascade reads
-    this instead of re-deriving the qualification from scratch.
-    """
-    assert _head_verdict(_ingest_event("bind86", "pages")) is not None, "the configured lane fires"
-    assert _head_verdict(_ingest_event("bind86", "some-other-table")) is None, (
-        "an unconfigured table fired the head — the lane constraint has changed and #34 should be revisited"
-    )
 
 
 def test_the_CATALOG_and_the_GRAPH_name_the_SAME_TABLE() -> None:

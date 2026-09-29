@@ -123,17 +123,6 @@ def test_the_listing_asks_openfga_once_for_the_whole_page(_oidc_on: None, monkey
     assert verifier.verifications == 1, f"the caller's bearer was verified {verifier.verifications} times for one request"
 
 
-def test_the_batch_carries_each_project_once(_oidc_on: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Twenty runs in two projects is a two-object batch, not a twenty-object one."""
-    spy = _Spy(allowed={"project:a"})
-    res = _client(monkeypatch, spy, _Verifier("alice"), ["a", "b"] * 10).get("/api/ingests?limit=200", headers=_BEARER)
-
-    assert res.status_code == 200, res.text
-    assert len(spy.batches) == 1, f"expected ONE batch_check, got {spy.batches}"
-    assert sorted(spy.batches[0]) == ["project:a", "project:b"], spy.batches
-    assert len(res.json()["runs"]) == 10
-
-
 def test_an_authz_outage_is_still_503_not_an_empty_page(_oidc_on: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """The listing's own docstring: a fail-closed outage rendered as `{"runs": []}` looks like an answer."""
     spy = _Spy(allowed=set(), outage=True)

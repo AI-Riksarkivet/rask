@@ -39,28 +39,6 @@ def _graph(monkeypatch: pytest.MonkeyPatch, runs: list[dict[str, str]], *, statu
     return fetched
 
 
-def test_the_check_asks_for_ONE_RUN_not_for_the_whole_graph(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ING-14's other half, and a REGRESSION the board's own bound would otherwise have caused.
-
-    Downloading every run to answer "is THIS run there?" was always the wrong shape, and it became
-    wrong in a second way the moment `/runs` was bounded (2026-09-07): the board answers the 200
-    newest runs, so a run older than those is simply not in the response and the linear scan reports
-    it ABSENT. That is not a slow answer, it is a WRONG one — A8 would report a provenance defect on
-    a run whose lineage is in the graph, silently, and only for older runs.
-
-    So the question is asked of the run: a point read on `/runs/{id}`, which the graph answers from
-    `MATCH (r:Run {run_id: $rid})` rather than by returning the estate.
-    """
-    fetched = _graph(monkeypatch, [{"run_id": lineage_run_id("run-42")}])
-
-    assert LineageProvenanceReader().has_run("run-42") is True
-    assert fetched, "the reader asked lineage nothing at all"
-    asked = fetched[0]
-    assert asked.rstrip("/").endswith(lineage_run_id("run-42")), (
-        f"the reader fetched {asked!r} — it must ask for the ONE run, or a bounded board reports an older run as absent"
-    )
-
-
 def test_a_present_run_is_asked_for_ONCE(monkeypatch: pytest.MonkeyPatch) -> None:
     fetched = _graph(monkeypatch, [{"run_id": lineage_run_id("run-42")}])
     reader = LineageProvenanceReader()

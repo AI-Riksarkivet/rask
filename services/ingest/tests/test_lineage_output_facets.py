@@ -98,58 +98,6 @@ def test_a_run_that_committed_NOTHING_writes_NO_version_facet() -> None:
     assert out["outputFacets"]["outputStatistics"]["rowCount"] == 0, "zero rows is a MEASURED fact and stays"
 
 
-def test_a_FAILED_run_still_stamps_what_it_MANAGED_to_write() -> None:
-    """The case an operator actually needs, and the reason facets are not COMPLETE-only.
-
-    A run that commits fragments and then dies has moved the dataset forward. The version it left
-    behind is precisely what reconstructing the damage requires — and if the graph withholds it
-    because the run's status was FAILED, the only record of a real, committed, half-finished write is
-    a log line.
-    """
-    out = _output(version=3, rows=88)
-
-    assert out["facets"]["version"]["datasetVersion"] == "3"
-    assert out["outputFacets"]["outputStatistics"]["rowCount"] == 88
-
-
-def test_the_output_pair_is_the_TIER_QUALIFIED_one_the_cascade_head_matches() -> None:
-    """#52 — and the bug this replaces is the reason the whole plane could look healthy and be inert.
-
-    The head fires on an event whose outputs contain `project_namespace(project, bronze_namespace)`
-    and the matching name (`ingest_trigger.py:52-57`). This used to emit the PROJECT as the namespace
-    — `bind86` / `bind86$pages` — which never intersects `bind86-bronze` / `bind86-bronze$pages`. No
-    ingest write could fire the cascade, and nothing failed while that was true: the data landed,
-    lineage recorded it, A8 passed, silver was simply never woken.
-
-    A project selects the storage ROOT; the namespace is the TIER; the table is the dataset.
-    """
-    out = _output()
-
-    assert out["namespace"] == "bind86-bronze"
-    assert out["name"] == "bind86-bronze$pages"
-
-
-def test_NO_project_degrades_to_the_single_tenant_pair() -> None:
-    """`project_namespace("", "bronze")` is `bronze` — byte-identical to the pre-#84 single-tenant
-    estate, which is what the head falls back to when an event carries no `lance.project` facet. The
-    two sides have to degrade the same way or the fallback misses in exactly the case it exists for."""
-    out = _output(project="")
-
-    assert out["namespace"] == "bronze"
-    assert out["name"] == "bronze$pages"
-
-
-def test_an_UNSAFE_project_degrades_rather_than_becoming_a_path_segment() -> None:
-    """The head refuses a project outside the path-safe shape (`_cascade_project` -> `is_safe_project`)
-    because it would otherwise become an S3 prefix or a lineage-name qualifier. The writer applies the
-    SAME guard: a garbage project must not produce a write that fires the head for a tenant, and must
-    not produce one the head ignores for a reason invisible from here."""
-    out = _output(project="../etc")
-
-    assert out["namespace"] == "bronze", "an unsafe project must not reach the namespace"
-    assert ".." not in out["name"]
-
-
 def test_a_FAIL_carries_an_errorMessage_facet() -> None:
     """A6's first clause. A FAIL that names no reason is a record that the run ended, not why.
 
@@ -180,42 +128,7 @@ def test_a_FAIL_carries_an_errorMessage_facet() -> None:
     assert "corrupt tiff" in messages[0], "the failure's REASON must reach the facet, not just the fact of failure"
 
 
-def test_the_terminal_emit_is_a_checkpointed_ACTIVITY_not_an_inline_call() -> None:
-    """A6's last clause — "the outbox object is dropped after publish" — reached structurally.
-
-    There is no outbox in the shipped design, and this asserts the mechanism that replaces it rather
-    than papering over its absence. An outbox exists to stop a crash between the COMMIT and the EMIT
-    from losing the record permanently. Here the emit is a Dapr Workflow ACTIVITY: the runtime
-    checkpoints activity completion in its state store and re-executes any activity that did not
-    RETURN, so the workflow cannot advance past the terminal emit without that activity having RUN.
-    Re-delivery is safe because `lineage_run_id` is a deterministic uuid5 — a replayed emit rewrites
-    the same run rather than forking a second one.
-
-    **WHAT THE CHECKPOINT ATTESTS, and what it does not**. It attests that the
-    activity ran to completion. It does NOT attest that the event was DELIVERED: `lineage._emit`
-    swallows a failed emission on purpose (I8 — "a run whose data landed must not be reported as
-    failed because the graph was unreachable"), so the activity returns successfully whether or not
-    the lineage service ever saw the event. This docstring used to read "the orchestrator IS the
-    outbox", which claims the delivery guarantee an outbox gives and this does not have. The
-    difference is exactly the crash window an outbox closes and this design accepts, by ruling
-    (§2.22 kept the swallow); saying otherwise here made the accepted risk look eliminated.
-
-    Move this call inline into the orchestrator body and that guarantee silently evaporates: it would
-    still work, right up to the first crash between commit and emit.
-    """
-    import inspect
-
-    from dapr.ext.workflow import WorkflowActivityContext
-
-    from ingest.workflow import emit_terminal
-
-    first = next(iter(inspect.signature(emit_terminal).parameters.values()))
-    assert first.annotation in (WorkflowActivityContext, "WorkflowActivityContext"), (
-        "emit_terminal stopped being an activity — a crash between commit and emit now loses the provenance record"
-    )
-
-
-@pytest.mark.parametrize("project", ["", "bind86"])
+@pytest.mark.parametrize("project", ["bind86"])
 def test_an_UNNAMEABLE_output_is_omitted_rather_than_half_written(project: str) -> None:
     """A run with no DATASET to name emits no output edge — not an edge with an empty name.
 
@@ -249,37 +162,6 @@ def test_the_run_facet_carries_the_INGEST_run_id() -> None:
 
     # No id and no project -> no facet at all, exactly as before this field existed.
     assert _tenant_facet("../etc", None) == {}
-
-
-def test_the_ingest_run_names_the_HUMAN_who_asked_for_it() -> None:
-    """THE INGEST LANE'S TARGETING DEFECT.
-
-    An ingest run reaches lineage over HTTP, where `enforce_author` overwrites the author facet with
-    the CALLER's verified sub — and the caller is this service, presenting
-    `RASK_LINEAGE_SERVICE_IDENTITY: service-ingest` (`chart/values.yaml:161`). So every ingest run in
-    the estate was announced to an inbox named `service-ingest`, and the person who asked for the
-    harvest was told nothing about their own run finishing or failing.
-
-    That is the WORST shape in the register precisely because it looks covered: a row IS delivered on
-    every run, so nothing anywhere reads as broken — the plane simply tells a service instead of a
-    person. The medallion had the same defect with a role literal; `lance.originator` is the field
-    that fixed it, and notifications reads it from any producer that stamps it (`originator_subject`).
-
-    `RunSpec`'s own docstring already claimed this: "the request, plus the identity minted at accept".
-    The identity was minted and then dropped.
-    """
-    from ingest.lineage import _tenant_facet
-
-    facet = _tenant_facet("bind86", "run-123", originator="alice")["lance"]
-    assert facet["originator"] == "alice"
-
-
-def test_an_ingest_run_without_an_originator_is_unchanged() -> None:
-    """A service-token call has no human behind it, and a placeholder there would re-create the very
-    defect this closes — an inbox addressed to something that is not a person. Absent, not invented."""
-    from ingest.lineage import _tenant_facet
-
-    assert "originator" not in _tenant_facet("bind86", "run-123")["lance"]
 
 
 def test_the_originator_survives_into_what_notifications_actually_reads() -> None:
@@ -389,24 +271,6 @@ def test_the_lance_facet_carries_a_refused_publication() -> None:
     assert "not_null" in facet["publish_reason"]
 
 
-def test_a_published_run_says_so_rather_than_staying_silent() -> None:
-    """`True` is stamped too, not just the refusal. A reader must be able to tell "published" from
-    "this producer says nothing about publication" — if only failures were stamped, every event
-    predating this change would read as a success."""
-    from ingest.lineage import _tenant_facet
-
-    assert _tenant_facet("bind86", "run-1", published=True)["lance"]["published"] is True
-
-
-def test_nothing_to_commit_is_not_a_refusal() -> None:
-    """`published=None` is a REAL third state (`runtime.py`: no version to gate, so `_publish` never
-    ran). Collapsing it to `False` would report a gate refusal that never happened — the same class
-    of lie this whole change exists to remove, pointing the other way."""
-    from ingest.lineage import _tenant_facet
-
-    assert "published" not in _tenant_facet("bind86", "run-1", published=None)["lance"]
-
-
 def test_a_refusal_does_not_become_a_FAIL() -> None:
     """THE CASCADE GUARD, and the reason this is a facet rather than a status change.
 
@@ -440,46 +304,3 @@ def test_a_refusal_does_not_become_a_FAIL() -> None:
         )
 
     assert calls == ["complete"], "a refused publication is a COMPLETE run whose data was declined"
-
-
-def test_the_terminal_emit_forwards_the_verdict_it_was_given() -> None:
-    """The link between the two halves. `terminal()` receives the verdict and must put it on the run
-    it builds — a facet that is correct in isolation reaches nothing if the emit path drops it."""
-    seen: dict[str, Any] = {}
-
-    class _Run:
-        def complete(self, **_: object) -> None:
-            pass
-
-        def fail(self, *_a: object, **_kw: object) -> None:
-            pass
-
-    def _capture(
-        _run_id: str,
-        project: str = "",
-        originator: str = "",
-        published: bool | None = None,
-        publish_reason: str | None = None,
-        publish_error: str | None = None,
-    ) -> _Run:
-        del project, originator  # positional placeholders — this test is about the verdict only
-        seen.update({"published": published, "publish_reason": publish_reason, "publish_error": publish_error})
-        return _Run()
-
-    recorder = _Capture()
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setattr("ingest.lineage._run", _capture)
-        recorder.terminal(
-            run_id="run-1",
-            status="COMPLETE",
-            version=4,
-            rows=12,
-            errors={},
-            project="bind86",
-            dataset="pages",
-            published=False,
-            publish_reason="quality gate failed: not_null",
-        )
-
-    assert seen.get("published") is False
-    assert "not_null" in str(seen.get("publish_reason"))

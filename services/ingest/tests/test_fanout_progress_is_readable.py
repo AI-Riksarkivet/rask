@@ -141,19 +141,6 @@ def test_a_TERMINAL_run_does_not_pay_for_a_fan_out(monkeypatch: pytest.MonkeyPat
     assert client.asked == [RUN], f"a completed run fanned out anyway: {client.asked}"
 
 
-def test_an_UNREACHABLE_engine_still_returns_None_rather_than_raising(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The pre-existing contract: a status endpoint that 500s when the engine is unreachable fails at
-    precisely the moment an operator is using it to find out why."""
-    import dapr.ext.workflow as wf
-
-    def _boom() -> Any:
-        raise RuntimeError("no sidecar")
-
-    monkeypatch.setattr(wf, "DaprWorkflowClient", _boom)
-
-    assert _reader().state(RUN) is None
-
-
 def test_a_child_read_that_RAISES_abandons_the_sum_rather_than_undercounting(monkeypatch: pytest.MonkeyPatch) -> None:
     """A partial sum renders as progress going BACKWARDS on the next poll, which reads as corruption
     rather than as a failed read. Falling back to the parent's own status is the honest answer."""

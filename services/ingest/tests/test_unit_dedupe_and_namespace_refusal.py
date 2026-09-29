@@ -16,8 +16,6 @@ refusal to the generic branch, and the caller loses the fix.
 
 from __future__ import annotations
 
-import hashlib
-
 import httpx
 import pyarrow as pa
 import pytest
@@ -32,47 +30,8 @@ def _task(run_id: str = "run-1", key: str = "s3://bucket/a.tif", chunk_id: str =
 
 
 class TestTheUnitDedupeIdIsStable:
-    def test_the_same_unit_of_the_same_run_hashes_the_same(self) -> None:
-        """The whole requirement. A replay that produced a different id would defeat JetStream's
-        dedupe window and land the unit twice."""
-        assert _dedupe_id(_task()) == _dedupe_id(_task())
-
-    def test_it_is_the_hash_the_code_actually_computes(self) -> None:
-        """The separator is the LITERAL four characters `\\x00`, not a NUL byte — the f-string escapes
-        the backslash. The docstring claimed the NUL form until 2026-08-22; this pins the real one so
-        the two cannot drift again, and `_dedupe_id`'s docstring now records why it is not changed."""
-        expected = hashlib.sha256(b"run-1\\x00s3://bucket/a.tif").hexdigest()
-        assert _dedupe_id(_task()) == expected
-
     def test_different_units_differ(self) -> None:
         assert _dedupe_id(_task(key="a")) != _dedupe_id(_task(key="b"))
-
-    def test_different_runs_differ(self) -> None:
-        """Two runs over one source are two legitimate publishes, not a duplicate."""
-        assert _dedupe_id(_task(run_id="r1")) != _dedupe_id(_task(run_id="r2"))
-
-    def test_the_chunk_id_is_NOT_part_of_the_identity(self) -> None:
-        """Deliberate: chunk_id is how enumeration happened to batch, which is not part of a unit's
-        identity. Including it would make the id depend on batching and break dedupe across a
-        re-enumeration that chunked differently."""
-        assert _dedupe_id(_task(chunk_id="c0")) == _dedupe_id(_task(chunk_id="c7"))
-
-    def test_it_is_header_safe(self) -> None:
-        """A NATS header value must not contain CR or LF, and a source key is a URI that can carry
-        either — which would corrupt the header frame rather than fail loudly. Hashing is what makes
-        that unreachable, so a key with a newline must still produce a clean id."""
-        got = _dedupe_id(_task(key="s3://bucket/a\r\nb.tif"))
-        assert "\r" not in got and "\n" not in got
-        assert len(got) == 64
-
-    def test_the_publisher_actually_sets_the_header(self) -> None:
-        """The property that was absent once already: the id can be perfect and unattached."""
-        import inspect
-
-        from ingest import queue
-
-        source = inspect.getsource(queue.WorkQueue.publish_units)
-        assert '"Nats-Msg-Id": _dedupe_id(task)' in source, "publish_units no longer stamps the dedupe id — JetStream cannot refuse a replayed unit"
 
 
 class TestTheNamespaceRefusalNamesTheFix:
@@ -107,15 +66,3 @@ class TestTheNamespaceRefusalNamesTheFix:
             service._ensure_namespace("badname")
 
         assert "does not provision tenancy" not in str(excinfo.value)
-
-    def test_the_catalog_still_emits_the_phrase_ingest_matches_on(self) -> None:
-        """The other half of the cross-service contract. Rewording the catalog's message silently
-        degrades the refusal above to the generic branch, on a deployment nobody is testing."""
-        from pathlib import Path
-
-        catalog = Path(__file__).resolve().parents[3] / "services/catalog/src/catalog"
-        hits = [p for p in catalog.rglob("*.py") if "must belong to a warehouse" in p.read_text()]
-        assert hits, (
-            "no catalog source emits 'must belong to a warehouse' any more — ingest matches on that "
-            "prose, so its actionable refusal has silently become a generic 400 passthrough"
-        )

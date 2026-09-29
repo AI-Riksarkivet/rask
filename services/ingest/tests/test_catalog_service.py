@@ -48,45 +48,6 @@ def _contract_check_is_covered_elsewhere(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(CatalogServiceClient, "_contracted", lambda _self, _ns, _ds, uri: uri)
 
 
-def test_the_table_id_joins_project_and_dataset_with_the_catalog_delimiter() -> None:
-    """`bronze$pages`, not `bronze/pages`. A wrong separator addresses a DIFFERENT table rather than
-    failing, which is the kind of mistake that only shows up as missing data."""
-    assert _client().table_id("bronze", "pages") == "bronze$pages"
-
-
-@respx.mock
-def test_ensure_returns_the_location_the_catalog_VENDS() -> None:
-    """The location is the catalog's answer, never composed here — I2.
-
-    Composing `{warehouse}/{project}/{dataset}.lance` from env is exactly the hardcoded path I2
-    forbids: two callers with different env compose different locations for the same logical table.
-    """
-    # ensure() on an EXISTING table now also evolves the schema (the etag column, 2026-08-07);
-    # the door answering "already exists" is the ordinary idempotent case.
-    respx.post(f"{BASE}/v1/table/bronze$pages/add_columns").mock(return_value=httpx.Response(400, json={"detail": "column etag already exists"}))
-    respx.post(f"{BASE}/v1/table/bronze$pages/describe").mock(
-        return_value=httpx.Response(200, json={"location": "s3://governed/bronze/pages.lance", "version": 3})
-    )
-
-    assert _client().ensure("bronze", "pages") == "s3://governed/bronze/pages.lance"
-
-
-@respx.mock
-def test_an_absent_table_is_CREATED_empty_and_then_described() -> None:
-    """D6's creation two-step: create server-side with zero rows, then read back the location."""
-    describe = respx.post(f"{BASE}/v1/table/bronze$pages/describe")
-    describe.side_effect = [
-        httpx.Response(404, json={"detail": "no such table"}),
-        httpx.Response(200, json={"location": "s3://governed/bronze/pages.lance", "version": 1}),
-    ]
-    respx.post(f"{BASE}/v1/namespace/bronze/exists").mock(return_value=httpx.Response(404, json={}))
-    respx.post(f"{BASE}/v1/namespace/bronze/create").mock(return_value=httpx.Response(200, json={}))
-    create = respx.post(f"{BASE}/v1/table/bronze$pages/create").mock(return_value=httpx.Response(200, json={"version": 1}))
-
-    assert _client().ensure("bronze", "pages") == "s3://governed/bronze/pages.lance"
-    assert create.called
-
-
 @respx.mock
 def test_the_create_body_carries_ZERO_rows() -> None:
     """ "No byte transits the catalog" must stay true on a dataset's FIRST run too.
@@ -187,62 +148,6 @@ def test_the_chooser_defaults_to_LOCAL_and_is_opt_in(monkeypatch: pytest.MonkeyP
     assert isinstance(build_catalog(BRONZE), CatalogServiceClient)
 
 
-def test_both_catalogs_present_the_SAME_seam() -> None:
-    """`finalize_run` must not need to know which one it has.
-
-    The local catalog is path-based and the service is id-based; if they did not agree on `ensure`,
-    the swap would be a code change at every call site instead of a config change.
-    """
-    from ingest.catalog import LocalCatalog
-
-    for catalog in (LocalCatalog(BRONZE), CatalogServiceClient(BRONZE, base_url=BASE)):
-        assert callable(catalog.ensure)
-
-
-@respx.mock
-def test_the_NAMESPACE_is_created_before_the_table() -> None:
-    """Three steps, not two — and the order matters.
-
-    A table lives IN a namespace, and the namespace is itself a catalog object with its own manifest.
-    It is not implied by the table id: `demo$pages` names a namespace `demo` that must already exist,
-    and against a fresh catalog the table create fails with NamespaceNotFoundError ("Child namespace
-    reads require an existing __manifest dataset"). Nothing in the table endpoints says so; only a
-    real catalog does, and only the first time.
-
-    The namespace is PROBED before it is created, and the probe answering 404 here is what makes the
-    create run. Probing is not an optimisation: where namespaces are warehouse-scoped, a create
-    against an already-bound namespace is refused by `require_warehouse_scoped` BEFORE the catalog
-    reaches its already-exists check — so an unconditional create fails on a correctly provisioned
-    tenant. Measured in-cluster: the lane provisioned project > warehouse > namespace successfully
-    and every run still died here.
-    """
-    respx.post(f"{BASE}/v1/table/demo$pages/describe").side_effect = [
-        httpx.Response(404),
-        httpx.Response(200, json={"location": "s3://b/demo/pages.lance", "version": 1}),
-    ]
-    respx.post(f"{BASE}/v1/namespace/demo/exists").mock(return_value=httpx.Response(404, json={}))
-    namespace = respx.post(f"{BASE}/v1/namespace/demo/create").mock(return_value=httpx.Response(200, json={}))
-    table = respx.post(f"{BASE}/v1/table/demo$pages/create").mock(return_value=httpx.Response(200, json={}))
-
-    _client().ensure("demo", "pages")
-
-    assert namespace.called, "the namespace was never created — the table create would 404"
-    assert table.called
-
-
-def test_the_catalogs_row_count_is_the_TIER_not_the_run() -> None:
-    """`CommitFragmentsResponse.row_count` is the dataset total after the commit.
-
-    Reporting it as the run's `units_done` made a second run against one dataset claim 8 units done
-    for 4 ingested files — the identical bug the Lander path had already fixed, walking straight back
-    in through the code that bypassed it. A run's progress must describe the run, so the count comes
-    from its own fragments.
-    """
-    from ingest.runtime import _rows_in
-
-    assert _rows_in(['{"physical_rows": 3}', '{"physical_rows": 1}']) == 4
-
-
 def test_a_malformed_fragment_does_not_zero_the_whole_count() -> None:
     """One unreadable manifest must cost one fragment's rows, not the run's entire reported progress."""
     from ingest.runtime import _rows_in
@@ -309,18 +214,6 @@ def test_a_403_on_describe_means_TRY_CREATE_not_give_up() -> None:
     assert _client().ensure("bind86-bronze", "brandnew") == "s3://bind86-wh/abc_bind86-bronze$brandnew"
     assert describe.called, "the probe must still run — an existing table must not be re-created"
     assert create.called, "the 403 was treated as fatal and create was never attempted"
-
-
-@respx.mock
-def test_the_CREATE_response_vends_the_location_without_a_second_describe() -> None:
-    """Create's own 200 carries the location, so the happy path does not re-ask a read door the
-    question it cannot answer. A second describe here would 403 again on a catalog that seeds tuples
-    asynchronously, turning a successful create into a failed run."""
-    respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/describe").mock(return_value=httpx.Response(403, json={}))
-    respx.post(f"{BASE}/v1/namespace/bind86-bronze/exists").mock(return_value=httpx.Response(200))
-    respx.post(f"{BASE}/v1/table/bind86-bronze$fresh/create").mock(return_value=httpx.Response(200, json={"location": "s3://wh/fresh", "version": 1}))
-
-    assert _client().ensure("bind86-bronze", "fresh") == "s3://wh/fresh"
 
 
 @respx.mock

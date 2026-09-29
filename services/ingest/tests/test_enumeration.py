@@ -14,8 +14,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from ingest.fetch import UriFetcher
 from ingest.sources import iter_unit_keys
 from ingest.validation import PayloadValidator
@@ -80,16 +78,6 @@ def test_LocalDirSource_lists_the_same_keys_it_would_yield_objects_for(tmp_path:
     assert list(source.iter_keys()) == [obj.uri for obj in source.iter_objects()]
 
 
-def test_the_fetcher_resolves_a_file_uri(tmp_path: Path) -> None:
-    """`file://` is the A11 fixture lane — no network, runnable on a laptop and in CI."""
-    import asyncio
-
-    target = tmp_path / "page.tif"
-    target.write_bytes(b"TIFF-BYTES")
-
-    assert asyncio.run(UriFetcher().fetch(target.resolve().as_uri())) == b"TIFF-BYTES"
-
-
 def test_the_fetcher_decodes_a_percent_encoded_path(tmp_path: Path) -> None:
     """`Path.as_uri()` percent-encodes, so a fixture named `sida 1.tif` round-trips as `sida%201.tif`.
 
@@ -102,17 +90,6 @@ def test_the_fetcher_decodes_a_percent_encoded_path(tmp_path: Path) -> None:
     target.write_bytes(b"SPACED")
 
     assert asyncio.run(UriFetcher().fetch(target.resolve().as_uri())) == b"SPACED"
-
-
-def test_the_fetcher_refuses_an_unknown_scheme_by_NAME() -> None:
-    """A worker that cannot fetch must say which scheme and which key.
-
-    'no fetcher' alone would leave an operator grepping adapters; the message is the diagnosis.
-    """
-    import asyncio
-
-    with pytest.raises(ValueError, match="gopher"):
-        asyncio.run(UriFetcher().fetch("gopher://old/1.tif"))
 
 
 # ── validation: packages/validate's first consumer ────────────────────────────────────

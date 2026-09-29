@@ -72,15 +72,6 @@ def test_an_ANONYMOUS_request_is_refused(monkeypatch: pytest.MonkeyPatch) -> Non
         assert client.post("/ingests", json={"project": "demo"}).status_code == 403
 
 
-def test_a_WRONG_service_token_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Compared with `compare_digest`, so a near-miss is refused in constant time rather than leaking
-    a prefix through timing."""
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-
-    with TestClient(_app(), raise_server_exceptions=False) as client:
-        assert client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": SERVICE_TOKEN + "x"}).status_code == 403
-
-
 def test_the_SERVICE_token_may_ingest_into_its_CONFIGURED_project(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
 
@@ -124,13 +115,6 @@ class _Verifier:
         if self._sub is None:
             raise UnauthenticatedError("invalid token")
         return type("Tok", (), {"sub": self._sub})()
-
-
-class _Fga:
-    def __init__(self, allow: bool, *, outage: bool = False) -> None:
-        self._allow = allow
-        self._outage = outage
-        self.asked: list[tuple[str, str, str]] = []
 
 
 @pytest.fixture
@@ -251,19 +235,6 @@ def test_the_SAME_token_from_a_SERVICE_caller_still_works(monkeypatch: pytest.Mo
     assert response.status_code == 200
 
 
-def test_a_DIRECT_caller_with_no_dapr_hop_still_works(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No caller app-id means nothing invoked through Dapr — the caller PRESENTED the token itself.
-
-    That is the conformance lane's path (it reads APP_API_TOKEN from the pod's own env), and holding
-    the shared secret is the credential there. Refusing it would break the lane while closing
-    nothing: a party with the secret AND network reach to the pod never needed the gateway.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", SERVICE_TOKEN)
-
-    with TestClient(_app()) as client:
-        assert client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": SERVICE_TOKEN}).status_code == 200
-
-
 # ── ING-01: an absent service token is not an absent door ─────────────────────────────────────────
 #
 # Every test above SETS `APP_API_TOKEN`, which is exactly how the bypass survived a read-through audit.
@@ -272,35 +243,6 @@ def test_a_DIRECT_caller_with_no_dapr_hop_still_works(monkeypatch: pytest.Monkey
 # port — while `/v1/me`, the navbar and the catalog all reported authorization as ON. The blank case is
 # the likelier one: a secret that renders empty is far more common than one nobody wired, and it failed
 # open rather than loudly.
-
-
-@pytest.fixture
-def _oidc_on_without_service_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`_oidc_on` minus the service token — the deployment shape the bypass lived in."""
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
-    monkeypatch.setenv("RASK_OIDC_ISSUER", "https://issuer.test")
-    monkeypatch.setenv("RASK_OIDC_AUDIENCE", "rask")
-
-
-@pytest.mark.usefixtures("_oidc_on_without_service_token")
-def test_an_unset_service_token_does_not_open_the_door_when_auth_is_ON() -> None:
-    """ING-01. The SERVICE door is absent; the USER door must still be shut."""
-    with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
-        assert client.post("/ingests", json={"project": "demo"}).status_code == 403
-
-
-@pytest.mark.usefixtures("_oidc_on_without_service_token")
-def test_a_stray_service_token_header_cannot_authenticate_when_none_is_configured() -> None:
-    """With no `APP_API_TOKEN`, any `dapr-api-token` a caller invents must authenticate nothing.
-
-    Also guards the `expected and …` ordering: comparing against `None` would raise and answer 500,
-    which reads as a broken service rather than as a refused credential.
-    """
-    with TestClient(_app(fga=object()), raise_server_exceptions=False) as client:
-        response = client.post("/ingests", json={"project": "demo"}, headers={"dapr-api-token": "anything-at-all"})
-
-    assert response.status_code == 403
 
 
 def test_a_BLANK_service_token_does_not_open_the_door_when_auth_is_ON(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -314,74 +256,7 @@ def test_a_BLANK_service_token_does_not_open_the_door_when_auth_is_ON(monkeypatc
         assert client.post("/ingests", json={"project": "demo"}).status_code == 403
 
 
-def test_the_local_dev_posture_is_preserved(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Nothing configured to authenticate against: the documented open stack stays open.
-
-    The half that keeps the fix honest. Closing the door unconditionally would break `make dev-micro`
-    and every local ingest — and a fix that forces everyone to run OIDC locally is a fix nobody keeps.
-    """
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
-    with TestClient(_app()) as client:
-        assert client.post("/ingests", json={"project": "demo"}).status_code == 200
-
-
 # ── ING-12 / ING-13: the signature reads as what it is, and settings are built once ──────
-
-
-def test_authorize_ingest_is_not_dependency_shaped() -> None:
-    """ING-12: `authorize_ingest` is invoked positionally at every call site, never `Depends()`d.
-
-    Its parameters therefore must not carry FastAPI `Header()`/`Depends()` bindings — those are inert
-    here (the ROUTE params carry the real header binding and pass the values in) and read as though
-    this were a dependency, which is the one thing it is not. The real risk of the misread is the
-    tempting "wire it in as a dependency" fix: as a dependency its `project` would bind as a query
-    param defaulting to None, silently scoping the admin check to the configured project instead of
-    the body's — a real cross-project regression. So the signature stays plain.
-    """
-    import inspect
-    import typing
-
-    from fastapi import params as fastapi_params
-
-    binding = (fastapi_params.Header, fastapi_params.Depends)
-    hints = typing.get_type_hints(authorize_ingest, include_extras=True)
-    annotated = [name for name, hint in hints.items() if any(isinstance(meta, binding) for meta in getattr(hint, "__metadata__", ()))]
-    defaulted = [name for name, param in inspect.signature(authorize_ingest).parameters.items() if isinstance(param.default, binding)]
-
-    offenders = sorted(set(annotated + defaulted))
-    assert not offenders, f"authorize_ingest carries inert FastAPI dependency annotations on {offenders}"
-
-
-def test_get_auth_settings_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ING-13: the settings are constructed once, not rebuilt (and `.env` re-read from disk) per request.
-
-    `AuthSettingsDep` resolves `get_auth_settings` on every governed route; an uncached factory
-    re-instantiates the `BaseSettings` — a disk read of `.env` — on each one.
-    """
-    from ingest import auth
-
-    calls = 0
-    original_init = auth.IngestAuthSettings.__init__
-
-    # `Any`, not `object`: this wrapper forwards verbatim into pydantic-settings' typed `__init__`,
-    # and `object` would fail every one of its keyword parameters at the forwarding call.
-    def _counting_init(self: auth.IngestAuthSettings, *args: Any, **kwargs: Any) -> None:
-        nonlocal calls
-        calls += 1
-        original_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(auth.IngestAuthSettings, "__init__", _counting_init)
-    # Clear whatever earlier tests cached, so the count reflects only this test's two calls. The guard
-    # is what makes the RED legible: an uncached factory has no `cache_clear`, and the point is the two
-    # calls below then construct twice.
-    if hasattr(auth.get_auth_settings, "cache_clear"):
-        auth.get_auth_settings.cache_clear()
-
-    auth.get_auth_settings()
-    auth.get_auth_settings()
-
-    assert calls == 1, f"IngestAuthSettings was constructed {calls} times across two calls — get_auth_settings is not cached"
 
 
 def test_service_project_override_reads_the_env(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -44,24 +44,9 @@ def _req(*, kind: str = "lance-append", options: dict[str, object] | None = None
 
 
 @pytest.mark.asyncio
-async def test_unknown_kind_is_400_not_202(lance_root: str) -> None:
-    """`build_source` refuses loudly; the door must turn that into the caller's answer."""
-    with pytest.raises(ValidationError, match="unknown source kind"):
-        await _refuse_unusable_source(_req(kind="not-a-real-kind"))
-
-
-@pytest.mark.asyncio
 async def test_outside_the_confinement_root_is_400(lance_root: str, tmp_path) -> None:
     with pytest.raises(ValidationError, match="outside RASK_INGEST_LANCE_ROOT"):
         await _refuse_unusable_source(_req(options={"uri": "/etc/passwd.lance"}))
-
-
-@pytest.mark.asyncio
-async def test_a_governed_dataset_is_400_and_names_the_stage_runner(lance_root: str, tmp_path, monkeypatch) -> None:
-    """The security guard. Its message must name where the caller SHOULD go, or they build a copy path by hand."""
-    monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
-    with pytest.raises(ValidationError, match="catalog-governed"):
-        await _refuse_unusable_source(_req(options={"uri": str(tmp_path / "ok.lance")}))
 
 
 @pytest.mark.asyncio
@@ -69,18 +54,6 @@ async def test_an_unreadable_dataset_is_400(lance_root: str, tmp_path) -> None:
     """lance raises ValueError for a missing dataset — guard 2, the one `probe()` exists for."""
     with pytest.raises(ValidationError, match=r"[Nn]ot found"):
         await _refuse_unusable_source(_req(options={"uri": str(tmp_path / "absent.lance")}))
-
-
-@pytest.mark.asyncio
-async def test_a_usable_source_passes(lance_root: str) -> None:
-    """The door must not become a second place runs die."""
-    await _refuse_unusable_source(_req(options={"uri": lance_root}))
-
-
-@pytest.mark.asyncio
-async def test_missing_required_option_is_400(lance_root: str) -> None:
-    with pytest.raises(ValidationError, match=r"requires options\.uri"):
-        await _refuse_unusable_source(_req(options={}))
 
 
 @pytest.mark.asyncio

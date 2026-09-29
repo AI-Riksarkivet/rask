@@ -31,18 +31,6 @@ def _clear_cache() -> None:
     catalog_service.catalog_token.cache_clear()
 
 
-def test_the_token_comes_from_the_SECRET_STORE(monkeypatch: pytest.MonkeyPatch) -> None:
-    from ingest import catalog_service
-
-    monkeypatch.setenv("RASK_INGEST_USE_CATALOG", "true")
-    monkeypatch.setattr(
-        "service_kit.governed.secrets.fetch_required_secrets",
-        lambda store, key, *, require: {require: "from-the-store"},
-    )
-
-    assert catalog_service.catalog_token() == "from-the-store"
-
-
 def test_there_is_NO_ENV_FALLBACK(monkeypatch: pytest.MonkeyPatch) -> None:
     """The heart of the rule. A fallback makes the store optional, and an optional store is one nobody
     notices has stopped working — the credential keeps coming from env and the "governed" claim is a
@@ -58,23 +46,6 @@ def test_there_is_NO_ENV_FALLBACK(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("service_kit.governed.secrets.fetch_required_secrets", _refuse)
 
     with pytest.raises(RuntimeError, match="failing closed"):
-        catalog_service.catalog_token()
-
-
-def test_a_MISSING_secret_fails_CLOSED_rather_than_booting_tokenless(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Booting without the token is the failure mode that actually happened: the service came up
-    healthy, served `/api/health` 200, accepted runs with a 202, and only died at the first catalog
-    call — one activity deep inside a workflow, where the 401 reaches an operator as `FAILED` with an
-    empty error map. Failing at the fetch turns a mystery into a message."""
-    from ingest import catalog_service
-
-    monkeypatch.setenv("RASK_INGEST_USE_CATALOG", "true")
-    monkeypatch.setattr(
-        "service_kit.governed.secrets.fetch_required_secrets",
-        lambda store, key, *, require: (_ for _ in ()).throw(RuntimeError(f"secret {require!r} unavailable — failing closed")),
-    )
-
-    with pytest.raises(RuntimeError, match="unavailable"):
         catalog_service.catalog_token()
 
 

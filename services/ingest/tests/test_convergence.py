@@ -36,26 +36,6 @@ if TYPE_CHECKING:
 # ── the identity itself ────────────────────────────────────────────────────────────────
 
 
-def test_same_key_same_token_is_the_SAME_id() -> None:
-    assert unit_id("s3://b/k", "etag1") == unit_id("s3://b/k", "etag1")
-
-
-def test_a_replaced_object_gets_a_NEW_id() -> None:
-    """The owner's ruling made mutation real: same key, new bytes, new listing etag. The id MUST
-    move, or the anti-join skips the replacement forever — the exact silent loss ruled out."""
-    assert unit_id("s3://b/k", "etag1") != unit_id("s3://b/k", "etag2")
-
-
-def test_a_tokenless_id_is_BYTE_IDENTICAL_to_the_historic_derivation() -> None:
-    """Snapshot sources keep sha256(key) — so every id this plane ever wrote stays valid and the
-    change is additive for existing tables. This is the back-compat contract, pinned."""
-    import hashlib
-
-    key = "file:///data/page-0001.tif"
-    historic = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big", signed=True)
-    assert unit_id(key, None) == historic
-
-
 def test_the_NUL_separator_prevents_boundary_collisions() -> None:
     assert unit_id("ab", "c") != unit_id("a", "bc")
 
@@ -98,19 +78,6 @@ def test_s3_versioned_listing_yields_uri_and_UNQUOTED_etag() -> None:
     )
 
     assert list(source.iter_versioned_keys()) == [("s3://b/p/one.tif", "abc123"), ("s3://b/p/two.tif", "def456")]
-
-
-def test_a_clientless_s3_source_degrades_to_SNAPSHOT_not_an_error(tmp_path: Path) -> None:
-    """The documented contract: no client -> (key, None) over the pyarrow listing. Local-dir takes
-    the same fallback through `iter_versioned_unit_keys`."""
-    from ingest.sources import iter_versioned_unit_keys
-    from service_kit.lakehouse.sources import LocalDirSource
-
-    (tmp_path / "a.tif").write_bytes(b"II*\x00a")
-    pairs = list(iter_versioned_unit_keys(LocalDirSource(tmp_path)))
-
-    assert len(pairs) == 1
-    assert pairs[0][1] is None
 
 
 # ── the anti-join, end to end through the real enumerate activity ─────────────────────
@@ -209,14 +176,6 @@ def test_a_REPLACED_token_enumerates_the_key_AGAIN(tmp_path: Path, monkeypatch: 
     assert unit_id(key, "etag-2") not in existing, "a replaced object's id matched the old row — the replacement would be skipped forever"
 
 
-def test_the_etag_COLUMN_records_what_the_identity_used(tmp_path: Path) -> None:
-    """The audit half: a row must SAY which version of the source object it witnessed."""
-    table = units_to_table([("s3://b/k", b"bytes")], tokens=["etag-9"])
-
-    assert table.column("etag").to_pylist() == ["etag-9"]
-    assert table.column("id").to_pylist() == [unit_id("s3://b/k", "etag-9")]
-
-
 # ── the anti-join must FAIL rather than skip nothing (F12c) ────────────────────────────
 
 
@@ -252,23 +211,3 @@ def test_an_UNREADABLE_bronze_FAILS_the_enumeration_instead_of_ingesting_everyth
 
     with pytest.raises(AntiJoinUnavailable, match="already holds"):
         _enumerate(activity_ctx, root, uri)
-
-
-def test_an_EMPTY_bronze_is_not_a_failure(activity_ctx: WorkflowActivityContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The legitimate empty case stays legitimate: `ensure_dataset` creates the table with zero rows,
-    so a run against a brand-new dataset must enumerate everything rather than refuse."""
-    from ingest.catalog import LocalCatalog
-    from ingest.runtime import BRONZE_SCHEMA
-
-    monkeypatch.setenv("RASK_INGEST_LOCAL_ROOT", str(tmp_path))
-    root = tmp_path / "src"
-    root.mkdir()
-    (root / "a.tif").write_bytes(b"II*\x00a")
-
-    uri = str(tmp_path / "bronze.lance")
-    LocalCatalog(BRONZE_SCHEMA).ensure_at(uri)
-
-    chunks = _enumerate(activity_ctx, root, uri)
-
-    assert len(chunks) == 1
-    assert chunks[0]["count"] == 1

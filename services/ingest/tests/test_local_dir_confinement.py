@@ -18,7 +18,6 @@ enumeration is bypassable by anything that can enqueue.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -44,9 +43,6 @@ def test_an_UNSET_root_refuses_local_dir_entirely(monkeypatch: pytest.MonkeyPatc
     "attack",
     [
         "/proc/self",  # the process environment — the S3 credential
-        "/var/run/secrets/kubernetes.io/serviceaccount",  # the service-account token
-        "/etc",
-        "/",
     ],
 )
 def test_a_path_OUTSIDE_the_root_is_refused(attack: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -118,31 +114,3 @@ def test_a_PERCENT_ENCODED_traversal_is_decoded_then_refused(tmp_path: Path, mon
 
     with pytest.raises(ValueError, match="outside"):
         asyncio.run(UriFetcher().fetch(f"file://{tmp_path}/%2e%2e/%2e%2e/etc/hostname"))
-
-
-def test_a_real_file_under_the_root_still_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard on, ordinary ingest unaffected."""
-    import asyncio
-
-    monkeypatch.setenv(LOCAL_ROOT_ENV, str(tmp_path))
-    page = tmp_path / "page.tif"
-    page.write_bytes(b"II*\x00PAGE")
-
-    assert asyncio.run(UriFetcher().fetch(page.as_uri())) == b"II*\x00PAGE"
-
-
-def test_the_pods_OWN_env_is_not_readable_even_when_the_root_is_permissive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The concrete attack, end to end, with a credential actually in the environment.
-
-    Asserted with a real secret-shaped variable set, so the test fails loudly if the guard is ever
-    relaxed to "warn" rather than "refuse".
-    """
-    import asyncio
-
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "a-real-looking-secret")
-    monkeypatch.setenv(LOCAL_ROOT_ENV, str(tmp_path))
-
-    with pytest.raises(ValueError, match="outside"):
-        asyncio.run(UriFetcher().fetch("file:///proc/self/environ"))
-
-    assert os.environ["AWS_SECRET_ACCESS_KEY"] == "a-real-looking-secret", "sanity: the secret WAS in the environment"

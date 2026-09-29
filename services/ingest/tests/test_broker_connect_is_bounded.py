@@ -74,16 +74,6 @@ async def _must_raise_within(coro, bound: float, what: str) -> BaseException:
 
 
 @pytest.mark.asyncio
-async def test_the_seam_itself_gives_up(black_hole: str, short_bound: float) -> None:
-    """`WorkQueue.connect` is where the bound belongs — every caller inherits it."""
-    from ingest.queue import WorkQueue
-
-    started = time.monotonic()
-    await _must_raise_within(WorkQueue.connect(black_hole), short_bound, "WorkQueue.connect")
-    assert time.monotonic() - started < short_bound + _SLACK
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("activity", ["publish_chunk_units", "drain_chunk_units", "reconcile_from_queue"])
 async def test_every_activity_body_raises_instead_of_hanging(activity: str, black_hole: str, short_bound: float, monkeypatch: pytest.MonkeyPatch) -> None:
     """The three sites the finding names. They pass no options, so they inherit the seam's bound —

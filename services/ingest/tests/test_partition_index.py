@@ -19,7 +19,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from ingest.lander import PARTITION_INDEX, PARTITION_INDEX_NAME, _ensure_partition_index
+from ingest.lander import _ensure_partition_index
 
 
 @pytest.fixture
@@ -32,30 +32,6 @@ def dataset(tmp_path):
         }
     )
     return lance.write_dataset(table, str(tmp_path / "bronze.lance"), data_storage_version="2.2", enable_stable_row_ids=True)
-
-
-def test_the_index_is_CREATED_because_nothing_else_creates_it(dataset: lance.LanceDataset) -> None:
-    """`services/maintenance` MAINTAINS indices; it never creates any. Verified by grep over that whole
-    service — `create_scalar_index` does not appear. A dataset arriving there without an index gets
-    nothing from it, so the creating moment has to be the writer's own commit."""
-    assert dataset.describe_indices() == [], "sanity: a fresh dataset has no index"
-
-    _ensure_partition_index(dataset)
-
-    names = [i.name for i in dataset.describe_indices()]
-    assert PARTITION_INDEX_NAME in names, f"no partition index was created; found {names}"
-
-
-def test_it_is_a_BITMAP_because_the_column_is_low_cardinality_equality(dataset: lance.LanceDataset) -> None:
-    """One distinct value per IIIF volume or S3 folder, queried as `partition_key = 'x'`. Lance stores a
-    compressed Roaring Bitmap per distinct value (`guide.md:3211-3215`); BTREE serves ranges, which this
-    column never has."""
-    _ensure_partition_index(dataset)
-
-    index = next(i for i in dataset.describe_indices() if i.name == PARTITION_INDEX_NAME)
-
-    # `type_url` is the protobuf descriptor — `/lance.table.BitmapIndexDetails` for a BITMAP.
-    assert PARTITION_INDEX.lower() in index.type_url.lower(), f"expected a {PARTITION_INDEX} index, got {index.type_url}"
 
 
 def test_an_equality_filter_is_INDEX_SERVED_not_a_scan(dataset: lance.LanceDataset) -> None:

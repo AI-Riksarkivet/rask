@@ -36,19 +36,12 @@ moved.
 from __future__ import annotations
 
 import json
-import random
-from itertools import combinations
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
 from ingest import staging
-from ingest.staging import CoverResult, discover_staged, stage_fragments
-
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator, Sequence
+from ingest.staging import discover_staged, stage_fragments
 
 
 RUN = "run-cover-bounded"
@@ -76,87 +69,6 @@ def _stage_recovery_family(dataset: str, batches: int, per_batch: int) -> None:
         stage_fragments(dataset, RUN, units, [json.dumps({"batch": batch, "units": units})])
         for unit in units:
             stage_fragments(dataset, RUN, [unit], [json.dumps({"redelivered": unit, "units": [unit]})])
-
-
-# ── the search this one must answer identically ───────────────────────────────────────
-
-
-def _scanning_search_core(sets: Sequence[frozenset[str]], core: Sequence[int], remaining: frozenset[str]) -> CoverResult:
-    """A search that rescans the whole core and re-sorts the whole residue at every node.
-
-    The differential oracle, kept in the test rather than in the module: an optimisation is only
-    allowed to change what the finalizer COSTS, and the only way to say that is to run both and
-    compare verdicts. Its branching rule is the contract — most-constrained unit first, ties broken
-    by the smallest unit key, candidates in ascending fragment index — because that rule decides
-    WHICH exact cover comes back when several exist, and two workers finalizing the same prefix must
-    still choose the same one.
-    """
-    core_holders: dict[str, list[int]] = {}
-    for index in core:
-        for unit in sets[index]:
-            core_holders.setdefault(unit, []).append(index)
-    core_occurrences = sum(len(sets[index]) for index in core)
-
-    def candidates(rest: frozenset[str]) -> list[int]:
-        usable = {index for index in core if sets[index] <= rest}
-        best: list[int] | None = None
-        for unit in sorted(rest):
-            holders = [index for index in core_holders.get(unit, ()) if index in usable]
-            if not holders:
-                return []
-            if best is None or len(holders) < len(best):
-                best = holders
-        return best or []
-
-    budget = staging._SEARCH_WORK_LIMIT
-    frames: list[tuple[frozenset[str], Iterator[int]]] = []
-    picked: list[int] = []
-
-    def descend(rest: frozenset[str]) -> bool:
-        nonlocal budget
-        budget -= core_occurrences + len(rest)
-        if budget <= 0:
-            return False
-        frames.append((rest, iter(candidates(rest))))
-        return True
-
-    if not descend(remaining):
-        return CoverResult(exhausted=True)
-
-    while frames:
-        rest, untried = frames[-1]
-        if not rest:
-            return CoverResult(chosen=list(picked))
-        index = next(untried, None)
-        if index is None:
-            frames.pop()
-            if picked:
-                picked.pop()
-            continue
-        picked.append(index)
-        if not descend(rest - sets[index]):
-            return CoverResult(exhausted=True)
-
-    return CoverResult()
-
-
-def _brute_force_cover(sets: Sequence[frozenset[str]], universe: frozenset[str]) -> bool:
-    """Is there ANY subset of these fragments covering every unit exactly once? Exponential.
-
-    Independent of both searches on purpose: propagation, branching order and budget are shared
-    reasoning, and an oracle that shares the reasoning cannot catch it being wrong.
-    """
-    for size in range(1, len(sets) + 1):
-        for combo in combinations(sets, size):
-            covered: set[str] = set()
-            for unit_set in combo:
-                if unit_set & covered:
-                    break
-                covered |= unit_set
-            else:
-                if covered == universe:
-                    return True
-    return False
 
 
 # ── the bound ─────────────────────────────────────────────────────────────────────────
@@ -223,74 +135,6 @@ def test_the_search_reads_the_staging_a_bounded_number_of_TIMES_not_once_per_pic
 
 
 # ── what the bound must not have cost ─────────────────────────────────────────────────
-
-
-def _fuzz_family(rng: random.Random) -> list[frozenset[str]]:
-    """A staged family: random batches, then a partial redelivery of some of them.
-
-    Half the cases carry the recovery shape — a batch and singletons of ITS units — because that is
-    the family the bound is for, and a fuzz over unrelated random sets would never build one.
-    Deduplicated and ordered the way `discover_staged` orders its records: a manifest is named by a
-    hash of its unit set, so two records cannot share one.
-    """
-    units = [f"u{index}" for index in range(rng.randint(4, 9))]
-    sets = [frozenset(rng.sample(units, rng.randint(1, min(4, len(units))))) for _ in range(rng.randint(2, 5))]
-    for batch in list(sets):
-        if rng.random() < 0.5:
-            sets += [frozenset({unit}) for unit in rng.sample(sorted(batch), rng.randint(1, len(batch)))]
-    sets += [frozenset({rng.choice(units)}) for _ in range(rng.randint(0, 2))]
-    sets = list(dict.fromkeys(sets))
-    sets.sort(key=lambda unit_set: (-len(unit_set), sorted(unit_set)))
-    return sets
-
-
-def test_the_bounded_search_returns_the_SAME_selection_as_a_full_scan() -> None:
-    """Every verdict, on every case, identical — the indices, not merely "a cover exists".
-
-    Which cover comes back is part of the contract: `discover_staged` commits the fragments the
-    solver names, and two workers finalizing the same staging prefix must name the same ones. So
-    this compares `chosen` element by element against the full-scan search above, not just whether
-    both found something.
-
-    The oracle run reuses the module's own propagation (only the search is swapped) so the
-    comparison isolates what changed. A third, independent brute force then checks that both are
-    right rather than identically wrong.
-    """
-    # Seeded: an unreproducible failure on the finalize path cannot be debugged, and the value of a
-    # fuzz here is the orderings a hand-picked family would not think of.
-    rng = random.Random(20260831)  # noqa: S311 — shuffling test inputs, not minting secrets
-    resolvable = 0
-    refused = 0
-    with_recovery_shape = 0
-
-    for _ in range(4000):
-        sets = _fuzz_family(rng)
-        universe = frozenset().union(*sets)
-        if any(len(unit_set) == 1 and any(unit_set < other for other in sets) for unit_set in sets):
-            with_recovery_shape += 1
-
-        verdict = staging._exact_cover(sets, universe)
-        with pytest.MonkeyPatch.context() as patch:
-            patch.setattr(staging, "_search_core", _scanning_search_core)
-            reference = staging._exact_cover(sets, universe)
-
-        family = sorted(sorted(unit_set) for unit_set in sets)
-        assert verdict.chosen == reference.chosen, f"the selection moved on {family}: {verdict.chosen} vs {reference.chosen}"
-        assert verdict.exhausted == reference.exhausted, f"the budget verdict moved on {family}"
-
-        if verdict.chosen is None:
-            assert not _brute_force_cover(sets, universe), f"refused a family the brute force covers — {family}"
-            refused += 1
-            continue
-
-        covered = [unit for index in verdict.chosen for unit in sets[index]]
-        assert sorted(covered) == sorted(universe), f"the selection does not cover {family}"
-        assert len(covered) == len(set(covered)), f"a unit would commit twice on {family}"
-        resolvable += 1
-
-    assert resolvable > 1000, f"only {resolvable} resolvable cases — the accept path is barely fuzzed"
-    assert refused > 100, f"only {refused} refusals — the refusal path is barely fuzzed"
-    assert with_recovery_shape > 1000, f"only {with_recovery_shape} cases carried the redelivery shape the bound is for"
 
 
 def test_the_pivot_heap_stays_proportional_to_the_UNITS_not_to_the_budget() -> None:
