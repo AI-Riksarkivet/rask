@@ -415,9 +415,9 @@ async def _access_mutate(
     event = "access_grant" if grant else "access_revoke"
     try:
         if grant:
-            await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")
+            await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
         else:
-            await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")
+            await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
     except ServiceUnavailableError:
         audit(event, FAILURE, subject=actor, resource=obj, grantee=grantee, relation=body.relation)
         raise
@@ -616,9 +616,9 @@ async def _set_managed_access(
 
     already = any(t.object == obj and t.relation == "managed_access" for t in await fga.read_object_tuples(client, obj))
     if enabled and not already:
-        await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")
+        await fga.write_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
     elif not enabled and already:
-        await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")
+        await fga.delete_tuples(client, [tup], actor=actor, origin="grant_api")  # noqa: TID251
     # Audited distinctly from a grant: this does not move anyone's access, it changes WHO MAY move it —
     # a governance act whose blast radius is every object beneath, and one an auditor will look for by
     # name rather than by inferring it from the absence of later grants.

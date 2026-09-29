@@ -196,7 +196,7 @@ def ingest_to_bronze(
             yield _chunk_batch(chunk, next_id, extra_columns)
 
     try:
-        dataset = lance.write_dataset(
+        dataset = lance.write_dataset(  # noqa: TID251
             batches(),
             bronze_uri,
             schema=ingest_schema_for(extra_columns),

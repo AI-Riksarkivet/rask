@@ -323,7 +323,7 @@ def write_unit_fragments(dataset_uri: str, batch: pa.Table, storage_options: dic
     # ABSENT means the ambient credential chain, which is exactly the previous behaviour. `mode_b`
     # vends nothing by design, so a deployment on it must be untouched — this adds a capability
     # without removing one.
-    written = lance.fragment.write_fragments(batch, dataset_uri, **({"storage_options": storage_options} if storage_options else {}))
+    written = lance.fragment.write_fragments(batch, dataset_uri, **({"storage_options": storage_options} if storage_options else {}))  # noqa: TID251
     return [json.dumps(f.to_json()) for f in written]
 
 
@@ -359,7 +359,7 @@ def create_empty(dataset_uri: str, schema: pa.Schema, external_base: str | None 
     # so a stage runner that cannot resolve it cannot forward it, and the cascade would copy the bytes it was
     # built to stop copying.
     schema = blobs.stamp_external_base(schema, external_base)
-    ds = lance.write_dataset(
+    ds = lance.write_dataset(  # noqa: TID251
         schema.empty_table(),
         dataset_uri,
         mode="create",

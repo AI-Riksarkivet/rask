@@ -100,7 +100,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | Single Python test           | `uv run pytest services/core/tests/test_pipelines.py::test_name`        |
 | Filter by name               | `uv run pytest -k <pattern>`                                             |
 | Skip slow tests              | `uv run pytest -m "not slow"`                                            |
-| Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make typecheck` + `make knip`) |
+| Format + lint + typecheck    | `make check` (= `make fmt` + `make lint` + `make lint-imports` + `make typecheck` + `make knip` + `make fga-test` + `make go-fmt`) |
 | Scan dependencies for CVEs   | `make audit` (osv-scanner over all six lockfiles + `.dagger/go.mod`)     |
 | Scan dockerfiles + chart     | `make scan-config` (trivy misconfig + secret detection)                  |
 | Scan git history for secrets | `make scan-secrets` (trufflehog; gates on VERIFIED credentials only)     |
@@ -319,7 +319,7 @@ single file:
 ## Conventions
 
 - **Gateway port is 8888 — but the zones' dev proxies disagree on who to call.** `compute`/`studio`/`models` proxy `/api` → `VIEWER_BACKEND` (`:8888`, the gateway); `home`/`lakehouse` proxy → `LANCE_BACKEND` (**`:8001`**, the lineage service — which `dev-micro.sh` does not start); `explorer`/`annotator` have no `/api` proxy and reach `:8101`/`:8102`/`:8103` via their own BFF. The same split exists server-side: `compute` reads `RASK_GATEWAY_URL`, `home`/`lakehouse` read `LANCE_GATEWAY_URL`. A `/api/*` call that works in one zone can fail in another — see `.claude/skills/rask-frontend`.
-- **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are explicit (`testpaths = [...]`), not discovered.
+- **Pytest import mode is `importlib`** (`--import-mode=importlib` in `pyproject.toml`). Test paths are globbed (`testpaths` names `packages/*/tests`, `services/*/tests` and the three root suites), not discovered from the rootdir.
 - **Ruff line length is 160**, not 100. Selected rule families include `ANN` (annotations); tests are exempted via `per-file-ignores`.
 - **oxfmt uses tabs**, single quotes, `printWidth: 100` — defined in `frontend/.oxfmtrc.json`, applied across every JS/TS workspace (zones, `@rask/ui`, `@rask/api`, `@rask/zone-contract`). Prettier is gone.
 - **JS monorepo runs on Turborepo** (`frontend/turbo.json`): `bun --cwd=frontend run build`/`check`/`dev` delegate to `turbo run` (package tasks + `^build` ordering + cached `build`/`.svelte-kit`/`dist` outputs). Add a new JS package's scripts in its own `package.json` — never centralize task logic in root. `lint`/`fmt`/`fmt:check` are **per-package turbo tasks** too (each package runs `oxlint` / `oxfmt`); only `knip` stays root-level, because it analyses the whole JS graph at once.

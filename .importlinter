@@ -1,0 +1,115 @@
+# Import-layer contracts, run by `make lint-imports` (part of `make check`). Each names a layer that must
+# not import another; lint-imports walks the whole import graph, function-local (lazy) imports included,
+# and names the offending chain. `dapr` is a root package because import-linter cannot forbid an external
+# SUBPACKAGE (`dapr.ext.workflow`) otherwise, and include_external_packages lets the other third-party
+# names (ray, durabletask, fastapi, starlette, dotenv) be forbidden directly.
+
+[importlinter]
+root_packages =
+    catalog
+    lineage
+    medallion
+    maintenance
+    notifications
+    annotator
+    ingest
+    service_kit
+    ray_kit
+    dapr
+include_external_packages = True
+
+[importlinter:contract:catalog-api-speaks-the-spec-taxonomy]
+name = catalog.api raises the Lance Namespace spec taxonomy, never the fleet exceptions
+type = forbidden
+source_modules =
+    catalog.api
+forbidden_modules =
+    service_kit.exceptions
+allow_indirect_imports = True
+
+[importlinter:contract:the-workflow-reads-ray-through-the-port]
+name = medallion.workflow reaches Ray only through the executor port
+type = forbidden
+source_modules =
+    medallion.workflow
+forbidden_modules =
+    medallion.services.ray_jobs_api
+    medallion.services.ray_submit
+allow_indirect_imports = True
+
+[importlinter:contract:the-cascade-publishes-lineage-through-the-signing-door]
+name = medallion publishes lineage only through medallion.core.lineage_publish
+type = forbidden
+source_modules =
+    medallion
+forbidden_modules =
+    service_kit.lakehouse.outbox
+ignore_imports =
+    medallion.core.lineage_publish -> service_kit.lakehouse.outbox
+allow_indirect_imports = True
+
+[importlinter:contract:the-lakehouse-is-not-built-on-ray]
+name = Phase 1 (3): no lakehouse service imports Ray
+type = forbidden
+source_modules =
+    catalog
+    lineage
+    medallion
+    maintenance
+    notifications
+forbidden_modules =
+    ray
+    ray_kit
+allow_indirect_imports = True
+
+[importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
+name = Phase 1 (3): only the named adapters import a workflow engine
+type = forbidden
+source_modules =
+    catalog
+    lineage
+    medallion
+    maintenance
+    service_kit
+forbidden_modules =
+    dapr.ext.workflow
+    durabletask
+ignore_imports =
+    medallion.workflow -> dapr.ext.workflow
+    medallion.api.promotions -> dapr.ext.workflow
+    medallion.api.promotions -> dapr.ext.workflow.workflow_state
+    medallion.producer -> dapr.ext.workflow
+    medallion.services.dapr_saga -> dapr.ext.workflow
+    medallion.stage_runner -> dapr.ext.workflow
+allow_indirect_imports = True
+
+[importlinter:contract:settings-import-no-web-stack]
+name = importing service_kit.config builds no app-factory graph
+type = forbidden
+source_modules =
+    service_kit.config
+forbidden_modules =
+    fastapi
+    starlette
+    service_kit.app
+    service_kit.middleware
+    service_kit.probes
+
+[importlinter:contract:the-error-types-import-no-app-factory]
+name = importing service_kit.exceptions loads neither the app factory nor its dotenv read
+type = forbidden
+source_modules =
+    service_kit.exceptions
+forbidden_modules =
+    service_kit.app
+    dotenv
+
+[importlinter:contract:the-annotation-domain-core-never-reaches-the-lakehouse]
+name = importing annotator.projects pulls in no lancekit / registry
+type = forbidden
+source_modules =
+    annotator.projects.machines
+    annotator.projects.models
+    annotator.projects.ontology
+forbidden_modules =
+    service_kit.lancekit

@@ -345,7 +345,7 @@ async def delete_project(
     # described and re-deletable; the opposite order would strand grants on a project no API can name any
     # more — privilege that nothing in the product can see, let alone clear.
     if settings.fga_enabled and client is not None:
-        removed = await fga.revoke_object_tuples(
+        removed = await fga.revoke_object_tuples(  # noqa: TID251
             client,
             f"project:{project_id}",
             # The caller who retired the tenant. `system:catalog` is the honest fallback for an auth-off

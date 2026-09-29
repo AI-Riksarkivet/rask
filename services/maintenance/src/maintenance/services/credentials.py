@@ -33,7 +33,7 @@ stops and is retried, because the catalog's own fail-closed refusals are 5xx too
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: TID251
 from typing import TYPE_CHECKING
 
 import httpx

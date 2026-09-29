@@ -251,7 +251,7 @@ def seed_bronze(uri: str, storage_options: dict[str, str], *, rows: int = 8, dat
         # the source table above reaches the dataset only on the create branch. This is the other half.
         ensure_declared_dataset_id(uri, dataset_id or "", storage_options, session=shared_lance_session())
     else:
-        lance.write_dataset(
+        lance.write_dataset(  # noqa: TID251
             declare_dataset_id(table, dataset_id),
             uri,
             mode="create",
@@ -392,7 +392,7 @@ def transform_stage(
         ).when_matched_update_all().when_not_matched_insert_all().when_not_matched_by_source_delete().execute(declare_dataset_id(out, dataset_id))
         ensure_declared_dataset_id(to_uri, dataset_id or "", storage_options, session=shared_lance_session())
     else:
-        lance.write_dataset(
+        lance.write_dataset(  # noqa: TID251
             declare_dataset_id(out, dataset_id),
             to_uri,
             mode="create",

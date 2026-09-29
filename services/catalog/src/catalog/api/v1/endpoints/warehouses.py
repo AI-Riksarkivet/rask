@@ -793,7 +793,7 @@ async def _revoke_tuples(client: OpenFgaClient | None, settings: Settings, token
     # `system:catalog` is the honest actor for an auth-off stack, where there genuinely is no principal —
     # never a stand-in for one we simply did not thread through (same rule as revoke_ownership).
     actor = token.sub if token is not None else "system:catalog"
-    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="lifecycle_delete")
+    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="lifecycle_delete")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": removed})
     return len(removed)

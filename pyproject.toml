@@ -78,12 +78,20 @@ extend-exclude = [".vulture-whitelist.py"]
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]
 ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
+# Code-shape rules live here, not in a test that reads source: TID251 enforces the bans in
+# [tool.ruff.lint.flake8-tidy-imports.banned-api] below at every import and attribute use, and FAST001
+# refuses a `response_model=` that restates the route's own return annotation (the parameter exists to
+# say the wire shape DIFFERS from the return type). FAST001 does not fire in a module that postpones
+# annotations (`from __future__ import annotations`; measured on ruff 0.15.13 and 0.16.0), which is 56
+# of the 78 route modules on 2026-09-29, so it guards only the other 22.
+extend-select = ["TID251", "FAST001"]
 
 [tool.ruff.lint.per-file-ignores]
 # Tests legitimately hardcode fixture credentials (S105/S106/S107), drive live endpoints without a
 # client timeout (S113), and use tmp paths (S108) — that is what a fixture IS. rask already exempted
-# S101/ANN2xx here; the lance-ns suites needed the rest of the same family.
-"**/tests/**" = ["S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
+# S101/ANN2xx here; the lance-ns suites needed the rest of the same family. TID251 is exempt in the
+# tests and scripts trees because both sit outside the platform seams the banned-api rules guard.
+"**/tests/**" = ["TID251", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
 # The media pipeline shells out to ffmpeg/ffprobe with LIST-form argv (never shell=True), which is
 # the safe form S603 cannot distinguish from an unsafe one. Scoped to the two trees that decode
 # media rather than silenced globally.
@@ -134,12 +142,17 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 "packages/service-kit/src/service_kit/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
 "packages/service-kit/src/service_kit/lakehouse/**" = ["RUF002", "RUF003", "RUF100", "PERF401"]
 "packages/service-kit/src/service_kit/lancekit/**" = ["A002", "ANN401", "C901", "PERF401"]
-"packages/service-kit/src/service_kit/media/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# No ANN exemption under media/: `dataset_handle` is the entry point every media and annotator route
+# passes through to reach a dataset, and an untyped return there is an `Any` in every one of them.
+"packages/service-kit/src/service_kit/media/**" = ["A002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 # `service_kit/obs.py` measured identically and went the same way 2026-09-10.
 "packages/service-kit/src/service_kit/dapr_publish.py" = ["ANN401"]
-"runners/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
+# TID251: a sealed runner is where a model framework and a workload's own Lance writes belong, outside
+# the platform seams the banned-api rules guard (htr and dummy carry their own ruff config and never
+# read this map).
+"runners/**" = ["TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "scripts/ray_stage_job.py" = ["ANN401"]
 "scripts/ray_train_job.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 # The other two baked Ray entrypoints. They inline the SAME trace-continuity helpers as the two above
@@ -154,11 +167,70 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # need them.
 "scripts/medallion_demo.py" = ["PERF401"]
 "scripts/model_artifact_janitor.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"tests/**" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
+"tests/**" = ["TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
+"scripts/**" = ["TID251"]
 "services/viewer/src/viewer/services/clips.py" = ["S603"]
 "services/viewer/src/viewer/services/audio_prep.py" = ["S603"]
 "scripts/harvest_ead.py" = ["ANN", "RET503", "B007"]
 "scripts/index_catalog.py" = ["ANN", "RET503", "PERF401", "C901", "F841"]
+# ---- TID251: the sanctioned sites of the banned-api rules ---------------------------------------
+# A dedicated seam module IS the sanctioned site, so it takes a per-file ignore. Every other sanctioned
+# use takes a LINE-level `# noqa: TID251` at its call site, never a per-file ignore: a per-file ignore
+# waives every ban in the file. Measured: with annotator's projects endpoint per-file-ignored (it is
+# sanctioned for grant_on_create), a raw ActorProxy planted in the same file went unflagged, and
+# maintenance's rebuild may grant tuples but must never revoke them, which only a line-level exemption
+# can express.
+"packages/storage/src/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
+"packages/storage/src/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
+"packages/service-kit/src/service_kit/draining.py" = ["TID251"]  # signal: the drain seam
+"packages/service-kit/src/service_kit/lancekit/arrow_ipc.py" = ["TID251"]  # arrow ipc: the validating decoder
+"packages/service-kit/src/service_kit/lancekit/reader.py" = ["TID251"]  # decode_arrow_response: the /query reader
+"services/annotator/src/annotator/projects/proxies.py" = ["TID251"]  # ActorProxy: the proxies module
+"services/notifications/src/notifications/proxies.py" = ["TID251"]  # ActorProxy + encode_subject: the proxies module
+"services/ingest/src/ingest/queue.py" = ["TID251"]  # nats: the queue seam
+
+# The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
+# are the per-file ignores above and the line-level `# noqa: TID251` at each call site.
+# Six `dataclasses.dataclass` noqa lines are DEBT against the Pydantic-only rule, not sanctioned uses:
+# lineage_kit/signing.py, service_kit/lakehouse/idempotency.py, catalog/api/idempotency.py,
+# catalog/core/lineage_emit.py, maintenance/services/credentials.py and maintenance/services/sweep.py.
+# services/ingest and services/viewer RESTATE this whole map in their own pyproject.toml: a nested
+# banned-api table replaces the root one rather than merging with it (measured, ruff 0.16.0), so a ban
+# added here is added to both of those too.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
+"boto3".msg = "Build S3/STS clients through storage.s3_client / storage.sts_client: a raw boto3 client carries no timeouts."
+"lance.write_dataset".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
+"lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
+"catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
+"catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
+"service_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
+"signal.signal".msg = "SIGTERM is taken only by service_kit.draining; a second handler replaces the drain."
+"pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.MessageReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_message".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_record_batch".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_schema".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"service_kit.lancekit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
+"dapr.actor.ActorProxy".msg = "Build an actor proxy through the service's proxies module: it translates the wire method names."
+"service_kit.governed.user_state.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
+"service_kit.governed.fga.write_tuples".msg = "Tuple grants happen only at the registered granting sites."
+"service_kit.governed.fga.grant_on_create".msg = "Tuple grants happen only at the registered granting sites."
+"service_kit.governed.fga.seed_ownership".msg = "Tuple grants happen only at the registered granting sites."
+"service_kit.governed.fga.provision".msg = "Only the registered bootstrap may provision an OpenFGA store/model."
+"service_kit.governed.fga.delete_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
+"service_kit.governed.fga.revoke_object_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
+"service_kit.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py and medallion train."
+"torch".msg = "No model framework in a shared seam: models live in sealed runners/."
+"pyannote".msg = "No model framework in a shared seam: models live in sealed runners/."
+"nats".msg = "The broker appears only in ingest.queue (the queue seam)."
+"ray_kit.await_success".msg = "Poll a Ray job through the shared submit-or-reattach kernel."
 
 [tool.ruff.lint.mccabe]
 max-complexity = 15
@@ -243,11 +315,11 @@ exclude = [
 # never silently vanish from the gate (tests/unit/test_e2e_collection_gate.py asserts it), but
 # excluded from offline runs via `-m "not e2e"` (make test / test-slow), the same way `slow` is.
 # tests/e2e-py/conftest.py force-applies the e2e marker to every item collected under it.
-# `services/catalog/tests` and `services/lineage/tests` were written and then collected by NOTHING —
-# the list is explicit, and adding the directory is a separate act from adding the file. Three landed
-# regression suites (the catalog's replayed-commit door, lineage's external-source authz and its
-# privileged-identity door) sat green-by-absence until 2026-08-09.
-testpaths = ["packages/lineage-kit/tests", "packages/ray-kit/tests", "packages/service-kit/tests", "packages/storage/tests", "packages/validate/tests", "services/annotator/tests", "services/gateway/tests", "services/ingest/tests", "services/compute/tests", "services/controlplane/tests", "services/flows/tests", "services/maintenance/tests", "services/medallion/tests", "services/notifications/tests", "services/catalog/tests", "services/lineage/tests", "services/search/tests", "services/viewer/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
+# GLOBS, so a workspace member's `tests/` is collected the moment it exists: with an explicit list,
+# adding the directory is a separate act from adding the file, and a suite outside the list is green by
+# absence (measured 2026-08-09: three landed regression suites in services/catalog and services/lineage
+# had never run). pytest expands a glob in `testpaths` (measured, pytest 9.1.1).
+testpaths = ["packages/*/tests", "services/*/tests", "tests/unit", "tests/integration", "tests/e2e-py"]
 # NO `--cov` HERE. It ran on EVERY pytest invocation in the estate and nothing read the result: no
 # `fail_under`, no xml report, no artifact upload, no threshold in `ci.yml` or `.dagger/` — so the
 # measurement was pure cost on the merge path and on every local run. `make coverage` computes it when
@@ -278,18 +350,21 @@ markers = [
 
 [tool.coverage.run]
 branch = true
-# THE SRC ROOTS, not the workspace directories. `["packages/", "services/"]` names two paths that are
-# not importable package roots (every member is a src-layout project), so coverage.py's unexecuted-file
-# discovery pruned the tree and the denominator became "files some test happened to import". Measured
-# on a single package's test run: 3 files discovered before, 427 after. A headline percentage computed over only
-# the files a run touched is not a coverage number, it is a tautology.
-#
-# Enumerated because coverage.py does not glob `source` — and pinned against the globs by
-# tests/unit/test_coverage_denominator.py, so a new package cannot silently fall out of the denominator.
-source = ["packages/lineage-kit/src", "packages/ray-kit/src", "packages/service-kit/src", "packages/storage/src", "packages/validate/src", "services/annotator/src", "services/catalog/src", "services/compute/src", "services/controlplane/src", "services/flows/src", "services/gateway/src", "services/ingest/src", "services/lineage/src", "services/maintenance/src", "services/medallion/src", "services/notifications/src", "services/search/src", "services/viewer/src"]
+# The two workspace directories, read with `[tool.coverage.report] include_namespace_packages` below.
+# Every member is a src-layout project with no `__init__.py` between the workspace directory and its
+# package, so without that flag coverage.py's unexecuted-file discovery prunes the tree at the first
+# directory lacking one and the denominator becomes "files some test happened to import" (measured on
+# a single package's test run: 3 files discovered, against 427 with the src roots named). With it,
+# discovery walks every member: measured 2026-09-29 with coverage 7.15.2 on one package's test run,
+# all 545 tracked `src/**/*.py` files and no other file, and a new member joins the denominator with no
+# edit here.
+source = ["services", "packages"]
 # `**/__init__.py` was here for empty package markers and deleted 409 statements of real
 # implementation across 69 files — including the ENTIRE gateway service, whose route table,
 # `_CLIENT_SPOOFABLE` header strip and proxy all live in `__init__.py`. Measured: the estate's front
 # door was absent from its own coverage report even when running its own tests; with this row narrowed
 # it reports 140 statements at 83%. An empty marker contributes 0 statements and costs nothing.
 omit = ["**/tests/*"]
+
+[tool.coverage.report]
+include_namespace_packages = true

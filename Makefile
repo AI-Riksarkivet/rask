@@ -1,4 +1,4 @@
-.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
+.PHONY: fga-store-check fga-estate-migrate sbom zone-sbom backlog registry-gc dagger-gc dev-gc help install build test test-slow lint lint-imports fmt clean storybook typecheck knip comment-gate check coverage fga-test ci dev-micro dev-frontends dev-frontends-k3s dev-zone home frontend-build frontend-check sync-favicons ray-up ray-down ray-status serve-up serve-down serve-status harvest-ead claude-bootstrap ray-up-htr serve-up-both qwen-serve k3s-install k3s-deps k3s-build k3s-import k3s-up k3s-down k3s-purge k9s bootstrap dev-registry e2e frontend-images prod-render-check alert-rules-check alert-rules-drill notifications-lanes notifications-rig audit smoke-rustfs rustfs-lifecycle auth-chain governance-chain medallion-demo go-fmt scan-config scan-secrets scan-image scan-zone-image seed-corpus e2e-isolation e2e-container-deletes e2e-fga-model e2e-open-run
 
 help:
 	@echo "Targets:"
@@ -55,35 +55,37 @@ build:
 PYTEST_WORKERS ?= 16
 PYTEST_PARALLEL = $(if $(filter 0,$(PYTEST_WORKERS)),,-n $(PYTEST_WORKERS))
 
+# The sealed runners' suites. A runner is sealed OUT of the root workspace (own lock, own venv), so the
+# root pytest can neither import nor collect its tests: each suite runs from INSIDE its own directory,
+# where pytest reads that runner's config and `uv run --frozen` syncs from that runner's lock. From the
+# repo root pytest would read the ROOT testpaths and die at collection on fleet modules the runner's
+# venv lacks. The loop covers every `runners/*/tests`, so a runner that gains a suite runs in both
+# `make test` and `make test-slow` with no edit here, and `--frozen` fails loudly on a runner that has
+# a suite but commits no uv.lock. `|| exit 1` because a shell loop reports only its LAST iteration's
+# status: without it a failing suite followed by a passing one reads as green.
+RUNNER_SUITES := $(sort $(patsubst %/tests,%,$(wildcard runners/*/tests)))
+run-runner-suites = for runner in $(RUNNER_SUITES); do (cd $$runner && uv run --frozen pytest $(1)) || exit 1; done
+
 test:
 	uv run pytest -m "not slow and not e2e" $(PYTEST_PARALLEL)
-	# The HTR runner is sealed OUT of the root workspace (own lock, own venv): the root
-	# pytest can neither import nor collect its tests, so without this second line the
-	# runner suite silently never runs. cd first — from the repo root, pytest would read
-	# the ROOT testpaths and try to import fleet modules absent from the runner's venv.
-	cd runners/htr && uv run --frozen pytest -m "not slow"
-	cd runners/dummy && uv run --frozen pytest
+	$(call run-runner-suites,-m "not slow")
 
-# Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on
-# hosts without them — opt in explicitly. Runs the full suite including slow marks.
-#
-# BOTH legs were broken, and between them this target ran ZERO slow tests while reading as if it
-# ran them all. Leg 1 selects none: the root workspace declares NO `slow` mark at all — every one
-# of them lives in a sealed runner. Leg 2 omitted the `cd` that `make test` documents four lines
-# above as mandatory, so from the repo root pytest read the ROOT testpaths and died at collection
-# (`ModuleNotFoundError: lineage_kit` — a fleet module absent from the runner's venv). It failed on
-# the second line AFTER a two-minute green suite, which reads as "no GPU on this box".
-# `runners/dummy` was simply missing. Pinned by tests/unit/test_runner_suites_are_invoked.py.
+# Slow tests need real models / a GPU (e.g. the YOLO layout smoke test) and hang on hosts without
+# them, so this is opt-in. The root workspace declares no `slow` mark at all: every one lives in a
+# sealed runner, so the runner loop, run with no marker filter, is what this target adds over
+# `make test`.
 test-slow:
 	uv run pytest -m "not e2e" $(PYTEST_PARALLEL)
-	# No `-m` filter, unlike `make test` above: dropping the `not slow` deselection is the entire
-	# difference between the two targets, and the sealed runners are where the slow marks are.
-	cd runners/htr && uv run --frozen pytest
-	cd runners/dummy && uv run --frozen pytest
+	$(call run-runner-suites,)
 
 lint:
 	uv run ruff check .
 	bun --cwd=frontend run lint
+
+# The import-layer contracts in `.importlinter`. `uv run --with` layers the pinned import-linter over
+# the workspace venv, so the graph it walks is the workspace's own editable installs.
+lint-imports:
+	uv run --with import-linter==2.15 lint-imports
 
 fmt:
 	uv run ruff format .
@@ -248,10 +250,11 @@ knip:
 # invocation in the estate — local, CI, Dagger — computed a report that nothing read: no `fail_under`,
 # no xml, no artifact upload, no threshold anywhere. Pure cost on the merge path.
 #
-# The denominator it produced was also wrong twice over, and both are fixed in `[tool.coverage.run]`:
-# `source` named the workspace directories rather than the src roots (3 files discovered on a
-# single package's test run, vs 427 after), and `omit` deleted every `__init__.py` — which is where the whole
-# gateway service lives.
+# The denominator is every src file of every workspace member, whichever tests ran: `[tool.coverage.run]
+# source` names the two workspace directories and `[tool.coverage.report] include_namespace_packages`
+# makes discovery walk their src-layout members (without it, a single package's test run discovered 3
+# files against 427), and `omit` keeps every `__init__.py`, which is where the whole gateway service
+# lives.
 #
 # NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
 # by whoever fixed the plumbing is how a gate ends up ratcheted to whatever happened to be true that
@@ -262,7 +265,7 @@ coverage: ## The coverage report, computed on request against a correct denomina
 # `go-fmt` IS IN HERE because a gate that runs nowhere is not a gate. It gated the Go plane from no
 # caller at all: not this target, not the CI gate matrix, only a `make go-fmt` nobody types — and
 # `.dagger/storage.go` was sitting unformatted in a pushed commit when that was measured (2026-09-24).
-check: fmt lint typecheck knip fga-test go-fmt
+check: fmt lint lint-imports typecheck knip fga-test go-fmt
 
 # The authorization model's OWN suite, plus the drift check between its three copies. Both halves lived
 # ONLY in `.github/workflows/ci.yml`, so `make ci` could be fully green on a machine where the model's

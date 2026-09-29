@@ -88,17 +88,18 @@ app = make_service_app(
 - **One lock.** The root `uv.lock` is the only Python lockfile — dev, tests, and every fleet docker image resolve from it (`uv sync --frozen --package <name>`). The sealed `runners/htr` project carries its **own** lock and is invoked via `uv run --project runners/htr runner` (in-cluster the ray image ships the console script on PATH).
 - **`service-kit` keeps a light base.** Base deps are `storage`, `fastapi`, `pydantic`, `pydantic-settings`, `python-dotenv`, **`dapr>=1.18.1`, and 8 OpenTelemetry packages** — the SDK, the OTLP/HTTP exporter, and instrumentors for fastapi, httpx, logging, requests, grpc and aiohttp-client. The last three landed 2026-08-23: the fleet runs bare `uvicorn` with no `opentelemetry-instrument` launcher, so whatever `setup_otel` names is ALL the instrumentation it gets, and without grpc + aiohttp the app→sidecar hop carried no `traceparent` and every Dapr span rooted a new trace. The heavy Lance/Ray deps live behind the `[governed]` / `[lakehouse]` / `[lancekit]` extras — keep them there. **Never** add `lancedb`, `ray`, or `sqlmodel` to the base: service-kit is shared by every service including the storeless ones (`gateway` via `setup_otel`, `compute`).
 - **`known-first-party` is COMPLETE — keep it that way.** This bullet used to read "stale and silently drifting": the list held 9 of the 19 real first-party import names, so ten modules sorted into the THIRD-PARTY block. Closed 2026-08-30 (docs/DECISIONS.md "The Python estate audit" X3) as one pass — every name added, then `uvx ruff check --select I --fix`, which re-sorted 391 files. All 19 are listed now (6 code-shipping packages + 13 services). Step 4 of `references/adding-a-package.md` is the step that was being skipped on every landing: add the import name in the SAME change that adds the member. One name at a time is cheap; letting ten accumulate is a repo-wide re-sort again.
-- **Membership is globbed; TEST ENROLMENT IS NOT — and the asymmetry is where suites go missing.** A
-  directory dropped into `packages/`/`services/` is a workspace member with no manifest edit, but
-  `[tool.pytest.ini_options] testpaths` is an EXPLICIT list. So a new member's `tests/` runs nowhere until
-  someone adds the path, and the run stays green while it does. Three suites landed green-by-absence this
-  way (`services/catalog`, `services/lineage` — one pinning a privilege escalation, one a commit
-  duplication — enrolled 2026-08-09). `tests/unit/test_invariants.py::test_every_workspace_test_directory_is_in_the_root_testpaths`
-  now gates it in both directions, but ONLY over `packages/*/tests` and `services/*/tests`: a new
-  **top-level** `tests/<x>/` is still ungated, which is exactly how `tests/e2e-py` was lost once.
+- **Membership is globbed, and so is test enrolment — except at the top level.** A directory dropped
+  into `packages/`/`services/` is a workspace member with no manifest edit, and
+  `[tool.pytest.ini_options] testpaths` globs `packages/*/tests` and `services/*/tests`, so its `tests/`
+  runs in the root suite the moment it exists. An explicit list is how suites go missing while the run
+  stays green (`services/catalog`, `services/lineage` — one pinning a privilege escalation, one a commit
+  duplication — ran nowhere until 2026-08-09). A new **top-level** `tests/<x>/` matches no glob and must
+  be added to `testpaths` by hand, which is exactly how `tests/e2e-py` was lost once.
   Measured 2026-08-22: `services/search` and `services/viewer` shipped **no tests at all** (`packages/ratch` was the third — dissolved 2026-08-28); both have since gained suites (`test_search_is_governed`, `test_the_search_door_is_wired`, the viewer's gating suites), and the residue is tracked in the lakehouse register, row Q3-37 (drained 2026-09-10; in git history)/Q3-38 (the blanket ruff exemption, and `ray_kit.submit` untested), not here.
 - **A sealed runner's tests are invisible to the root pytest, and to CI.** `runners/*` is matched by no
-  glob by design, so `make test` names `runners/htr` and `make test-slow` names `htr` + `dummy` — by hand.
+  workspace or testpaths glob by design, so `make test` and `make test-slow` loop over every
+  `runners/*/tests` themselves, running each suite from inside its runner directory with
+  `uv run --frozen pytest` (a runner with a suite therefore commits its own `uv.lock`).
   `dagger call test` runs the root testpaths only and says so in its own doc comment, so the 75 test
   functions that exist in the runners execute in **no CI job**. Seven of the nine ship no tests at all.
   A lockfile's absence in those seven is NOT a defect — see the plane table above: a runner carries a

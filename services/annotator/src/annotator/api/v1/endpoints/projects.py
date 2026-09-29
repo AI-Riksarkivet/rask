@@ -140,7 +140,7 @@ async def create_annotation_project(payload: CreateProjectRequest, checker: Chec
         # its parent edge differently from every governed type, and writing `parent` yields a tuple no
         # rule reads.
         if fga_client is not None:
-            await fga.grant_on_create(
+            await fga.grant_on_create(  # noqa: TID251
                 cast("OpenFgaClient", fga_client),
                 user_sub=subject,
                 resource="annotation_project",

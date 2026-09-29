@@ -134,7 +134,7 @@ async def build_fga_client(
         pinned = bool(store_id and model_id)
         if not pinned:
             if provision:
-                store_id, model_id = await fga.provision(settings.fga_api_url, store_id=store_id)
+                store_id, model_id = await fga.provision(settings.fga_api_url, store_id=store_id)  # noqa: TID251
                 # STRUCTURED, not a printf: `openfga_provisioned` is a documented INFO audit-tier
                 # event (`service_kit.obs`, severity 9), and it had two hand-written emitters
                 # (catalog + lineage) before this became the single bootstrap. One structured

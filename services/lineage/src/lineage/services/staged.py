@@ -50,7 +50,7 @@ async def republish_staged(publisher: object | None, settings: LineageSettings, 
     """
     if publisher is None:
         return
-    await dapr_publish.publish_event(
+    await dapr_publish.publish_event(  # noqa: TID251
         publisher,
         timeout_seconds=settings.dapr_publish_timeout_seconds,
         pubsub_name=settings.dapr_pubsub,

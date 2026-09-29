@@ -41,3 +41,56 @@ service-kit = { workspace = true }
 lineage-kit = { workspace = true }
 storage = { workspace = true }
 validate = { workspace = true }
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+# The ROOT banned-api map, restated, then this service's own bans. A nested banned-api table replaces
+# the root one rather than merging with it (measured, ruff 0.16.0: a child declaring one ban stopped
+# enforcing the root's), so every root ban is repeated here and a ban added to the root map is added
+# here too. The root per-file ignores still apply under this directory (measured).
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
+"boto3".msg = "Build S3/STS clients through storage.s3_client / storage.sts_client: a raw boto3 client carries no timeouts."
+"lance.write_dataset".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
+"lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (catalog dataplane, ingest lander, medallion compute/ingest)."
+"catalog.services.warehouses.put_warehouse".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
+"catalog.services.projects.put_project".msg = "An unconditional registry put lifts a quarantine; write through the conditional (CAS) path."
+"service_kit.dapr_publish.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
+"signal.signal".msg = "SIGTERM is taken only by service_kit.draining; a second handler replaces the drain."
+"pyarrow.ipc.open_stream".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.open_file".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.MessageReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_message".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_record_batch".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.ipc.read_schema".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchStreamReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.RecordBatchFileReader".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"pyarrow.feather".msg = "Decode an Arrow IPC body only through service_kit.lancekit.arrow_ipc: it bounds and validates what a caller sends."
+"service_kit.lancekit.arrow_ipc.decode_arrow_response".msg = "Only the catalog /query reader may skip the size bound."
+"dapr.actor.ActorProxy".msg = "Build an actor proxy through the service's proxies module: it translates the wire method names."
+"service_kit.governed.user_state.encode_subject".msg = "An inbox actor id is derived only in notifications.proxies."
+"service_kit.governed.fga.write_tuples".msg = "Tuple grants happen only at the registered granting sites."
+"service_kit.governed.fga.grant_on_create".msg = "Tuple grants happen only at the registered granting sites."
+"service_kit.governed.fga.seed_ownership".msg = "Tuple grants happen only at the registered granting sites."
+"service_kit.governed.fga.provision".msg = "Only the registered bootstrap may provision an OpenFGA store/model."
+"service_kit.governed.fga.delete_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
+"service_kit.governed.fga.revoke_object_tuples".msg = "Tuple revokes happen only at the registered revoking sites."
+"service_kit.governed.fga.hierarchy_edge_tuples".msg = "Hierarchy edges are seeded only by fga.py and medallion train."
+"torch".msg = "No model framework in a shared seam: models live in sealed runners/."
+"pyannote".msg = "No model framework in a shared seam: models live in sealed runners/."
+"nats".msg = "The broker appears only in ingest.queue (the queue seam)."
+"ray_kit.await_success".msg = "Poll a Ray job through the shared submit-or-reattach kernel."
+"os.getenv".msg = "Declare the value on IngestSettings (config.py); auth.py's call-time APP_API_TOKEN read is the one exception."
+"os.environ".msg = "Declare the value on IngestSettings (config.py); auth.py's call-time APP_API_TOKEN read is the one exception."
+"httpx.get".msg = "Use ingest.http.shared_client(): one pooled client with explicit timeouts."
+"httpx.post".msg = "Use ingest.http.shared_client(): one pooled client with explicit timeouts."
+"httpx.Client".msg = "Use ingest.http.shared_client(): one pooled client with explicit timeouts."
+
+# http.py IS the shared pool, so the whole module is the sanctioned httpx.Client site. auth.py's one
+# call-time APP_API_TOKEN read carries a line-level noqa instead of a per-file ignore: auth.py is the
+# service's authorization door, and a per-file ignore would waive the FGA grant and revoke bans there too.
+[tool.ruff.lint.extend-per-file-ignores]
+"src/ingest/http.py" = ["TID251"]  # httpx.Client: the shared pool

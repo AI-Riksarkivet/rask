@@ -31,3 +31,30 @@ packages = ["src/maintenance"]
 [tool.uv.sources]
 lineage-kit = { workspace = true }
 service-kit = { workspace = true }
+
+[tool.ruff]
+extend = "../../pyproject.toml"
+
+# Size and call-shape limits for this service's source. Its sweep and compaction are the code whose
+# failure modes delete data, and these keep each operation a sequence of named phases rather than one
+# body: at most 40 statements and 4 nested blocks per function. A helper takes at most three positional
+# parameters, because two parameters a caller cannot tell apart at the call site must be keyword-only
+# (a retention count passed where a fragment size belongs type-checks).
+# PLR1702 is a preview rule, and so is PLR0917 under the ruff the pre-commit hook pins (0.15.13), so
+# preview is on for this directory; explicit-preview-rules enables only the preview rules named in full.
+[tool.ruff.lint]
+preview = true
+explicit-preview-rules = true
+extend-select = ["PLR0915", "PLR1702", "PLR0917"]
+
+[tool.ruff.lint.pylint]
+max-statements = 40
+max-nested-blocks = 4
+max-positional-args = 3
+
+# The limits are for the source. A test function's positional parameters are its fixtures, and a route
+# handler's are its dependency declaration: FastAPI resolves them by annotation, and nothing calls a
+# route by position.
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**" = ["PLR0915", "PLR1702", "PLR0917"]
+"src/maintenance/api/routes.py" = ["PLR0917"]

@@ -129,7 +129,7 @@ async def _republish(publisher: object, settings: Settings, event_json: str) -> 
     the stage write is single-flighted and content-deterministic, so the second pass is a same-bytes
     overwrite (`bronze_arrival.py` records the same property for the two cascade heads).
     """
-    await dapr_publish.publish_event(
+    await dapr_publish.publish_event(  # noqa: TID251
         publisher,
         timeout_seconds=settings.control_emit_timeout_seconds,
         pubsub_name=settings.control_pubsub,

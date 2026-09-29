@@ -300,7 +300,7 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         # link left dangling by a job that later fails is harmless — the same posture the seed script's
         # pre-linked stage runner datasets take.
         try:
-            await fga.write_tuples(
+            await fga.write_tuples(  # noqa: TID251
                 fga_client,
                 actor="system:medallion",
                 origin="train",
@@ -309,7 +309,7 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
                 # `can_get_metadata: reader or can_get_metadata from child` needs the inverse STORED:
                 # with the forward `parent` edge alone a grantee on one model can read that model and
                 # cannot see the `models` namespace containing it.
-                tuples=fga.hierarchy_edge_tuples(
+                tuples=fga.hierarchy_edge_tuples(  # noqa: TID251
                     child_object=f"table:{settings.models_namespace}${model}",
                     parent_object=f"namespace:{settings.models_namespace}",
                 ),

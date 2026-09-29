@@ -282,7 +282,7 @@ async def _queue_build(
         name=body.name or "",
         params=_pylance_kwargs(body),
     )
-    await dapr_publish.publish_event(
+    await dapr_publish.publish_event(  # noqa: TID251
         publisher,
         timeout_seconds=settings.control_emit_timeout_seconds,
         pubsub_name=settings.maintenance_index_pubsub,

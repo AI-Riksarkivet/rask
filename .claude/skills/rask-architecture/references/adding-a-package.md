@@ -3,8 +3,8 @@
 Membership itself is now **globbed**, so the old "you forgot to register it"
 failure is mostly gone — but it is replaced by a sharper one: put the package in
 the **wrong-language plane** and uv errors hard while bun says nothing at all.
-Everything else (sources, first-party naming, testpaths, dockerfile) is still a
-manual edit. Do every step that applies.
+Everything else (sources, first-party naming, dockerfile) is still a manual
+edit; test enrolment is globbed too (step 5). Do every step that applies.
 
 ## 1. Pick the plane (language first, then layer)
 
@@ -83,14 +83,15 @@ or deleted without touching it fails that gate.
 
 ## 5. If it has tests
 
-Add the test path to `[tool.pytest.ini_options] testpaths` — tests are **not**
-auto-discovered (explicit `testpaths`, `--import-mode=importlib`). A test dir
-not listed there simply never runs. Current entries look like
-`services/ingest/tests`, `packages/storage/tests`. (The seven lance-plane services carry
-no `tests/` dir of their own — their coverage lives in the root `tests/unit` +
-`tests/integration` entries, which ARE listed. A sealed `runners/<workload>` has its OWN
-testpaths in its own pyproject — the root pytest cannot see it, so `make test` runs it
-separately.)
+Nothing to add: `[tool.pytest.ini_options] testpaths` globs `packages/*/tests`
+and `services/*/tests`, so the member's `tests/` is collected by the root suite
+(`--import-mode=importlib`) as soon as it exists, and coverage's
+`source = ["services", "packages"]` already counts its `src`. Only a new TOP-LEVEL
+`tests/<x>/` needs adding to `testpaths` by hand. A sealed `runners/<workload>` has
+its OWN testpaths in its own pyproject — the root pytest cannot see it — and
+`make test` / `make test-slow` loop over every `runners/*/tests`, running each
+from inside its runner directory with `uv run --frozen pytest`, so a runner with a
+suite commits its own `uv.lock`.
 
 JS tests are a per-package `test` script picked up by `turbo run test` from
 `frontend/` — no root list to edit.
@@ -116,7 +117,7 @@ parametrized `.docker/frontend.dockerfile` is built per zone with
       cross-language package was added to either plane
 - [ ] member `pyproject.toml`: `[project] dependencies` + `[tool.uv.sources]` workspace pins + hatch wheel `packages` (JS: `workspace:*` deps + its own turbo scripts)
 - [ ] `known-first-party` += import name
-- [ ] `testpaths` += test dir (if any)
+- [ ] tests live in `<member>/tests` (the `testpaths` glob collects them; nothing to list)
 - [ ] `.docker/<name>.dockerfile` + `k3s-build` list (if a deployable; zones reuse the parametrized one)
 - [ ] `uv sync` resolves clean; first-party import works — and for a JS member,
       `bun --cwd=frontend install` actually **lists** it (a silent skip means the

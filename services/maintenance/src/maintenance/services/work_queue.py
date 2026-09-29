@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from service_kit.dapr_publish import publish_event
+from service_kit.dapr_publish import publish_event  # noqa: TID251
 
 
 if TYPE_CHECKING:

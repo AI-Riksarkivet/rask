@@ -377,7 +377,7 @@ async def _publish_staged(
         else:
             outbox_metrics.record_staged()
     try:
-        await dapr_publish.publish_event(
+        await dapr_publish.publish_event(  # noqa: TID251
             publisher,
             timeout_seconds=timeout_seconds,
             pubsub_name=pubsub_name,

@@ -23,7 +23,7 @@ and nothing here is in-memory, so it works across replicas.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: TID251
 from typing import Any
 
 from service_kit.lakehouse.records import RecordExistsError, create_json, mutate_json, read_json

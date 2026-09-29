@@ -494,7 +494,7 @@ async def _revoke(fga_client: Any, *, kind: str, obj_id: str, fga_enabled: bool)
         return 0
     # `len(...)`: the helper hands back WHICH tuples it revoked so a caller can name the affected
     # principals; this one only reports a count in its sweep summary.
-    return len(await fga.revoke_object_tuples(fga_client, f"{kind}:{obj_id}", actor=ACTOR, origin="lifecycle_delete"))
+    return len(await fga.revoke_object_tuples(fga_client, f"{kind}:{obj_id}", actor=ACTOR, origin="lifecycle_delete"))  # noqa: TID251
 
 
 #: The control-plane vocabulary for a purge — its OWN verbs since diff2 F10 item 6.

@@ -151,7 +151,7 @@ async def _resolve_caller(
     the next — the listing's own docstring is explicit that rendering them as an empty page tells a
     caller their token works and they own nothing.
     """
-    expected = os.environ.get("APP_API_TOKEN")
+    expected = os.environ.get("APP_API_TOKEN")  # noqa: TID251
     # An absent service token means "this deployment has no SERVICE door" — never "this deployment has
     # no door". Returning on it alone was a full bypass of the user path as well: an estate with
     # `RASK_OIDC_ENABLED=true`, a live FGA client and a blank or unset `APP_API_TOKEN` accepted every

@@ -316,9 +316,9 @@ async def _mutate_tuple(client: OpenFgaClient, control: ControlEmitter, token: I
     event = "access_tuple_write" if write else "access_tuple_delete"
     try:
         if write:
-            await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")
+            await fga.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
         else:
-            await fga.delete_tuples(client, [tup], actor=actor, origin="admin_api")
+            await fga.delete_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
     except ServiceUnavailableError:
         # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
         # `fga.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too

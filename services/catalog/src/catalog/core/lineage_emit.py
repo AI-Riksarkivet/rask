@@ -30,7 +30,7 @@ import json
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: TID251
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkable
 

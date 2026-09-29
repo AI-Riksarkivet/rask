@@ -1258,7 +1258,7 @@ async def seed_project_admin(
     silently skipped)."""
     if not (settings.fga_enabled and token is not None and client is not None):
         return False
-    await fga.write_tuples(
+    await fga.write_tuples(  # noqa: TID251
         client,
         [fga.ClientTuple(user=f"user:{token.sub}", relation="admin", object=f"project:{project}")],
         actor=token.sub,
@@ -1320,7 +1320,7 @@ async def seed_ownership(
     # `SERVICE_DOOR_ISSUER`, and a synthetic principal is required never to look like a human login.
     # Matching `sub` against `service_subjects` would work today and drift the moment a service is
     # renamed or an allowlist is edited.
-    await fga.grant_on_create(
+    await fga.grant_on_create(  # noqa: TID251
         client,
         grant_owner=may_grant_owner and token.iss != SERVICE_DOOR_ISSUER,
         user_sub=token.sub,
@@ -1362,7 +1362,7 @@ async def revoke_ownership(
     # auth-off stack, where there genuinely is no principal — never a stand-in for one we simply did
     # not thread through.
     actor = token.sub if token is not None else "system:catalog"
-    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="create")
+    removed = await fga.revoke_object_tuples(client, obj, actor=actor, origin="create")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
 
@@ -1592,7 +1592,7 @@ async def seed_warehouse(
     # one tuple reaches every tier and every table under it, instead of three-plus per tenant that the
     # hierarchy already implies. Written in the SAME call as the creator's grant so there is no window
     # in which the warehouse exists and its cascade cannot publish into it.
-    await fga.write_tuples(
+    await fga.write_tuples(  # noqa: TID251
         client,
         [
             fga.ClientTuple(user=f"user:{token.sub}", relation="owner", object=obj),
@@ -1706,7 +1706,7 @@ async def backfill_cascade_grants(
     if not (settings.fga_enabled and client is not None):
         return 0
     tuples = cascade_tuples(settings, warehouse_id=warehouse_id, project=project)
-    await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")
+    await fga.write_tuples(client, tuples, actor=actor, origin="cascade_backfill")  # noqa: TID251
     # THEN withdraw the wide grant these replace. Narrowing what the CREATE path writes repairs nothing
     # that already exists — `owner` still resolves beside the narrow rungs, so an add-only backfill is a
     # security fix that is true in the repository and false in the estate (measured 2026-09-10: 95
@@ -1717,5 +1717,5 @@ async def backfill_cascade_grants(
     # holds neither rung and every promotion 403s. This way the worst outcome is the over-granted
     # warehouse the repair started from. `delete_tuples` treats an already-absent tuple as success, so
     # a re-run over a repaired estate is a no-op.
-    await fga.delete_tuples(client, superseded_cascade_tuples(settings, warehouse_id=warehouse_id), actor=actor, origin="cascade_backfill")
+    await fga.delete_tuples(client, superseded_cascade_tuples(settings, warehouse_id=warehouse_id), actor=actor, origin="cascade_backfill")  # noqa: TID251
     return len(tuples)

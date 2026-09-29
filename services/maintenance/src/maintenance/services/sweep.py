@@ -17,7 +17,7 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace  # noqa: TID251
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from time import perf_counter

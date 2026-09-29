@@ -166,7 +166,7 @@ async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileRepo
         out.written = planned
         return out
     try:
-        await fga.write_tuples(
+        await fga.write_tuples(  # noqa: TID251
             fga_client,
             [fga.ClientTuple(user=t.user, relation=t.relation, object=t.object) for t in planned],
             actor=settings.catalog_service_identity,

@@ -126,7 +126,7 @@ async def grant_member(
     existing = await fga.read_object_tuples(wired, obj)
     granted = not any(t.object == obj and t.relation == payload.relation and t.user == user for t in existing)
     if granted:
-        await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
+        await fga.write_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
         existing = await fga.read_object_tuples(wired, obj)
     audit("project.members.grant", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # TELL THE PERSON. `access.py` has announced every per-object grant it writes since the control lane
@@ -176,7 +176,7 @@ async def revoke_member(
             f"{user} holds the only remaining admin on this project — grant another admin first, or nobody will be able to administer or delete it"
         )
 
-    await fga.delete_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")
+    await fga.delete_tuples(wired, [fga.ClientTuple(user=user, relation=payload.relation, object=obj)], actor=actor, origin="grant_api")  # noqa: TID251
     audit("project.members.revoke", SUCCESS, subject=actor, resource=obj, grantee=user, relation=payload.relation)
     # THE SHARPER HALF. After this the subject can no longer see the project, so no visibility-gated
     # feed could ever tell them — which is precisely why the control lane runs no visibility check and

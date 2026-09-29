@@ -126,7 +126,7 @@ async def grant_member(
     if not already:
         # An OpenFGA Write is transactional and REJECTS a tuple that already exists, so the read
         # above is not an optimisation — it is what makes a repeated grant a no-op instead of a 400.
-        await fga.write_tuples(
+        await fga.write_tuples(  # noqa: TID251
             client,
             [fga.ClientTuple(user=user, relation=payload.relation, object=obj)],
             actor=subject,
@@ -191,7 +191,7 @@ async def revoke_member(
                 f"{user} holds the only remaining {relation} on this project — grant another owner or manager first, or nobody will be able to administer it"
             )
 
-    await fga.delete_tuples(
+    await fga.delete_tuples(  # noqa: TID251
         client,
         [fga.ClientTuple(user=user, relation=relation, object=obj)],
         actor=subject,

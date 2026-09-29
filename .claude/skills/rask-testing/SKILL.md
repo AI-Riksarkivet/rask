@@ -1,6 +1,6 @@
 ---
 name: rask-testing
-description: "rask's pytest wiring, its real-collaborator fixtures, and the row rule for how many tests a change may add: the explicit testpaths list, importlib mode, the e2e/slow markers, which lane runs what (make test, check-fast, dagger call test, the runner suites), what the root conftest already does, and what stands in for Lance, S3, NATS, Ray, OpenFGA and a service app. Use when writing, changing, deleting or auditing any test in rask, when a new tests/ directory or runner suite runs in no lane, or when a test needs a real collaborator."
+description: "rask's pytest wiring, its real-collaborator fixtures, and the row rule for how many tests a change may add: the globbed testpaths, importlib mode, the e2e/slow markers, which lane runs what (make test, check-fast, dagger call test, the runner suites), what the root conftest already does, and what stands in for Lance, S3, NATS, Ray, OpenFGA and a service app. Use when writing, changing, deleting or auditing any test in rask, when a new tests/ directory or runner suite runs in no lane, or when a test needs a real collaborator."
 ---
 
 # rask × pytest — wiring, fixtures, and the row rule
@@ -41,17 +41,17 @@ reverted, and the commit message carries the delta.
 | Several members in one flow, or a fixture from `tests/integration/conftest.py` (`real_ns_client`) | `tests/integration`: a conftest's fixtures reach only the tests beneath it |
 | The rendered chart                                | `tests/unit`, through `tests/unit/chart_render.py`                                              |
 | A deployed stack                                  | `tests/e2e-py`, run by name from a lane: § Wiring                                               |
-| A sealed runner's code                            | `runners/<name>/tests`, under that runner's own `pyproject.toml`, run by name from a lane: § Wiring |
+| A sealed runner's code                            | `runners/<name>/tests`, under that runner's own `pyproject.toml`, run by the Makefile's runner loop: § Wiring |
 
 ## Wiring
 
 Read `[tool.pytest.ini_options]` in the root `pyproject.toml` for the current values. These are the
 consequences it does not spell out.
 
-- **`testpaths` is explicit.** The workspace glob enrols a new member, not its `tests/`; add the
-  directory to `testpaths` (`tests/unit/test_invariants.py::test_every_workspace_test_directory_is_in_the_root_testpaths`
-  fails until you do), and its `src` to `[tool.coverage.run] source`
-  (`tests/unit/test_coverage_denominator.py`).
+- **`testpaths` is globbed.** `packages/*/tests` and `services/*/tests` enrol a new member's `tests/`
+  the moment it exists; only a new top-level `tests/<x>/` needs adding by hand. Coverage's
+  `source = ["services", "packages"]` with `[tool.coverage.report] include_namespace_packages` counts
+  every member's `src` in the denominator with no edit.
 - **A live suite runs only when something names it.** Every offline lane deselects `e2e`. A new
   `tests/e2e-py` file needs a per-suite marker registered in the root `pyproject.toml` with a
   `make e2e-<suite>` target (listed in `E2E_SUITES`), or its path in the Makefile, `ci.yml`, a
@@ -60,10 +60,10 @@ consequences it does not spell out.
   `scripts/ray_e2e_stack.sh` and `ci.yml` never name that suite's files,
   `tests/unit/test_a_declared_e2e_suite_is_driven_by_something.py` fails until they do or the suite is
   added to that file's `UNDRIVEN` set.
-- **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. A new
-  `runners/<name>/tests` goes into both `make test` and `make test-slow` as
-  `cd runners/<name> && uv run --frozen pytest`, and `<name>` leaves `_RUNNERS_WITHOUT_TESTS` in
-  `tests/unit/test_runner_suites_are_invoked.py`, which fails until both are done.
+- **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. `make test`
+  and `make test-slow` loop over every `runners/*/tests`, running `uv run --frozen pytest` from inside
+  that runner's directory, so a new `runners/<name>/tests` runs in both with no edit; `--frozen` needs
+  the runner to commit its own `uv.lock`.
 - **`--import-mode=importlib`.** The `from test_invariants import ...` lines in `tests/unit` resolve
   only because `tests/unit/conftest.py` inserts that directory into `sys.path`; don't copy them. A
   shared helper goes in a plain module, as `tests/unit/chart_render.py` does (`writing-python` →
@@ -75,17 +75,19 @@ consequences it does not spell out.
   suite, 12,225 tests, collects cleanly under it, measured 2026-09-28).
 - **Async is strict.** No `asyncio_mode` is set, so pytest-asyncio runs in strict mode. The `anyio`
   plugin is loaded too; most async tests use `@pytest.mark.asyncio`, so write new ones that way.
-- **Code-shape rules have no linter home yet.** The root `[tool.ruff.lint]` selects no `TID` family
-  and there is no import-linter. A code-shape rule a change needs adds `TID251` and a `banned-api`
-  entry there (or an import-linter contract), in the same change.
+- **Code-shape rules live in ruff and import-linter.** A banned name is a `TID251` entry in the root
+  `[tool.ruff.lint.flake8-tidy-imports.banned-api]`, restated in `services/ingest` and
+  `services/viewer`, whose nested maps replace the root one. A sanctioned use takes a line-level
+  `# noqa: TID251`, and only a module that IS the seam takes a per-file ignore. A layer rule is a
+  contract in `.importlinter`, run by `make lint-imports` (part of `make check`).
 
 ### Lanes
 
 | Lane                                              | What it runs                                                                                                      |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `make test`                                       | `-m "not slow and not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process), then the `runners/htr` (`-m "not slow"`) and `runners/dummy` suites |
+| `make test`                                       | `-m "not slow and not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process), then every `runners/*/tests` suite with `-m "not slow"` |
 | `make check-fast`                                 | `tests/unit tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
-| `make test-slow`                                  | `-m "not e2e"`, then both runner suites unfiltered                                                                |
+| `make test-slow`                                  | `-m "not e2e"`, then every runner suite unfiltered                                                                |
 | `make coverage`                                   | `-m "not e2e and not slow" --cov`, on request only                                                                |
 | CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter, serially, with `--timeout=300 --timeout-method=thread`, helm installed and a real NATS bound at `RASK_NATS_URL`. **No runner suite** |
 | CI: `dagger call auth-chain`, `dagger call governance-chain` | a real Dex, OpenFGA and catalog as Dagger services (plus lineage for `governance-chain`), asserting through `scripts/auth_chain.sh` and `tests/e2e-py/test_governance_e2e.py` respectively |

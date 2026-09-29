@@ -611,7 +611,7 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> N
     from dapr.aio.clients import DaprClient
 
     from medallion.core.config import get_settings
-    from service_kit.dapr_publish import publish_event
+    from service_kit.dapr_publish import publish_event  # noqa: TID251
 
     spec = payload.spec
     outcome = payload.outcome
@@ -1296,7 +1296,7 @@ def request_approval(ctx: WorkflowActivityContext, spec: PromotionSpec) -> bool:
 
     from medallion.core.config import get_settings
     from service_kit.control_events import CONTROL_TOPIC, CatalogControlEvent
-    from service_kit.dapr_publish import publish_event
+    from service_kit.dapr_publish import publish_event  # noqa: TID251
 
     if not spec.approver:
         log.warning("medallion_promotion_unapprovable", extra={"dataset": spec.to_dataset, "token": spec.token})

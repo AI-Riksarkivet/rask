@@ -293,7 +293,7 @@ def _write_blob(
         else None
     )
     try:
-        return lance.write_dataset(
+        return lance.write_dataset(  # noqa: TID251
             table,
             uri,
             mode=mode,

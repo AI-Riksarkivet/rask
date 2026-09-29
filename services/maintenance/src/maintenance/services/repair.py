@@ -243,7 +243,7 @@ async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport
     done: list[RevokedObject] = []
     for target in planned:
         try:
-            await fga.revoke_object_tuples(fga_client, target.fga_object, actor=settings.catalog_service_identity, origin="drift_repair")
+            await fga.revoke_object_tuples(fga_client, target.fga_object, actor=settings.catalog_service_identity, origin="drift_repair")  # noqa: TID251
         except Exception as exc:  # noqa: BLE001 — see the docstring; one object must not fail the tick
             log.warning("drift_repair_object_failed", extra={"object": target.fga_object, "error": str(exc)})
             out.error = str(exc)
@@ -253,7 +253,7 @@ async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport
     cut: list[CutEdge] = []
     for edge in edges:
         try:
-            await fga.delete_tuples(
+            await fga.delete_tuples(  # noqa: TID251
                 fga_client,
                 [fga.ClientTuple(user=edge.user, relation=edge.relation, object=edge.object)],
                 actor=settings.catalog_service_identity,

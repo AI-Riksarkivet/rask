@@ -239,7 +239,7 @@ async def compact_maintenance(
             # medallion path no parser can read back.
             table_id=id,
         )
-        await dapr_publish.publish_event(
+        await dapr_publish.publish_event(  # noqa: TID251
             publisher,
             timeout_seconds=settings.control_emit_timeout_seconds,
             pubsub_name=settings.maintenance_work_pubsub,
@@ -343,7 +343,7 @@ async def reindex_maintenance(
         params=params,
     )
     if settings.maintenance_index_topic and publisher is not None:
-        await dapr_publish.publish_event(
+        await dapr_publish.publish_event(  # noqa: TID251
             publisher,
             timeout_seconds=settings.control_emit_timeout_seconds,
             pubsub_name=settings.maintenance_index_pubsub,

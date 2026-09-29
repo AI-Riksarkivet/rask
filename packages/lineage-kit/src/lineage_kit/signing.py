@@ -31,7 +31,7 @@ import hashlib
 import hmac
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass  # noqa: TID251
 from typing import Any
 
 
