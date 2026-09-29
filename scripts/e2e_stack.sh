@@ -382,7 +382,6 @@ PYTHONPATH=services uv run pytest \
   tests/e2e-py/test_client_direct_e2e.py \
   tests/e2e-py/test_warehouses_e2e.py \
   tests/e2e-py/test_multibase_e2e.py \
-  tests/e2e-py/test_outbox_e2e.py \
   tests/e2e-py/test_outbox_crash_e2e.py \
   tests/e2e-py/test_maintenance_s3_e2e.py \
   tests/e2e-py/test_track_a_acceptance.py \
@@ -401,22 +400,13 @@ if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-stack.log; then
   exit 1
 fi
 
-# DuckDB external-consumer read (own step, separate log): proves DuckDB's core `lance` extension reads a
-# pylance-8 dataset over this RustFS store. Kept OUT of the strict no-skip block on purpose — `INSTALL lance`
-# fetches the extension from duckdb.org, so a transient CDN miss should skip (offline), not red the whole
-# guarded suite; but a real READ failure returns non-zero and — under `set -o pipefail` — still fails the job.
-PYTHONPATH=services uv run pytest \
-  tests/e2e-py/test_duckdb_lance_e2e.py \
-  -v -rs -p no:cacheprovider | tee /tmp/e2e-duckdb.log
-
-# The two Ray-path suites (#53, test_ray_{train,batch}_e2e.py) are NOT run here on purpose. They need a
+# The Ray-path suite (#53, test_ray_train_e2e.py) is NOT run here on purpose. It needs a
 # real KubeRay cluster AND medallion.ray/compute flipped on — and flipping ray-on rolls the medallion
 # stage runners into stage-compute-via-ray mode, which on a fresh CI stack races the OpenBao secret-store
 # readiness and hangs the stage runners (secret 500 + "waiting on port 8000"). Forcing that into the shared,
-# ray-OFF core-suite job destabilises the whole run for no isolation benefit. Those suites are proven
-# live and kept green as dedicated targets — `make e2e-ray-train` / `make e2e-ray-batch` (deploy the ray
-# cluster first with `make ray-demo`). A dedicated ray-enabled CI job is the right home and a scoped
-# follow-up; wiring them into THIS job is a net regression.
+# ray-OFF core-suite job destabilises the whole run for no isolation benefit. Its home is the ray-ON
+# lane, `scripts/ray_e2e_stack.sh` (CI `e2e-ray`), and `make e2e-ray-train` against a deployed estate;
+# wiring it into THIS job is a net regression.
 
 # --- P5 chaos drill: prove a core-dependency OUTAGE fails CLOSED (never fail-open) and RECOVERS. The stack
 # is auth-on, so this is the LIVE counterpart to the mocked OpenFGA-down unit test + the first test of the

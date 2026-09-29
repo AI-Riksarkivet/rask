@@ -1216,7 +1216,7 @@ medallion:
   # fall back to the shared roots and transform the WRONG tenant's data — but an estate that HAS
   # projects seeded and leaves this off has a cascade that cannot complete for any of them.
   #
-  # Turn it on wherever `scripts/seed_estate.py` has run. `make e2e-medallion LANCE_E2E_PROJECT=<p>`
+  # Turn it on wherever `scripts/seed_estate.py` has run. `make e2e-governed-union LANCE_E2E_PROJECT=<p>`
   # is the proof it is on and working end to end.
   # ON, and it is the partner of catalog.warehouses.enabled — a warehouse belongs to a PROJECT, so an
   # estate with warehouses and without projects has tiers that can belong to nothing. That combination

@@ -726,7 +726,7 @@ jobs:
   # MEDALLION_RAY_ENABLED with the stage runners, so a ray-ON stack is a different deploy — flipping it on mid-run
   # against the openbao-ON core stack races the OpenBao secret store and hangs the stage runners. This job deploys
   # the ray-ON recipe (openbao OFF → no secret race, compute+ray+quality+auth+fga ON) from the start plus a
-  # real KubeRay head, then runs both Ray suites. `make e2e-ray-ci` == this job (scripts/ray_e2e_stack.sh).
+  # real KubeRay head, then runs the Ray train suite. `make e2e-ray-ci` == this job (scripts/ray_e2e_stack.sh).
   # Fork-gated like the other live jobs. Observability is off to fit the runner (train's GreptimeDB-metrics
   # leg self-skips; its pins + lineage + validator gates still run).
   e2e-ray:

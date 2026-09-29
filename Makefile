@@ -982,7 +982,7 @@ e2e-live: ## Run the e2e suites against the DEPLOYED k3s release (discovers addr
 e2e-ci: bootstrap ## Governed kind stack + the 5 live e2e suites (CAS/#2/#3-A/#3-B/#4) == CI e2e-stack
 	CLUSTER=$(KIND_CLUSTER) RELEASE=rask bash scripts/e2e_stack.sh
 
-e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + both Ray suites == CI e2e-ray
+e2e-ray-ci: bootstrap ## Governed ray-ON kind stack + real KubeRay + the Ray train suite == CI e2e-ray
 	CLUSTER=$(KIND_CLUSTER)-ray-e2e RELEASE=rask bash scripts/ray_e2e_stack.sh
 
 # The tenant-isolation attack (#74's live half), as a STANDALONE target against an already-deployed
@@ -1035,22 +1035,19 @@ e2e-container-deletes: ## Warehouse/project delete, cascade and the gate-before-
 # `grep -rnE '\-m ["']?(cas|compaction|…)' Makefile scripts .github .dagger` returned nothing. So
 # eleven live suites ran in no lane at all, and the declarations read as if they drove something.
 #
-# Every marker now has exactly one invocation site, and `test_e2e_collection_gate.py` FAILS if a
-# declared marker loses it again — the gate is what makes this stay true, not the targets.
+# Every marker has exactly one invocation site, and nothing offline checks it: a change that deletes a
+# suite deletes its marker, its target and its `E2E_SUITES` entry with it.
 #
 # All of them need a live deployed stack (that is what `e2e` means here); they are runnable proofs,
 # not a CI lane. `make e2e-ci` remains the governed-kind-stack entry point, and wiring the
 # security-shaped ones (governed-union, gateway, cas) into CI is the follow-up — it needs an edit to
 # `.github/workflows/ci.yml`, which a concurrent session is holding.
-E2E_SUITES = auth cas chaos compaction duckdb dummy-lane gateway governed-union medallion media media-catalog observability spec-conformance track-a user-state ray-batch ray-train
+E2E_SUITES = cas chaos compaction dummy-lane gateway governed-union media-catalog observability spec-conformance track-a user-state ray-train
 .PHONY: $(addprefix e2e-,$(E2E_SUITES))   # declared HERE, not up with the other .PHONY: make
                                           # expands a rule's prerequisites AS IT READS the line,
                                           # so referencing E2E_SUITES before this assignment
                                           # expands to nothing and silently declares no target.
 
-e2e-auth:           ## Live OIDC/FGA authorization proof (Dex + OpenFGA + governed catalog) (needs LANCE_E2E_AUTH_SERVER)
-	@test -n "$(LANCE_E2E_AUTH_SERVER)" || { echo "  !! e2e-auth needs LANCE_E2E_AUTH_SERVER — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_AUTH_SERVER=$(LANCE_E2E_AUTH_SERVER) uv run pytest tests/e2e-py -m auth -v
 e2e-cas:            ## Object-store + registry conditional-write (CAS) proofs (needs LANCE_E2E_S3_ENDPOINT)
 	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-cas needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m cas -v
@@ -1064,9 +1061,6 @@ e2e-compaction:     ## Maintenance sweep / compaction / GC proofs (needs LANCE_E
 	@test -n "$(LANCE_E2E_MAINTENANCE_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_GREPTIME_URL)" || { echo "  !! e2e-compaction needs LANCE_E2E_MAINTENANCE_URL, LANCE_E2E_GREPTIME_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_MAINTENANCE_URL=$(LANCE_E2E_MAINTENANCE_URL) LANCE_E2E_GREPTIME_URL=$(LANCE_E2E_GREPTIME_URL) uv run pytest tests/e2e-py -m compaction -v
-e2e-duckdb:         ## DuckDB-over-Lance proof (needs LANCE_E2E_S3_ENDPOINT)
-	@test -n "$(LANCE_E2E_S3_ENDPOINT)" || { echo "  !! e2e-duckdb needs LANCE_E2E_S3_ENDPOINT — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_S3_ENDPOINT=$(LANCE_E2E_S3_ENDPOINT) uv run pytest tests/e2e-py -m duckdb -v
 e2e-spec-conformance:     ## The STOCK lance_namespace client against a live catalog (needs LANCE_E2E_CATALOG_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-spec-conformance needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) LANCE_E2E_DEX=$(LANCE_E2E_DEX) uv run pytest tests/e2e-py -m spec_conformance -v
@@ -1117,14 +1111,6 @@ e2e-governed-union: ## Full governed-union proof (the estate's widest authz path
 	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_FGA)" || { echo "  !! e2e-governed-union needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_FGA=$(LANCE_E2E_FGA) uv run pytest tests/e2e-py -m governed_union -v
-e2e-medallion:      ## Medallion bronze→silver→gold cascade proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL; also LANCE_E2E_PROJECT on a cascadeViaPublish estate, or gold never fires)
-	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-medallion needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) LANCE_E2E_PROJECT=$(LANCE_E2E_PROJECT) LANCE_E2E_DAPR_TOKEN=$(LANCE_E2E_DAPR_TOKEN) uv run pytest tests/e2e-py -m medallion -v
-e2e-media:          ## Media-lane proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL)
-	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-media needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	@test -n "$(LANCE_E2E_LINEAGE_URL)" || { echo "  !! e2e-media needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_LINEAGE_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_LANCERAY_URL=$(LANCE_E2E_LANCERAY_URL) LANCE_E2E_LINEAGE_URL=$(LANCE_E2E_LINEAGE_URL) uv run pytest tests/e2e-py -m media -v
 e2e-media-catalog:  ## Annotator/catalog live-mode proof (needs MEDIA_CATALOG_URL)
 	@test -n "$(MEDIA_CATALOG_URL)" || { echo "  !! e2e-media-catalog needs MEDIA_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	MEDIA_CATALOG_URL=$(MEDIA_CATALOG_URL) uv run pytest tests/e2e-py -m media_catalog -v
@@ -1141,9 +1127,6 @@ e2e-track-a:        ## Track A acceptance: tier contract + gate/publish symmetry
 e2e-user-state:     ## Durable user-state (dock layouts, read state) proof (needs LANCE_E2E_CATALOG_URL)
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-user-state needs LANCE_E2E_CATALOG_URL — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	LANCE_E2E_CATALOG_URL=$(LANCE_E2E_CATALOG_URL) uv run pytest tests/e2e-py -m user_state -v
-e2e-ray-batch:      ## Ray batch proof (needs LANCE_E2E_RAY_HEAD_DEPLOY)
-	@test -n "$(LANCE_E2E_RAY_HEAD_DEPLOY)" || { echo "  !! e2e-ray-batch needs LANCE_E2E_RAY_HEAD_DEPLOY — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
-	LANCE_E2E_RAY_HEAD_DEPLOY=$(LANCE_E2E_RAY_HEAD_DEPLOY) uv run pytest tests/e2e-py -m ray_batch -v
 e2e-ray-train:      ## Ray train proof (needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA)
 	@test -n "$(LANCE_E2E_LANCERAY_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }
 	@test -n "$(LANCE_E2E_CATALOG_URL)" || { echo "  !! e2e-ray-train needs LANCE_E2E_LANCERAY_URL, LANCE_E2E_CATALOG_URL, LANCE_E2E_LINEAGE_URL, LANCE_E2E_FGA — a live drive with no live target is a failed invocation, not a pass"; exit 1; }

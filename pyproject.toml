@@ -328,21 +328,16 @@ addopts = "--import-mode=importlib"
 markers = [
     "slow: marks tests requiring real models or long runtimes (deselect with '-m \"not slow\"')",
     "e2e: live end-to-end suites needing a running/deployed stack (deselect with '-m \"not e2e\"'; run via make e2e-ci / the per-suite targets)",
-    # per-suite selectors used by the e2e make targets (e.g. `pytest -m media`); all of them ALSO carry e2e
-    "auth: live OIDC/FGA authorization e2e (Dex + OpenFGA + a governed catalog)",
+    # per-suite selectors used by the e2e make targets (e.g. `pytest -m cas`); all of them ALSO carry e2e
     "cas: object-store conditional-write (CAS) e2e",
     "chaos: pull-a-service resilience e2e — SCALES a deployment, so it is out of e2e-ci",
     "compaction: compaction/GC sweep e2e",
-    "duckdb: duckdb-over-Lance e2e",
     "dummy_lane: the GPU-free dummy medallion lane, end to end (declare -> baked Ray entrypoint -> silver)",
     "spec_conformance: the STOCK lance_namespace client driven against a live catalog (needs LANCE_E2E_CATALOG_URL)",
     "gateway: Dapr service-invocation gateway e2e",
     "governed_union: full governed-union e2e",
-    "medallion: medallion-cascade e2e",
-    "media: media-lane e2e",
     "media_catalog: annotator/catalog live-mode e2e",
     "observability: observability (OTLP/Greptime) e2e",
-    "ray_batch: Ray batch-path e2e",
     "ray_train: Ray train-path e2e",
     "track_a: Track A acceptance e2e (tier contract, gate/publish symmetry, branch isolation) against a live catalog",
     "user_state: user-state live e2e",

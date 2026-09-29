@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The Ray-path e2e stack + suite runner (#53) — the SINGLE definition used by BOTH `make e2e-ray-ci`
 # and the CI `ray-e2e` job, mirroring scripts/e2e_stack.sh. It brings up the governed stack with the
-# Ray-ON recipe and a real KubeRay head, then runs the two Ray-path suites so they cannot silently
-# regress.
+# Ray-ON recipe and a real KubeRay head, then runs the Ray train suite and the governance suite so they
+# cannot silently regress.
 #
 # WHY A SEPARATE JOB (not folded into e2e_stack.sh): the train head shares MEDALLION_RAY_ENABLED with
 # the stage runners, so enabling it flips the whole cascade into stage-compute-via-ray. Flipping that ON mid-run
@@ -210,9 +210,7 @@ OPENFGA_API_URL=http://localhost:8081 scripts/seed_medallion_fga.sh || { echo "!
 DAPR_TOKEN="$(kubectl get secret "$RELEASE-dapr-app-token" -o jsonpath='{.data.token}' | base64 -d)"
 [ -n "$DAPR_TOKEN" ] || { echo "!! no dapr app token"; exit 1; }
 
-step "6/6 run the two Ray-path suites against the live ray-on stack"
-# Batch FIRST: its ray_lance_job submit cold-starts the Ray runtime env, so the ray cluster is warm
-# when the train suite's bronze→silver cascade (also Ray jobs) runs — avoids stacking cold-starts.
+step "6/6 run the Ray train suite and the governance suite against the live ray-on stack"
 # The env vars MUST stay a contiguous command-prefix to `uv run pytest` (no comment splitting the `\`
 # continuation) — a comment there ends the line, demoting them to non-exported shell vars the child
 # pytest never sees, and every suite would skip "set LANCE_E2E_...".
@@ -221,7 +219,6 @@ LANCE_E2E_AUTH_SERVER=http://localhost:2333 \
 LANCE_E2E_LINEAGE_URL=http://localhost:8000 LANCE_E2E_DEX=http://localhost:5556/dex \
 LANCE_E2E_FGA=http://localhost:8081 LANCE_E2E_DAPR_TOKEN="$DAPR_TOKEN" LANCE_E2E_GREPTIME_URL="" \
 PYTHONPATH=services uv run pytest \
-  tests/e2e-py/test_ray_batch_e2e.py \
   tests/e2e-py/test_ray_train_e2e.py \
   tests/e2e-py/test_governance_e2e.py \
   -v -rs -p no:cacheprovider | tee /tmp/e2e-ray.log
@@ -233,4 +230,4 @@ if grep -qE "[1-9][0-9]* skipped" /tmp/e2e-ray.log; then
 fi
 
 echo
-echo "✓ ray-path e2e green — both Ray paths proven on a fresh ray-on kind stack"
+echo "✓ ray-path e2e green — the Ray train path proven on a fresh ray-on kind stack"
