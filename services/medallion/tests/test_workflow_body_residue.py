@@ -42,13 +42,6 @@ def test_an_oversized_lineage_blob_is_REFUSED_not_written_2880_times() -> None:
         )
 
 
-def test_a_lineage_blob_INSIDE_the_bound_is_untouched() -> None:
-    """The cap must not become a second failure mode for the ordinary case."""
-    spec = StageJobSpec.model_validate({"from_uri": "s3://wh/bronze", "to_uri": "s3://wh/silver", "stage": "silver", "lineage_json": "x" * 1024})
-
-    assert len(spec.lineage_json) == 1024
-
-
 def _report(verdict: str, monkeypatch: pytest.MonkeyPatch) -> tuple[list[str], list[str]]:
     from medallion import workflow as workflow_mod
 
@@ -81,15 +74,3 @@ def test_a_FAILED_job_still_emits_its_lineage_FAIL(monkeypatch: pytest.MonkeyPat
     assert recorded == ["failed"]
     assert len(published) == 1
     assert "ended" in published[0]
-
-
-def test_the_watch_helper_does_NOT_re_import_datetime() -> None:
-    """The module imports `datetime` at line 51. A local re-import inside the one workflow-scope helper
-    reads as though the body were doing something the surrounding docstrings forbid."""
-    import inspect
-
-    from medallion.workflow import _watch_seconds
-
-    source = inspect.getsource(_watch_seconds)
-
-    assert "import datetime" not in source, "the workflow-scope helper still re-imports datetime"

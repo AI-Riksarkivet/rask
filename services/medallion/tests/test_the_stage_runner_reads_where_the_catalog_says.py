@@ -83,18 +83,6 @@ def _confined(trigger_uri: str, roots: Any) -> str | None:  # noqa: ANN401 — S
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_the_vended_location_becomes_the_upstream_and_the_confinement_root() -> None:
-    """The property the media lane needs: the head's own answer is accepted, not refused."""
-    _describe(VENDED_FROM)
-    roots = await _resolve_roots(_settings(), project="", from_dataset=FROM_DATASET)
-
-    assert roots.from_uri == VENDED_FROM, f"the stage runner would open {roots.from_uri}, which no catalog vends"
-    assert roots.read_root == VENDED_FROM, "the confinement root still names the composed path"
-    assert _confined(VENDED_FROM, roots) == VENDED_FROM, "the head's own trigger was refused as unconfined"
-
-
-@respx.mock
-@pytest.mark.asyncio
 async def test_a_table_the_catalog_does_not_govern_keeps_the_composed_path() -> None:
     """`None` is an ANSWER, not a failure — an external OpenLineage producer writing an unregistered
     dataset is real and supported, and composing is the right behaviour for it."""

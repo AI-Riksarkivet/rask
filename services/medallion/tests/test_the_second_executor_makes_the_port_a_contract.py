@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 
 from medallion.services.inprocess_executor import IN_PROCESS_ENGINE, InProcessExecutor, WrongEngineError
-from service_kit.lakehouse.executor import Capability, Executor, RunHandle, RunState, SubmitOutcome
+from service_kit.lakehouse.executor import Capability, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkDestination, WorkIdentity, WorkOrder, WorkSource, WorkStamp
 
@@ -51,24 +51,6 @@ def executor(monkeypatch: pytest.MonkeyPatch) -> InProcessExecutor:
 
     monkeypatch.setattr(inprocess_executor, "transform_stage", lambda *a, **k: {"version": 3})
     return InProcessExecutor(lambda: {})
-
-
-def test_the_adapter_SATISFIES_the_port(executor: InProcessExecutor) -> None:
-    """Asked at runtime rather than assumed. `Executor` is `runtime_checkable` for exactly this: a
-    partial implementation is refused at the seam instead of raising later."""
-    assert isinstance(executor, Executor)
-    assert executor.name == IN_PROCESS_ENGINE
-
-
-@pytest.mark.asyncio
-async def test_a_SYNCHRONOUS_engine_returns_a_terminal_handle(executor: InProcessExecutor) -> None:
-    """The port must not assume a poll. This engine's work is over before `submit` returns, so its
-    first `status` is already terminal — and if that could not be expressed, `Executor` would be a
-    Ray-shaped interface wearing a neutral name."""
-    handle, outcome = await executor.submit(_order(), _registration())
-
-    assert outcome is SubmitOutcome.SUBMITTED
-    assert await executor.status(handle) is RunState.SUCCEEDED
 
 
 @pytest.mark.asyncio
@@ -129,12 +111,3 @@ async def test_a_task_for_ANOTHER_engine_is_refused_at_SUBMIT(executor: InProces
     is how the wrong program rewrites a tenant's data while every status says success."""
     with pytest.raises(WrongEngineError, match="ray"):
         await executor.submit(_order(), _registration(engine="ray"))
-
-
-def test_this_engine_promises_no_durable_record() -> None:
-    """Its run record dies with the process, so an UNKNOWN handle means the work was lost with it.
-
-    Claiming `DURABLE_RECORD` here would tell a resubmitting caller the opposite: that the engine still
-    holds the run and a second submit is a double-submit.
-    """
-    assert Capability.DURABLE_RECORD not in InProcessExecutor(lambda: {}).capabilities

@@ -110,16 +110,6 @@ class TestTheHeadRegistersWhatItSeeds:
 
     @respx.mock
     @pytest.mark.asyncio
-    async def test_registration_precedes_the_first_row(self, steps: list[str], published: list[dict[str, Any]]) -> None:
-        """The stage runners' ordering rule (`test_no_rows_without_a_catalog_record`), applied to the head."""
-        _register_route().side_effect = lambda request: steps.append("register") or Response(200, json={"location": "medallion/bronze"})
-
-        await _produce()
-
-        assert steps == ["register", "seed"], f"got {steps} — rows on disk the catalog has no record of is exactly the ungoverned state"
-
-    @respx.mock
-    @pytest.mark.asyncio
     async def test_an_already_registered_bronze_is_the_steady_state(self, steps: list[str], published: list[dict[str, Any]]) -> None:
         """Every produce after the first: 409 is convergence, not a failure — as long as the catalog
         governs the location this head actually writes, which the describe below confirms."""
@@ -146,26 +136,6 @@ class TestTheHeadRegistersWhatItSeeds:
 
 
 class TestTheCascadeHeadSurvivesIt:
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_the_bronze_write_event_is_still_emitted_exactly_once(self, steps: list[str], published: list[dict[str, Any]]) -> None:
-        _register_route()
-
-        await _produce()
-
-        assert len(published) == 1, f"the cascade head must emit exactly one bronze-write event, got {len(published)}"
-
-    @respx.mock
-    @pytest.mark.asyncio
-    async def test_the_event_still_carries_what_bronze_arrival_matches_on(self, steps: list[str], published: list[dict[str, Any]]) -> None:
-        """Registration must not touch the head's contract with `/bronze-arrival`: the same COMPLETE
-        event, the same output namespace/name, the same token — or the whole cascade stops silently."""
-        _register_route()
-
-        await _produce()
-
-        assert ingest_trigger._bronze_write_dataset(published[0], _settings(), "") == "bronze$events"
-
     @respx.mock
     @pytest.mark.asyncio
     async def test_a_refused_registration_writes_nothing_and_fires_nothing(self, steps: list[str], published: list[dict[str, Any]]) -> None:

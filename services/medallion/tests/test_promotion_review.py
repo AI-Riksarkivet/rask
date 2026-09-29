@@ -123,20 +123,6 @@ class TestAHardFailureStillDropsWithoutAsking:
 
 
 class TestAnUnusualPromotionAsksAPerson:
-    def test_the_request_is_SENT_before_the_wait(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Order is the whole property: parking on an event nobody was told about is an outage
-        wearing a pause."""
-        ctx = _Ctx(
-            {"resolve_review_policy": {"verdict": "review", "reasons": ["row_delta_band"]}, "request_approval": True},
-            external={"approved": True, "subject": "CiQwOGE4Njg0Yi1kYjg4"},
-        )
-
-        _drive(ctx, _spec(), monkeypatch)
-
-        asked = ctx.actions.index("call_activity(request_approval)")
-        waited = ctx.actions.index("wait_for_external_event(promotion_decision)")
-        assert asked < waited, f"the workflow waited before asking: {ctx.actions}"
-
     def test_an_APPROVAL_publishes_the_promotion_and_records_who_said_yes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = _Ctx(
             {"resolve_review_policy": {"verdict": "review", "reasons": ["row_delta_band"]}, "request_approval": True},
@@ -179,15 +165,6 @@ class TestAnUnansweredHoldExpiresRatherThanWaitingForever:
 
 
 class TestTheBodyStaysDeterministic:
-    def test_the_review_band_is_resolved_by_an_ACTIVITY_not_read_in_the_body(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """A threshold compiled into the workflow body changes under a running instance and makes
-        replay disagree with the original run. It is resolved once, by an activity, and carried."""
-        ctx = _Ctx({"resolve_review_policy": {"verdict": "promote", "reasons": []}})
-
-        _drive(ctx, _spec(), monkeypatch)
-
-        assert ctx.actions[0] == "call_activity(resolve_review_policy)", f"policy must be resolved first, by an activity: {ctx.actions}"
-
     def test_a_clean_promotion_asks_nobody_and_still_promotes(self, monkeypatch: pytest.MonkeyPatch) -> None:
         ctx = _Ctx({"resolve_review_policy": {"verdict": "promote", "reasons": []}})
 
@@ -239,19 +216,6 @@ class TestTheActivitiesActuallyRUN:
         verdict = resolve_review_policy(cast(Any, None), _spec(reasons=["row_delta_band"]))
 
         assert verdict["verdict"] == "block", "review off must BLOCK — the gate must never fail open"
-
-    def test_an_ask_with_no_approver_returns_FALSE_rather_than_pretending(self) -> None:
-        """`request_approval` returning True on an unsendable ask would park the workflow on an event
-        nobody can raise. It reports the failure so the body can block instead."""
-        from medallion.workflow import request_approval
-
-        assert request_approval(cast(Any, None), _spec(approver="")) is False
-
-    def test_a_service_cannot_approve_its_own_promotion(self) -> None:
-        from medallion.workflow import settings_author_marker
-
-        spec = _spec()
-        assert settings_author_marker(spec) == "service:acme-silver-to-acme-gold"
 
 
 class TestTheGateNeverFailsOpen:

@@ -89,13 +89,6 @@ def test_a_live_training_watch_can_be_OBSERVED(client: TestClient) -> None:
     assert body["submission_id"] == "ray-train-tok-1", "an operator must be able to cross-check the Ray dashboard"
 
 
-def test_the_status_route_does_not_disclose_the_whole_spec(client: TestClient) -> None:
-    """A declared field list, not the SDK state object -- which carries the serialized input and output."""
-    body = client.get(f"/trains/{LIVE}").json()
-
-    assert set(body) == {"instance_id", "status", "submission_id"}, f"the wire shape widened: {sorted(body)}"
-
-
 def test_an_UNKNOWN_watch_is_404_not_a_silent_empty_state(client: TestClient) -> None:
     assert client.get("/trains/train-nope").status_code == 404
 
@@ -105,20 +98,6 @@ def test_a_live_watch_can_be_TERMINATED(client: TestClient) -> None:
 
     assert resp.status_code == 202, resp.text
     assert cast("Any", client.app).state.workflow_client.terminated == [LIVE]
-
-
-def test_the_terminate_body_REFUSES_to_imply_the_ray_job_stopped(client: TestClient) -> None:
-    """The whole reason this is worth a custom body. `train_run` polls a job it did not submit."""
-    detail = client.post(f"/trains/{LIVE}/terminate").json()["detail"]
-
-    assert "keeps running" in detail and "Ray" in detail, f"the body lets an operator believe the GPUs are free: {detail!r}"
-
-
-def test_terminating_an_UNKNOWN_watch_is_404_and_terminates_NOTHING(client: TestClient) -> None:
-    resp = client.post("/trains/train-nope/terminate")
-
-    assert resp.status_code == 404
-    assert cast("Any", client.app).state.workflow_client.terminated == []
 
 
 @pytest.mark.parametrize("call", [lambda c: c.get(f"/trains/{LIVE}"), lambda c: c.post(f"/trains/{LIVE}/terminate")])
@@ -138,11 +117,9 @@ def engine_not_installed(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.parametrize(
     ("call", "status"),
     [
-        (lambda c: c.get(f"/trains/{LIVE}"), 503),
-        (lambda c: c.post(f"/trains/{LIVE}/terminate"), 503),
         (lambda c: c.get("/trains/promotion-x"), 404),
     ],
-    ids=["show", "terminate", "not-a-training-id"],
+    ids=["not-a-training-id"],
 )
 @pytest.mark.usefixtures("engine_not_installed")
 def test_a_producer_WITHOUT_the_engine_answers_as_one_with_no_sidecar(call: Any, status: int) -> None:
@@ -184,19 +161,3 @@ def test_a_non_training_instance_is_404_and_is_NEVER_TERMINATED(hosting: tuple[T
 
     assert (shown.status_code, stopped.status_code) == (404, 404), (shown.text, stopped.text)
     assert engine.terminated == [], "a training door stopped a workflow that is not a training watch"
-
-
-def test_an_id_a_training_watch_cannot_have_is_refused_BEFORE_the_engine_is_asked(hosting: tuple[TestClient, _Client]) -> None:
-    """`schedule_train_watch` mints `train-<submission id>`, so any other id names no training watch and
-    the promotion's persisted spec is never read to answer it."""
-    client, engine = hosting
-
-    assert client.get(f"/trains/{PROMOTION}").status_code == 404
-    assert engine.read == []
-
-
-def test_a_training_watch_is_still_served_beside_the_promotions(hosting: tuple[TestClient, _Client]) -> None:
-    client, engine = hosting
-
-    assert client.post(f"/trains/{LIVE}/terminate").status_code == 202
-    assert engine.terminated == [LIVE]

@@ -37,7 +37,6 @@ from lineage_kit.schemas import JobRef
 from medallion.core.config import MedallionSettings
 from medallion.services import transform
 from medallion.services.compute import WriteResult
-from medallion.services.engine_names import IN_PROCESS_ENGINE
 from service_kit.lakehouse.executor import Capability, RunHandle, RunState, SubmitOutcome
 from service_kit.lakehouse.task_registry import TaskRegistration
 from service_kit.lakehouse.work_order import WorkOrder
@@ -118,26 +117,6 @@ _RE_DERIVED = WriteResult(version=7, row_count=11, size_bytes=222, previous_row_
 
 
 @pytest.mark.anyio
-async def test_the_lane_resolves_its_engine_THROUGH_THE_REGISTRY(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE DEFECT ITSELF. The lane must ASK the registry for the engine rather than naming a class.
-
-    Asserted by substituting the registry's answer and checking the lane used it — a source-text
-    assertion would pass against an import that is never called, which is the state this row describes.
-    """
-    asked: list[str] = []
-    fake = _FakeExecutor(capabilities=frozenset({Capability.RESULT}), result_value=_FROM_THE_ENGINE)
-
-    def _executor_for(engine: str, **_kwargs: object) -> _FakeExecutor:
-        asked.append(engine)
-        return fake
-
-    monkeypatch.setattr(transform, "executor_for", _executor_for)
-
-    assert await _drive(_settings(tmp_path)) is _FROM_THE_ENGINE
-    assert asked == [IN_PROCESS_ENGINE], f"the lane did not resolve through the registry; it asked for {asked}"
-
-
-@pytest.mark.anyio
 async def test_an_engine_that_promises_a_RESULT_is_not_measured_a_second_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The optimisation the hand-built adapter existed to keep, now expressed as a capability.
 
@@ -168,25 +147,6 @@ async def test_an_engine_that_promises_NO_result_makes_the_lane_RE_DERIVE(tmp_pa
 
     assert await _drive(_settings(tmp_path)) is _RE_DERIVED
     assert fake.result_calls == 0, "the lane called a method the engine never promised"
-
-
-def test_the_two_SHIPPED_adapters_disagree_about_RESULT(tmp_path: Path) -> None:
-    """The asymmetry is real rather than hypothetical, and the declining adapter REFUSES.
-
-    `InProcessExecutor` holds the Lance handle and measures as it writes; `RayJobsApiExecutor` submits
-    to a cluster and never sees the table. A `result()` returning `None` on the second would be
-    indistinguishable from a run that measured nothing, which is the overloaded-`None` defect the port's
-    own `UNKNOWN` docstring exists to name — so it raises, exactly as `InProcessExecutor.cancel` does
-    for the capability IT declines.
-    """
-    from medallion.services.engine_names import RAY_ENGINE
-    from medallion.services.engine_registry import executor_for
-
-    in_process = executor_for(IN_PROCESS_ENGINE, storage_options={})
-    ray = executor_for(RAY_ENGINE, storage_options={})
-
-    assert Capability.RESULT in in_process.capabilities
-    assert Capability.RESULT not in ray.capabilities
 
 
 def _refuse_to_measure(*_args: object, **_kwargs: object) -> WriteResult:

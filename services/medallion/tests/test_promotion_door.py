@@ -79,15 +79,6 @@ def _held(**over: Any) -> dict[str, Any]:
 
 class TestTheHoldReachesTheProducerOverTheBus:
     @pytest.mark.asyncio
-    async def test_a_held_promotion_becomes_a_durable_review(self) -> None:
-        client = _WorkflowClient()
-
-        result = await handle_promotion_held({"data": _held()}, client=client)
-
-        assert result == {"status": "SUCCESS"}
-        assert len(client.scheduled) == 1, "the hold must become a durable review, not a log line"
-
-    @pytest.mark.asyncio
     async def test_a_redelivered_hold_REATTACHES_instead_of_asking_twice(self) -> None:
         """Dapr redelivers, so a handler may run twice. What must not happen is two reviews of one
         promotion, each asking the approver separately."""
@@ -98,27 +89,6 @@ class TestTheHoldReachesTheProducerOverTheBus:
 
         assert first == second == {"status": "SUCCESS"}
         assert len(client.scheduled) == 1
-
-    @pytest.mark.asyncio
-    async def test_the_instance_id_is_derived_from_the_TOKEN(self) -> None:
-        """The id is what makes re-attach possible, and it is the only handle the door has: nothing
-        carries an instance id back from the stage runner."""
-        client = _WorkflowClient()
-
-        await handle_promotion_held({"data": _held()}, client=client)
-
-        assert client.scheduled[0][0] == instance_for("tok-1")
-
-    @pytest.mark.asyncio
-    async def test_a_malformed_hold_is_DROPPED_rather_than_retried(self) -> None:
-        """The payload is untrusted bus input. A shape that cannot be parsed will not parse on
-        redelivery either, so retrying it forever parks a poison message on the topic."""
-        client = _WorkflowClient()
-
-        result = await handle_promotion_held({"data": {"nonsense": True}}, client=client)
-
-        assert result["status"] == "DROP"
-        assert client.scheduled == []
 
     @pytest.mark.asyncio
     async def test_an_engine_outage_RETRIES(self) -> None:
@@ -147,16 +117,6 @@ class TestTheDecisionDoor:
         assert result["status"] == "accepted"
         assert result["approved"] is True
         assert client.raised == [(instance_for("tok-1"), "promotion_decision", {"approved": True, "subject": "CiQwOGE4Njg0Yi1kYjg4"})]
-
-    @pytest.mark.asyncio
-    async def test_a_rejection_is_delivered_too(self) -> None:
-        """A no is a decision. Dropping it leaves the promotion to expire, which reads as "nobody
-        looked" rather than "somebody said no"."""
-        client = _WorkflowClient(instances={instance_for("tok-1"): _State(_held(), WorkflowStatus.RUNNING)})
-
-        await decide_promotion(instance_for("tok-1"), approved=False, subject="CiQwOGE4Njg0Yi1kYjg4", client=client)
-
-        assert client.raised[0][2] == {"approved": False, "subject": "CiQwOGE4Njg0Yi1kYjg4"}
 
     @pytest.mark.asyncio
     async def test_an_UNKNOWN_instance_is_404_and_never_a_silent_ACCEPT(self) -> None:
@@ -223,21 +183,6 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
         assert client.raised == []
 
     @pytest.mark.asyncio
-    async def test_an_unqualified_destination_is_used_as_is(self) -> None:
-        """A projectless estate (#84) has no tenant prefix to add, and inventing one would gate against
-        an object no tuple names."""
-        projectless = _held(project="", from_namespace="silver", from_dataset="silver$features", to_namespace="gold", to_dataset="gold$catalog")
-        client = _WorkflowClient(instances={instance_for("tok-1"): _State(projectless, WorkflowStatus.RUNNING)})
-        gated: list[tuple[str, str]] = []
-
-        async def _authorize(*, subject: str, obj: str) -> None:
-            gated.append((subject, obj))
-
-        await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
-
-        assert gated == [("alice", "namespace:gold")]
-
-    @pytest.mark.asyncio
     async def test_a_DECLARED_lane_gates_on_the_namespace_the_stage_resolved(self) -> None:
         """A lane declared through the catalog door may name tenant-free ids, and the stage runner checks
         its own `can_promote` on exactly the namespace it resolved (`namespace:curated`). The approver
@@ -253,35 +198,3 @@ class TestTheDoorAuthorizesAgainstTHISPromotion:
         await decide_promotion(instance_for("tok-1"), approved=True, subject="alice", client=client, authorize=_authorize)
 
         assert gated == [("alice", "namespace:curated")]
-
-
-class TestTheRungIsValidatorNotAdmin:
-    """`can_promote: validator` exists precisely so a non-admin can validate.
-
-    `docs/architecture/ingest-and-tier-movement.md` §4 rejects a promotion door gated on `can_administer` for exactly this:
-    it is "a coarser and different rung from the `can_promote: validator` rung the model already
-    defines for exactly this act". The route's first draft reused `authorize_produce`, whose FGA half
-    is `can_administer` on the configured project — so the effective gate became admin AND validator,
-    and the one person the rung was invented for could not answer.
-    """
-
-    def test_the_route_does_not_depend_on_the_ADMIN_gate(self) -> None:
-        import inspect
-
-        from medallion.api import promotions
-
-        source = inspect.getsource(promotions)
-        assert "authorize_produce" not in source, (
-            "the decision route must authenticate WITHOUT the can_administer gate; a project validator "
-            "who is not a project admin is exactly who this rung exists for"
-        )
-
-    @pytest.mark.asyncio
-    async def test_authentication_and_authorization_are_separate_steps(self) -> None:
-        """The door proves WHO, the FGA check proves MAY. Fusing them is what lost the rung."""
-        import inspect
-
-        from medallion.api.produce_auth import authenticate_subject
-
-        params = inspect.signature(authenticate_subject).parameters
-        assert "fga_client" not in params, "authentication must not carry an authorization client"

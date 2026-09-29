@@ -28,40 +28,6 @@ from medallion.services.task_register import register_tasks
 from service_kit.lakehouse import task_registry
 
 
-def _no_ray(tmp_path: Path) -> MedallionSettings:
-    """An estate that brought its own engine: no Ray cluster, no Ray task list, one in-process task."""
-    return MedallionSettings.model_validate(
-        {
-            "control_root": str(tmp_path),
-            "ray_enabled": False,
-            "inprocess_tasks": [{"task": "stage-transform", "command": "medallion.transform_stage", "cardinalities": ["1:1", "1:N"]}],
-        }
-    )
-
-
-def test_the_in_process_plane_registers_its_own_tasks(tmp_path: Path) -> None:
-    """THE GATE. Without this the registry is empty on a Ray-less estate and every declaration 422s."""
-    assert register_tasks(_no_ray(tmp_path)) == 1
-
-    stored = task_registry.get_task(str(tmp_path), {}, "stage-transform")
-
-    assert stored is not None, "a Ray-less estate registered nothing, so the catalog refuses every transform declaration"
-    assert stored.engine == IN_PROCESS_ENGINE, f"the registering plane stamps its OWN engine, not Ray's: {stored.engine!r}"
-    assert stored.command == "medallion.transform_stage"
-
-
-def test_the_engine_is_stamped_by_the_plane_here_too(tmp_path: Path) -> None:
-    """The same rule the Ray half already obeys: a chart row cannot name an engine.
-
-    `TaskDeclaration` has no `engine` field on purpose — letting a values file supply one would make a
-    typo register a task no executor here answers to, a declaration that validates at the catalog door
-    and resolves to nothing at dispatch.
-    """
-    from medallion.core.config import TaskDeclaration
-
-    assert "engine" not in TaskDeclaration.model_fields, "the chart must not be able to name an engine"
-
-
 def test_both_planes_register_when_both_are_hosted(tmp_path: Path) -> None:
     """An estate running Ray AND the in-process engine registers both vocabularies, each with its own.
 

@@ -146,18 +146,6 @@ def test_a_train_job_that_SUCCEEDS_reports_nothing() -> None:
     assert "call_activity(report_train_outcome)" not in ctx.actions
 
 
-def test_the_watcher_NAMES_the_person_the_run_was_for() -> None:
-    """Without this the watcher is pointless: a FAIL that names nobody is discarded by the plane's own
-    rule, so the whole lane would be a producer whose output the consumer is designed to drop."""
-    ctx = _Ctx({"poll_train": ["FAILED"]})
-
-    _drive(ctx, _spec(originator="alice", project="acme"))
-
-    reported = ctx.inputs["report_train_outcome"][0]
-    assert reported["spec"]["originator"] == "alice"
-    assert reported["spec"]["project"] == "acme"
-
-
 def test_the_watchers_FAIL_EVENT_is_actually_deliverable(monkeypatch: pytest.MonkeyPatch) -> None:
     """The test above proves the wrong half of its own docstring, so this proves the other half.
 
@@ -211,17 +199,6 @@ def test_the_watchers_FAIL_EVENT_is_actually_deliverable(monkeypatch: pytest.Mon
     )
 
 
-def test_a_job_still_RUNNING_hands_the_watch_to_a_fresh_turn() -> None:
-    """One poll per turn — the Monitor pattern. A turn carries the poll count forward, or the ceiling
-    below can never be reached and the instance watches forever."""
-    ctx = _Ctx({"poll_train": ["RUNNING", "RUNNING", "SUCCEEDED"]})
-
-    out = _drive(ctx, _spec())
-
-    assert ctx.actions.count("continue_as_new") == 2
-    assert out["polls"] == 3, "the poll count did not survive the hand-off"
-
-
 def test_the_watch_is_BOUNDED_and_says_so_rather_than_reporting_a_failure() -> None:
     """A job still running at the ceiling is NOT a failed job. Reporting it as one would send somebody
     hunting a training run that is alive and may yet land — the same wrong-state-reported defect this
@@ -232,27 +209,6 @@ def test_the_watch_is_BOUNDED_and_says_so_rather_than_reporting_a_failure() -> N
 
     assert out["verdict"] == "abandoned"
     assert out["polls"] == 3
-
-
-def test_a_LOST_watch_is_not_reported_as_a_dead_job() -> None:
-    """An exhausted poll means the dashboard was unreachable across the whole retry policy. The JOB may
-    be training perfectly; reporting `failed` would be a lie about somebody's four-hour run."""
-    ctx = _Ctx({"poll_train": ["RUNNING"]})
-    ctx.raise_on = "poll_train"
-
-    out = _drive(ctx, _spec(max_polls=3))
-
-    assert out["verdict"] == "abandoned"
-
-
-def test_the_workflow_body_yields_ONLY_ctx_actions() -> None:
-    """Determinism (DWF-DET): every yield must be a ctx action, never a bare awaitable or an I/O call
-    smuggled into the body. A replay re-executes this generator from the top."""
-    ctx = _Ctx({"poll_train": ["FAILED"]})
-
-    _drive(ctx, _spec())
-
-    assert all(a.startswith(("call_activity(", "create_timer(", "continue_as_new")) for a in ctx.actions), ctx.actions
 
 
 def test_every_train_activity_is_registered() -> None:

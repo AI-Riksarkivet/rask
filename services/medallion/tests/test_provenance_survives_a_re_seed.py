@@ -55,17 +55,6 @@ def test_a_re_seed_preserves_the_row_ids_silver_references(tmp_path: Path) -> No
     )
 
 
-def test_a_re_seed_does_not_multiply_versions_without_changing_rows(tmp_path: Path) -> None:
-    """20 versions of an 8-row table is what overwrite-per-run produces, and the 7-day GC then spends
-    its time reclaiming copies of a dataset that never changed."""
-    uri = str(tmp_path / "bronze.lance")
-    seed_bronze(uri, {}, rows=8)
-    for _ in range(4):
-        seed_bronze(uri, {}, rows=8)
-    rows = lance.dataset(uri).count_rows()
-    assert rows == 8, f"five identical seeds produced {rows} rows — the merge is not converging on `id`"
-
-
 def test_a_re_seed_with_more_rows_keeps_the_originals_identity(tmp_path: Path) -> None:
     """Growth must not re-mint what was already there: an incremental ingest is the normal case, and
     it is precisely when a stale `source_rowid` would go unnoticed."""

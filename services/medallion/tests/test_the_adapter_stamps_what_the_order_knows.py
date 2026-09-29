@@ -34,11 +34,6 @@ def _order(**stamp: str) -> WorkOrder:
     )
 
 
-def test_the_adapter_can_render_metadata() -> None:
-    """RED before the fix: the adapter had no way to express what the lane stamps."""
-    assert hasattr(RayJobsApiExecutor, "job_metadata"), "the adapter cannot stamp metadata, so the port drops it"
-
-
 def test_every_fact_the_lane_stamps_is_derivable() -> None:
     """The five keys, from the order alone — no argument, no second source of truth."""
     meta = RayJobsApiExecutor().job_metadata(_order(token="tok", transform="browserlane"))

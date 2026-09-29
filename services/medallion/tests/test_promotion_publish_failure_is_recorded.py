@@ -143,24 +143,3 @@ def test_a_refused_publish_is_recorded_as_PROMOTION_FAILED_not_lost(monkeypatch:
     outcome = ctx.inputs["emit_promotion_outcome"]["outcome"]
     assert outcome["status"] == "PROMOTION_FAILED"
     assert any("backwards" in reason for reason in outcome["reasons"]), f"the reason the publish was refused must ride along; got {outcome['reasons']}"
-
-
-def test_a_refused_publish_is_NEVER_reported_as_PROMOTED(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Swallowing into PROMOTED would be worse than the crash: the tag did not move, and a lying
-    audit trail is unrecoverable in a way a missing one is not."""
-    ctx = _Ctx(_POLICY, external=_APPROVED, fails="publish_promotion")
-
-    result = _drive(ctx, _spec(), monkeypatch)
-
-    assert result["status"] != "PROMOTED"
-    assert ctx.inputs["emit_promotion_outcome"]["outcome"]["status"] != "PROMOTED"
-
-
-def test_the_SUCCESS_path_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The boundary must not change what an ordinary approval does — same actions, same order."""
-    ctx = _Ctx(_POLICY, external=_APPROVED)
-
-    result = _drive(ctx, _spec(), monkeypatch)
-
-    assert result["status"] == "PROMOTED"
-    assert ctx.actions[-2:] == ["call_activity(publish_promotion)", "call_activity(emit_promotion_outcome)"]

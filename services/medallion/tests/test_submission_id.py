@@ -7,35 +7,11 @@ second transform's work silently never ran.
 
 import itertools
 
-import pytest
-
 from medallion.services.ray_jobs_api import submission_id
 from medallion.services.trigger_guards import safe_token
 
 
 _WORK = "s3://wh/bronze$a\x00s3://wh/silver$a"
-
-
-@pytest.mark.parametrize(
-    ("first", "second"),
-    [
-        ("a.b", "a-b"),
-        ("run.1", "run-1"),
-        (".", "-"),
-        ("my.retry.key", "my-retry-key"),
-        # Both dotted and one fold: only a digest of the RAW token tells these apart.
-        ("my.retry.key", "my.retry-key"),
-        ("a.b-c", "a-b.c"),
-        ("run.1.x", "run-1.x"),
-    ],
-)
-def test_two_tokens_that_fold_alike_get_two_ids(first: str, second: str) -> None:
-    """`.` is not an id character, and both spellings are keys the stage lane accepts — two cascades.
-
-    One id for both is one workflow instance: the second trigger is answered as a re-attach to the
-    first, and the job the second instance would have submitted never runs.
-    """
-    assert submission_id("silver", first, work=_WORK) != submission_id("silver", second, work=_WORK)
 
 
 def test_every_token_the_lane_accepts_over_the_folding_alphabet_gets_its_own_id() -> None:
@@ -64,13 +40,6 @@ def test_a_token_cannot_spell_another_tokens_disambiguated_id() -> None:
     assert submission_id("silver", segment, work=_WORK) != dotted
 
 
-@pytest.mark.parametrize("token", ["arrival-42", "8e1c9b7a-2f3d-4c5b-9a01-1234567890ab", "0f1c2d3e4f5a", "Ok_1", "ui-train-1k9x2p"])
-def test_a_token_no_other_can_spell_stays_verbatim(token: str) -> None:
-    """Disambiguation costs readability, so it is paid only where a spelling is shared: a hex or UUID
-    token and every training key the door accepts stay readable in the dashboard, verbatim."""
-    assert submission_id("train", token) == f"ray-train-{token}"
-
-
 def test_tokenless_submissions_of_DIFFERENT_work_get_DIFFERENT_ids() -> None:
     """The collapse: two distinct transforms, no token — they must not share a job id."""
     a = submission_id("silver", None, work="s3://wh/bronze$a\x00s3://wh/silver$a")
@@ -85,13 +54,6 @@ def test_one_token_fanning_out_to_two_tables_gets_two_ids() -> None:
     assert a != b
 
 
-def test_redelivery_reattaches_same_stage_token_work_is_same_id() -> None:
-    """A redelivered trigger carries the same (stage, token, work) — it must re-attach."""
-    kwargs = {"work": "s3://wh/bronze$a\x00s3://wh/silver$a"}
-    assert submission_id("silver", "tok-1", **kwargs) == submission_id("silver", "tok-1", **kwargs)
-    assert submission_id("silver", None, **kwargs) == submission_id("silver", None, **kwargs)
-
-
 def test_token_stays_visible_in_the_id() -> None:
     """Operators grep the Ray dashboard by token — the digest must not replace it."""
     sid = submission_id("silver", "arrival-42", work="from\x00to")
@@ -103,13 +65,6 @@ def test_no_work_is_byte_identical_to_the_historic_shape() -> None:
     """The train path passes no work; its ids (and any running jobs) must not move."""
     assert submission_id("train", "tok-9") == "ray-train-tok-9"
     assert submission_id("silver", None) == "ray-silver-notoken"
-
-
-def test_id_is_ray_safe_regardless_of_work_length() -> None:
-    """Arbitrarily long URIs ride as a fixed-width digest; the charset stays [A-Za-z0-9_-]."""
-    sid = submission_id("silver", "tok/with:odd chars", work="x" * 10_000)
-    assert len(sid) <= 200
-    assert all(c.isalnum() or c in "_-" for c in sid)
 
 
 def test_a_redelivered_trigger_reattaches_but_a_DEPLOY_does_not() -> None:

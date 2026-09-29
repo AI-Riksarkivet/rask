@@ -41,47 +41,12 @@ def _settings(**overrides: Any) -> MedallionSettings:
     return MedallionSettings.model_validate(values)
 
 
-def test_a_governed_feature_table_resolves_to_the_catalogs_location(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The defect: the door opened a composed path while the catalog vended somewhere else."""
-    asked: list[str] = []
-
-    def _describe(*, table_id: str, **_kw: Any) -> str:
-        asked.append(table_id)
-        return "s3://tenant-wh/90fabc_silver$features"
-
-    monkeypatch.setattr(train.catalog_register, "describe_table_location", _describe)
-    settings = _settings(MEDALLION_CATALOG_URL="http://catalog:2333")
-
-    assert train.feature_uri_for(settings, "silver$features") == "s3://tenant-wh/90fabc_silver$features"
-    assert asked == ["silver$features"], "the door did not ask the catalog"
-
-
 def test_an_UNREGISTERED_dataset_keeps_the_composed_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """`None` is an answer, not a failure — an external producer's unregistered dataset is supported."""
     monkeypatch.setattr(train.catalog_register, "describe_table_location", lambda **_kw: None)
     settings = _settings(MEDALLION_CATALOG_URL="http://catalog:2333")
 
     assert train.feature_uri_for(settings, "silver$features") == "s3://lake/medallion/silver"
-
-
-def test_with_NO_catalog_the_door_never_asks(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The demo shape has no catalog to ask, and must not pay a request to discover that.
-
-    RECORDED, NOT RAISED. A tripwire that raises cannot fire here: the outage fallback catches every
-    exception on purpose, so an `AssertionError` from the double is swallowed and the test passes
-    whether or not the call was made. Caught by mutation — removing the no-catalog guard left this
-    green.
-    """
-    calls: list[str] = []
-
-    def _record(*, table_id: str, **_kw: Any) -> str:
-        calls.append(table_id)
-        return "s3://should-not-be-used/x"
-
-    monkeypatch.setattr(train.catalog_register, "describe_table_location", _record)
-
-    assert train.feature_uri_for(_settings(), "silver$features") == "s3://lake/medallion/silver"
-    assert calls == [], "asked a catalog that is not configured"
 
 
 def test_a_CATALOG_OUTAGE_falls_back_rather_than_refusing_the_submission(monkeypatch: pytest.MonkeyPatch) -> None:

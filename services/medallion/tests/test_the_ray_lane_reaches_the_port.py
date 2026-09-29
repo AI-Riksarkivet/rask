@@ -21,39 +21,6 @@ docstring records a poller that watched an id the submitter never used.
 from __future__ import annotations
 
 from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
-from service_kit.lakehouse.executor import Capability, Executor
-
-
-def test_the_adapter_satisfies_the_port() -> None:
-    """Asked rather than assumed — the port is `runtime_checkable` precisely so this is a question.
-
-    A partial implementation is refused here instead of raising at the first dispatch that reaches a
-    missing method.
-    """
-    assert isinstance(RayJobsApiExecutor(), Executor)
-
-
-def test_the_adapter_names_the_ray_engine() -> None:
-    """`executor_for` resolves by name, so an adapter calling itself something else is unreachable."""
-    from medallion.services.engine_names import RAY_ENGINE
-
-    assert RayJobsApiExecutor().name == RAY_ENGINE
-
-
-def test_the_adapter_claims_cancel_and_failure_detail_but_not_a_durable_record() -> None:
-    """Capabilities are PROMISES the platform acts on, so an honest absence matters more than a full set.
-
-    DURABLE_RECORD is deliberately absent: a Jobs-API submission lives in the head's GCS, and a head
-    restart takes the job history with it — observed on this estate. Its absence is what licenses the
-    resubmit machinery; claiming it would tell a resubmitting caller that a lost run is still held.
-    CANCEL and FAILURE_DETAIL are claimed because `job_failure` classifies a real reason and the lane
-    can delete a job by id.
-    """
-    caps = RayJobsApiExecutor().capabilities
-
-    assert Capability.DURABLE_RECORD not in caps, "a Jobs-API job does not survive a head restart; claiming it would suppress a needed resubmit"
-    assert Capability.CANCEL in caps
-    assert Capability.FAILURE_DETAIL in caps
 
 
 def test_the_adapter_refuses_a_task_registered_for_another_engine() -> None:

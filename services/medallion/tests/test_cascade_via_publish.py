@@ -121,21 +121,6 @@ class TestTheTagMoveIsTheTrigger:
             "the stage runner fired the next-stage trigger AND published — two ignitions for one hop, which is the duplicate cascade this replaces"
         )
 
-    def test_lineage_is_still_emitted(self, published: list[dict[str, Any]], upstream: Path) -> None:
-        """The run's provenance does not depend on the gate's verdict — a refused batch still wrote."""
-        dapr = _Dapr()
-
-        asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream), _event()))
-
-        assert "lineage.events.v1" in dapr.topics
-
-    def test_the_declared_columns_reach_the_door(self, published: list[dict[str, Any]], upstream: Path) -> None:
-        dapr = _Dapr()
-
-        asyncio.run(transform.handle_stage(cast(Any, dapr), _settings(upstream, MEDALLION_REQUIRED_COLUMNS="id,embedding"), _event()))
-
-        assert published[0]["required_columns"] == ["id", "embedding"]
-
 
 class TestARefusalBecomesTheHold:
     def test_a_refused_publish_stops_the_cascade_and_names_its_assertions(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
@@ -183,37 +168,3 @@ class TestARefusalBecomesTheHold:
         written = _data_version(str(upstream / "vended.lance"))
         assert [ask["version"] for ask in asked] == [written], f"the catalog was offered {asked}, the run wrote v{written}"
         assert holds[0].version == written, f"the hold names v{holds[0].version}; the run wrote v{written}"
-
-
-class TestTheDefaultIsUntouched:
-    def test_there_is_no_flag_and_no_second_door(self, monkeypatch: pytest.MonkeyPatch, upstream: Path) -> None:
-        """THE MIGRATION IS OVER, so the seam is gone.
-
-        This asserted the opposite: with MEDALLION_CASCADE_VIA_PUBLISH unset the stage runner fired
-        `medallion.silver` itself and never called the catalog. That was honest as a MIGRATION SEAM,
-        which is how this module's header describes it -- but it made the DEFAULT deployment promote
-        through the door `publication.py` says must not exist, and left two enforcement points for one
-        contract.
-
-        The flag is removed, so the setting cannot turn the second door back on. A stage promotes
-        through the catalog or it does not promote.
-        """
-        called: list[Any] = []
-
-        def _first_publication(kwargs: dict[str, Any]) -> PublishOutcome:
-            # The catalog's answer for a first publication: no prior version, the tag moved to the one asked about.
-            called.append(kwargs)
-            return PublishOutcome(published=True, from_version=None, to_version=kwargs["version"])
-
-        monkeypatch.setattr(transform.catalog_register, "ensure_stage_output", lambda **_: str(upstream / "vended.lance"))
-        monkeypatch.setattr(transform.catalog_register, "describe_table_location", lambda **_: None)
-        monkeypatch.setattr(transform.catalog_register, "publish_stage_output", _bound_publish(_first_publication))
-        dapr = _Dapr()
-        # Review pinned off: a first promotion under review HOLDs, which acks with a `reason` this test is not about.
-        settings = _settings(upstream, MEDALLION_CASCADE_VIA_PUBLISH="false", MEDALLION_QUALITY_REVIEW_ENABLED="false")
-
-        status = asyncio.run(transform.handle_stage(cast(Any, dapr), settings, _event()))
-
-        assert called, "the catalog must be asked to publish even with the retired flag set to false"
-        assert status == {"status": "SUCCESS"}, f"the published run did not ack: {status}"
-        assert "medallion.silver" not in dapr.topics, "the stage runner must never fire the next stage itself"

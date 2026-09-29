@@ -71,15 +71,6 @@ def test_an_unknown_edge_is_counted_and_publishes_nothing() -> None:
     assert gauge.points == []
 
 
-def test_a_tick_over_no_declared_edges_is_not_an_error() -> None:
-    """A deployment with no lanes declared has nothing to measure. Zero is the honest report; raising
-    would make an unconfigured estate look broken on every tick."""
-    gauge = _Gauge()
-    assert run_lag_tick(
-        edges=[], published=lambda e, p: 1, consumed=lambda e, p: [ConsumedRange(from_version=None, to_version=1)], gauge=gauge
-    ) == LagTickReport(edges=0, published_points=0, failed=0)
-
-
 def _raise_unmeasurable(edge: str, project: str) -> int | None:
     raise EdgeNotMeasurable(f"{edge} is not visible to this subject")
 

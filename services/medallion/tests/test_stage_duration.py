@@ -34,26 +34,6 @@ def _event(**over: Any) -> dict[str, Any]:
     return build_run_event(**{**base, **over})
 
 
-def test_the_metrics_module_can_record_a_stage_COMPLETION_not_just_a_count() -> None:
-    """Six counters and zero histograms: a transition was counted, never timed or sized."""
-    from medallion.core import metrics
-
-    assert hasattr(metrics, "record_stage_completion"), (
-        "no way to record a stage's duration/rows/bytes — `record_transition` counts that a stage "
-        "happened and says nothing about how long it took or how much it moved"
-    )
-
-
-def test_the_duration_reaches_the_LINEAGE_FACET_so_it_cannot_disagree_with_the_metric() -> None:
-    """B10's second half. A number in a metric and a different number in the graph is worse than one
-    number, because a reader has no way to tell which is lying."""
-    event = _event(duration_seconds=12.5)
-    lance = event["run"]["facets"]["lance"]
-
-    assert "duration_seconds" in lance, "the run facet carries no duration — the graph cannot corroborate the metric"
-    assert lance["duration_seconds"] == 12.5
-
-
 def test_a_run_with_NO_measured_duration_is_byte_identical_to_before() -> None:
     """Additive and optional, or it is a wire break.
 

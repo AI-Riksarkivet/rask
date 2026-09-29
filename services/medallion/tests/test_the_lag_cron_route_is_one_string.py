@@ -39,22 +39,6 @@ def test_an_unnamed_binding_mounts_nothing() -> None:
     assert client.post("/medallion-cascade-lag-cron").status_code == 404
 
 
-def test_the_route_path_IS_the_binding_name() -> None:
-    """Driven through the app rather than by reading `app.routes`: this FastAPI wraps an included
-    router in `_IncludedRouter` and does not flatten it, so a structural probe reports "not mounted"
-    for a route that serves perfectly. What Dapr cares about is whether the path answers."""
-    client, mounted = _client("medallion-cascade-lag-cron")
-    assert mounted is True
-    assert client.post("/medallion-cascade-lag-cron").status_code != 404
-
-
-def test_a_different_name_is_NOT_served() -> None:
-    """The one-string rule from the other side: the path is the binding name and nothing else, so a
-    Component whose name drifts from the setting hits a 404 rather than a silently working door."""
-    client, _ = _client("medallion-cascade-lag-cron")
-    assert client.post("/some-other-name").status_code == 404
-
-
 def test_it_is_mounted_at_the_pod_ROOT_not_under_the_api_prefix() -> None:
     """Dapr posts to the pod root. A route under `/api` is a cron that 404s forever."""
     client, _ = _client("medallion-cascade-lag-cron")

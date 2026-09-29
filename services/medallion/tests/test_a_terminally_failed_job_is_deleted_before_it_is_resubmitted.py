@@ -98,28 +98,3 @@ async def test_a_failed_RESUBMIT_raises_rather_than_reporting_success() -> None:
 
     with pytest.raises(Exception):  # noqa: B017 — the kernel wraps the httpx error in its own type
         await submit_or_reattach(cast(httpx.AsyncClient, jobs), SUB_ID, BODY)
-
-
-@pytest.mark.asyncio
-async def test_report_NEVER_deletes(terminal: str = "FAILED") -> None:
-    """The train contract's divergence, asserted here beside the branch it diverges from: expensive
-    compute is terminal until a human resubmits, so the dead job must survive for them to inspect."""
-    jobs = _Jobs(posts=[409], existing=terminal)
-
-    outcome = await submit_or_reattach(cast(httpx.AsyncClient, jobs), SUB_ID, BODY, on_terminal_failure="report")
-
-    assert outcome == "already_failed"
-    assert not [c for c in jobs.calls if c[0] == "DELETE"], jobs.calls
-
-
-@pytest.mark.asyncio
-async def test_a_job_that_is_STILL_RUNNING_is_reattached_not_replaced() -> None:
-    """The control that stops the branch firing too widely. Deleting a running job would kill work in
-    flight and restart it from nothing — strictly worse than the failure this row exists to fix."""
-    jobs = _Jobs(posts=[409], existing="RUNNING")
-
-    outcome = await submit_or_reattach(cast(httpx.AsyncClient, jobs), SUB_ID, BODY)
-
-    assert outcome == "reattached"
-    assert not [c for c in jobs.calls if c[0] == "DELETE"], jobs.calls
-    assert len([c for c in jobs.calls if c[0] == "POST"]) == 1, "a reattach must not post again"

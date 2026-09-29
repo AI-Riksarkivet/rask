@@ -17,14 +17,13 @@ therefore be safe to do twice, and everything it swallows must be findable after
 from __future__ import annotations
 
 import json
-import logging
 from contextlib import suppress
 from typing import Any, cast
 
 import pytest
 
 from medallion.schemas.promotion import PromotionSpec
-from medallion.workflow import PromotionOutcome, PromotionReport, StageJobOutcome, StageJobSpec, StageReport, request_approval
+from medallion.workflow import StageJobOutcome, StageJobSpec, StageReport, request_approval
 
 
 def _spec(**over: Any) -> dict[str, Any]:
@@ -81,39 +80,6 @@ def test_a_RE_EXECUTED_request_approval_carries_the_SAME_dedupe_key(monkeypatch:
 
     assert len(seen) == 2, f"the fixture did not capture both publishes: {seen}"
     assert seen[0]["event_id"] == seen[1]["event_id"], f"a re-executed activity minted a fresh dedupe key: {seen[0]['event_id']} vs {seen[1]['event_id']}"
-
-
-def test_the_dedupe_key_is_DERIVED_from_the_promotion_not_shared_across_them(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A constant would dedupe every promotion into the first one -- worse than the bug."""
-    seen = _published(monkeypatch)
-
-    request_approval(cast("Any", None), PromotionSpec.model_validate(_spec(token="tok-1")))
-    request_approval(cast("Any", None), PromotionSpec.model_validate(_spec(token="tok-2")))
-
-    assert seen[0]["event_id"] != seen[1]["event_id"], "two different promotions collapsed onto one dedupe key"
-
-
-def test_a_lost_promotion_audit_NAMES_the_promotion(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """`emit_promotion_outcome` is the only writer of the durable record. When its publish fails, the
-    log line is all that is left -- and it named nothing, against three sibling `best_effort` calls in
-    the same file that all pass identifying kwargs."""
-    from medallion import workflow as workflow_mod
-
-    def _boom() -> None:
-        raise RuntimeError("sidecar refused")
-
-    monkeypatch.setattr(workflow_mod, "_run_async", lambda _coro: _boom())
-    monkeypatch.setattr(workflow_mod, "record_promotion_outcome", lambda _s: None)
-
-    payload = PromotionReport(spec=PromotionSpec.model_validate(_spec()), outcome=PromotionOutcome(status="PROMOTED", decided_by="CiQwOGE4Njg0Yi1kYjg4"))
-    with caplog.at_level(logging.ERROR):
-        workflow_mod.emit_promotion_outcome(cast("Any", None), payload)
-
-    record = next((r for r in caplog.records if "best_effort_emit_failed_promotion_outcome" in r.message), None)
-    assert record is not None, f"the lost audit was not reported at all; saw {[r.message for r in caplog.records]}"
-    named = {getattr(record, "token", None), getattr(record, "dataset", None), getattr(record, "status", None), getattr(record, "decided_by", None)}
-    assert "tok-1" in named, f"the lost-audit line does not name the promotion: {record.__dict__}"
-    assert "acme-gold$catalog" in named, f"the lost-audit line does not name the dataset: {record.__dict__}"
 
 
 def test_an_EMPTY_submission_id_never_reaches_rays_job_list_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:

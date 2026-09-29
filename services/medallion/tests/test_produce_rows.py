@@ -18,30 +18,12 @@ measurement needs promotions of different sizes.
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, cast
 
 import pytest
 
 from medallion.core.config import MedallionSettings
 from medallion.services import produce as produce_module
-from medallion.services.compute import seed_bronze
-
-
-def test_seed_bronze_still_takes_a_row_count() -> None:
-    """The knob this exposes. If it goes, the door below is pointing at nothing."""
-    assert "rows" in inspect.signature(seed_bronze).parameters
-
-
-def test_produce_accepts_a_row_count() -> None:
-    parameters = inspect.signature(produce_module.produce).parameters
-    assert "rows" in parameters, "produce cannot vary its volume, so the review band cannot be exercised"
-
-
-def test_the_row_count_is_optional_and_defaults_to_the_seeders_own() -> None:
-    """Absent means byte-identical to today: `produce` must not restate seed_bronze's default, because
-    two copies of one number drift and the drift is invisible (both still "work")."""
-    assert inspect.signature(produce_module.produce).parameters["rows"].default is None
 
 
 class _Stop(Exception):

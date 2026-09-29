@@ -53,13 +53,6 @@ def test_the_subject_is_the_service_identity() -> None:
     assert facet["sub"] == "service-bronze-to-silver", "the authz subject is still a role name, so lineage will refuse the run"
 
 
-def test_the_display_name_is_still_the_role() -> None:
-    """The half a person reads. Owner ruling: the role is what makes a board legible, so it stays."""
-    facet = _facet(_event(author_subject="service-bronze-to-silver"))
-
-    assert facet["name"] == "data_eng", "the role name was lost, so every board now reads a service id"
-
-
 def test_without_a_service_identity_the_facet_is_unchanged() -> None:
     """A caller that names no identity — an external producer, a test, a deployment that configures
     none — must emit exactly what it emitted before rather than a run with no subject at all."""

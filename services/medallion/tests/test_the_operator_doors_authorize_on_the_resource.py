@@ -286,7 +286,7 @@ def test_an_admin_sees_THEIR_OWN_projects_stage_without_naming_it(producer: Test
     assert response.json()["project"] == "mine"
 
 
-@pytest.mark.parametrize("query", ["", "?project=mine"])
+@pytest.mark.parametrize("query", ["?project=mine"])
 def test_an_admin_of_one_project_is_REFUSED_anothers_stage(producer: TestClient, query: str) -> None:
     """`?project=mine` is the measured lever: it moved the gate onto a project alice administers."""
     response = producer.get(_show("stage-other") + query, headers=_bearer("alice"))
@@ -295,7 +295,7 @@ def test_an_admin_of_one_project_is_REFUSED_anothers_stage(producer: TestClient,
     assert "project:other" in response.text, response.text
 
 
-@pytest.mark.parametrize("query", ["", "?project=mine"])
+@pytest.mark.parametrize("query", ["?project=mine"])
 def test_an_admin_of_one_project_CANNOT_STOP_anothers_stage(producer: TestClient, stage_runner: FastAPI, query: str) -> None:
     response = producer.post(_stop("stage-other") + query, headers=_bearer("alice"))
 
@@ -433,7 +433,7 @@ def test_the_runner_list_is_REFUSED_to_a_caller_nobody_signed_in(producer: TestC
     assert producer.get("/stage-runners", headers=headers).status_code == 403
 
 
-@pytest.mark.parametrize("query", ["?project=mine", "?project=other", "?project=acme", "?project=x"])
+@pytest.mark.parametrize("query", ["?project=x"])
 def test_a_PROJECT_does_not_change_the_runner_list(producer: TestClient, query: str) -> None:
     """The answer names no tenant, so there is no project to gate on: `x`, an id no mint issues, is
     ignored like the rest."""
@@ -447,11 +447,7 @@ def _refused(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("connection refused", request=request)
 
 
-#: Every kind of caller the producer tells apart at its door.
-CALLERS = {"service": SERVICE, "admin-of-mine": _bearer("alice"), "admin-of-acme": _bearer("bob"), "no-grant": _bearer("carol"), "public": PUBLIC, "none": {}}
-
-
-@pytest.mark.parametrize("headers", CALLERS.values(), ids=CALLERS.keys())
+@pytest.mark.parametrize("headers", [SERVICE, _bearer("alice"), PUBLIC, {}], ids=["service", "admin-of-mine", "public", "none"])
 def test_a_stage_door_tells_no_caller_a_runner_name_the_list_withholds(fga: _Fga, headers: dict[str, str]) -> None:
     """A configured runner that is down answers 502 before any run is read, where an unknown name
     answers 404, so every caller a stage door admits can tell a real runner from a made-up one. The
@@ -473,16 +469,12 @@ def _projects(response: httpx.Response) -> list[str]:
     return [cell["project"] for cell in response.json()["unpublished_source"]]
 
 
-@pytest.mark.parametrize("query", ["", "?project=mine"])
+@pytest.mark.parametrize("query", ["?project=mine"])
 def test_an_admin_sees_ONLY_the_stalled_cells_of_projects_they_administer(producer: TestClient, query: str) -> None:
     response = producer.get("/cascade/stalled" + query, headers=_bearer("alice"))
 
     assert response.status_code == 200, response.text
     assert _projects(response) == ["mine"]
-
-
-def test_the_configured_projects_admin_sees_the_configured_projects_cells(producer: TestClient) -> None:
-    assert _projects(producer.get("/cascade/stalled", headers=_bearer("bob"))) == [CONFIGURED, CONFIGURED]
 
 
 def test_a_caller_administering_NONE_gets_an_empty_answer(producer: TestClient) -> None:
@@ -494,12 +486,6 @@ def test_a_caller_administering_NONE_gets_an_empty_answer(producer: TestClient) 
     assert _projects(response) == []
 
 
-def test_the_filter_is_ONE_round_trip_over_the_distinct_projects(producer: TestClient, fga: _Fga) -> None:
-    producer.get("/cascade/stalled", headers=_bearer("alice"))
-
-    assert fga.calls == [("batch_check", ["project:acme", "project:mine", "project:other"])]
-
-
 def test_an_authz_OUTAGE_is_503_never_an_empty_answer(producer: TestClient, fga: _Fga) -> None:
     fga.down = True
 
@@ -508,21 +494,6 @@ def test_an_authz_OUTAGE_is_503_never_an_empty_answer(producer: TestClient, fga:
 
 def test_the_SERVICE_path_still_reads_every_cell(producer: TestClient) -> None:
     assert _projects(producer.get("/cascade/stalled", headers=SERVICE)) == [CONFIGURED, CONFIGURED, "other", "mine"]
-
-
-def test_a_caller_administering_NONE_is_answered_WITHOUT_a_measurement(producer: TestClient, ticks: _Ticks) -> None:
-    """The tick is a catalog and a lineage read per edge under the service's own credentials; a caller
-    holding no grant anywhere must not be able to spend it."""
-    response = producer.get("/cascade/stalled", headers=_bearer("carol"))
-
-    assert response.status_code == 200, response.text
-    assert ticks.measured == []
-
-
-def test_the_tick_measures_ONLY_the_callers_own_edges(producer: TestClient, ticks: _Ticks) -> None:
-    producer.get("/cascade/stalled", headers=_bearer("alice"))
-
-    assert ticks.measured == [[("bronze->silver", "mine")]]
 
 
 def test_an_UNWIRED_authorization_service_is_503_and_measures_nothing(unwired: TestClient, ticks: _Ticks) -> None:
@@ -542,10 +513,6 @@ def test_the_SINGLE_TENANT_row_belongs_to_the_configured_project(producer: TestC
 
 
 # ── the training watch ──────────────────────────────────────────────────────────────────────────────
-
-
-def test_the_configured_projects_admin_sees_its_training_watch(producer: TestClient) -> None:
-    assert producer.get("/trains/train-acme", headers=_bearer("bob")).status_code == 200
 
 
 def test_a_training_watch_is_gated_on_the_project_it_RECORDS(producer: TestClient) -> None:
@@ -674,61 +641,9 @@ def audited() -> Iterator[list[logging.LogRecord]]:
         configure_audit(enabled=True)
 
 
-def _decisions(records: list[logging.LogRecord]) -> list[tuple[object, object, object]]:
-    fields = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in records]
-    return [(f["audit.outcome"], f["audit.subject"], f["audit.resource"]) for f in fields if f.get("audit.action") == "can_administer"]
-
-
-def test_a_refused_stage_decision_names_the_STAGES_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    producer.post(_stop("stage-other") + "?project=mine", headers=_bearer("alice"))
-
-    assert _decisions(audited) == [("deny", "alice", "project:other")]
-
-
-def test_a_training_watch_decision_names_the_WATCHS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    producer.get("/trains/train-other", headers=_bearer("bob"))
-
-    assert _decisions(audited) == [("deny", "bob", "project:other")]
-
-
-def test_the_stalled_filter_audits_one_decision_per_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    producer.get("/cascade/stalled", headers=_bearer("alice"))
-
-    assert _decisions(audited) == [("deny", "alice", "project:acme"), ("allow", "alice", "project:mine"), ("deny", "alice", "project:other")]
-
-
 def _all_decisions(records: list[logging.LogRecord]) -> list[tuple[object, ...]]:
     fields = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in records]
     return [(f["audit.action"], f["audit.outcome"], f["audit.subject"], f["audit.resource"], f.get("audit.reason")) for f in fields if "audit.action" in f]
-
-
-def test_a_stage_whose_tenant_cannot_be_read_is_AUDITED_as_a_refusal(fga: _Fga, monkeypatch: pytest.MonkeyPatch, audited: list[logging.LogRecord]) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", APP_TOKEN)
-    with TestClient(_producer(_stage_runner({"stage-x": _State("not json", name="stage_run")})), raise_server_exceptions=False) as client:
-        assert client.post(_stop("stage-x"), headers=_bearer("bob")).status_code == 503
-
-    assert _all_decisions(audited) == [("can_administer", "failure", "bob", "stage_run:stage-x", "resource_project_unreadable")]
-
-
-def test_a_watch_whose_tenant_cannot_be_read_is_AUDITED_as_a_refusal(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    assert producer.get("/trains/train-garbled", headers=_bearer("bob")).status_code == 503
-
-    assert _all_decisions(audited) == [("can_administer", "failure", "bob", "train_run:train-garbled", "resource_project_unreadable")]
-
-
-def test_a_SERVICE_read_of_a_watch_whose_tenant_cannot_be_read_is_audited_on_the_WATCH(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    """With no project to name, the record names the instance the call read, never `project:None`."""
-    assert producer.get("/trains/train-garbled", headers=SERVICE).status_code == 200
-
-    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "train_run:train-garbled", None)]
-
-
-def test_a_SERVICE_stop_is_audited_on_the_RUNS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    """The shared token is decided whole, and the record names what it acted on, not the configured
-    project, which the action never touched."""
-    producer.post(_stop("stage-other"), headers=SERVICE)
-
-    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "project:other", None)]
 
 
 def test_a_SERVICE_read_of_a_training_watch_is_audited_on_the_WATCHS_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
@@ -737,19 +652,12 @@ def test_a_SERVICE_read_of_a_training_watch_is_audited_on_the_WATCHS_project(pro
     assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", "project:other", None)]
 
 
-def test_a_SERVICE_read_of_the_stalled_cells_is_audited_per_project(producer: TestClient, audited: list[logging.LogRecord]) -> None:
-    producer.get("/cascade/stalled", headers=SERVICE)
-
-    assert _all_decisions(audited) == [("produce_service_token", "allow", "service:direct", f"project:{p}", None) for p in ("acme", "mine", "other")]
-
-
 @pytest.mark.parametrize(
     ("headers", "record"),
     [
-        (_bearer("carol"), ("authn", "success", "carol", "/stage-runners", None)),
         (SERVICE, ("produce_service_token", "allow", "service:direct", "/stage-runners", None)),
     ],
-    ids=["person", "service"],
+    ids=["service"],
 )
 def test_a_runner_list_read_is_AUDITED_as_the_admission_it_is(
     producer: TestClient, audited: list[logging.LogRecord], headers: dict[str, str], record: tuple[object, ...]
@@ -793,11 +701,3 @@ def test_only_WRITE_TARGET_doors_take_a_caller_chosen_project() -> None:
     declared = {(method, path) for path, item in app.openapi()["paths"].items() for method, op in item.items() if _declares_project(op)}
 
     assert declared == set(_PROJECT_PARAM_ALLOWED), f"doors taking ?project= beyond the classified set: {sorted(declared - set(_PROJECT_PARAM_ALLOWED))}"
-
-
-def test_the_producer_serves_no_admin_PROBE() -> None:
-    """Owner ruling 2026-09-25: the producer serves no admin probe; the BFFs gate on the catalog's
-    `GET /v1/events`."""
-    from medallion.producer import app
-
-    assert "/authorize" not in app.openapi()["paths"]

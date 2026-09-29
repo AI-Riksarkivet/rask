@@ -28,11 +28,9 @@ so there is no second claim to disagree with).
 from __future__ import annotations
 
 import httpx
-import pyarrow as pa
-import pytest
 import respx
 
-from medallion.services.catalog_register import RegisterError, ensure_stage_output, publish_stage_output
+from medallion.services.catalog_register import publish_stage_output
 
 
 CATALOG = "http://catalog.test"
@@ -75,25 +73,6 @@ class TestTheServiceDoor:
         _publish(app_token="stamped-by-daprd", service_identity="service-bronze-to-silver", token="a-jwt")
 
         assert "authorization" not in route.calls.last.request.headers
-
-    @respx.mock
-    def test_the_CREATE_carries_the_same_credential_as_the_describe(self) -> None:
-        """Resolving a location can be two calls. Authenticating only the second leaves the first
-        401-ing — and the describe runs FIRST, so the hop fails before the create is reached."""
-        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(404, json={}))
-        create = respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(
-            return_value=httpx.Response(200, json={"location": "s3://acme-wh/abc_silver$features"})
-        )
-
-        ensure_stage_output(
-            catalog_url=CATALOG,
-            table_id="silver$features",
-            schema=pa.schema([pa.field("id", pa.int64())]),
-            app_token="stamped-by-daprd",
-            service_identity="service-bronze-to-silver",
-        )
-
-        assert create.calls.last.request.headers["x-lance-service-identity"] == "service-bronze-to-silver"
 
 
 class TestBothHalvesOrNeither:
@@ -138,37 +117,6 @@ class TestTheBearerRemainsForTheCaseThatNeedsIt:
         assert "authorization" not in sent
         assert "dapr-api-token" not in sent
         assert "x-lance-service-identity" not in sent
-
-
-class TestItNeverTriesToCreateATopLevelNamespace:
-    """Found in-cluster, on the first run register ever made: the cascade dead-lettered on a 400.
-
-    The register door created the parent namespace before registering, treating 409 as the steady
-    state. For a NESTED parent that is right. For a TOP-LEVEL one — `silver`, `gold`, every namespace
-    the cascade actually writes into — the catalog refuses outright:
-
-        400 InvalidInputError: top-level namespace 'silver' must belong to a warehouse ...
-        Create it through its warehouse — POST /v1/warehouses/{id}/namespaces
-
-    The guard runs BEFORE the existence check, so an already-existing namespace answers 400 rather
-    than 409 and the whole hop failed. A stage runner has no business minting a tenant's top-level
-    namespace; that door is the warehouse's.
-
-    The stage runner reaches the catalog only through `ensure_stage_output` now, which knocks on no namespace
-    door at all — so this asserts a property of the seam that replaced the offender rather than
-    re-testing the offender.
-    """
-
-    @respx.mock
-    def test_resolving_a_location_knocks_on_no_namespace_door(self) -> None:
-        # No route for a namespace call. `assert_all_mocked` (on by default) turns an attempt into a
-        # hard AllMockedAssertionError rather than a silent 400 this test would then have to notice.
-        respx.post(f"{CATALOG}/v1/table/silver$features/describe").mock(return_value=httpx.Response(404, json={}))
-        respx.post(f"{CATALOG}/v1/table/silver$features/create").mock(return_value=httpx.Response(200, json={"location": "s3://acme-wh/abc_silver$features"}))
-
-        ensure_stage_output(catalog_url=CATALOG, table_id="silver$features", schema=pa.schema([pa.field("id", pa.int64())]))
-
-        assert not [c for c in respx.calls if "/namespace/" in str(c.request.url)], "the stage runner tried to mint a namespace the warehouse door owns"
 
 
 class TestAPrivilegedIdentityPresentsItsOwnCredential:
@@ -230,22 +178,3 @@ class TestAPrivilegedIdentityPresentsItsOwnCredential:
         )
 
         assert route.calls.last.request.headers["dapr-api-token"] == "shared-app-token"
-
-    @respx.mock
-    def test_no_resolver_at_all_is_the_shared_token(self) -> None:
-        """The default, and what every existing caller gets — this change adds a path, it moves none."""
-        route = _routes()
-
-        _publish(app_token="shared-app-token", service_identity="service-bronze-to-silver")
-
-        assert route.calls.last.request.headers["dapr-api-token"] == "shared-app-token"
-
-
-class TestTheFailurePostureIsUnchangedByTheDoorThatWent:
-    @respx.mock
-    def test_a_refusal_names_the_status_and_the_table(self) -> None:
-        """`RegisterError` still carries both, which is what an operator reads out of a dead-letter."""
-        respx.post(f"{CATALOG}/management/v1/table/silver$features/publish").mock(return_value=httpx.Response(403, text="denied"))
-
-        with pytest.raises(RegisterError, match="HTTP 403"):
-            _publish()

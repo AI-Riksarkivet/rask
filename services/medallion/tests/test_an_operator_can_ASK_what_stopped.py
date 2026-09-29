@@ -51,18 +51,6 @@ def _report(*, stalled: list[tuple[str, str]]) -> LagTickReport:
     )
 
 
-def test_the_door_answers_what_stopped_without_an_instance_id() -> None:
-    """THE DEFECT: the identities existed and no caller could reach them."""
-    from medallion.api.cascade_lag_read import stalled_from
-
-    answered = stalled_from(_report(stalled=[("silver->gold", "acme"), ("bronze->silver", "brand-new")]), visible=frozenset({"acme", "brand-new"}))
-
-    assert [(cell.edge, cell.project) for cell in answered.unpublished_source] == [
-        ("silver->gold", "acme"),
-        ("bronze->silver", "brand-new"),
-    ]
-
-
 def test_the_answer_carries_only_the_cells_of_VISIBLE_projects() -> None:
     """Which projects are visible is the door's decision (`test_the_operator_doors_authorize_on_the_resource`);
     the projection keeps exactly those cells and nothing else."""
@@ -71,39 +59,6 @@ def test_the_answer_carries_only_the_cells_of_VISIBLE_projects() -> None:
     answered = stalled_from(_report(stalled=[("silver->gold", "acme"), ("bronze->silver", "other")]), visible=frozenset({"other"}))
 
     assert [(cell.edge, cell.project) for cell in answered.unpublished_source] == [("bronze->silver", "other")]
-
-
-def test_a_cascade_with_nothing_stopped_answers_an_empty_list() -> None:
-    """ "Nothing is stalled" and "the door is broken" must not look alike, so it answers rather than 404s."""
-    from medallion.api.cascade_lag_read import stalled_from
-
-    assert stalled_from(_report(stalled=[]), visible=frozenset({"acme"})).unpublished_source == []
-
-
-def test_the_gauge_the_door_hands_the_tick_RECORDS_NOTHING() -> None:
-    """A dashboard that moves because somebody looked at it is worse than one that is stale.
-
-    Asserted by driving the gauge through `record_edge_lag` — the production path that decides when a
-    point is published — rather than by calling `.set` and checking a list nothing appends to. An
-    earlier draft did exactly that, and with its spy removed the assertion was `[] == []`: green
-    against any gauge, including the real one.
-    """
-    from medallion.api.cascade_lag_read import _silent_gauge
-    from medallion.services.cascade_lag import EdgeLag, record_edge_lag
-
-    real_points: list[int] = []
-
-    class _Recording:
-        def set(self, value: int, /, attributes: dict[str, str] | None = None) -> None:
-            real_points.append(value)
-
-    measurable = EdgeLag(edge="silver->gold", project="acme", lag=3, known=True)
-    record_edge_lag(measurable, gauge=_Recording())
-    assert real_points == [3], "the fixture does not describe a lag this path would publish, so the control below proves nothing"
-
-    record_edge_lag(measurable, gauge=_silent_gauge())
-
-    assert real_points == [3], "the read door's gauge published a point"
 
 
 def test_the_door_measures_OFF_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:

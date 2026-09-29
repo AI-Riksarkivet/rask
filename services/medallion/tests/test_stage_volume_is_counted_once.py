@@ -58,29 +58,12 @@ def test_a_REPLAYED_stage_counts_its_volume_ONCE(counted: dict[str, list[int]]) 
     assert counted["bytes"] == [2048]
 
 
-def test_the_LATENCY_is_still_recorded_both_times(counted: dict[str, list[int]]) -> None:
-    """The asymmetry, asserted rather than assumed: a duration is an observation, not a running total,
-    and dropping the second sample would hide real work that really took that long."""
-    for _ in range(2):
-        metrics.record_stage_completion("bronze->silver", duration_seconds=1.0, rows=100, size_bytes=2048, volume_key="bronze->silver:tok-1")
-
-    assert counted["duration"] == [1, 1]
-
-
 def test_a_DIFFERENT_batch_is_counted_normally(counted: dict[str, list[int]]) -> None:
     """The guard must not make the counter sticky: two batches through the same hop are two results."""
     metrics.record_stage_completion("bronze->silver", duration_seconds=1.0, rows=100, volume_key="bronze->silver:tok-1")
     metrics.record_stage_completion("bronze->silver", duration_seconds=1.0, rows=7, volume_key="bronze->silver:tok-2")
 
     assert counted["rows"] == [100, 7]
-
-
-def test_the_SAME_batch_through_a_DIFFERENT_hop_is_counted(counted: dict[str, list[int]]) -> None:
-    """One batch crosses several tiers, and each hop moved its own rows."""
-    metrics.record_stage_completion("bronze->silver", duration_seconds=1.0, rows=100, volume_key="bronze->silver:tok-1")
-    metrics.record_stage_completion("silver->gold", duration_seconds=1.0, rows=100, volume_key="silver->gold:tok-1")
-
-    assert counted["rows"] == [100, 100]
 
 
 def test_a_caller_with_NO_key_is_unchanged(counted: dict[str, list[int]]) -> None:

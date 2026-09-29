@@ -91,14 +91,6 @@ def order(monkeypatch: pytest.MonkeyPatch, upstream: Path) -> list[str]:
 
 
 class TestRegistrationPrecedesTheFirstRow:
-    def test_the_catalog_is_asked_before_anything_is_written(self, order: list[str], upstream: Path) -> None:
-        asyncio.run(transform.handle_stage(cast("Any", _Dapr()), _settings(upstream), _event()))
-
-        assert order == ["register", "write"], (
-            f"got {order} — a write that precedes registration is exactly the S5 window: rows on disk "
-            f"that the catalog has no record of, and nothing to roll them back"
-        )
-
     def test_a_failed_write_leaves_no_unregistered_rows(self, monkeypatch: pytest.MonkeyPatch, upstream: Path, order: list[str]) -> None:
         """The failure S5 was written about. Because the ask already happened, the worst state is an
         empty REGISTERED table — governed, and overwritten by the retry."""

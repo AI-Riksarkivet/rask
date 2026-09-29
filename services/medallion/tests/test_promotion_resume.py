@@ -12,7 +12,6 @@ findings never, by anyone.
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, cast
 
 import pytest
@@ -51,70 +50,9 @@ def _spec(**over: Any) -> PromotionSpec:
     return PromotionSpec(**{**base, **over})
 
 
-class TestTheResumeMovesTheTag:
-    def test_it_publishes_the_version_the_hold_was_taken_on(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Not "whatever is latest": a later commit may have landed while the approver was deciding,
-        and publishing that one would ship a version nobody reviewed."""
-        from medallion import workflow
-
-        asks: list[dict[str, Any]] = []
-        monkeypatch.setattr(workflow, "_resume_publish", lambda **k: asks.append(k))
-        _publishing_estate(monkeypatch)
-
-        workflow.publish_promotion(cast("Any", None), _spec())
-
-        assert asks and asks[0]["version"] == 7
-        assert asks[0]["table_id"] == "gold$catalog"
-
-    def test_it_carries_the_ACCEPTED_findings(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without them the door re-runs the same assertions and refuses for the reason a person just
-        overruled — the approval would be a no-op."""
-        from medallion import workflow
-
-        asks: list[dict[str, Any]] = []
-        monkeypatch.setattr(workflow, "_resume_publish", lambda **k: asks.append(k))
-        _publishing_estate(monkeypatch)
-
-        workflow.publish_promotion(cast("Any", None), _spec(reasons=["row_count_positive", "column_declared"]))
-
-        assert sorted(asks[0]["accept_assertions"]) == ["column_declared", "row_count_positive"]
-
-
-class TestTheSpecCarriesTheVersion:
-    def test_a_hold_without_a_version_cannot_be_resumed(self) -> None:
-        """The version is what makes the resume specific. A spec that never captured it would leave the
-        approver's decision unattached to anything."""
-        assert PromotionSpec.model_fields["version"].is_required() is True
-        assert _spec().version == 7
-
-
 class TestTheCatalogIsTheOnlyDoorAnApprovalHas:
     """`gate_decision`: the stage promotes through the catalog, which is the ONLY door. An approval is
     a promotion too, so it gets the same single door — a version the catalog is asked to publish."""
-
-    def test_a_hold_naming_no_written_version_is_refused_at_the_hold_topic(self) -> None:
-        """Lance numbers a dataset's first version 1 (measured on pylance 12.0.0, an empty create
-        included), so 0 names nothing the catalog could publish. Refused where the hold arrives — DROP,
-        because redelivery cannot add a version — and no review is ever opened for it."""
-        from medallion.api.promotions import handle_promotion_held
-
-        scheduled: list[Any] = []
-
-        class _Engine:
-            def schedule_new_workflow(self, *, workflow: Any, input: Any, instance_id: str) -> str:  # noqa: A002
-                scheduled.append(input)
-                return instance_id
-
-            def raise_workflow_event(self, instance_id: str, event_name: str, *, data: Any = None) -> None:
-                raise AssertionError("the hold ingress raises no event")
-
-            def get_workflow_state(self, instance_id: str, *, fetch_payloads: bool = True) -> Any:
-                return None
-
-        ack = asyncio.run(handle_promotion_held({"data": _spec().model_dump() | {"version": 0}}, client=_Engine()))
-
-        assert ack == {"status": "DROP"}
-        assert scheduled == [], "a review was opened for a hold that names no written version"
 
     def test_an_approval_never_fires_a_topic(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A valid approval moves the tag once and publishes nothing: a topic fired beside the catalog

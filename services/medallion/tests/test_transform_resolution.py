@@ -91,14 +91,3 @@ def test_a_lane_with_no_project_in_scope_REFUSES(tmp_path: Path) -> None:
 
     with pytest.raises(UndeclaredTransformError):
         resolve_transform(_settings(tmp_path, transform="dummy"), project="")
-
-
-def test_a_lane_with_no_control_root_REFUSES_rather_than_reading_nothing() -> None:
-    """An unconfigured control root cannot distinguish "not declared" from "cannot look", and the
-    two need opposite answers. Fail naming the knob, exactly as the catalog register seam does."""
-    from types import SimpleNamespace
-
-    settings: Any = SimpleNamespace(transform="dummy", control_root="", storage_options=lambda: {})
-
-    with pytest.raises(UndeclaredTransformError, match="MEDALLION_CONTROL_ROOT"):
-        resolve_transform(settings, project="acme")

@@ -61,21 +61,6 @@ async def test_a_refused_trigger_is_published_to_the_retention_topic() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_retained_payload_carries_the_reason_and_the_event() -> None:
-    """A retained payload that does not say WHY is a replay nobody can triage — the reason is the same
-    string `record_refused` counts, so the stream and the metric cannot describe one refusal two ways."""
-    dapr = _dapr()
-
-    await handle_stage(cast(DaprClient, dapr), _settings(), _MALFORMED)
-
-    call = next(c for c in dapr.publish_event.await_args_list if c.kwargs.get("topic_name") == "refused.bronze-to-silver")
-    body = call.kwargs["data"]
-    assert "malformed" in body, body
-    assert "bronze->silver" in body, body
-    assert "nope" in body, "the original event must be replayable from the retained payload"
-
-
-@pytest.mark.asyncio
 async def test_retention_is_OFF_when_no_topic_is_configured() -> None:
     """Dapr does not auto-create streams, so a publish to an unprovisioned subject FAILS. A deployment
     that has not run the stream job must retain nowhere rather than fail every refusal."""

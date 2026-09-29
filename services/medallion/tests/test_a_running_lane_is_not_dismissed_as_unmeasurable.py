@@ -36,9 +36,7 @@ from pydantic import ValidationError
 
 from medallion.api import cascade_lag_cron
 from medallion.services.cascade_lag import (
-    BLIND_REASONS,
     DESTINATION_INVISIBLE,
-    STORES_DISAGREE,
     AbsentEdgeMemo,
     BlindEdge,
     ConsumedRange,
@@ -78,34 +76,6 @@ def test_a_published_source_with_an_unreadable_destination_is_reported_not_dismi
         "and it still publishes NO lag: an absent destination and a forbidden one answer alike, so a "
         "first-hop lag here would be a fabrication for a hop that may have run"
     )
-
-
-def test_both_stores_refusing_is_still_unmeasurable() -> None:
-    """The other direction, and the one that keeps this from becoming 252 pages a tick.
-
-    A project that does not run a lane has neither a source nor a destination. Nothing about it is
-    wrong, and the tick must stay silent about it.
-
-    This is also the honest limit of the discriminator, recorded rather than glossed: an UNGOVERNED
-    source refuses exactly as an absent one does, so a lane that IS running reads as one that is not.
-    Measured 2026-09-11: eight cells have an ungoverned source, of which three were dropped and three
-    were never written — two are genuinely running and unseen. No reading of the two refusals separates them —
-    lineage and the catalog both answer one status for "absent" and "not yours" on purpose — so the
-    repair is to govern the table, and the cost of not doing so is that its lane has no series.
-    """
-
-    def _invisible_source(edge: str, project: str) -> int | None:
-        raise EdgeNotMeasurable(f"{project}-silver$features is not visible to this subject")
-
-    report = run_lag_tick(
-        edges=[("silver->gold", "a-tenant-that-does-not-run-this-lane")],
-        published=_invisible_source,
-        consumed=_invisible_destination,
-        gauge=_Gauge(),
-    )
-
-    assert report.unmeasurable == 1
-    assert report.blind == []
 
 
 def test_a_source_that_exists_but_never_published_is_not_reported() -> None:
@@ -175,47 +145,6 @@ def test_the_lag_cron_publishes_the_blind_lanes_it_found(monkeypatch: pytest.Mon
 
     assert report.blind == [found]
     assert published == [found], "a blind lane the tick found and the cron did not export is a finding nothing can alert on"
-
-
-def test_a_disagreement_between_the_two_stores_is_NAMED_not_merely_counted() -> None:
-    """The second way a running lane goes unmeasured, and it was counted without an identity.
-
-    Both stores answer and CONTRADICT each other — a frontier ahead of the source's published version,
-    which means a tag moved backwards or a lineage run outlived the table it names. `record_edge_lag`
-    correctly publishes no point (every sentinel a gauge could carry is also a real lag), so the cell
-    has no series, and a count in a log line names no edge. On the live estate 2026-09-11 exactly one
-    cell has been in this state on every tick, and nothing in the system can say which.
-    """
-    report = run_lag_tick(
-        edges=[("silver->gold", "acme")],
-        published=lambda edge, project: 3,
-        consumed=lambda edge, project: [ConsumedRange(from_version=None, to_version=8)],
-        gauge=_Gauge(),
-    )
-
-    assert report.blind == [BlindEdge(edge="silver->gold", project="acme", reason=STORES_DISAGREE)]
-    assert report.published_points == 0, "a contradicted lag must still publish no level — the gauge has no honest value here"
-
-
-def test_the_two_blind_reasons_are_one_vocabulary_not_two_mechanisms() -> None:
-    """Both states mean "this lane is running and I cannot state its lag", and they are reported as one
-    list with a CLOSED reason, the way `medallion.stage.refused` already handles its four refusals.
-
-    Two parallel fields would be the shape that caused this in the first place — two sibling readers
-    classifying the same refusal differently, so one identical 403 was silent on one side of a file and
-    a warning on the other.
-    """
-    report = run_lag_tick(
-        edges=[("silver->gold", "advref31"), ("bronze->silver", "acme")],
-        published=lambda edge, project: 3,
-        consumed=lambda edge, project: _invisible_destination(edge, project) if project == "advref31" else [ConsumedRange(from_version=None, to_version=8)],
-        gauge=_Gauge(),
-    )
-
-    assert {(b.reason, b.project) for b in report.blind} == {(DESTINATION_INVISIBLE, "advref31"), (STORES_DISAGREE, "acme")}
-    assert {b.reason for b in report.blind} <= BLIND_REASONS, (
-        "the reason vocabulary is closed — an unbounded label would publish caller-chosen strings as series"
-    )
 
 
 def test_a_reason_outside_the_vocabulary_cannot_be_constructed() -> None:

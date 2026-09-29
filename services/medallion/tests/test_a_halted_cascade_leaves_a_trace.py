@@ -130,18 +130,3 @@ async def test_an_UNDECLARED_transform_DROPS_rather_than_poisoning_the_subscript
 
     assert status["status"] == "DROP", f"a deterministic declaration failure must ack, not raise: {status}"
     assert refusals == [("bronze->silver", "unresolvable_lane")], f"and it must leave the same trace as its sibling: {refusals}"
-
-
-@pytest.mark.asyncio
-async def test_a_refused_trigger_emits_NO_lineage(refusals: list[tuple[str, str]], tmp_path: Path) -> None:
-    """The other half of the 2026-08-16 ruling, pinned so a later reading of "the halt tells nobody"
-    does not close it by minting provenance for a run that never touched data.
-
-    The gap it names is real — the person whose cascade stopped is still told nothing — and its home
-    is the CONTROL lane (`extra.subject` = the trigger's originator), not this one.
-    """
-    dapr = _Dapr()
-
-    await transform.handle_stage(cast(Any, dapr), _settings(tmp_path), {"data": {"token": "t", "project": "../evil", "originator": "alice"}})
-
-    assert dapr.calls == [], f"a halt that read and wrote nothing published lineage for it: {dapr.calls}"

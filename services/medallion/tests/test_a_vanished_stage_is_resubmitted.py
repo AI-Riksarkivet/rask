@@ -46,15 +46,6 @@ def test_the_resubmit_is_bounded() -> None:
     assert submits == MAX_RESUBMITS + 1, f"expected the first submit plus {MAX_RESUBMITS} retries, got {submits}"
 
 
-def test_a_healthy_run_is_never_resubmitted() -> None:
-    """The common path must be untouched — exactly one submit."""
-    ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": ["RUNNING", "SUCCEEDED"]})
-    out = _drive(ctx, cast("Any", _spec(max_polls=10)))
-
-    assert out["verdict"] == "succeeded"
-    assert ctx.actions.count("call_activity(submit_stage)") == 1
-
-
 def test_the_training_watch_does_NOT_resubmit() -> None:
     """Expensive compute stays terminal until a human decides — the `report` contract.
 

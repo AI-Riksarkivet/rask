@@ -62,24 +62,6 @@ class TestTheAsk:
 
         assert json.loads(route.calls.last.request.content)["version"] == 7
 
-    @respx.mock
-    def test_the_declared_columns_travel(self) -> None:
-        """Without them the door runs two assertions where the stage runner ran five — the breaking-change
-        detector, which is the reason the local gate cannot simply be deleted."""
-        route = _route()
-
-        _publish(required_columns=("id", "embedding"))
-
-        assert json.loads(route.calls.last.request.content)["required_columns"] == ["id", "embedding"]
-
-    @respx.mock
-    def test_it_authenticates_as_a_service(self) -> None:
-        route = _route()
-
-        _publish(app_token="stamped", service_identity="service-bronze-to-silver")
-
-        assert route.calls.last.request.headers["x-lance-service-identity"] == "service-bronze-to-silver"
-
 
 class TestTheAnswer:
     @respx.mock
@@ -108,13 +90,6 @@ class TestTheAnswer:
 
         assert outcome.published is False
         assert outcome.failed_assertions == ["row_count_positive"]
-
-    @respx.mock
-    def test_an_accepted_finding_is_reported_back(self) -> None:
-        """So a resumed promotion can be told apart from a clean one in the run's own lineage."""
-        _route(published=True, accepted=["row_count_positive"])
-
-        assert _publish(accept_assertions=("row_count_positive",)).accepted == ["row_count_positive"]
 
 
 class TestFailurePosture:

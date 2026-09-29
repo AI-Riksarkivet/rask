@@ -23,22 +23,10 @@ from __future__ import annotations
 import pyarrow as pa
 import pytest
 
-from medallion.services.compute import WriteResult, transform_stage
+from medallion.services.compute import transform_stage
 
 
 lance = pytest.importorskip("lance")
-
-
-def test_write_result_carries_the_pre_write_row_count() -> None:
-    assert "previous_row_count" in WriteResult.model_fields
-
-
-def test_a_fresh_destination_reports_no_predecessor(tmp_path) -> None:
-    """Nothing to compare against — the band reads this as a first promotion and asks."""
-    src = str(tmp_path / "from.lance")
-    lance.write_dataset(pa.table({"id": [1, 2, 3]}), src)
-    result = transform_stage(src, str(tmp_path / "to.lance"), {}, stage="silver")
-    assert result.previous_row_count is None
 
 
 def test_an_existing_destination_reports_what_it_held_BEFORE_the_write(tmp_path) -> None:

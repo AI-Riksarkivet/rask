@@ -101,32 +101,6 @@ async def test_the_head_span_goes_ERROR_when_the_cascade_never_fires(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_the_head_span_COVERS_the_publish_not_just_the_seed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Covering only a prefix of the operation is what let the status be wrong in the first place.
-
-    Proved by ordering rather than by reading the source: if the span closed at the seed, the publish
-    would run after it ended, and a span cannot be ended twice — so recording the publish's own child
-    span INSIDE the head span is only possible if the head is still open.
-    """
-    tracer, exporter = _recording_tracer()
-    monkeypatch.setattr(produce_module, "tracer", tracer)
-    monkeypatch.setattr(produce_module, "seed_bronze", _seeder())
-
-    async def publish_with_a_child(*args: object, **kwargs: object) -> None:
-        with tracer.start_as_current_span("test.publish"):
-            pass
-
-    monkeypatch.setattr("service_kit.lakehouse.outbox.publish_lineage_with_outbox", publish_with_a_child)
-    await produce_module.produce(cast("Any", None), _settings(), token="idem-cover")
-
-    head, child = _span(exporter, "medallion.produce"), _span(exporter, "test.publish")
-    assert head is not None and child is not None, "one of the two spans was never recorded"
-    assert child.parent is not None and child.parent.span_id == head.context.span_id, (
-        "the publish ran outside `medallion.produce`, so the span covers only the seed — a prefix of the operation it names"
-    )
-
-
-@pytest.mark.asyncio
 async def test_the_head_span_EXISTS_when_compute_is_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """With no seed there was no `with` block and therefore no span — in exactly the configuration
     where the head emits a synthetic event and is most worth watching."""

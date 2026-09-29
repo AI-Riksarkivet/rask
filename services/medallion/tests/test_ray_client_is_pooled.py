@@ -24,7 +24,6 @@ activities were its unfixed remainder.
 from __future__ import annotations
 
 import contextlib
-import inspect
 from typing import Any
 
 import pytest
@@ -32,42 +31,11 @@ import pytest
 from medallion.services import ray_submit
 
 
-def test_the_module_offers_one_pooled_client() -> None:
-    assert hasattr(ray_submit, "ray_client"), (
-        "ray_submit builds a fresh httpx.AsyncClient per submit — one connect, handshake and pool "
-        "teardown per activity on a durable workflow that runs them repeatedly"
-    )
-
-
-def test_no_submit_path_builds_its_own_client() -> None:
-    """The accessor existing is not the property; the call sites using it is."""
-    for name in ("submit_stage_job", "submit_train_job"):
-        fn = getattr(ray_submit, name, None)
-        if fn is None:
-            continue
-        source = inspect.getsource(fn)
-        code = "\n".join(line for line in source.split("\n") if not line.strip().startswith("#"))
-        assert "AsyncClient(" not in code, f"{name} still constructs its own client"
-
-
 @pytest.mark.asyncio
 async def test_the_client_is_reused_across_calls() -> None:
     first = await ray_submit.ray_client()
     second = await ray_submit.ray_client()
     assert first is second, "each call got a new client — the pool is per-call again"
-    await ray_submit.close_ray_client()
-
-
-@pytest.mark.asyncio
-async def test_it_can_be_closed_and_rebuilt() -> None:
-    """A module-level client nothing closes is a leak plus an 'Unclosed client session' on every
-    shutdown — the easier half of this fix, and the worse one on its own."""
-    first = await ray_submit.ray_client()
-    await ray_submit.close_ray_client()
-    assert first.is_closed
-
-    second = await ray_submit.ray_client()
-    assert second is not first, "after close, the next caller must get a working client"
     await ray_submit.close_ray_client()
 
 

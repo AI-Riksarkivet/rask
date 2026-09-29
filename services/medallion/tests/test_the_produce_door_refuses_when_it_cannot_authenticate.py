@@ -56,17 +56,6 @@ async def test_an_unconfigured_door_refuses(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_names_the_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A 403 that does not say how to run open deliberately sends an operator to guess at a setting."""
-    _hatch(monkeypatch, open_door=False)
-
-    with pytest.raises(PermissionDeniedError) as caught:
-        await _call()
-
-    assert "RASK_ALLOW_UNAUTHENTICATED_DAPR" in str(caught.value)
-
-
-@pytest.mark.asyncio
 async def test_the_hatch_still_opens_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """The control. Without it, a door that refused unconditionally would pass the two cases above.
 

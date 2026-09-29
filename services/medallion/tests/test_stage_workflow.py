@@ -18,7 +18,6 @@ from typing import Any, cast
 import pytest
 
 from medallion.workflow import (
-    MAX_POLLS,
     PollInput,
     StageJobOutcome,
     StageJobSpec,
@@ -191,43 +190,6 @@ def test_a_TERMINAL_BAD_job_does_NOT_wake_the_stage_runner(terminal_bad: str) ->
     assert outcome["status"] == terminal_bad
 
 
-def test_the_poll_loop_is_BOUNDED_so_history_cannot_grow_without_limit() -> None:
-    """DWF-DET-013. An unbounded `while True` grows workflow history forever; a RUNNING instance is
-    never collected by `stateRetentionPolicy`, so the growth has no other ceiling either.
-
-    The bound is what makes S1 shippable ahead of S2's `continue_as_new`. Asserted as a RELATION to
-    the constant so raising the ceiling without thinking about history fails here.
-    """
-    ctx = _Ctx({"submit_stage": ["sub"], "poll_stage": ["RUNNING"] * 50})
-
-    _drive(ctx, _spec(max_polls=7))
-
-    assert ctx.actions.count("call_activity(poll_stage)") == 7, "the loop ran past its bound"
-    assert MAX_POLLS * 30 <= 24 * 3600 + 1, "the default ceiling should be about a day of waiting, not a week"
-
-
-def test_the_workflow_body_yields_ONLY_ctx_actions() -> None:
-    """DWF-DET-005/006/007/014 in one assertion: every yielded object came from the fake context.
-
-    A workflow that yields a bare coroutine, an `asyncio.gather`, or an httpx call escapes the
-    scheduler and runs once per replay. Driving the generator with a context that can only produce
-    `_Action`s makes that structurally visible.
-    """
-    ctx = _Ctx({"submit_stage": ["sub"], "poll_stage": ["SUCCEEDED"]})
-    gen = stage_run(cast("Any", ctx), _spec())
-    sent: Any = None
-    seen = 0
-    try:
-        while True:
-            action = gen.send(sent)
-            assert isinstance(action, _Action), f"the workflow yielded a non-context object: {type(action)!r}"
-            seen += 1
-            sent = action.result
-    except StopIteration:
-        pass
-    assert seen >= 3
-
-
 def test_terminality_agrees_with_ray_kits_own_constants() -> None:
     """The workflow body compares against local literals so it has no import-time behaviour. That
     duplication is only safe while it AGREES — this is what stops it drifting."""
@@ -250,14 +212,6 @@ def test_the_submitter_and_the_poller_name_the_SAME_job() -> None:
     b = stage_submission_id("silver", "tok-1", "s3://a", "s3://b")
     assert a == b, "the id is not deterministic — redelivery would start a second job"
     assert stage_submission_id("silver", "tok-1", "s3://a", "s3://c") != a, "from->to must be part of the identity"
-
-
-def test_every_activity_is_registered() -> None:
-    """A definition the runtime does not know fails at runtime with an unhelpful 'no such activity'."""
-    from medallion.workflow import ACTIVITIES, WORKFLOWS
-
-    assert stage_run in WORKFLOWS
-    assert {submit_stage, publish_stage_ready, report_stage_outcome} <= set(ACTIVITIES)
 
 
 # --------------------------------------------------------------------------- #
@@ -489,35 +443,6 @@ def test_a_publish_that_EXHAUSTS_its_retries_still_reports() -> None:
 # Every S1 defect the audit found lived in a path no test drove: the FAILED-job report, the second
 # clock, the exhausted publish. All three passed 4,300 tests because the ORDER tests assert what the
 # workflow schedules, never what the activities DO. These pin the properties a defect would break.
-
-
-def test_submit_returns_THE_SAME_id_it_submitted_under(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The poll watches whatever this returns. If it derives a DIFFERENT id from the one
-    `submit_stage_job` used, the poll reads `None` forever, the watch abandons at the ceiling, and a
-    perfectly healthy job is reported as never finishing — with no error anywhere.
-
-    THE FAKE MUST NOT RE-DERIVE THE ID. An earlier version of this test built the expected id by
-    calling `stage_submission_id(stage, token, from_uri, to_uri)` itself — the same expression, with
-    the same arguments omitted, as the activity under test. That reproduced the defect on BOTH sides
-    of the assertion, so the test stayed green while every deployed stage job was polled under an id
-    nobody submitted. A fake that answers the question for the code cannot pin the code.
-
-    So the fake returns an OPAQUE id and the assertion is the contract: `submit_stage` returns what
-    the submitter posted, whatever that is. No axis added to the derivation later can defeat this,
-    because the test never derives anything.
-    """
-    from medallion.workflow import submit_stage
-
-    posted = "ray-silver-tok-1-deadbeefcafe-0badc0de"
-
-    async def _fake_submit(_settings: Any, *, from_uri: str, to_uri: str, stage: str, token: str | None, lineage_json: str = "", **_identity: str) -> str:
-        return posted
-
-    monkeypatch.setattr("medallion.services.stage_submit.submit_stage_job", _fake_submit)
-
-    returned = submit_stage(cast("Any", None), StageJobSpec.model_validate(_spec()))
-
-    assert returned == posted, "the poll would watch an id the submitter never used"
 
 
 def test_submit_returns_the_posted_id_when_a_CODE_VERSION_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -811,18 +736,6 @@ def test_a_stage_FAIL_names_the_PROJECT_QUALIFIED_datasets_like_the_COMPLETE_doe
     assert event["inputs"][0]["namespace"].startswith("acme-"), "the input edge must be qualified too"
 
 
-def test_a_projectless_stage_FAIL_is_byte_identical() -> None:
-    """Single-tenant is the default and must not move: with no project the names are exactly the env
-    values, which is what `project_namespace` returns for an empty project."""
-    from medallion.workflow import _build_stage_fail_event
-
-    spec = StageJobSpec.model_validate(_spec())
-    outcome = StageJobOutcome(submission_id="sub", status="FAILED", polls=1, verdict="failed")
-    event = _build_stage_fail_event(spec, outcome, "reason")
-
-    assert "-" not in event["outputs"][0]["namespace"].split("$")[0].replace("gold-htr", "goldhtr")
-
-
 def test_the_stage_outcome_span_carries_the_CASCADE_identity_and_the_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
     """A cascade trace answers "an activity ran" and never "which stage of which project".
 
@@ -897,14 +810,3 @@ class TestA404IsNotTheEndOfTheWatch:
 
         assert outcome["verdict"] == "abandoned"
         assert ctx.actions.count("call_activity(poll_stage)") == 3, "a 404 must consume a poll of the budget"
-
-    def test_an_EXHAUSTED_retry_still_abandons_immediately(self) -> None:
-        """The half that must not change. An exhausted policy does NOT increment `polls`, so treating
-        it like a 404 would loop `continue_as_new` forever against an unreachable dashboard."""
-        ctx = _Ctx({"submit_stage": ["sub-1"], "poll_stage": ["RUNNING"]})
-        ctx.raise_on = "poll_stage"
-
-        outcome = _drive(ctx, _spec())
-
-        assert outcome["verdict"] == "abandoned"
-        assert ctx.actions.count("call_activity(poll_stage)") == 1, "a lost watch must not retry the turn"

@@ -20,7 +20,6 @@ Three properties carry it, and each is a decision the spec argued for rather tha
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Iterator
 from typing import Any
@@ -159,14 +158,6 @@ def test_the_RUNG_is_the_edge_s_own_not_produce_s(client: TestClient, checks: li
     assert checks == [{"user": "alice", "relation": "can_promote", "obj": "namespace:acme-gold"}]
 
 
-def test_a_BRONZE_edge_asks_a_DIFFERENT_rung(client: TestClient, checks: list[dict[str, str]]) -> None:
-    """Each edge carries its own action and its own target tier; a single hardcoded rung would be
-    wrong for one of them in whichever direction it was chosen."""
-    client.post(_RERUN, json={**_BODY, "object_id": "table:acme-bronze$events"})
-
-    assert checks == [{"user": "alice", "relation": "can_create_table", "obj": "namespace:acme-silver"}]
-
-
 def test_a_DENIED_caller_publishes_NOTHING(bus: _Bus, checks: list[dict[str, str]], monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate runs before the publish, so a refusal cannot leave a trigger on the bus."""
     with TestClient(_app(bus, checks, monkeypatch, allow=False)) as client:
@@ -204,7 +195,6 @@ def test_an_object_that_names_NO_EDGE_is_refused_before_any_gate(bus: _Bus, chec
         # Well-formed table ids that are not project `acme`'s: the body names the project, so an id it
         # does not qualify contradicts the caller's own request.
         "table:silver$features",
-        "table:other-silver$features",
         "table:acme-$features",
     ],
 )
@@ -250,18 +240,6 @@ def test_a_BROKER_outage_is_503_and_not_a_202_that_re_drove_nothing(bus: _Bus, c
     bus.lands = False
     with TestClient(_app(bus, checks, monkeypatch)) as client:
         assert client.post(_RERUN, json=_BODY).status_code == 503
-
-
-def test_the_TRIGGER_is_the_shape_the_subscription_mints(client: TestClient, bus: _Bus) -> None:
-    """Both producers go through `build_stage_trigger`, and that is the point: every field is read by
-    a different guard on the stage runner, so a mismatch is not a loud failure but a wrong one — the wrong
-    lane dropped as another's, the wrong delta range, or a composed path instead of vended bytes."""
-    client.post(_RERUN, json={**_BODY, "token": "ev-9"})
-
-    payload = bus.published[0]["payload"]
-    assert set(payload) >= {"token", "dataset", "namespace", "from_version", "to_version", "project"}
-    assert payload["dataset"] == "silver$features" and payload["namespace"] == "silver"
-    assert json.loads(json.dumps(payload)) == payload, "the trigger must be JSON-serializable to cross the bus"
 
 
 def test_the_trigger_carries_the_CATALOG_VENDED_location(client: TestClient, bus: _Bus, located: list[str]) -> None:

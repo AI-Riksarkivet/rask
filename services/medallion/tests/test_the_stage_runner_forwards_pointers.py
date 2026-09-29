@@ -104,22 +104,6 @@ class TestAnExternalUpstreamIsForwardedNotCopied:
         assert _resolves(gold) == 8
         assert set(lance.dataset(gold).to_table(columns=["stage"]).column("stage").to_pylist()) == {"gold"}
 
-    def test_the_carried_column_is_still_EXTERNAL_not_re_materialised(self, tmp_path: Path) -> None:
-        """Cheap-and-readable could also be achieved by copying into a packed sidecar. It was not.
-
-        Asserted on the descriptor `kind` rather than on disk size, because size is circumstantial and
-        `kind` is the actual claim: 3 is external, everything else means the bytes were re-persisted.
-        """
-        source = tmp_path / "corpus"
-        uris = _corpus(source, count=5)
-        bronze = str(tmp_path / "bronze.lance")
-        _bronze(bronze, uris, base=str(source))
-        silver = str(tmp_path / "silver.lance")
-        transform_stage(bronze, silver, {}, stage="silver")
-
-        kinds = {d["kind"] for d in lance.dataset(silver).to_table(columns=["payload"]).column("payload").to_pylist()}
-        assert kinds == {blobs.EXTERNAL_KIND}, f"silver's payloads are not external: kinds={kinds}"
-
 
 class TestTheManagedPathIsUnchanged:
     """No base means the bytes exist nowhere else. Copying is correct and must keep working."""

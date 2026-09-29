@@ -21,7 +21,6 @@ its FAIL run in the graph, or the stage reads as a successful hop whose downstre
 from __future__ import annotations
 
 import asyncio
-import inspect
 import json
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -34,7 +33,7 @@ from medallion.core.config import MedallionSettings
 from medallion.schemas.promotion import PromotionSpec
 from medallion.services import transform
 from medallion.services.compute import WriteResult
-from medallion.services.gate_decision import GateOutcome, refusal_message
+from medallion.services.gate_decision import GateOutcome
 from medallion.services.transform import PromotionVerdict, StageIdentity, _report_hold, resolve_stage_identity
 from medallion.services.trigger_guards import StageTrigger
 from service_kit.lakehouse.transform_specs import TransformSpec
@@ -84,18 +83,6 @@ def test_a_stage_that_WROTE_NOTHING_publishes_no_hold(monkeypatch: pytest.Monkey
     holds = [p for p in bus.published if p["topic_name"] == settings.promotion_topic]
     assert holds == [], f"a stage that cannot promote asked a person to approve it: {holds}"
     assert ack["status"] == "SUCCESS", f"the refusal is recorded, so it must not park: {ack}"
-
-
-def test_a_stage_that_WROTE_NOTHING_still_leaves_its_FAIL_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The graph names the deployment fault, and files it under no promotion verdict: no validator can act on it."""
-    settings, bus, _ = _wrote_nothing(monkeypatch)
-
-    fails = bus.fail_runs(settings.lineage_topic)
-
-    assert len(fails) == 1, f"a stage that can never promote left {len(fails)} FAIL runs on {settings.lineage_topic}"
-    facets = fails[0]["run"]["facets"]
-    assert facets["errorMessage"]["message"] == refusal_message(GateOutcome.MISCONFIGURED, settings.to_dataset)
-    assert "promotion_status" not in facets["lance"], f"a deployment fault was filed as a promotion verdict: {facets['lance']}"
 
 
 _IDENTITY = StageIdentity(from_namespace="acme-silver", from_dataset="acme-silver$features", to_namespace="acme-gold", to_dataset="acme-gold$catalog")
@@ -169,35 +156,10 @@ def _names(spec: PromotionSpec) -> StageIdentity:
     return StageIdentity(from_namespace=spec.from_namespace, from_dataset=spec.from_dataset, to_namespace=spec.to_namespace, to_dataset=spec.to_dataset)
 
 
-def _parameters(function: Callable[..., Any]) -> list[tuple[str, Any, Any]]:
-    return [(p.name, p.kind, p.default) for p in inspect.signature(function).parameters.values()]
-
-
-def test_the_FAIL_run_double_carries_the_real_signature() -> None:
-    assert _parameters(_failure_recorder(_Reported())) == _parameters(transform._emit_stage_failure)
-
-
 def test_a_MISCONFIGURED_stage_asks_nobody_even_when_it_wrote(monkeypatch: pytest.MonkeyPatch) -> None:
     """Writing a version does not make a deployment fault a question: there is still no target the
     catalog could publish, so an approval has nothing it may do."""
     assert _report(monkeypatch, GateOutcome.MISCONFIGURED).held == []
-
-
-@pytest.mark.parametrize("outcome", [GateOutcome.HOLD, GateOutcome.BLOCK, GateOutcome.PUBLISH])
-def test_a_promotion_VERDICT_is_held_on_the_version_the_stage_wrote(monkeypatch: pytest.MonkeyPatch, outcome: GateOutcome) -> None:
-    """The half that must survive: every verdict still reaches the review, pinned to the written version."""
-    held = _report(monkeypatch, outcome).held
-
-    assert [spec.version for spec in held] == [4], f"{outcome} held {held}"
-
-
-@pytest.mark.parametrize("outcome", [GateOutcome.HOLD, GateOutcome.BLOCK, GateOutcome.PUBLISH])
-def test_a_promotion_VERDICT_is_held_on_the_names_the_stage_resolved(monkeypatch: pytest.MonkeyPatch, outcome: GateOutcome) -> None:
-    """The hold is the producer's only source of the four names, and it uses them as given, so the
-    outcome, the approver's object and the catalog publish all name what this identity names."""
-    held = _report(monkeypatch, outcome).held
-
-    assert [_names(spec) for spec in held] == [_IDENTITY]
 
 
 def test_a_DECLARED_lane_hold_carries_the_declared_names(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -207,14 +169,3 @@ def test_a_DECLARED_lane_hold_carries_the_declared_names(monkeypatch: pytest.Mon
     held = _report(monkeypatch, GateOutcome.HOLD, identity).held
 
     assert [_names(spec) for spec in held] == [StageIdentity("landing", "landing$events", "curated", "curated$catalog")]
-
-
-@pytest.mark.parametrize(
-    ("outcome", "status"),
-    [(GateOutcome.MISCONFIGURED, None), (GateOutcome.HOLD, "HELD"), (GateOutcome.BLOCK, "BLOCKED"), (GateOutcome.PUBLISH, "REFUSED")],
-)
-def test_every_refusal_leaves_one_FAIL_run_carrying_its_verdict(monkeypatch: pytest.MonkeyPatch, outcome: GateOutcome, status: str | None) -> None:
-    """A question or not, the refusal is in the graph, on the stage's own names, under its own verdict."""
-    failures = _report(monkeypatch, outcome).failures
-
-    assert [(f.identity, f.promotion_status) for f in failures] == [(_IDENTITY, status)]

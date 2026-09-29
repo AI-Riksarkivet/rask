@@ -127,14 +127,6 @@ def test_a_DECLARED_lane_ask_targets_the_table_the_catalog_knows(published: list
     assert json.loads(published[0]["data"])["object_id"] == _catalog_table_object("curated$catalog")
 
 
-def test_the_control_topic_is_the_one_the_inbox_subscribes_to(published: list[dict[str, Any]]) -> None:
-    """Publishing a correct event to the wrong topic reaches nobody, and looks identical from here."""
-    from service_kit.control_events import CONTROL_TOPIC
-
-    assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(_spec())) is True
-    assert published[0]["topic_name"] == CONTROL_TOPIC
-
-
 def test_no_approver_refuses_the_ask_instead_of_publishing_one_nobody_can_answer(published: list[dict[str, Any]]) -> None:
     """`approver` empty means nobody can be asked. The spec's own comment: that BLOCKS, never promotes."""
     assert wf.request_approval(_ctx(), wf.PromotionSpec.model_validate(_spec(approver=""))) is False

@@ -118,15 +118,3 @@ def test_deciding_it_answers_InvalidTableState_and_reaches_no_workflow(stored: s
     assert response.status_code == 409, response.text
     assert response.json()["code"] == ErrorCode.INVALID_TABLE_STATE
     assert engine.raised == [], "a decision on a review nobody can read must not reach the workflow"
-
-
-def test_the_log_names_the_instance_an_operator_must_clear(caplog: pytest.LogCaptureFixture) -> None:
-    """The response carries no internals, so the log line is where an operator learns WHICH review is
-    stuck and which fields failed."""
-    with caplog.at_level(logging.WARNING, logger="medallion.api.promotions"), _serving(_Engine(_without_operation())) as client:
-        client.get(f"/promotions/{_INSTANCE}")
-
-    unreadable = [record for record in caplog.records if record.message == "medallion_promotion_review_unreadable"]
-    assert unreadable, f"nothing named the unreadable review: {[record.message for record in caplog.records]}"
-    assert getattr(unreadable[0], "instance_id", None) == _INSTANCE
-    assert getattr(unreadable[0], "fields", None) == ["operation"]

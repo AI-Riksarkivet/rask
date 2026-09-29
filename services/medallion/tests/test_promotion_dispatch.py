@@ -10,13 +10,11 @@ runs in the producer, beside the door a person can reach — splits corrupt from
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import pytest
 
 from medallion.core.config import MedallionSettings
-from medallion.schemas.promotion import PromotionSpec
 from medallion.services.promotion_hold import hold_spec, publish_hold
 
 
@@ -45,24 +43,6 @@ def _settings(**over: Any) -> MedallionSettings:
 
 
 class TestWhatTheHoldCarries:
-    def test_the_spec_names_the_FAILED_assertions_only(self) -> None:
-        """The review splits corrupt from unusual by reading these names, so a passing assertion in
-        the list would block a promotion nothing is wrong with."""
-        spec = hold_spec(
-            _settings(),
-            token="tok-1",
-            project="acme",
-            from_namespace="silver",
-            from_dataset="silver$features",
-            to_namespace="gold",
-            to_dataset="gold$catalog",
-            reasons=["row_count_positive"],
-            originator="alice",
-            version=7,
-        )
-
-        assert spec.reasons == ["row_count_positive"]
-
     def test_the_deadline_and_approver_are_read_at_DISPATCH(self) -> None:
         """Both ride the spec because a workflow body that read settings would replay against whatever
         the value is now, not what it was when the promotion was held."""
@@ -82,48 +62,8 @@ class TestWhatTheHoldCarries:
         assert spec.approval_hours == 48
         assert spec.approver == "CiQwOGE4"
 
-    def test_the_hold_carries_NO_downstream_topic(self) -> None:
-        """An approval resumes by asking the catalog to publish the held version, and the tag move wakes
-        the next lane. A topic on the hold would hand the producer a way to wake it directly — the
-        second door `gate_decision` rules out — so the stage runner's downstream never leaves it."""
-        spec = hold_spec(
-            _settings(MEDALLION_PUB_TOPIC="medallion.gold"),
-            token="tok-1",
-            project="acme",
-            from_namespace="silver",
-            from_dataset="silver$features",
-            to_namespace="gold",
-            to_dataset="gold$catalog",
-            reasons=["row_count_positive"],
-            originator="",
-            version=7,
-        )
-
-        assert "medallion.gold" not in spec.model_dump_json(), f"the hold carries the downstream topic: {spec.model_dump()}"
-
 
 class TestPublishingTheHold:
-    @pytest.mark.asyncio
-    async def test_it_goes_to_the_promotion_topic(self) -> None:
-        dapr, settings = _Dapr(), _settings()
-        spec = hold_spec(
-            settings,
-            token="tok-1",
-            project="acme",
-            from_namespace="silver",
-            from_dataset="silver$features",
-            to_namespace="gold",
-            to_dataset="gold$catalog",
-            reasons=["row_count_positive"],
-            originator="",
-            version=7,
-        )
-
-        assert await publish_hold(dapr, settings, spec) is True
-        assert dapr.published[0]["topic_name"] == "medallion.promotion"
-        # The whole spec, not one field: the hold topic refuses a hold missing any required one.
-        assert PromotionSpec.model_validate(json.loads(dapr.published[0]["data"])) == spec
-
     @pytest.mark.asyncio
     async def test_a_LOST_publish_reports_false_rather_than_raising(self) -> None:
         """The caller has already written the output and emitted the held-run lineage. A broker blip

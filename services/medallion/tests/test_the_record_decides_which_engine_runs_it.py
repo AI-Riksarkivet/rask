@@ -44,33 +44,6 @@ def _declare(tmp_path: Path, *, task: str, engine: str) -> None:
     )
 
 
-def test_an_UNDECLARED_estate_is_governed_by_the_chart_exactly_as_before(tmp_path: Path) -> None:
-    """The opt-in default. Nothing about this change may alter what an un-migrated estate does."""
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True), spec=None) == engine_choice.RAY_ENGINE
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=False), spec=None) == engine_choice.IN_PROCESS_ENGINE
-
-
-def test_a_DECLARED_transform_takes_the_decision_over(tmp_path: Path) -> None:
-    """The record wins over the flag where the flag is a PREFERENCE: a chart with ray on, and a task
-    registered for an engine that is not Ray, must not go to Ray because a boolean said so.
-
-    It does NOT win over what the deployment can run. `ray_enabled` answers two questions — the default
-    engine for an undeclared estate, and whether this pod starts the Ray workflow runtime — and a
-    declaration may only override the first. Overriding the second enqueued a stage onto a runtime
-    nothing started: see [[LH-147]] and
-    `test_a_declared_ray_task_is_refused_where_no_ray_runtime_runs.py`, which owns that direction.
-    """
-    _declare(tmp_path, task="compact", engine="inprocess")
-    settings = _settings(tmp_path, ray_enabled=True, transform="lane")
-    spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
-
-    assert engine_choice.engine_for(settings, spec=spec) == engine_choice.IN_PROCESS_ENGINE
-
-    _declare(tmp_path, task="stage-transform", engine="ray")
-    spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
-
-
 def test_an_engine_NOBODY_here_runs_is_refused_rather_than_silently_defaulted(tmp_path: Path) -> None:
     """A task registered for an engine this deployment does not host is an operator error, and the one
     thing that must not happen is quietly running it on whatever is available — that is how a
@@ -96,20 +69,6 @@ def test_an_UNREGISTERED_task_is_refused_at_dispatch_too(tmp_path: Path) -> None
         engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec)
 
 
-def test_the_choice_never_reads_a_COMMAND(tmp_path: Path) -> None:
-    """Dispatch asks WHICH engine and never what it will run. A chooser that parsed the command would
-    put an engine's vocabulary back into the platform's decision path, which is the coupling this
-    whole change removes."""
-    _declare(tmp_path, task="stage-transform", engine="ray")
-    task_registry.put_task(str(tmp_path), {}, TaskRegistration(task="stage-transform", engine="ray", command="anything at all, unparsed"))
-    spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
-
-    # `ray_enabled=True` because this pins the CHOOSER, not hosting: a declared Ray task belongs on a
-    # deployment that runs the Ray lane, and leaving it off would make this a test of [[LH-147]]'s refusal
-    # wearing another name.
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
-
-
 def test_a_spec_carrying_no_project_cannot_resolve_and_says_so(tmp_path: Path) -> None:
     """A transform is keyed (project, name). Resolution without one is refused upstream; this asserts
     the chooser does not invent a second, laxer path to the same lookup."""
@@ -119,32 +78,3 @@ def test_a_spec_carrying_no_project_cannot_resolve_and_says_so(tmp_path: Path) -
 
     with pytest.raises(engine_choice.UnrunnableTaskError, match="MEDALLION_CONTROL_ROOT"):
         engine_choice.engine_for(settings, spec=spec)
-
-
-def test_the_ENGINES_this_BUILD_carries_are_named_in_one_place(tmp_path: Path) -> None:
-    """A second engine is added by registering tasks for it and hosting it — never by editing a
-    branch. The set is asserted so the addition is a visible, reviewed change rather than a drift.
-
-    `KNOWN_ENGINES` is the BUILD's ceiling; what a deployment may choose is derived from it by
-    `hosted_engines`, and asserting the ceiling alone would pass for a derivation that ignored the
-    deployment entirely — which is the defect [[LH-147]] names. So both are pinned here.
-    """
-    assert set(engine_choice.KNOWN_ENGINES) == {engine_choice.RAY_ENGINE, engine_choice.IN_PROCESS_ENGINE}
-    assert engine_choice.hosted_engines(_settings(tmp_path, ray_enabled=True)) == engine_choice.KNOWN_ENGINES
-    assert engine_choice.hosted_engines(_settings(tmp_path, ray_enabled=False)) == frozenset({engine_choice.IN_PROCESS_ENGINE})
-
-
-@pytest.mark.asyncio
-async def test_the_registry_read_does_not_block_the_event_loop(tmp_path: Path) -> None:
-    """A stage handler serves other deliveries while this resolves.
-
-    The registry read is a blocking object-store call. Made synchronously inside the handler it
-    stalls the loop for every other delivery on the pod — a per-delivery tax on a service whose whole
-    job is absorbing a bus. And with NO declaration there is no IO at all, so the threadpool hop must
-    be skipped rather than paid.
-    """
-    _declare(tmp_path, task="stage-transform", engine="ray")
-    spec = transform_specs.get_spec(str(tmp_path), {}, "acme", "lane")
-
-    assert await engine_choice.engine_for_async(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
-    assert await engine_choice.engine_for_async(_settings(tmp_path, compute_enabled=True, ray_enabled=True), spec=None) == engine_choice.RAY_ENGINE

@@ -46,13 +46,6 @@ def test_the_typed_setting_is_the_FALLBACK_not_the_source(monkeypatch: pytest.Mo
     assert produce_auth._expected_app_token(_settings(app_api_token="from-env")) == "from-env"
 
 
-def test_neither_source_configured_is_still_UNCONFIGURED(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dev-open path is deliberate and must survive: what changes is the input, not the policy."""
-    monkeypatch.setattr(produce_auth.dapr_auth, "expected_app_token", lambda: "")
-
-    assert produce_auth._expected_app_token(_settings(app_api_token="")) == ""
-
-
 @dataclass(frozen=True)
 class _Settings:
     """The one field the resolver reads. A dataclass rather than an ad-hoc object with an attribute

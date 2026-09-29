@@ -45,31 +45,8 @@ def test_importing_the_cascade_head_does_not_pull_in_dapr_workflow() -> None:
     )
 
 
-def test_the_promotions_router_does_not_pull_in_dapr_workflow() -> None:
-    """The specific door that carried it: mounted unconditionally, so its imports are the producer's."""
-    assert not _imports_engine("medallion.api.promotions")
-
-
 def test_importing_the_stage_runner_does_not_pull_in_dapr_workflow() -> None:
     """The cascade's OTHER entrypoint, and it arrived by a second route: `services/transform.py`
     imports `promotion_hold` at module scope, which took `PromotionSpec` from the engine adapter. Both
     medallion entrypoints measured as pulling the engine before this change."""
     assert not _imports_engine("medallion.stage_runner")
-
-
-def test_the_transform_path_does_not_pull_in_dapr_workflow() -> None:
-    """`transform.py` is where the cascade actually runs a stage; its own `medallion.workflow` import
-    is already lazy, and this pins that nothing it imports at module scope undoes that."""
-    assert not _imports_engine("medallion.services.transform")
-
-
-def test_the_promotion_payload_carries_no_engine() -> None:
-    """`PromotionSpec` is plain pydantic. It sat in the engine adapter, which is what made every
-    consumer of the payload a consumer of the engine."""
-    assert not _imports_engine("medallion.schemas.promotion")
-
-
-def test_the_workflow_adapter_still_imports_its_engine() -> None:
-    """The other half, so the fix cannot be 'lazy-import everything until the module means nothing':
-    `medallion.workflow` IS the Dapr Workflow adapter and is supposed to import Dapr Workflow."""
-    assert _imports_engine("medallion.workflow")

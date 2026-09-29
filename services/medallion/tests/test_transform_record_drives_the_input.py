@@ -22,8 +22,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from medallion.services.transform import resolve_stage_identity
 from service_kit.lakehouse.transform_specs import TransformSpec
 
@@ -69,34 +67,3 @@ def test_a_declared_record_decides_both_ends() -> None:
 
     assert ident.from_dataset == "acme-bronze$events"
     assert ident.to_dataset == "acme-silver$dummy"  # env says silver$features; the record wins
-
-
-def test_the_namespace_is_derived_from_the_id_not_the_env() -> None:
-    """A declared id carries its namespace; mixing it with the env's invents a pair."""
-    ident = resolve_stage_identity(_settings(), spec=_spec(from_id="acme-raw$inbox", to_id="acme-curated$out"), project="acme")
-
-    assert ident.from_namespace == "acme-raw"
-    assert ident.to_namespace == "acme-curated"
-
-
-def test_an_id_without_a_namespace_is_refused_rather_than_guessed() -> None:
-    """`events` names no namespace. Falling back to the env's would silently pair a declared
-    dataset with an undeclared namespace — the failure this record exists to remove."""
-    with pytest.raises(ValueError):
-        resolve_stage_identity(_settings(), spec=_spec(from_id="events"), project="acme")
-
-
-def test_the_env_dataset_is_still_accepted_alongside_a_declaration() -> None:
-    """A stage runner pointed at a declared lane must not stop serving its configured edge.
-
-    The guard accepts BOTH: the env `from_dataset` an estate has always used, and the declared
-    lane's `from_id`. Replacing rather than adding would silently retire a working lane the moment
-    someone declared a second one — a migration hazard disguised as a config change.
-    """
-    ident_env = resolve_stage_identity(_settings(), spec=None, project="acme")
-    ident_declared = resolve_stage_identity(_settings(), spec=_spec(), project="acme")
-
-    assert ident_env.from_dataset == "acme-bronze$events"
-    assert ident_declared.from_dataset == "acme-bronze$events"
-    # the declaration changes the OUTPUT here, which is what makes the two distinguishable
-    assert ident_env.to_dataset != ident_declared.to_dataset

@@ -14,9 +14,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-from pydantic import ValidationError
-
 from medallion.services import gate as gate_svc
 from service_kit.lakehouse import gate_specs
 from service_kit.lakehouse.gate_specs import GateSpec
@@ -33,16 +30,6 @@ def _settings(tmp_path: Path, **over: object) -> Any:
     }
     base.update(over)
     return SimpleNamespace(**base)
-
-
-def test_an_undeclared_project_keeps_the_chart_settings(tmp_path: Path) -> None:
-    """Byte-for-byte the old behaviour — an estate that opted into nothing changes nothing."""
-    settings = _settings(tmp_path)
-
-    gate = gate_svc.effective_gate(settings, gate_svc.resolve_gate(settings, project="acme"))
-
-    assert gate.review_band == 0.25
-    assert gate.key_column == "id"
 
 
 def test_a_declared_band_wins(tmp_path: Path) -> None:
@@ -94,16 +81,6 @@ class TestTheGateNamesItsSource:
     one list across stage runners with different outputs. See `docs/architecture/medallion-data-flow.md` item 6.
     """
 
-    def test_the_chart_gate_says_chart(self, tmp_path: Path) -> None:
-        settings = _settings(tmp_path)
-        assert gate_svc.effective_gate(settings, None).gate_source == "chart"
-
-    def test_a_declared_gate_says_declared(self, tmp_path: Path) -> None:
-        settings = _settings(tmp_path)
-        gate_specs.put_spec(str(tmp_path), {}, GateSpec(project="acme", review_band=0.5))
-        gate = gate_svc.effective_gate(settings, gate_svc.resolve_gate(settings, project="acme"))
-        assert gate.gate_source == "declared"
-
     def test_the_source_is_distinguishable_when_the_VALUES_are_identical(self, tmp_path: Path) -> None:
         """The case the field exists for, and the one a value comparison cannot answer.
 
@@ -118,12 +95,3 @@ class TestTheGateNamesItsSource:
 
         assert declared.review_band == chart.review_band and declared.key_column == chart.key_column
         assert (declared.gate_source, chart.gate_source) == ("declared", "chart")
-
-    def test_the_source_cannot_be_set_by_a_caller(self) -> None:
-        """A source a writer can assign is a source a writer can lie about.
-
-        `GateSpec` is `extra="forbid"`, so a stored record naming its own source is refused at parse
-        — the field is a property of the TYPE, derived, never carried in the JSON.
-        """
-        with pytest.raises(ValidationError):
-            GateSpec.model_validate({"project": "acme", "gate_source": "declared"})

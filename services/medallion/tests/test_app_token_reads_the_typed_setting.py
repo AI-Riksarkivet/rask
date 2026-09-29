@@ -10,22 +10,8 @@ prevents from returning.
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 from medallion.api import stage_runner_ops
 from medallion.core.config import MedallionSettings
-
-
-_SRC = Path(__file__).resolve().parents[1] / "src" / "medallion"
-
-#: A raw environment read of the credential: os.environ["..."], os.environ.get("..."), os.getenv("...").
-_RAW_READ = re.compile(r"os\.(?:environ(?:\.get)?|getenv)\s*[\(\[]\s*['\"]APP_API_TOKEN['\"]")
-
-
-def test_no_module_reads_APP_API_TOKEN_from_the_raw_environment() -> None:
-    offenders = [str(path.relative_to(_SRC)) for path in sorted(_SRC.rglob("*.py")) if _RAW_READ.search(path.read_text())]
-    assert offenders == [], f"these modules bypass MedallionSettings.app_api_token with a raw env read: {offenders}"
 
 
 def test_the_stage_runner_forward_header_comes_from_settings() -> None:

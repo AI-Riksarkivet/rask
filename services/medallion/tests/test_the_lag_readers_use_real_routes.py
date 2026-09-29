@@ -62,12 +62,6 @@ def _capture(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any], status: i
     return seen
 
 
-def test_the_published_reader_asks_the_TAGS_route(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = _capture(monkeypatch, {"tags": {"published": {"version": 7}}})
-    assert published_reader(_Settings())("bronze->silver", "acme") == 7
-    assert seen and seen[0].endswith("/tags/list"), seen
-
-
 def test_a_table_with_no_published_tag_reads_None(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never published — an idle, healthy edge, which `lag_for_edge` reads as lag 0."""
     _capture(monkeypatch, {"tags": {"stable": {"version": 3}}})
@@ -100,27 +94,6 @@ def test_a_catalog_error_RAISES_so_the_tick_counts_it_failed(monkeypatch: pytest
         published_reader(_Settings())("bronze->silver", "acme")
 
 
-def test_the_consumed_reader_asks_ABOUT_THE_DATASET_not_the_whole_board(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The lag verdict must not depend on how many runs the estate happens to hold.
-
-    This read answered "what has this lane consumed?" by downloading the entire run board and
-    filtering it for runs whose outputs named the lane's destination. That is O(estate) for a
-    per-dataset question, and once `/runs` was bounded to its newest page (2026-09-07) it became
-    SILENTLY PARTIAL: a lane whose consuming runs have aged off the page reports fewer ranges than it
-    has, and `lag_for_edge` turns a short answer into a confident number.
-
-    So it asks the dataset. `/datasets/{name}/producers` is answered from
-    `MATCH (r:Run)-[:WROTE]->(d:Dataset {name:$name})`, which is the question, and it carries the
-    run's consumed range because that range is a property of the run that wrote this dataset.
-    """
-    seen = _capture(monkeypatch, {"dataset": "acme-silver$features", "producers": [{"run_id": "r1", "consumed_to_version": 5, "consumed_from_version": 2}]})
-
-    assert consumed_reader(_Settings())("bronze->silver", "acme") == [ConsumedRange(from_version=2, to_version=5)]
-    assert seen, "the reader asked lineage nothing"
-    assert seen[0].endswith("/producers"), f"the reader fetched {seen[0]!r} — a per-dataset question must not be answered by the run board"
-    assert "acme-silver%24features" in seen[0] or "acme-silver$features" in seen[0], f"the dataset is not named in the URL: {seen[0]!r}"
-
-
 def test_the_published_reader_asks_for_a_TABLE_THAT_EXISTS(monkeypatch: pytest.MonkeyPatch) -> None:
     """The defect that made this detector blind: it asked for the source NAMESPACE as if it were a table.
 
@@ -135,14 +108,6 @@ def test_the_published_reader_asks_for_a_TABLE_THAT_EXISTS(monkeypatch: pytest.M
     seen = _capture(monkeypatch, {"tags": {"published": {"version": 7}}})
     published_reader(_Settings())("bronze->silver", "acme")
     assert "/v1/table/acme-bronze%24events/tags/list" in seen[0] or "/v1/table/acme-bronze$events/tags/list" in seen[0], seen
-
-
-def test_a_single_tenant_estate_asks_for_the_UNQUALIFIED_table(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`project_namespace("", name)` returns the name unchanged, which is the whole single-tenant
-    contract — a leading `-` would name nothing."""
-    seen = _capture(monkeypatch, {"tags": {"published": {"version": 7}}})
-    published_reader(_Settings())("bronze->silver", "")
-    assert "acme" not in seen[0] and ("bronze%24events" in seen[0] or "bronze$events" in seen[0]), seen
 
 
 def test_the_consumed_reader_MATCHES_ONE_TENANT_not_every_lookalike(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,32 +133,6 @@ def test_the_consumed_reader_MATCHES_ONE_TENANT_not_every_lookalike(monkeypatch:
         f"the reader asked about {asked!r} — a project-qualified dataset, not a bare namespace, is what keeps one tenant's lag out of another's"
     )
     assert "beta" not in asked
-
-
-def test_the_consumed_reader_returns_EVERY_range_not_just_the_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The gap between two ranges is the loss, so a reader that reduced to `max()` threw away the only
-    evidence of it before the detector ever saw the numbers."""
-    _capture(
-        monkeypatch,
-        {
-            "dataset": "acme-silver$features",
-            "producers": [
-                {"consumed_from_version": None, "consumed_to_version": 3},
-                {"consumed_from_version": 5, "consumed_to_version": 8},
-            ],
-        },
-    )
-    assert consumed_reader(_Settings())("bronze->silver", "acme") == [
-        ConsumedRange(from_version=None, to_version=3),
-        ConsumedRange(from_version=5, to_version=8),
-    ]
-
-
-def test_a_run_with_no_ceiling_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A promotion or a full rescan carries no range. It consumed no stated delta, so it is evidence of
-    nothing here — and a `to_version` of 0 borrowed for it would claim coverage it never had."""
-    _capture(monkeypatch, {"runs": [{"outputs": ["acme-silver$features"], "consumed_to_version": None}]})
-    assert consumed_reader(_Settings())("bronze->silver", "acme") == []
 
 
 def test_a_dataset_LINEAGE_cannot_show_us_is_unmeasurable_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:

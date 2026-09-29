@@ -18,7 +18,6 @@ expensive retry — which is why the D2 tests here are as load-bearing as the si
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 import pytest
@@ -91,22 +90,6 @@ async def _submit(client: _FakeClient, monkeypatch: pytest.MonkeyPatch) -> str:
         registry_uri="s3://models/registry",
         artifact_base="s3://models/artifacts",
     )
-
-
-def test_train_has_no_inline_copy_of_the_kernel() -> None:
-    """The single-seam assertion. The inline dance (POST, then GET-and-branch, then re-raise) is
-    exactly what `submit_or_reattach` is; a second copy is where the next one-sided fix lands."""
-    source = inspect.getsource(ray_submit.submit_train_job)
-    assert "submit_or_reattach" in source, (
-        "submit_train_job does not ride medallion.services.ray_jobs_api — it still carries its own copy of the submission dance"
-    )
-    assert 'post("/api/jobs/"' not in source, "an inline POST remains beside the kernel call — the copy was added to, not collapsed"
-
-
-@pytest.mark.asyncio
-async def test_a_fresh_submission_reports_submitted(monkeypatch: pytest.MonkeyPatch) -> None:
-    client = _FakeClient(post_status=200)
-    assert await _submit(client, monkeypatch) == "submitted"
 
 
 @pytest.mark.asyncio

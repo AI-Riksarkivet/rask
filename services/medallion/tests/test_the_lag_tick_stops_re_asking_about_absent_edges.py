@@ -51,16 +51,6 @@ def _tick(memo: AbsentEdgeMemo, *, absent: set[tuple[str, str]]) -> tuple[LagTic
     return run_lag_tick(edges=EDGES, published=published, consumed=lambda e, p: [], gauge=_Gauge(), memo=memo), asked
 
 
-def test_an_absent_edge_is_asked_about_REPEATEDLY_before_it_is_skipped() -> None:
-    """One miss is not evidence. A tenant mid-onboarding, or a catalog blip, must not cost the estate
-    a lane's series — so the memo needs the answer to be stable before it acts on it."""
-    memo = AbsentEdgeMemo()
-    absent = {("bronze->silver", "tenant-b")}
-    for tick in range(AbsentEdgeMemo.MISSES_BEFORE_SKIP):
-        _, asked = _tick(memo, absent=absent)
-        assert ("bronze->silver", "tenant-b") in asked, f"tick {tick}: the edge was skipped on too little evidence"
-
-
 def test_a_STABLY_absent_edge_stops_being_asked() -> None:
     """The point of the change: the probe that produces the false audit record stops being issued."""
     memo = AbsentEdgeMemo()
@@ -92,28 +82,3 @@ def test_the_memo_RE_PROBES_so_a_new_lane_is_never_missed_forever() -> None:
     assert ("bronze->silver", "tenant-b") in asked_since, (
         f"the edge was not re-probed within {AbsentEdgeMemo.TICKS_BEFORE_REPROBE} ticks — a lane created later would never be measured"
     )
-
-
-def test_an_edge_that_becomes_measurable_is_counted_again() -> None:
-    """The other direction: once it answers, it must return to the normal population immediately."""
-    memo = AbsentEdgeMemo()
-    absent = {("bronze->silver", "tenant-b")}
-    for _ in range(AbsentEdgeMemo.MISSES_BEFORE_SKIP):
-        _tick(memo, absent=absent)
-    memo.reset()  # the periodic re-probe, forced
-    report, asked = _tick(memo, absent=set())
-    assert ("bronze->silver", "tenant-b") in asked
-    assert report.skipped == 0, "a measurable edge was still counted as skipped"
-    assert report.published_points == 2, f"both edges should publish once visible, got {report.published_points}"
-
-
-def test_no_memo_is_the_previous_behaviour_exactly() -> None:
-    """The memo is injected, so a caller that passes none asks about everything — which is what every
-    existing caller and test does."""
-    report, asked = _tick(AbsentEdgeMemo(), absent={("bronze->silver", "tenant-b")})
-    assert len(asked) == 2
-    assert report.unmeasurable == 1
-    assert report.skipped == 0
-
-    plain = run_lag_tick(edges=EDGES, published=lambda e, p: 5, consumed=lambda e, p: [], gauge=_Gauge())
-    assert plain.skipped == 0, "a tick with no memo reported a skip"

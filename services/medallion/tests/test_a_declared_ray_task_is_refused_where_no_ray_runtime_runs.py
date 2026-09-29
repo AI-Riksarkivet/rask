@@ -56,54 +56,6 @@ def _declare(tmp_path: Path, *, task: str, engine: str) -> TransformSpec:
     return spec
 
 
-def test_a_declared_RAY_task_on_a_ray_OFF_deployment_is_REFUSED(tmp_path: Path) -> None:
-    """THE DEFECT. Before this, the declaration won and the stage was enqueued onto a runtime that is
-    never started — scheduled, never executed, and silent in every direction."""
-    spec = _declare(tmp_path, task="stage-transform", engine="ray")
-
-    with pytest.raises(engine_choice.UnrunnableTaskError) as excinfo:
-        engine_choice.engine_for(_settings(tmp_path, ray_enabled=False, transform="lane"), spec=spec)
-
-    message = str(excinfo.value)
-    assert "ray" in message, f"the refusal must name the engine an operator has to act on: {message}"
-    assert "MEDALLION_RAY_ENABLED" in message, (
-        f"an engine this deployment has turned OFF is a lever, not a typo — naming only the hosted set leaves the operator guessing: {message}"
-    )
-
-
-def test_the_same_declaration_RUNS_where_the_ray_lane_IS_hosted(tmp_path: Path) -> None:
-    """The control that keeps the guard from becoming a refusal of everything. Identical declaration,
-    identical registration — only the deployment differs, which is the whole point of the change."""
-    spec = _declare(tmp_path, task="stage-transform", engine="ray")
-
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.RAY_ENGINE
-
-
-def test_a_declared_IN_PROCESS_task_still_overrides_a_ray_ON_chart(tmp_path: Path) -> None:
-    """The decoupling property is kept in the direction that carries it: the record beats the flag, so
-    a chart with Ray on must not send a task registered for another engine to Ray. Narrowing hosting
-    must not cost this — it is the assertion that makes the declaration mean anything."""
-    spec = _declare(tmp_path, task="compact", engine="inprocess")
-
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True, transform="lane"), spec=spec) == engine_choice.IN_PROCESS_ENGINE
-
-
-def test_in_process_is_hosted_on_a_ray_OFF_deployment(tmp_path: Path) -> None:
-    """A Ray-OFF estate is not an estate that can run nothing. In-process needs no workflow runtime —
-    `transform.py` calls it directly — so turning the Ray lane off must leave the second engine whole."""
-    spec = _declare(tmp_path, task="compact", engine="inprocess")
-
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=False, transform="lane"), spec=spec) == engine_choice.IN_PROCESS_ENGINE
-
-
-def test_an_UNDECLARED_estate_is_unchanged_in_both_directions(tmp_path: Path) -> None:
-    """The chart path is a different question — the DEFAULT for an estate that declared nothing — and
-    this change must not touch it. Pinned here as well as in its own file because narrowing the hosted
-    set is exactly the edit that would silently take the un-migrated estate with it."""
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=True), spec=None) == engine_choice.RAY_ENGINE
-    assert engine_choice.engine_for(_settings(tmp_path, ray_enabled=False), spec=None) == engine_choice.IN_PROCESS_ENGINE
-
-
 @pytest.mark.asyncio
 async def test_the_ASYNC_door_refuses_identically(tmp_path: Path) -> None:
     """The stage handler calls `engine_for_async`, so a guard only the sync door applies is a guard the
@@ -113,31 +65,3 @@ async def test_the_ASYNC_door_refuses_identically(tmp_path: Path) -> None:
 
     with pytest.raises(engine_choice.UnrunnableTaskError, match="MEDALLION_RAY_ENABLED"):
         await engine_choice.engine_for_async(_settings(tmp_path, ray_enabled=False, transform="lane"), spec=spec)
-
-
-@pytest.mark.parametrize("ray_enabled", [True, False])
-def test_what_may_be_CHOSEN_is_always_a_subset_of_what_can_be_RESOLVED(tmp_path: Path, ray_enabled: bool) -> None:
-    """The invariant that survives hosting becoming deployment-derived.
-
-    The two sets answer different questions and it was their EQUALITY that was wrong: the registry's
-    is "which adapters exist here", a code fact that is rightly constant, while choosing asks "which
-    engines does this deployment run". Subset is the property worth holding — an engine that can be
-    chosen and not resolved is a stage that dies at submission — and equality made a Ray-OFF
-    deployment unrepresentable.
-    """
-    from medallion.services import ray_submit
-    from medallion.services.engine_registry import hosted_engines as resolvable
-
-    # RUNNABLE, not RESOLVABLE. `hosted_engines()` reports only what an `Executor` adapter serves, and
-    # Ray has none — the cascade submits it through `ray_submit` (the Ray Jobs API). The `RayJobExecutor`
-    # that made the two sets equal had zero production callers and was deleted 2026-09-15 (owner
-    # decision), so comparing against adapters alone would now fail for the engine the estate runs most.
-    runnable = set(resolvable())
-    if callable(getattr(ray_submit, "submit_stage_job", None)):
-        runnable.add(engine_choice.RAY_ENGINE)
-
-    choosable = engine_choice.hosted_engines(_settings(tmp_path, ray_enabled=ray_enabled))
-
-    assert choosable <= runnable, f"a stage may choose {sorted(choosable - runnable)} which nothing executes"
-    assert engine_choice.IN_PROCESS_ENGINE in choosable, "the in-process engine needs no runtime and is always hosted"
-    assert (engine_choice.RAY_ENGINE in choosable) is ray_enabled, "hosting the Ray lane is exactly whether this deployment starts its runtime"

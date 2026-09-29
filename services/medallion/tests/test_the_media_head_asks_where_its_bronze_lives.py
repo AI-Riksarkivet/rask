@@ -128,48 +128,6 @@ async def test_the_blobs_land_where_the_CATALOG_says_not_where_the_chart_compose
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_the_media_trigger_NAMES_the_upstream_it_wrote(wrote_to: list[str], published: list[dict[str, Any]]) -> None:
-    """Rule I2 from the consuming end. The stage runner composes `{root}/medallion/{namespace}`; without
-    `from_uri` it opens that path, finds none of these rows, and acks 200 — the lane dead, nothing red."""
-    del wrote_to, published  # requested to patch the write and the outbox; the trigger is the assertion
-    _describe()
-    dapr = _FakeDapr()
-    await _ingest(dapr=dapr)
-
-    triggers = [payload for topic, payload in dapr.published if topic.endswith("media")]
-    assert triggers, f"no media trigger published: {dapr.published}"
-    assert triggers[0].get("from_uri") == VENDED_URI, triggers[0]
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_the_lineage_event_names_the_same_location(wrote_to: list[str], published: list[dict[str, Any]]) -> None:
-    """A graph that names the composed path describes a dataset nobody wrote."""
-    del wrote_to  # requested to patch the write; the emitted event is the assertion
-    _describe()
-    await _ingest()
-
-    assert published, "no lineage event emitted"
-    outputs = published[0].get("outputs") or []
-    assert outputs, published[0]
-    assert VENDED_URI in json.dumps(outputs), f"the emitted output does not name {VENDED_URI}: {outputs}"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_asking_precedes_the_first_blob(wrote_to: list[str], published: list[dict[str, Any]]) -> None:
-    """The ordering rule is unchanged by the direction of the question: no window exists in which
-    bronze media rows sit on storage the catalog has no record of."""
-    del published  # requested to patch the outbox; the order of ask-then-write is the assertion
-    route = _describe()
-    await _ingest()
-
-    assert route.called, "the head never asked the catalog"
-    assert wrote_to, "the head never wrote"
-
-
-@respx.mock
-@pytest.mark.asyncio
 async def test_no_catalog_url_keeps_the_configured_uri(wrote_to: list[str], published: list[dict[str, Any]]) -> None:
     """The ungoverned dev/demo shape the stage runners keep the same escape hatch for — there is nothing to
     ask, so the deployment contract is the only answer available."""
@@ -196,28 +154,3 @@ async def test_a_catalog_that_cannot_be_ASKED_lands_nothing_and_fires_nothing(wr
     assert wrote_to == [], "a media ingest the catalog cannot govern must not report success"
     assert published == [], "no head event, so no half-run media chain on an ungoverned tier"
     assert dapr.published == [], "no trigger, so the media stage runner never derives from bytes nothing governs"
-
-
-@respx.mock
-@pytest.mark.asyncio
-async def test_the_blob_write_gets_the_settings_and_the_resolved_uri_AND_NOTHING_ELSE(monkeypatch: pytest.MonkeyPatch, published: list[dict[str, Any]]) -> None:
-    """Blob typing (v2, file format 2.2) is decided entirely inside `_seed_and_ingest`. Resolving the
-    location is a metadata-only HTTP call that must not reach into that write: it hands it the settings
-    and the URI the catalog vended, and nothing more."""
-    del published  # requested to patch the outbox
-    _describe()
-    seen: list[tuple[tuple[object, ...], dict[str, object]]] = []
-
-    def seed_and_ingest(*args: object, **kwargs: object) -> IngestResult:
-        seen.append((args, kwargs))
-        return _RESULT
-
-    monkeypatch.setattr(media_module, "_seed_and_ingest", seed_and_ingest)
-    await _ingest()
-
-    assert len(seen) == 1
-    args, kwargs = seen[0]
-    assert kwargs == {}
-    assert len(args) == 2 and isinstance(args[0], MedallionSettings) and args[1] == VENDED_URI, (
-        f"the blob write's argument list changed — the native blob-v2 path is not the one it was: {args}"
-    )

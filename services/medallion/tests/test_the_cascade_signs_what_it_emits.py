@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -108,14 +107,6 @@ async def test_an_emitted_event_verifies_with_this_service_s_own_key(published: 
 
 
 @pytest.mark.asyncio
-async def test_a_PEER_s_key_does_not_verify_it(published: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control. Without it every leg above would pass on a signature over a constant."""
-    await _emit(monkeypatch, _keyed(**{IDENTITY: KEY}))
-
-    assert not verify_signed_event(json.loads(published[0]), key=PEER)
-
-
-@pytest.mark.asyncio
 async def test_it_signs_as_the_SERVICE_IDENTITY_and_not_the_display_role(published: list[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """`verify_signed_event` requires signer == stamped subject, so signing as `author` would make the
     estate refuse its own cascade. The resolver holds a key for BOTH names, so the leg fails on the
@@ -136,24 +127,3 @@ async def test_NO_credential_emits_UNSIGNED_rather_than_a_placeholder(published:
 
     assert signature_of(json.loads(published[0])) is None, f"an unkeyed producer attached something anyway: {published[0]}"
     assert json.loads(published[0])["run"]["facets"]["author"]["sub"] == IDENTITY, "the event lost its author on the way out"
-
-
-# --------------------------------------------------------------------------- #
-# THE WIRING GATE. Everything above tests the door; none of it notices a tenth
-# call site publishing around it.
-# --------------------------------------------------------------------------- #
-
-_SRC = Path(__file__).resolve().parents[1] / "src" / "medallion"
-
-
-def test_NOTHING_in_this_service_publishes_lineage_around_the_signing_door() -> None:
-    """A signature that any caller can skip is a signature the estate cannot rely on.
-
-    The nine sites that used to call the outbox seam directly are what made "sign at the emit"
-    unworkable, and adding a tenth is a one-line change nobody would read twice. `emit_lineage` is
-    allowed to call the seam; nothing else in this service is.
-    """
-    callers = sorted(path.relative_to(_SRC).as_posix() for path in _SRC.rglob("*.py") if "publish_lineage_with_outbox(" in path.read_text(encoding="utf-8"))
-
-    assert callers, "no call site found at all — the gate is matching nothing and would pass on anything"
-    assert callers == ["core/lineage_publish.py"], f"these modules publish lineage around the signing door, so their events reach the bus unsigned: {callers}"

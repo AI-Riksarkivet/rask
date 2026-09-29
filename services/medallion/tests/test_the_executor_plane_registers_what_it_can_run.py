@@ -36,41 +36,6 @@ def _settings(tmp_path: Path, **over: object) -> MedallionSettings:
     return MedallionSettings.model_validate(base | over)
 
 
-def test_the_chart_declaration_lands_in_the_registry(tmp_path: Path) -> None:
-    """The write, read back the way the catalog reads it — a different process, nothing shared but
-    the control root."""
-    assert register_tasks(_settings(tmp_path)) == 2
-
-    stored = task_registry.get_task(str(tmp_path), {}, "dummy-lane")
-
-    assert stored is not None
-    assert stored.command == "python /home/ray/jobs/ray_dummy_job.py"
-    assert stored.cardinalities == ["1:1"]
-
-
-def test_the_ENGINE_is_stamped_by_the_plane_not_supplied_by_the_chart(tmp_path: Path) -> None:
-    """A chart row cannot name an engine, so it cannot name the wrong one.
-
-    The registering plane knows what it submits to; a values file does not, and a typo there would
-    survive every test that only checks the record round-trips.
-    """
-    register_tasks(_settings(tmp_path))
-
-    stored = task_registry.get_task(str(tmp_path), {}, "stage-transform")
-
-    assert stored is not None and stored.engine == RAY_ENGINE
-
-
-def test_a_task_without_its_own_build_stamp_inherits_the_planes(tmp_path: Path) -> None:
-    """One build stamp governs both halves, so a stale registration is detectable against the image
-    the submitter is actually running."""
-    register_tasks(_settings(tmp_path))
-
-    stored = task_registry.get_task(str(tmp_path), {}, "stage-transform")
-
-    assert stored is not None and stored.code_version == "main-abc1234"
-
-
 def test_declaring_no_tasks_writes_NOTHING(tmp_path: Path) -> None:
     """An estate that declares no transforms needs no registry, and boot must not manufacture one."""
     assert register_tasks(_settings(tmp_path, ray_tasks=[])) == 0

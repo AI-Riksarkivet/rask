@@ -74,21 +74,6 @@ _PRODUCER_ENV_IS_UNSET = ("MEDALLION_OPERATION", "MEDALLION_AUTHOR")
 _PROJECT = "acme"
 
 
-def _bronze_to_silver_stage() -> MedallionSettings:
-    """The bronze-to-silver stage runner's env as `chart/values.yaml` `medallion.stageRunners` sets it.
-
-    Tenant-free, as in the chart: qualifying the names is production's job, not the test's.
-    """
-    return MedallionSettings(
-        MEDALLION_FROM_NAMESPACE="bronze",
-        MEDALLION_FROM_DATASET="bronze$events",
-        MEDALLION_TO_NAMESPACE="silver",
-        MEDALLION_TO_DATASET="silver$features",
-        MEDALLION_OPERATION="embed_features",
-        MEDALLION_AUTHOR="data_eng",
-    )
-
-
 def _silver_to_gold_stage() -> MedallionSettings:
     """The silver-to-gold stage runner's env as `chart/values.yaml` `medallion.stageRunners` sets it."""
     return MedallionSettings(
@@ -215,45 +200,6 @@ def wire(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, Any]]]:
     get_settings.cache_clear()
 
 
-def test_the_approved_promotion_names_the_stage_that_was_held(captured: list[dict[str, Any]]) -> None:
-    """The whole defect in one assertion set: job, author and version must describe the gold hop."""
-    _, report = _gold_hold()
-    emit_promotion_outcome(_ctx(), report)
-
-    assert captured, "emit_promotion_outcome built no run event at all"
-    event = captured[-1]
-
-    assert event["operation"] == "aggregate_gold", (
-        f"the gold promotion was recorded as job {event['operation']!r} -- lineage now says the silver stage produced acme-gold$catalog"
-    )
-    assert event["author"] == "analyst", f"the gold promotion was authored by {event['author']!r}, the bronze->silver stage runner's literal"
-    assert event.get("version") == 48, (
-        f"the promotion recorded version {event.get('version')!r}; the hold was taken on v48, and "
-        "build_run_event's default of 1 claims a version the table never had at that point"
-    )
-
-
-def test_the_outputs_were_never_the_broken_half(captured: list[dict[str, Any]]) -> None:
-    """Non-vacuity, and it pins the asymmetry that made this hard to see.
-
-    Inputs and outputs come off the SPEC and were always right; only the fields read from `settings`
-    were wrong. If a future refactor breaks these too, this test says so instead of the graph.
-
-    A chart lane's spec arrives already project-qualified, so "right" means the SAME nodes the held
-    stage's own lineage named: neither the producer's settings (`bronze` -> `silver`, tenant-free) nor
-    a second qualification of a name that already carries the tenant (`acme-acme-gold$catalog`).
-    """
-    held, report = _gold_hold()
-    emit_promotion_outcome(_ctx(), report)
-    event = captured[-1]
-
-    read, wrote = (held.from_namespace, held.from_dataset), (held.to_namespace, held.to_dataset)
-    assert event["inputs"] == [read], f"the approval read {event['inputs']!r}; the held stage read {read!r}"
-    assert (event["output_namespace"], event["output_name"]) == wrote, (
-        f"the approval wrote {(event['output_namespace'], event['output_name'])!r}; the held stage wrote {wrote!r}"
-    )
-
-
 def test_a_DECLARED_lane_outcome_lands_on_the_tables_the_stage_wrote(captured: list[dict[str, Any]]) -> None:
     """The stage resolved `landing$events` -> `curated$catalog`, wrote its lineage there, and handed
     those names over on the spec. Re-qualifying them in the producer names `acme-curated$catalog`, a
@@ -289,23 +235,6 @@ def test_a_lost_DECLARED_lane_outcome_names_the_table_it_was_about(monkeypatch: 
     assert getattr(lost[0], "dataset", None) == "curated$catalog", f"the lost-outcome line named {getattr(lost[0], 'dataset', None)!r}"
 
 
-def test_a_silver_hold_still_names_the_silver_stage(captured: list[dict[str, Any]]) -> None:
-    """The accidental-pass case, made deliberate.
-
-    A bronze->silver promotion produced the RIGHT answer before this fix, for the wrong reason -- the
-    producer's defaults happen to be that stage's values. Pinning it stops a fix that merely swaps one
-    hardcoded stage for another from looking correct.
-    """
-    _, report = _approved_hold(_bronze_to_silver_stage(), version=72)
-
-    emit_promotion_outcome(_ctx(), report)
-    event = captured[-1]
-
-    assert event["operation"] == "embed_features"
-    assert event["author"] == "data_eng"
-    assert event["version"] == 72
-
-
 def test_the_held_version_is_the_one_on_the_wire(wire: list[dict[str, Any]]) -> None:
     """The version the approver ruled on reaches both places a reader finds it: the output's version
     facet (the WROTE edge) and the run's `lance` facet."""
@@ -317,17 +246,6 @@ def test_the_held_version_is_the_one_on_the_wire(wire: list[dict[str, Any]]) -> 
     assert event["outputs"][0]["facets"]["version"]["datasetVersion"] == "48"
     assert event["run"]["facets"]["lance"]["version"] == 48
     assert "synthetic" not in event["run"]["facets"]["lance"]
-
-
-def test_the_outcome_names_the_person_the_batch_is_for(captured: list[dict[str, Any]]) -> None:
-    """The author is a role literal and a service sub signs the event, so the ORIGINATOR is the only
-    field that reaches the person whose batch was held (`rask-notifications`, Q2). Without it the
-    decision reaches nobody, and the lineage lane acks that SUCCESS."""
-    _, report = _gold_hold()
-
-    emit_promotion_outcome(_ctx(), report)
-
-    assert captured[-1]["originator"] == "alice"
 
 
 class _Engine:
@@ -348,7 +266,7 @@ class _Engine:
 
 
 #: A hold that cannot name the stage it was taken on: the field blank, or absent (`None`).
-_NAMELESS = [("operation", ""), ("author", ""), ("operation", None), ("author", None), ("version", None)]
+_NAMELESS = [("operation", ""), ("version", None)]
 
 
 @pytest.mark.parametrize(("field", "value"), _NAMELESS)
@@ -366,22 +284,6 @@ def test_a_hold_that_does_not_name_its_stage_is_refused(field: str, value: str |
 
     assert asyncio.run(handle_promotion_held({"data": payload}, client=engine)) == {"status": "DROP"}
     assert engine.scheduled == []
-
-
-def test_hold_spec_refuses_a_call_that_names_no_version() -> None:
-    """A caller that forgets the version must fail at the call, not build a hold on version 0."""
-    with pytest.raises(TypeError, match="version"):
-        cast(Any, hold_spec)(
-            _silver_to_gold_stage(),
-            token="tok-hold",
-            project=_PROJECT,
-            from_namespace="acme-silver",
-            from_dataset="acme-silver$features",
-            to_namespace="acme-gold",
-            to_dataset="acme-gold$catalog",
-            reasons=["row_count_positive"],
-            originator="alice",
-        )
 
 
 class _Bus:

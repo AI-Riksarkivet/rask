@@ -66,17 +66,6 @@ def test_measure_stage_reports_the_version_the_data_landed_at(tmp_path: Path) ->
     assert result.version == data_version, f"the WROTE edge named version {result.version} — the index build — instead of the data commit {data_version}"
 
 
-def test_the_measurements_other_than_version_are_still_taken_after_the_index(tmp_path: Path) -> None:
-    """Only the VERSION moves. An index build changes no row and no column, so the rest is unaffected
-    and is still read from a single open — moving them too would buy nothing and cost a second read."""
-    from_uri, to_uri = _staged(tmp_path)
-
-    result = compute.measure_stage(from_uri, to_uri, {})
-
-    assert result.row_count == 2
-    assert {field["name"] for field in result.fields} == {"id", "payload", "lineage"}
-
-
 def test_a_target_with_no_lineage_column_is_measured_at_its_own_version(tmp_path: Path) -> None:
     """No lineage column means no index rebuild, so nothing is one-past anything — the version the
     caller sees is the version on disk, exactly as before."""

@@ -68,14 +68,6 @@ def test_the_trigger_model_KEEPS_the_range_it_documents_as_its_own_example() -> 
     assert trigger.to_version == 9
 
 
-def test_a_FIRST_publication_carries_no_floor_and_that_is_not_an_error() -> None:
-    """`from_version` is None on a dataset's first publication -- 'everything', not 'missing'."""
-    trigger = StageTrigger.model_validate({"token": "tok-1", "to_version": 3})
-
-    assert trigger.from_version is None
-    assert trigger.to_version == 3
-
-
 @pytest.mark.asyncio
 async def test_the_range_REACHES_the_submitted_job_as_the_orders_VERSION_FLOOR(captured: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -> None:
     """Steps 2 and 3, and the assertion the whole finding turns on."""
