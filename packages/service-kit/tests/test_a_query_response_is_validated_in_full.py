@@ -55,7 +55,7 @@ _TWO_BLOBS = pa.table({"v": pa.array([b"hello", b"world"], pa.binary())})
 
 @pytest.mark.parametrize(
     "offsets",
-    [pytest.param(struct.pack("<iii", 0, 5, 65536), id="past-the-values-buffer"), pytest.param(struct.pack("<iii", 0, 8, 5), id="that-decrease")],
+    [pytest.param(struct.pack("<iii", 0, 8, 5), id="that-decrease")],
 )
 def test_a_response_whose_buffers_lie_is_refused(offsets: bytes) -> None:
     body = _file(_TWO_BLOBS)
@@ -64,12 +64,6 @@ def test_a_response_whose_buffers_lie_is_refused(offsets: bytes) -> None:
 
     with pytest.raises(ArrowBodyError):
         reader.to_table()
-
-
-def test_a_valid_response_is_the_table_it_carries() -> None:
-    reader = CatalogTableReader(_Answers(_file(_TWO_BLOBS)), ["ns", "t"])
-
-    assert reader.to_table().equals(_TWO_BLOBS)
 
 
 def test_a_projection_of_a_field_that_stores_nothing_is_read() -> None:

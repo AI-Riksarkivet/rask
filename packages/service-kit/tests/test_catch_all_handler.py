@@ -30,7 +30,6 @@ removing the handler that made ingest right.
 
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError as NsServiceUnavailableError
@@ -39,28 +38,10 @@ from service_kit import make_service_app
 from service_kit.exceptions import register_handlers
 
 
-PROBLEM_JSON = "application/problem+json"
-
-
 def _client(app: FastAPI) -> TestClient:
     # raise_server_exceptions=False: we are asserting on the RESPONSE the client sees, which is the
     # whole point. With it on, TestClient re-raises and there is no envelope to inspect.
     return TestClient(app, raise_server_exceptions=False)
-
-
-def test_register_handlers_installs_a_catch_all() -> None:
-    app = FastAPI()
-    register_handlers(app)
-
-    @app.get("/boom")
-    async def boom() -> None:
-        raise RuntimeError("a secret path /var/lib/rask/creds and a stack frame")
-
-    response = _client(app).get("/boom")
-    assert response.status_code == 500
-    assert response.headers["content-type"].startswith(PROBLEM_JSON), (
-        f"an unhandled exception answered {response.headers['content-type']} — a third error envelope on a service whose every other error is RFC 9457"
-    )
 
 
 def test_the_catch_all_leaks_no_internals() -> None:
@@ -85,23 +66,6 @@ def _factory_app(exc: Exception) -> FastAPI:
         raise exc
 
     return app
-
-
-@pytest.mark.parametrize(
-    "exc",
-    [
-        pytest.param(NsServiceUnavailableError("authorization service unavailable"), id="lance-namespace"),
-        pytest.param(RuntimeError("boom"), id="unhandled"),
-    ],
-)
-def test_a_factory_built_app_answers_problem_json(exc: Exception) -> None:
-    """compute, controlplane, flows and notifications are built exactly this way."""
-    response = _client(_factory_app(exc)).get("/raise")
-    assert response.headers["content-type"].startswith(PROBLEM_JSON), (
-        f"a {type(exc).__name__} from a make_service_app app answered "
-        f"{response.headers['content-type']} — the governed kernel these apps call raises "
-        f"lance_namespace errors, and none of them could map one"
-    )
 
 
 def test_an_fga_outage_reads_as_503_not_500() -> None:

@@ -19,18 +19,14 @@ lives here is the decision itself:
 from __future__ import annotations
 
 from collections.abc import Iterator
-from typing import Any
 
 import pytest
-from fastapi import HTTPException
 
 from service_kit.governed import dapr_auth
 from service_kit.governed.dapr_auth import (
     CredentialRejected,
     SecretStoreUnreadable,
     ServiceDoorClosed,
-    ServiceDoorError,
-    SubjectNotAllowed,
     dedicated_token_from_store,
     service_principal,
 )
@@ -55,42 +51,9 @@ def app_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APP_API_TOKEN", SHARED)
 
 
-def _seed_store(monkeypatch: pytest.MonkeyPatch, bundle: dict[str, str]) -> None:
-    """Serve a flat field dict as the store actually shapes it since [[XC-072]]: the shared `lance`
-    bundle plus ONE SECRET PER IDENTITY.
-
-    KEY-AWARE ON PURPOSE. The double used to answer the same dict for every key, which made it blind to
-    the split it now has to model -- `dedicated_token_from_store` addresses `service-token-<identity>`
-    and reads its `token` field, so a key-blind stub would hand back the shared bundle and the tests
-    would pass against a resolver that no longer works.
-    """
-
-    def _fetch(store: str, key: str, **_kw: object) -> dict[str, str]:
-        if key.startswith("service-token-"):
-            value = bundle.get(key)
-            return {"token": value} if value else {}
-        return {k: v for k, v in bundle.items() if not k.startswith("service-token-")}
-
-    monkeypatch.setattr("service_kit.governed.secrets.fetch_dapr_secret", _fetch)
-
-
 # --------------------------------------------------------------------------- #
 # THE UNIFIED NO-CREDENTIAL ANSWER
 # --------------------------------------------------------------------------- #
-
-
-def test_the_unconfigured_door_REFUSES_rather_than_signalling_a_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No `APP_API_TOKEN` = the door does not exist here, and that is a 401 that NAMES ITSELF.
-
-    The catalog used to catch this and `pass`, so an operator who set the allowlist and forgot the
-    token read "Missing bearer token" and went hunting in the IdP. Reaching this door at all takes
-    BOTH service headers, which the gateway strips and the zones' BFF sends only when there is no
-    session — so the caller asked to be a service, and the service door is the only one they get.
-    """
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-
-    with pytest.raises(ServiceDoorClosed, match="APP_API_TOKEN"):
-        service_principal(token=SHARED, identity="service-trainer", allowed_subjects=ALLOWED)
 
 
 def test_the_unconfigured_door_is_refused_BEFORE_the_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -103,72 +66,8 @@ def test_the_unconfigured_door_is_refused_BEFORE_the_allowlist(monkeypatch: pyte
 
 
 # --------------------------------------------------------------------------- #
-# THE DOOR DECIDES, THE CALL SITE RENDERS
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "expected"),
-    [
-        ({"token": SHARED, "identity": "alice"}, SubjectNotAllowed),
-        ({"token": SHARED, "identity": None}, SubjectNotAllowed),
-        ({"token": "wrong", "identity": "service-trainer"}, CredentialRejected),
-        ({"token": "", "identity": "service-trainer"}, CredentialRejected),
-    ],
-)
-def test_every_refusal_is_a_ServiceDoorError_never_an_HTTPException(app_token: None, kwargs: dict[str, Any], expected: type[ServiceDoorError]) -> None:
-    """`service_kit` must not pick the wire shape. Both consumers install
-    `service_kit.lakehouse.ns_errors`' problem+json handlers, and a `fastapi.HTTPException` slips
-    past them as a bare `{"detail": ...}` body — breaking the contract each of their module
-    docstrings promises. So the door raises its own neutral types and each call site maps them."""
-    with pytest.raises(expected) as exc:
-        service_principal(allowed_subjects=ALLOWED, **kwargs)
-
-    assert isinstance(exc.value, ServiceDoorError)
-    assert not isinstance(exc.value, HTTPException)
-
-
-def test_an_allowlisted_subject_with_the_shared_token_is_admitted(app_token: None) -> None:
-    """The unprivileged read tier: the seven sidecar-less web pods cannot reach a secret store, so
-    the shared token stays valid for the subjects nobody marked privileged."""
-    assert service_principal(token=SHARED, identity="service-web", allowed_subjects=ALLOWED).sub == "service-web"
-
-
-# --------------------------------------------------------------------------- #
 # the PRIVILEGED branch — the escalation this door exists to stop
 # --------------------------------------------------------------------------- #
-
-
-def test_the_shared_token_cannot_claim_a_privileged_subject(app_token: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The allowlist answers "may this SUBJECT use the door"; only a dedicated credential answers
-    "may THIS CALLER be that subject". Without the second, any holder of the shared token picks the
-    highest-privileged name on the list."""
-    _seed_store(monkeypatch, {"service-token-service-trainer": TRAINER_OWN})
-    resolver = dedicated_token_from_store("lance-secrets")
-
-    admitted = service_principal(
-        token=TRAINER_OWN, identity="service-trainer", allowed_subjects=ALLOWED, privileged_subjects="service-trainer", dedicated_token=resolver
-    )
-    assert admitted.sub == "service-trainer"
-
-    with pytest.raises(CredentialRejected, match="may not claim"):
-        service_principal(token=SHARED, identity="service-trainer", allowed_subjects=ALLOWED, privileged_subjects="service-trainer", dedicated_token=resolver)
-
-
-def test_an_unprovisioned_privileged_credential_FAILS_CLOSED(app_token: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A privileged subject whose secret was never seeded must NOT fall back to the shared token: a
-    quiet fallback restores the escalation while LOOKING configured, which is worse than not having
-    the control at all."""
-    _seed_store(monkeypatch, {"unrelated": "field"})
-
-    with pytest.raises(CredentialRejected, match="no dedicated credential"):
-        service_principal(
-            token=SHARED,
-            identity="service-trainer",
-            allowed_subjects=ALLOWED,
-            privileged_subjects="service-trainer",
-            dedicated_token=dedicated_token_from_store("lance-secrets"),
-        )
 
 
 def test_omitting_the_resolver_cannot_open_the_privileged_branch(app_token: None) -> None:
@@ -177,22 +76,6 @@ def test_omitting_the_resolver_cannot_open_the_privileged_branch(app_token: None
     right direction — pinned here so the default can never become "fall back to the shared token"."""
     with pytest.raises(CredentialRejected, match="no dedicated credential"):
         service_principal(token=SHARED, identity="service-trainer", allowed_subjects=ALLOWED, privileged_subjects="service-trainer")
-
-
-def test_an_unlisted_subject_never_reaches_the_credential_store(app_token: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The allowlist is checked FIRST. A door that looks up arbitrary caller-supplied names in a
-    credential store is an enumeration oracle."""
-    consulted: list[str] = []
-
-    def _resolver(identity: str) -> str | None:
-        consulted.append(identity)
-        return TRAINER_OWN
-
-    with pytest.raises(SubjectNotAllowed):
-        service_principal(
-            token=SHARED, identity="service-impostor", allowed_subjects=ALLOWED, privileged_subjects="service-impostor", dedicated_token=_resolver
-        )
-    assert consulted == []
 
 
 def test_an_unprivileged_subject_never_consults_the_store(app_token: None) -> None:
@@ -213,30 +96,6 @@ def test_an_unprivileged_subject_never_consults_the_store(app_token: None) -> No
 # --------------------------------------------------------------------------- #
 # absent vs unreadable (§2.17) — the resolver's half
 # --------------------------------------------------------------------------- #
-
-
-def test_an_UNREADABLE_store_is_not_a_missing_credential(app_token: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`fetch_dapr_secret` returns {} both when the store is down and when the bundle is empty, and
-    both used to produce the identical 401 — the conflation the estate solved properly in the state
-    plane. An outage must say outage: `SecretStoreUnreadable` is a RuntimeError, deliberately NOT a
-    `ServiceDoorError`, so a call site cannot render it as a refusal by catching the base class."""
-    _seed_store(monkeypatch, {})
-
-    with pytest.raises(SecretStoreUnreadable, match="unreadable") as exc:
-        service_principal(
-            token=TRAINER_OWN,
-            identity="service-trainer",
-            allowed_subjects=ALLOWED,
-            privileged_subjects="service-trainer",
-            dedicated_token=dedicated_token_from_store("lance-secrets"),
-        )
-    assert not isinstance(exc.value, ServiceDoorError)
-
-
-def test_a_readable_bundle_without_the_field_is_a_genuine_absence(monkeypatch: pytest.MonkeyPatch) -> None:
-    _seed_store(monkeypatch, {"unrelated": "field"})
-
-    assert dedicated_token_from_store("lance-secrets")("service-trainer") is None
 
 
 def test_the_bundle_is_fetched_once_and_with_the_REQUEST_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:

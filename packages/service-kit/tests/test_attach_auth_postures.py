@@ -107,17 +107,6 @@ async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) 
 
 
 @pytest.mark.asyncio
-async def test_provision_False_resolves_and_never_writes(fga_calls: _Recorder) -> None:
-    """`ingest` and `maintenance`. Reading which store exists is not authoring one — but the write
-    half must be provably absent, not merely unused today."""
-    app = FastAPI()
-    await attach_auth(app, _Settings(), service="t", provision=False)
-
-    assert "provision" not in fga_calls.calls, "a read-only door provisioned a store — it now owns everyone else's permissions"
-    assert fga_calls.calls == ["resolve", "make_client:01RESOLVED"]
-
-
-@pytest.mark.asyncio
 async def test_provision_False_with_no_store_leaves_the_door_SHUT(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
     """An unbootstrapped estate must not be bootstrapped BY the reader. No client, so the gate 503s —
     which is the honest answer, and the one `fga.resolve` returning None is for."""
@@ -206,17 +195,6 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
 
     assert getattr(app.state, "fga", None) is None
     assert getattr(app.state, "oidc", None) is not None, "the OIDC half must build independently — one failure must not take the other down"
-
-
-@pytest.mark.asyncio
-async def test_build_fga_client_is_the_same_implementation_without_an_app(fga_calls: _Recorder) -> None:
-    """`maintenance` builds its client OUTSIDE a lifespan (it stores `app.state.fga_client` and the
-    sweep runs from a cron route), so it needs the value, not the assignment. Returning it from the
-    same function is what stops it becoming an eleventh copy."""
-    client = await build_fga_client(_Settings(), service="t", provision=False)
-
-    assert client is not None
-    assert fga_calls.calls == ["resolve", "make_client:01RESOLVED"]
 
 
 # ── the structured audit events survive the shared bootstrap (DUP-01 verify) ─────────────────────

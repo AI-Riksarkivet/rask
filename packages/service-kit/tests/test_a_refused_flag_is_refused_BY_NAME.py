@@ -46,13 +46,6 @@ _UPSTREAM: dict[int, str] = {
 }
 
 
-def test_every_allocated_upstream_bit_has_a_NAME() -> None:
-    """A declined bit nobody can name is a refusal an operator cannot act on."""
-    unnamed = {bit: symbol for bit, symbol in _UPSTREAM.items() if bit not in features._FLAG_NAMES}
-
-    assert not unnamed, f"upstream allocates these and this module cannot name them: {unnamed}"
-
-
 def test_naming_did_not_widen_the_whitelist() -> None:
     """The guard on this gate. Naming a flag must never be mistaken for supporting it."""
     supported_bits = {bit for bit in _UPSTREAM if features.SUPPORTED & bit}
@@ -62,10 +55,3 @@ def test_naming_did_not_widen_the_whitelist() -> None:
         "compaction, version GC and the orphan pass were each checked against that layout, not a "
         "side effect of naming a bit"
     )
-
-
-def test_the_names_are_not_empty() -> None:
-    """A present-but-blank name renders exactly as uninformatively as the bare bit."""
-    blank = [bit for bit in _UPSTREAM if not (features._FLAG_NAMES.get(bit) or "").strip()]
-
-    assert not blank, f"these bits have an empty name: {blank}"

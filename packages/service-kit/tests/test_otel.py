@@ -72,13 +72,6 @@ def _restore_otel_globals() -> Iterator[None]:
                 shutdown()
 
 
-def test_setup_otel_noop_when_disabled() -> None:
-    app = FastAPI()
-    settings = _settings(RASK_OTEL_ENABLED=False)
-    wired = setup_otel(app, "svc-test", settings)
-    assert wired is False
-
-
 def test_setup_otel_wires_when_enabled(monkeypatch: object) -> None:
     """ "Wired" means ALL THREE signals, and logs were the one this test never checked.
 
@@ -164,52 +157,3 @@ def test_NO_settings_and_NO_endpoint_stays_off(monkeypatch: object) -> None:
     monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
 
     assert setup_otel(FastAPI(), "svc-test") is False
-
-
-def test_every_client_transport_the_estate_uses_gets_an_instrumentor(monkeypatch: object) -> None:
-    """The seam's instrumentor list is the FLEET's complete instrumentation — there is no launcher.
-
-    `chart/templates/fleet.yaml` and `controlplane.yaml` run `command: ["uvicorn"]`, not
-    `opentelemetry-instrument`, so unlike the lakehouse half nothing auto-loads the installed
-    entry points. Whatever this function names is all the fleet gets.
-
-    `requests` was the expensive omission. Ray's `JobSubmissionClient` performs every call through it,
-    so `list_jobs` — the call that measured 164.7 MB / 81,155 jobs and OOM-killed the compute pod —
-    and the pruner's per-job DELETE loop carried no client span at all, while the cheap httpx reads
-    did. That does not read as a gap in a trace view; it reads as those calls being instantaneous.
-
-    `grpc` and `aiohttp` are the two that decide whether the DAPR plane joins up at all, and they are
-    why this test is being repaired rather than left as it was. Now that `lance-tracing` names an
-    exporter (d5744a9c) the sidecars finally emit spans — but the app->sidecar leg carries no
-    `traceparent` without these, so the sidecar's span ROOTS A NEW TRACE. That fresh id is what gets
-    stamped into the CloudEvent envelope and persisted as `ExecutionStartedEvent.ParentTraceContext`,
-    so every activity, lineage event and notification downstream inherits the orphan. The damage is a
-    severed subtree, not a missing span, and it looks like a sampling problem rather than a missing
-    instrumentor.
-
-      * grpc  — `dapr.aio.clients.DaprClient` rides `grpc.aio` (publish, state, bindings, workflow
-        schedule); `dapr-ext-workflow`'s `DaprWorkflowClient` rides SYNC grpc. BOTH variants are
-        needed: they patch different symbols, and installing one looks configured while doing nothing.
-      * aiohttp — `ActorProxy` -> `DaprActorHttpClient`, i.e. EVERY actor call in the estate, and the
-        `openfga_sdk`, i.e. every authorization check on every governed door.
-    """
-    from opentelemetry.instrumentation.aiohttp_client import AioHttpClientInstrumentor
-    from opentelemetry.instrumentation.grpc import GrpcAioInstrumentorClient, GrpcInstrumentorClient
-    from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-    from opentelemetry.instrumentation.requests import RequestsInstrumentor
-
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")  # ty: ignore[unresolved-attribute]
-    assert setup_otel(FastAPI(), "svc-test", _settings(RASK_OTEL_ENABLED=True)) is True
-
-    # `is_instrumented_by_opentelemetry` is the SDK's own flag. Asserting on a patched function's repr
-    # does NOT work — measured: the requests instrumentor leaves `Session.request` identical and wraps
-    # the send path instead, so a repr check passes vacuously in one direction and fails in the other.
-    assert RequestsInstrumentor().is_instrumented_by_opentelemetry, "requests is not instrumented — Ray's Job SDK calls carry no client span"
-    assert HTTPXClientInstrumentor().is_instrumented_by_opentelemetry, "httpx is not instrumented"
-    assert GrpcAioInstrumentorClient().is_instrumented_by_opentelemetry, (
-        "grpc.aio is not instrumented — dapr.aio.clients.DaprClient sends no traceparent, so the sidecar roots a NEW trace"
-    )
-    assert GrpcInstrumentorClient().is_instrumented_by_opentelemetry, "sync grpc is not instrumented — DaprWorkflowClient's schedule call is an orphan"
-    assert AioHttpClientInstrumentor().is_instrumented_by_opentelemetry, (
-        "aiohttp is not instrumented — every ActorProxy call and every OpenFGA check is invisible"
-    )

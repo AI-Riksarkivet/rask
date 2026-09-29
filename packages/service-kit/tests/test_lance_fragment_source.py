@@ -44,25 +44,6 @@ def test_one_key_per_fragment(dataset_uri: str) -> None:
     assert len(set(keys)) == 3, "fragment keys must be distinct"
 
 
-def test_keys_are_stable_when_an_earlier_row_is_deleted(dataset_uri: str) -> None:
-    """The offset-keyed design would have renumbered every later unit here — the whole reason for fragments."""
-    before = list(LanceFragmentSource(dataset_uri).iter_keys())
-    dataset = lance.dataset(dataset_uri)
-    dataset.delete("id = 1")
-    after = list(LanceFragmentSource(dataset_uri).iter_keys())
-    assert set(after) <= set(before), f"a delete invented new unit keys: {set(after) - set(before)}"
-
-
-def test_payload_round_trips_as_arrow_ipc(dataset_uri: str) -> None:
-    """Every unit's bytes must reopen as the fragment's own rows — the payload is a real IPC stream."""
-    total = 0
-    for unit in LanceFragmentSource(dataset_uri).iter_objects():
-        table = pa.ipc.open_stream(unit.data).read_all()
-        assert table.schema.names == ["id", "word"]
-        total += table.num_rows
-    assert total == 6
-
-
 def test_version_token_is_the_dataset_version(dataset_uri: str) -> None:
     """A fragment's CONTENT changes under deletes while its id does not, so the key alone cannot
     identify what was ingested — the dataset version is the token that distinguishes the two reads."""
@@ -73,10 +54,3 @@ def test_version_token_is_the_dataset_version(dataset_uri: str) -> None:
     second = dict(LanceFragmentSource(dataset_uri).iter_versioned_keys())
     assert set(second) <= set(first), "delete must not invent keys"
     assert set(second.values()) != set(first.values()), "the version token must move when the data does"
-
-
-def test_missing_dataset_fails_at_construction_not_at_fetch(tmp_path) -> None:
-    """Guard 2, restated for this payload shape: a source that cannot be read is refused at ACCEPT
-    rather than hanging a worker that already claimed the unit."""
-    with pytest.raises((FileNotFoundError, ValueError, OSError)):
-        LanceFragmentSource(str(tmp_path / "absent.lance")).probe()

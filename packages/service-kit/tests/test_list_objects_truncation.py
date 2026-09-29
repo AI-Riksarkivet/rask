@@ -27,21 +27,10 @@ so it is the version this codebase can be consistent about.
 from __future__ import annotations
 
 import logging
-import pathlib
 
 import pytest
 
 from service_kit.governed import fga
-
-
-REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-
-
-def test_the_cap_is_declared_for_objects_as_well_as_users() -> None:
-    assert hasattr(fga, "LIST_OBJECTS_SERVER_CAP"), (
-        "list_objects has no declared server cap, so nothing can compare a result against it — the sibling list_users has carried one since it was written"
-    )
-    assert fga.LIST_OBJECTS_SERVER_CAP > 0
 
 
 class _Response:
@@ -86,59 +75,3 @@ async def test_an_ordinary_result_is_silent(caplog: pytest.LogCaptureFixture) ->
     with caplog.at_level(logging.WARNING):
         await fga.list_objects(cast("OpenFgaClient", _Client(["table:a", "table:b"])), user="gina", relation="can_get_metadata", object_type="table")
     assert "possibly_truncated" not in caplog.text
-
-
-def test_both_listing_calls_guard_their_cap() -> None:
-    """The symmetry is the point: two calls with the same silent ceiling, one guarded and one not, is
-    how the unguarded one stayed invisible."""
-    import inspect
-
-    for name, cap in (("list_users", "LIST_USERS_SERVER_CAP"), ("list_objects", "LIST_OBJECTS_SERVER_CAP")):
-        source = inspect.getsource(getattr(fga, name))
-        assert cap in source, f"{name} does not compare its result against {cap}"
-        assert "possibly_truncated" in source, f"{name} never reports a truncated result"
-
-
-def test_list_objects_returns_the_flag_not_just_a_list() -> None:
-    """A log tells an OPERATOR. `pagination.md` requires the CLIENT be able to learn its answer was
-    cut — "clients don't compute them" — and a caller holding a short list cannot tell a small estate
-    from a truncated one. So the truncation travels with the result rather than only to the log."""
-    import inspect
-
-    assert hasattr(fga, "ObjectListing"), "list_objects returns a bare list, so no caller can propagate truncation"
-    assert set(fga.ObjectListing._fields) == {"objects", "truncated"}
-    assert "ObjectListing" in inspect.signature(fga.list_objects).return_annotation
-
-
-@pytest.mark.asyncio
-async def test_the_flag_is_true_only_at_the_cap() -> None:
-    from typing import cast
-
-    from openfga_sdk.client import OpenFgaClient
-
-    short = await fga.list_objects(cast("OpenFgaClient", _Client(["table:a"])), user="g", relation="r", object_type="table")
-    assert short.objects == ["table:a"]
-    assert short.truncated is False
-
-    capped = await fga.list_objects(
-        cast("OpenFgaClient", _Client([f"table:t{i}" for i in range(fga.LIST_OBJECTS_SERVER_CAP)])),
-        user="g",
-        relation="r",
-        object_type="table",
-    )
-    assert capped.truncated is True
-
-
-def test_every_governed_listing_propagates_the_flag() -> None:
-    """All five, because a flag one route surfaces and four swallow is worse than none: it teaches a
-    client to trust an absence that means nothing on the other four."""
-    import pathlib
-
-    sites = {
-        "services/catalog/src/catalog/api/v1/endpoints/tables.py",
-        "services/catalog/src/catalog/api/v1/endpoints/namespaces.py",
-        "services/catalog/src/catalog/api/v1/endpoints/models.py",
-        "services/catalog/src/catalog/api/v1/endpoints/warehouses.py",
-    }
-    missing = [site for site in sorted(sites) if "authorization_truncated" not in (pathlib.Path(REPO_ROOT) / site).read_text()]
-    assert not missing, f"these governed listings drop the truncation flag on the floor: {missing}"

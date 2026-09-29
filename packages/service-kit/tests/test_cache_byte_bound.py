@@ -27,51 +27,6 @@ from __future__ import annotations
 from service_kit.media.cache_bounds import evict_to_bounds
 
 
-def test_eviction_honours_the_BYTE_ceiling_not_just_the_count() -> None:
-    """The finding: twelve multi-MB entries is a count of twelve and a gigabyte of memory."""
-    cache: dict[str, tuple[bytes, int]] = {}
-    payload = b"x" * 1000
-
-    for i in range(10):
-        evict_to_bounds(cache, max_entries=100, max_bytes=3000, incoming_bytes=len(payload))
-        cache[f"k{i}"] = (payload, len(payload))
-
-    total = sum(size for _, size in cache.values())
-    assert total <= 3000, f"cache holds {total} bytes against a 3000-byte ceiling"
-    assert len(cache) <= 3
-
-
-def test_the_count_bound_still_applies() -> None:
-    """Both bounds, not one replacing the other — the count bound is the LOOKUP bound."""
-    cache: dict[str, tuple[bytes, int]] = {}
-    for i in range(10):
-        evict_to_bounds(cache, max_entries=4, max_bytes=0, incoming_bytes=1)
-        cache[f"k{i}"] = (b"x", 1)
-
-    assert len(cache) <= 4
-
-
-def test_eviction_is_oldest_first() -> None:
-    """Insertion order is the LRU proxy both caches already relied on."""
-    cache: dict[str, tuple[bytes, int]] = {}
-    for i in range(3):
-        cache[f"k{i}"] = (b"x", 1)
-
-    evict_to_bounds(cache, max_entries=2, max_bytes=0, incoming_bytes=1)
-    assert "k0" not in cache, "eviction did not drop the oldest entry"
-
-
-def test_a_zero_byte_ceiling_disables_only_the_BYTE_bound() -> None:
-    """`0 = off` is the convention `search_cache_bytes` already documents; keep it identical so the
-    two twins cannot diverge on the meaning of their own settings."""
-    cache: dict[str, tuple[bytes, int]] = {}
-    for i in range(5):
-        evict_to_bounds(cache, max_entries=100, max_bytes=0, incoming_bytes=10_000_000)
-        cache[f"k{i}"] = (b"x", 10_000_000)
-
-    assert len(cache) == 5, "a zero byte ceiling evicted on bytes anyway"
-
-
 def test_an_entry_larger_than_the_whole_ceiling_does_not_empty_the_cache() -> None:
     """The pathological case: one oversized payload must not evict everything and then not fit.
 

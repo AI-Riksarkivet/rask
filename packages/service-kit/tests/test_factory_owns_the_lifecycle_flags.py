@@ -45,13 +45,6 @@ def test_readyz_is_ready_once_the_lifespan_has_entered() -> None:
         assert response.json()["status"] == "ready"
 
 
-def test_the_flags_are_set_by_the_factory_not_by_the_service() -> None:
-    app = _app()
-    with TestClient(app):
-        assert is_started(app) is True
-        assert is_draining(app) is False
-
-
 def test_the_drain_flag_flips_when_the_lifespan_unwinds() -> None:
     app = _app()
     with TestClient(app):

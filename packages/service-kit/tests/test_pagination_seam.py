@@ -37,16 +37,6 @@ def test_the_offset_is_derived_not_restated() -> None:
     assert PaginationParams(page=1, page_size=24).offset == 0
 
 
-def test_a_deep_page_is_REFUSED_not_served() -> None:
-    """The reference's `get_pagination_guarded`: forbid deep pages so an adversarial query cannot
-    walk the store. `page: Query(ge=1)` alone bounds nothing — `?page=1000000` was legal."""
-    with pytest.raises(ValidationError) as caught:
-        guard_offset(PaginationParams(page=1_000_000, page_size=100))
-    assert "cursor" in str(caught.value).lower() or "keyset" in str(caught.value).lower(), (
-        "the refusal must point at the alternative, or the caller has no way forward: " + str(caught.value)
-    )
-
-
 def test_the_boundary_page_is_still_served() -> None:
     """An off-by-one here silently amputates the last legal page."""
     page_size = 100

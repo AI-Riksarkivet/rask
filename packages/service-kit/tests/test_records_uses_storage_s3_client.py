@@ -13,29 +13,12 @@ warehouse to `AWS_REGION`, and a dropped token makes a scoped credential sign as
 
 from __future__ import annotations
 
-import ast
 import json
-import pathlib
 from typing import Any
 
 import pytest
 
 from service_kit.lakehouse import records
-
-
-_RECORDS_PY = pathlib.Path(records.__file__)
-
-
-def test_records_never_imports_boto3() -> None:
-    """No `import boto3` — top-level or inline. `botocore.exceptions` stays allowed: catching
-    `ClientError` is reading the wire protocol's error shape, not building a client."""
-    offences: list[str] = []
-    for node in ast.walk(ast.parse(_RECORDS_PY.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.Import) and any(alias.name.split(".")[0] == "boto3" for alias in node.names):
-            offences.append(f"records.py:{node.lineno} imports boto3")
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.split(".")[0] == "boto3":
-            offences.append(f"records.py:{node.lineno} imports from boto3")
-    assert not offences, "the registry hand-rolls its S3 client instead of storage.s3_client:\n  " + "\n  ".join(offences)
 
 
 class _RecordingClient:

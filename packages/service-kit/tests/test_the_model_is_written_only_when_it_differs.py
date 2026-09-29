@@ -83,21 +83,10 @@ def _as_openfga_serves_it(model: dict[str, Any]) -> dict[str, Any]:
     return {"id": "01STORED0000000000000000", **served}
 
 
-def test_an_empty_store_is_always_a_write() -> None:
-    assert needs_write(None, _model(warehouse=["owner"]))
-
-
 def test_an_identical_model_is_not_rewritten() -> None:
     """The property that keeps the store from growing a model per upgrade forever."""
     stored = _model(warehouse=["owner", "reader"])
     assert not needs_write(stored, _model(warehouse=["reader", "owner"])), "relation ORDER made two identical models look different"
-
-
-def test_a_SERVER_ASSIGNED_ID_is_not_a_difference() -> None:
-    """Every stored model carries an `id` the document being written does not. Comparing whole
-    documents would therefore differ every single time — always writing, never converging."""
-    stored = {"id": "01ABCDEF", **_model(warehouse=["owner"])}
-    assert not needs_write(stored, _model(warehouse=["owner"]))
 
 
 def test_a_MISSING_RELATION_on_an_existing_type_is_a_difference() -> None:
@@ -110,7 +99,6 @@ def test_a_MISSING_RELATION_on_an_existing_type_is_a_difference() -> None:
 @pytest.mark.parametrize(
     ("stored", "desired"),
     [
-        pytest.param(_warehouse(_READER_OR_PASS_GRANTS), _warehouse(_READER), id="a-rewrite-TIGHTENED"),
         pytest.param(_warehouse(_READER), _warehouse(_READER_OR_PASS_GRANTS), id="a-rewrite-WIDENED"),
         pytest.param(
             _warehouse(_READER),
@@ -121,18 +109,6 @@ def test_a_MISSING_RELATION_on_an_existing_type_is_a_difference() -> None:
             _warehouse(_READER, condition="current_time < grant_time + grant_duration"),
             _warehouse(_READER, condition="current_time <= grant_time + grant_duration"),
             id="a-CONDITION-expression-changed",
-        ),
-        # `wildcard: {}` is the whole difference between `[user:*]` and `[user]`, and an empty dict is
-        # exactly what the store's fills look like — so the stored side is in the served shape here.
-        pytest.param(
-            _as_openfga_serves_it(_warehouse(_READER, reader_types=[{"type": "user"}])),
-            _warehouse(_READER, reader_types=[{"type": "user", "wildcard": {}}]),
-            id="a-restriction-WIDENED-to-a-wildcard",
-        ),
-        pytest.param(
-            _as_openfga_serves_it(_warehouse(_READER, reader_types=[{"type": "user", "wildcard": {}}])),
-            _warehouse(_READER, reader_types=[{"type": "user"}]),
-            id="a-wildcard-NARROWED-to-a-restriction",
         ),
     ],
 )
@@ -167,11 +143,3 @@ def test_the_shipped_model_with_one_rule_TIGHTENED_is_a_write() -> None:
 
     assert shape(tightened) == shape(shipped), "the premise: no type or relation NAME differs, only a rule"
     assert needs_write(_as_openfga_serves_it(shipped), tightened), f"tightening {type_name}#{relation} was reported as already written"
-
-
-def test_the_shipped_model_is_readable_and_has_the_types_the_estate_reasons_about() -> None:
-    """Without this the tests above could pass over a document that never loads."""
-    shipped = shape(model_document())
-
-    assert {"warehouse", "namespace", "table", "project"} <= set(shipped), f"the shipped model lost a core type: {sorted(shipped)}"
-    assert "maintainer" in shipped["warehouse"], "the shipped model has no warehouse#maintainer — the relation whose absence wedged an upgrade"

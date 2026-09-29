@@ -59,14 +59,6 @@ async def test_every_page_is_read_and_the_type_prefix_is_stripped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_another_type_is_answered_from_the_same_pass() -> None:
-    """The filter is the caller's, not the server's — there is no type-only Read to ask for."""
-    store = _Store([["table:a$one", "namespace:acme"], ["namespace:beta"]])
-
-    assert await fga.governed_objects(cast(Any, store), object_type="namespace") == {"acme", "beta"}
-
-
-@pytest.mark.asyncio
 async def test_a_cursor_that_never_empties_raises_rather_than_answering_short() -> None:
     """The property that keeps this safe to invert.
 

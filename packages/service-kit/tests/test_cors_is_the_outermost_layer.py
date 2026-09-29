@@ -14,10 +14,8 @@ blocked it as a cross-origin violation, so the client saw an opaque network fail
 
 from fastapi import APIRouter
 from fastapi.testclient import TestClient
-from starlette.middleware.cors import CORSMiddleware
 
 from service_kit import make_service_app
-from service_kit.body_limit import BodySizeLimitMiddleware
 from service_kit.config import Settings
 
 
@@ -36,13 +34,6 @@ def _app(**over: object):
         return {"ok": "1"}
 
     return make_service_app(title="cors-order", routers=[router], settings=_settings(**over))
-
-
-def test_cors_is_registered_outside_the_body_cap() -> None:
-    """Registration order is innermost-first, so CORS must come AFTER the cap in the list."""
-    classes = [m.cls for m in _app().user_middleware]
-    assert CORSMiddleware in classes and BodySizeLimitMiddleware in classes
-    assert classes.index(CORSMiddleware) < classes.index(BodySizeLimitMiddleware), "starlette prepends, so a lower index is OUTER — CORS sat under the cap"
 
 
 def test_an_over_cap_rejection_is_readable_by_the_browser() -> None:

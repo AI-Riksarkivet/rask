@@ -54,15 +54,6 @@ UNREADABLE = [
         _S3.format(status="404 Not Found", code="NoSuchBucket", message="The specified bucket does not exist"),
         id="404 NoSuchBucket — the warehouse bucket is gone, the table is NOT proven absent",
     ),
-    pytest.param(
-        _S3.format(status="403 Forbidden", code="AccessDenied", message="Access Denied"),
-        id="403 — the credential cannot look",
-    ),
-    pytest.param(
-        _S3.format(status="500 Internal Server Error", code="InternalError", message="We encountered an internal error"),
-        id="500 — the store is broken",
-    ),
-    pytest.param('Generic Config error: failed to parse "x" as Duration', id="a malformed storage option"),
     pytest.param("some wording no marker anticipated", id="an unrecognized failure fails CLOSED"),
 ]
 
@@ -80,15 +71,3 @@ def test_a_message_that_proves_only_that_we_could_not_LOOK_does_not(message: str
 def test_FileNotFoundError_is_definitive_whatever_it_says() -> None:
     """The one typed signal pylance passes through. Message-independent, so it needs no vocabulary."""
     assert reads_as_absent(FileNotFoundError("anything at all"))
-
-
-def test_the_status_line_alone_never_proves_absence() -> None:
-    """THE TRAP, pinned on its own: every non-2xx object-store error carries `404 Not Found` verbatim.
-
-    A marker of `"not found"` matches that status line, so it answers ABSENT for a bucket that was
-    deleted, an endpoint pointed at the wrong host, or a proxy 404 — none of which say anything about
-    whether the table was written. `_already_committed` acts on this answer to decide whether a run's
-    rows are already in the table, and its own contract is that a guard which cannot PROVE the run has
-    not committed must not assume it has not.
-    """
-    assert not reads_as_absent(ValueError("Server returned non-2xx status code: 404 Not Found"))

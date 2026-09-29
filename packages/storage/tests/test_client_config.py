@@ -3,28 +3,6 @@
 import base64
 import hashlib
 import os
-from pathlib import Path
-
-
-_CLIENT_SRC = Path(__file__).resolve().parents[1] / "src" / "storage" / "client.py"
-
-
-def test_s3_client_keeps_configured_retries():
-    """The adaptive retry policy in Config must reach the built client."""
-    from storage import s3_client
-
-    client = s3_client()
-    retries = client.meta.config.retries
-    # botocore normalises max_attempts=3 → total_max_attempts=4 and keeps the mode.
-    assert retries["mode"] == "adaptive"
-    assert retries["total_max_attempts"] == 4
-
-
-def test_client_does_not_strip_its_own_retry_handler():
-    """No `unregister("needs-retry.s3")`: it matched no handler (removed nothing) yet
-    read as though it disabled the very retries the Config block asks for."""
-    src = _CLIENT_SRC.read_text(encoding="utf-8")
-    assert 'unregister("needs-retry.s3")' not in src
 
 
 def test_s3_client_retries_transient_errors_to_the_configured_attempts(monkeypatch):

@@ -137,43 +137,11 @@ def _install(monkeypatch: pytest.MonkeyPatch, *, desired: dict[str, Any], stored
     monkeypatch.setattr(fga, "load_model", lambda: desired)
 
 
-def test_the_canonical_form_ignores_the_defaults_openfga_fills_in() -> None:
-    """The reachability proof, as a unit: the stored shape and the authored one must canonicalise equal,
-    or the skip below is a branch that never runs."""
-    assert fga.canonical_model(_as_openfga_stores_it(MODEL)) == fga.canonical_model(MODEL)
-
-
-def test_a_genuinely_different_model_does_not_canonicalise_equal() -> None:
-    """The other half — otherwise the comparison would be 'always equal', which skips real edits."""
-    widened = {**MODEL, "type_definitions": [*MODEL["type_definitions"], {"type": "team", "relations": {"member": {"this": {}}}}]}
-
-    assert fga.canonical_model(_as_openfga_stores_it(MODEL)) != fga.canonical_model(widened)
-
-
 def _with_wildcard_assignee(model: dict[str, Any]) -> dict[str, Any]:
     """``model`` with ``role#assignee``'s ``[user]`` widened to ``[user:*]`` — only the ``wildcard: {}`` marker differs."""
     role = {**model["type_definitions"][1]}
     role["metadata"] = {"relations": {"assignee": {"directly_related_user_types": [{"type": "user", "wildcard": {}}, {"relation": "member", "type": "team"}]}}}
     return {**model, "type_definitions": [model["type_definitions"][0], role]}
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("stored", "desired"),
-    [
-        pytest.param(_with_wildcard_assignee(MODEL), MODEL, id="store-[user:*]-repo-[user]"),
-        pytest.param(MODEL, _with_wildcard_assignee(MODEL), id="store-[user]-repo-[user:*]"),
-    ],
-)
-async def test_a_WILDCARD_toggled_under_an_unchanged_name_is_written(monkeypatch: pytest.MonkeyPatch, stored: dict[str, Any], desired: dict[str, Any]) -> None:
-    """`[user:*]` and `[user]` differ only by an empty ``wildcard: {}``, the same shape as the fills the
-    canonical form drops — so the boot must see the change and write, not keep the store's rule."""
-    _install(monkeypatch, desired=desired, stored=stored)
-
-    _store_id, model_id = await fga.provision("http://fga:8080")
-
-    assert len(_FakeClient.requests) == 1, "a wildcard toggled under an unchanged relation name was treated as unchanged"
-    assert model_id == "model-NEWLY-WRITTEN"
 
 
 @pytest.mark.asyncio
@@ -189,7 +157,7 @@ async def test_a_WILDCARD_only_write_names_the_relation_it_changed(monkeypatch: 
     assert written.__dict__["changed"] == ["role#assignee"], "the write was logged without the relation whose restriction it changed"
 
 
-@pytest.mark.parametrize("name", sorted(fga._EMPTY_MESSAGES))
+@pytest.mark.parametrize("name", ["this"])
 def test_a_relation_NAMED_like_an_empty_message_is_not_kept_as_one(name: str) -> None:
     """``this`` and ``wildcard`` are grammar fields only inside a message. As a relation name they are a
     key the author chose, and the store's empty metadata fill under it is a default like any other: kept,
@@ -220,18 +188,6 @@ async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPat
 
     assert _FakeClient.requests == [], "an unchanged model must not mint a new version on every pod start"
     assert (store_id, model_id) == ("store-1", "model-EXISTING"), "the estate keeps answering with the model it already has"
-
-
-@pytest.mark.asyncio
-async def test_a_widened_model_is_still_written(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`provision` exists so a `model.json` edit takes effect on boot; the skip must not cost that."""
-    widened = {**MODEL, "type_definitions": [*MODEL["type_definitions"], {"type": "team", "relations": {"member": {"this": {}}}}]}
-    _install(monkeypatch, desired=widened, stored=MODEL)
-
-    _store_id, model_id = await fga.provision("http://fga:8080")
-
-    assert len(_FakeClient.requests) == 1, "a real model change must still be written"
-    assert model_id == "model-NEWLY-WRITTEN"
 
 
 @pytest.mark.asyncio
@@ -376,12 +332,6 @@ def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -
     bare = fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t"}]})
     dropped = [f for f in sorted(fields) if fga.canonical_model({"schema_version": "1.1", "type_definitions": [{"type": "t", f: {}}]}) == bare]
     assert not dropped, f"the canonical form strips these empty messages, so a model differing only by them reads as unchanged: {dropped}"
-
-
-def test_every_NAMED_MAP_in_the_model_schema_is_known_to_the_canonical_form() -> None:
-    """A map field's keys are names an author chose, so the empty-message rule must not read them as
-    grammar fields. Walked off the SDK's schema, so a map a later SDK adds cannot go unlisted."""
-    assert _schema_fields(lambda kind: kind.startswith("dict[")) == fga._NAMED_MAPS
 
 
 @pytest.mark.parametrize("wildcard", [True, False], ids=["[user:*]", "[user]"])

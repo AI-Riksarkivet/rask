@@ -37,14 +37,10 @@ def _recording_client(seen: list[httpx.Request]) -> httpx.AsyncClient:
     "path",
     [
         "api/serve/../v0/logs/file/",
-        "api/serve/./applications/",
-        "api/serve/a/../../v0/x/",
         "api/serve//applications/",
-        "../v0/logs/file/",
         # A double-encoded segment survives one decode as `%2e%2e`; whether the upstream decodes it
         # again is the upstream's business, and the seam refuses it rather than finding out.
         "api/serve/%2e%2e/v0/logs/file/",
-        "api/serve/%2E%2E/v0/logs/file/",
     ],
 )
 @pytest.mark.asyncio

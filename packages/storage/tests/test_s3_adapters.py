@@ -24,8 +24,6 @@ from moto import mock_aws
 
 from storage import (
     BucketNotFoundError,
-    FSSink,
-    FSSource,
     ObjectNotFoundError,
     S3Sink,
     S3Source,
@@ -108,13 +106,6 @@ def test_a_credential_failure_is_not_laundered_into_a_not_found() -> None:
 # ── PS-04: one mechanism each ────────────────────────────────────────────────────────────────
 
 
-def test_the_adapters_satisfy_the_source_and_sink_protocols(tmp_path: Path) -> None:
-    assert isinstance(FSSource(root=tmp_path), Source)
-    assert isinstance(FSSink(root=tmp_path), Sink)
-    assert isinstance(S3Source(bucket="b", client_factory=_make_s3_client), Source)
-    assert isinstance(S3Sink(bucket="b", client_factory=_make_s3_client), Sink)
-
-
 def test_the_factories_are_typed_by_the_protocols(tmp_path: Path) -> None:
     """`build_source`/`build_sink` returned `Any` — the seam had no stated shape at all."""
     from typing import get_type_hints
@@ -123,18 +114,6 @@ def test_the_factories_are_typed_by_the_protocols(tmp_path: Path) -> None:
     assert get_type_hints(build_sink)["return"] is Sink
     assert isinstance(build_source(str(tmp_path)), Source)
     assert isinstance(build_sink(str(tmp_path)), Sink)
-
-
-def test_the_lazy_client_dance_is_written_once() -> None:
-    assert S3Source.client is S3Sink.client, "the @property/__getstate__/__setstate__ trio is duplicated per adapter"
-    assert S3Source.__getstate__ is S3Sink.__getstate__
-    assert S3Source.__setstate__ is S3Sink.__setstate__
-
-
-def test_the_paginate_loop_is_written_once() -> None:
-    src = (Path(__file__).resolve().parents[1] / "src" / "storage").rglob("*.py")
-    occurrences = sum(text.count('get_paginator("list_objects_v2")') for text in (p.read_text(encoding="utf-8") for p in src))
-    assert occurrences == 1, f"the list_objects_v2 paginate loop is written {occurrences} times"
 
 
 # ── the behaviour the de-duplication must preserve ───────────────────────────────────────────

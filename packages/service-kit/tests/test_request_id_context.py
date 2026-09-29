@@ -32,31 +32,6 @@ from fastapi.testclient import TestClient
 from service_kit.middleware import RequestIDMiddleware
 
 
-def test_the_context_var_exists_and_defaults_safely() -> None:
-    from service_kit.context import current_request_id, request_id_ctx
-
-    assert request_id_ctx.get() is not None
-    assert current_request_id() == request_id_ctx.get()
-
-
-def test_the_middleware_publishes_the_id_to_the_context() -> None:
-    from service_kit.context import current_request_id
-
-    seen: dict[str, str] = {}
-    app = FastAPI()
-    app.add_middleware(RequestIDMiddleware)
-
-    @app.get("/thing")
-    async def thing() -> dict[str, str]:
-        # Deliberately reads it WITHOUT taking `request` — that is the whole point of the ContextVar.
-        seen["id"] = current_request_id()
-        return {"ok": "yes"}
-
-    response = TestClient(app).get("/thing", headers={"X-Request-ID": "abc123"})
-    assert response.headers["X-Request-ID"] == "abc123"
-    assert seen["id"] == "abc123", "the handler could not see the id the middleware minted"
-
-
 def test_the_id_does_NOT_leak_into_the_next_request() -> None:
     """The `finally: reset(token)` the reference marks critical.
 

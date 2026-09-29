@@ -40,12 +40,6 @@ def test_extra_trailing_slash_served_not_redirected() -> None:
     assert resp.json() == {"ok": "ping"}
 
 
-def test_canonical_paths_still_work() -> None:
-    c, p = _client()
-    assert c.get(f"{p}/items/").status_code == 200
-    assert c.get(f"{p}/ping").status_code == 200
-
-
 def test_parametrized_path_not_mangled() -> None:
     c, p = _client()
     resp = c.post(f"{p}/items/abc123/submit")

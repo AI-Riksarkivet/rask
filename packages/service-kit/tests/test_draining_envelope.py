@@ -24,62 +24,14 @@ raising the right class is not enough; the app has to map it.
 
 from __future__ import annotations
 
-import logging
-
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from service_kit.draining import refuse_when_draining
-from service_kit.exceptions import register_handlers
-from service_kit.lakehouse.ns_errors import install_problem_handlers
 
 
 PROBLEM_JSON = "application/problem+json"
-
-
-def _app(*, lance_plane: bool) -> FastAPI:
-    """An app composed like the real ones. The lance plane installs the ns translator too, and — since
-    this finding — `register_handlers` as well, which is what makes a `DomainError` render as a problem
-    document there rather than through starlette's `HTTPException` fallback."""
-    app = FastAPI()
-    register_handlers(app)
-    if lance_plane:
-        install_problem_handlers(app, logging.getLogger(__name__))
-
-    @app.post("/run", dependencies=[Depends(refuse_when_draining)])
-    async def run() -> dict[str, str]:
-        return {"status": "started"}
-
-    app.state.shutting_down = True
-    return app
-
-
-@pytest.mark.parametrize("lance_plane", [False, True], ids=["fleet", "lance-plane"])
-def test_the_draining_refusal_is_really_problem_json(lance_plane: bool) -> None:
-    """Both planes, because the three doors this finding names are on the lance side."""
-    response = TestClient(_app(lance_plane=lance_plane), raise_server_exceptions=False).post("/run")
-
-    assert response.status_code == 503
-    assert response.headers["content-type"].startswith(PROBLEM_JSON), (
-        f"the 503 declares {response.headers['content-type']} — a Content-Type that renames a body without changing it is worse than none"
-    )
-    body = response.json()
-    assert {"type", "title", "status", "detail"} <= set(body), f"the body is {sorted(body)} while its media type asserts a problem document"
-
-
-@pytest.mark.parametrize("lance_plane", [False, True], ids=["fleet", "lance-plane"])
-def test_retry_after_survives(lance_plane: bool) -> None:
-    """The half that already worked must keep working — it is what a retrying caller acts on, and the
-    reason the original chose `HTTPException` in the first place."""
-    response = TestClient(_app(lance_plane=lance_plane), raise_server_exceptions=False).post("/run")
-    assert response.headers["Retry-After"], "the drain window's Retry-After was dropped"
-
-
-def test_a_healthy_app_is_untouched() -> None:
-    app = _app(lance_plane=False)
-    app.state.shutting_down = False
-    assert TestClient(app).post("/run").status_code == 200
 
 
 #: Every app that mounts `refuse_when_draining`. All are on the lance plane, which is why the

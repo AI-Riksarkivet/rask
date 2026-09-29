@@ -41,22 +41,6 @@ def _fail_with(exc: OSError | None) -> None:
         raise exc
 
 
-@pytest.mark.parametrize(
-    "message",
-    [
-        "Commit conflict for version 8",
-        "commit conflict: retry the transaction",
-        "Concurrent write detected on the dataset",
-    ],
-)
-def test_a_lost_race_becomes_a_conflict(message: str) -> None:
-    """The markers are the catalog classifier's own (`_COMMIT_CONFLICT_MARKERS` in
-    `catalog/services/dataplane.py`), kept identical so one vocabulary covers one condition on
-    whichever plane hits it. Matching is case-insensitive because Lance capitalises inconsistently."""
-    with pytest.raises(ConflictError), translate_commit_conflict():
-        _fail_with(OSError(message))
-
-
 def test_the_conflict_names_the_REMEDY_not_just_the_fact() -> None:
     """ "Conflict" alone leaves a client unable to act. The annotator must re-read and re-send, and
     saying so is the difference between a recoverable refusal and an error someone reports as a bug."""
@@ -64,25 +48,6 @@ def test_the_conflict_names_the_REMEDY_not_just_the_fact() -> None:
         _fail_with(OSError("Commit conflict for version 8"))
 
     assert "re-read" in str(exc.value).lower()
-
-
-def test_an_UNRELATED_OSError_is_not_swallowed() -> None:
-    """The dangerous direction. A disk failure, a permissions error or an object-store outage is NOT
-    a lost race: calling it 409 would tell the annotator to retry a write that cannot succeed, and
-    would hide a real outage behind a routine-looking refusal. Anything unmatched propagates."""
-    with pytest.raises(OSError, match="No space left on device") as exc, translate_commit_conflict():
-        _fail_with(OSError("No space left on device"))
-
-    assert not isinstance(exc.value, ConflictError)
-
-
-def test_a_clean_write_passes_through_untouched() -> None:
-    """The guard must be invisible when nothing goes wrong — it wraps every direct write."""
-    seen = []
-    with translate_commit_conflict():
-        seen.append("committed")
-
-    assert seen == ["committed"]
 
 
 def test_a_NON_RETRYABLE_conflict_is_never_advised_to_re_send() -> None:

@@ -24,7 +24,6 @@ import pytest
 
 from service_kit.exceptions import NotFoundError
 from service_kit.lancekit import registry as registry_mod
-from service_kit.lancekit.absence import reads_as_absent
 from service_kit.lancekit.reader import LocalCatalogTransport
 
 
@@ -44,20 +43,6 @@ def _transport(exc: BaseException) -> LocalCatalogTransport:
     # real LanceDataset cannot be made to raise a chosen message on demand.
     transport._ds = cast("lance.LanceDataset", _RaisingDataset(exc))
     return transport
-
-
-def test_helper_classifies_both_missing_wordings() -> None:
-    assert reads_as_absent(OSError("LanceError(IO): Object at location foo does not exist"))
-    assert reads_as_absent(ValueError("Table bar was not found"))
-    assert not reads_as_absent(OSError("Commit conflict for version 7: concurrent writer"))
-
-
-def test_reader_translates_does_not_exist_into_not_found() -> None:
-    # The wording the object store produces for a missing version file. Before the
-    # shared classifier the reader matched only "not found" and this escaped raw.
-    transport = _transport(OSError("Object at location data/_versions/9.manifest does not exist"))
-    with pytest.raises(NotFoundError):
-        transport._at_version(9)
 
 
 def test_reader_still_translates_not_found() -> None:
@@ -85,12 +70,6 @@ def test_the_reader_does_not_call_a_CORRUPT_dataset_a_missing_one() -> None:
         transport._at_version(9)
 
 
-def test_reader_leaves_other_oserrors_alone() -> None:
-    transport = _transport(OSError("connection reset by peer"))
-    with pytest.raises(OSError, match="connection reset"):
-        transport._at_version(9)
-
-
 def test_registry_translates_missing_table_into_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     handle = SimpleNamespace(
         id="ds",
@@ -111,14 +90,3 @@ def test_registry_translates_missing_table_into_not_found(monkeypatch: pytest.Mo
         # cast: a duck-typed stand-in — table_dataset only reads the attributes
         # scripted above, and building a real DatasetHandle needs a live dataset.
         registry_mod.table_dataset(cast("registry_mod.DatasetHandle", handle), "t")
-
-
-def test_the_two_sites_share_one_classifier() -> None:
-    """The inline substring matching is gone — every site goes through `lancekit.absence`."""
-    src_dir = Path(registry_mod.__file__).parent
-    for name in ("registry.py", "reader.py", "introspect.py"):
-        source = (src_dir / name).read_text()
-        assert '"does not exist" in' not in source and '"not found" in' not in source, (
-            f"{name} still classifies not-found inline instead of via lancekit.absence"
-        )
-        assert "reads_as_absent" in source

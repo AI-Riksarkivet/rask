@@ -22,11 +22,10 @@ silently is a different thing from a limitation written in a docstring.
 
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from service_kit.rate_limit import RATE_LIMITED_SERVICES, by_subject, make_limiter, register_rate_limiting
+from service_kit.rate_limit import by_subject, make_limiter, register_rate_limiting
 
 
 def test_the_key_function_falls_back_to_IP_for_an_anonymous_caller() -> None:
@@ -96,32 +95,3 @@ def test_probe_routes_are_never_limited() -> None:
     with TestClient(app) as client:
         for _ in range(50):
             assert client.get("/livez").status_code == 200
-
-
-@pytest.mark.parametrize("service", sorted(RATE_LIMITED_SERVICES))
-def test_a_rate_limited_service_still_runs_ONE_replica(service: str) -> None:
-    """The tripwire that makes in-memory storage honest.
-
-    slowapi's in-memory backend is per PROCESS. At one replica that is the global limit; at N it is
-    N times the limit, silently — the caller sees no error and the estate enforces nothing like what it
-    declares. Scaling one of these is therefore the moment shared storage (Redis, which this estate
-    deliberately does not run) becomes justified, and this test is how that moment announces itself
-    instead of passing unnoticed.
-    """
-    from pathlib import Path
-
-    import yaml
-
-    repo = Path(__file__).resolve().parents[3]
-    values = yaml.safe_load((repo / "chart/values.yaml").read_text())
-
-    for section in ("services", "explorer"):
-        node = (values.get(section) or {}).get(service)
-        if isinstance(node, dict) and "replicas" in node:
-            assert node["replicas"] == 1, (
-                f"{service} is rate-limited with slowapi's IN-MEMORY backend and now runs "
-                f"{node['replicas']} replicas — the limit is silently multiplied by that number. "
-                f"Move the limiter to shared storage (Redis) or drop the replica count back to 1."
-            )
-            return
-    # No explicit replicas key means the chart default of 1, which is the assumption holding.

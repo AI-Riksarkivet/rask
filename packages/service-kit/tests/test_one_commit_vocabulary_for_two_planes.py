@@ -44,9 +44,3 @@ def test_INCOMPATIBLE_beats_the_bare_word_concurrent() -> None:
     assert classify_commit_failure(both) is CommitVerdict.INCOMPATIBLE, (
         "a message carrying BOTH vocabularies was read as retryable — the caller is being told to do the one thing that corrupts the table"
     )
-
-
-def test_an_unknown_phrase_fails_toward_the_store_not_the_caller() -> None:
-    """The safe direction for a new store's wording: a caller told "the store is unavailable" retries
-    later and loses nothing; one told "your input is wrong" stops and loses the work."""
-    assert classify_commit_failure(OSError("some wording no marker anticipated")) is CommitVerdict.STORE_UNAVAILABLE

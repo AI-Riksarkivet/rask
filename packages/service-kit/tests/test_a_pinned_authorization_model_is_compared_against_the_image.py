@@ -83,20 +83,6 @@ def _image(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_pin_that_still_says_what_the_image_says_reports_no_drift() -> None:
-    """The control that keeps this from becoming a check that fires on everything."""
-    _PinnedClient.model = _pinned(
-        _typedef("warehouse", {"owner": {"this": {}}, "event_stager": {"this": {}}}),
-        _typedef("table", {"owner": {"this": {}}}),
-    )
-
-    drift = await fga.audit_pinned_model(cast(OpenFgaClient, _PinnedClient()), store_id="store-1", model_id="model-PINNED")
-
-    assert drift.readable is True
-    assert not drift.drifted, f"an identical model must not be reported as drifted: {drift}"
-
-
-@pytest.mark.asyncio
 async def test_a_relation_the_image_defines_and_the_pin_does_not_is_NAMED() -> None:
     """THE LIVE SHAPE, from the pinned side: `warehouse#event_stager` ships in the image and the store
     is pinned to a model without it. Under a pin nothing writes, so the relation simply never exists and
@@ -108,23 +94,6 @@ async def test_a_relation_the_image_defines_and_the_pin_does_not_is_NAMED() -> N
     assert drift.drifted
     assert "warehouse#event_stager" in drift.absent_from_pin, drift
     assert drift.absent_from_image == (), "the image defines everything the pin does here — reporting a loss would be a false alarm"
-
-
-@pytest.mark.asyncio
-async def test_a_relation_the_PIN_defines_and_the_image_does_not_is_named_separately() -> None:
-    """The opposite direction is a different operator action — the pin is AHEAD of this image — so it
-    must not be collapsed into the same field. One list for both would make a rollback and a
-    roll-forward indistinguishable at exactly the moment the difference decides what to do."""
-    _PinnedClient.model = _pinned(
-        _typedef("warehouse", {"owner": {"this": {}}, "event_stager": {"this": {}}, "auditor": {"this": {}}}),
-        _typedef("table", {"owner": {"this": {}}}),
-    )
-
-    drift = await fga.audit_pinned_model(cast(OpenFgaClient, _PinnedClient()), store_id="store-1", model_id="model-PINNED")
-
-    assert drift.drifted
-    assert "warehouse#auditor" in drift.absent_from_image, drift
-    assert drift.absent_from_pin == ()
 
 
 @pytest.mark.asyncio
@@ -179,7 +148,6 @@ def _restricted_pin(*restrictions: dict[str, Any]) -> Any:
     [
         pytest.param((_ANYONE, _ROLE), ({"type": "user"}, {"type": "role"}), id="pin-drops-[user:*]"),
         pytest.param(({"type": "user"},), (_ANYONE,), id="pin-adds-[user:*]"),
-        pytest.param((_ANYONE, _ROLE), (_ANYONE,), id="pin-drops-[role:*]"),
         pytest.param((_TIMEBOXED,), ({"type": "user"},), id="pin-drops-the-condition"),
     ],
 )

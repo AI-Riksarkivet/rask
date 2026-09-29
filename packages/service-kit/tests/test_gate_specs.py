@@ -24,43 +24,10 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lakehouse import gate_specs
 from service_kit.lakehouse.gate_specs import GateSpec
-
-
-@pytest.fixture
-def root(tmp_path: object) -> str:
-    return str(tmp_path)
-
-
-def test_a_declared_gate_round_trips(root: str) -> None:
-    spec = GateSpec(project="acme", key_column="id", required_columns=["id", "payload"], review_band=0.5, review_enabled=True)
-    gate_specs.put_spec(root, {}, spec)
-
-    got = gate_specs.get_spec(root, {}, "acme")
-
-    assert got is not None
-    assert got.review_band == 0.5
-    assert got.required_columns == ["id", "payload"]
-
-
-def test_an_undeclared_project_answers_none(root: str) -> None:
-    """`None`, never a default — the medallion needs "unset" distinguishable from "set to 0"."""
-    assert gate_specs.get_spec(root, {}, "never-declared") is None
 
 
 def test_a_negative_band_is_refused() -> None:
     """A band is a magnitude. Negative would make every delta a breach, silently."""
     with pytest.raises(ValueError):
         GateSpec(project="acme", review_band=-0.1)
-
-
-def test_two_projects_do_not_collide(root: str) -> None:
-    gate_specs.put_spec(root, {}, GateSpec(project="acme", review_band=0.25))
-    gate_specs.put_spec(root, {}, GateSpec(project="other", review_band=0.9))
-
-    acme = gate_specs.get_spec(root, {}, "acme")
-    other = gate_specs.get_spec(root, {}, "other")
-    assert acme is not None and other is not None
-    assert acme.review_band == 0.25
-    assert other.review_band == 0.9

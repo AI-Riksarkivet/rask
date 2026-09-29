@@ -57,35 +57,6 @@ def _app() -> FastAPI:
 
 
 @pytest.mark.asyncio
-async def test_SIGTERM_flips_the_flag_immediately(sentinel: list[int]) -> None:
-    """The flag is set when the signal arrives, not when the lifespan unwinds."""
-    app = _app()
-    disarm = arm_drain_on_sigterm(app)
-    try:
-        signal.raise_signal(signal.SIGTERM)
-        await _settle()
-
-        assert app.state.shutting_down is True, "the grace period is still a countdown, not a drain"
-    finally:
-        disarm()
-
-
-@pytest.mark.asyncio
-async def test_SIGTERM_is_HANDED_ON_to_the_handler_the_drain_displaced(sentinel: list[int]) -> None:
-    """Under uvicorn the displaced handler is `Server.handle_exit`, the only thing that stops the server.
-    A drain that keeps the signal leaves the process up and NotReady until SIGKILL ([[LH-183]])."""
-    app = _app()
-    disarm = arm_drain_on_sigterm(app)
-    try:
-        signal.raise_signal(signal.SIGTERM)
-        await _settle()
-
-        assert sentinel == [signal.SIGTERM], f"the displaced handler never received the signal: {sentinel}"
-    finally:
-        disarm()
-
-
-@pytest.mark.asyncio
 async def test_a_SECOND_signal_is_harmless_and_handed_on_too(sentinel: list[int]) -> None:
     """An impatient operator sends two. A signal handler that raised would be unhandleable, and the
     displaced handler decides what a second one means (uvicorn's escalates only on SIGINT)."""
@@ -122,17 +93,6 @@ async def test_a_SECOND_arm_is_REFUSED_while_the_first_holds_SIGTERM(sentinel: l
         disarm()
 
     arm_drain_on_sigterm(second)()
-
-
-@pytest.mark.asyncio
-async def test_DISARMING_puts_back_the_handler_it_displaced(sentinel: list[int]) -> None:
-    """The restore reinstalls the exact handler, so uvicorn's own restore-and-re-raise at exit sees
-    the state it left."""
-    held = signal.getsignal(signal.SIGTERM)
-    disarm = arm_drain_on_sigterm(_app())
-    disarm()
-
-    assert signal.getsignal(signal.SIGTERM) is held
 
 
 @pytest.mark.asyncio

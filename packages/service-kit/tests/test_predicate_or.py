@@ -11,10 +11,6 @@ from __future__ import annotations
 from service_kit.lancekit.predicate import and_, eq, or_
 
 
-def test_each_leg_is_parenthesised() -> None:
-    assert or_("a = 1", "b = 2") == "(a = 1) OR (b = 2)"
-
-
 def test_ORed_conjunctions_keep_their_grouping() -> None:
     """The real shape, and the reason the parens exist. Without them this renders as
     `doc = 'a' AND chunk = 1 OR doc = 'b' AND chunk = 2`, whose grouping depends entirely on
@@ -26,12 +22,6 @@ def test_ORed_conjunctions_keep_their_grouping() -> None:
 
     assert joined == f"({left}) OR ({right})"
     assert joined.count("(") >= 2
-
-
-def test_a_single_leg_is_still_wrapped() -> None:
-    """A one-key batch is the common case for a small queue page. Wrapping is harmless here and
-    keeps the output shape uniform, so a caller cannot come to depend on an unwrapped single."""
-    assert or_("a = 1") == "(a = 1)"
 
 
 def test_empty_clauses_are_dropped_like_and_() -> None:

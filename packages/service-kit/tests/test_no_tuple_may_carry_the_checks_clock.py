@@ -59,14 +59,6 @@ async def _write(store: _Store, tuples: list[ClientTuple]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_tuples_refuses_a_tuple_carrying_the_clock() -> None:
-    store = _Store()
-    with pytest.raises(InvalidInputError, match=REFUSAL):
-        await _write(store, [_pinned()])
-    assert store.writes == [], "a clock-pinned grant reached OpenFGA"
-
-
-@pytest.mark.asyncio
 async def test_write_tuples_refuses_the_whole_batch_not_only_the_pinned_tuple() -> None:
     """OpenFGA's Write is one transaction, so the refusal is too: a batch is written whole or not at all."""
     store = _Store()

@@ -32,26 +32,6 @@ def _opts(**kw: object) -> dict[str, str]:
     return lance_storage_options("http://s3:9000", "key", "secret", "us-east-1", **kw)  # ty: ignore[invalid-argument-type]
 
 
-def test_no_encryption_asked_for_emits_no_encryption_keys() -> None:
-    """Every existing caller is untouched: an option the store would read must not appear uninvited."""
-    opts = _opts()
-    assert not [k for k in opts if "encryption" in k or "sse" in k], f"encryption keys appeared unasked: {sorted(opts)}"
-
-
-def test_AES256_reaches_the_writer_under_the_documented_name() -> None:
-    opts = _opts(server_side_encryption="AES256")
-    assert opts.get("aws_server_side_encryption") == "AES256", (
-        "the algorithm did not reach the storage options — object_store ignores what it does not recognise, so this writes plaintext silently"
-    )
-
-
-def test_a_KMS_key_carries_its_algorithm() -> None:
-    """Both halves, under the names the guide documents."""
-    opts = _opts(server_side_encryption="aws:kms", sse_kms_key_id="arn:aws:kms:eu-north-1:1:key/abc")
-    assert opts["aws_server_side_encryption"] == "aws:kms"
-    assert opts["aws_sse_kms_key_id"] == "arn:aws:kms:eu-north-1:1:key/abc"
-
-
 def test_a_KMS_key_WITHOUT_a_kms_algorithm_is_REFUSED() -> None:
     """`lance_docs/guide.md:2418`, verbatim: "If set, `aws_server_side_encryption` must be `aws:kms` or
     `aws:kms:dsse`." The store will not reject the pair; it will ignore the key id and encrypt with

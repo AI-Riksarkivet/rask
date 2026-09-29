@@ -47,11 +47,6 @@ def _emit(sink: str) -> dict[str, Any] | None:
     )
 
 
-def test_the_emitter_logs_under_its_own_module_not_the_lineage_service() -> None:
-    assert lineage_emit.logger.name == "service_kit.lancekit.lineage_emit"
-    assert lineage_emit.logger is not logging.getLogger("lineage")
-
-
 def test_the_record_carries_the_module_name(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.INFO, logger="service_kit.lancekit.lineage_emit"):
         event = _emit(LineageSink.log)

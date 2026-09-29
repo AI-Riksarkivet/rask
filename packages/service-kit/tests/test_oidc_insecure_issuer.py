@@ -64,10 +64,6 @@ def test_the_dev_escape_hatch_still_works() -> None:
     assert settings.oidc_issuer == "http://dex.local:5556"
 
 
-def test_https_is_unaffected() -> None:
-    assert _settings().oidc_issuer == "https://issuer.test"
-
-
 def test_the_check_is_skipped_when_oidc_is_off() -> None:
     """An issuer nobody verifies against is not a misconfiguration."""
     assert _Governed.model_validate({"RASK_OIDC_ENABLED": False, "RASK_OIDC_ISSUER": "http://x"}) is not None

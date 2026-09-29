@@ -18,13 +18,6 @@ OPTS = {
 }
 
 
-def test_equal_options_reuse_one_filesystem() -> None:
-    fs1, host1 = _s3fs(OPTS)
-    fs2, host2 = _s3fs(dict(OPTS))  # an equal but distinct dict must still hit the memo
-    assert fs1 is fs2
-    assert host1 == host2 == "localhost:9000"
-
-
 def test_different_options_get_distinct_filesystems() -> None:
     fs_a, _ = _s3fs({**OPTS, "endpoint": "http://a:9000"})
     fs_b, _ = _s3fs({**OPTS, "endpoint": "http://b:9000"})

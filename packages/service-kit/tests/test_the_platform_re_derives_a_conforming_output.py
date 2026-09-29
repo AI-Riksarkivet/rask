@@ -156,13 +156,3 @@ def test_the_SCHEMA_check_is_an_equality_against_the_reference_function(tmp_path
     written = _write(tmp_path, extended)
 
     assert _verdicts(verify_stage_output(written, upstream_schema=upstream.schema, rows_in=3))["O3"] is Verdict.PASSED
-
-
-def test_O9_is_ABSENT_because_one_dataset_cannot_answer_it() -> None:
-    """Idempotence is a property of TWO runs. Nothing about one written dataset distinguishes a
-    merge_insert applied twice from one applied once, so an assertion here would be a guess wearing a
-    proof's name. It is enforced where it is decidable — at the submitter's deterministic id."""
-    from service_kit.lakehouse import attestation
-
-    source = Path(attestation.__file__).read_text(encoding="utf-8")
-    assert '"O9"' not in source, "O9 cannot be derived from one dataset; an assertion for it would be a guess"

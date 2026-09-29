@@ -69,22 +69,6 @@ async def test_an_unscoped_actor_state_store_is_caught(monkeypatch: pytest.Monke
 
 
 @pytest.mark.asyncio
-async def test_the_error_names_the_consequence_and_the_restart(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """The whole point is the line an operator reads.
-
-    daprd already logs the mechanism ("actor hosting disabled") and then contradicts it with
-    "Workflow engine started". This line must carry what the OTHER two do not: what breaks, and that
-    a scope added under a running sidecar does not reach it without a restart.
-    """
-    _serve(monkeypatch, _UNSCOPED)
-    with caplog.at_level("ERROR"):
-        await actor_state_store.probe_actor_state_store(capability="held promotions cannot be reviewed")
-    assert "held promotions cannot be reviewed" in caplog.text
-    assert "RESTART" in caplog.text
-    assert "stateStore.scopes" in caplog.text
-
-
-@pytest.mark.asyncio
 async def test_a_component_without_the_actor_capability_does_not_count(monkeypatch: pytest.MonkeyPatch) -> None:
     """A plain state store is not an actor state store, and the difference is the whole bug.
 

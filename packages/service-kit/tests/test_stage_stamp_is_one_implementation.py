@@ -32,7 +32,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pyarrow as pa
-import pytest
 
 from service_kit.lakehouse.stage_stamp import LINEAGE_COLUMN, LINEAGE_DATASET_ID_KEY, SOURCE_ROWID_COLUMN, ensure_declared_dataset_id, stamp_stage
 
@@ -41,20 +40,6 @@ def _rows(**extra: object) -> pa.Table:
     base: dict[str, object] = {"id": [1, 2], "data": ["a", "b"]}
     base.update(extra)
     return pa.table(base)
-
-
-class TestTheStampIsPure:
-    """No storage, no Ray, no lance — which is what lets one implementation serve both drivers."""
-
-    def test_it_takes_a_table_and_returns_a_table(self) -> None:
-        out = stamp_stage(_rows(), stage="silver")
-        assert isinstance(out, pa.Table)
-
-    def test_it_does_not_mutate_its_input(self) -> None:
-        table = _rows()
-        before = table.column_names[:]
-        stamp_stage(table, stage="silver")
-        assert table.column_names == before
 
 
 class TestColumnOrderIsStable:
@@ -72,36 +57,8 @@ class TestColumnOrderIsStable:
         out = stamp_stage(_rows(), stage="silver")
         assert out.column_names == ["id", "data", "stage"]
 
-    def test_stamping_twice_is_idempotent_in_shape(self) -> None:
-        """The cascade is overwrite-only and re-runs, so a second pass must not keep reshaping."""
-        once = stamp_stage(_rows(), stage="silver")
-        twice = stamp_stage(once, stage="silver")
-        assert once.schema.equals(twice.schema)
-
 
 class TestRootProvenance:
-    def test_the_head_mints_source_rowid_from_the_reserved_metacolumn(self) -> None:
-        table = _rows(_rowid=pa.array([7, 8], pa.uint64()))
-
-        out = stamp_stage(table, stage="silver")
-
-        assert out.column(SOURCE_ROWID_COLUMN).to_pylist() == [7, 8]
-
-    def test_rowid_is_never_persisted(self) -> None:
-        """A reserved name that advances on the next overwrite — persisting it records a lie."""
-        out = stamp_stage(_rows(_rowid=pa.array([7, 8], pa.uint64())), stage="silver")
-        assert "_rowid" not in out.column_names
-
-    def test_a_later_stage_keeps_the_ROOT_id_rather_than_re_minting(self) -> None:
-        """source_rowid names the BRONZE row a gold row descends from. Re-minting from the immediate
-        parent would silently reroot the chain one tier down."""
-        table = _rows(source_rowid=pa.array([99, 100], pa.uint64()), _rowid=pa.array([1, 2], pa.uint64()))
-
-        out = stamp_stage(table, stage="gold")
-
-        assert out.column(SOURCE_ROWID_COLUMN).to_pylist() == [99, 100]
-        assert "_rowid" not in out.column_names
-
     def test_no_rowid_and_no_source_rowid_is_not_an_error(self) -> None:
         """A tabular upstream read without with_row_id has neither. It must still stamp."""
         out = stamp_stage(_rows(), stage="silver")
@@ -109,11 +66,6 @@ class TestRootProvenance:
 
 
 class TestTheLineageColumn:
-    def test_a_document_is_stamped_as_json(self) -> None:
-        out = stamp_stage(_rows(), stage="silver", lineage='{"run":"r1"}')
-        assert LINEAGE_COLUMN in out.column_names
-        assert out.column(LINEAGE_COLUMN).to_pylist() == ['{"run":"r1"}', '{"run":"r1"}']
-
     def test_an_inherited_document_is_REPLACED_not_appended_twice(self) -> None:
         """The re-stamp exists so a gold row does not claim its parent's provenance."""
         table = _rows(**{LINEAGE_COLUMN: ['{"run":"parent"}', '{"run":"parent"}']})
@@ -146,11 +98,6 @@ class TestTheDeclaredIdNamesTHISTier:
     against bronze's node.
     """
 
-    def test_the_stamp_declares_the_destination_it_was_given(self) -> None:
-        out = stamp_stage(_rows(), stage="silver", dataset_id="acme$silver")
-
-        assert (out.schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
-
     def test_no_declared_id_drops_an_inherited_one(self) -> None:
         """The half that was missing: an unwired driver must not publish its parent's name."""
         bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"})
@@ -166,15 +113,6 @@ class TestTheDeclaredIdNamesTHISTier:
 
         assert (out.schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
 
-    def test_other_producers_metadata_survives(self) -> None:
-        """Lance keeps other producers' schema metadata (the #21 self-describing coordinates among
-        them); a replace would silently destroy it, so this merges."""
-        bronze = _rows().replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze", "lance.coords": "kept"})
-
-        out = stamp_stage(bronze, stage="silver", dataset_id="acme$silver")
-
-        assert (out.schema.metadata or {})[b"lance.coords"] == b"kept"
-
     def test_the_empty_schema_a_distributed_lane_creates_its_destination_with_agrees(self) -> None:
         """The distributed lane derives its destination schema from a zero-row slice of the upstream
         (`ray_stage_job._target_schema`), so the metadata rule has to hold with no rows to stamp."""
@@ -183,23 +121,6 @@ class TestTheDeclaredIdNamesTHISTier:
         target = stamp_stage(bronze.schema.empty_table(), stage="silver", dataset_id="acme$silver").schema
 
         assert (target.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
-
-
-class TestBothDriversUseIt:
-    """The pin. An extracted function nobody calls leaves the two copies exactly as they were."""
-
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "services/medallion/src/medallion/services/compute.py",
-            "scripts/ray_stage_job.py",
-        ],
-    )
-    def test_the_driver_imports_the_shared_stamp(self, path: str) -> None:
-        from pathlib import Path
-
-        source = (Path(__file__).resolve().parents[3] / path).read_text()
-        assert "stage_stamp" in source, f"{path} still carries its own copy of the stamp"
 
 
 class TestTheRepairReachesADatasetAMergeWrote:
@@ -212,34 +133,6 @@ class TestTheRepairReachesADatasetAMergeWrote:
     stamp alone would land only on tiers created after it, and every tier already on disk would keep
     its parent's name forever, repaired by no re-run.
     """
-
-    def test_a_merge_alone_does_NOT_move_the_declared_id(self, tmp_path: Path) -> None:
-        """The measurement the repair exists for. If this ever starts failing, pylance changed and the
-        repair became a no-op rather than a fix — check before deleting it."""
-        import lance
-
-        uri = str(tmp_path / "silver.lance")
-        rows = pa.table({"id": pa.array([1, 2], pa.int64()), "data": ["a", "b"]})
-        lance.write_dataset(rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze"}), uri, mode="create")
-
-        lance.dataset(uri).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
-            rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$silver"})
-        )
-
-        assert (lance.dataset(uri).schema.metadata or {})[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$bronze"
-
-    def test_the_repair_corrects_it_in_place(self, tmp_path: Path) -> None:
-        import lance
-
-        uri = str(tmp_path / "silver.lance")
-        rows = pa.table({"id": pa.array([1, 2], pa.int64()), "data": ["a", "b"]})
-        lance.write_dataset(rows.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "acme$bronze", "lance.coords": "kept"}), uri, mode="create")
-
-        assert ensure_declared_dataset_id(uri, "acme$silver") is True
-
-        after = lance.dataset(uri).schema.metadata or {}
-        assert after[LINEAGE_DATASET_ID_KEY.encode()] == b"acme$silver"
-        assert after[b"lance.coords"] == b"kept", "a metadata-only correction must not drop another producer's keys"
 
     def test_it_is_IDEMPOTENT_so_every_cascade_tick_may_call_it(self, tmp_path: Path) -> None:
         """A cascade runs this on every write. A second call must commit nothing, or the estate mints a

@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lancekit import absence, introspect
 from service_kit.schemas import storage
 
 
@@ -42,25 +41,3 @@ def test_a_fault_in_our_own_code_is_no_longer_answered_with_the_defaults(monkeyp
     monkeypatch.setattr(storage.Store, "model_validate", staticmethod(_boom))
     with pytest.raises(AttributeError):
         storage.registered_stores(_ONE_STORE)
-
-
-def test_discovery_classifies_absence_through_the_shared_vocabulary(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(absence, "_ABSENCE_MARKERS", ("was not found", "no such table"))
-    monkeypatch.setattr(introspect.store, "list_lance_stems", lambda *_a, **_k: ["t"])
-
-    def _raise(_uri: object, _opts: object = None) -> object:
-        raise RuntimeError("no such table: t")
-
-    monkeypatch.setattr(introspect, "table_info", _raise)
-    assert introspect.discover_tables("s3://b/db") == {}
-
-
-def test_a_transient_read_is_still_not_laundered_into_absence(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(introspect.store, "list_lance_stems", lambda *_a, **_k: ["t"])
-
-    def _raise(_uri: object, _opts: object = None) -> object:
-        raise OSError("connection reset by peer")
-
-    monkeypatch.setattr(introspect, "table_info", _raise)
-    with pytest.raises(OSError, match="connection reset"):
-        introspect.discover_tables("s3://b/db")

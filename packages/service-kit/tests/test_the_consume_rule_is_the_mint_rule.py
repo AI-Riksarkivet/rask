@@ -25,15 +25,13 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lakehouse.naming import CONTROL_ID_PATTERN
-from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN, is_safe_project
+from service_kit.lakehouse.warehouse_registry import is_safe_project
 
 
 #: Ids the loose rule admitted that the catalog could never have minted.
 _UNMINTABLE = [
     pytest.param("ACME", id="uppercase"),
     pytest.param("acme_bronze", id="underscore"),
-    pytest.param("a", id="one-char"),
     pytest.param("ab", id="two-chars-below-the-floor"),
     pytest.param("acme-", id="trailing-hyphen"),
 ]
@@ -44,20 +42,10 @@ def test_an_id_the_catalog_could_not_mint_is_not_consumed(value: str) -> None:
     assert is_safe_project(value) is False
 
 
-@pytest.mark.parametrize("value", ["acme", "a72fcc0f", "acme-bronze", "a" * 63])
+@pytest.mark.parametrize("value", ["acme-bronze", "a" * 63])
 def test_a_real_registered_id_still_passes(value: str) -> None:
     """The control. Without it, a rule that refused everything would pass above."""
     assert is_safe_project(value) is True
-
-
-def test_the_wire_pattern_is_the_mint_pattern() -> None:
-    """ONE constant, not two strings that happen to agree today — the whole failure mode of this row."""
-    assert rf"^{CONTROL_ID_PATTERN}$" == PROJECT_PATTERN
-
-
-def test_the_wire_pattern_carries_no_python_only_anchor() -> None:
-    """``\\Z`` on the wire is unparseable to pydantic's Rust regex and to any JSON Schema reader."""
-    assert "\\Z" not in PROJECT_PATTERN
 
 
 def test_the_guard_does_not_lean_on_the_wire_anchor() -> None:

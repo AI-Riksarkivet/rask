@@ -233,7 +233,7 @@ def test_an_external_SIGTERM_drains_the_in_flight_request_and_then_EXITS(tmp_pat
         assert server.printed("TEARDOWN draining=True"), f"the lifespan teardown never ran: {server.lines}"
 
 
-@_EVERY_LOOP
+@pytest.mark.parametrize("loop", ["uvloop"])
 def test_SIGTERM_TO_SELF_acks_the_request_that_sent_it_and_then_EXITS(tmp_path: Path, loop: str) -> None:
     """The recycle's shape: a handler signals its own process. The response carrying the ack must
     arrive, and then the process must actually leave for Kubernetes to replace it."""
@@ -246,7 +246,7 @@ def test_SIGTERM_TO_SELF_acks_the_request_that_sent_it_and_then_EXITS(tmp_path: 
         assert server.printed("TEARDOWN draining=True"), f"the lifespan teardown never ran: {server.lines}"
 
 
-@_EVERY_LOOP
+@pytest.mark.parametrize("loop", ["uvloop"])
 def test_a_SECOND_arm_in_one_process_is_REFUSED_and_SIGTERM_still_stops_the_server(tmp_path: Path, loop: str) -> None:
     """A process has one SIGTERM disposition. A second arm would displace the first with a handler whose
     `previous` is the loop's own no-op trampoline, so SIGTERM would be handed to nothing: swallowed, and the

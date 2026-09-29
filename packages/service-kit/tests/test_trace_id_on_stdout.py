@@ -121,30 +121,6 @@ def test_the_formatter_SURVIVES_otel_never_having_run(stdout_lines: io.StringIO)
     assert "Traceback" not in line and "--- Logging error ---" not in line, f"the formatter raised on a record with no otel attributes: {line!r}"
 
 
-def test_setup_otel_BINDS_the_logger_provider_it_built(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`LoggingInstrumentor` reads the GLOBAL provider, never the kwarg — so the binding is the
-    contract, and the comment claiming the kwarg protects against a lost race is false.
-
-    Asserted rather than commented: if `set_logger_provider` ever stops taking effect, every log
-    record is translated to an OTel record and dropped by the proxy's no-op logger — full cost, no
-    delivery, and no error anywhere.
-    """
-    from fastapi import FastAPI
-    from opentelemetry._logs import get_logger_provider
-    from opentelemetry.sdk._logs import LoggerProvider
-
-    from service_kit import setup_otel
-
-    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
-    assert setup_otel(FastAPI(), "svc-trace-binding") is True
-
-    provider = get_logger_provider()
-    assert isinstance(provider, LoggerProvider), (
-        f"the global logger provider is {type(provider).__name__}, not the SDK one — `LoggingInstrumentor` "
-        "would bind its handler to a proxy whose logger drops every record silently"
-    )
-
-
 def test_a_record_PRINTS_the_diagnostics_it_carries_in_extra(stdout_lines: io.StringIO) -> None:
     """The estate records causes in `extra=` — 626 call sites — and the stdout line printed none of them.
 

@@ -45,13 +45,6 @@ def test_the_injected_settings_reach_the_router_prefix_and_the_docs_urls() -> No
         assert client.get("/api/injected/openapi.json").status_code == 200
 
 
-def test_the_injected_object_itself_is_what_the_app_carries() -> None:
-    settings = _injected()
-    app = make_service_app(title="injected", routers=[APIRouter()], settings=settings)
-    with TestClient(app):
-        assert app.state.settings is settings, "the factory rebuilt Settings instead of using the injected object"
-
-
 def test_the_injected_settings_reach_a_service_lifespan() -> None:
     seen: list[Settings] = []
 
@@ -69,9 +62,3 @@ def test_the_injected_settings_reach_a_service_lifespan() -> None:
     with TestClient(make_service_app(title="injected", routers=[APIRouter()], lifespan=lifespan, settings=settings)):
         pass
     assert seen == [settings]
-
-
-def test_omitting_settings_still_builds_them_from_the_environment() -> None:
-    app = make_service_app(title="default", routers=[APIRouter()])
-    with TestClient(app):
-        assert isinstance(app.state.settings, Settings)

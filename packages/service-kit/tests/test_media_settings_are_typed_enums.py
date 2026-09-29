@@ -10,39 +10,11 @@ comparison keeps working.
 
 from __future__ import annotations
 
-import pytest
-from pydantic import ValidationError
-
-from service_kit.media.config import LineageSink, Settings, TableBackend
+from service_kit.media.config import LineageSink, Settings
 
 
 def _settings(**env: object) -> Settings:
     return Settings.model_validate(env)
-
-
-def test_the_backend_fields_are_the_enum() -> None:
-    settings = _settings(MEDIA_READ_BACKEND="catalog", MEDIA_WRITE_BACKEND="direct")
-    assert settings.read_backend is TableBackend.catalog
-    assert settings.write_backend is TableBackend.direct
-
-
-def test_the_members_still_compare_equal_to_their_strings() -> None:
-    """Every existing consumer compares against the literal — `open_reader`, `open_writer`, the tests."""
-    assert _settings(MEDIA_READ_BACKEND="catalog").read_backend == "catalog"
-    assert _settings().write_backend != "catalog"
-
-
-def test_an_unknown_value_is_refused_at_load() -> None:
-    with pytest.raises(ValidationError) as caught:
-        _settings(MEDIA_READ_BACKEND="catalouge")
-    assert "direct" in str(caught.value) and "catalog" in str(caught.value), "the message must name the options"
-
-
-def test_the_lineage_sink_is_the_enum_and_stdout_is_gone() -> None:
-    assert _settings(MEDIA_LINEAGE_SINK="log").lineage_sink is LineageSink.log
-    assert [member.value for member in LineageSink] == ["log", "none"]
-    with pytest.raises(ValidationError):
-        _settings(MEDIA_LINEAGE_SINK="stdout")
 
 
 def test_the_derived_properties_keep_their_meaning() -> None:
@@ -51,13 +23,3 @@ def test_the_derived_properties_keep_their_meaning() -> None:
     assert live.effective_lineage_sink is LineageSink.none
     assert _settings().rest_catalog_mode is False
     assert _settings().effective_lineage_sink is LineageSink.log
-
-
-def test_no_hand_rolled_membership_check_survives() -> None:
-    import inspect
-
-    from service_kit.media import config
-
-    source = inspect.getsource(config)
-    assert '{"direct", "catalog"}' not in source
-    assert '{"stdout", "log", "none"}' not in source

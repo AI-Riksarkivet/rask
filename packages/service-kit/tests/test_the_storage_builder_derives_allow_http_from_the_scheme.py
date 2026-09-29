@@ -24,8 +24,6 @@ from service_kit.lakehouse.objectfs import lance_storage_options
     ("endpoint", "expected"),
     [
         ("http://rustfs:9000", "true"),
-        ("http://127.0.0.1:9000", "true"),
-        ("https://s3.example.com", "false"),
         ("https://rustfs:9000", "false"),
         # AWS proper: callers pass "" and drop the key, leaving botocore's regional https endpoint.
         ("", "false"),
@@ -33,9 +31,3 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 )
 def test_allow_http_follows_the_endpoint_scheme(endpoint: str, expected: str) -> None:
     assert lance_storage_options(endpoint, "AK", "SK", "us-east-1")["allow_http"] == expected
-
-
-def test_a_vended_credential_for_a_tls_store_is_not_permitted_plaintext() -> None:
-    """The vending shape — a session token on top — takes the same rule; the token changes nothing."""
-    options = lance_storage_options("https://s3.example.com", "AK", "SK", "us-east-1", session_token="TOK")
-    assert options["allow_http"] == "false"

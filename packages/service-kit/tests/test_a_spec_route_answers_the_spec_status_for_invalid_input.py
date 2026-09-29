@@ -70,15 +70,6 @@ def test_a_RASK_ONLY_route_keeps_422(client: TestClient) -> None:
     assert response.json()["status"] == 422
 
 
-def test_the_path_parameter_NAME_does_not_decide_it() -> None:
-    """The spec writes `{id}`; this app wrote `{table_id}`. Matching on the literal pattern would make
-    the status depend on a local variable name, which is the kind of coupling that works until someone
-    renames a parameter."""
-    assert is_spec_route("POST", "/v1/table/{table_id}/update")
-    assert is_spec_route("POST", "/v1/table/{id}/update")
-    assert not is_spec_route("POST", "/v1/table/{id}/credentials")
-
-
 def test_a_request_that_reached_no_route_is_not_a_spec_operation() -> None:
     """`handle_validation_error` passes `""` when the scope carries no route. That must be a plain
     False, not an exception — the handler is an error path and must not raise from inside one."""

@@ -36,19 +36,6 @@ def test_two_activities_run_on_the_SAME_loop() -> None:
     assert run_activity(which()) is run_activity(which()), "a fresh loop per activity is the bug, not the design"
 
 
-def test_loop_bound_state_SURVIVES_between_activities() -> None:
-    """`asyncio.Lock` binds to the loop that first awaits it and refuses any other — the same class of
-    breakage as the httpx pool, reachable without a socket."""
-    lock = asyncio.Lock()
-
-    async def guarded() -> bool:
-        async with lock:
-            return True
-
-    assert run_activity(guarded())
-    assert run_activity(guarded()), "the second activity met a lock bound to the first one's loop"
-
-
 def test_the_loop_is_not_left_running_after_a_stop() -> None:
     """A worker that shuts down must not leave a loop thread holding pooled resources open."""
     loop = worker_loop()

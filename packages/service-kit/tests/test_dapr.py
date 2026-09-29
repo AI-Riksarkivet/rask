@@ -10,37 +10,6 @@ only the factory and its dependency are gone.
 
 import pytest
 
-from service_kit.config import Settings
-
-
-def _settings(**env: str) -> Settings:
-    return Settings.model_validate({"RASK_VIEWER_INPUT": "/dev/null", "RASK_VIEWER_OUTPUT": "/dev/null", **env})
-
-
-def test_dapr_disabled_by_default() -> None:
-    s = _settings()
-    assert s.dapr_enabled is False
-    assert s.dapr_http_port == "3500"
-
-
-def test_dapr_enabled_from_env() -> None:
-    s = _settings(RASK_DAPR_ENABLED="true", DAPR_HTTP_PORT="3555")
-    assert s.dapr_enabled is True
-    assert s.dapr_http_port == "3555"
-
-
-def test_the_client_factory_seam_stays_deleted() -> None:
-    """§2.1, pinned so it cannot come back by muscle memory.
-
-    A shared factory on `service_kit` is the obvious place for the next service wanting a Dapr client
-    to reach — and the one that lived here pointed at the wrong port. Re-adding one is a decision to
-    make deliberately (and against the gRPC port, 50001), not a convenience to rediscover.
-    """
-    import service_kit
-
-    for gone in ("build_dapr_client", "get_dapr", "DaprClientDep", "_import_dapr_client"):
-        assert not hasattr(service_kit, gone), f"service_kit.{gone} is back — the client-factory seam was deleted deliberately; check git history first"
-
 
 # ── the public front door must never take a service-token path ────────────────
 

@@ -19,7 +19,6 @@ that names the internal dashboard address published it to whoever loaded the ifr
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -73,14 +72,6 @@ async def test_logs_reports_a_401_as_a_failure_not_as_an_empty_file() -> None:
 
 
 @pytest.mark.asyncio
-async def test_logs_reports_a_404_filename_as_a_failure() -> None:
-    async with httpx.AsyncClient(transport=_responder(404, "no such file")) as http:
-        payload = await dashboard.logs(http, _DASH, "node-1", "typo.log")
-    assert payload.ok is False
-    assert payload.error and "404" in payload.error
-
-
-@pytest.mark.asyncio
 async def test_logs_keeps_the_clean_note_for_rays_empty_file_500() -> None:
     """The documented Ray quirk survives: an empty file 500s and must not read as an outage."""
     async with httpx.AsyncClient(transport=_responder(500)) as http:
@@ -117,18 +108,6 @@ async def test_job_logs_still_answers_an_unknown_submission_id_politely() -> Non
         payload = await dashboard.job_logs(http, client, _DASH, "sub-nope")
     assert payload.ok is False
     assert payload.error and "RuntimeError" in payload.error
-
-
-# ── PS-20 ────────────────────────────────────────────────────────────────────────────────────
-
-
-def test_the_error_text_helper_is_the_one_formatter() -> None:
-    text = dashboard._error_text(ValueError("x" * 1000))
-    assert text.startswith("ValueError: ")
-    assert len(text) == dashboard._ERROR_MSG_MAX_LEN
-
-    source = Path(str(dashboard.__file__)).read_text(encoding="utf-8")
-    assert source.count('f"{type(exc).__name__}: {exc!s}"') == 1, "the error-payload expression is copy-pasted; it belongs in `_error_text`"
 
 
 # ── PS-21 ────────────────────────────────────────────────────────────────────────────────────

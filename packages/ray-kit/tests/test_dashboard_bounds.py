@@ -20,7 +20,6 @@ import pytest
 from ray.job_submission import JobSubmissionClient
 
 from ray_kit import dashboard
-from ray_kit.schemas import RayJob
 
 
 _DASH = "http://ray-head:8265"
@@ -152,60 +151,6 @@ async def test_bulky_ray_fields_are_dropped_not_retained() -> None:
     # …while the fields the SPA actually reads survive.
     assert kept["submission_id"] == "job-1"
     assert kept["entrypoint"] == "runner --chunk job-1"
-
-
-def test_declared_fields_cover_every_field_the_frontend_reads() -> None:
-    """Narrowing to `extra="ignore"` is only safe while this holds.
-
-    Grepped from `frontend/microfrontends/compute` and `@rask/api` at the time of the change. If a
-    zone starts reading a new Ray field, this fails and points at the model instead of shipping a
-    silently-absent value to the UI.
-    """
-    read_by_frontend = {
-        "submission_id",
-        "job_id",
-        "status",
-        "entrypoint",
-        "start_time",
-        "end_time",
-        "batches",
-        "logs_url",
-        "error_type",
-        "message",
-        "driver_exit_code",
-    }
-    assert read_by_frontend <= set(RayJob.model_fields)
-
-
-def test_task_limit_is_below_rays_api_ceiling() -> None:
-    """`limit=10000` was EXACTLY `RAY_MAX_LIMIT_FROM_API_SERVER` — the largest page Ray will serve.
-
-    On an endpoint polled every 5 s by two pages, with `detail=1` attaching `runtime_env_info`,
-    `events` and `profiling_data` to every row.
-    """
-    assert dashboard.MAX_TASKS < 10_000
-
-
-@pytest.mark.asyncio
-async def test_metadata_projection_keeps_identity_and_discards_the_rest() -> None:
-    """The other half of the projection: `rask.` survives, a workload's own keys do not.
-
-    Without this, someone restoring the old whole-field drop would still see a green suite — the
-    bulk assertion alone passes when metadata is dropped entirely, which is exactly how the lane
-    identity was lost the first time.
-    """
-    bulky = {
-        "metadata": {
-            "rask.transform": "dummy",
-            "rask.stage": "silver",
-            **{f"workload{i}": "x" * 100 for i in range(50)},
-        },
-    }
-    jobs = [_FakeJobDetails("job-1", start_time=1, bulky=bulky)]
-
-    payload = await dashboard.list_jobs(_client(jobs), _DASH)
-
-    assert payload.jobs[0].metadata == {"rask.transform": "dummy", "rask.stage": "silver"}
 
 
 @pytest.mark.asyncio

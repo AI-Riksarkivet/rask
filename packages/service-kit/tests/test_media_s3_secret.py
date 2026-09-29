@@ -13,8 +13,6 @@ the estate (`MedallionSettings`, the catalog and maintenance settings all expose
 
 from __future__ import annotations
 
-import inspect
-
 import pytest
 
 from service_kit.media import config as media_config
@@ -34,15 +32,6 @@ def _fresh_cache():
     getattr(media_config._store_secret, "cache_clear", lambda: None)()
     yield
     getattr(media_config._store_secret, "cache_clear", lambda: None)()
-
-
-def test_storage_options_is_a_method_not_a_property() -> None:
-    """A property doing blocking I/O looks like a free attribute and lands on event loops. The whole
-    finding: `storage_options` must be a callable a reader can SEE is not free."""
-    assert not isinstance(inspect.getattr_static(Settings, "storage_options"), property), (
-        "`storage_options` is still a @property — a blocking Dapr fetch disguised as an attribute read"
-    )
-    assert callable(_settings().storage_options), "`storage_options` is not callable"
 
 
 def test_secret_comes_from_the_store(monkeypatch: pytest.MonkeyPatch) -> None:

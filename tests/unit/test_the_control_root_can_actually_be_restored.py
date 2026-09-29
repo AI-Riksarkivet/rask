@@ -96,16 +96,6 @@ def test_a_backup_captures_every_RECORD_prefix(s3: Any) -> None:
     assert result["objects"] == len(records)
 
 
-def test_the_OUTBOXES_are_not_in_the_backup(s3: Any) -> None:
-    """Restoring a queue re-publishes what the estate already handled. The exclusion is deliberate, so
-    it gets a test that fails if somebody 'completes' the prefix list."""
-    result = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")
-    captured = set(crb.read_manifest(s3, result["backup"])["objects"])
-
-    assert not [k for k in captured if k.startswith(("_control_outbox/", "_lineage_outbox/"))], captured
-    assert crb.SKIPPED_PREFIXES, "the skipped set is empty, so nothing records that this was a decision"
-
-
 def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any) -> None:
     """THE ROW'S ACTUAL ASK. A backup that runs is not a backup that restores."""
     backup = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")["backup"]

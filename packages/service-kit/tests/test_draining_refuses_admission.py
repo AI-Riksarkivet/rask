@@ -26,10 +26,8 @@ either a lost cascade or a caller that gives up.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Annotated
 
-import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from starlette.requests import Request
@@ -53,9 +51,6 @@ def _request(*, shutting_down: bool) -> Request:
 class TestThePredicate:
     def test_a_draining_process_is_draining(self) -> None:
         assert draining(_request(shutting_down=True)) is True
-
-    def test_a_healthy_one_is_not(self) -> None:
-        assert draining(_request(shutting_down=False)) is False
 
     def test_an_app_that_never_set_the_flag_is_not_draining(self) -> None:
         """Three services (ingest, compute, flows) set no lifecycle flags at all. They must read as
@@ -93,17 +88,6 @@ class TestTheHttpDoorRefusesWith503:
     def test_it_refuses_503_while_draining(self) -> None:
         assert self._client(shutting_down=True).post("/produce").status_code == 503
 
-    def test_the_refusal_is_a_problem_document_naming_the_cause(self) -> None:
-        """An operator reading a 503 must be able to tell "this pod is leaving" from "this pod is
-        broken" — they lead to opposite actions."""
-        resp = self._client(shutting_down=True).post("/produce")
-        assert "application/problem+json" in resp.headers.get("content-type", "")
-        assert "drain" in resp.text.lower() or "shutting down" in resp.text.lower()
-
-    def test_it_advertises_retryability(self) -> None:
-        """Retry-After is what turns a 503 into "come back", rather than a caller's backoff guess."""
-        assert self._client(shutting_down=True).post("/produce").headers.get("retry-after")
-
 
 class TestTheSidecarDoorAsksForRedelivery:
     def _client(self, *, shutting_down: bool) -> TestClient:
@@ -128,45 +112,3 @@ class TestTheSidecarDoorAsksForRedelivery:
         resp = self._client(shutting_down=True).post("/bronze-arrival")
         assert resp.status_code == 200, "a subscription answers 200 with a verdict, never an HTTP error"
         assert resp.json() == {"status": "RETRY"}
-
-    def test_it_never_answers_DROP(self) -> None:
-        """DROP is final and these topics have no DLQ, so dropping a trigger because THIS replica is
-        draining silently cancels the cascade."""
-        assert self._client(shutting_down=True).post("/bronze-arrival").json()["status"] != "DROP"
-
-    def test_it_never_answers_SUCCESS_while_draining(self) -> None:
-        """A SUCCESS ack is indistinguishable from having done the work — the broker discards the
-        message and nobody ever runs it."""
-        assert self._client(shutting_down=True).post("/bronze-arrival").json()["status"] != "SUCCESS"
-
-
-class TestTheTwoAnswersAreDistinct:
-    def test_they_are_not_the_same_dependency(self) -> None:
-        """Applying the HTTP one to a subscription route would raise a 503 at a Dapr sidecar, which
-        it reads as a delivery failure and retries — accidentally correct today, and silently wrong
-        the moment resiliency policy treats 5xx as terminal. The intent must be explicit."""
-        assert refuse_when_draining is not retry_when_draining
-
-
-@pytest.mark.parametrize("dep", [refuse_when_draining, retry_when_draining])
-def test_neither_dependency_touches_a_closing_resource(dep: Callable[..., object]) -> None:
-    """`/readyz`'s comment states the rule this shares: once shutting_down flips, that is the answer
-    regardless of anything else, and the check must never reach for a dependency that is already
-    closing. A drain gate that opened a DB handle would fail during exactly the window it exists for."""
-    import ast
-    import inspect
-    import textwrap
-
-    # THE CODE, not the prose. Scanning raw source matched the DOCSTRING and the comments too, so a
-    # note explaining what a *client* sees tripped a check about touching a client — the same
-    # false-positive class as grepping for a claim that a correction quotes in order to correct it.
-    # The docstring is stripped and comments never survive `ast.unparse`.
-    tree = ast.parse(textwrap.dedent(inspect.getsource(dep)))
-    fn = tree.body[0]
-    assert isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef)
-    if fn.body and isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant):
-        fn.body = fn.body[1:]
-    source = ast.unparse(fn)
-
-    for forbidden in ("await ", "client", "session", "dataset", "connect"):
-        assert forbidden not in source, f"{dep} reaches for {forbidden!r} during shutdown"

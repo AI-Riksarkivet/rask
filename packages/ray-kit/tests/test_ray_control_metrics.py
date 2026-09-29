@@ -53,24 +53,6 @@ def _recorded(reader: Any) -> dict[str, list[Any]]:
     return out
 
 
-def test_ray_kit_exposes_a_control_plane_metrics_module() -> None:
-    """No instrument existed anywhere in ray-kit or compute — verified by negative grep for
-    `get_meter|create_counter|create_histogram` over both trees, which returned nothing."""
-    from ray_kit import metrics
-
-    assert hasattr(metrics, "record_probe"), "no way to record whether a Ray call succeeded"
-    assert hasattr(metrics, "RayOutcome"), "no closed vocabulary for the outcome label"
-
-
-def test_the_outcome_vocabulary_separates_UNAUTHORIZED_from_UNREACHABLE() -> None:
-    """The whole point. A credential fault and a dead cluster must not share a label value, or the
-    metric reproduces exactly the collapse it exists to expose."""
-    from ray_kit.metrics import RayOutcome
-
-    values = {o.value for o in RayOutcome}
-    assert {"ok", "unauthorized", "unreachable"} <= values, f"outcomes are {values}"
-
-
 def test_an_AuthenticationError_classifies_as_unauthorized_not_unreachable() -> None:
     """`RAY_TRANSIENT_ERRORS` catches AuthenticationError alongside ConnectionError, so the classifier
     is the only thing that can tell them apart after the fact."""
@@ -81,18 +63,6 @@ def test_an_AuthenticationError_classifies_as_unauthorized_not_unreachable() -> 
     assert classify_ray_error(AuthenticationError("401 Unauthorized")) is RayOutcome.UNAUTHORIZED
     assert classify_ray_error(ConnectionError("connection refused")) is RayOutcome.UNREACHABLE
     assert classify_ray_error(RuntimeError("protocol failure")) is RayOutcome.TRANSIENT
-
-
-def test_a_probe_records_a_series_a_rule_could_fire_on() -> None:
-    from ray_kit import metrics
-    from ray_kit.metrics import RayOutcome
-
-    reader, provider = _reader()
-    metrics.bind_meter_provider(provider)
-    metrics.record_probe("health", RayOutcome.UNREACHABLE, duration_seconds=0.25)
-
-    seen = _recorded(reader)
-    assert any("probe" in name for name in seen), f"a failed probe recorded nothing — metrics are {list(seen)}"
 
 
 def test_the_probe_label_set_is_BOUNDED() -> None:

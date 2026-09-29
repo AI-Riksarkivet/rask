@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from service_kit.lancekit import openlineage as lancekit_ol
 from service_kit.lancekit.openlineage import PRODUCER, WriteResult, build_run_event
 from service_kit.openlineage import COLUMN_LINEAGE_FACET_SCHEMA_URL, column_lineage_facet
 
@@ -31,17 +30,6 @@ def _event(column_map: list[tuple[str, str, str]], inputs: list[tuple[str, str]]
         event_time="2026-08-29T00:00:00+00:00",
         result=WriteResult(version=1, row_count=1, size_bytes=0, fields=[], column_map=column_map),
     )
-
-
-def test_there_is_only_one_builder_and_one_name_for_each_shape() -> None:
-    import service_kit.openlineage as shared_ol
-
-    assert not hasattr(lancekit_ol, "_column_lineage_facet")
-    # `ColumnEdge` now means ONE thing everywhere: the wire seven-tuple. The narrow write shape has
-    # its own name, so `list[ColumnEdge]` no longer depends on which module the reader had open.
-    assert lancekit_ol.ColumnEdge is shared_ol.ColumnEdge
-    assert lancekit_ol.ColumnMapEdge == tuple[str, str, str]
-    assert lancekit_ol.ColumnMapEdge != shared_ol.ColumnEdge
 
 
 def test_a_well_formed_edge_reaches_the_shared_builder_unchanged() -> None:

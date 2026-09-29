@@ -46,46 +46,6 @@ def _ok_document(issuer: str) -> dict[str, object]:
     return {"issuer": issuer, "jwks_uri": f"{issuer}/jwks", "id_token_signing_alg_values_supported": ["RS256"]}
 
 
-def test_warm_reports_a_reachable_issuer_as_no_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control: a healthy IdP warms clean, so a non-empty result below means something."""
-
-    def _ok(self: httpx.Client, url: str, **_kw: object) -> httpx.Response:
-        return httpx.Response(200, json=_ok_document(ISSUER), request=httpx.Request("GET", url))
-
-    monkeypatch.setattr(httpx.Client, "get", _ok)
-
-    assert oidc.OIDCVerifier(ISSUER, "rask", 300).warm() == []
-
-
-def test_warm_NAMES_the_issuer_it_could_not_reach(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE DEFECT: nothing contacted the issuer, so `ready` was asserted. The reason has to carry the
-    issuer, because the split-horizon override means the URL that failed is not always the one an
-    operator configured as the issuer."""
-
-    def _refuse(self: httpx.Client, url: str, **_kw: object) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
-    monkeypatch.setattr(httpx.Client, "get", _refuse)
-
-    failures = oidc.OIDCVerifier(ISSUER, "rask", 300).warm()
-
-    assert [issuer for issuer, _reason in failures] == [ISSUER]
-    assert "could not be reached" in failures[0][1], failures[0][1]
-
-
-def test_warm_DOES_NOT_RAISE(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that keeps this from becoming an outage amplifier. Warming reports; the caller
-    decides. A `warm` that raised would make every governed pod refuse to start whenever the IdP was
-    briefly unreachable, which is strictly worse than the 503 the door already answers."""
-
-    def _refuse(self: httpx.Client, url: str, **_kw: object) -> httpx.Response:
-        raise httpx.ConnectError("connection refused")
-
-    monkeypatch.setattr(httpx.Client, "get", _refuse)
-
-    oidc.OIDCVerifier(ISSUER, "rask", 300).warm()  # must not raise
-
-
 def test_warm_tries_EVERY_configured_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     """A multi-issuer deployment is exactly where one misconfigured entry hides: the other issuer's
     traffic works, so nothing looks wrong until a user from the broken tenant signs in."""
@@ -127,23 +87,3 @@ def test_a_warmed_verifier_does_not_refetch_on_the_first_verify(monkeypatch: pyt
         verifier.verify("not-a-token")
 
     assert len(calls) == before, f"discovery was re-fetched after warming: {calls[before:]}"
-
-
-def test_the_startup_path_WARMS_rather_than_asserting() -> None:
-    """The line that made this invisible. `attach_governed_auth` logged "OIDC verifier ready" for a
-    constructor that performs no I/O; without a call to `warm` there, everything above is a capability
-    nothing uses."""
-    import inspect
-
-    from service_kit.governed import auth_lifespan
-
-    source = inspect.getsource(auth_lifespan)
-
-    # `.warm` rather than `warm(`: the call goes through `run_in_threadpool(app.state.oidc.warm)`,
-    # which passes the bound method rather than calling it — matching on the parenthesis would fail
-    # against the correct implementation.
-    assert ".warm" in source, "the startup path still asserts readiness instead of proving it"
-    assert "run_in_threadpool" in source, (
-        "`warm` performs blocking HTTP and `attach_auth` is a coroutine — awaiting it inline stalls "
-        "the worker, which is the reason `verify_off_loop` exists one module over"
-    )

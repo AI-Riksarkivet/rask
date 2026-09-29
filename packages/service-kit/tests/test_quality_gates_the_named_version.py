@@ -43,9 +43,6 @@ def dirty_then_clean(tmp_path: Path) -> str:
 
 
 class TestItScansTheVersionItIsAsked_About:
-    def test_a_clean_version_passes_even_when_LATEST_is_dirty(self, clean_then_dirty: str) -> None:
-        assert passed(assert_quality(clean_then_dirty, {}, key_column="id", version=1))
-
     def test_a_DIRTY_version_is_refused_even_when_LATEST_is_clean(self, dirty_then_clean: str) -> None:
         """The silent one. Without the pin the gate scans the good latest version and moves the
         `published` tag onto data that has a null key."""

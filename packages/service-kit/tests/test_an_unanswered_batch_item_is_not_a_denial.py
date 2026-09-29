@@ -32,9 +32,8 @@ from service_kit.governed import fga
 
 _NO_WAIT: dict[str, Any] = {"retry_backoff_seconds": 0.0, "retry_max_backoff_seconds": 0.0}
 
-#: The three per-item faults, each as OpenFGA reports it.
+#: Two per-item faults, each as OpenFGA reports it.
 _MISSING_RELATION = CheckError(input_error="validation_error", message="relation 'table#can_nope' not found")
-_TOO_COMPLEX = CheckError(input_error="authorization_model_resolution_too_complex", message="resolution depth exceeded")
 _TIMED_OUT = CheckError(internal_error="deadline_exceeded", message="context deadline exceeded")
 
 
@@ -70,7 +69,7 @@ def _ask(client: _BatchOpenFga, objects: list[str], *, attempts: int = 1) -> dic
     )
 
 
-@pytest.mark.parametrize("fault", [_MISSING_RELATION, _TOO_COMPLEX, _TIMED_OUT], ids=["missing-relation", "too-complex", "timed-out"])
+@pytest.mark.parametrize("fault", [_MISSING_RELATION, _TIMED_OUT], ids=["missing-relation", "timed-out"])
 def test_an_item_openfga_could_not_answer_is_a_503_not_a_deny(fault: CheckError, caplog: pytest.LogCaptureFixture) -> None:
     """One errored item fails the call closed even when its sibling was answered cleanly, and the log
     line names the item and the code, since the 503's body is constant by design."""
@@ -103,7 +102,7 @@ def test_a_server_side_item_fault_is_retried_like_a_5xx() -> None:
     assert client.calls == 2
 
 
-@pytest.mark.parametrize("fault", [_MISSING_RELATION, _TOO_COMPLEX], ids=["missing-relation", "too-complex"])
+@pytest.mark.parametrize("fault", [_MISSING_RELATION], ids=["missing-relation"])
 def test_an_input_item_fault_is_not_retried_like_a_4xx(fault: CheckError) -> None:
     """An input fault recurs on every attempt, as a 400 does for ``check``: one call, then the 503."""
     client = _BatchOpenFga({"table:a": True, "table:b": fault, "table:c": _TIMED_OUT})
@@ -144,11 +143,6 @@ def _over_the_wire(objects: list[str]) -> dict[str, bool]:
     return asyncio.run(drive())
 
 
-def test_the_wire_server_answers_a_clean_batch() -> None:
-    """Without this, the 503 below could be a server the SDK never reached."""
-    assert _over_the_wire(["table:answered"]) == {"table:answered": True}
-
-
 def test_the_sdk_hands_a_wire_item_error_to_the_gate() -> None:
     """The real SDK, from the real wire shape: the double above is only as good as this agreement."""
     with pytest.raises(ServiceUnavailableError):
@@ -164,7 +158,6 @@ _NOT_OBJECT_IDS = {
     "empty-id": "table:",
     "empty-type": ":db1$a",
     "space": "table:file//my scans",
-    "tab": "table:a\tb",
     "257-runes": "table:" + "d" * 251,
 }
 

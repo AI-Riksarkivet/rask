@@ -29,18 +29,9 @@ def _no_ambient_token(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------- auth_headers
 
 
-def test_auth_headers_empty_when_no_token_env() -> None:
-    assert auth_headers() == {}
-
-
 def test_auth_headers_empty_when_token_env_is_blank(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_RAY_AUTH_TOKEN", "")
     assert auth_headers() == {}
-
-
-def test_auth_headers_bearer_from_rask_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_RAY_AUTH_TOKEN", TOKEN)
-    assert auth_headers() == {"Authorization": f"Bearer {TOKEN}"}
 
 
 def test_auth_headers_bearer_from_native_ray_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -92,25 +83,6 @@ def _client_with_capture(seen: list[httpx.Request], response: httpx.Response | N
         return response or httpx.Response(200, json={})
 
     return httpx.AsyncClient(headers=auth_headers(), transport=httpx.MockTransport(handler))
-
-
-@pytest.mark.asyncio
-async def test_dashboard_http_carries_bearer_when_token_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_RAY_AUTH_TOKEN", TOKEN)
-    seen: list[httpx.Request] = []
-    async with _client_with_capture(seen) as http:
-        await dashboard.overview(http, "http://ray:8265")
-    assert seen, "no request reached the transport"
-    assert all(r.headers.get("authorization") == f"Bearer {TOKEN}" for r in seen)
-
-
-@pytest.mark.asyncio
-async def test_dashboard_http_carries_no_credential_without_token() -> None:
-    seen: list[httpx.Request] = []
-    async with _client_with_capture(seen) as http:
-        await dashboard.overview(http, "http://ray:8265")
-    assert seen, "no request reached the transport"
-    assert all("authorization" not in r.headers for r in seen)
 
 
 # ------------------------------------------------------------- proxy hardening

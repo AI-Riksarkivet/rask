@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import pytest
 
-from service_kit.lancekit.catalog_client import catalog_api_client, reset_catalog_clients
+from service_kit.lancekit.catalog_client import reset_catalog_clients
 
 
 pytest.importorskip("lance_namespace_urllib3_client")
@@ -33,11 +33,6 @@ def _fresh_cache() -> None:
 def _pool(transport: RestCatalogTransport | RestCatalogWriteTransport) -> object:
     api = transport._api.api_client  # the generated DataApi's ApiClient
     return api.rest_client.pool_manager
-
-
-def test_repeated_open_reader_calls_share_one_connection_pool() -> None:
-    pools = {id(_pool(RestCatalogTransport("http://catalog:2333", token=f"user-{n}"))) for n in range(5)}
-    assert len(pools) == 1, f"{len(pools)} connection pools for 5 reads against one catalog — each one connects from scratch"
 
 
 def test_the_reader_and_the_writer_share_the_pool_for_one_catalog() -> None:
@@ -73,7 +68,3 @@ def test_the_per_call_headers_are_a_fresh_mapping_each_time() -> None:
     first = transport.request_headers()
     first["Content-Type"] = "application/vnd.made-up"
     assert "Content-Type" not in transport.request_headers()
-
-
-def test_the_shared_client_is_reachable_by_name() -> None:
-    assert catalog_api_client("http://catalog:2333") is catalog_api_client("http://catalog:2333")

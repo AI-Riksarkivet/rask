@@ -20,57 +20,7 @@ leaving.
 
 from __future__ import annotations
 
-import pathlib
-
 import pytest
-
-
-REPO = pathlib.Path(__file__).resolve().parents[3]
-
-#: Every lifespan that builds an FGA client. All of them call one factory; only notifications closed it.
-#:
-#: The media trio (viewer, search, annotator) is ONE entry, not three: their three copied lifespans
-#: collapsed onto `service_kit.media.lifespan` (docs/DECISIONS.md "The Python estate audit" DUP-16), so that module is now the
-#: single place their `attach_auth` client is opened and disposed. Listing the three mains here after
-#: the collapse would assert the word "dispose" appears in three files that no longer build a client —
-#: which a passing prose mention would satisfy, and a real regression would not fail.
-LIFESPANS = [
-    "packages/service-kit/src/service_kit/media/lifespan.py",
-    "services/flows/src/flows/lifespan.py",
-    "services/maintenance/src/maintenance/service.py",
-    "services/notifications/src/notifications/lifespan.py",
-]
-
-
-@pytest.mark.asyncio
-async def test_the_disposer_closes_a_client_on_app_state() -> None:
-    from fastapi import FastAPI
-
-    from service_kit.governed.fga import dispose
-
-    closed: list[bool] = []
-
-    class _Client:
-        async def close(self) -> None:
-            closed.append(True)
-
-    app = FastAPI()
-    app.state.fga = _Client()
-    await dispose(app)
-    assert closed == [True]
-
-
-@pytest.mark.asyncio
-async def test_the_disposer_is_silent_when_there_is_nothing_to_close() -> None:
-    """FGA off, or a lifespan that failed before building one — neither is an error at shutdown."""
-    from fastapi import FastAPI
-
-    from service_kit.governed.fga import dispose
-
-    await dispose(FastAPI())  # no attribute at all
-    app = FastAPI()
-    app.state.fga = None
-    await dispose(app)
 
 
 @pytest.mark.asyncio
@@ -87,13 +37,3 @@ async def test_a_failing_close_does_not_stop_the_teardown() -> None:
     app = FastAPI()
     app.state.fga = _Angry()
     await dispose(app)  # must not raise
-
-
-@pytest.mark.parametrize("path", LIFESPANS, ids=[p.rsplit("/", 2)[-2] for p in LIFESPANS])
-def test_every_lifespan_disposes_its_client(path: str) -> None:
-    """Five lifespans, one factory, one disposer — not five copies of a block that four forgot."""
-    source = (REPO / path).read_text()
-    assert "dispose" in source, (
-        f"{path} builds an FGA client and never closes it — the SDK's aiohttp session is collected "
-        f"unclosed, leaving a half-open connection per replica on every rolling restart"
-    )

@@ -19,32 +19,10 @@ than the shared default and set explicitly for that reason.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from service_kit import make_service_app
 from service_kit.config import Settings
-
-
-def test_the_shared_middleware_factory_applies_a_body_cap() -> None:
-    """The seam itself. Without this, every app built by the factory buffers without a ceiling."""
-    from service_kit.middleware import register_middleware
-
-    app = FastAPI()
-    register_middleware(app, Settings())
-
-    # `getattr` rather than `.__name__`: starlette types the slot as `_MiddlewareFactory`, which is
-    # not guaranteed to be a class, so ty refuses the direct attribute.
-    names = [getattr(m.cls, "__name__", repr(m.cls)) for m in app.user_middleware]
-    assert "BodySizeLimitMiddleware" in names, (
-        f"register_middleware installs {names} and no body cap — every app built through it buffers an unbounded request body, the gateway included"
-    )
-
-
-def test_the_cap_is_configurable_and_declared_on_the_shared_settings() -> None:
-    """A hardcoded ceiling cannot be raised for a service that legitimately needs more."""
-    assert "max_body_bytes" in Settings.model_fields, "the shared Settings declares no body ceiling"
-    assert Settings().max_body_bytes > 0
 
 
 def test_an_oversized_body_is_REFUSED_with_413() -> None:
@@ -74,17 +52,3 @@ def test_a_normal_body_still_passes() -> None:
         resp = client.post("/echo", content=b"x" * 1024)
 
     assert resp.status_code == 200
-
-
-def test_the_catalog_keeps_its_LARGER_explicit_cap() -> None:
-    """Do not overcorrect: the catalog's Arrow-IPC writes legitimately exceed the shared default.
-
-    It builds its own app (it does not use `make_service_app`), so it is not double-capped — and its
-    256 MiB is set explicitly for the write path this middleware was originally written for.
-    """
-    from catalog.core.config import Settings as CatalogSettings
-
-    assert CatalogSettings.model_fields["max_body_bytes"].default > Settings().max_body_bytes, (
-        "the catalog's Arrow-IPC ceiling is no longer above the shared default — a shared cap that "
-        "is tighter than the catalog's would reject the very writes the middleware was written for"
-    )

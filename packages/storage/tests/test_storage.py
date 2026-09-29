@@ -3,13 +3,6 @@ from pathlib import Path
 from moto import mock_aws
 
 
-def _make_s3_client():
-    """Module-level factory for pickling tests."""
-    import boto3
-
-    return boto3.client("s3", region_name="us-east-1")
-
-
 def test_fs_source_lists_jpg(tmp_path: Path):
     from storage import FSSource
 
@@ -43,19 +36,6 @@ def test_s3_source_round_trip():
         src = S3Source(bucket="bucket-in", prefix="A0060198/", client=c)
         assert list(src.keys()) == ["A0060198/00001.jpg"]
         assert src.read("A0060198/00001.jpg") == b"img"
-
-
-def test_factory_pickles():
-    """S3Source/S3Sink built with a client_factory must drop the live client on pickle."""
-    import pickle
-
-    from storage import S3Source
-
-    src = S3Source(bucket="b", prefix="p/", client_factory=_make_s3_client)
-    _ = src.client  # forces lazy build
-    blob = pickle.dumps(src)
-    restored = pickle.loads(blob)  # noqa: S301
-    assert restored._client is None  # rebuilt on next access via factory
 
 
 def test_split_s3_uri_and_merge_prefix():

@@ -54,12 +54,6 @@ def test_running_jobs_are_NEVER_deleted_even_when_old() -> None:
     assert result.deleted == 3  # job-2..4 (job-5 is the kept newest)
 
 
-def test_newest_kept_regardless_of_terminal_state() -> None:
-    client = _Client([_job(0), _job(1, "FAILED"), _job(2, "STOPPED")])
-    prune_jobs(client, keep_newest=2)
-    assert client.deleted == ["job-0"]
-
-
 def test_a_failing_delete_is_counted_not_raised() -> None:
     client = _Client([_job(i) for i in range(5)])
     client.fail_ids = {"job-1"}

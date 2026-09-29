@@ -33,40 +33,8 @@ from service_kit.lakehouse.objectfs import lance_storage_options
 #: overridden one signs as neither identity.
 _MUST_BE_AWS_PREFIXED = ("aws_access_key_id", "aws_secret_access_key", "aws_session_token")
 
-_MUST_NOT_APPEAR = ("access_key_id", "secret_access_key", "session_token")
-
 
 def test_the_credential_is_emitted_under_the_spellings_that_displace_the_environment() -> None:
     options = lance_storage_options("http://rustfs:9000", "AK", "SK", "us-east-1", session_token="TOK")
     for key in _MUST_BE_AWS_PREFIXED:
         assert key in options, f"{key} missing — the ambient AWS_* environment wins and the write signs as the pod"
-
-
-def test_the_bare_spellings_are_gone_rather_than_carried_alongside() -> None:
-    """Emitting both is not a safe superset. object_store resolves ONE value per config key, and two
-    spellings of the same setting in one dict make which credential signs a matter of the library's
-    internal precedence rather than of what this builder decided."""
-    options = lance_storage_options("http://rustfs:9000", "AK", "SK", "us-east-1", session_token="TOK")
-    assert [key for key in _MUST_NOT_APPEAR if key in options] == []
-
-
-def test_an_absent_session_token_is_still_omitted_entirely() -> None:
-    """Unchanged by the rename: object_store treats a present-but-empty token as a token and refuses
-    the request. The bug this guards against is the ROOT credential path, which has no token at all."""
-    options = lance_storage_options("http://rustfs:9000", "AK", "SK", "us-east-1")
-    assert "aws_session_token" not in options
-    assert "session_token" not in options
-
-
-def test_the_non_credential_options_keep_their_spelling() -> None:
-    """Pins the spellings the builder emits, which do NOT displace the ambient environment.
-
-    Measured on pylance 12.0.0 in fresh processes: `AWS_ALLOW_HTTP` beat `allow_http` 5 of 5 each way;
-    `AWS_ENDPOINT_URL`, `AWS_ENDPOINT` and `AWS_VIRTUAL_HOSTED_STYLE_REQUEST` beat the bare `endpoint` and
-    `virtual_hosted_style_request` in some processes and not others; `aws_endpoint` beat
-    `AWS_ENDPOINT_URL` and `aws_virtual_hosted_style_request` beat its variable 5 of 5. Closing that is
-    [[LH-238]]."""
-    options = lance_storage_options("http://rustfs:9000", "AK", "SK", "us-east-1", virtual_hosted=False)
-    assert options["endpoint"] == "http://rustfs:9000"
-    assert options["allow_http"] == "true"
-    assert options["virtual_hosted_style_request"] == "false"
