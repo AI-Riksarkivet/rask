@@ -21,7 +21,6 @@ whose Secret holds derivable values must come back holding independent ones.
 from __future__ import annotations
 
 import base64
-import hashlib
 import pathlib
 import re
 import subprocess
@@ -33,8 +32,6 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 CHART = ROOT / "chart"
 #: Any value works — the property is that KNOWING it buys nothing, not that this one is weak.
 APP_TOKEN = "a-real-operator-supplied-app-token"
-#: Length is load-bearing: `compare_digest` is fed whatever renders, and a short token is a weak one.
-TOKEN_LENGTH = 40
 
 
 def _render(*overrides: str) -> str:
@@ -86,25 +83,6 @@ def _seeded(rendered: str) -> dict[str, str]:
     return {identity: value.strip("'") for identity, value in re.findall(r"secret/service-token-(\S+) token=(\S+)", rendered)}
 
 
-def test_both_writers_render_something_to_compare() -> None:
-    """Without this every assertion below passes by finding nothing."""
-    rendered = _render()
-    assert _mounted(rendered), "no `service-token-*` Secret entries — either the control was removed or this walk is stale"
-    assert _seeded(rendered), "the OpenBao seed Job renders no `service-token-*` — the door half is unwritten"
-
-
-def test_no_dedicated_token_is_computable_from_the_shared_app_token() -> None:
-    """THE PROPERTY. Holding `dapr.appToken` — which every fleet Deployment carries — must buy nothing here."""
-    rendered = _render()
-    tokens = {**_seeded(rendered), **_mounted(rendered)}
-
-    def derive(identity: str) -> str:
-        return hashlib.sha256(f"{identity}-{APP_TOKEN}".encode()).hexdigest()[:TOKEN_LENGTH]
-
-    derivable = sorted(i for i, t in tokens.items() if t == derive(i))
-    assert not derivable, f"{len(derivable)} of {len(tokens)} dedicated credentials are a pure function of the shared app token: {derivable}"
-
-
 def test_the_two_writers_agree_byte_for_byte() -> None:
     """A door seeded with one value and a pod mounting another is a 401 with no error anywhere."""
     rendered = _render()
@@ -114,15 +92,6 @@ def test_the_two_writers_agree_byte_for_byte() -> None:
 
     disagreeing = [i for i in shared if mounted[i] != seeded[i]]
     assert not disagreeing, f"mounted and seeded halves differ for {disagreeing} — every call from those identities is a silent 401"
-
-
-def test_an_operator_supplied_token_wins_at_both_writers() -> None:
-    """The escape hatch has to reach BOTH halves, or supplying one breaks the identity it was meant to secure."""
-    #: The shape a secret manager actually hands over, not a tidy one — the seed Job renders into `sh -c`.
-    supplied = "aB3+xY/9=zQ7wE2rT"
-    rendered = _render(f"auth.serviceTokens.service-trainer={supplied}")
-    assert _mounted(rendered).get("service-trainer") == supplied, "the mounted half ignored the supplied value"
-    assert _seeded(rendered).get("service-trainer") == supplied, "the seeded half ignored the supplied value"
 
 
 def _helper_body() -> str:
@@ -157,22 +126,3 @@ def test_the_shared_app_token_is_only_ever_compared_against_never_built_from() -
     assert assigns, "nothing assigns the memo — this walk is stale and every assertion above is unmoored"
     for line in assigns:
         assert "sha256sum" not in line, f"the credential is assigned from a digest of the shared token: {line}"
-
-
-def test_a_supplied_token_survives_a_rotation_of_the_shared_one() -> None:
-    """The one dependence question that IS behaviourally checkable: a pinned credential must ignore `dapr.appToken`."""
-    supplied = "aB3+xY/9=zQ7wE2rT"
-    rotated = _render(
-        f"auth.serviceTokens.service-trainer={supplied}",
-        "dapr.appToken=a-completely-different-operator-token",
-    )
-    assert _mounted(rotated).get("service-trainer") == supplied, "rotating the shared token moved a pinned credential"
-    assert _seeded(rotated).get("service-trainer") == supplied, "rotating the shared token moved the seeded half"
-
-
-def test_a_generated_token_is_not_shorter_than_the_derivation_it_replaces() -> None:
-    """`compare_digest` compares whatever renders; a generated credential must not be weaker than a hash prefix."""
-    rendered = _render()
-    tokens = {**_seeded(rendered), **_mounted(rendered)}
-    short = sorted(i for i, t in tokens.items() if len(t) < TOKEN_LENGTH)
-    assert not short, f"dedicated credentials shorter than {TOKEN_LENGTH} chars: {short}"

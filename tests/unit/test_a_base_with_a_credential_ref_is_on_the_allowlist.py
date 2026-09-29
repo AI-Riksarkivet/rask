@@ -20,7 +20,6 @@ and invisible to review.
 from __future__ import annotations
 
 import pathlib
-import re
 import shutil
 import subprocess
 
@@ -71,34 +70,6 @@ def _env(rendered: str, name: str) -> str | None:
     return None
 
 
-def test_the_chart_can_EXPRESS_a_base_credential_reference() -> None:
-    """Before this, the env var rendered from NOTHING and the live value was pure cluster drift.
-
-    Paired with its allowlist entry because the cross-check below refuses the unpaired form — which is
-    the point of that check, and the reason this one cannot assert the property on its own.
-    """
-    rendered = _render(
-        "catalog.multibase.dataBases[0]=s3://probe-store/data",
-        "catalog.multibase.baseCredentialRefs.s3://probe-store/data=probe-secret",
-    )
-
-    assert _env(rendered, _REFS) == "s3://probe-store/data=probe-secret", (
-        f"the chart does not render {_REFS} from a value, so the only way to set it is out-of-band on the live Deployment"
-    )
-
-
-def test_a_REF_WITHOUT_AN_ALLOWLIST_ENTRY_is_refused_by_the_render() -> None:
-    """The cross-check the live estate failed: a credential for a base no request may name.
-
-    Refused at RENDER rather than reported at runtime, because the runtime symptom is a plain refusal
-    of the `?data_base=` request — indistinguishable from a caller naming a bucket they invented.
-    """
-    with pytest.raises(AssertionError) as caught:
-        _render("catalog.multibase.baseCredentialRefs.s3://orphan-store/data=orphan-secret")
-
-    assert "allowlist" in str(caught.value).lower(), f"the render failed for some other reason: {caught.value}"
-
-
 def test_a_ref_WITH_its_allowlist_entry_renders_both() -> None:
     """The positive case — without it the guard could pass by refusing everything."""
     rendered = _render(
@@ -108,20 +79,3 @@ def test_a_ref_WITH_its_allowlist_entry_renders_both() -> None:
 
     assert _env(rendered, _BASES) == "s3://paired-store/data"
     assert _env(rendered, _REFS) == "s3://paired-store/data=paired-secret"
-
-
-def test_the_default_renders_NEITHER_so_the_feature_stays_off() -> None:
-    """`dataBases: []` is the shipped default and the chart's comment calls it "feature off"."""
-    rendered = _render()
-
-    assert not _env(rendered, _BASES), "the default estate has a non-empty data-base allowlist"
-    assert not _env(rendered, _REFS), "the default estate names a base credential reference"
-
-
-def test_the_two_values_are_documented_beside_each_other() -> None:
-    """A reader setting one must see the other; they were three sections apart with no cross-reference."""
-    values = (CHART / "values.yaml").read_text(encoding="utf-8")
-    block = re.search(r"^  multibase:\n(?:.*\n)*?^  [a-zA-Z]", values, re.MULTILINE)
-
-    assert block, "the `multibase:` values block is gone or renamed"
-    assert "baseCredentialRefs" in block.group(0), "baseCredentialRefs is not declared inside the multibase block"

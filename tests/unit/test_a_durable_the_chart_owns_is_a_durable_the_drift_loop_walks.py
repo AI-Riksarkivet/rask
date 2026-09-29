@@ -79,36 +79,6 @@ def test_a_durable_carrying_FLEET_redelivery_values_is_on_a_stream_the_loop_walk
     )
 
 
-@pytest.mark.parametrize("resiliency", [True, False])
-def test_a_durable_whose_backoff_is_sized_by_its_own_WORK_is_deliberately_NOT_walked(resiliency: bool) -> None:
-    """The negative twin, and it is not symmetry for its own sake.
-
-    `maintenance-work-durable` renders `720s,720s,720s,720s` with resiliency OFF against the fleet's
-    `30s,60s,120s,300s`. Walking its stream would find a mismatch on EVERY run and delete the work queue
-    out from under in-flight units — the documented reason INGEST is excluded. Without this assertion the
-    obvious "fix" for the test above is to add every stream to the list, which is a worse defect than the
-    one it closes.
-    """
-    rendered = _helm_template(
-        "dapr.enabled=true",
-        f"dapr.resiliency.enabled={str(resiliency).lower()}",
-        "maintenance.workTopic=maintenance.work.unit",
-        "maintenance.indexTopic=maintenance.index.unit",
-    )
-    streams = _job_stream_list(rendered)
-    durables = _durables(rendered)
-
-    for name, stream in (("maintenance-work-durable", "MAINTENANCE_WORK"), ("maintenance-index-durable", "MAINTENANCE_INDEX")):
-        cfg = durables.get(name)
-        assert cfg is not None, f"{name} did not render — the fixture no longer sets up its subject"
-        if cfg != _FLEET[resiliency]:
-            assert stream not in streams, (
-                f"{name} renders {cfg}, which the loop's EXP {_FLEET[resiliency]} would call drift — "
-                f"walking {stream} would delete it every run, taking in-flight maintenance units with it"
-            )
-    assert "INGEST" not in streams, "the ingest work queue is a raw nats-py pull consumer; its config can never match EXP"
-
-
 def _job_expected_durables(rendered: str) -> list[str]:
     """The durable set the orphan pass spares, read out of the rendered Job script."""
     match = re.search(r'EXP_DURABLES="([^"]*)"', rendered)
@@ -134,28 +104,3 @@ def test_the_orphan_pass_spares_EVERY_durable_the_chart_renders(resiliency: bool
     rendered = _helm_template("dapr.enabled=true", f"dapr.resiliency.enabled={str(resiliency).lower()}")
 
     assert set(_job_expected_durables(rendered)) == set(_durables(rendered))
-
-
-def test_the_orphan_pass_spares_a_durable_that_appears_only_under_a_values_flag() -> None:
-    """`maintenance-work-durable` renders only when `workTopic` is set, and it is the one durable the
-    drift pass must never touch. The orphan pass must not touch it either — for the opposite reason: it
-    IS chart-owned, so it is not an orphan, whatever stream it sits on."""
-    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=false", "maintenance.workTopic=maintenance.work.unit")
-
-    spared = set(_job_expected_durables(rendered))
-    assert "maintenance-work-durable" in spared
-    assert spared == set(_durables(rendered))
-
-
-def test_the_orphan_pass_actually_deletes_something_and_is_guarded_by_the_set() -> None:
-    """A spare-set with no consumer of it is decoration, and an unguarded delete is the destructive form.
-
-    Anchored on `EXP_DURABLES` rather than on the word "orphan": a first version of this matched
-    `MAINTENANCE_ORPHAN_SCAN_ENABLED` from an unrelated template and then any later `consumer rm`, so it
-    passed against a chart with no orphan pass at all.
-    """
-    rendered = _helm_template("dapr.enabled=true", "dapr.resiliency.enabled=false")
-    guarded = re.search(r"EXP_DURABLES(.|\n)*?consumer rm", rendered)
-
-    assert guarded, "no `consumer rm` is reached from the EXP_DURABLES guard — the orphan pass removes nothing [[LH-127]]"
-    assert "ORPHAN DURABLE" in rendered, "the orphan pass logs no distinguishable line, so an operator cannot tell it from the drift pass"

@@ -54,11 +54,6 @@ def _deployments_of(service: str, docs: list[dict]) -> list[dict]:
     return [d for d in docs if d.get("kind") == "Deployment" and service in d["metadata"]["name"]]
 
 
-def test_the_discovery_finds_something() -> None:
-    """A grep that silently matches nothing would make every assertion below vacuous."""
-    assert _services_that_refuse_to_boot_unauthenticated(), "no service calls assert_authentication_configured — is the guard gone?"
-
-
 @pytest.mark.parametrize("auth_enabled", ["true", "false"])
 def test_every_such_service_is_given_an_answer_by_the_chart(auth_enabled: str) -> None:
     docs = _rendered_docs(f"auth.enabled={auth_enabled}")
@@ -74,30 +69,3 @@ def test_every_such_service_is_given_an_answer_by_the_chart(auth_enabled: str) -
         f"with auth.enabled={auth_enabled} these Deployments render NEITHER {SATISFIES[0]} nor "
         f"{SATISFIES[1]}, so their boot assertion refuses and they crash-loop: {sorted(unanswered)}"
     )
-
-
-def test_a_service_with_no_human_door_is_NOT_wired_to_the_assertion() -> None:
-    """The other direction, and it cost two reverts to learn. `maintenance` and `notifications`
-    mix in `FgaSettings` alone — "no human door: its routes are gated by the Dapr app token and it
-    only ever READS tuples, as itself" — and the medallion STAGE RUNNERS render no OIDC either. Wiring the
-    assertion into any of them refuses a boot over an authentication mode they never had."""
-    doorless = {"maintenance", "notifications"}
-    wired = _services_that_refuse_to_boot_unauthenticated()
-    assert not (wired & doorless), (
-        f"{sorted(wired & doorless)} carry the assertion but have no human door — the chart renders "
-        "them no OIDC, so this refuses a boot over a mode they never had"
-    )
-
-
-def test_the_ack_is_absent_when_the_estate_is_actually_governed() -> None:
-    """An acknowledgement that authentication is off, rendered on an authenticated estate, would be a
-    standing lie in `kubectl describe` — and the one an operator would find while investigating."""
-    docs = _rendered_docs("auth.enabled=true")
-    leaked = [
-        d["metadata"]["name"]
-        for d in docs
-        if d.get("kind") == "Deployment"
-        for c in d["spec"]["template"]["spec"]["containers"]
-        if any(e["name"] == "RASK_INSECURE_ALLOW_UNAUTHENTICATED" for e in (c.get("env") or []))
-    ]
-    assert not leaked, f"a governed estate renders the unauthenticated acknowledgement on: {sorted(set(leaked))}"

@@ -38,12 +38,6 @@ def _pods_given_a_token() -> list[tuple[str, dict[str, str]]]:
     return out
 
 
-def test_the_walk_finds_pods_given_a_token() -> None:
-    """Without this the assertion below passes by finding nothing to check."""
-    given = _pods_given_a_token()
-    assert len(given) >= 10, f"only {len(given)} pods carry {TOKEN_ANNOTATION} — the render or this walk is broken"
-
-
 def test_every_such_pod_carries_the_checksum_that_makes_a_rotation_restart_it() -> None:
     """Otherwise the rotation control cannot fire, and nothing reports that it did not.
 

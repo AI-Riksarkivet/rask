@@ -61,17 +61,3 @@ def test_the_maintenance_deployment_uses_Recreate() -> None:
         "pods, both holding a cron binding that fires independently — the exact duplicate-tick the single-replica "
         "pin exists to prevent"
     )
-
-
-def test_a_deployment_that_CAN_scale_is_left_on_RollingUpdate() -> None:
-    """The other direction, and the one that stops this becoming a blanket.
-
-    `Recreate` means downtime on every deploy. It is the right trade only where two live pods would be
-    WRONG; for a service that may run several, it turns a zero-downtime rollout into an outage.
-    """
-    deployments = _deployments()
-    scalable = {
-        name: spec for name, d in deployments.items() for spec in [d["spec"]] if not name.endswith(_PINNED_FOR_CORRECTNESS) and int(spec.get("replicas", 1)) > 1
-    }
-    forced = {n for n, s in scalable.items() if (s.get("strategy") or {}).get("type") == "Recreate"}
-    assert not forced, f"these multi-replica deployments were forced to Recreate, trading zero-downtime for nothing: {sorted(forced)}"

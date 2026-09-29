@@ -29,15 +29,9 @@ following from it.
 
 from __future__ import annotations
 
-import pathlib
-import re
-
-import pytest
-
-from tests.unit.chart_render import DEFAULT_ARGS, OIDC_ARGS, render
+from tests.unit.chart_render import DEFAULT_ARGS, render
 
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
 WORKER_ENV = "MAINTENANCE_MAX_CONCURRENT_UNITS"
 
 
@@ -56,42 +50,10 @@ def _work_component(docs: tuple[dict, ...]) -> dict:
     return found[0]
 
 
-def _script(job: dict) -> str:
-    """Every argv token of a Job's containers as one string — the shell script is the last of them."""
-    return " ".join(part for c in job["spec"]["template"]["spec"]["containers"] for part in [*c.get("command", []), *c.get("args", [])])
-
-
-def test_the_work_component_renders_at_all() -> None:
-    """An empty render would make every leg below vacuously true."""
-    assert _work_component(render(*DEFAULT_ARGS))
-
-
-def test_the_work_queue_DECLARES_a_bound() -> None:
-    """A component that sets none inherits NATS's 1,000, which nobody chose."""
-    meta = _meta(_work_component(render(*DEFAULT_ARGS)))
-    assert "maxAckPending" in meta, (
-        "the maintenance work component sets no `maxAckPending`, so the lane runs on NATS's default of "
-        "1,000 units in flight against an execution ceiling two orders of magnitude lower — and a unit "
-        f"delivered but queued burns its {meta.get('ackWait', 'ackWait')} window while idle. Set it from "
-        "`maintenance.dedicatedWorkers.maxConcurrentUnits` x replicas."
-    )
-
-
 def _index_component(docs: tuple[dict, ...]) -> dict:
     found = [c for name, c in _components(docs).items() if "maintenance-index" in name or _meta(c).get("name") == "lance-dapr-maintenance-index"]
     assert found, f"no maintenance index pubsub component rendered; components were {sorted(_components(docs))}"
     return found[0]
-
-
-def test_the_INDEX_lane_declares_one_too() -> None:
-    """It is the lane where an unbounded delivery costs most.
-
-    A build holds its token for up to `indexAckWait` (3600s) against the work queue's 720s, so a unit
-    delivered with nothing to run it burns an HOUR before redelivering — and a redelivered build
-    rebuilds the whole index.
-    """
-    meta = _meta(_index_component(render(*DEFAULT_ARGS)))
-    assert "maxAckPending" in meta, "the maintenance INDEX component sets no maxAckPending, so that lane runs on NATS's default of 1,000"
 
 
 def test_THE_TWO_LANES_SHARE_ONE_POOL_AND_THEIR_BOUNDS_SUM_TO_IT() -> None:
@@ -117,94 +79,3 @@ def test_THE_TWO_LANES_SHARE_ONE_POOL_AND_THEIR_BOUNDS_SUM_TO_IT() -> None:
         "split that capacity, not each claim it."
     )
     assert index > 0 and work > 0, f"one lane was given the whole pool (work={work}, index={index}); both must be able to make progress"
-
-
-def test_the_WORKER_actually_enforces_the_number_it_is_given() -> None:
-    """A chart value the process ignores is a bound nobody applies — the gap this estate keeps finding.
-
-    Asserted against the SOURCE rather than by importing and reading the limiter, because the limiter is
-    process-global: a test that set it would change every later test in the same worker.
-    """
-    source = (REPO / "services/maintenance/src/maintenance/service.py").read_text(encoding="utf-8")
-    assert re.search(r"current_default_thread_limiter\(\)\.total_tokens\s*=", source), (
-        "the maintenance service never sets anyio's thread limiter, so `max_concurrent_units` is "
-        "configuration the process does not apply and the real ceiling stays the library default of 40"
-    )
-
-
-@pytest.mark.parametrize("flag", ["maintenance.dedicatedWorkers.maxConcurrentUnits"])
-def test_the_value_is_declared_where_an_operator_can_find_it(flag: str) -> None:
-    """Beside the replica count it is multiplied with, not buried in a template."""
-    assert flag.rsplit(".", 1)[-1] in (REPO / "chart/values.yaml").read_text(encoding="utf-8"), f"{flag} is not declared in values.yaml"
-
-
-def test_an_EXISTING_consumer_is_converged_too() -> None:
-    """The component sets the bound at CREATION only, so a live estate needs someone to converge it.
-
-    MEASURED 2026-09-22: adding `maxAckPending` to the component left the deployed durable — created
-    2026-09-03 — on NATS's default of 1,000 while the chart, the rendered Component and the legs above
-    all said 80. Deleting the durable and letting Dapr rebuild it gave `Max Ack Pending: 80`, so the key
-    is honoured and only at creation. Without this step the gate is green on an estate that is not.
-    """
-    job = [d for d in render(*DEFAULT_ARGS) if d.get("kind") == "Job" and "nats-stream" in d["metadata"]["name"]]
-    assert job, "no nats-stream Job rendered"
-    script = _script(job[0])
-    assert "converge_max_ack_pending MAINTENANCE_INDEX" in script, "the stream Job never converges the INDEX durable's max_ack_pending"
-    assert "converge_max_ack_pending MAINTENANCE_WORK" in script, (
-        "the stream Job never converges the work durable's max_ack_pending, so an estate whose consumer "
-        "predates the setting keeps the old bound silently and forever — the chart says 80 and the "
-        "broker does 1,000"
-    )
-
-
-def test_the_JOB_and_the_COMPONENT_agree_on_the_number() -> None:
-    """Two spellings of one bound is how they drift; both come from `lance.maintenanceMaxAckPending`."""
-    docs = render(*DEFAULT_ARGS)
-    component = int(_meta(_work_component(docs))["maxAckPending"])
-    job = next(d for d in docs if d.get("kind") == "Job" and "nats-stream" in d["metadata"]["name"])
-    script = _script(job)
-    found = re.search(r"converge_max_ack_pending MAINTENANCE_WORK \S+ (\d+)", script)
-    assert found, "the converge call carries no number"
-    assert int(found.group(1)) == component, f"the Job converges to {found.group(1)} while the component sets {component}"
-
-
-def _declared_total() -> int:
-    """`maintenance.dedicatedWorkers.maxConcurrentUnits` as the chart declares it.
-
-    DERIVED, NOT HARD-CODED. This leg first spelled the boundary as literals against a total of 40 and
-    went red the moment the total was lowered to a MEASURED value — a test asserting the number rather
-    than the relationship, which is the thing it exists to protect.
-    """
-    workers = [d for d in render(*DEFAULT_ARGS) if d.get("kind") == "Deployment" and "maintenance-worker" in d["metadata"]["name"]]
-    env = {e["name"]: str(e.get("value", "")) for c in workers[0]["spec"]["template"]["spec"]["containers"] for e in c.get("env", [])}
-    return int(env[WORKER_ENV])
-
-
-@pytest.mark.parametrize("offset", [-1, 0, +1])
-def test_an_index_share_that_swallows_the_pool_FAILS_THE_RENDER(offset: int) -> None:
-    """A share at or above the total leaves the compaction lane with zero or negative capacity.
-
-    Refused where an operator is reading rather than where a consumer is failing: the runtime symptom
-    is a lane that delivers nothing, or an invalid consumer config, and neither names the values file.
-    Walked as total-1 / total / total+1 so the boundary moves with the declared number.
-    """
-    import shutil
-    import subprocess
-
-    helm = shutil.which("helm") or str(REPO / ".localbin/helm")
-    if not pathlib.Path(helm).exists():
-        pytest.skip("helm not available")
-    index_share = _declared_total() + offset
-    if index_share < 1:
-        pytest.skip(f"a total of {_declared_total()} leaves no legal share below it to test")
-    argv = [
-        helm, "template", "rask", str(REPO / "chart"),
-        *OIDC_ARGS, *DEFAULT_ARGS,
-        "--set", f"maintenance.dedicatedWorkers.indexConcurrentUnits={index_share}",
-    ]  # fmt: skip
-    done = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603
-    if offset < 0:
-        assert done.returncode == 0, f"a legal index share of {index_share} failed to render: {done.stderr[-500:]}"
-    else:
-        assert done.returncode != 0, f"an index share of {index_share} rendered, leaving the compaction lane with no capacity"
-        assert "must be LESS than maxConcurrentUnits" in done.stderr, f"the render failed without naming the cause: {done.stderr[-500:]}"

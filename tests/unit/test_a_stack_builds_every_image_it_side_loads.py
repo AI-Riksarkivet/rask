@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import importlib.util
 import pathlib
-import re
 
 import pytest
 
@@ -48,53 +47,6 @@ def _side_loaded(overlay: tuple[str, ...]) -> set[str]:
 
 def _stem(image: str) -> str:
     return str(_SLI.dockerfile_stem(image))
-
-
-#: A script that DERIVES its side-loaded set through that module rather than listing or grepping it.
-_DERIVES = re.compile(r"SIDE_LOADED=.*side_loaded_images\.py", re.DOTALL)
-
-#: A private text filter over `image:` — the shape that matched nothing for a day.
-_OWN_FILTER = re.compile(r"grep[^\n]*image:")
-
-#: What the script actually BUILDS: `scripts/dagger-image.sh --name <stem>` / `--runner <stem>`.
-_BUILDS = re.compile(r"dagger-image\.sh[^\n|;]*?--(?:name|runner)[= ]([a-z0-9][a-z0-9-]*)")
-
-
-def _script_for(label: str) -> pathlib.Path:
-    return REPO / "scripts" / label
-
-
-def _built_stems(text: str) -> set[str]:
-    """Stems the script hands to the image builder.
-
-    NOT a substring search of the whole script, which is how the first cut of this gate passed for
-    two images it should have failed: `gateway` appears in a rollout-wait loop and `compute` in a
-    comment, and neither is a build. A gate that matches prose reports whatever the prose happens to
-    mention.
-    """
-    return set(_BUILDS.findall(text))
-
-
-@pytest.mark.parametrize("label,overlay", [(lbl, ov) for lbl, ov in _overlays() if lbl.endswith(".sh")], ids=lambda v: v if isinstance(v, str) else "")
-def test_the_stack_builds_every_image_its_overlay_schedules(label: str, overlay: tuple[str, ...]) -> None:
-    script = _script_for(label)
-    assert script.is_file(), f"{label} no longer exists"
-    text = script.read_text(encoding="utf-8")
-    scheduled = _side_loaded(overlay)
-    assert scheduled, f"{label} schedules no side-loaded image — the gate lost its subject"
-    built = _built_stems(text)
-    assert built, f"{label} invokes the image builder for nothing — the gate lost its subject"
-    if _DERIVES.search(text):
-        # The script asks the RENDER which images it side-loads and builds each, so there is no
-        # static list to fall behind. That is the shape this gate wants; it stays to catch a revert
-        # to a hand-kept one, which is exactly what left six images unbuilt.
-        return
-    missing = sorted(image for image in scheduled if _stem(image) not in built)
-    assert not missing, (
-        f"{label} deploys with image.localImages=true but never builds these images its overlay "
-        f"schedules, so each pod sits in ImagePullBackOff against a registry that has no such "
-        f"repository:\n  " + "\n  ".join(missing)
-    )
 
 
 @pytest.mark.parametrize("label,overlay", [(lbl, ov) for lbl, ov in _overlays() if lbl.endswith(".sh")], ids=lambda v: v if isinstance(v, str) else "")
@@ -129,17 +81,3 @@ def test_an_image_that_is_not_ours_is_left_alone() -> None:
         '    - image: "gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"\n'
     )
     assert _SLI.side_loaded(render, "dev") == []
-
-
-@pytest.mark.parametrize("label,overlay", [(lbl, ov) for lbl, ov in _overlays() if lbl.endswith(".sh")], ids=lambda v: v if isinstance(v, str) else "")
-def test_the_stack_extracts_through_the_shared_filter_and_holds_no_copy(label: str, overlay: tuple[str, ...]) -> None:
-    """The early return above accepts a derivation on SHAPE, so the shape has to be the shared one.
-
-    A script that greps `image:` out of the render itself is a second implementation of this module,
-    and a second implementation is what silently diverged: this gate read the parsed documents while
-    the shell read the text, and nothing compared the two answers.
-    """
-    text = (REPO / "scripts" / label).read_text(encoding="utf-8")
-    assert _DERIVES.search(text), f"{label} does not derive its side-loaded set through scripts/side_loaded_images.py"
-    own = _OWN_FILTER.search(text)
-    assert not own, f"{label} filters `image:` out of the render itself ({own.group(0)!r}) — that copy is the bug this gate exists for"

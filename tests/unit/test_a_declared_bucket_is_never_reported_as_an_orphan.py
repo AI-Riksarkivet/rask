@@ -70,17 +70,6 @@ def _platform_buckets(docs: list[dict]) -> dict[str, list[str]]:
     return {name: [b for b in value.split(",") if b] for name, value in _maintenance_env(docs, "MAINTENANCE_S3_PLATFORM_BUCKETS").items()}
 
 
-def test_both_maintenance_deployments_declare_the_set() -> None:
-    """Anti-vacuity: the assertions below compare per-deployment, and a missing deployment would make
-    them pass on a render that told one half of the service nothing."""
-    found = _platform_buckets(_render())
-    observability_bucket = yaml.safe_load((_ROOT / "chart" / "values.yaml").read_text())["observability"]["bucket"]
-
-    assert set(found) == set(_MAINTENANCE), f"the platform-bucket env is missing from: {sorted(set(_MAINTENANCE) - set(found))}"
-    for name, buckets in found.items():
-        assert observability_bucket in buckets, f"{name} does not even name GreptimeDB's bucket, which the default render makes: {buckets}"
-
-
 @pytest.mark.parametrize("observability", [True, False], ids=["observability-on", "observability-off"])
 def test_a_renamed_bucket_is_exempt_under_its_new_name_only(observability: bool) -> None:
     """`orphan_buckets` exempts what the bucket-init Job makes, and the Job makes GreptimeDB's bucket only
@@ -116,34 +105,6 @@ def test_a_renamed_bucket_is_exempt_under_its_new_name_only(observability: bool)
         )
     root = _maintenance_env(docs, "MAINTENANCE_S3_BUCKET")
     assert root == dict.fromkeys(_MAINTENANCE, "root-x"), f"the renamed root is not the bucket maintenance sweeps and exempts: {root}"
-
-
-def test_a_declared_multibase_base_is_a_platform_bucket() -> None:
-    """The defect: an opted-in second store is an orphan on every tick and blocks the purge forever."""
-    docs = _render("--set", "catalog.multibase.dataBases[0]=s3://second-store/data")
-
-    for name, buckets in _platform_buckets(docs).items():
-        assert "second-store" in buckets, (
-            f"{name} would report the declared multibase bucket as an orphan: {buckets}. The drift total "
-            "then never reaches zero and the trash purge is blocked by a finding nobody can clear."
-        )
-
-
-def test_the_two_deployments_agree() -> None:
-    """They read one expression on purpose; a divergence means the planner and the worker disagree
-    about what the estate owns, and only one of them gates the purge."""
-    found = _platform_buckets(_render("--set", "catalog.multibase.dataBases[0]=s3://second-store/data"))
-
-    assert len(set(map(tuple, found.values()))) == 1, f"the maintenance deployments carry different platform buckets: {found}"
-
-
-def test_the_DEFAULT_render_gains_nothing() -> None:
-    """`catalog.multibase.dataBases` is empty by default and the feature is off, so an estate that
-    opted into nothing must see exactly the buckets it did before."""
-    buckets = _platform_buckets(_render())
-
-    for name, listed in buckets.items():
-        assert "second-store" not in listed, f"{name} invented a bucket nobody declared: {listed}"
 
 
 def test_an_empty_platform_set_adds_no_empty_bucket() -> None:

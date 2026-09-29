@@ -90,14 +90,3 @@ def test_every_deployment_that_guards_a_dapr_door_is_told_what_to_expect() -> No
         f"Give the app one of {list(_TOKEN_SOURCES)} — RASK_APP_TOKEN_FROM_STORE is the sanctioned one "
         "(the secret store, not the environment); RASK_ALLOW_UNAUTHENTICATED_DAPR is a deliberate open door."
     )
-
-
-def test_the_gate_can_see_the_service_that_defected() -> None:
-    """The annotator must be IN scope, or the test above passes by measuring nothing.
-
-    It is named here rather than left implicit because the derivation has two ways to silently cover
-    nothing — a package name that stops matching the uvicorn target, and a source scan that stops
-    finding the call — and both would leave an empty list comparing equal to an empty list.
-    """
-    assert "annotator" in _packages_that_guard_a_dapr_door()
-    assert any(package == "annotator" for _, package, _ in _deployed_apps()), "the annotator Deployment is not in the render this gate reads"

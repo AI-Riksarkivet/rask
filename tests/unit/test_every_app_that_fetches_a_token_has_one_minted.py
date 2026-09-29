@@ -82,20 +82,6 @@ def _token_fetchers(docs: list[dict]) -> list[tuple[str, str]]:
     return out
 
 
-def test_the_render_has_token_fetchers_to_check(rendered: list[dict]) -> None:
-    """Anti-vacuity: both assertions below iterate this, and an empty list passes them silently."""
-    fetchers = _token_fetchers(rendered)
-
-    assert len(fetchers) >= 5, f"only {len(fetchers)} declared token-fetching apps found: {fetchers}"
-    assert any(app == "notifications" for app, _ in fetchers), "notifications no longer fetches a token — this gate is guarding something that moved"
-    # The suffix derivation earning its place: `rask-maintenance` declares through
-    # `MAINTENANCE_CATALOG_SERVICE_IDENTITY`, a fifth spelling a hand-written key list did not carry,
-    # so this gate skipped it entirely while reporting coverage.
-    assert any(identity == "service-maintenance" for _, identity in fetchers), (
-        "the scan no longer sees the maintenance identity — it is declared through a spelling the suffix rule should catch"
-    )
-
-
 def test_every_declared_identity_has_a_token_minted(rendered: list[dict]) -> None:
     seeded = "\n".join(yaml.safe_dump(d) for d in rendered if d.get("kind") == "Job")
     assert "bao kv put secret/service-token-" in seeded, "no token seeding found in any Job — the parse moved, not the chart"

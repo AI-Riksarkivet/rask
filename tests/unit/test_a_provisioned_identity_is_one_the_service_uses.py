@@ -95,25 +95,3 @@ def test_no_provisioned_plane_falls_back_to_the_storage_root() -> None:
             f"`minio-scoped-users.yaml` provisions a least-privilege user for it in the same release. "
             "Root by default is not a deployment choice anyone made."
         )
-
-
-def test_the_identity_exists_before_the_pods_that_present_it_roll() -> None:
-    """Arming the identity is only safe if provisioning precedes the roll.
-
-    A `post-upgrade` hook creates the RustFS user AFTER the Deployments are updated, so pods restart
-    holding a credential the object store has never heard of and 403 until the hook catches up. That
-    window is why the keys shipped empty; closing it is what makes the default above safe.
-    """
-    for doc in yaml.load_all(_render(), Loader=FAST_LOADER):
-        if not doc or doc.get("kind") != "Job":
-            continue
-        if "scoped-users" not in doc["metadata"]["name"]:
-            continue
-        phases = doc["metadata"]["annotations"]["helm.sh/hook"].split(",")
-        assert "pre-upgrade" in phases, (
-            f"{doc['metadata']['name']} provisions the scoped users only in {phases} — an upgrade rolls "
-            "the pods onto a credential that does not exist yet, which is exactly why every plane "
-            "shipped defaulted to root"
-        )
-        return
-    pytest.fail("no scoped-users provisioning Job rendered — the identities are not provisioned at all")

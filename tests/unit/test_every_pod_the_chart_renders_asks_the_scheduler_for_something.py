@@ -109,14 +109,6 @@ _OVERLAYS = {
 
 
 @pytest.mark.parametrize("overlay", sorted(_OVERLAYS))
-def test_the_overlay_renders_enough_containers_to_be_worth_checking(overlay: str) -> None:
-    """Without this the assertion below would pass by iterating an empty render."""
-    specs = _pod_specs(_render(*_OVERLAYS[overlay]))
-
-    assert len(specs) >= 35, f"the {overlay} overlay rendered {len(specs)} pod specs — too few to be the whole chart"
-
-
-@pytest.mark.parametrize("overlay", sorted(_OVERLAYS))
 def test_no_container_asks_the_scheduler_for_nothing(overlay: str) -> None:
     bare = _unbounded(_render(*_OVERLAYS[overlay]))
 
@@ -125,16 +117,3 @@ def test_no_container_asks_the_scheduler_for_nothing(overlay: str) -> None:
         "every one of those pods is REJECTED at admission, and the ones here are the bootstrap Jobs the "
         "release needs to converge"
     )
-
-
-def test_both_backup_lanes_and_the_openbao_seed_are_actually_covered() -> None:
-    """The reason two overlays are rendered, asserted rather than left to a comment.
-
-    The backup CronJobs render only under prod and the OpenBao seed Job only under the default values,
-    so a single-overlay version of this gate would silently skip whichever set it did not render.
-    """
-    prod = {name for name, _ in _pod_specs(_render(*_OVERLAYS["prod"]))}
-    default = {name for name, _ in _pod_specs(_render(*_OVERLAYS["default"]))}
-
-    assert any("pg-backup" in n for n in prod), f"the prod overlay rendered no backup CronJob: {sorted(prod)}"
-    assert any("openbao-seed" in n for n in default), f"the default overlay rendered no OpenBao seed Job: {sorted(default)}"

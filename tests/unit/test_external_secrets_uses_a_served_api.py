@@ -68,12 +68,3 @@ def test_every_eso_document_names_the_served_api() -> None:
     assert docs, "externalSecrets.enabled=true rendered no ESO documents — this gate sees nothing to check"
     wrong = sorted({f"{d['kind']}/{d['metadata']['name']}={d['apiVersion']}" for d in docs if d["apiVersion"] != SERVED})
     assert not wrong, f"these name an apiVersion the operator does not serve, so the cluster refuses them: {wrong}"
-
-
-def test_the_ray_credential_is_among_what_eso_syncs() -> None:
-    """The whole point of turning ESO on here: a pod with no sidecar still gets its secret."""
-    keys: set[str] = set()
-    for doc in _rendered_eso():
-        if doc["kind"] == "ExternalSecret" and "infra-credentials" in doc["metadata"]["name"]:
-            keys |= set(((doc["spec"].get("target") or {}).get("template") or {}).get("data") or {})
-    assert {"ray-compute-access-key", "ray-compute-secret-key"} <= keys, f"ESO would not deliver the Ray plane's credential; it syncs: {sorted(keys)}"

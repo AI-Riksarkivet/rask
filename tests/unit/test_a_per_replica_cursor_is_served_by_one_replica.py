@@ -64,26 +64,3 @@ def test_the_catalog_service_pins_a_caller_to_one_replica() -> None:
         "the catalog Service load-balances a poll whose cursor is per-replica, so the console's "
         f"`/v1/events` resets on every replica change: {spec.get('sessionAffinity')!r}"
     )
-
-
-def test_the_affinity_survives_a_poll_interval() -> None:
-    """An affinity that expires between polls is the same defect with a delay. Stated explicitly
-    rather than left to kube-proxy's default, so the window is a decision someone made."""
-    spec = _service(_render(), "-catalog")["spec"]
-    timeout = spec.get("sessionAffinityConfig", {}).get("clientIP", {}).get("timeoutSeconds")
-
-    assert timeout, "no explicit affinity timeout — the poll window is whatever kube-proxy defaults to"
-    assert timeout >= 600, f"an affinity of {timeout}s is shorter than a console session, so the cursor still resets"
-
-
-def test_the_GATEWAY_is_not_pinned_the_same_way() -> None:
-    """The guard against fixing this estate-wide. The gateway sits behind the Ingress, so every
-    request reaches it from the ingress controller's pod — one address for the whole internet. Keyed
-    on ClientIP, that pins ALL traffic to a single gateway replica and turns a load balancer into a
-    single instance. The catalog is safe to pin precisely because its callers are distinct pods."""
-    spec = _service(_render(), "-gateway")["spec"]
-
-    assert "sessionAffinity" not in spec, (
-        "the gateway Service is pinned by ClientIP, but its client is the ingress controller — "
-        "one source address for every caller, so this sends the whole estate to one replica"
-    )

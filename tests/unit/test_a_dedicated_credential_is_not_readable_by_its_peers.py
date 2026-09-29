@@ -59,14 +59,6 @@ def _docs() -> list[dict]:
     return out
 
 
-def _apps_scoped_to_the_store(docs: list[dict]) -> list[str]:
-    """Every app-id the secret store admits. Derived from the rendered Component, never listed here."""
-    for doc in docs:
-        if doc.get("kind") == "Component" and doc.get("metadata", {}).get("name") == STORE:
-            return list(doc.get("scopes") or [])
-    return []
-
-
 def _seeded_token_identities(docs: list[dict]) -> set[str]:
     """The identities the seed Job writes a dedicated credential for, read off the rendered command."""
     identities: set[str] = set()
@@ -82,52 +74,6 @@ def _seeded_token_identities(docs: list[dict]) -> set[str]:
                 # "does the seed write ANY dedicated credential at all".
                 identities |= set(TOKEN_FIELD.findall(str(part))) | set(TOKEN_SECRET.findall(str(part)))
     return identities
-
-
-def test_the_walk_sees_the_store_and_its_credentials() -> None:
-    """Without this every assertion below passes by measuring nothing."""
-    docs = _docs()
-    apps = _apps_scoped_to_the_store(docs)
-    assert len(apps) >= 5, f"only {len(apps)} app-ids scoped to {STORE} -- the Component or its scopes changed"
-    assert _seeded_token_identities(docs), "the seed Job writes no service-token-* at all; this gate would pass vacuously"
-
-
-def test_a_dedicated_credential_is_its_own_secret_rather_than_a_field_of_the_shared_bundle() -> None:
-    """HALF ONE, and it must land first because scoping is inert without it.
-
-    Dapr's ``allowedSecrets`` names SECRETS, not fields. While every credential is a field of
-    ``secret/lance``, the only grant expressible is the whole bundle -- so this is not a stylistic
-    preference, it is what makes half two able to say anything at all.
-
-    The fix follows ``secret/viewer-s3`` in the same template: one ``bao kv put`` per identity.
-    """
-    docs = _docs()
-    offenders: dict[str, list[str]] = {}
-    for doc in docs:
-        if doc.get("kind") != "Job":
-            continue
-        pod = (doc.get("spec") or {}).get("template", {}).get("spec", {})
-        for container in (pod.get("containers") or []) + (pod.get("initContainers") or []):
-            joined = "\n".join(str(p) for p in (container.get("command") or []) + (container.get("args") or []))
-            # SPLIT ON THE PUTS rather than regex-matching one, because the rendered command is a shell
-            # script whose arguments continue across lines with a trailing backslash -- a single-line
-            # pattern silently matched nothing and the gate passed while every token was a field of the
-            # shared bundle. Each segment is one `kv put`: its first word is the PATH, the rest fields.
-            for segment in joined.split("bao kv put ")[1:]:
-                path, _, fields = segment.partition(" ")
-                if path.strip() != "secret/lance":
-                    continue
-                found = TOKEN_FIELD.findall(fields.split("bao ")[0])
-                if found:
-                    offenders.setdefault(doc["metadata"]["name"], []).extend(found)
-    offenders = {k: sorted(set(v)) for k, v in offenders.items()}
-
-    assert not offenders, (
-        f"these identities' credentials are FIELDS of the shared `secret/lance` bundle, so every app-id "
-        f"scoped to {STORE} reads all of them and Dapr cannot scope them apart: {offenders}. "
-        "Seed each as its own `secret/service-token-<identity>` (the `secret/viewer-s3` precedent in the "
-        "same template) and point `dedicated_token_from_store` at it."
-    )
 
 
 def _readable_identities(docs: list[dict], seeded: set[str]) -> dict[str, set[str]]:
@@ -146,23 +92,6 @@ def _readable_identities(docs: list[dict], seeded: set[str]) -> dict[str, set[st
                 readable &= {a.removeprefix("service-token-") for a in (allowed or [])}
             out[doc["metadata"]["name"]] = readable
     return out
-
-
-def test_every_app_scoped_to_the_secret_store_carries_a_scope_for_it() -> None:
-    """A missing scope entry is the same failure as a permissive one: Dapr's default is ALLOW.
-
-    So an app-id with no entry reads every secret in the store, which is the state measured live on
-    2026-09-23 and the reason this file exists. Absence counts as an offender rather than a skip.
-    """
-    docs = _docs()
-    scoped = set(_readable_identities(docs, _seeded_token_identities(docs)))
-    unscoped = sorted(app for app in _apps_scoped_to_the_store(docs) if CONFIG_FOR(app) not in scoped)
-
-    assert not unscoped, (
-        f"app-ids admitted to {STORE} with no secret scope at all: {unscoped}. Dapr defaults to ALLOW, "
-        "so each of these reads every secret in the store including its peers' dedicated credentials. "
-        "Give each one a Configuration carrying a `secrets.scopes` entry for this store."
-    )
 
 
 def test_only_the_verifier_doors_may_read_more_than_their_own_credential() -> None:

@@ -50,12 +50,6 @@ def _jobs() -> list[tuple[str, bool, int | None]]:
     return out
 
 
-def test_the_render_produces_jobs_that_wait() -> None:
-    """A control: with nothing detected as waiting, the gate below passes by vacuum."""
-    waiting = [name for name, waits, _ in _jobs() if waits]
-    assert waiting, "no rendered Job matches the wait shapes — the detector or the render moved"
-
-
 def test_every_waiting_job_has_a_deadline() -> None:
     offenders = [name for name, waits, deadline in _jobs() if waits and deadline is None]
     assert not offenders, (

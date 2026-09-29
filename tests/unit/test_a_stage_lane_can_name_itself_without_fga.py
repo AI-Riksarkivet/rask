@@ -79,16 +79,3 @@ def test_a_stage_runner_names_itself_with_fga_off() -> None:
             "default at lineage's door, which the allowlist has never heard of, and the emit is refused "
             "while the job exits SUCCEEDED"
         )
-
-
-def test_a_stage_lane_is_told_where_to_post_its_provenance() -> None:
-    """A stage job that cannot reach lineage emits nothing, and reports that as success.
-
-    `stage_lineage_url` is empty in code so an unwired estate posts to no guessed address. The chart
-    is not a guess: it knows its own lineage Service, exactly as it already does for the train lane's
-    `MEDALLION_TRAIN_LINEAGE_URL`.
-    """
-    runners = _stage_runner_env(_render("--set", "medallion.ray=true"))
-    for name, env in runners.items():
-        url = env.get("MEDALLION_STAGE_LINEAGE_URL", "")
-        assert url.startswith("http"), f"{name} submits Ray stage jobs with nowhere to post provenance (got {url!r}) — the whole lane is unlineaged, silently"

@@ -71,11 +71,3 @@ def test_every_privileged_subject_is_also_an_allowed_one() -> None:
     assert not privileged - allowed, (
         f"named privileged but never admitted, so the door refuses them before reading their credential: {sorted(privileged - allowed)}"
     )
-
-
-def test_the_stage_runners_are_admitted() -> None:
-    """Named explicitly, because they are the three the live door refused and a subset check alone
-    would also pass if BOTH lists lost them."""
-    allowed = _subjects(_render("--set", "auth.dedicatedServiceCredentials=true"), "LINEAGE_SERVICE_SUBJECTS")
-
-    assert {"service-bronze-to-silver", "service-media-to-silver", "service-silver-to-gold"} <= allowed

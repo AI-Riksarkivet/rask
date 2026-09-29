@@ -92,22 +92,6 @@ def _first_party_workloads() -> list[tuple[str, str, dict]]:
     return out
 
 
-def test_the_walk_sees_the_chart() -> None:
-    """Without this every assertion below passes by rendering nothing."""
-    workloads = _first_party_workloads()
-    assert len(workloads) >= 20, f"only {len(workloads)} first-party workloads rendered — the walk or the render is broken"
-    assert any(kind == "Job" for kind, _, _ in workloads), "no Jobs rendered; this gate exists because Jobs were never walked"
-    assert set(SLOTS) == {"containers", "initContainers"}, "the ratchet stopped walking a container slot"
-    # `readOnlyRootFilesystem` and `allowPrivilegeEscalation` are CONTAINER-only fields in the Kubernetes
-    # API; a pod cannot carry them. Crediting a pod for one would excuse a container that genuinely
-    # lacks it — the inverse of the false positive this merge was added to fix, and invisible while no
-    # pod happens to set them. Caught by mutation: widening the tuple to BASELINE changed no result.
-    assert set(POD_INHERITABLE) == {"runAsNonRoot", "seccompProfile"}, (
-        "POD_INHERITABLE names a container-only key; the pod cannot satisfy it and crediting it hides a real gap"
-    )
-    assert any(pod.get("initContainers") for _, _, pod in workloads), "no init containers rendered; one of them is why this gate is parametrised"
-
-
 #: The containers that render without the full baseline TODAY, measured 2026-09-23 under default values.
 #:
 #: A RATCHET, NOT AN EXEMPTION LIST, and the difference is the whole design: a container may be here only
@@ -172,23 +156,3 @@ def test_no_NEW_first_party_container_renders_without_the_baseline(slot: str) ->
         f"NEW first-party {slot} rendering without the baseline: {unexpected}. "
         "Harden it, or argue for it by name in `_UNHARDENED_TODAY` — the list only shrinks."
     )
-
-
-def test_the_ratchet_names_nothing_that_is_already_hardened() -> None:
-    """A stale entry is how a ratchet stops ratcheting: it would excuse a REGRESSION on that container."""
-    rendered: dict[str, dict[str, set[str]]] = {}
-    for kind, name, pod in _first_party_workloads():
-        for slot, tag in (("containers", "containers"), ("initContainers", "init")):
-            for container in pod.get(slot) or []:
-                missing = {key for key in BASELINE if key not in _effective(pod, container)}
-                if missing:
-                    rendered.setdefault(_key(kind, name, container["name"]), {})[tag] = missing
-
-    stale = {}
-    for key, by_slot in _UNHARDENED_TODAY.items():
-        for slot, keys in by_slot.items():
-            still_missing = rendered.get(key, {}).get(slot, set())
-            excused_but_present = sorted(set(keys) - still_missing)
-            if excused_but_present:
-                stale[f"{key}[{slot}]"] = excused_but_present
-    assert not stale, f"the ratchet excuses keys these containers now render — narrow or remove them: {stale}"

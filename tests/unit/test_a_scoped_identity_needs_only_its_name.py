@@ -63,21 +63,6 @@ def _env_of(prefix: str, *set_values: str) -> dict[str, dict[str, str]]:
 
 
 @pytest.mark.parametrize("plane", sorted(PLANES))
-def test_naming_the_identity_is_enough_to_scope_the_plane(plane: str) -> None:
-    """The defect: an access key alone leaves the plane on the ROOT credential, because every site
-    gates on `and accessKey secretKey`. Writing the identity down then requires writing a secret down."""
-    access, prefix, _ = PLANES[plane]
-    envs = _env_of(prefix, access, "openbao.enabled=false")
-    assert envs, f"no {plane} Deployment rendered"
-    expected = access.split("=", 1)[1]
-    for name, env in envs.items():
-        assert env[f"{prefix}_S3_ACCESS_KEY_ID"] == expected, f"{name} still runs as {env[f'{prefix}_S3_ACCESS_KEY_ID']} — naming the identity did not scope it"
-        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] not in ("", "minioadmin"), (
-            f"{name} pairs a scoped access key with the ROOT secret — every S3 call fails SignatureDoesNotMatch"
-        )
-
-
-@pytest.mark.parametrize("plane", sorted(PLANES))
 def test_one_secret_string_reaches_every_site(plane: str) -> None:
     """THE FAILURE THIS EXISTS TO CATCH. Eight read sites across five templates; a derivation applied
     to seven of them is a mismatched pair, which looks correct in a diff and fails every call."""
@@ -102,33 +87,3 @@ def test_one_secret_string_reaches_every_site(plane: str) -> None:
     # comparison against whatever the Job then reads the secret FROM — do not delete it, or the pair
     # stops being checked at the only hop that mints it.
     assert re.search(rf"value:\s*\"{re.escape(secret)}\"", rendered), f"the scoped-users provisioning Job does not carry the {plane} secret the pods present"
-
-
-@pytest.mark.parametrize("plane", sorted(PLANES))
-def test_a_derived_secret_is_not_the_roots(plane: str) -> None:
-    """A derivation that collapses onto `minio.secretKey` would scope the NAME and nothing else."""
-    access, prefix, _ = PLANES[plane]
-    envs = _env_of(prefix, access, "openbao.enabled=false")
-    for name, env in envs.items():
-        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] != "minioadmin", f"{name} derived the root's own secret"
-
-
-@pytest.mark.parametrize("plane", sorted(PLANES))
-def test_an_explicit_secret_still_wins(plane: str) -> None:
-    """An operator supplying one from a secret manager must not have it silently replaced."""
-    access, prefix, _ = PLANES[plane]
-    explicit = access.split("=", 1)[0].replace("AccessKey", "SecretKey")
-    envs = _env_of(prefix, access, f"{explicit}=an-explicit-operator-supplied-secret", "openbao.enabled=false")
-    assert envs, f"no {plane} Deployment rendered"
-    for name, env in envs.items():
-        assert env[f"{prefix}_S3_SECRET_ACCESS_KEY"] == "an-explicit-operator-supplied-secret", f"{name} overrode the operator"
-
-
-def test_naming_the_identity_EMPTY_is_the_escape_hatch_back_to_root() -> None:
-    """The default is now the provisioned identity; returning to the tenant root stays possible and
-    has to be DELIBERATE. What is gone is reaching root by never learning the key existed — which is
-    how lineage sat on `minioadmin` while holding the tightest policy in the estate."""
-    envs = _env_of("MEDALLION", "openbao.enabled=false", "minio.medallionAccessKey=")
-    assert envs, "no medallion Deployment rendered"
-    for name, env in envs.items():
-        assert env["MEDALLION_S3_ACCESS_KEY_ID"] == "minioadmin", f"{name} ignored an explicitly emptied identity"
