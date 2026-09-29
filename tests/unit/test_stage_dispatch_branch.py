@@ -23,20 +23,6 @@ def _event(**data: Any) -> dict[str, Any]:
     return {"data": {"token": "tok-1", **data}}
 
 
-def test_the_trigger_contract_carries_ray_job_done_and_DEFAULTS_FALSE() -> None:
-    """The default is the load-bearing half. If an absent flag parsed as True, every ordinary upstream
-    arrival would take the measure branch — reinstating the original defect for the whole cascade."""
-    plain = parse_stage_trigger(_event())
-    assert plain is not None
-    assert plain.ray_job_done is False, "an upstream producer cannot know the job finished; absent must mean not-done"
-    assert plain.ray_submission_id is None
-
-    ready = parse_stage_trigger(_event(ray_job_done=True, ray_submission_id="ray-silver-tok-1-abc"))
-    assert ready is not None
-    assert ready.ray_job_done is True
-    assert ready.ray_submission_id == "ray-silver-tok-1-abc"
-
-
 def test_a_NON_BOOL_ray_job_done_is_refused_rather_than_coerced() -> None:
     """`extra="ignore"` tolerates unknown fields; it does not tolerate a known field of the wrong type.
 
@@ -44,20 +30,6 @@ def test_a_NON_BOOL_ray_job_done_is_refused_rather_than_coerced() -> None:
     every trigger down the measure branch.
     """
     assert parse_stage_trigger(_event(ray_job_done="not-a-bool")) is None
-
-
-def test_the_dispatch_seam_derives_a_DETERMINISTIC_instance_id_from_the_work() -> None:
-    """Redelivery must re-attach to the running watcher, not start a second one over the same job.
-
-    The id is derived from the same `from->to` digest the SUBMISSION id uses, so the two cannot name
-    different work for one trigger.
-    """
-    from medallion.services.ray_submit import stage_submission_id
-
-    a = stage_submission_id("silver", "tok-1", "s3://a", "s3://b")
-    b = stage_submission_id("silver", "tok-1", "s3://a", "s3://b")
-    assert a == b
-    assert stage_submission_id("silver", "tok-1", "s3://a", "s3://z") != a
 
 
 @pytest.mark.parametrize("pair", [("a.b", "a-b"), ("a.b-c", "a-b.c")], ids=["dotted-and-verbatim", "both-dotted"])

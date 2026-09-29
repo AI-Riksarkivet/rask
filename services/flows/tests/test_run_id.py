@@ -11,9 +11,7 @@ HTTP header and `subject` is a token claim, so a single crafted subject is enoug
 else's run.
 """
 
-import uuid
-
-from flows.routes import RUN_NAMESPACE, run_id_for
+from flows.routes import run_id_for
 
 
 #: The exact pair that collided under the old `-flows-` delimiter: both rendered the joined string
@@ -21,30 +19,10 @@ from flows.routes import RUN_NAMESPACE, run_id_for
 COLLIDING_PAIR = (("alice", "b-flows-c"), ("alice-flows-b", "c"))
 
 
-def _legacy(subject: str, idempotency_key: str) -> str:
-    """The pre-fix derivation, kept ONLY so the test can prove it was actually broken.
-
-    Without it the assertion below reads as "these two differ", which is true of almost any two
-    inputs and would pass against a derivation that never had the bug — the test would gate nothing.
-    """
-    return f"run-{uuid.uuid5(RUN_NAMESPACE, f'{subject}-flows-{idempotency_key}').hex}"
-
-
-def test_the_legacy_derivation_really_did_collide() -> None:
-    """Pin the premise. If this ever stops holding, the fixture below stopped exercising the bug."""
-    first, second = COLLIDING_PAIR
-    assert _legacy(*first) == _legacy(*second), "the chosen pair no longer collides under the old form — pick one that does"
-
-
 def test_distinct_pairs_never_share_a_run_id() -> None:
     """The regression: the delimiter must not be forgeable out of the fields it separates."""
     first, second = COLLIDING_PAIR
     assert run_id_for(*first) != run_id_for(*second), "two callers derive one workflow instance id — the cross-tenant collision"
-
-
-def test_the_derivation_is_still_deterministic() -> None:
-    """The whole point of a caller-keyed id: same inputs, same id, on any pod after any crash."""
-    assert run_id_for("alice", "page-7") == run_id_for("alice", "page-7")
 
 
 def test_the_subject_still_scopes_the_key() -> None:

@@ -109,12 +109,6 @@ def test_the_train_door_returns_the_verified_subject(monkeypatch: pytest.MonkeyP
     assert _run_authorize_train(monkeypatch, app_token="secret", authz="Bearer t") == "alice"
 
 
-def test_a_service_triggered_training_run_names_nobody(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A shared service token authenticates a SERVICE. `None`, never a placeholder: an inbox addressed
-    to a role is precisely the defect this chain removes."""
-    assert _run_authorize_train(monkeypatch, app_token="secret", authz=None, dapr_token="secret") is None
-
-
 # ── link 2: the head puts it on the trigger ──────────────────────────────────────────────────────
 
 

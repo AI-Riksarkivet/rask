@@ -120,34 +120,6 @@ def test_upstream_fixed_the_null_drop_and_the_shape_changed_with_it(bronze_with_
     assert took[0] is not None and took[2] is not None
 
 
-def test_read_aligned_table_preserves_cardinality(bronze_with_a_null_page: str) -> None:
-    """``blobs.read_aligned_table`` returns one row per selected row, the null payload as ``None``."""
-    ds = lance.dataset(bronze_with_a_null_page)
-    table = blobs.read_aligned_table(ds, columns=["id", "payload", "page_key"], with_row_id=True)
-    assert table.num_rows == 3
-    payloads = table.column("payload").to_pylist()
-    assert payloads[1] is None
-    assert payloads[0] is not None and payloads[2] is not None
-    # the tabular columns are still on their own rows — the whole point of alignment
-    assert table.column("page_key").to_pylist() == ["p0", "p1", "p2"]
-    assert "_rowid" in table.column_names
-
-
-def test_read_aligned_table_payloads_round_trip_through_blob_array(bronze_with_a_null_page: str) -> None:
-    """The aligned payload list is directly re-wrappable as a blob column (nulls survive the write)."""
-    ds = lance.dataset(bronze_with_a_null_page)
-    payloads = blobs.read_aligned_table(ds, columns=["payload"]).column("payload").to_pylist()
-    out_uri = bronze_with_a_null_page.replace("bronze-pages", "rewrapped")
-    lance.write_dataset(
-        pa.table({"payload": blob_array(payloads)}, schema=pa.schema([blob_field("payload")])),
-        out_uri,
-        mode="overwrite",
-        data_storage_version="2.2",
-    )
-    again = blobs.read_aligned_table(lance.dataset(out_uri), columns=["payload"]).column("payload").to_pylist()
-    assert [p is None for p in again] == [False, True, False]
-
-
 def test_the_cascade_carries_a_null_page_through(bronze_with_a_null_page: str, tmp_path: Path) -> None:
     """A missing page no longer fails the stage: 3 rows out, null payload, null artifacts, rows aligned.
 

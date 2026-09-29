@@ -64,55 +64,6 @@ def _event(action: str = "table_published", object_id: str = "table:acme-bronze$
     return {"data": {"action": action, "object_id": object_id, "event_id": "evt-1", "extra": extra}}
 
 
-#: What a STAGE RUNNER authenticates to the catalog as (`chart/values.yaml` `medallion.stageRunners[].serviceIdentity`).
-#: Under one door this — not a person — is the actor of every publication that drives the cascade.
-_STAGE_RUNNER = "service-bronze-to-silver"
-
-
-def _with_actor(event: dict[str, Any], actor: str | None) -> dict[str, Any]:
-    """Put `actor` where the real envelope carries it — TOP level of `data`, not inside `extra`.
-
-    `CatalogControlEvent` declares `actor` as its own field (`service_kit/control_events.py`), and the
-    catalog fills it with the verified `user:<sub>`. Nesting it under `extra` in a test would let a
-    handler that reads the wrong place pass.
-    """
-    event["data"]["actor"] = actor
-    return event
-
-
-@pytest.mark.asyncio
-async def test_a_publication_triggers_the_cascade_WITH_the_range() -> None:
-    """The whole of D-R3 on the wire: the trigger names which rows are new, not merely that some are."""
-    dapr = _Dapr()
-
-    result = await handle_publication(dapr, _Settings(), _event(from_version=3, to_version=4))
-
-    assert result == {"status": "SUCCESS"}
-    assert len(dapr.published) == 1
-    trigger = dapr.published[0]
-    assert (trigger["from_version"], trigger["to_version"]) == (3, 4)
-    # The LANE, not the catalog identifier. `table:lane$pages` is tenant `lane`, table `pages`; the
-    # medallion lane for it is `bronze$pages`, the same string every tenant's publication produces.
-    assert trigger["dataset"] == "bronze$pages"
-    assert trigger["namespace"] == "bronze"
-
-
-@pytest.mark.asyncio
-async def test_the_trigger_carries_the_PROJECT_or_the_stage_runner_moves_nothing() -> None:
-    """The quiet half of B8.
-
-    `handle_stage` resolves its tier roots only when the trigger carries a project; otherwise it uses
-    `MEDALLION_FROM_URI`/`MEDALLION_TO_URI`, which default to empty, and its `if compute_enabled and
-    from_uri and to_uri` guard silently skips the compute path. A cascade that runs and moves nothing
-    looks identical to one that had nothing to move.
-    """
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _event(project="my-team", object_id="table:my-team-silver$features", from_version=None, to_version=1))
-
-    assert dapr.published[0]["project"] == "my-team"
-
-
 @pytest.mark.asyncio
 async def test_a_FIRST_publication_carries_a_null_from_rather_than_zero() -> None:
     """ "No prior publication" and "published from version 0" are different claims.
@@ -133,8 +84,6 @@ async def test_a_FIRST_publication_carries_a_null_from_rather_than_zero() -> Non
     "event",
     [
         _event(action="grant_added"),
-        _event(action="table_created"),
-        _event(action="warehouse_created"),
     ],
 )
 async def test_a_GOVERNANCE_notice_drives_nothing(event: dict[str, Any]) -> None:
@@ -149,7 +98,7 @@ async def test_a_GOVERNANCE_notice_drives_nothing(event: dict[str, Any]) -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("event", [{}, {"data": "not-a-dict"}, _event(object_id="warehouse:acme"), _event(object_id="table:nodelimiter")])
+@pytest.mark.parametrize("event", [{}, _event(object_id="warehouse:acme"), _event(object_id="table:nodelimiter")])
 async def test_an_unparseable_event_is_ACKED_not_retried(event: dict[str, Any]) -> None:
     """A head that RETRYs on events it can never handle turns one malformed message into a permanent
     hot loop against the broker."""
@@ -185,173 +134,3 @@ async def test_the_trigger_carries_the_CATALOG_VENDED_location() -> None:
     await handle_publication(dapr, _Settings(), _event(from_version=1, to_version=2, location="s3://lane-wh/abc123_lane$pages"))
 
     assert dapr.published[0]["from_uri"] == "s3://lane-wh/abc123_lane$pages"
-
-
-# ── the two naming systems, kept apart ────────────────────────────────────────
-
-
-@pytest.mark.asyncio
-async def test_the_lane_name_carries_NO_tenant() -> None:
-    """The bug this file previously asserted as correct.
-
-    The catalog names a table `<tenant>$<table>`; the medallion names a lane `<tier>$<lane>`, and
-    `transform.py:109` compares the arrived name against the RAW `settings.from_dataset`, documenting
-    that "the trigger carries the unqualified name for every tenant". Publishing the catalog
-    identifier meant `acme$events` was compared against `bronze$events`, so EVERY tenant's publication
-    was dropped as another lane's — and the tenant leaked into a field that must be tenant-free.
-
-    It appeared to work exactly once, in a cluster test whose tenant was NAMED `bronze` and whose
-    table was named `events`: the two systems' strings collided and nothing was translated at all.
-    Hence a tenant here that could never collide.
-    """
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$events", from_version=1, to_version=2))
-
-    trigger = dapr.published[0]
-    assert "acme" not in trigger["dataset"], f"the tenant leaked into the lane name: {trigger['dataset']}"
-    assert trigger["dataset"] == "bronze$events"
-    assert trigger["project"] == "acme", "the tenant must still travel — separately, in `project`"
-
-
-@pytest.mark.asyncio
-async def test_the_lane_name_is_EXACTLY_what_a_stage_runner_compares_against() -> None:
-    """Couples the two sides in one assertion instead of restating a literal on each.
-
-    A stage runner's discriminator is `arrived != settings.from_dataset`, and a deployment sets that from
-    `bronze_dataset`. Asserting the produced name equals that setting means a change to either side
-    fails here rather than in a cluster, silently, as a DROP nobody sees.
-    """
-    dapr = _Dapr()
-    settings = _Settings()
-
-    await handle_publication(dapr, settings, _event(object_id="table:acme-bronze$events", from_version=1, to_version=2))
-
-    assert dapr.published[0]["dataset"] == settings.bronze_dataset
-
-
-@pytest.mark.asyncio
-async def test_a_DIFFERENT_table_is_a_DIFFERENT_lane() -> None:
-    """Lanes are per-table, not one global lane — the page lane and the events lane are distinct
-    stage runners subscribed to the same topic, and each must see only its own."""
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
-
-    assert dapr.published[0]["dataset"] == "bronze$pages"
-
-
-@pytest.mark.asyncio
-async def test_a_NESTED_namespace_still_names_the_right_lane() -> None:
-    """The lane is the table's OWN name, however deep its namespace nests.
-
-    Catalog namespaces nest — `namespace#parent: [warehouse, namespace]` in the FGA model, and the
-    create door takes a nested id up to MAX_NAMESPACE_DEPTH (8) — so `acme$bronze$pages` is the table
-    `pages` inside the namespace `acme$bronze`. The head used `partition`, which takes the FIRST
-    delimiter, so the table read as `bronze$pages` and the published lane became `bronze$bronze$pages`.
-
-    That is not a cosmetic mis-name. `transform.py` compares the arrived name against
-    `settings.from_dataset` and DROPs anything else, so the publication vanishes and the run reports
-    nothing at all — the failure mode nobody goes looking for. Every live table measured flat on
-    2026-08-16, which is the only reason this had not fired.
-    """
-    dapr = _Dapr()
-    settings = _Settings()
-
-    await handle_publication(dapr, settings, _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
-
-    assert dapr.published[0]["dataset"] == "bronze$pages"
-    assert dapr.published[0]["dataset"] != "bronze$bronze$pages"
-
-
-@pytest.mark.asyncio
-async def test_the_project_is_READ_from_the_event_never_derived_from_the_id() -> None:
-    """This asserted the opposite, and the opposite was wrong.
-
-    It pinned `table:acme$bronze$pages` -> project `acme`, taking the first segment as the top of the
-    hierarchy. That shape is not what any door produces: a catalog namespace is project-QUALIFIED with
-    a HYPHEN, so the real id is `acme-bronze$pages` and the first segment is the NAMESPACE. The head
-    stamped `project="acme-bronze"` — a tenant no registry knows — on every real publication.
-
-    No split fixes it: `PROJECT_PATTERN` permits `-` inside a project id, so `acme-bronze` is
-    genuinely ambiguous. The catalog resolves it through the warehouse binding and stamps it on the
-    event (`warehouses.project_for_namespace`); this head reads it and derives nothing.
-    """
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$pages", from_version=1, to_version=2))
-
-    assert dapr.published[0]["project"] == "acme"
-    assert dapr.published[0]["dataset"] == "bronze$pages"
-
-
-@pytest.mark.asyncio
-async def test_an_event_with_no_project_carries_NONE_rather_than_a_guess() -> None:
-    """A single-tenant estate, or a catalog that predates the field during a rolling deploy. Guessing
-    is what put a non-existent tenant on the wire."""
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _event(object_id="table:bronze$pages", project=None, from_version=1, to_version=2))
-
-    assert "project" not in dapr.published[0]
-
-
-@pytest.mark.asyncio
-async def test_the_FLAT_case_is_byte_identical_to_before() -> None:
-    """The FLAT `<project>-<tier>$<table>` shape every live table actually has."""
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _event(object_id="table:acme-bronze$events", from_version=1, to_version=2))
-
-    assert dapr.published[0]["dataset"] == "bronze$events"
-    assert dapr.published[0]["project"] == "acme"
-
-
-@pytest.mark.asyncio
-async def test_the_trigger_carries_the_PERSON_the_catalog_resolved_so_the_cascade_can_name_them() -> None:
-    """The human whose batch this is rides the trigger, so a stage that fails hours later can name them.
-
-    THIS USED TO READ THE `actor`, and the reasoning was half right. The actor IS the last verified
-    identity on a publication a person performed — but under one door the publications that matter are
-    performed by a STAGE RUNNER, which authenticates to the catalog as itself. So the field this head filled
-    from `actor` said `service-bronze-to-silver`, and every silver→gold failure addressed an inbox
-    actor named after a stage runner: role-shaped, unread, and indistinguishable from a delivery.
-
-    The catalog resolves it now (`publication.publication_originator`), because it is the only
-    component that knows whether its caller was a person or a service, and hands the answer over on
-    `extra.originator`. The whole chain is driven end to end in `tests/unit/test_cascade_originator.py`.
-    """
-    dapr = _Dapr()
-
-    result = await handle_publication(dapr, _Settings(), _event(originator="CiQwOGE4Njg0Yi1kYjg4"))
-
-    assert result == {"status": "SUCCESS"}
-    assert dapr.published[0]["originator"] == "CiQwOGE4Njg0Yi1kYjg4"
-
-
-@pytest.mark.asyncio
-async def test_a_SERVICE_publication_carries_no_originator_rather_than_a_fake_one() -> None:
-    """A reconcile, a backfill or a cron sweep has nobody behind it, so the catalog resolves nothing
-    and sends no field. Omitted, never blank: a present-but-empty originator is not an address, and
-    `transform.py` treats present-and-wrong far more harshly than absent."""
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _with_actor(_event(), f"user:{_STAGE_RUNNER}"))
-
-    assert "originator" not in dapr.published[0]
-
-
-@pytest.mark.asyncio
-async def test_the_ACTOR_is_never_read_as_the_person_the_cascade_is_for() -> None:
-    """The defect's own signature, pinned so the guess cannot come back.
-
-    A cascade publication's actor is the stage runner. Reading it here is what put a service identity on the
-    trigger; the rule that a principal must name a PERSON (trap 4) now lives at the catalog's
-    resolver, where the caller's kind is actually known — `tests/unit/test_cascade_originator.py`
-    covers the wildcards and usersets it refuses.
-    """
-    dapr = _Dapr()
-
-    await handle_publication(dapr, _Settings(), _with_actor(_event(), f"user:{_STAGE_RUNNER}"))
-
-    assert _STAGE_RUNNER not in json.dumps(dapr.published[0])

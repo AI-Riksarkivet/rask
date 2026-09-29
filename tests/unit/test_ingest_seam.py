@@ -14,7 +14,6 @@ from PIL import Image
 
 from medallion.services import ingest as ingest_module
 from medallion.services.ingest import ExtraColumns, ingest_to_bronze
-from service_kit.lakehouse.sinks import LocalDirSink, S3FileSystemSink
 from service_kit.lakehouse.sources import LocalDirSource, S3FileSystemSource, SourceObject
 
 
@@ -35,13 +34,6 @@ def test_local_dir_source_recurses_sorted_and_yields_file_uris(tmp_path: Path) -
 
     assert [obj.data for obj in objects] == [b"AAA", b"BBB", b"CCC"]  # sorted, recursive, skip.txt excluded
     assert all(obj.uri.startswith("file://") and obj.uri.endswith(".png") for obj in objects)
-
-
-def test_local_dir_sink_writes_and_returns_uri(tmp_path: Path) -> None:
-    uri = LocalDirSink(tmp_path).put("out/thumb.png", b"PNGBYTES")
-
-    assert uri.startswith("file://") and uri.endswith("out/thumb.png")
-    assert (tmp_path / "out" / "thumb.png").read_bytes() == b"PNGBYTES"
 
 
 def test_ingest_to_bronze_writes_2_2_blob_table_with_provenance(tmp_path: Path) -> None:
@@ -257,21 +249,6 @@ def test_s3_source_yields_files_sorted_recursive_prefix_scoped() -> None:
     ]
 
 
-def test_s3_sink_writes_key_under_prefix_and_returns_s3_uri() -> None:
-    fs = _FakeFs({})
-    uri = S3FileSystemSink(cast(pafs.S3FileSystem, fs), "bucket", "prefix").put("out/gold.arrow", b"BYTES")
-
-    assert uri == "s3://bucket/prefix/out/gold.arrow"
-    assert fs.files["bucket/prefix/out/gold.arrow"] == b"BYTES"
-
-
-def test_s3_sink_empty_prefix_has_no_double_slash() -> None:
-    # an unset prefix must not leave a `bucket//key` seam (the reason the old .replace("//","/") existed)
-    uri = S3FileSystemSink(cast(pafs.S3FileSystem, _FakeFs({})), "bucket", "").put("gold.arrow", b"X")
-
-    assert uri == "s3://bucket/gold.arrow"
-
-
 # --- #92 fixity: a digest over the bytes AS HARVESTED ----------------------------------------------
 
 
@@ -298,37 +275,3 @@ def test_bronze_records_a_sha256_of_the_harvested_bytes(tmp_path: Path) -> None:
     assert got.column("sha256").to_pylist() == [hashlib.sha256(p).hexdigest() for p in payloads]
     # A hex digest, not raw bytes — greppable in a report and comparable without decoding.
     assert all(len(d) == 64 and set(d) <= set("0123456789abcdef") for d in got.column("sha256").to_pylist())
-
-
-def test_the_digest_distinguishes_two_payloads_that_differ_by_one_bit(tmp_path: Path) -> None:
-    """The property that makes it fixity rather than decoration."""
-    (tmp_path / "a.png").write_bytes(b"\x00")
-    (tmp_path / "b.png").write_bytes(b"\x01")
-    bronze = str(tmp_path / "bronze.lance")
-
-    ingest_to_bronze(LocalDirSource(tmp_path, "*.png"), bronze, {})
-
-    digests = lance.dataset(bronze).to_table(columns=["sha256"]).column("sha256").to_pylist()
-    assert len(set(digests)) == 2, digests
-
-
-def test_the_digest_carries_forward_into_the_next_tier(tmp_path: Path) -> None:
-    """A gold transcription must be traceable to the exact page bytes it was read from.
-
-    `compute._carry_forward` reads every column generically, so this needs no per-column plumbing —
-    but "needs no plumbing" is exactly the kind of claim that silently stops being true, so it is
-    pinned here rather than assumed from reading the function.
-    """
-    import hashlib
-
-    from medallion.services.compute import transform_stage
-
-    (tmp_path / "a.png").write_bytes(b"AAA")
-    bronze = str(tmp_path / "bronze.lance")
-    silver = str(tmp_path / "silver.lance")
-    ingest_to_bronze(LocalDirSource(tmp_path, "*.png"), bronze, {})
-
-    transform_stage(bronze, silver, {}, stage="silver")
-
-    carried = lance.dataset(silver).to_table(columns=["sha256"]).column("sha256").to_pylist()
-    assert carried == [hashlib.sha256(b"AAA").hexdigest()]

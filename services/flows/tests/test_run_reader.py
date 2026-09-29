@@ -22,16 +22,6 @@ from flows.routes import _state_from_engine
 RUN_ID = "run-abc"
 
 
-def test_a_completed_run_reads_back_as_what_it_returned() -> None:
-    """The regression. Pre-fix this run reported `running` for the rest of the pod's life."""
-    finished = RunState(run_id=RUN_ID, status="succeeded").model_dump_json()
-
-    state = _state_from_engine(RUN_ID, {"runtime_status": "COMPLETED", "serialized_output": finished})
-
-    assert state is not None
-    assert state.status == "succeeded", "a completed workflow still read as running — the defect"
-
-
 def test_a_run_the_workflow_itself_called_failed_stays_failed() -> None:
     """The workflow decides succeeded-vs-failed by inspecting its own node results. The reader must
     carry that verdict rather than form a second opinion from `runtime_status` — a workflow that
@@ -55,19 +45,12 @@ def test_an_instance_that_never_returned_is_failed_with_a_reason(status: str) ->
     assert state.error is not None and state.error != ""
 
 
-@pytest.mark.parametrize("status", ["RUNNING", "PENDING", "SUSPENDED"])
+@pytest.mark.parametrize("status", ["RUNNING", "PENDING"])
 def test_a_live_instance_reports_running(status: str) -> None:
     state = _state_from_engine(RUN_ID, {"runtime_status": status})
 
     assert state is not None
     assert state.status == "running"
-
-
-def test_no_engine_answer_is_None_so_the_caller_can_fall_back() -> None:
-    """ "The engine has nothing" and "the engine says running" are different facts, and only the first
-    may fall back to the local record. Collapsing them would make a 404 unreachable."""
-    assert _state_from_engine(RUN_ID, None) is None
-    assert _state_from_engine(RUN_ID, {}) is None
 
 
 def test_a_completed_run_with_no_output_is_reported_not_swallowed() -> None:

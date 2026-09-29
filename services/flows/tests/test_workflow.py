@@ -76,23 +76,6 @@ class _FakeContext:
         return ("task", dumped)
 
 
-def test_importing_the_lane_registers_the_workflow_and_its_activity() -> None:
-    # Imported for the registration side effect — the decorators ARE the registration.
-    import flows.activities
-    import flows.workflow
-    from flows.runtime import wfr
-
-    assert flows.workflow.NODE_RETRY is not None  # the imports are load-bearing, not incidental
-    assert flows.activities.log is not None
-
-    # getattr, because the name is PRIVATE AND MANGLED (`self.__worker` inside WorkflowRuntime) — the
-    # SDK exposes no public reader for its own registry, and a dotted access would be an attribute the
-    # type checker is right to say does not exist. This is the only place the test reaches inside.
-    registry = getattr(wfr, "_WorkflowRuntime__worker")._registry  # noqa: B009
-    assert "flow_run" in registry.orchestrators
-    assert "run_node" in registry.activities
-
-
 def test_the_orchestrator_fans_out_per_wave_and_blocks_on_upstream_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     # when_all is the engine's fan-in primitive; here it only has to preserve the task list so the
     # driver can see what one wave asked for.

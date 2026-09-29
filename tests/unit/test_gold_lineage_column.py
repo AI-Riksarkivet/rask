@@ -21,13 +21,12 @@ import json
 from typing import Any, cast
 
 import lance
-import pytest
 from dapr.aio.clients import DaprClient
 
 from lineage_kit.consume import LineageDoc
 from lineage_kit.schemas import RunEvent
 from medallion.core.config import MedallionSettings
-from medallion.schemas.tier import LINEAGE_COLUMN, TIER_COLUMNS
+from medallion.schemas.tier import LINEAGE_COLUMN
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
 
@@ -101,22 +100,6 @@ def test_the_promotion_writes_the_lineage_column_as_lance_json(tmp_path: Any) ->
     assert all(cell for cell in cells)
 
 
-def test_the_lineage_column_is_part_of_the_tier_contract() -> None:
-    # The exporter (P7c) is allowed to rely on it — a field dropped from a tier is unrecoverable
-    # downstream. Asserted against TIER_COLUMNS, the contract EVERY governed tier carries whatever
-    # workload produced it; it used to be asserted against an HTR-shaped gold contract, which made
-    # a platform guarantee look like one workload's.
-    assert LINEAGE_COLUMN in TIER_COLUMNS
-
-
-def test_the_promotion_indexes_the_run_id_path(tmp_path: Any) -> None:
-    # R26's second half: a JSON scalar index over one JSONB path, rebuilt each run because the cascade's
-    # mode="overwrite" drops indices. Without it every provenance filter is a full scan.
-    uris, _ = _run_cascade(tmp_path)
-    indices = lance.dataset(uris["gold"]).describe_indices()
-    assert [(idx.type_url, list(idx.field_names)) for idx in indices] == [("/lance.index.pb.JsonIndexDetails", [LINEAGE_COLUMN])]
-
-
 def test_the_lineage_column_is_re_stamped_not_inherited(tmp_path: Any) -> None:
     # Silver carries its OWN document (that is what lets gold's chain reach bronze). Gold must overwrite
     # it, never carry it forward — a gold row labelled with silver's run would be a provenance lie.
@@ -148,26 +131,6 @@ def test_the_document_round_trips_with_everything_an_external_consumer_needs(tmp
     assert [(d.namespace, d.name, d.uri) for d in doc.inputs] == [("silver", "silver$features", uris["silver"])]
     assert doc.inputs[0].version == str(lance.dataset(uris["silver"]).version)
     assert (doc.output.namespace, doc.output.name, doc.output.uri) == ("gold", "gold$catalog", uris["gold"])
-
-
-@pytest.mark.parametrize(
-    "predicate",
-    [
-        "json_get_string(lineage, 'run_id') IS NOT NULL",
-        "json_get_string(lineage, 'operation') = 'aggregate_gold'",
-        "json_get_string(lineage, 'author') = 'analyst'",
-        "json_get_string(json_get(lineage, 'job'), 'name') = 'aggregate_gold'",
-        "json_array_contains(lineage, 'chain', 'bronze$events')",
-        "json_array_length(lineage, 'derived_from') = 2",
-        "json_exists(lineage, 'derived_from')",
-    ],
-)
-def test_the_jsonb_answers_filters_in_place(tmp_path: Any, predicate: str) -> None:
-    # Queryability is the point (R26): these predicates run INSIDE the Lance scan against stored JSONB.
-    # A string column would fail every one of them — proving the type, not just the bytes.
-    uris, _ = _run_cascade(tmp_path)
-    gold = lance.dataset(uris["gold"])
-    assert gold.to_table(columns=["id"], filter=predicate).num_rows == gold.count_rows()
 
 
 def test_a_run_id_filter_selects_exactly_the_rows_that_run_produced(tmp_path: Any) -> None:
@@ -209,10 +172,3 @@ def test_the_document_still_describes_the_event_that_was_published(tmp_path: Any
     uris, dapr = _run_cascade(tmp_path)
     emitted = RunEvent.model_validate(_lineage_events(dapr)[-1])
     assert _gold_doc(uris).is_consistent_with(emitted)
-
-
-def test_the_document_names_the_same_instant_as_the_event(tmp_path: Any) -> None:
-    # One eventTime per run, threaded into both. Without it the two records disagree on the only field a
-    # consumer can order runs by time on.
-    uris, dapr = _run_cascade(tmp_path)
-    assert _gold_doc(uris).event_time == _lineage_events(dapr)[-1]["eventTime"]

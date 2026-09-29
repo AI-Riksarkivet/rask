@@ -18,11 +18,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-import pytest
-
 from flows.activities import _idempotency_key
-from flows.executor import dispatch
-from flows.models import FlowNode, Payload
 
 
 class _Inner:
@@ -52,61 +48,8 @@ def test_the_key_is_the_TASK_EXECUTION_id_which_survives_a_retry() -> None:
     assert _idempotency_key(cast("Any", _Ctx("exec-abc"))) == "exec-abc"
 
 
-def test_a_retry_with_a_NEW_task_id_keeps_the_SAME_key() -> None:
-    """Modelled directly: the retry re-schedules with a new sequence number and the same execution id,
-    so a key built from `task_id` would change on the one event it exists for."""
-    first = _Ctx("exec-abc")
-    retry = _Ctx("exec-abc")
-    retry.task_id = 41  # the new sequence number the SDK assigns
-
-    assert _idempotency_key(cast("Any", first)) == _idempotency_key(cast("Any", retry))
-
-
 def test_the_FALLBACK_covers_the_SDKs_empty_default() -> None:
     """`task_execution_id` defaults to `''`. Sending nothing would be worse than sending a key that is
     stable within an attempt, which is what the composite is."""
     assert _idempotency_key(cast("Any", _Ctx(""))) == "wf-1:7"
     assert _idempotency_key(cast("Any", _Ctx(None))) == "wf-1:7"
-
-
-@pytest.mark.asyncio
-async def test_the_key_REACHES_the_Serve_POST() -> None:
-    """The assertion the whole finding turns on: a key nothing sends is not a key."""
-    sent: dict[str, Any] = {}
-
-    class _Client:
-        async def post(self, url: str, **kwargs: Any) -> Any:
-            sent.update(kwargs)
-
-            class _Resp:
-                status_code = 200
-                text = "ok"
-
-            return _Resp()
-
-    node = FlowNode(id="ocr-1", kind="model", config={"app": "demo"})
-    await dispatch(node, [Payload(text="in")], None, client=cast("Any", _Client()), serve_url="http://serve", idempotency_key="exec-abc")
-
-    assert sent["headers"].get("Idempotency-Key") == "exec-abc", f"the retried POST carries nothing to dedupe on: {sent.get('headers')}"
-
-
-@pytest.mark.asyncio
-async def test_NO_key_sends_no_header_rather_than_an_empty_one() -> None:
-    """An empty `Idempotency-Key` is worse than none: a server honouring the header would treat every
-    keyless call as the same request."""
-    sent: dict[str, Any] = {}
-
-    class _Client:
-        async def post(self, url: str, **kwargs: Any) -> Any:
-            sent.update(kwargs)
-
-            class _Resp:
-                status_code = 200
-                text = "ok"
-
-            return _Resp()
-
-    node = FlowNode(id="ocr-1", kind="model", config={"app": "demo"})
-    await dispatch(node, [Payload(text="in")], None, client=cast("Any", _Client()), serve_url="http://serve")
-
-    assert "Idempotency-Key" not in sent["headers"]

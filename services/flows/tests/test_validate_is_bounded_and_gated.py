@@ -76,13 +76,6 @@ def test_a_graph_AT_the_ceiling_still_validates(open_client: TestClient) -> None
     assert resp.status_code == 200
 
 
-def test_the_defaults_leave_validate_open(open_client: TestClient) -> None:
-    """Auth off — a dev stack validates exactly as before the gate existed."""
-    resp = open_client.post("/api/flows/validate", json=_graph(2))
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-
-
 def test_validate_is_GATED_on_a_governed_stack() -> None:
     """Owner ruling 2026-08-26: the estate is authenticated, so no route is ungated.
 

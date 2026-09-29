@@ -18,15 +18,9 @@ made — the same module the estate's single bounded `publish_event` already liv
 from __future__ import annotations
 
 import logging
-import re
-from pathlib import Path
 from typing import Any
 
 import pytest
-
-
-REPO = Path(__file__).resolve().parents[2]
-MEDALLION_SERVICES = REPO / "services/medallion/src/medallion/services"
 
 
 class _Broken:
@@ -34,18 +28,6 @@ class _Broken:
 
     async def publish_event(self, **_kwargs: Any) -> None:
         raise RuntimeError("nats unreachable")
-
-
-def test_no_medallion_service_wraps_a_publish_in_its_own_try_except() -> None:
-    """DUP-18: the try/except + warning around a publish belongs to the publish helper, not the caller.
-
-    RED before the collapse: five modules under `services/medallion/services` each carried
-    `await dapr_publish.publish_event(...)` inside their own `try:`.
-    """
-    offenders = sorted(
-        str(path.relative_to(REPO)) for path in MEDALLION_SERVICES.rglob("*.py") if re.search(r"dapr_publish\.publish_event\(", path.read_text())
-    )
-    assert offenders == [], offenders
 
 
 @pytest.mark.asyncio

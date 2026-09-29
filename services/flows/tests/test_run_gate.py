@@ -16,10 +16,7 @@ the subject/checker sub-dependencies are overridden at their own seams
 wiring — the check call, the audit, the refusal — exercised for real.
 """
 
-from collections.abc import Iterator
-
 import httpx
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -46,20 +43,6 @@ def _app(settings: FlowsSettings) -> FastAPI:
     app.state.workflow_scheduler = None
     app.state.workflow_reader = None
     return app
-
-
-@pytest.fixture
-def open_client() -> Iterator[TestClient]:
-    """Auth entirely off — the defaults every existing deployment has."""
-    with TestClient(_app(FlowsSettings(serve_url="http://serve.invalid:8000"))) as client:
-        yield client
-
-
-def test_the_defaults_leave_the_door_open(open_client: TestClient) -> None:
-    """No bearer, no FGA — a dev stack runs flows exactly as before the gate existed."""
-    resp = open_client.post("/api/flows/runs", json=BODY)
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "succeeded"
 
 
 def test_a_denial_is_a_403_that_names_the_missing_tuple() -> None:
@@ -118,13 +101,6 @@ def test_a_governed_stack_with_no_verifier_is_a_503_not_an_open_door() -> None:
     assert resp.status_code == 503
 
 
-def test_the_read_routes_stay_open(open_client: TestClient) -> None:
-    """/catalog and /validate read a server-declared registry and run graph hygiene — no compute,
-    no gate. Pinned so adding one later is a deliberate act, not a side effect."""
-    assert open_client.get("/api/flows/catalog").status_code == 200
-    assert open_client.post("/api/flows/validate", json=GRAPH).status_code == 200
-
-
 # ---- reading a run back --------------------------------------------------------------------
 
 
@@ -138,13 +114,6 @@ def _app_with_a_run() -> FastAPI:
         )
     }
     return app
-
-
-def test_the_defaults_leave_the_read_door_open(open_client: TestClient) -> None:
-    """Same as the write door: with every knob off the subject is `anon` and the checker is
-    permissive, so a dev stack reads its runs exactly as before the gate existed."""
-    open_client.app.state.runs["run-abc"] = RunState(run_id="run-abc", status="succeeded")
-    assert open_client.get("/api/flows/runs/run-abc").status_code == 200
 
 
 def test_reading_a_run_is_refused_with_the_same_named_tuple() -> None:

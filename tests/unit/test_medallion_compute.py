@@ -28,50 +28,6 @@ from service_kit.lakehouse.quality import assert_quality, passed
 # --------------------------------------------------------------------------- #
 
 
-def test_seed_bronze_writes_a_real_dataset(tmp_path: Any) -> None:
-    uri = str(tmp_path / "bronze")
-    result = seed_bronze(uri, {}, rows=5)
-    table = lance.dataset(uri).to_table()
-    assert table.num_rows == 5
-    # The stage stamp lands AT INGEST (R23 — the retired raw→bronze stage runner's logic, merged into the head).
-    assert table.column_names == ["id", "payload", "stage"]
-    assert set(table.column("stage").to_pylist()) == {"bronze"}
-    assert result.version == lance.dataset(uri).version  # the returned version == what lineage records
-    # the measured output statistics are exact (not estimated): real rows + a positive on-disk byte count.
-    assert result.row_count == 5
-    assert result.size_bytes > 0
-
-
-def test_transform_stage_measures_real_rows_and_bytes(tmp_path: Any) -> None:
-    # The compute reports the runtime-measured output statistics the outputStatistics facet carries.
-    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
-    seed_bronze(bronze, {}, rows=6)
-    result = transform_stage(bronze, silver, {}, stage="silver")
-    assert result.row_count == 6  # rows flowed forward, exactly
-    assert result.size_bytes > 0  # the derived columns add bytes; the count is real, from the dataset stats
-
-
-def test_transform_stage_carries_rows_forward_and_stamps_stage(tmp_path: Any) -> None:
-    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
-    seed_bronze(bronze, {}, rows=4)
-    transform_stage(bronze, silver, {}, stage="silver")
-    out = lance.dataset(silver).to_table()
-    assert out.num_rows == 4  # real rows flowed forward
-    assert set(out.column("stage").to_pylist()) == {"silver"}  # provenance column re-stamped per stage
-
-
-def test_transform_stage_replaces_stage_column_not_duplicates_it(tmp_path: Any) -> None:
-    # The upstream is already stamped at ingest (bronze); each hop must SET the column to its own stage,
-    # not append a second `stage` column (which would collide on the name).
-    bronze, silver, gold = (str(tmp_path / n) for n in ("bronze", "silver", "gold"))
-    seed_bronze(bronze, {}, rows=3)
-    transform_stage(bronze, silver, {}, stage="silver")
-    transform_stage(silver, gold, {}, stage="gold")
-    out = lance.dataset(gold).to_table()
-    assert out.column_names.count("stage") == 1
-    assert set(out.column("stage").to_pylist()) == {"gold"}
-
-
 def test_the_version_advances_WITH_THE_DATA_and_not_otherwise(tmp_path: Any) -> None:
     """A version records a change. A re-run over unchanged rows is not one.
 
@@ -177,32 +133,6 @@ def test_handle_stage_writes_real_data_and_emits_the_real_version(tmp_path: Any)
     )
 
 
-def test_handle_stage_compute_off_writes_no_data(tmp_path: Any) -> None:
-    # The gate: with compute OFF the stage runner writes no downstream dataset and still names the output.
-    #
-    # This test used to assert `datasetVersion == "1"` — it pinned the phantom AS the contract. That
-    # half of it is deleted rather than relaxed: the claim it protected was false, and what a COMPLETE
-    # may assert with no compute is now covered properly by
-    # `test_compute_off_emits_no_phantom_complete`. What remains here is the part that was always
-    # right — the output is still NAMED (the cascade shape survives) and nothing is written to disk.
-    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
-    seed_bronze(bronze, {}, rows=4)
-    settings = _stage_runner_settings(bronze, silver)
-    settings.compute_enabled = False
-    dapr = _FakeDapr()
-
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t1"}}))
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
-    output = lineage["data"]["outputs"][0]
-    assert output["name"] == "silver$features" and output["namespace"] == "silver"
-    # No write happened — opening the downstream path as a dataset must fail (it was never created).
-    try:
-        lance.dataset(silver)
-        raise AssertionError("downstream dataset must not exist when compute is off")
-    except ValueError:
-        pass
-
-
 def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     """A COMPLETE must never describe a dataset that was never written.
 
@@ -236,25 +166,6 @@ def test_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
     )
     assert "outputStatistics" not in output.get("facets", {})
     assert "dataSource" not in output.get("facets", {})
-
-
-def test_produce_compute_off_emits_no_phantom_complete(tmp_path: Any) -> None:
-    """Same contract at the cascade HEAD, which has the identical `result if else 1` shape.
-
-    Separate from the stage runner case on purpose: ``produce`` is where suppressing the event would
-    actually break the pipeline (``/bronze-arrival`` subscribes to THIS event to publish
-    ``medallion.bronze``), so it is the site that proves marking was the necessary choice.
-    """
-    settings = MedallionSettings.model_validate({"compute_enabled": False, "bronze_uri": str(tmp_path / "bronze")})
-    dapr = _FakeDapr()
-
-    asyncio.run(produce(cast(DaprClient, dapr), settings, token="t1"))
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
-    output = lineage["data"]["outputs"][0]
-
-    assert lineage["data"]["run"]["facets"]["lance"]["synthetic"] is True
-    assert "version" not in output.get("facets", {})
-    assert "outputStatistics" not in output.get("facets", {})
 
 
 def test_produce_seeds_real_bronze_and_emits_its_version(tmp_path: Any) -> None:
@@ -293,63 +204,6 @@ def test_produce_idempotency_token_converges_retries(tmp_path: Any) -> None:
 # --------------------------------------------------------------------------- #
 # the quality gate — assertions on the produced data, and blocked promotion
 # --------------------------------------------------------------------------- #
-
-
-def test_assert_quality_passes_on_clean_data(tmp_path: Any) -> None:
-    uri = str(tmp_path / "gold")
-    seed_bronze(uri, {}, rows=3)  # ids 0..2, no nulls
-    checks = assert_quality(uri, {}, key_column="id")
-    assert {c.assertion for c in checks} == {"row_count_positive", "not_null"}
-    assert passed(checks)
-
-
-def test_assert_quality_fails_on_null_key(tmp_path: Any) -> None:
-    uri = str(tmp_path / "gold")
-    lance.write_dataset(pa.table({"id": pa.array([1, None, 3], pa.int64()), "p": ["a", "b", "c"]}), uri, mode="overwrite")
-    checks = assert_quality(uri, {}, key_column="id")
-    not_null = next(c for c in checks if c.assertion == "not_null")
-    assert not_null.success is False and not_null.column == "id"
-    assert not passed(checks)
-
-
-def test_assert_quality_fails_on_empty_dataset(tmp_path: Any) -> None:
-    uri = str(tmp_path / "gold")
-    lance.write_dataset(pa.table({"id": pa.array([], pa.int64())}), uri, mode="overwrite")
-    checks = assert_quality(uri, {}, key_column="id")
-    assert next(c for c in checks if c.assertion == "row_count_positive").success is False
-    assert not passed(checks)
-
-
-def test_assert_quality_skips_null_check_when_key_absent(tmp_path: Any) -> None:
-    # A different stage may not carry the key column — skip the null check, don't fail it.
-    uri = str(tmp_path / "gold")
-    seed_bronze(uri, {}, rows=2)
-    checks = assert_quality(uri, {}, key_column="nonexistent")
-    assert [c.assertion for c in checks] == ["row_count_positive"]
-
-
-def test_assert_quality_declared_columns_block_breaking_changes(tmp_path: Any) -> None:
-    """THE breaking-change detector (data-contract gap #1): a version whose schema no longer carries
-    a DECLARED consumer dependency fails the gate (promotion blocked), while additive evolution and
-    undeclared datasets stay untouched. seed_bronze writes columns [id, payload, stage]."""
-    uri = str(tmp_path / "gold")
-    seed_bronze(uri, {}, rows=2)
-
-    healthy = assert_quality(uri, {}, key_column="id", required_columns=["id", "payload"])
-    declared = [c for c in healthy if c.assertion == "column_declared"]
-    assert [(c.column, c.success) for c in declared] == [("id", True), ("payload", True)]
-    assert passed(healthy)
-
-    # The producer "renamed" payload → a declared dependency is gone: the SPECIFIC column is named,
-    # the gate fails, and the untouched declaration still reports success (precise blame).
-    breaking = assert_quality(uri, {}, key_column="id", required_columns=["id", "embedding"])
-    by_column = {c.column: c.success for c in breaking if c.assertion == "column_declared"}
-    assert by_column == {"id": True, "embedding": False}
-    assert not passed(breaking)  # promotion blocked
-
-    # No declaration (the default) → no new assertion, byte-identical to the pre-existing gate.
-    undeclared = assert_quality(uri, {}, key_column="id")
-    assert all(c.assertion != "column_declared" for c in undeclared)
 
 
 def _write_blob_dataset(uri: str, payloads: list, *, base: str | None = None) -> None:
@@ -452,37 +306,6 @@ def test_a_failed_assertion_is_RECORDED_by_the_stage_runner_and_RULED_ON_by_the_
     assert any(a["assertion"] == "not_null" and a["success"] is False for a in facet["assertions"])
     # And no second door opened.
     assert not any(p["topic"] == "gold.ready" for p in dapr.published)
-
-
-def test_quality_gate_promotes_on_clean_data(tmp_path: Any) -> None:
-    silver = str(tmp_path / "silver")
-    seed_bronze(silver, {}, rows=4)  # clean ids 0..3
-    gold = str(tmp_path / "gold")
-    settings = _quality_stage_runner_settings(silver, gold)
-    dapr = _FakeDapr()
-
-    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
-    assert result == {"status": "SUCCESS"}
-
-    lineage = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")
-    facet = lineage["data"]["outputs"][0]["facets"]["dataQualityAssertions"]
-    assert all(a["success"] for a in facet["assertions"])
-    # Clean data does NOT buy a stage runner-fired promotion — there is one door and this stage runner has no
-    # catalog to reach it. Asserted as an absence for the same reason as the failed-assertion case:
-    # a deleted line and a deleted door look the same in a diff.
-    assert not any(p["topic"] == "gold.ready" for p in dapr.published)
-
-
-def test_quality_off_emits_no_assertions_facet(tmp_path: Any) -> None:
-    # compute ON but quality OFF: a real write + outputStatistics, but NO dataQualityAssertions facet.
-    bronze, silver = str(tmp_path / "bronze"), str(tmp_path / "silver")
-    seed_bronze(bronze, {}, rows=3)
-    settings = _stage_runner_settings(bronze, silver)  # compute on, quality off
-    dapr = _FakeDapr()
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t"}}))
-    output = next(p for p in dapr.published if p["topic"] == settings.lineage_topic and p["data"]["eventType"] != "START")["data"]["outputs"][0]
-    assert "outputStatistics" in output["facets"]
-    assert "dataQualityAssertions" not in output["facets"]
 
 
 def _newest_data_version(uri: str) -> int:

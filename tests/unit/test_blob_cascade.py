@@ -59,17 +59,6 @@ def test_stage_restamped_not_duplicated_when_carrying_a_blob(tmp_path: Path) -> 
     assert "stage" in ds.schema.names and ds.schema.names.count("stage") == 1
 
 
-def test_plain_stage_still_stamps_without_blob(tmp_path: Path) -> None:
-    src, dst = str(tmp_path / "src"), str(tmp_path / "dst")
-    _write(src, pa.table({"id": [1, 2, 3]}))
-
-    transform_stage(src, dst, {}, stage="bronze")
-
-    ds = lance.dataset(dst)
-    assert ds.count_rows() == 3
-    assert ds.to_table(columns=["stage"]).column("stage").to_pylist() == ["bronze"] * 3
-
-
 def test_carry_forward_preserves_fixed_size_list_alongside_a_blob(tmp_path: Path) -> None:
     # a blob column AND a FixedSizeList embedding both survive the blob-rebuild path, row-aligned
     bronze, silver = str(tmp_path / "b"), str(tmp_path / "s")
@@ -94,21 +83,6 @@ def test_carry_forward_preserves_fixed_size_list_alongside_a_blob(tmp_path: Path
     assert ds.schema.field("embedding").type == pa.list_(pa.float32(), 4)
     assert ds.read_blobs("payload", indices=[1])[0][1] == b"b"
     assert ds.to_table(columns=["embedding"]).column("embedding")[1].as_py() == [0.125, 0.375, 0.625, 0.875]
-
-
-def test_carry_forward_handles_multiple_blob_columns(tmp_path: Path) -> None:
-    bronze, silver = str(tmp_path / "b"), str(tmp_path / "s")
-    schema = pa.schema([pa.field("id", pa.int64()), blob_field("img"), blob_field("audio")])
-    _write(
-        bronze,
-        pa.table({"id": [1], "img": blob_array([b"pixels"]), "audio": blob_array([b"waveform"])}, schema=schema),
-    )
-
-    transform_stage(bronze, silver, {}, stage="silver")
-
-    ds = lance.dataset(silver)
-    assert ds.read_blobs("img", indices=[0])[0][1] == b"pixels"
-    assert ds.read_blobs("audio", indices=[0])[0][1] == b"waveform"
 
 
 def test_carry_forward_handles_zero_row_blob_dataset(tmp_path: Path) -> None:

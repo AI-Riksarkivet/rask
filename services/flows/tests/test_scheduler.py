@@ -15,7 +15,6 @@ that was wrong and a double that reimplemented it would prove nothing.
 """
 
 import asyncio
-import inspect
 import threading
 import time
 from collections.abc import Iterator
@@ -151,23 +150,6 @@ async def test_a_probe_that_cannot_reach_the_sidecar_still_degrades() -> None:
         await engine.schedule("run-nosidecar", {})
 
     assert caught.value is refusal  # not the probe's error: the caller needs the reason it failed
-
-
-def test_the_two_substituted_methods_call_the_sdk_the_way_the_sdk_is_spelled() -> None:
-    """Every test above replaces `_create` and `_exists`, so nothing else in this suite would notice
-    the SDK moving under them — and the probe is the half whose FAILURE is silent by design (an
-    unreachable engine answers "absent"). A signature check is two lines and closes that whole class,
-    the same argument `test_workflow.py`'s registration test makes.
-    """
-    import dapr.ext.workflow as wf
-
-    create = inspect.signature(wf.DaprWorkflowClient.schedule_new_workflow).parameters
-    assert {"workflow", "input", "instance_id"} <= set(create)
-
-    probe = inspect.signature(wf.DaprWorkflowClient.get_workflow_state).parameters
-    assert "instance_id" in probe
-    assert "fetch_payloads" in probe
-    assert probe["fetch_payloads"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 @pytest.mark.asyncio

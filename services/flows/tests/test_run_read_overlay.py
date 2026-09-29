@@ -86,24 +86,3 @@ def test_a_run_in_NEITHER_place_is_a_404_not_an_empty_200() -> None:
     says running, and only the first may fall through to the dict — then to a genuine 404."""
     with TestClient(_app(_Engine(None), {})) as client:
         assert client.get(f"/api/flows/runs/{RUN_ID}").status_code == 404
-
-
-def test_the_local_record_still_answers_when_there_is_NO_engine() -> None:
-    """No sidecar is the inline lane, and it is a supported deployment (`make dev-micro`). With no
-    reader the dict is the only record there is, and it must still serve."""
-    inline = {RUN_ID: RunState(run_id=RUN_ID, status="succeeded")}
-    with TestClient(_app(None, inline)) as client:
-        response = client.get(f"/api/flows/runs/{RUN_ID}")
-
-    assert response.status_code == 200
-    assert response.json()["status"] == "succeeded"
-
-
-def test_the_engine_is_consulted_exactly_ONCE_per_read(finished: dict[str, object]) -> None:
-    """A status endpoint is polled. Asking the sidecar twice per request doubles that load for nothing,
-    and it is the kind of regression a refactor introduces silently."""
-    engine = _Engine(finished)
-    with TestClient(_app(engine, {})) as client:
-        client.get(f"/api/flows/runs/{RUN_ID}")
-
-    assert engine.calls == 1

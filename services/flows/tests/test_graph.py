@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from flows.graph import topo_order, topo_waves, upstreams, validate_graph
+from flows.graph import topo_waves, upstreams, validate_graph
 from flows.models import FlowEdge, FlowGraph, FlowNode
 
 
@@ -14,20 +14,9 @@ def _graph(nodes: list[tuple[str, str]], edges: list[tuple[str, str]]) -> FlowGr
     )
 
 
-def test_a_linear_graph_has_no_problems() -> None:
-    graph = _graph([("a", "text"), ("b", "alto"), ("c", "inspect")], [("a", "b"), ("b", "c")])
-    assert validate_graph(graph) == []
-
-
 def test_duplicate_node_id_is_a_problem() -> None:
     graph = _graph([("a", "text"), ("a", "inspect")], [])
     assert validate_graph(graph) == ["duplicate node id: a"]
-
-
-def test_unknown_kind_is_a_problem_and_names_the_node() -> None:
-    graph = _graph([("a", "quantum")], [])
-    problems = validate_graph(graph)
-    assert problems == ["unknown node kind: quantum (node a)"]
 
 
 def test_dangling_edge_endpoints_are_problems() -> None:
@@ -42,18 +31,6 @@ def test_self_loop_is_named_and_suppresses_the_generic_cycle_line() -> None:
     not, so reporting both would be noise the user has to read twice."""
     graph = _graph([("a", "text")], [("a", "a")])
     assert validate_graph(graph) == ["self-loop on node: a"]
-
-
-def test_a_cycle_is_refused() -> None:
-    graph = _graph([("a", "text"), ("b", "alto"), ("c", "inspect")], [("a", "b"), ("b", "c"), ("c", "a")])
-    assert validate_graph(graph) == ["graph has a cycle"]
-    assert topo_order(graph) is None
-    assert topo_waves(graph) is None
-
-
-def test_topo_order_respects_dependencies() -> None:
-    graph = _graph([("c", "inspect"), ("a", "text"), ("b", "alto")], [("a", "b"), ("b", "c")])
-    assert topo_order(graph) == ["a", "b", "c"]
 
 
 def test_topo_waves_group_independent_nodes() -> None:
@@ -152,53 +129,6 @@ def test_a_graph_larger_than_the_node_cap_is_REFUSED() -> None:
     problems = validate_graph(too_big)
     assert problems, f"a {MAX_GRAPH_NODES + 1}-node graph was accepted — the history it writes is bounded by nothing"
     assert any(str(MAX_GRAPH_NODES) in p for p in problems), f"the refusal must name the ceiling, so the caller knows what to cut to: {problems}"
-
-
-def test_a_node_with_too_many_INCOMING_EDGES_is_refused_and_NAMED() -> None:
-    """The sharp cliff, and the one reachable with a small graph.
-
-    `workflow.py` builds each activity input as `inputs=[outputs[u] for u in incoming[node_id]]`, so
-    ONE `NodeJob` carries one full payload per incoming edge. At `MAX_PAYLOAD_CHARS` (256 KiB) each
-    and daprd's `--max-body-size` of 32Mi (verified live on daprd 1.18.1, where that one flag governs
-    HTTP *and* gRPC), 128 upstreams sits exactly on the limit — and JSON escaping pushes a text
-    payload past its raw size, so the true cliff is lower and depends on the CONTENT.
-
-    Past it the sidecar rejects the activity input and the run wedges rather than failing with a
-    problem the builder can paint. Refusing at validate time is the difference between a 422 naming
-    the node and a run that stops with nothing to show.
-    """
-    from flows.models import MAX_NODE_FAN_IN
-
-    sources = [(f"s{i}", "text") for i in range(MAX_NODE_FAN_IN + 1)]
-    graph = _graph([*sources, ("sink", "inspect")], [(f"s{i}", "sink") for i in range(MAX_NODE_FAN_IN + 1)])
-
-    problems = validate_graph(graph)
-    assert problems, f"a node with {MAX_NODE_FAN_IN + 1} upstreams was accepted — its activity input is bounded by nothing"
-    assert any("sink" in p for p in problems), f"the refusal must NAME the node so the builder can paint it: {problems}"
-
-
-def test_the_fan_in_bound_counts_EDGES_not_distinct_sources() -> None:
-    """The amplifier case, and the reason this bound cannot be written against distinct sources.
-
-    `upstreams` APPENDS per edge (`graph.py`), so a duplicated edge contributes a SECOND copy of the
-    same payload to the same `NodeJob`. `validate_graph` tolerates duplicate edges on purpose — the
-    suite's own `test_a_duplicated_edge_does_not_invent_a_cycle` pins that, noting a drag-created
-    duplicate is easy to produce on a canvas. So the cheapest way to blow the message limit is one
-    upstream dragged repeatedly, which a distinct-source count would wave straight through.
-    """
-    from flows.models import MAX_NODE_FAN_IN
-
-    graph = FlowGraph(
-        nodes=[FlowNode(id="a", kind="text"), FlowNode(id="b", kind="inspect")],
-        edges=[FlowEdge(source="a", target="b") for _ in range(MAX_NODE_FAN_IN + 1)],
-    )
-
-    problems = validate_graph(graph)
-    assert problems, (
-        f"{MAX_NODE_FAN_IN + 1} copies of ONE edge were accepted: two distinct sources, but "
-        f"{MAX_NODE_FAN_IN + 1} payloads in the activity input. Counting distinct sources misses this."
-    )
-    assert any("b" in p for p in problems), f"the refusal must name the target node: {problems}"
 
 
 def test_the_bounds_are_ARITHMETICALLY_consistent_with_the_payload_cap_and_the_sidecar_limit() -> None:

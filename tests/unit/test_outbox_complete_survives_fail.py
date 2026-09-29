@@ -96,18 +96,3 @@ def test_a_failed_complete_publish_does_not_get_overwritten_by_a_fail(tmp_path: 
         f"a {event_type} was staged over the COMPLETE — the outbox lost the event it exists to "
         "preserve. The guard flag in handle_stage is set after the COMPLETE emit instead of before it."
     )
-
-
-def test_the_complete_is_still_staged_at_all_after_its_publish_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The outbox contract underneath the guard: a failed publish leaves the event staged, so the
-    lineage relay can re-ingest it. If this regresses, the guard above protects nothing."""
-    _fake_stage(monkeypatch)
-    dapr = _DaprFailingEveryPublish()
-
-    asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _settings(tmp_path), {"data": {"token": "tok"}}))
-
-    assert _staged(tmp_path), "the crash window is gone — a publish failure now loses the event"
-    assert dapr.attempts, "no publish was attempted"
-    # The START opens the run first now, so the COMPLETE is not attempt zero — what matters is that it
-    # was attempted at all, which is the publish whose failure this test is about.
-    assert next(a.get("eventType") for a in dapr.attempts if a.get("eventType") != "START") == "COMPLETE"

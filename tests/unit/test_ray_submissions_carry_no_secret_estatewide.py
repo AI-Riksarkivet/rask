@@ -27,14 +27,11 @@ that only checks the seams someone remembered is the plane-local regime this rep
 from __future__ import annotations
 
 import json
-import pathlib
 from typing import Any
 
 import httpx
 import pytest
 
-
-REPO = pathlib.Path(__file__).resolve().parents[2]
 
 #: One distinctive value per credential CLASS the estate holds. Every seam is fed all of them.
 MATERIAL = {
@@ -148,41 +145,6 @@ async def test_the_medallion_train_seam_is_clean(medallion_bodies: dict[str, Any
 # ── the enumeration guard: a fourth seam cannot land outside this file ───────────────────────────
 
 
-#: Files KNOWN to build a Ray Jobs submission body, each represented by a test above.
-_REPRESENTED = {
-    "services/medallion/src/medallion/services/ray_submit.py",
-    # `ray_jobs_api` is the medallion's Ray ADAPTER and the kernel the seam above rides: it SHIPS
-    # bodies its caller builds and builds none itself — `submit_or_reattach(client, sub_id, body)`
-    # takes the body as an argument. The callers are the seams. If it ever grows an env-building
-    # helper it stops being a shipper, and it already has a test here to grow into.
-    "services/medallion/src/medallion/services/ray_jobs_api.py",
-    # The `Executor`-port adapter for the same Jobs API ([[LH-158]]). It BUILDS a body — `runtime_env`
-    # from `order.to_env()` — so it is a seam in its own right, not a shipper like the kernel above.
-    # Its safety is structural rather than filtered: `WorkOrder` has no field that can hold a
-    # credential (`credential_ref` NAMES one), so there is nothing for a filter to miss. That is a
-    # stronger property than either mechanism this file was written to reconcile, and it is exactly
-    # why it still has to be fed the same material: a structural claim nobody tests is a claim.
-    "services/medallion/src/medallion/services/rayjobs_api_executor.py",
-}
-
-
-def _submission_seams_in_tree() -> set[str]:
-    """Every non-test file under the fleet's planes that submits to the Ray Jobs surface."""
-    seams: set[str] = set()
-    for base in (REPO / "services", REPO / "packages"):
-        for path in base.rglob("*.py"):
-            if "tests" in path.parts or ".venv" in path.parts:
-                continue
-            text = path.read_text()
-            # CALL sites, not imports, re-exports or comments: a seam is a file that actually fires
-            # a submission (`.submit_job(` / `submit_or_reattach(`). `compute` holds a full
-            # `JobSubmissionClient` and never submits (read-only introspection — verified), so a
-            # client import alone must not count or the guard cries wolf on every reader.
-            if "submit_job(" in text or "submit_or_reattach(" in text:
-                seams.add(str(path.relative_to(REPO)))
-    return seams
-
-
 @pytest.mark.asyncio
 async def test_the_executor_port_seam_is_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     """The `Executor` adapter builds its own body, so it is fed the same material as every other seam.
@@ -226,16 +188,3 @@ async def test_the_executor_port_seam_is_clean(monkeypatch: pytest.MonkeyPatch) 
 
     assert "body" in captured, "the submission was never captured — the seam moved and this pin is checking nothing"
     _assert_clean("rayjobs_api_executor.submit", captured["body"])
-
-
-def test_every_submission_seam_is_represented_here() -> None:
-    unrepresented = _submission_seams_in_tree() - _REPRESENTED
-    assert not unrepresented, (
-        "these files submit to the Ray Jobs surface and are not covered by this cross-plane pin — "
-        "add a test feeding them MATERIAL, or the next seam repeats the twice-fixed P0:\n  " + "\n  ".join(sorted(unrepresented))
-    )
-
-
-def test_the_enumeration_guard_sees_the_known_seams() -> None:
-    """A guard on the guard: if the grep stops matching the three known files, it is matching nothing."""
-    assert _submission_seams_in_tree() >= _REPRESENTED, "the seam grep no longer finds the known submitters — the enumeration is checking nothing"

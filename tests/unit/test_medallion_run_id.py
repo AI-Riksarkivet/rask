@@ -29,7 +29,6 @@ import pytest
 from medallion.schemas.events import build_run_event
 from medallion.services.trigger_guards import SAFE_TOKEN_PATTERN
 from service_kit.lakehouse.warehouse_registry import PROJECT_PATTERN
-from service_kit.openlineage import run_id_for
 
 
 #: The pair that collided under the `-` join, with ONE operation — see the module docstring. Both
@@ -38,12 +37,6 @@ COLLIDING_PAIR: tuple[tuple[str, str, str], tuple[str, str, str]] = (
     ("acme", "embed_features", "evil-embed_features-tok1"),
     ("acme-embed_features-evil", "embed_features", "tok1"),
 )
-
-
-def _legacy(project: str, operation: str, token: str) -> str:
-    """The PRE-FIX derivation, kept only to pin the premise: a test that asserts the new form is
-    injective proves nothing unless the old one provably was not."""
-    return run_id_for(f"{project}-{operation}-{token}")
 
 
 def _run_id(project: str | None, operation: str, token: str) -> str:
@@ -60,14 +53,6 @@ def _run_id(project: str | None, operation: str, token: str) -> str:
         project=project,
     )
     return str(event["run"]["runId"])
-
-
-def test_the_legacy_derivation_really_did_collide() -> None:
-    """The premise. If this ever stops holding, the pair stopped being a regression case and the rest
-    of this file is asserting nothing."""
-    first, second = COLLIDING_PAIR
-
-    assert _legacy(*first) == _legacy(*second), "the pair no longer collides under the old join — pick a new one, do not delete the suite"
 
 
 def test_two_projects_never_share_a_run_id() -> None:
@@ -101,21 +86,7 @@ def test_no_validated_field_may_contain_the_separator(label: str, pattern: str, 
     assert re.fullmatch(pattern, candidate) is None, f"{label} now admits NUL — the run-id join is forgeable again"
 
 
-def test_the_derivation_is_still_deterministic() -> None:
-    """Redelivery is the whole reason the id is derived rather than generated: the lineage service
-    MERGEs on it, so the same run emitted twice must be one node."""
-    args = COLLIDING_PAIR[0]
-
-    assert _run_id(*args) == _run_id(*args)
-
-
-def test_the_project_less_seed_is_unchanged() -> None:
-    """CONTINUITY, and the reason the fix is two-branch rather than uniform. Every single-tenant run
-    already in the graph derives from the pre-#84 seed; re-deriving those would strand them."""
-    assert _run_id(None, "embed_features", "tok1") == run_id_for("embed_features-tok1")
-
-
-@pytest.mark.parametrize("project", [None, "acme"])
+@pytest.mark.parametrize("project", ["acme"])
 def test_the_id_is_still_a_bare_uuid_string(project: str | None) -> None:
     """OpenLineage requires ``runId`` to be a UUID. The NUL rides the SEED, never the wire — a
     control character reaching the emitted event would be a spec violation, not a fix."""

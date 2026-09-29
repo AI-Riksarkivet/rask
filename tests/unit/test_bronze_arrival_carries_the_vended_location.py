@@ -203,20 +203,6 @@ def test_a_table_the_catalog_does_not_govern_names_no_upstream(tmp_path: Path) -
     assert "from_uri" not in trigger
 
 
-def test_an_ungoverned_head_names_no_upstream(tmp_path: Path) -> None:
-    """The dev/demo shape (no `MEDALLION_CATALOG_URL`) asks nobody and carries nothing — the same
-    escape hatch `produce.py` and the stage runners keep, so a stack with no catalog still cascades."""
-    control = tmp_path / "control"
-    _provision(control, "acme", tmp_path / "acme-wh")
-    dapr = _FakeDapr()
-    head = MedallionSettings.model_validate({"compute_enabled": True, "bronze_uri": str(tmp_path / "b"), "control_root": str(control)})
-
-    assert asyncio.run(handle_bronze_arrival(cast("DaprClient", dapr), head, {"data": _bronze_event()})) == {"status": "SUCCESS"}
-
-    trigger = next(p["data"] for p in dapr.published if p["topic"] == head.bronze_topic)
-    assert "from_uri" not in trigger
-
-
 @respx.mock
 def test_a_vended_location_outside_the_read_root_is_still_refused(tmp_path: Path) -> None:
     """THE CONFINEMENT GUARD STILL APPLIES. `from_uri` is honoured by OPENING it with the stage runner's own

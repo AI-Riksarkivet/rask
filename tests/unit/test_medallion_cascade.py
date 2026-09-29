@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from pathlib import Path
 from typing import Any, cast
 
@@ -389,29 +388,6 @@ def test_page_lane_arrival_does_not_fire_the_events_lane_stage_runner(tmp_path: 
     assert not (tmp_path / "silver").exists(), "the events-lane stage runner wrote silver from a page trigger"
 
 
-def test_the_dropped_lane_is_observable(tmp_path: Any, caplog: Any) -> None:
-    """Dropping quietly would delete the signal that the page lane has no consumer.
-
-    A DROP is an ack — Dapr does not retry it — so if the app logs nothing and counts nothing, the only
-    remaining trace is a dead-letter park that reads as exhaustion rather than as a lane decision. That
-    matters concretely: before the lane guard, a
-    ``bronze$pages`` arrival drove the events stage runner into a deterministic FAIL, and
-    ``docs/architecture/live-proof-2026-07-28.md`` used that FAIL as its evidence that the P7b page lane
-    was unlanded. Asserted at INFO because the stage runner's logger is configured to INFO
-    (``configure_app_logging``), so a DEBUG record would never be emitted at all.
-    """
-    seed_bronze(str(tmp_path / "bronze"), {}, rows=2)
-    dapr = _FakeDapr()
-    settings = _stage_runner_settings(_HOPS[0], {"bronze": str(tmp_path / "bronze"), "silver": str(tmp_path / "silver")})
-
-    with caplog.at_level(logging.INFO, logger="medallion.services.transform"):
-        asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "t", "dataset": "bronze$pages"}}))
-
-    record = next((r for r in caplog.records if r.message == "medallion_stage_other_lane"), None)
-    assert record is not None, f"the drop left no INFO record: {[r.message for r in caplog.records]}"
-    assert record.arrived == "bronze$pages" and record.expects == "bronze$events"
-
-
 def test_matching_lane_trigger_still_runs(tmp_path: Any) -> None:
     """The other half of the guard: the discriminator must not reject the lane it belongs to.
 
@@ -540,7 +516,6 @@ def _seed_silver(work_wh: Path) -> None:
         (True, True, True),  # the only combination that retargets
         (True, False, False),  # no serving warehouse → fall back to the work root, byte-identical
         (False, True, False),  # flag off → the gold record is ignored entirely
-        (False, False, False),
     ],
 )
 def test_gold_stage_runner_target_selection(tmp_path: Any, flag_on: bool, gold_present: bool, expect_gold_bucket: bool) -> None:

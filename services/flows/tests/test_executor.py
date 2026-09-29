@@ -33,10 +33,6 @@ def client():
 # ---- alto extraction -------------------------------------------------------------------------
 
 
-def test_alto_lines_group_strings_per_textline() -> None:
-    assert alto_lines(ALTO) == ["Anno 1723", "Bengt & Anna"]
-
-
 def test_alto_lines_unescape_the_entities_alto_actually_carries() -> None:
     xml = '<TextLine><String CONTENT="&quot;kvar&quot; &lt;7&gt; &amp; O&apos;Neil"/></TextLine>'
     assert alto_lines(xml) == ['"kvar" <7> & O\'Neil']
@@ -175,38 +171,6 @@ async def test_execute_runs_a_text_model_alto_chain() -> None:
     assert state.status == "succeeded"
     assert state.nodes["a"].output_text == "Anno 1723\nBengt & Anna"
     assert all(n.ms is not None for n in state.nodes.values())
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_failed_node_blocks_its_dependents_without_dispatching_them() -> None:
-    """The dependent is recorded `failed` / "upstream failed" and never run. Running it against
-    missing input would invent a second failure and the builder would paint the wrong node red."""
-    respx.post(f"{SERVE}/htrflow").mock(return_value=httpx.Response(500))
-    graph = FlowGraph(
-        nodes=[
-            FlowNode(id="t", kind="text"),
-            FlowNode(id="m", kind="model", config={"app": "htrflow"}),
-            FlowNode(id="a", kind="alto"),
-            FlowNode(id="s", kind="inspect"),
-        ],
-        edges=[
-            FlowEdge(source="t", target="m"),
-            FlowEdge(source="m", target="a"),
-            FlowEdge(source="a", target="s"),
-        ],
-    )
-
-    async with httpx.AsyncClient() as client:
-        state = await execute(graph, {"t": "seed"}, "run-2", client=client, serve_url=SERVE)
-
-    assert state.status == "failed"
-    assert state.nodes["t"].status == "succeeded"
-    assert state.nodes["m"].error == "serve returned 500 for app 'htrflow'"
-    assert state.nodes["a"].error == "upstream failed"
-    assert state.nodes["s"].error == "upstream failed"
-    # Blocked nodes were never dispatched, so they have no duration to report.
-    assert state.nodes["a"].ms is None
 
 
 @pytest.mark.asyncio

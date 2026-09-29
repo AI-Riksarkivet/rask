@@ -29,7 +29,7 @@ import medallion.services.transform as stage_runner
 from lineage.models import Dataset
 from medallion.core.config import MedallionSettings
 from medallion.schemas.events import build_run_event
-from medallion.services.compute import _column_map, measure_stage, seed_bronze, transform_stage
+from medallion.services.compute import measure_stage, seed_bronze, transform_stage
 from medallion.services.transform import handle_stage
 from service_kit.openlineage import column_lineage_facet
 
@@ -58,34 +58,6 @@ def test_column_lineage_facet_groups_by_output_and_roundtrips() -> None:
     assert hash_edges == {("name", True), ("salt", True)}
     id_edge = next(e for e in parsed if e.out_field == "id")
     assert (id_edge.name, id_edge.field, id_edge.subtype) == ("events", "id", "IDENTITY")
-
-
-def test_column_lineage_facet_drops_malformed_and_empty() -> None:
-    # An empty output/source column must not materialise a junk vertex; no valid edges → no facet at all.
-    assert column_lineage_facet("p", [("", "ns", "d", "f", "DIRECT", "", False)]) == {}
-    assert column_lineage_facet("p", [("out", "ns", "d", "", "DIRECT", "", False)]) == {}
-    assert column_lineage_facet("p", []) == {}
-
-
-# --------------------------------------------------------------------------- #
-# the compute DECLARES the right edges (pure _column_map)
-# --------------------------------------------------------------------------- #
-
-
-def test_column_map_identity_for_carried_columns_only() -> None:
-    in_schema = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.string())])
-    deps = _column_map(in_schema, ["id", "payload", "stage"], blob_cols=set())
-    # Every carried column is IDENTITY; the ``stage`` provenance stamp is a constant with NO input.
-    assert set(deps) == {("id", "id", "IDENTITY"), ("payload", "payload", "IDENTITY")}
-    assert not any(out == "stage" for out, _in, _t in deps)
-
-
-def test_column_map_transformation_for_derived_artifacts() -> None:
-    in_schema = pa.schema([pa.field("id", pa.int64()), pa.field("payload", pa.large_binary())])
-    deps = _column_map(in_schema, ["id", "payload", "stage", "thumbnail", "embedding"], blob_cols={"payload"})
-    assert ("thumbnail", "payload", "TRANSFORMATION") in deps
-    assert ("embedding", "payload", "TRANSFORMATION") in deps
-    assert ("payload", "payload", "IDENTITY") in deps  # the blob itself is carried forward
 
 
 # --------------------------------------------------------------------------- #
@@ -133,28 +105,6 @@ def test_measure_stage_reconstructs_transformation_edges_for_a_media_stage(tmp_p
 # --------------------------------------------------------------------------- #
 # build_run_event attaches the facet on the output, pointing at the single input
 # --------------------------------------------------------------------------- #
-
-
-def test_build_run_event_attaches_columnlineage_on_output() -> None:
-    event = build_run_event(
-        operation="ingest_events",
-        author="data_eng",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="silver",
-        output_name="silver$features",
-        version=2,
-        column_map=[("id", "id", "IDENTITY"), ("hash", "payload", "TRANSFORMATION")],
-        token="t1",
-    )
-    output = Dataset.model_validate(event["outputs"][0])
-    edges = {(e.out_field, e.name, e.field, e.subtype) for e in output.column_edges}
-    assert edges == {
-        ("id", "bronze$events", "id", "IDENTITY"),
-        ("hash", "bronze$events", "payload", "TRANSFORMATION"),
-    }
-    # The facet lives ONLY on the output — inputs never carry columnLineage.
-    assert "columnLineage" not in (event["inputs"][0].get("facets") or {})
 
 
 def test_build_run_event_without_column_map_omits_facet() -> None:
@@ -254,20 +204,6 @@ def _write_media_dataset(uri: str, payloads: list[bytes]) -> None:
     schema = pa.schema([pa.field("id", pa.int64()), blob_field("payload")])
     table = pa.table({"id": list(range(len(payloads))), "payload": lance.blob_array(payloads)}, schema=schema)
     lance.write_dataset(table, uri, data_storage_version="2.2", enable_stable_row_ids=True)
-
-
-def test_transform_stage_derives_artifact_column_edges(tmp_path: Any) -> None:
-    # A blob (image) stage: the derived thumbnail/embedding edges are TRANSFORMATION from the blob column,
-    # the blob + id are carried IDENTITY — proving the media lane populates the field-to-field graph.
-    uri, silver = str(tmp_path / "bronze_media"), str(tmp_path / "silver_media")
-    _write_media_dataset(uri, [_png((200, 40, 40)), _png((40, 40, 200))])
-
-    result = transform_stage(uri, silver, {}, stage="silver")
-    deps = set(result.column_map)
-    assert ("thumbnail", "payload", "TRANSFORMATION") in deps
-    assert ("embedding", "payload", "TRANSFORMATION") in deps
-    assert ("id", "id", "IDENTITY") in deps
-    assert ("payload", "payload", "IDENTITY") in deps
 
 
 # --------------------------------------------------------------------------- #

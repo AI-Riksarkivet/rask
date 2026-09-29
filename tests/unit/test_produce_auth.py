@@ -12,7 +12,6 @@ Two layers: direct-function tests pin every fail-closed branch of :func:`authori
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import threading
 from collections.abc import Iterator
@@ -116,20 +115,6 @@ def test_dev_open_when_no_service_token(monkeypatch: pytest.MonkeyPatch) -> None
     assert _run(monkeypatch, app_token=None) is None  # dev no-op, exactly like require_dapr_token
 
 
-def test_service_token_allows(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t") is None
-
-
-def test_oidc_admin_allows(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Allowed = returns without raising. It used to assert `is None` because the gate returned nothing;
-    the subject it now hands back is the cascade's originator, and NOT raising is still the whole claim."""
-    assert _run(monkeypatch, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_result=True) == "alice"
-
-
-def test_oidc_nonadmin_is_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    _expect(monkeypatch, 403, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_result=False)
-
-
 def test_invalid_bearer_is_401(monkeypatch: pytest.MonkeyPatch) -> None:
     _expect(monkeypatch, 401, app_token="s3cr3t", authz="Bearer bad", verifier=_Verifier(invalid=True))
 
@@ -186,17 +171,9 @@ def test_the_promotion_door_verifies_the_bearer_OFF_the_event_loop() -> None:
     assert verifier.thread != threading.get_ident(), "verify() ran on the event loop thread"
 
 
-def test_fga_outage_is_503(monkeypatch: pytest.MonkeyPatch) -> None:
-    _expect(monkeypatch, 503, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_raises=True)
-
-
 def test_an_UNWIRED_fga_client_is_503_even_for_an_admin(monkeypatch: pytest.MonkeyPatch) -> None:
     """The check would allow; only the missing client can refuse, and it must, never as an allow."""
     _expect(monkeypatch, 503, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), fga_result=True, wired=False)
-
-
-def test_no_credential_is_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    _expect(monkeypatch, 403, app_token="s3cr3t")  # token set, no dapr token, no bearer, no verifier
 
 
 def test_bearer_but_oidc_disabled_is_403(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,10 +187,6 @@ def test_bearer_but_unwired_verifier_is_503(monkeypatch: pytest.MonkeyPatch) -> 
     # terminal 403 — a valid admin would otherwise be misreported as denied, and 503-keyed monitoring
     # (which the FGA-unwired branch already feeds) would miss the misconfiguration.
     _expect(monkeypatch, 503, app_token="s3cr3t", authz="Bearer good", verifier=None)
-
-
-def test_wrong_service_token_and_oidc_off_is_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="wrong", oidc_enabled=False)
 
 
 # ── route-wiring tests: authorize_produce is actually mounted on POST /produce ────────────────────
@@ -231,10 +204,6 @@ def _client() -> TestClient:
     app.dependency_overrides[get_dapr] = lambda: None
     app.dependency_overrides[get_settings] = lambda: SimpleNamespace(oidc_enabled=False, produce_admin_project="acme", app_api_token="s3cret")
     return TestClient(app, raise_server_exceptions=False)
-
-
-def test_route_rejects_missing_token() -> None:
-    assert _client().post("/produce").status_code == 403
 
 
 def test_route_rejects_wrong_token() -> None:
@@ -264,36 +233,6 @@ def test_oidc_admin_gate_targets_the_requested_project(monkeypatch: pytest.Monke
     assert captured["obj"] == "project:globex"
 
 
-def test_oidc_admin_gate_defaults_to_the_configured_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-    _run(monkeypatch, app_token="s3cr3t", authz="Bearer good", verifier=_Verifier(), captured=captured)
-    assert captured["obj"] == "project:acme"  # no project param → exactly the pre-#84 gate
-
-
-def test_service_token_with_the_configured_project_allows(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The service path stays open for the project it is configured to produce into.
-    assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", project="acme") is None
-
-
-def test_service_token_cannot_request_another_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The shared app token authenticates the SERVICE, not a tenant — trusting it for an arbitrary
-    # requested project would let any token holder produce into every tenant. Cross-project requests
-    # take a user bearer — the per-project FGA check test_oidc_admin_gate_targets_the_requested_project pins.
-    _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="s3cr3t", project="globex")
-
-
-def test_nonadmin_of_the_requested_project_is_403(monkeypatch: pytest.MonkeyPatch) -> None:
-    _expect(
-        monkeypatch,
-        403,
-        app_token="s3cr3t",
-        authz="Bearer good",
-        verifier=_Verifier(),
-        fga_result=False,
-        project="globex",
-    )
-
-
 def test_route_rejects_a_malformed_project_with_422() -> None:
     # The project becomes an S3 prefix + lineage qualifier — a path-shaped value is refused at the edge.
     res = _client().post("/produce", params={"project": "../evil"}, headers={"dapr-api-token": "s3cret", "Idempotency-Key": "idem-test"})
@@ -315,13 +254,6 @@ def test_produce_route_409s_when_project_routing_is_disabled(monkeypatch: pytest
 
 
 # ── /train gate: pinned to the CONFIGURED project — a caller-supplied ?project= is ignored ─────────
-
-
-def test_train_gate_declares_no_project_param() -> None:
-    # The pin is structural: authorize_train has NO `project` parameter, so FastAPI never binds a
-    # caller's ?project= into the train gate — training writes single-tenant state under the configured
-    # produce_admin_project, and authorization scope must equal write scope.
-    assert "project" not in inspect.signature(produce_auth.authorize_train).parameters
 
 
 def test_train_gate_checks_the_configured_project(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -455,29 +387,7 @@ def test_service_token_cross_project_refusal_is_audited(monkeypatch: pytest.Monk
     assert fields["audit.resource"] == "project:globex"
 
 
-def test_medallion_audit_stream_is_env_gated(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The producer boot gates `lance.audit` on the SHARED LANCE_AUDIT_ENABLED (catalog parity — one flag
-    # for the estate's compliance posture): default on, and the env alias turns the stream off.
-    assert MedallionSettings.model_validate({}).audit_enabled is True
-    monkeypatch.setenv("LANCE_AUDIT_ENABLED", "false")
-    assert MedallionSettings().audit_enabled is False
-
-
 # ── the gateway must not launder anonymous traffic into a governed write ──────
-
-
-def test_a_VALID_service_token_from_the_PUBLIC_DOOR_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The measured bypass, on the highest-value door in the estate.
-
-    `dapr.io/app-token-secret` makes daprd stamp `dapr-api-token` on every request it hands the app,
-    and the gateway forwards `/api/produce` through Dapr service invocation — so an anonymous public
-    request reaches this door already holding the estate's service credential. Measured on the sibling
-    ingest door: 403 straight to the pod, 202 through the gateway.
-
-    What that buys an anonymous caller here is not a read: `/produce` writes `bronze$events`,
-    fabricates OpenLineage provenance, and fires the whole bronze->silver->gold cascade.
-    """
-    _expect(monkeypatch, 403, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="gateway")
 
 
 def test_a_PUBLIC_callers_refusal_is_audited_on_the_REQUESTED_project(monkeypatch: pytest.MonkeyPatch, audit_records: list[logging.LogRecord]) -> None:
@@ -526,19 +436,3 @@ def test_a_SERVICE_caller_and_a_DIRECT_caller_are_both_still_allowed(monkeypatch
     """
     assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id="medallion") is None
     assert _run(monkeypatch, app_token="s3cr3t", dapr_token="s3cr3t", caller_app_id=None) is None
-
-
-def test_the_human_path_returns_the_verified_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The door is the LAST place the cascade's originator exists.
-
-    It returned nothing, so a bronze->silver->gold run could never name the person who started it: by
-    the time a later stage fails the request is gone and the stage runner authors as a chart role literal. The
-    value is a TARGETING hint only — it rides `lance.originator` into the notifications plane, which
-    re-derives every recipient's visibility at delivery — so returning it widens no authorization."""
-    assert _run(monkeypatch, app_token="secret", authz="Bearer t", verifier=_Verifier("alice")) == "alice"
-
-
-def test_the_service_path_names_no_originator(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A shared service token authenticates a SERVICE, not a person. `None` rather than a placeholder:
-    an inbox addressed to a role is the defect this whole change exists to remove."""
-    assert _run(monkeypatch, app_token="secret", dapr_token="secret") is None

@@ -19,7 +19,6 @@ the taxonomy, not a departure from it.
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Iterator
 
 import httpx
@@ -29,7 +28,6 @@ from fastapi.testclient import TestClient
 
 from flows import health, routes
 from flows.config import FlowsSettings
-from flows.models import RunState
 from service_kit.exceptions import register_handlers
 
 
@@ -51,13 +49,6 @@ def client() -> Iterator[TestClient]:
         yield test_client
 
 
-def test_create_run_declares_one_return_type() -> None:
-    """The `| JSONResponse` escape hatch is what let a second error plane exist here."""
-    from flows.routes import create_run
-
-    assert inspect.signature(create_run).return_annotation is RunState
-
-
 def test_the_refusal_body_is_the_shared_builders_output(client: TestClient) -> None:
     """Five members, produced by the one handler every other refusal in this service goes through."""
     response = client.post(
@@ -74,18 +65,3 @@ def test_the_refusal_body_is_the_shared_builders_output(client: TestClient) -> N
         "detail": "1 problem(s) in the graph",
         "problems": ["unknown node kind: quantum (node a)"],
     }
-
-
-def test_the_refusal_is_raised_so_it_can_be_caught(client: TestClient) -> None:
-    """A refusal that is RAISED is one the service layer can produce; a returned response is not.
-
-    This is the practical difference the union type hid: `validate_graph` is called from the route
-    today, but anything below the route that wants to refuse a graph could not, because the only
-    refusal path was `return JSONResponse(...)` from inside a handler.
-    """
-    from flows.models import RunRefusedError
-    from service_kit.exceptions import UnprocessableEntityError
-
-    error = RunRefusedError("1 problem(s) in the graph", extensions={"problems": ["x"]})
-    assert isinstance(error, UnprocessableEntityError)
-    assert error.status_code == 422

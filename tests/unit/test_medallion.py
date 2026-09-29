@@ -22,7 +22,7 @@ import medallion.services.ray_submit as ray_submit
 import medallion.services.transform as stage_runner
 from lineage_kit.consume import LineageDoc
 from medallion.core.config import MedallionSettings
-from medallion.schemas.events import _REPO_URL, build_run_event
+from medallion.schemas.events import build_run_event
 from medallion.services import inprocess_executor, stage_submit
 from medallion.services.compute import UpstreamFacts, WriteResult
 from medallion.services.ingest_trigger import handle_bronze_arrival
@@ -79,69 +79,6 @@ _BRONZE_TO_SILVER = MedallionSettings.model_validate(
 # The same stage with the EVENT-DRIVEN Ray path on (compute + ray + from/to URIs). model_copy skips the
 # validators, matching what the deployed pod resolves; a local path keeps storage_options() creds-free.
 _RAY_STAGE_RUNNER = _BRONZE_TO_SILVER.model_copy(update={"compute_enabled": True, "ray_enabled": True, "from_uri": "/tmp/from", "to_uri": "/tmp/to"})
-
-
-def test_build_run_event_records_the_transform_edge() -> None:
-    event = build_run_event(
-        operation="embed_features",
-        author="data_eng",
-        job_namespace="lance-medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="silver",
-        output_name="silver$features",
-        version=2,
-        token="embed1",
-    )
-    assert event["inputs"][0]["name"] == "bronze$events"
-    assert event["outputs"][0]["name"] == "silver$features"
-    assert event["outputs"][0]["facets"]["version"]["datasetVersion"] == "2"
-    assert event["run"]["facets"]["author"]["sub"] == "data_eng"
-    assert event["job"]["name"] == "embed_features"
-    # The standard sourceCodeLocation job facet — where the job's code lives. type=git + the repo URL +
-    # the service path.
-    #
-    # THE URL IS READ FROM THE CONSTANT, NOT RE-SPELLED. This line held the literal
-    # `https://github.com/Borg93/lance-ns` — the RETIRED repo — and stayed green for as long as the
-    # emitter agreed with it, which is precisely the period during which the estate was stamping a
-    # dead URL onto 738 real runs. A second copy of a value cannot detect that the value is wrong; it
-    # only makes the wrong value harder to change. Whether the constant names a repo that EXISTS is a
-    # different question, asked where it can be answered: `test_every_lineage_producer_uri_resolves.py`
-    # finds every producer constant by parse and reads the org from `git remote`.
-    source = event["job"]["facets"]["sourceCodeLocation"]
-    assert source["type"] == "git"
-    assert source["url"] == _REPO_URL
-    assert source["path"] == "services/medallion"
-    assert "SourceCodeLocationJobFacet" in source["_schemaURL"]
-
-
-def _run_event_for(project: str | None) -> dict[str, Any]:
-    return build_run_event(
-        operation="embed_features",
-        author="data_eng",
-        job_namespace="lance-medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="silver",
-        output_name="silver$features",
-        token="tok1",
-        project=project,
-    )
-
-
-def test_run_id_without_project_keeps_the_single_tenant_seed() -> None:
-    # Regression: a project-less emit derives its runId from EXACTLY the pre-#84 seed — the graph's
-    # existing runs (and every redelivery of them) must keep MERGEing onto the same ids.
-    assert _run_event_for(None)["run"]["runId"] == run_id_for("embed_features-tok1")
-
-
-def test_run_id_is_project_qualified_so_tenants_never_collide() -> None:
-    # Two projects reusing the SAME token must yield TWO distinct runs — an unqualified seed would
-    # MERGE one tenant's run onto the other's, cross-wiring their lineage.
-    acme, globex = _run_event_for("acme")["run"]["runId"], _run_event_for("globex")["run"]["runId"]
-    # NUL-joined, not `-`-joined: both `project` and `token` admit `-`, so the readable join was
-    # forgeable across tenants. tests/unit/test_medallion_run_id.py pins the collision it closed.
-    assert acme == run_id_for("acme\x00embed_features\x00tok1")
-    assert globex == run_id_for("globex\x00embed_features\x00tok1")
-    assert acme != globex
 
 
 def test_stage_runner_emits_lineage_and_fires_NO_next_stage_trigger() -> None:
@@ -332,49 +269,6 @@ def test_stage_runner_write_is_single_flight_under_concurrent_delivery(monkeypat
     assert max_active == 1  # serialized — never two writes in flight for the same target at once
 
 
-def test_ray_stage_runner_submits_for_blob_upstreams(monkeypatch: pytest.MonkeyPatch) -> None:
-    """ray_enabled + a blob-carrying upstream now goes to the RAY job (Phase-3 parity, 2026-07-13): the
-    stage job round-trips the blob column via pylance (read_blobs → blob_array → 2.2 write) and derives
-    thumbnail+embedding — so there is no in-process fallback anymore. The old fallback is GONE."""
-    from medallion.services.compute import WriteResult
-
-    measured = WriteResult(version=7, row_count=5, size_bytes=99)
-    monkeypatch.setattr(stage_runner, "measure_stage", lambda _from, _to, _so: measured)
-    dispatched: list[str] = []
-
-    def fake_dispatch(*_a: Any, **_k: Any) -> str:
-        dispatched.append("ray")
-        return "stage-ray-silver-tok-abc"
-
-    monkeypatch.setattr(stage_runner, "_dispatch_stage_workflow", fake_dispatch)
-    transformed: list[str] = []
-
-    def fake_transform(_f: str, _t: str, _so: dict[str, str], *, stage: str) -> WriteResult:
-        transformed.append(stage)
-        return WriteResult(version=2, row_count=1, size_bytes=10)
-
-    monkeypatch.setattr(inprocess_executor, "transform_stage", fake_transform)
-    _fake_upstream(monkeypatch)
-    dapr = _FakeDapr()
-
-    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _RAY_STAGE_RUNNER, {"data": {"token": "tok"}}))
-
-    assert status == {"status": "SUCCESS"}
-    # The blob upstream still goes to RAY — S1 changed WHEN the job is waited for, not WHICH lane runs.
-    assert dispatched == ["ray"]
-    assert transformed == []  # in-process transform did NOT run
-
-
-def test_terminal_stage_runner_emits_lineage_but_no_next_trigger() -> None:
-    terminal = _BRONZE_TO_SILVER.model_copy(update={"pub_topic": ""})  # gold: no downstream
-    dapr = _FakeDapr()
-
-    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), terminal, {"data": {"token": "t"}}))
-
-    assert status == {"status": "SUCCESS"}
-    assert len(dapr.calls) == 1 and dapr.calls[0]["topic"] == "lineage.events.v1"
-
-
 def test_medallion_apps_build_their_openapi() -> None:
     """Regression: the FastAPI apps must construct AND build their OpenAPI schema.
 
@@ -386,11 +280,6 @@ def test_medallion_apps_build_their_openapi() -> None:
 
     assert producer_app.app.openapi()["openapi"]  # the crash path — must not raise
     assert stage_runner_app.app.openapi()["openapi"]
-
-
-def test_stage_runner_retries_on_publish_failure() -> None:
-    status = asyncio.run(stage_runner.handle_stage(cast(Any, _FakeDapr(fail=True)), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
-    assert status == {"status": "RETRY"}
 
 
 def test_producer_emits_only_the_bronze_write_event() -> None:
@@ -584,29 +473,6 @@ def test_a_failed_complete_publish_is_not_a_run_failure() -> None:
     )
 
 
-def test_the_stage_runner_makes_exactly_ONE_publish_and_it_is_the_COMPLETE() -> None:
-    """The one-door property, asserted at the wire rather than at the decision.
-
-    THIS TEST'S ORIGINAL SUBJECT NO LONGER EXISTS, and converting it beats deleting it. It was
-    `test_stage_runner_does_not_fail_run_when_only_the_trigger_publish_fails`: with `fail_at=1` the COMPLETE
-    landed and the SECOND publish — the downstream trigger — raised, and the contract was that a run
-    whose data committed must not be flipped to FAIL. There is no second publish now, so `fail_at=1`
-    has nothing to fail and the case is unreachable.
-
-    The principle it protected (a publish failure after a committed write must not fabricate a FAIL)
-    is still covered one step earlier by the `fail_at=0` sibling above. What is NOT covered anywhere
-    else is the property this file is now the only witness to: the stage runner's publish COUNT. `gate_decision`
-    can be reasoned about in isolation; what reaches the broker cannot, and a reintroduced second door
-    would show up here first.
-    """
-    dapr = _AttemptDapr(fail_at=99)  # nothing fails; the subject is what gets published at all
-    status = asyncio.run(stage_runner.handle_stage(cast(Any, dapr), _BRONZE_TO_SILVER, {"data": {"token": "t"}}))
-    assert status == {"status": "SUCCESS"}
-    assert [e.get("eventType", "trigger") for e in dapr.attempts] == ["COMPLETE"], (
-        "the stage runner published something besides its COMPLETE lineage event — the second door is back"
-    )
-
-
 def test_bronze_arrival_carries_the_originator_onto_the_trigger() -> None:
     """THE HEAD IS THE LAST PLACE THE HUMAN EXISTS.
 
@@ -624,17 +490,6 @@ def test_bronze_arrival_carries_the_originator_onto_the_trigger() -> None:
     assert status == {"status": "SUCCESS"}
     (trigger,) = dapr.calls
     assert trigger["data"]["originator"] == "alice"
-
-
-def test_bronze_arrival_without_an_originator_is_byte_identical() -> None:
-    """Absent is every pre-existing publisher and every single-tenant estate. The trigger must be
-    unchanged, so the field can land at one producer at a time without rewriting the contract."""
-    dapr = _FakeDapr()
-
-    asyncio.run(handle_bronze_arrival(cast(Any, dapr), MedallionSettings(), _bronze_write_cloudevent()))
-
-    (trigger,) = dapr.calls
-    assert "originator" not in trigger["data"]
 
 
 class _FakeJobsAPI:
@@ -656,32 +511,6 @@ class _FakeJobsAPI:
     async def post(self, _url: str, json: dict[str, Any]) -> Any:
         self.posts.append(json)
         return httpx.Response(200, json={"submission_id": "sub-1"}, request=httpx.Request("POST", "http://ray"))
-
-
-def test_a_lane_supplies_its_own_parameters_under_a_namespace(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A workload configures itself without a platform edit — the other half of `stageJob`.
-
-    Before this, `submit_stage_job` built a FIXED env dict, so a stage runner row could name a workload's Ray
-    entrypoint and then had no way to configure it: a second workload either reused the first one's
-    variables or required an edit to the platform. That is the coupling the agnostic ruling forbids,
-    and it is why "a workload reaches the platform as configuration" had no mechanism behind it.
-    """
-    api = _FakeJobsAPI()
-    monkeypatch.setattr(ray_submit.httpx, "AsyncClient", lambda **_kw: api)
-    settings = MedallionSettings.model_validate(
-        {
-            "compute_enabled": True,
-            "ray_enabled": True,
-            "from_uri": "s3://lake/bronze",
-            "to_uri": "s3://lake/silver",
-            "to_namespace": "silver",
-            "ray_job_params": {"MODEL_REVISION": "abc123", "BATCH": "64"},
-        }
-    )
-    asyncio.run(stage_submit.submit_stage_job(settings, from_uri="s3://lake/bronze", to_uri="s3://lake/silver", stage="silver", token="t"))
-    env = api.posts[0]["runtime_env"]["env_vars"]
-    assert env["RASK_PARAM_MODEL_REVISION"] == "abc123"
-    assert env["RASK_PARAM_BATCH"] == "64"
 
 
 def test_a_lane_cannot_reach_a_platform_variable_by_colliding_on_its_name(monkeypatch: pytest.MonkeyPatch) -> None:

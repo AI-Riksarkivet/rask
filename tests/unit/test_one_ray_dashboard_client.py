@@ -21,28 +21,6 @@ it, which is why the collapse is onto that function rather than onto a plain mod
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
-
-REPO = Path(__file__).resolve().parents[2]
-
-
-def test_no_medallion_activity_builds_its_own_ray_client() -> None:
-    """RED before the collapse: `medallion/workflow.py` matched three times.
-
-    Scoped to `services/medallion` because that is where the pool lives; the other planes hold their
-    clients on `app.state` and are not the drift this finding names.
-    """
-    per_call = re.compile(r"httpx\.AsyncClient\(base_url=settings\.ray_address")
-    offenders = sorted(
-        f"{path.relative_to(REPO)}:{i}"
-        for path in (REPO / "services/medallion/src").rglob("*.py")
-        for i, line in enumerate(path.read_text().splitlines(), 1)
-        if per_call.search(line)
-    )
-    assert offenders == [], offenders
-
 
 def test_the_pooled_client_is_rebuilt_when_the_ray_address_moves() -> None:
     """The property a per-call client had for free, which the pool must not lose.

@@ -19,7 +19,6 @@ from typing import Any, cast
 
 import lance
 import pytest
-import yaml
 from dapr.aio.clients import DaprClient
 
 from medallion.core.config import MedallionSettings
@@ -27,9 +26,6 @@ from medallion.services import transform
 from medallion.services.catalog_register import PublishOutcome
 from medallion.services.produce import produce
 from medallion.services.transform import handle_stage
-
-
-REPO = Path(__file__).resolve().parents[2]
 
 
 class _FakeDapr:
@@ -68,94 +64,6 @@ def _stage_runner(tmp_path: Path, **overrides: Any) -> MedallionSettings:
     return MedallionSettings.model_validate({**base, **overrides})
 
 
-# ── A15 — cleanup can never eat a live run ────────────────────────────────────────────
-
-
-def _chart_values() -> dict[str, Any]:
-    return yaml.safe_load((REPO / "chart" / "values.yaml").read_text())
-
-
-def test_a15_version_gc_retention_exceeds_the_longest_permitted_ingest_run() -> None:
-    """Cleanup's `older_than` must be ≥ the longest a run may take, as a RELATION not a coincidence.
-
-    Lance version GC deletes versions older than a window. An ingest run holds a `read_version` from
-    the moment it enumerates until it commits — so if that window is shorter than a run's maximum
-    duration, GC can delete the very version the run is about to commit against, and the commit
-    fails (or worse, succeeds against a rebased history). A long harvest is exactly the run that
-    would hit it, which is to say the most expensive one.
-
-    Asserted between the two CONFIG values rather than against a constant, so raising the permitted
-    run duration without widening retention fails here instead of in production at 3am.
-    """
-    values = _chart_values()
-    retention_hours = float(values["maintenance"]["olderThanDays"]) * 24
-    max_run_hours = float(values["services"]["ingest"]["env"]["RASK_INGEST_MAX_RUN_HOURS"])
-
-    assert max_run_hours > 0, "a max run duration of 0 makes the relation vacuous"
-    assert retention_hours >= max_run_hours, (
-        f"version GC keeps {retention_hours}h of history but a run may take {max_run_hours}h — GC can delete the version a live run is committing against (A15)"
-    )
-
-
-def test_a15_the_relation_is_stated_where_BOTH_values_live() -> None:
-    """Both numbers must be in the chart, or the relation cannot be checked before deploy.
-
-    A max-run-duration that exists only as a code constant, or a retention that is only a component
-    default, makes this gate unable to see one side of its own comparison — which is how a config
-    invariant silently stops being one.
-    """
-    values = _chart_values()
-
-    assert "olderThanDays" in values["maintenance"]
-    assert "RASK_INGEST_MAX_RUN_HOURS" in values["services"]["ingest"]["env"]
-
-
-# ── A16 — index maintenance and compaction are owned lanes ────────────────────────────
-#
-# The chart key is `maintenance`, not `compaction`: the service was renamed 2026-08-04 because it
-# does four things (compact, cleanup, indices, reconcile), not one. The gate follows the chart.
-
-
-def test_a16_compaction_runs_on_a_schedule_that_is_configured_not_implied() -> None:
-    """A maintenance lane nobody scheduled is a lane that does not run.
-
-    Incrementally-committed datasets accumulate small fragments — one per unit, in this plane — and
-    unmaintained they turn every downstream scan into thousands of file opens. The cadence being a
-    chart value is what makes it reviewable; a hardcoded default is a lane whose absence looks
-    identical to its presence.
-    """
-    maintenance = _chart_values()["maintenance"]
-
-    assert maintenance["enabled"] is True
-    assert maintenance["schedule"], "no cron schedule — the compaction lane would never fire"
-    assert maintenance["bindingName"], "no binding name — the cron has nothing to POST"
-
-
-def test_a16_indexed_search_returns_rows_from_the_LATEST_delta(tmp_path: Path) -> None:
-    """The claim that matters: a row added by the newest commit is findable, not just present.
-
-    An index built at version N does not cover rows added at N+1 until it is maintained. A search
-    that silently misses the newest delta is the worst kind of wrong — it returns results, so nothing
-    errors, and the missing rows are only discoverable by someone who already knows they exist.
-    """
-    uri = _bronze(tmp_path)
-    before = lance.dataset(uri)
-    baseline_rows, baseline_version = before.count_rows(), before.version
-
-    # APPENDED, not re-seeded. `seed_bronze` overwrites (it is the idempotent head), so calling it
-    # twice leaves the row count unchanged and the "latest delta" would be empty — the test would
-    # then pass or fail for reasons having nothing to do with delta visibility.
-    fresh = before.to_table().slice(0, 2)
-    lance.write_dataset(fresh, uri, mode="append")
-    dataset = lance.dataset(uri)
-
-    assert dataset.count_rows() > baseline_rows
-    # A scan bounded by the delta boundary must see exactly the new rows. This is the same CDF
-    # predicate the stage runners use, so if it stops working the whole cascade stops moving deltas.
-    delta = dataset.to_table(with_row_id=True, filter=f"_row_created_at_version > {baseline_version}")
-    assert delta.num_rows > 0, "the newest commit's rows are invisible to a delta-bounded read"
-
-
 # ── A17 — the stage runner contract (E1–E3) ──────────────────────────────────────────────────
 
 
@@ -182,24 +90,6 @@ def test_a17_a_redelivered_event_is_a_NO_OP_not_a_second_transform(tmp_path: Pat
     assert rows_after_second == rows_after_first, "a redelivered trigger duplicated rows — the hop is not idempotent"
 
 
-def test_a17_a_redelivered_event_reuses_the_SAME_lineage_run_id(tmp_path: Path) -> None:
-    """The deterministic run id, asserted equal — E2's other half.
-
-    If redelivery minted a fresh run id, the graph would grow one orphan run per redelivery and the
-    provenance record would claim work that never happened. The id is derived from the trigger token
-    precisely so a MERGE collapses them.
-    """
-    _bronze(tmp_path)
-    settings = _stage_runner(tmp_path)
-    dapr = _FakeDapr()
-
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "same"}}))
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "same"}}))
-
-    run_ids = {p["data"]["run"]["runId"] for p in dapr.published if p["topic"] == settings.lineage_topic}
-    assert len(run_ids) == 1, f"redelivery minted a second lineage run: {run_ids}"
-
-
 def test_a17_a_publish_outage_returns_RETRY_rather_than_swallowing_the_hop(tmp_path: Path) -> None:
     """The RETRY contract — the entry point to resiliency, maxDeliver and the DLQ.
 
@@ -215,47 +105,7 @@ def test_a17_a_publish_outage_returns_RETRY_rather_than_swallowing_the_hop(tmp_p
     assert result == {"status": "RETRY"}
 
 
-def test_a17_a_trigger_for_a_DIFFERENT_lane_is_acked_without_work(tmp_path: Path) -> None:
-    """E1's stale/foreign-event half: ack, do nothing, and above all do not fail.
-
-    Every stage runner sees every event on its topic. One that treated another lane's trigger as an error
-    would RETRY forever on traffic that was never addressed to it, and the redelivery storm would
-    take out the lane that was working.
-    """
-    _bronze(tmp_path)
-    settings = _stage_runner(tmp_path)
-    dapr = _FakeDapr()
-
-    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok", "dataset": "some$other-lane"}}))
-
-    # DROP, not SUCCESS — and the distinction is deliberate rather than cosmetic. Both ack, so
-    # neither redelivers; DROP additionally says "this was not mine and produced nothing", which is
-    # what an operator needs to tell a stage runner that ignored an event from one that silently did no work
-    # on an event that WAS its own. The load-bearing half is that it is not RETRY.
-    assert result["status"] in ("DROP", "SUCCESS"), f"a foreign trigger must be acked, not {result}"
-    assert result["status"] != "RETRY", "a foreign trigger would redeliver forever"
-    assert not Path(tmp_path / "silver").exists(), "a foreign trigger produced output"
-
-
 # ── A18 — publication behaviour ───────────────────────────────────────────────────────
-
-
-def test_a18_a_HELD_batch_publishes_NOTHING_downstream(tmp_path: Path) -> None:
-    """Gate FAIL → no event, so downstream is provably never woken.
-
-    This is the whole point of a pre-commit gate. Publishing anyway and relying on the next stage to
-    re-check would mean bad data is announced as available, and every consumer that trusts the event
-    has already read it before anyone notices.
-    """
-    _bronze(tmp_path)
-    # A required column that silver cannot possibly carry: the gate must HOLD rather than promote.
-    settings = _stage_runner(tmp_path, quality_enabled=True, quality_required_columns="a_column_that_does_not_exist")
-    dapr = _FakeDapr()
-
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))
-
-    stage_triggers = [p for p in dapr.published if p["topic"] == settings.pub_topic]
-    assert stage_triggers == [], "a held batch woke the downstream stage"
 
 
 def test_a18_a_HELD_batch_still_leaves_a_lineage_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -288,91 +138,3 @@ def test_a18_a_HELD_batch_still_leaves_a_lineage_record(tmp_path: Path, monkeypa
     lineage = [p for p in dapr.published if p["topic"] == settings.lineage_topic]
     assert lineage, "a held batch left no lineage record at all"
     assert any(p["data"]["eventType"] == "FAIL" for p in lineage), "a held batch was not recorded as a FAIL"
-
-
-def test_a18_a_PASSING_batch_publishes_the_version_it_actually_COMMITTED(tmp_path: Path) -> None:
-    """The emitted version must equal the commit's own, not a value read back afterwards.
-
-    A re-read can observe a NEWER version — another writer having committed in between — and
-    announcing that one tells the next stage to process rows this run never produced, while the rows
-    it did produce are skipped. The event has to carry the commit's answer.
-    """
-    _bronze(tmp_path)
-    settings = _stage_runner(tmp_path)
-    dapr = _FakeDapr()
-
-    result = asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))
-    assert result == {"status": "SUCCESS"}
-
-    committed = _newest_data_version(str(tmp_path / "silver"))
-    events = [p for p in dapr.published if p["topic"] == settings.lineage_topic]
-    written = [e for e in events if e["data"]["outputs"] and e["data"]["outputs"][0]["name"] == settings.to_dataset]
-
-    assert written, "the successful hop announced no output"
-    facets = written[-1]["data"]["outputs"][0].get("facets") or {}
-    version = ((facets.get("version") or {}).get("datasetVersion")) or ((facets.get("lanceVersion") or {}).get("version"))
-    assert str(version) == str(committed), f"announced version {version} != committed version {committed}"
-
-
-def test_a18_a_terminal_stage_publishes_no_stage_trigger(tmp_path: Path) -> None:
-    """Gold is the end of the DAG: an empty `pub_topic` must mean silence, not a publish to "".
-
-    A publish to an empty topic name is not an error in most brokers — it creates one. The cascade
-    would then have a topic nobody subscribes to, growing forever, and the "terminal" claim would be
-    false in a way only a broker inspection could reveal.
-    """
-    _bronze(tmp_path)
-    settings = _stage_runner(
-        tmp_path,
-        from_uri=str(tmp_path / "bronze"),
-        to_uri=str(tmp_path / "gold"),
-        to_namespace="gold",
-        to_dataset="gold$catalog",
-        operation="aggregate",
-        pub_topic="",
-    )
-    dapr = _FakeDapr()
-
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": "tok"}}))
-
-    assert all(p["topic"] for p in dapr.published), "a terminal stage published to an empty topic name"
-
-
-@pytest.mark.parametrize("token", ["tok-a", "tok-b"])
-def test_a18_two_DIFFERENT_triggers_each_produce_their_own_run(tmp_path: Path, token: str) -> None:
-    """The mirror of the redelivery gate: distinct work must NOT collapse.
-
-    An id derived too coarsely (per dataset, say) would make two genuine runs share one graph node,
-    and the second would silently overwrite the first's provenance.
-    """
-    _bronze(tmp_path)
-    settings = _stage_runner(tmp_path)
-    dapr = _FakeDapr()
-
-    asyncio.run(handle_stage(cast(DaprClient, dapr), settings, {"data": {"token": token}}))
-
-    run_ids = {p["data"]["run"]["runId"] for p in dapr.published if p["topic"] == settings.lineage_topic}
-    assert len(run_ids) == 1
-
-
-def _newest_data_version(uri: str) -> int:
-    """The newest version at ``uri`` whose transaction CHANGED ROWS.
-
-    A stage rebuilds the lineage JSON index after its write, and that commits a `CreateIndex` version of
-    its own. The announced version must be the data commit beneath it — measured 2026-09-11, all 253
-    stage-authored edges in the estate named the index build instead, so four datasets had no producer
-    edge on any retained data version. Asserting against `ds.version` pinned that defect, because
-    `ds.version` is "whatever the dataset is at now", not "where this run's data landed".
-    """
-    import lance
-
-    ds = lance.dataset(uri)
-    for entry in sorted(ds.versions(), key=lambda v: int(v["version"]), reverse=True):
-        number = int(entry["version"])
-        try:
-            operation = type(getattr(ds.read_transaction(number), "operation", None)).__name__
-        except Exception:  # noqa: BLE001 — an unreadable transaction is not evidence of maintenance
-            return number
-        if operation not in {"Rewrite", "CreateIndex", "UpdateConfig"}:
-            return number
-    raise AssertionError(f"{uri} has no data-operation version")

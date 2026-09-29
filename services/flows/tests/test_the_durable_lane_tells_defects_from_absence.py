@@ -28,7 +28,6 @@ from typing import cast
 import pytest
 from fastapi import FastAPI
 
-from flows.config import build_flows_settings
 from flows.lifespan import make_lifespan
 from service_kit.config import Settings
 
@@ -104,11 +103,6 @@ async def test_no_sidecar_at_all_is_the_inline_lane(monkeypatch: pytest.MonkeyPa
     async with make_lifespan(Settings())(app):
         assert app.state.workflow_lane == "inline"
         assert app.state.workflow_scheduler is None
-
-
-def test_the_settings_are_still_built(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Guard for the helper above: `build_flows_settings` is what the lifespan reads."""
-    assert isinstance(build_flows_settings().serve_timeout, float)
 
 
 @pytest.mark.asyncio

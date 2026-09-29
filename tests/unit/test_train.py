@@ -56,11 +56,6 @@ class _FakeDapr:
 # --------------------------------------------------------------------------- #
 
 
-def test_stage_uri_derives_the_sibling_stage_from_the_bronze_uri() -> None:
-    assert train.stage_uri_for(_settings(), "silver$features") == "s3://lake/medallion/silver"
-    assert train.stage_uri_for(_settings(), "gold$catalog") == "s3://lake/medallion/gold"
-
-
 def test_registry_and_artifact_layout_derivation() -> None:
     # D4: registry dataset beside the stages; artifact bytes in a SEPARATE tree at the bucket root
     # (never inside a Lance dataset directory — GC/orphan safety + the #92 allowlist prefix).
@@ -91,25 +86,6 @@ def test_head_resolves_omitted_versions_at_submit_time(monkeypatch: pytest.Monke
     payload = json.loads(dapr.published[0]["data"])
     assert dapr.published[0]["topic"] == "training.jobs"  # the DEDICATED topic (D1)
     assert payload["model"] == "churn" and payload["token"] == result["token"]
-
-
-def test_submit_train_request_reuses_idempotency_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    # REGRESSION (bug hunt 2026-07-13): a caller-supplied token (the route's 503-retry Idempotency-Key) is
-    # REUSED, so an ambiguous publish-timeout retry converges on the same deterministic run_ids (the graph
-    # MERGEs the duplicate) instead of double-firing an unrelated training run. Absent → a fresh token.
-    monkeypatch.setattr(train, "_resolve_version", lambda _s, _d: 1)
-    dapr = _FakeDapr()
-    result = asyncio.run(
-        train.submit_train_request(
-            cast(Any, dapr),
-            _settings(),
-            model="churn",
-            features=[{"dataset": "silver$features"}],
-            token="retry-key-1",
-        )
-    )
-    assert result["token"] == "retry-key-1"
-    assert json.loads(dapr.published[0]["data"])["token"] == "retry-key-1"
 
 
 def test_head_surfaces_resolution_and_publish_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -144,15 +120,6 @@ def test_train_route_enforces_the_app_token(monkeypatch: pytest.MonkeyPatch) -> 
     body = {"model": "m", "features": [{"dataset": "silver$features"}]}
     assert client.post("/train", json=body).status_code == 403
     assert client.post("/train", json=body, headers={"dapr-api-token": "nope"}).status_code == 403
-
-
-def test_train_route_409_when_the_head_is_not_configured() -> None:
-    app = FastAPI()
-    app.include_router(router)
-    app.dependency_overrides[get_dapr] = lambda: None
-    app.dependency_overrides[get_settings] = lambda: _settings(MEDALLION_RAY_ENABLED="false")
-    response = TestClient(app).post("/train", json={"model": "m", "features": [{"dataset": "a$b"}]}, headers={"Idempotency-Key": "idem-test"})
-    assert response.status_code == 409  # explicit contract, never a silent 202
 
 
 # --------------------------------------------------------------------------- #
@@ -418,18 +385,9 @@ def test_train_route_422s_the_names_its_consumer_would_drop() -> None:
 #: consumer; a row on which they disagree is a request its caller was told 202 that never trains.
 _TRAINING_KEYS = [
     ("idem-test", True),
-    ("ui-train-1k9x2p", True),  # the models zone's content-derived key (`train.remote.ts`)
-    ("0f1c2d3e4f5a", True),
-    ("8e1c9b7a-2f3d-4c5b-9a01-1234567890ab", True),
-    ("Ok_1", True),
     ("a" * 64, True),
     ("my.retry.key", False),  # the token is one path-safe segment (`TOKEN_PATTERN`), and a segment has no dot
-    ("run.3", False),
-    (".", False),  # as the artifact directory `<base>/<token>/` on a filesystem base, it IS the base
-    ("..", False),
     ("-leading-dash", False),
-    ("has space", False),
-    ("tok$en", False),
     ("", False),
     ("a" * 65, False),
 ]

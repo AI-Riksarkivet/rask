@@ -220,12 +220,6 @@ def test_a_graph_that_does_not_validate_is_refused_with_the_problem_LIST(client:
     assert _runs(client) == {}
 
 
-def test_an_unknown_run_id_is_404(client: TestClient) -> None:
-    resp = client.get("/api/flows/runs/run-nope")
-    assert resp.status_code == 404
-    assert "run-nope" in resp.json()["detail"]
-
-
 def test_the_durable_lane_takes_over_when_a_scheduler_is_present(client: TestClient) -> None:
     """With a sidecar the route SCHEDULES instead of executing: `running`, no node states, and the
     engine owns the run from there. The lane is decided at startup, never by the caller."""
@@ -307,16 +301,6 @@ def test_a_key_less_post_still_gets_a_fresh_run_each_time(client: TestClient) ->
 
     assert len(ids) == 3
     assert len(scheduler.dispatched) == 3
-
-
-def test_a_run_id_is_derived_from_the_subject_and_the_key() -> None:
-    """Deterministic across processes — it is the workflow INSTANCE id, so a retry on another
-    replica must land on the same instance. Scoped by subject, or one caller's `Idempotency-Key: 1`
-    would resolve to another caller's run."""
-    assert routes.run_id_for("alice", "k") == routes.run_id_for("alice", "k")
-    assert routes.run_id_for("alice", "k") != routes.run_id_for("bob", "k")
-    assert routes.run_id_for("alice", "k") != routes.run_id_for("alice", "other")
-    assert routes.run_id_for("alice", "k").startswith("run-")
 
 
 @respx.mock

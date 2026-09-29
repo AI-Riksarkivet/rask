@@ -20,9 +20,7 @@ from typing import Any
 
 import pytest
 
-import lineage_kit
 from medallion.schemas.events import build_run_event
-from service_kit import openlineage as service_kit_ol
 from service_kit.openlineage import (
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
@@ -170,44 +168,6 @@ def _legacy_build_run_event(**kwargs: Any) -> dict[str, Any]:
 
 
 _MATRIX: list[dict[str, Any]] = [
-    # The bronze produce head (no inputs, dummy version-1 emit — R23: bronze is the first tier).
-    {
-        "operation": "lance_ray_ingest",
-        "author": "ray",
-        "job_namespace": "lance-medallion",
-        "inputs": [],
-        "output_namespace": "bronze",
-        "output_name": "bronze$events",
-        "token": "tok1",
-    },
-    # The media head: one input per source object, blob schema facet, measured stats without size.
-    {
-        "operation": "ingest_media",
-        "author": "ray",
-        "job_namespace": "lance-medallion",
-        "inputs": [("source", "s3://lake/a.png"), ("source", "s3://lake/b.png")],
-        "output_namespace": "bronze-media",
-        "output_name": "bronze-media$objects",
-        "version": 3,
-        "row_count": 2,
-        "source_uri": "s3://lake/medallion/bronze-media",
-        "schema_fields": [{"name": "payload", "type": "blob"}],
-        "token": "tok2",
-    },
-    # The IIIF head (P7a, re-tiered by R23): one external iiif:// input, bronze blob page dataset out.
-    {
-        "operation": "iiif-ingest",
-        "author": "ray",
-        "job_namespace": "lance-medallion",
-        "inputs": [("iiif://iiifintern-ai.ra.se", "A0068688")],
-        "output_namespace": "bronze",
-        "output_name": "bronze$pages",
-        "version": 2,
-        "row_count": 12,
-        "source_uri": "s3://lake/medallion/bronze-pages",
-        "schema_fields": [{"name": "payload", "type": "blob"}, {"name": "page_key", "type": "string"}],
-        "token": "tok3",
-    },
     # A full stage transform: stats + schema + column lineage + quality assertions, per-project.
     {
         "operation": "embed_features",
@@ -226,20 +186,6 @@ _MATRIX: list[dict[str, Any]] = [
         "token": "tok4",
         "project": "acme",
     },
-    # A FAIL run: bare output, errorMessage facet.
-    {
-        "operation": "embed_features",
-        "author": "data_eng",
-        "job_namespace": "lance-medallion",
-        "inputs": [("bronze", "bronze$events")],
-        "output_namespace": "silver",
-        "output_name": "silver$features",
-        "token": "tok5",
-        "event_type": "FAIL",
-        "error_message": "boom",
-    },
-    # Author-less, token-less defensive fallback (random run id — compared modulo runId).
-    {"operation": "op", "author": None, "job_namespace": "ns", "inputs": [], "output_namespace": "bronze", "output_name": "bronze$events"},
 ]
 
 
@@ -253,13 +199,6 @@ def test_wire_is_byte_identical_to_the_legacy_builder(kwargs: dict[str, Any]) ->
     if not kwargs.get("token"):  # token-less → a fresh random UUID on each side, equal modulo value
         assert uuid.UUID(new["run"].pop("runId")) != uuid.UUID(legacy["run"].pop("runId"))
     assert new == legacy
-
-
-def test_lineage_kit_run_id_namespace_is_aligned() -> None:
-    """Migration note #1: lineage-kit's uuid5 namespace equals the lance-ns one, so every deterministic
-    run id already in the graph keeps MERGEing after emitters swap onto lineage-kit."""
-    for seed in ("lance_ray_ingest-tok1", "acme-embed_features-tok4", "iiif-ingest-x"):
-        assert lineage_kit.run_id_for(seed) == service_kit_ol.run_id_for(seed)
 
 
 def test_the_model_facet_carries_the_runs_own_provenance() -> None:

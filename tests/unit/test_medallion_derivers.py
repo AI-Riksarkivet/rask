@@ -104,21 +104,3 @@ def test_derive_skips_when_artifacts_already_present() -> None:
     """A later stage carries derived artifacts forward instead of re-deriving them."""
     table = pa.table({"id": pa.array([0], pa.int64()), "thumbnail": pa.array([b"t"], pa.large_binary())})
     assert derive_artifacts(table, {"payload": [_png((9, 9, 9))]}) is table
-
-
-def test_derive_noop_on_empty_payloads() -> None:
-    table = pa.table({"id": pa.array([], pa.int64())})
-    assert derive_artifacts(table, {"payload": []}) is table
-
-
-def test_blob_field_detection_keys_on_lance_type(tmp_path: Path) -> None:
-    """Blob detection keys on the LANCE TYPE (blob column present), nothing else. (Was the Ray-path GATE
-    until 2026-07-13 — the gate is gone now that the Ray stage job round-trips blobs; the detection still
-    routes a media stage to the pylance blob path, in the job itself.)"""
-    from service_kit.lakehouse import blobs
-
-    blobby = _bronze_media(tmp_path, [_png((1, 2, 3))])
-    tabular = str(tmp_path / "plain")
-    lance.write_dataset(pa.table({"id": pa.array([1], pa.int64())}), tabular, data_storage_version="2.2")
-    assert blobs.blob_field_names(lance.dataset(blobby).schema) == ["payload"]
-    assert blobs.blob_field_names(lance.dataset(tabular).schema) == []

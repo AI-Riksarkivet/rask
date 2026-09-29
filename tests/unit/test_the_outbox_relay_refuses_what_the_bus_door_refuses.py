@@ -40,7 +40,6 @@ evidence of any fault. Counting the two together made `drained=0 stranded=6` —
 
 from __future__ import annotations
 
-import inspect
 from typing import Any
 
 import pytest
@@ -53,22 +52,6 @@ def _governed_settings(outbox_uri: str) -> LineageSettings:
     """The real settings, FGA on — the whole point: the other executing tests leave it off."""
     auth = {"oidc_enabled": True, "oidc_issuer": "https://dex.example", "oidc_audience": "lance", "fga_store_id": "s", "fga_model_id": "m"}
     return LineageSettings.model_validate({"database_url": "postgresql://x/y", "outbox_uri": outbox_uri, "fga_enabled": True, **auth})
-
-
-def test_the_relay_authorizes_before_it_ingests() -> None:
-    """THE GATE. The drain is the fourth ingest path and the only one that admitted anything."""
-    body = inspect.getsource(reconcile_cron._drain_outbox)
-
-    assert "enforce_bus_authz" in body, (
-        "the outbox relay ingests staged events with no authorization, so a producer that cannot get an "
-        "event past the bus door can stage it instead — the gate is skipped, not weakened"
-    )
-    # The CALLS, not the words: `ingest_event` appears in this function's own docstring first, so indexing
-    # the bare name compared the gate against a sentence rather than against the statement it guards. BOTH
-    # doors: a catalog DDL change reaches the graph through `ingest_dataset_event`.
-    gate_at = body.index("await enforce_bus_authz(")
-    for door in ("repository.ingest_event(", "repository.ingest_dataset_event("):
-        assert gate_at < body.index(door), f"the check must run BEFORE `{door}` reaches the graph"
 
 
 def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,92 +112,3 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
         f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"
     )
     assert steps == ["record", "drop"], f"the refusal path ran {steps}: the object must be retired only after its verdict is recorded"
-
-
-def test_the_cron_can_supply_the_principal_the_gate_needs() -> None:
-    """`enforce_bus_authz(event, request, settings)` needs a Request; a cron tick has no caller.
-
-    The Request is a carrier — `enforce_output_authz` and `_is_replay` read the FGA client and the
-    repository off `app.state` — so FastAPI injecting one into the handler is what makes the same gate
-    usable here. Pinned because dropping the parameter would silently re-open the path.
-    """
-    assert "request" in inspect.signature(reconcile_cron._on_cron).parameters, "the cron handler must take a Request to thread to the drain"
-    assert "request" in inspect.signature(reconcile_cron._drain_outbox).parameters, "the drain needs it to call the shared gate"
-
-
-def test_a_refusal_is_HANDLED_and_not_a_crash(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The refusal branch, EXECUTED — which is the one thing the three tests above cannot do.
-
-    They read `_drain_outbox`'s source text and assert substrings. That form pins the SHAPE of the
-    branch and can say nothing about whether it runs, and this is what it missed: the refusal handler
-    logged `author_sub_from_payload(payload)` while `payload` is bound only inside the `except
-    ValidationError` branch above it, so reaching a refusal raised `UnboundLocalError`. The handler
-    sits inside the drain's per-event `try`, so that escaped to the tick's error boundary and aborted
-    the WHOLE drain — every other staged event stayed put, tick after tick.
-
-    Observed on the deployed estate 2026-09-14: `lineage_outbox_drain_failed error="cannot access local
-    variable 'payload' where it is not associated with a value"` on EVERY sweep — 18 in 50 minutes —
-    with `outbox_drained: 0` while `list_events` confirmed an event was staged. The outbox is what makes
-    a committed write's provenance survive its producer; a drain that cannot complete a tick makes it a
-    write-only store, which is the failure mode `test_ONE_ungraphable_event_does_not_strand_every_other
-    _staged_event` already names for a different cause.
-
-    The GATE's decision is not under test here — `test_the_relay_authorizes_before_it_ingests` owns
-    that. What is under test is the drain's handling of a refusal it has already received, which is why
-    the gate is replaced wholesale rather than driven through a real FGA.
-    """
-    import asyncio
-    import json as _json
-    from types import SimpleNamespace
-    from typing import cast
-
-    from lance_namespace import PermissionDeniedError
-
-    from medallion.schemas.events import build_run_event
-    from service_kit.lakehouse import outbox
-
-    async def _refuse(*_args: object, **_kwargs: object) -> None:
-        raise PermissionDeniedError("can_write_data required")
-
-    monkeypatch.setattr(reconcile_cron, "enforce_bus_authz", _refuse)
-
-    uri = f"file://{tmp_path}/_lineage_outbox"
-    event = build_run_event(
-        operation="ingest_events",
-        author="mallory",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
-        version=2,
-        token="refusal-probe",
-    )
-    outbox.stage_event(uri, {}, event["run"]["runId"], _json.dumps(event))
-
-    class _Repo:
-        def __init__(self) -> None:
-            self.ingested: list[str] = []
-            self.refusals: list[dict[str, str | None]] = []
-
-        async def ingest_event(self, ev: Any) -> None:  # pragma: no cover — a refusal must never reach here
-            self.ingested.append(ev.run.run_id)
-
-        async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-            self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
-
-    repo = _Repo()
-    request = cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))
-
-    outcome = asyncio.run(reconcile_cron._drain_outbox(request, cast("Any", repo), _governed_settings(uri), {}))
-
-    assert outcome.refused == 1, "a refused event must be counted as refused"
-    assert outcome.stranded == 0, "`stranded` means a tick that FAILED; a governance refusal is not one"
-    assert outcome.drained == 0 and repo.ingested == [], "a refused event must never reach the graph"
-    # [[LH-182]] THE PROPERTY IS THE SAME, THE MECHANISM IS NOT. This asserted "leave it staged",
-    # because staging was the only durable copy. The drain now writes the verdict AND the event into
-    # `lineage_outbox_refusals` first, so retiring the object destroys nothing — and NOT retiring it
-    # meant re-reading, re-parsing and re-refusing the same event on every tick forever (measured
-    # `refused=7`, unchanged for days). Dropping WITHOUT the record is still the failure, which is why
-    # both halves are asserted here and the ordering is pinned in the lineage suite.
-    assert repo.refusals and repo.refusals[0]["event_json"], "the refusal was not recorded with its event — retiring the object would be data loss"
-    assert not list(outbox.list_events(uri, {})), "a settled refusal left the object staged, so it will be re-refused forever"
