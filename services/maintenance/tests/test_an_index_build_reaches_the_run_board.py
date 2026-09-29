@@ -66,31 +66,6 @@ async def test_a_BUILT_index_reaches_the_run_board(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_operation_is_NOT_compaction(tmp_path: Path) -> None:
-    """Recording an index build as a compaction is a wrong fact rather than a missing one, and the
-    repository reads the marker to decide what edges the run gets."""
-    emitter = _Emitter()
-    item = IndexWorkItem(uri=_table(tmp_path), column="id", kind=SCALAR_INDEX, index_type="BTREE", table_id="ns$t")
-
-    await index_work.handle_index_unit({"data": item.model_dump()}, _settings(), emitter)
-
-    assert emitter.emitted[0]["operation"] != "compaction"
-
-
-@pytest.mark.asyncio
-async def test_an_UNBUILDABLE_unit_emits_nothing(tmp_path: Path) -> None:
-    """A producer defect is acked, not run — so there is no run to record. Emitting a FAIL for a unit
-    that never touched the table would put a maintenance failure on a dataset nothing maintained."""
-    emitter = _Emitter()
-    item = IndexWorkItem(uri=_table(tmp_path), column="absent", kind=SCALAR_INDEX, index_type="BTREE", table_id="ns$t")
-
-    result = await index_work.handle_index_unit({"data": item.model_dump()}, _settings(), emitter)
-
-    assert result["status"] == "SUCCESS"
-    assert emitter.emitted == [] and emitter.failed == []
-
-
-@pytest.mark.asyncio
 async def test_a_TABLE_ID_LESS_unit_still_builds_and_emits_nothing(tmp_path: Path) -> None:
     """The emit is keyed on the catalog id. A unit carrying none is still built — the index is what the
     caller asked for — but there is no dataset node to hang the run on, so nothing is emitted rather

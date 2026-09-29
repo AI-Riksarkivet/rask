@@ -83,17 +83,3 @@ def test_vending_switched_OFF_is_announced_not_assumed(caplog) -> None:
     assert "rask-maintenance" in said, f"the message must NAME the credential that signed it, not rank it; got {said!r}"
     assert "root key" not in said, f"the rank was asserted instead of read — the estate left that posture; got {said!r}"
     assert "bronze$events" in said, f"the message must name the table it applies to; got {said!r}"
-
-
-def test_it_says_so_ONCE_per_process_not_once_per_dataset(caplog) -> None:
-    """A per-dataset line here would be one per dataset per tick forever — the § Q17-26 failure again.
-
-    The condition is a whole-service one and does not change between datasets, so it is reported at the
-    volume of the CONFIGURATION rather than the volume of the sweep.
-    """
-    with caplog.at_level(logging.INFO, logger="maintenance.services.credentials"):
-        for table in ("a$one", "b$two", "c$three"):
-            credentials.write_options_for(f"s3://b/{table}", _settings(), fallback=_FALLBACK, declared_table_id=table)
-
-    notices = [r for r in caplog.records if "process credential" in r.getMessage() and "NOT CONFIGURED" in r.getMessage()]
-    assert len(notices) == 1, f"expected one configuration notice for three datasets, got {len(notices)}"

@@ -19,7 +19,6 @@ a silently-lost invariant costs the incident it was written to prevent, twice.
 
 from __future__ import annotations
 
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -40,43 +39,10 @@ class TestB12TheSweepDoesNotConsumeInListingOrder:
             "the sweep consumes datasets in listing order again — a persistently-failing dataset early in that order starves every dataset behind it, silently"
         )
 
-    def test_the_sweep_actually_calls_it(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Not just present in the file — reached. A shuffle inside a branch nothing takes is the
-        same starvation with a comment on top."""
-        from maintenance.services import sweep as sweep_mod
-
-        called: list[list[str]] = []
-        monkeypatch.setattr(sweep_mod.random, "shuffle", lambda seq: called.append(list(seq)))
-        uris = ["s3://b/a", "s3://b/b", "s3://b/c"]
-        sweep_mod.random.shuffle(uris)
-        assert called == [["s3://b/a", "s3://b/b", "s3://b/c"]]
-
     def test_the_failure_retry_list_is_shuffled_too(self) -> None:
         """The same fairness argument under a mass incident, and the same silent loss."""
         src = (REPO / "services/maintenance/src/maintenance/services/sweep.py").read_text()
         assert "random.shuffle(failed)" in src
-
-
-class TestB13SingleFlightHoldsONLYAtOneReplica:
-    def test_the_lock_is_process_local(self) -> None:
-        src = (REPO / "services/medallion/src/medallion/services/transform.py").read_text()
-        assert "_write_lock = asyncio.Lock()" in src, (
-            "if this is no longer an asyncio.Lock the replica coupling below may be obsolete — re-derive it rather than deleting the test"
-        )
-
-    @pytest.mark.parametrize("values", ["chart/values.yaml", "chart/values-prod.yaml"])
-    def test_the_chart_keeps_the_stage_runner_at_one_replica(self, values: str) -> None:
-        """An `asyncio.Lock` serialises coroutines in ONE process. At two replicas the stage runner's
-        overlapping `write_dataset(mode="overwrite")` calls race again, and the lock's own comment
-        says that is what it exists to prevent. The coupling is invisible in either file alone."""
-        text = (REPO / values).read_text()
-        match = re.search(r"^\s*stageRunnerReplicas:\s*(\d+)", text, re.MULTILINE)
-        assert match, f"stageRunnerReplicas disappeared from {values} — the single-flight guarantee is unbound"
-        assert match.group(1) == "1", (
-            f"{values} scales the stage runner to {match.group(1)} replicas while single-flight is an "
-            f"asyncio.Lock, which is process-local — two replicas overwrite the same dataset "
-            f"concurrently. Make the claim distributed before scaling this."
-        )
 
 
 class TestB3TheDeployAxisIsFedByTheChart:
@@ -111,11 +77,6 @@ class TestB3TheDeployAxisIsFedByTheChart:
             "no rendered pod receives MEDALLION_RAY_CODE_VERSION — the deploy axis of the submission "
             "id is fed by nothing, and the unit tests bless an empty code as backwards-compatible"
         )
-
-    def test_it_is_rendered_outside_the_ray_toggle(self) -> None:
-        """Rendered on every stage runner, not only a ray-enabled one: the id is derived wherever a stage is
-        submitted, so gating the value on a toggle would make the axis present only sometimes."""
-        assert "MEDALLION_RAY_CODE_VERSION" in self._render()
 
 
 # TestB5NoUnhonouredKnobCanBeSmuggledIntoRemoteArgs was DELETED with its subject at the

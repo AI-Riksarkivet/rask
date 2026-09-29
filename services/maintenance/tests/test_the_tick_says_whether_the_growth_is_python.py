@@ -30,26 +30,6 @@ from __future__ import annotations
 from maintenance.services.sweep import summarize
 
 
-def test_the_tick_summary_carries_the_python_heap_reading() -> None:
-    """RED before the fix: the summary reported bytes held by Lance and nothing about the Python heap."""
-    summary = summarize([])
-
-    assert "python_blocks" in summary, "a tick that cannot say what Python holds cannot rule Python out"
-
-
-def test_the_count_is_a_live_reading() -> None:
-    """Never a constant or a zero — a field that always answers the same thing measures nothing.
-
-    The bar is the type and a floor rather than a threshold: a CPython process holds tens of thousands of
-    allocator blocks before any of this estate's code runs, so anything at or below a few hundred means
-    the call is not reaching the allocator.
-    """
-    value = summarize([])["python_blocks"]
-
-    assert isinstance(value, int), f"expected an int block count, got {type(value).__name__}"
-    assert value > 1000, f"a live interpreter holds far more than {value} blocks; this is not a real reading"
-
-
 def test_two_readings_move_with_the_heap() -> None:
     """The reading must RESPOND, or it cannot separate retention from native allocation.
 

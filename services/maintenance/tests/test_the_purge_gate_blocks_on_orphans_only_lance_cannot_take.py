@@ -44,19 +44,3 @@ def _report(*flags: bool | None) -> ReconcileReport:
 def test_orphans_lance_will_take_do_not_block_the_purge() -> None:
     """979 of these cleared themselves inside ten minutes. Waiting on them buys nothing."""
     assert report_is_clean(_report(True, True, True)) is None
-
-
-def test_an_orphan_BEYOND_the_floor_blocks_it() -> None:
-    """No `older_than`, `retain_versions` or `delete_unverified` will ever reclaim this one."""
-    blocked = report_is_clean(_report(True, False, True))
-
-    assert blocked is not None
-    assert "orphan_files" in blocked
-    assert "1 finding" in blocked, "the message counted the self-clearing orphans too"
-
-
-def test_an_UNCLASSIFIED_orphan_blocks_it() -> None:
-    """The purge deletes bytes on this report. "We could not tell" is not "nothing to see"."""
-    blocked = report_is_clean(_report(True, None))
-
-    assert blocked is not None

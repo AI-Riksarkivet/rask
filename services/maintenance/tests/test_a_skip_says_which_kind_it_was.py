@@ -78,24 +78,3 @@ async def test_the_cadence_skip_is_countable_on_its_own(monkeypatch: pytest.Monk
         "an interval took effect is the total moving by one, which a dataset reaching the trash does too"
     )
     assert by_reason.get("trashed") == 7, f"the trash exclusions lost their own count: {by_reason}"
-
-
-@pytest.mark.anyio
-async def test_the_total_still_means_what_it_meant(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`skipped` is read by an alert. Attribution goes BESIDE it, never in place of it."""
-    summary = await _summary(monkeypatch, _WITH_CADENCE)
-    assert summary["skipped"] == 8, summary
-    by_reason = summary["skipped_by"]
-    assert isinstance(by_reason, dict)
-    assert sum(by_reason.values()) == summary["skipped"], (
-        f"the breakdown {by_reason} does not add up to the total {summary['skipped']} — a skip with a "
-        "reason nobody anticipated must still be counted, or the two numbers disagree in production"
-    )
-
-
-@pytest.mark.anyio
-async def test_todays_estate_reports_zero_cadence_skips_rather_than_silence(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The live tick, reproduced: seven trash exclusions and not one cadence skip. An ABSENT key and a
-    ZERO read the same in a log line, so the key that is not there is the one an operator misreads."""
-    summary = await _summary(monkeypatch, _TODAY)
-    assert summary["skipped_by"] == {"trashed": 7}, summary

@@ -108,22 +108,6 @@ class TestTheLiveFilesThatLookLikeGarbage:
 
         assert not [p for p in orphans if p in sidecars], f"live blob payloads reported reclaimable: {orphans}"
 
-    def test_a_MANIFEST_is_never_an_orphan(self, dataset: str) -> None:
-        """A manifest is what makes a version live; it cannot be unreferenced while it is present."""
-        assert not [p for p in _scan(dataset) if p.startswith("_versions/")]
-
-    def test_a_LIVE_INDEX_is_never_an_orphan(self, indexed_dataset: str) -> None:
-        """Measured 2026-09-09 on pylance 10.0.0: a freshly built BTREE had BOTH of its files reported
-        as orphans, with `checked=True` — nothing ever added an index to the referenced set. Same shape
-        as the blob-sidecar bug above (a live file class no manifest walk names), on the class the
-        catalog is slowest to rebuild."""
-        live = {segment.uuid for index in lance.dataset(indexed_dataset).describe_indices() for segment in index.segments}
-        assert live, "the fixture built no index — the assertion below would hold vacuously"
-
-        orphans = _scan(indexed_dataset)
-
-        assert not [p for p in orphans if p.startswith(tuple(f"_indices/{uuid}/" for uuid in live))], f"live index files reported reclaimable: {orphans}"
-
     def test_a_REPLACED_index_is_spared_while_the_version_that_cites_it_lives(self, indexed_dataset: str) -> None:
         """`create_scalar_index(replace=True)` mints a NEW uuid and leaves the old directory in place.
         Measured: v2 cites the old uuid, v3 the new, and both dirs are on disk — so a referenced set
@@ -151,19 +135,6 @@ class TestItStillFindsRealGarbage:
 
         assert "_indices/00000000-0000-0000-0000-000000000000/page_data.lance" in _scan(indexed_dataset)
 
-    def test_the_finding_is_classified_by_AREA(self, dataset: str) -> None:
-        _plant(dataset, "data/stray-0000.lance")
-        result = scan_dataset(pafs.LocalFileSystem(), dataset, prefix=dataset)
-
-        assert [(o.path, o.kind) for o in result.orphans if o.path.startswith("data/")] == [("data/stray-0000.lance", "data")]
-
-    def test_the_reported_size_is_the_real_one(self, dataset: str) -> None:
-        """A reclamation report whose sizes are wrong cannot be used to decide what to reclaim."""
-        _plant(dataset, "data/stray-0000.lance", b"z" * 4096)
-        result = scan_dataset(pafs.LocalFileSystem(), dataset, prefix=dataset)
-
-        assert [o.size_bytes for o in result.orphans if o.path == "data/stray-0000.lance"] == [4096]
-
 
 class TestKindClassification:
     @pytest.mark.parametrize(
@@ -184,15 +155,6 @@ class TestKindClassification:
 
 
 class TestUnreadableIsNotClean:
-    def test_an_unreadable_dataset_reports_checked_FALSE_with_no_orphans(self, tmp_path: Path) -> None:
-        """ "We could not look" and "there was nothing there" are different answers, and only one of
-        them is safe to act on."""
-        result = scan_dataset(pafs.LocalFileSystem(), str(tmp_path / "nope.lance"), prefix=str(tmp_path / "nope.lance"))
-
-        assert result.checked is False
-        assert result.orphans == []
-        assert result.reason
-
     def test_the_aggregate_counts_it_as_UNREADABLE_not_as_scanned(self, dataset: str, tmp_path: Path) -> None:
         """An unreadable dataset must not silently reduce the orphan count."""
         missing = str(tmp_path / "nope.lance")

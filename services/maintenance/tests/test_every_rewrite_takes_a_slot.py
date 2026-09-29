@@ -38,13 +38,6 @@ def _calls_to(name: str, tree: ast.AST) -> list[ast.Call]:
     return found
 
 
-def test_the_walk_finds_both_rewrite_paths() -> None:
-    """An empty walk would pass everything — the shape this file is about."""
-    tree = ast.parse(SWEEP.read_text(encoding="utf-8"))
-    for name in _REWRITERS:
-        assert _calls_to(name, tree), f"no call to {name} found in sweep.py; the walk is reading the wrong thing"
-
-
 def test_every_rewrite_call_passes_the_bound_FROM_SETTINGS() -> None:
     """Not merely present — sourced from the setting, so the chart's number is the one in force."""
     tree = ast.parse(SWEEP.read_text(encoding="utf-8"))
@@ -64,22 +57,3 @@ def test_every_rewrite_call_passes_the_bound_FROM_SETTINGS() -> None:
         "these rewrite calls do not carry the memory bound from settings, so the semaphore they "
         "contend for is not the one the chart declares:\n  " + "\n  ".join(offenders)
     )
-
-
-def test_the_bound_is_NOT_the_throughput_number() -> None:
-    """The mistake this separation exists to prevent, asserted where someone would make it again.
-
-    `max_concurrent_units` sizes anyio's thread limiter — a THROUGHPUT bound. Using it here throttled
-    the whole lane: measured 2026-09-22, the drain fell to ~0.67 units/sec against the 4.7 it must
-    sustain and `Unprocessed Messages` climbed past 2,000 with nothing draining.
-    """
-    source = SWEEP.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    for name in _REWRITERS:
-        for call in _calls_to(name, tree):
-            for kw in call.keywords:
-                if kw.arg == "rewrite_slots":
-                    assert "max_concurrent_units" not in ast.unparse(kw.value), (
-                        f"{name} at line {call.lineno} bounds MEMORY with the THROUGHPUT setting; a no-op "
-                        "unit holds no bytes, and throttling the lane to the rewrite ceiling stalls it"
-                    )

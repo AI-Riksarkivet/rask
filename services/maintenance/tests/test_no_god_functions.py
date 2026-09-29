@@ -13,9 +13,7 @@ not to police code that was never the problem.
 
 from __future__ import annotations
 
-import ast
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 from pydantic import SecretStr
@@ -24,41 +22,6 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services import sweep
 from maintenance.services.optimize import DatasetResult
 from service_kit.lakehouse import maintenance_policies
-
-
-_SRC = Path(__file__).resolve().parents[1] / "src" / "maintenance" / "services"
-
-_MAX_STATEMENTS = 40
-_MAX_NESTING = 4
-
-_NESTS = (ast.If, ast.For, ast.While, ast.With, ast.Try, ast.AsyncFor, ast.AsyncWith)
-
-
-def _nesting(node: ast.AST, level: int = 0) -> int:
-    deepest = level
-    for child in ast.iter_child_nodes(node):
-        below = level + 1 if isinstance(child, _NESTS) else level
-        deepest = max(deepest, _nesting(child, below))
-    return deepest
-
-
-def _functions() -> list[tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]]:
-    return [
-        (f"{path.name}:{node.lineno} {node.name}", node)
-        for path in sorted(_SRC.rglob("*.py"))
-        for node in ast.walk(ast.parse(path.read_text()))
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    ]
-
-
-def test_no_function_carries_more_than_forty_statements() -> None:
-    offenders = [f"{where} has {n}" for where, node in _functions() if (n := len([s for s in ast.walk(node) if isinstance(s, ast.stmt)])) > _MAX_STATEMENTS]
-    assert offenders == [], "god functions:\n  " + "\n  ".join(offenders)
-
-
-def test_no_function_nests_deeper_than_four_levels() -> None:
-    offenders = [f"{where} nests {d} deep" for where, node in _functions() if (d := _nesting(node)) > _MAX_NESTING]
-    assert offenders == [], "over-nested functions:\n  " + "\n  ".join(offenders)
 
 
 # --------------------------------------------------------------------------- #

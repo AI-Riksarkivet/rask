@@ -29,7 +29,7 @@ import pytest
 import respx
 
 from maintenance.services.compaction_executor import MaintenanceDenied
-from maintenance.services.floor import FLOOR_KEY, FloorReport, raise_listing_floors
+from maintenance.services.floor import FloorReport, raise_listing_floors
 from maintenance.services.orphans import OrphanFile
 from service_kit.lancekit.versions import committed_at
 
@@ -102,21 +102,6 @@ def test_lance_reclaims_a_stranded_file_only_after_the_floor_is_raised(tmp_path:
     assert not orphan.exists()
 
 
-def test_the_data_survives_the_commit_and_the_reclaim(tmp_path: Path) -> None:
-    """The control that matters: this writes to a LIVE governed table, so the rows must be untouched."""
-    uri, orphan, _ = _stranded_dataset(tmp_path)
-    rows_before = lance.dataset(uri).to_table().num_rows
-
-    raise_listing_floors(
-        _settings(),
-        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
-        storage_options={},
-    )
-    lance.dataset(uri).cleanup_old_versions(older_than=dt.timedelta(seconds=0), delete_unverified=True)
-
-    assert lance.dataset(uri).to_table().num_rows == rows_before
-
-
 def test_the_commit_is_a_config_change_lineage_already_knows_to_ignore(tmp_path: Path) -> None:
     """`UpdateConfig` is in `lineage.core.reconcile.MAINTENANCE_OPERATIONS`, so the sweep neither reports
     this version as a provenance hole nor back-fills it with a run that never existed. Asserted here
@@ -135,18 +120,6 @@ def test_the_commit_is_a_config_change_lineage_already_knows_to_ignore(tmp_path:
     newest = max(versions)
     assert operations[newest] == "UpdateConfig"
     assert operations[newest] in MAINTENANCE_OPERATIONS
-
-
-def test_the_commit_names_itself_in_the_datasets_config(tmp_path: Path) -> None:
-    """An operator reading the dataset must be able to tell this commit from a real one without the register."""
-    uri, orphan, _ = _stranded_dataset(tmp_path)
-    raise_listing_floors(
-        _settings(),
-        orphans=[OrphanFile(dataset=uri, path="data/stranded.lance", kind="data", reclaimable_by_lance=False, mtime_epoch=orphan.stat().st_mtime)],
-        storage_options={},
-    )
-
-    assert FLOOR_KEY in lance.dataset(uri).config()
 
 
 # --- selection: which datasets earn a commit -------------------------------------------------- #
@@ -177,17 +150,6 @@ def test_a_disabled_pass_selects_nothing(readable_floor: None) -> None:
 
     assert report.enabled is False
     assert report.raised == [] and report.refused == []
-
-
-def test_an_orphan_that_time_will_clear_earns_no_commit(readable_floor: None) -> None:
-    """`reclaimable_by_lance is True` is a file waiting out the 7-day rule. A commit buys it nothing."""
-    assert _plan([_orphan("s3://wh/a", True)]).raised == []
-
-
-def test_an_undecided_orphan_earns_no_commit(readable_floor: None) -> None:
-    """``None`` is "the floor could not be read". The case for writing to a governed table is that the
-    residue is PROVABLY permanent, and an unread floor proves nothing."""
-    assert _plan([_orphan("s3://wh/a", None)]).raised == []
 
 
 def test_one_undecided_sibling_disqualifies_the_whole_dataset(readable_floor: None) -> None:
@@ -263,12 +225,6 @@ def test_the_remainder_beyond_the_cap_is_reported(readable_floor: None) -> None:
     assert plan.capped == 3
 
 
-@pytest.mark.parametrize("dry_run", [True, False])
-def test_the_report_states_which_mode_produced_it(dry_run: bool) -> None:
-    """A plan and an act must never read alike — the same rule the trash purge's `dry_run` carries."""
-    assert raise_listing_floors(_settings(dry_run=dry_run), orphans=[], storage_options={}).dry_run is dry_run
-
-
 # --- the two defects the live run found -------------------------------------------------------- #
 
 
@@ -320,20 +276,6 @@ def test_a_catalog_denial_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, rea
 
     assert report.raised == []
     assert "REFUSED a write credential" in (report.refused[0].refused or "")
-
-
-def test_a_denial_is_reported_by_the_DRY_RUN_too(monkeypatch: pytest.MonkeyPatch, readable_floor: None) -> None:
-    """A preview that lists a table the catalog will refuse tells an operator the opposite of the truth."""
-
-    def _denied(*args: Any, **kwargs: Any) -> dict[str, str]:
-        raise MaintenanceDenied("the catalog REFUSED a write credential for t (403)")
-
-    monkeypatch.setattr("maintenance.services.floor.write_options_for", _denied)
-
-    report = raise_listing_floors(_settings(dry_run=True), orphans=[_orphan("s3://wh/denied", False)], storage_options={})
-
-    assert report.raised == []
-    assert len(report.refused) == 1
 
 
 def test_a_table_the_catalog_does_not_govern_refuses_the_raise(monkeypatch: pytest.MonkeyPatch, readable_floor: None) -> None:

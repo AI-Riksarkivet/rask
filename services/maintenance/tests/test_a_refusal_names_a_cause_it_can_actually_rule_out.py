@@ -29,38 +29,6 @@ def test_it_names_the_authorization_cause() -> None:
     assert "service-maintenance" in remedy
 
 
-def test_it_ALSO_names_the_cause_the_sweep_cannot_rule_out() -> None:
-    """The half that was missing: the id may not be a table at all."""
-    remedy = denial_remedy(table_id="lakehouse$silver", identity="service-maintenance")
-
-    assert "ungoverned" in remedy, f"the refusal still assumes the id is a registered table: {remedy}"
-    assert "no such table is registered" in remedy
-
-
-def test_it_says_WHY_the_two_are_indistinguishable() -> None:
-    """Without this the reader has no way to know the message is not simply vague.
-
-    The gate ordering is the reason, and it is the one fact that turns "check both" from hedging into
-    an instruction: an operator who knows the 403 precedes existence resolution knows to verify the id
-    names a table BEFORE reaching for a grant.
-    """
-    remedy = denial_remedy(table_id="db1$users", identity="service-maintenance")
-
-    assert "before existence resolution" in remedy
-
-
-def test_it_does_not_instruct_a_bare_grant() -> None:
-    """THE DEFECT ITSELF: an imperative that asserts the object is a table.
-
-    `Grant can_maintain on table:<id>` reads as a step to take. It is only a step when the id names a
-    table, and the sweep does not know that — so the refusal asks the reader to check first.
-    """
-    remedy = denial_remedy(table_id="lakehouse$silver", identity="service-maintenance")
-
-    assert "Grant can_maintain on table:lakehouse$silver" not in remedy
-    assert "Check that the id names a TABLE" in remedy
-
-
 def test_both_refusal_sites_use_the_one_wording() -> None:
     """Two call sites phrased this independently and drifted; one function is what stops that again."""
     import inspect

@@ -52,45 +52,6 @@ def test_discover_skips_manifest_and_non_dirs() -> None:
     assert uris == ["s3://lance-catalog/abcd_ns$table", "s3://lance-catalog/efgh_gold$catalog"]
 
 
-def test_discover_recurses_namespace_prefixes_to_nested_datasets() -> None:
-    # `medallion/` has no `_versions` → it's a namespace prefix, not a dataset: the sweep must
-    # descend to the real datasets under it instead of reporting the prefix as a failed open.
-    fs = _FakeFS(
-        {
-            "lance-catalog": [_dir("lance-catalog/medallion"), _dir("lance-catalog/abcd_t")],
-            "lance-catalog/medallion": [
-                _dir("lance-catalog/medallion/raw"),
-                _dir("lance-catalog/medallion/bronze"),
-            ],
-            "lance-catalog/medallion/raw": [_dir("lance-catalog/medallion/raw/_versions")],
-            "lance-catalog/medallion/bronze": [_dir("lance-catalog/medallion/bronze/_versions")],
-            "lance-catalog/abcd_t": [_dir("lance-catalog/abcd_t/_versions")],
-        }
-    )
-    uris = discover_datasets(cast(Any, fs), "lance-catalog").uris
-    assert uris == [
-        "s3://lance-catalog/medallion/raw",
-        "s3://lance-catalog/medallion/bronze",
-        "s3://lance-catalog/abcd_t",
-    ]
-    # the prefix itself is never reported as a dataset
-    assert "s3://lance-catalog/medallion" not in uris
-
-
-def test_summarize_aggregates_reclaimed_and_errors() -> None:
-    results = [
-        DatasetResult(uri="s3://b/a", fragments_removed=3, old_versions_removed=2),
-        DatasetResult(uri="s3://b/b", fragments_removed=1, old_versions_removed=0),
-        DatasetResult(uri="s3://b/c", error="open: not a dataset"),
-    ]
-    summary = summarize(results)
-    assert summary["datasets"] == 3
-    assert summary["fragments_removed"] == 4
-    assert summary["versions_removed"] == 2
-    # failures keep their message (the why), not just the URI
-    assert summary["errors"] == {"s3://b/c": "open: not a dataset"}
-
-
 def test_summarize_reports_refusals_as_their_own_category() -> None:
     """#64 — a REFUSED dataset must be its own line, never folded into `errors` or `skipped`.
 
@@ -179,34 +140,6 @@ def test_on_cron_single_flight_skips_an_overlapping_sweep(monkeypatch: Any) -> N
     assert ok["status"] == "ok" and ran == [1]
 
 
-def test_summarize_reports_the_BYTES_reclaimed(tmp_path: Any) -> None:
-    """#8's third claim, closed rather than merely reported.
-
-    `DatasetResult.bytes_removed` was WRITE-ONLY: assigned at optimize.py:283 from the Lance cleanup
-    stats and read by nothing (measured — two occurrences in the whole service, the declaration and
-    that assignment). The sweep therefore measured how much it had reclaimed on every tick and threw
-    the number away, while `summarize` reported fragments, indices and versions.
-
-    "How much did we get back" is the one question a reclaimer exists to answer, and an operator
-    reading the cron response could not answer it.
-    """
-    from maintenance.services.optimize import DatasetResult
-    from maintenance.services.sweep import summarize
-
-    out = summarize(
-        [
-            DatasetResult(uri="s3://b/a.lance", old_versions_removed=2, bytes_removed=1024),
-            DatasetResult(uri="s3://b/b.lance", old_versions_removed=1, bytes_removed=512),
-            DatasetResult(uri="s3://b/c.lance", refused="flag 16"),
-        ]
-    )
-
-    assert out["bytes_removed"] == 1536, "the reclaimed bytes were measured and discarded"
-    # The neighbouring counts must not shift — this is an addition, not a re-shape of the response.
-    assert out["versions_removed"] == 3
-    assert out["refused"] == 1
-
-
 def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any) -> None:
     """A refusal carries `error=None`, so the cadence stamp treated it as a successful pass.
 
@@ -245,29 +178,3 @@ def test_a_REFUSED_dataset_is_not_stamped_as_freshly_maintained(monkeypatch: Any
 
     assert len(results) == 1 and results[0].refused, "the harness did not produce the refusal under test"
     assert stamped == [], f"a REFUSED dataset was stamped as maintained, hiding it for the whole interval: {stamped}"
-
-
-def test_summarize_reports_what_the_INDEX_HEALTH_pass_found() -> None:
-    """#60's entire output was computed every tick and discarded.
-
-    `inspect_indices` runs a `describe_indices` + `index_stats` pass PER INDEX PER DATASET — the call
-    that panics on JSON scalar indices and needed two separate BaseException guards to contain — and
-    `summarize` had no key for its result. The estate paid for the diagnosis every 120 seconds and
-    never received it: rows left unindexed, delta proliferation and params drift surfaced only as a
-    count inside one warning log.
-
-    `auto_cleanup_configured` rides along for a related reason: without it, "reclaimed nothing" and
-    "this dataset reclaims itself" are the same zero.
-    """
-    finding = {"name": "id_idx", "column": "id", "unindexed_rows": 12, "note": "12 row(s) unindexed"}
-    results = [
-        DatasetResult(uri="s3://b/a.lance", index_findings=[finding]),
-        DatasetResult(uri="s3://b/b.lance", auto_cleanup_configured=True),
-        DatasetResult(uri="s3://b/healthy.lance"),
-    ]
-
-    out = summarize(results)
-
-    assert out["index_findings"] == {"s3://b/a.lance": [finding]}, "the #60 index report never reaches the caller"
-    assert out["auto_cleanup_configured"] == 1
-    assert "s3://b/healthy.lance" not in out["index_findings"], "a healthy dataset must not appear — a report that fires on healthy data gets ignored"

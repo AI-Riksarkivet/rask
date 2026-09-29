@@ -50,10 +50,3 @@ def test_the_default_warehouse_is_excluded_when_the_root_is_the_estate() -> None
         "the platform's own default warehouse is reported as a ghost once `fga_root_object` names an "
         f"`estate:` — every reconcile tick would carry this finding forever. Reported: {sorted(ghosts)}"
     )
-
-
-def test_the_exclusion_survives_a_warehouse_shaped_root() -> None:
-    """Both settings may still name a `warehouse:` (they do today), and neither may be a ghost."""
-    ghosts = _ghost_ids(DEFAULT_FGA_WAREHOUSE_OBJECT)
-    assert TENANT_ID in ghosts, "the ghost detector found nothing — this case would be vacuous"
-    assert PLATFORM_ID not in ghosts

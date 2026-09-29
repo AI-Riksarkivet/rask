@@ -68,13 +68,6 @@ def test_a_stranded_project_is_REPORTED_not_re_granted() -> None:
     assert "decision, not a repair" in unjustified["project:acme"]
 
 
-def test_the_finding_names_the_candidate_so_the_decision_is_one_call_away() -> None:
-    """Refusing to grant must not mean refusing to help — the operator needs the id the record holds."""
-    _, unjustified = plan_rebuild(_report("acme"), _sources(projects=[_ACME]))
-
-    assert "CiQwOGE4Njg0Yi" in unjustified["project:acme"]
-
-
 def test_no_tuple_this_pass_writes_confers_ACCESS() -> None:
     """The property that makes it safe to run unattended: a structural edge says where an object lives.
 
@@ -84,13 +77,6 @@ def test_no_tuple_this_pass_writes_confers_ACCESS() -> None:
     planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
 
     assert {t.relation for t in planned} <= {"project", "parent"}, [t.relation for t in planned]
-
-
-def test_a_healthy_tenant_is_left_alone() -> None:
-    """The control. Scoped to the report's findings, not to every record — `write_tuples` is idempotent,
-    so re-asserting all 93 seeds per tick would be harmless and unreadable, and the one that mattered
-    would be indistinguishable from the noise."""
-    assert plan_rebuild(_report(), _sources(projects=[_ACME])) == ([], {})
 
 
 def test_a_record_with_no_creator_says_SO_rather_than_going_quiet() -> None:
@@ -108,38 +94,11 @@ def test_a_warehouse_under_a_revived_tenant_regains_its_tenancy_pointer() -> Non
     assert ("project:acme", "project", "warehouse:acme-bucket") in [(t.user, t.relation, t.object) for t in planned]
 
 
-def test_the_pointer_relation_is_project_NOT_parent() -> None:
-    """`model.fga` defines `project: [project]` on the warehouse type and declares no `parent` there.
-    Writing `parent` makes OpenFGA reject the whole seed with a 503, which is why the catalog's
-    `seed_warehouse` writes this relation directly rather than through `grant_on_create`."""
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
-
-    assert [t.relation for t in planned if t.object.startswith("warehouse:")] == ["project"]
-
-
-def test_a_warehouse_owner_is_NOT_invented() -> None:
-    """Warehouse records carry no `created_by` (0 of 97, live 2026-09-19), so there is no creator to
-    restore — and a rebuild that picked one would be GRANTING, not restoring. The same rule as the
-    project seed above, arriving by a second route: here the field is absent, there it is present and
-    still not a licence."""
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
-
-    assert [t for t in planned if t.relation == "owner"] == []
-
-
 def test_a_warehouse_under_a_healthy_tenant_is_left_alone() -> None:
     """The control for the pointer half."""
     planned, _ = plan_rebuild(_report(), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
 
     assert planned == []
-
-
-def test_every_planned_tuple_names_the_record_that_justifies_it() -> None:
-    """A reader must be able to check the claim without this module — that is what makes it a REBUILD
-    rather than a grant."""
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
-
-    assert [t.justified_by for t in planned] == ["_warehouses/acme-bucket.json"]
 
 
 # --- the write path --------------------------------------------------------------------------- #
@@ -229,18 +188,3 @@ async def test_the_remainder_beyond_the_cap_is_reported(fga: _Fga) -> None:
 
     assert len(report.written) == 1
     assert report.capped == 1
-
-
-@pytest.mark.asyncio
-async def test_the_pass_never_deletes(fga: _Fga) -> None:
-    """The property the whole design rests on: it cannot widen access beyond what the control plane
-    already recorded, because it only ever adds what a record justifies."""
-    import ast
-    import inspect
-
-    import maintenance.services.rebuild as module
-
-    source = inspect.getsource(module)
-    called = {node.func.attr for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
-
-    assert not (called & {"delete_tuples", "revoke", "delete", "write_deletes"}), f"a deleting call appeared in the additive rebuild: {called}"

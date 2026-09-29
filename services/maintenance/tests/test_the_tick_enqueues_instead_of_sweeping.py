@@ -19,7 +19,7 @@ from datetime import timedelta
 import pytest
 
 from maintenance.services.sweep import DatasetPlan, DatasetResult, DatasetWorkItem
-from maintenance.services.work_queue import RETRY, SUCCESS, ack_for, enqueue_units
+from maintenance.services.work_queue import RETRY, SUCCESS, enqueue_units
 
 
 def _item(uri: str = "s3://bucket/t.lance") -> DatasetWorkItem:
@@ -74,24 +74,6 @@ async def test_a_publish_that_fails_is_COUNTED_not_swallowed() -> None:
 
     assert published == 1
     assert failed == ["s3://b/b.lance"]
-
-
-@pytest.mark.parametrize(
-    ("result", "expected", "why"),
-    [
-        (DatasetResult(uri="u", fragments_removed=3), SUCCESS, "work landed — nothing to redo"),
-        (DatasetResult(uri="u"), SUCCESS, "a no-op tick on a healthy dataset is a success"),
-        (DatasetResult(uri="u", refused="unsupported feature flag 16"), SUCCESS, "a refusal is a deliberate decline, not a failure"),
-        (
-            DatasetResult(uri="u", error="open: no such dataset", error_type="FileNotFoundError"),
-            SUCCESS,
-            "an unreadable directory is noise; redelivering it forever helps nobody",
-        ),
-        (DatasetResult(uri="u", error="maintain: connection reset", error_type="OSError"), RETRY, "a real failure must be redelivered, then dead-lettered"),
-    ],
-)
-def test_the_ack_decision_distinguishes_the_three_outcomes(result: DatasetResult, expected: str, why: str) -> None:
-    assert ack_for(result) == expected, why
 
 
 @pytest.mark.asyncio

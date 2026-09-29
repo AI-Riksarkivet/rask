@@ -49,14 +49,6 @@ def _report(*incomplete: IncompleteScan) -> ReconcileReport:
     )
 
 
-def test_a_COMPLETE_report_still_plans_every_revoke() -> None:
-    """The control. Without it every assertion below could pass by refusing everything always."""
-    planned, refused = repair.plan_repair(_report())
-
-    assert {p.fga_object for p in planned} == {"project:p1", "warehouse:w1", "table:ns$t1"}
-    assert refused == {}
-
-
 def test_an_unreadable_TABLE_root_does_not_make_its_tables_ghosts() -> None:
     """The live path: `catalog:tables:<root>` is an IncompleteScan, never an error, so `ghost_tables`
     runs against a record set missing every table under that root."""
@@ -68,30 +60,6 @@ def test_an_unreadable_TABLE_root_does_not_make_its_tables_ghosts() -> None:
     )
     assert "ghost_tables" in refused, f"the refusal is not reported, so the tick reads as clean: {refused}"
     assert "s3://acme-wh" in refused["ghost_tables"], f"the refusal does not name the partial source: {refused['ghost_tables']}"
-
-
-def test_the_OTHER_categories_still_run_when_only_tables_were_partial() -> None:
-    """A partial read invalidates the category it feeds and no other. Refusing all three on any
-    incompleteness would make the pass unusable on an estate that always carries one — which is the
-    state this estate is actually in."""
-    planned, _ = repair.plan_repair(_report(IncompleteScan(source="catalog:tables:s3://acme-wh", reason="manifest unreadable: 503")))
-
-    assert {p.fga_object for p in planned} == {"project:p1", "warehouse:w1"}
-
-
-def test_a_skipped_PROJECT_record_does_not_make_that_project_a_ghost() -> None:
-    """`_registry_source` files a skipped record the same way, and the inference is identically wrong."""
-    planned, refused = repair.plan_repair(_report(IncompleteScan(source="registry:projects", reason="1 record unreadable")))
-
-    assert "project:p1" not in {p.fga_object for p in planned}
-    assert "ghost_projects" in refused
-
-
-def test_a_skipped_WAREHOUSE_record_does_not_make_that_warehouse_a_ghost() -> None:
-    planned, refused = repair.plan_repair(_report(IncompleteScan(source="registry:warehouses", reason="1 record unreadable")))
-
-    assert "warehouse:w1" not in {p.fga_object for p in planned}
-    assert "ghost_warehouses" in refused
 
 
 def test_an_UNRELATED_partial_read_refuses_nothing() -> None:

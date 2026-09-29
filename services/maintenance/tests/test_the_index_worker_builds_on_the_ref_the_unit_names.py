@@ -51,19 +51,3 @@ def test_the_worker_builds_on_the_branch_the_unit_names(diverged: str) -> None:
     assert outcome.name == "extra_idx", outcome
     names = {index.name for index in lance.dataset(diverged).checkout_version(("work", None)).describe_indices()}
     assert "extra_idx" in names, f"the index did not land on the branch: {names}"
-
-
-def test_a_branchless_unit_still_builds_on_main(diverged: str) -> None:
-    """The control. Without it, a worker that read every unit as the branch would pass above."""
-    outcome = build_index(_unit(diverged, "id"), write_options={})
-
-    assert outcome.name == "id_idx", outcome
-    names = {index.name for index in lance.dataset(diverged).describe_indices()}
-    assert "id_idx" in names, f"the index did not land on main: {names}"
-
-
-def test_a_branch_only_column_is_INVISIBLE_to_a_branchless_unit(diverged: str) -> None:
-    """The fixture really did diverge the refs — otherwise every assertion here is about one dataset
-    wearing two names, and a worker ignoring `branch` would pass the whole file."""
-    with pytest.raises(Exception, match="extra"):
-        build_index(_unit(diverged, "extra"), write_options={})

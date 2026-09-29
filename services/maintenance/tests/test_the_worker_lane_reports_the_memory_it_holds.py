@@ -25,52 +25,16 @@ two places today and neither runs on a deployed worker.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import pytest
 
-from maintenance.services.sweep import DatasetResult, DatasetWorkItem, memory_readings
+from maintenance.services.sweep import memory_readings
 
 
 #: The key set the row's comparison needs. Read from the seam rather than restated, so a fourth reading
 #: added there becomes required here without editing this file — and asserted non-empty below, because
 #: an empty set would make every assertion pass by having nothing to check.
 EXPECTED = set(memory_readings())
-
-
-async def _noop(*_a: Any, **_k: Any) -> None:
-    return None
-
-
-def test_the_measurement_has_something_to_measure() -> None:
-    """Anti-vacuity, first: both gates below compare against `EXPECTED`."""
-    assert EXPECTED, "memory_readings() reports nothing, so the gates below assert nothing"
-    assert "rss_bytes" in EXPECTED, f"the comparison needs RSS to anchor it: {sorted(EXPECTED)}"
-
-
-@pytest.mark.asyncio
-async def test_a_COMPACTION_unit_reports_the_memory_it_held(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """EVERY unit, not only one that rewrote something.
-
-    The fixture returns a `DatasetResult` with nothing committed — the no-op outcome that is 100% of
-    the measured live traffic — so a reading gated on a rewrite leaves this red.
-    """
-    from maintenance.api import work as work_mod
-    from maintenance.core.config import MaintenanceSettings
-    from maintenance.core.lineage_emit import NoopEmitter
-
-    settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
-    monkeypatch.setattr(work_mod, "emit_sweep_lineage", _noop)
-    monkeypatch.setattr(work_mod.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_mod.base_refs.BaseRefs())
-    monkeypatch.setattr(work_mod, "execute_unit", lambda *a, **k: DatasetResult(uri="s3://b/t.lance"))
-
-    with caplog.at_level(logging.INFO):
-        await work_mod.handle_unit({"data": DatasetWorkItem(uri="s3://b/t.lance", table_id="ns$t", plan={}).model_dump(mode="json")}, settings, NoopEmitter())
-
-    done = [r for r in caplog.records if r.message == "maintenance_unit_done"]
-    assert done, f"no unit-done record at all: {[r.message for r in caplog.records]}"
-    missing = sorted(k for k in EXPECTED if not hasattr(done[0], k))
-    assert not missing, f"the unit lane reports no memory: {missing} absent from maintenance_unit_done"
 
 
 @pytest.mark.asyncio

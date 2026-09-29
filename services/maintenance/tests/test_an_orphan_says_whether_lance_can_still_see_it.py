@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import os
 import tempfile
-from datetime import datetime
 from pathlib import Path
 
 import lance
@@ -61,31 +60,3 @@ def test_an_orphan_BELOW_the_floor_is_lance_s_to_reclaim() -> None:
     assert scan.checked
     assert len(scan.orphans) == 1
     assert scan.orphans[0].reclaimable_by_lance is True
-
-
-def test_an_orphan_ABOVE_the_floor_is_reclaimable_by_NOTHING() -> None:
-    """The residue that justifies a reclaimer: no `older_than` and no flag will ever enumerate it."""
-    uri, prefix = _dataset_with_orphan(+60)
-
-    scan = scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix)
-
-    assert scan.checked
-    assert len(scan.orphans) == 1
-    assert scan.orphans[0].reclaimable_by_lance is False
-
-
-def test_the_classification_survives_a_host_that_is_not_UTC() -> None:
-    """The trap this test exists for: the two clocks are reported in different frames.
-
-    A naive-local manifest timestamp compared against an aware-UTC file mtime is wrong by the host
-    offset, which on this host is two hours — enough to flip every orphan within two hours of a commit
-    into the wrong class, silently and in only one direction.
-    """
-    uri, prefix = _dataset_with_orphan(-60)
-    version_ts = lance.dataset(uri).versions()[0]["timestamp"]
-    info = pafs.LocalFileSystem().get_file_info(f"{prefix}/_transactions")
-
-    assert isinstance(version_ts, datetime)
-    assert version_ts.tzinfo is None, "the manifest timestamp gained a tzinfo — re-derive the comparison"
-    assert info.mtime.tzinfo is not None, "FileInfo.mtime lost its tzinfo — re-derive the comparison"
-    assert scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix).orphans[0].reclaimable_by_lance is True

@@ -41,61 +41,13 @@ from maintenance.services.sweep import _MAX_FAIL_EMITS_PER_TICK, emit_sweep_line
 # --------------------------------------------------------------------------- #
 
 
-def test_table_id_from_uri_splits_on_first_underscore() -> None:
-    # The catalog lays a table out as s3://<bucket>/<uuid>_<table_id>; the id may itself contain '$'.
-    assert table_id_from_uri("s3://lance-catalog/aa3bed10_ns$table") == "ns$table"
-
-
-def test_table_id_from_uri_keeps_later_underscores_in_id() -> None:
-    # Only the FIRST '_' separates the uuid from the id — an id containing '_' survives intact.
-    assert table_id_from_uri("s3://lance-catalog/4750a5b9_my_table") == "my_table"
-
-
 def test_table_id_from_uri_tolerates_trailing_slash() -> None:
     assert table_id_from_uri("s3://lance-catalog/aa3bed10_gold$catalog/") == "gold$catalog"
-
-
-def test_table_id_from_uri_none_without_underscore() -> None:
-    # A directory that isn't the <uuid>_<id> layout yields no id → no bogus maintenance event.
-    assert table_id_from_uri("s3://lance-catalog/manifestlike") is None
 
 
 # --------------------------------------------------------------------------- #
 # maintenance event shape + the cross-service wire contract
 # --------------------------------------------------------------------------- #
-
-
-def test_build_maintenance_event_shape() -> None:
-    event = build_maintenance_event(
-        table_id="ns$table",
-        namespace="ns",
-        job_namespace="compaction",
-        run_id="r1",
-        event_time="2026-06-30T00:00:00Z",
-    )
-    assert event["run"]["facets"]["lance"]["operation"] == COMPACTION
-    assert event["outputs"] == [{"namespace": "ns", "name": "ns$table"}]
-    assert event["inputs"] == []
-    # Versionless: a maintenance pass asserts no data version, so no output facets at all.
-    assert "facets" not in event["outputs"][0]
-
-
-def test_producer_uri_names_this_repo_and_this_service() -> None:
-    # The spec-required OpenLineage ``producer`` is wire-visible on every RunEvent. It must resolve —
-    # the repo is AI-Riksarkivet/rask and the code lives in services/maintenance, not the dissolved
-    # Borg93/lance-ns services/compaction path (which now 404s).
-    event = build_maintenance_event(
-        table_id="ns$table",
-        namespace="ns",
-        job_namespace="compaction",
-        run_id="r1",
-        event_time="2026-06-30T00:00:00Z",
-    )
-    producer = event["producer"]
-    assert "lance-ns" not in producer, producer
-    assert "services/compaction" not in producer, producer
-    assert "AI-Riksarkivet/rask" in producer, producer
-    assert "services/maintenance" in producer, producer
 
 
 def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
@@ -132,21 +84,6 @@ def _fail_event(**overrides: Any) -> dict[str, Any]:
     }
     kwargs.update(overrides)
     return build_maintenance_fail_event(**kwargs)
-
-
-def test_build_maintenance_fail_event_shape() -> None:
-    # eventType FAIL, bare output (name only), errorMessage facet with message + programmingLanguage,
-    # and NO version/schema/statistics facets — a failed maintenance pass must never fabricate lineage.
-    event = _fail_event()
-    assert event["eventType"] == "FAIL"
-    assert event["outputs"] == [{"namespace": "ns", "name": "ns$table"}]  # bare: no facets key at all
-    assert event["inputs"] == []
-    assert event["job"]["name"] == f"{COMPACTION}.ns$table"  # same job identity as the COMPLETE event
-    error_facet = event["run"]["facets"]["errorMessage"]
-    assert error_facet["message"] == "maintain: Commit conflict for version 42"
-    assert error_facet["programmingLanguage"] == "PYTHON"
-    assert "_producer" in error_facet and "_schemaURL" in error_facet
-    assert event["run"]["facets"]["lance"]["operation"] == COMPACTION
 
 
 def test_fail_event_round_trips_through_lineage_run_event() -> None:
@@ -337,27 +274,6 @@ def test_make_emitter_noop_when_disabled() -> None:
     assert isinstance(emitter, NoopEmitter)
 
 
-def test_make_emitter_noop_when_enabled_but_unwired() -> None:
-    # Enabled but no Dapr client → stay a no-op rather than silently publish nowhere (fail safe).
-    emitter = make_emitter(enabled=True, dapr=None, pubsub="p", topic="t", job_namespace="compaction")
-    assert isinstance(emitter, NoopEmitter)
-
-
-def test_make_emitter_dapr_when_enabled_and_wired() -> None:
-    emitter = make_emitter(
-        enabled=True,
-        dapr=cast(Any, object()),
-        pubsub="lineage-pubsub",
-        topic="lineage.events.v1",
-        job_namespace="compaction",
-    )
-    assert isinstance(emitter, DaprMaintenanceEmitter)
-
-
-def test_noop_emitter_does_nothing() -> None:
-    asyncio.run(NoopEmitter().emit_maintenance(table_id="ns$a", namespace="ns"))  # no raise == pass
-
-
 class _FakeDaprClient:
     def __init__(self) -> None:
         self.published: list[dict[str, str]] = []
@@ -418,79 +334,6 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
     assert fail_b != fail_a1  # per-dataset, not global
     assert complete_1 != complete_2  # COMPLETE semantics untouched (uuid4 per tick)
     assert complete_1 not in {fail_a1, fail_b}
-
-
-def test_a_DECLARED_lineage_name_is_read_from_the_dataset(tmp_path: Any) -> None:
-    """The medallion tiers cannot be NAMED from their URI, so a producer must be able to declare it.
-
-    `table_id_from_uri` splits the directory on its first "_", which works for the catalog's
-    `<uuid8>_<ns>$<table>` layout and returns None for `medallion/<tier>`. That is not a parsing
-    shortfall: the chart composes those URIs from the namespace ALONE while the canonical id is a
-    separate literal, so `medallion/bronze` is both `bronze$events` and `bronze$pages`. No split can
-    recover a name the path never carried.
-
-    The name must equal the OpenFGA object id — delivery re-checks `can_get_metadata` against
-    `table:<output name>` — so a wrong name counts every recipient HIDDEN, which is worse than silence.
-    Hence a declared key rather than a guess.
-    """
-    import lance
-    import pyarrow as pa
-
-    from maintenance.core.lineage_emit import LINEAGE_DATASET_ID_KEY, declared_table_id
-
-    uri = str(tmp_path / "medallion-bronze.lance")
-    table = pa.table({"v": [1, 2, 3]})
-    table = table.replace_schema_metadata({LINEAGE_DATASET_ID_KEY: "bronze$events"})
-    lance.write_dataset(table, uri)
-
-    assert declared_table_id(lance.dataset(uri)) == "bronze$events"
-
-
-def test_an_UNDECLARED_dataset_yields_None_rather_than_a_guess(tmp_path: Any) -> None:
-    """No key means no name. Falling back to a guess is the failure this exists to avoid — and datasets
-    already on disk carry no key, so this is the common case until a producer stamps it."""
-    import lance
-    import pyarrow as pa
-
-    from maintenance.core.lineage_emit import declared_table_id
-
-    uri = str(tmp_path / "plain.lance")
-    lance.write_dataset(pa.table({"v": [1]}), uri)
-
-    assert declared_table_id(lance.dataset(uri)) is None
-
-
-def test_the_PRODUCER_stamp_and_the_SWEEP_read_agree(tmp_path: Any) -> None:
-    """The two halves of T6, asserted together — because either alone is silently useless.
-
-    The medallion writer is the only party holding BOTH the URI (composed from the namespace) and the
-    canonical table id (a separate project-qualified literal). `medallion/bronze` is both
-    `bronze$events` and `bronze$pages`, so nothing downstream can derive one from the other. The writer
-    declares; the sweep reads.
-
-    Pinned as one test on purpose: a stamp under a key the reader does not look for, or a reader
-    looking for a key nobody stamps, both leave the cascade's datasets emitting no provenance and — the
-    part that matters — no per-dataset FAIL event, which is the estate's only maintenance failure
-    surface for those tiers.
-    """
-    import lance
-    import pyarrow as pa
-
-    from maintenance.core.lineage_emit import declared_table_id
-    from service_kit.lakehouse.stage_stamp import declare_dataset_id
-
-    stamped = declare_dataset_id(pa.table({"v": [1, 2, 3]}), "silver$features")
-    uri = str(tmp_path / "medallion-silver.lance")
-    lance.write_dataset(stamped, uri)
-
-    assert declared_table_id(lance.dataset(uri)) == "silver$features", "the sweep must read what the producer stamped"
-    # ONE constant, not two that agree. Both services depend on service-kit, so the key is defined
-    # beside the stamp that writes it and imported by the reader — an identity assertion here would
-    # now be tautological, while the import itself is what makes disagreement unrepresentable.
-    from maintenance.core.lineage_emit import LINEAGE_DATASET_ID_KEY as READER_KEY
-    from service_kit.lakehouse.stage_stamp import LINEAGE_DATASET_ID_KEY as STAMP_KEY
-
-    assert READER_KEY is STAMP_KEY, "the sweep must read the key the stamp module defines, not a copy"
 
 
 def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:

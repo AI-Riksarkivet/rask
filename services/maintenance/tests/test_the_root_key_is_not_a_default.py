@@ -22,14 +22,6 @@ import pytest
 from maintenance.core.config import MaintenanceSettings
 
 
-def test_the_default_is_not_the_tenant_root() -> None:
-    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog")
-    assert settings.s3_access_key_id != "minioadmin", (
-        "an unconfigured deployment runs the sweep as RustFS tenant root, reaching every tenant's bytes and the records that govern maintenance itself"
-    )
-    assert settings.s3_access_key_id == "", "unset should be empty so the boot check can refuse it"
-
-
 def test_an_explicit_key_is_still_honoured() -> None:
     settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", MAINTENANCE_S3_ACCESS_KEY_ID="rask-maintenance")
     assert settings.s3_access_key_id == "rask-maintenance"

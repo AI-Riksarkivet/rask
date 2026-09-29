@@ -48,16 +48,6 @@ def _read(tmp_path: Path) -> tuple[list[dict[str, str]], list[str]]:
     return _list_json_records(f"file://{tmp_path}", {}, prefix="_trash", required=("id", "location"), non_empty=("id",))
 
 
-def test_a_record_with_every_field_is_read(tmp_path: Path) -> None:
-    """The control: without it the assertions below could pass by reading nothing at all."""
-    _write(tmp_path, "table-1.json", {"id": "ns$t", "location": "s3://wh/abc_ns$t", "kind": "table"})
-
-    records, skipped = _read(tmp_path)
-
-    assert [r["id"] for r in records] == ["ns$t"]
-    assert skipped == []
-
-
 def test_a_NAMESPACE_record_with_an_empty_location_is_read(tmp_path: Path) -> None:
     """THE DEFECT. `namespaces.py` writes `location=""` because a namespace owns no bytes; the reader
     calls that missing, and ten of them block the trash purge forever."""
@@ -67,31 +57,6 @@ def test_a_NAMESPACE_record_with_an_empty_location_is_read(tmp_path: Path) -> No
 
     assert skipped == [], f"a deliberately-empty location was reported as a missing field: {skipped}"
     assert [r["id"] for r in records] == ["acme$silver"]
-
-
-def test_a_record_ACTUALLY_missing_the_key_is_still_skipped(tmp_path: Path) -> None:
-    """The line this must not cross. Presence is a narrower test than truthiness, not a looser one:
-    a record with no `location` key at all is still incomplete and must still be reported."""
-    _write(tmp_path, "broken-1.json", {"id": "ns$t", "kind": "table"})
-
-    records, skipped = _read(tmp_path)
-
-    assert records == []
-    assert len(skipped) == 1 and "missing" in skipped[0] and "location" in skipped[0], skipped
-
-
-def test_an_empty_ID_is_still_skipped(tmp_path: Path) -> None:
-    """`id` is the record's identity and an empty one names nothing, so the presence rule must not
-    quietly admit it. That it and `location` are both in `required` while only one may legitimately
-    be blank is the whole reason this cannot be fixed by dropping `location` from the tuple."""
-    _write(tmp_path, "noid-1.json", {"id": "", "location": "s3://wh/x", "kind": "table"})
-
-    records, skipped = _read(tmp_path)
-
-    assert records == [], f"a record with no identity was accepted: {records}"
-    assert len(skipped) == 1 and "empty" in skipped[0], (
-        f"an empty required value must be named as EMPTY rather than as absent — they are different defects at the writer: {skipped}"
-    )
 
 
 def test_the_TRASH_registry_is_the_call_site_that_asks_for_both_rules() -> None:

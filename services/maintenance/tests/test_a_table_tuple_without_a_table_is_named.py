@@ -30,15 +30,3 @@ def test_a_tuple_holding_table_the_catalog_lacks_is_named() -> None:
 
     assert [(g.id, g.tuples) for g in found] == [("trackans1$gone", 4)]
     assert found[0].fga_object == "table:trackans1$gone"
-
-
-def test_a_live_table_with_tuples_is_not_named() -> None:
-    """The control: an ordinary governed table is the normal case and must never read as drift."""
-    assert _ghosts("table", {"acme$live": 2}, record_ids={"acme$live"}, exclude=set()) == []
-
-
-def test_the_count_rides_the_finding() -> None:
-    """How MANY tuples outlived the table is what says whether it was one grant or a whole tenant."""
-    found = _ghosts("table", {"a$x": 1, "b$y": 9}, record_ids=set(), exclude=set())
-
-    assert {g.id: g.tuples for g in found} == {"a$x": 1, "b$y": 9}

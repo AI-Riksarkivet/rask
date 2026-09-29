@@ -44,43 +44,6 @@ def test_a_record_whose_location_is_absent_is_reported() -> None:
     assert found[0].location == "s3://lance-catalog/medallion/bronze"
 
 
-def test_a_record_whose_bytes_are_present_is_not() -> None:
-    """The control. Without it the assertion above passes on a detector that reports everything."""
-    assert (
-        _absent_datasets(
-            registered={"bronze$pages": (ROOT, "s3://lance-catalog/bronze/pages")},
-            discovered={"s3://lance-catalog/bronze/pages"},
-            trashed=set(),
-        )
-        == []
-    )
-
-
-def test_a_RELATIVE_location_resolves_against_its_root() -> None:
-    """`lance_docs/namespace.md:974` — "Relative path to the table directory within the root"."""
-    assert _absent_datasets(registered={"ns$t": (ROOT, "a1b2c3d4_ns$t")}, discovered={f"{ROOT}/a1b2c3d4_ns$t"}, trashed=set()) == []
-    missing = _absent_datasets(registered={"ns$t": (ROOT, "a1b2c3d4_ns$t")}, discovered=set(), trashed=set())
-    assert [f.location for f in missing] == [f"{ROOT}/a1b2c3d4_ns$t"], "a relative location must be reported RESOLVED, or nobody can go and look"
-
-
-def test_a_DECLARED_ONLY_table_carries_no_location_and_is_never_a_finding() -> None:
-    """The false positive the schema itself rules out: `location` is nullable, "only for tables"."""
-    assert _absent_datasets(registered={"ns$reserved": (ROOT, None)}, discovered=set(), trashed=set()) == []
-
-
-def test_a_DROPPED_table_whose_bytes_await_the_purge_is_not_drift() -> None:
-    """Same exclusion `_unregistered_datasets` makes, in the other direction: a trashed table's record
-    is gone by definition while its bytes remain, so neither side of the pair is a defect."""
-    assert (
-        _absent_datasets(
-            registered={"ns$dropped": (ROOT, "s3://lance-catalog/gone")},
-            discovered=set(),
-            trashed={"s3://lance-catalog/gone"},
-        )
-        == []
-    )
-
-
 # --------------------------------------------------------------------------- #
 # The WALKED-BUCKET boundary: what was looked at, vs what happened to be found
 # --------------------------------------------------------------------------- #

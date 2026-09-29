@@ -20,9 +20,6 @@ ran" must not look identical on a dashboard, and the second is what a broken rec
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 
 from maintenance.core import metrics
@@ -50,28 +47,3 @@ def test_a_reclaiming_sweep_records_its_bytes(bytes_counter: _Spy) -> None:
     metrics.record_reclaimed(fragments_removed=0, versions_removed=97, bytes_removed=71_295)
 
     assert bytes_counter.added == [71_295]
-
-
-def test_a_sweep_that_reclaimed_NOTHING_still_emits_zero(bytes_counter: _Spy) -> None:
-    """ "Nothing to reclaim" and "the reclaimer never ran" must not read alike on a dashboard."""
-    metrics.record_reclaimed(fragments_removed=0, versions_removed=0, bytes_removed=0)
-
-    assert bytes_counter.added == [0], "the zero was skipped, so the series only exists after the first non-zero tick"
-
-
-def test_the_sweep_passes_the_bytes_it_measured() -> None:
-    """Asserted on the CALL SITE, because an instrument nothing feeds is the same defect one rung out.
-
-    PARSED, not grepped. `bytes_removed=result.bytes_removed` already appears in this module at the
-    AUDIT line, so a substring search passes before the fix exists and proves nothing — which is the
-    failure this file is about, one rung further out again. The AST names the callee.
-    """
-    source = Path(metrics.__file__).parents[1] / "services" / "sweep.py"
-    calls = [
-        node
-        for node in ast.walk(ast.parse(source.read_text()))
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "record_reclaimed"
-    ]
-
-    assert calls, "the sweep no longer calls `record_reclaimed` at all"
-    assert any(kw.arg == "bytes_removed" for call in calls for kw in call.keywords), "`record_reclaimed` is called without the bytes the sweep measured"

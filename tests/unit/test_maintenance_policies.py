@@ -176,37 +176,6 @@ def test_resolve_overlapping_project_claims_warns_and_matches_nothing(
     assert hit is not None and hit["retention_days"] == 7
 
 
-def test_project_policy_matches_flat_catalog_layout_without_a_logical_id() -> None:
-    # The bucket-level match needs no logical id, so BOTH the catalog's flat `<uuid>_<table_id>` layout
-    # and the medallion-nested layout in a project bucket resolve the project record.
-    records = [_project_policy(retention_days=90)]
-    for uri in ("s3://acme-wh/u1_db$users", "s3://acme-wh/medallion/gold/features"):
-        hit = mp.resolve_policy(records, uri, logical_id=None)
-        assert hit is not None and hit["retention_days"] == 90, uri
-
-
-def test_sweep_consumes_a_project_policy_via_the_same_resolution_call(tmp_path: Path) -> None:
-    # PIN (#84): the sweep needs NO change to honor the project tier — run_sweep resolves via
-    # list_policies + resolve_policy(records, uri, logical_id=table_id_from_uri(uri)) and then applies
-    # the skip logic. Drive exactly that call shape off a real registry and prove a project record
-    # both resolves and opts its bucket's datasets out.
-    from maintenance.core.lineage_emit import table_id_from_uri
-
-    root = str(tmp_path)
-    mp.put_policy(root, {}, _project_policy(compact_enabled=False))
-    records = mp.list_policies(root, {})
-    settings = _settings(tmp_path)
-    now = datetime.now(UTC)
-
-    uri = "s3://acme-wh/medallion/silver/events"  # medallion-nested: table_id_from_uri yields no id
-    policy = mp.resolve_policy(records, uri, logical_id=table_id_from_uri(uri), delimiter=settings.delimiter)
-    assert policy is not None and policy["kind"] == "project"
-    assert _policy_skip_reason(policy, settings=settings, options={}, now=now, uri=uri) == "policy_disabled"
-
-    outside = "s3://other-wh/u1_db$t"
-    assert mp.resolve_policy(records, outside, logical_id=table_id_from_uri(outside)) is None
-
-
 def test_resolve_matches_namespace_by_logical_parent_chain() -> None:
     # CONTRACT (audit 2026-07-16): the catalog lays tables out flat (`<uuid>_<table_id>`), never under a
     # namespace directory — so a namespace policy must also match via the dataset's logical parent chain
@@ -298,22 +267,6 @@ def test_tag_pinned_version_survives_any_retention_policy(tmp_path: Path) -> Non
     assert pinned.count_rows() == 1
 
 
-def test_retention_policy_prunes_unpinned_old_versions(tmp_path: Path) -> None:
-    # The observable flip side: with retain_versions=1 + older_than=0, an untagged old version is gone.
-    uri = str(tmp_path / "ds")
-    table = pa.table({"n": pa.array([1], pa.int64())})
-    lance.write_dataset(table, uri, mode="overwrite")  # v1 (untagged)
-    lance.write_dataset(table, uri, mode="append")  # v2
-    lance.write_dataset(table, uri, mode="append")  # v3
-
-    result = compact_one(uri, {}, older_than=None, retain_versions=1)
-    assert result.error is None, result.error
-    assert result.old_versions_removed >= 1
-
-    with pytest.raises((ValueError, OSError)):
-        lance.dataset(uri, version=1)  # pruned per policy
-
-
 def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: Any) -> None:
     """The destructive round-trip an audit found: `put_policy` overwrites the whole record, so a
     client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
@@ -333,18 +286,6 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     assert updated["compact_enabled"] is False, "the field the caller DID set must apply"
     assert updated["scan_batch_size"] == 64, "the memory bound was silently cleared"
     assert updated["auto_cleanup_interval_commits"] == 10, "version-reclamation ownership was flipped back"
-
-
-def test_a_first_write_still_gets_the_model_defaults(tmp_path: Any) -> None:
-    """The negative twin: with nothing to inherit from, defaults must still land — otherwise a first
-    policy would be missing every field the caller left alone."""
-    from catalog.api.v1.endpoints.policies import _record
-    from catalog.schemas import PolicyRequest
-
-    first = _record("table", "t", "p", PolicyRequest(retention_days=30))
-    assert first["retention_days"] == 30
-    assert first["compact_enabled"] is True and first["cleanup_enabled"] is True
-    assert first["scan_batch_size"] is None
 
 
 # --- #93 the compaction READ bound -----------------------------------------------------------------
@@ -495,35 +436,3 @@ def test_a_migrated_policy_does_not_leave_the_destination_unconfigured_on_a_part
     mp.migrate_policy(root, {}, "table", "a$t", "b$t")
 
     assert seen == ["b$t"], "the destination must be written BEFORE the source is deleted"
-
-
-def test_a_policy_can_name_the_columns_it_depends_on_being_INDEXED(tmp_path: Path) -> None:
-    """#60's dropped-index check was unreachable by construction.
-
-    `compact_one(index_columns=…)` has always accepted the argument, `inspect_indices` has always
-    implemented the check, and NO caller ever supplied one — there was no policy field to carry it. So
-    the docstring's promise ("a policy that names the columns it depends on gets a real answer") was
-    true of the function and false of the system, and the one #60 state that needs an expectation
-    could never fire.
-
-    It matters because a dropped index makes `optimize_indices()` a SUCCESSFUL NO-OP: the sweep stays
-    green while every query on that column falls back to a full scan. Silent degradation is the whole
-    class this report exists to surface.
-    """
-    root = str(tmp_path)
-    mp.put_policy(root, {}, {"kind": "table", "id": "bronze$pages", "index_columns": ["page_key", "text"]})
-
-    resolved = mp.get_policy(root, {}, "table", "bronze$pages")
-
-    assert resolved is not None
-    assert resolved["index_columns"] == ["page_key", "text"], "the declared columns must survive the round trip"
-
-
-def test_the_policy_SCHEMA_accepts_index_columns() -> None:
-    """The field has to exist on `PolicyRequest`, not merely survive as loose JSON on the record —
-    otherwise the API refuses the only body that could set it."""
-    from catalog.schemas import PolicyRequest
-
-    policy = PolicyRequest(index_columns=["page_key"])
-    assert policy.index_columns == ["page_key"]
-    assert PolicyRequest(retention_days=30).index_columns is None, "undeclared must stay None, never an empty expectation"

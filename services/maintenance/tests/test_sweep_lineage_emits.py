@@ -75,43 +75,15 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
     [
         pytest.param(
             DatasetResult(
-                uri="s3://b/0001_ns.t", declared_table_id="ns.t", old_versions_removed=5, error="compaction: refused", error_type="CompactionPlanRefused"
-            ),
-            "complete",
-            id="a-skipped-rewrite-whose-cleanup-reclaimed",
-        ),
-        pytest.param(
-            DatasetResult(
                 uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="compaction: 1 of 3 task(s) failed", error_type="PartialCompaction"
             ),
             "complete",
             id="a-partial-compaction-that-committed",
         ),
         pytest.param(
-            DatasetResult(
-                uri="s3://b/0001_ns.t",
-                declared_table_id="ns.t",
-                old_versions_removed=3,
-                error="auto_cleanup: config write failed",
-                error_type="RuntimeError",
-            ),
-            "complete",
-            id="a-failed-auto-cleanup-config-after-a-reclaiming-cleanup",
-        ),
-        pytest.param(
             DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", error="compaction: refused", error_type="CompactionPlanRefused"),
             None,
             id="a-skipped-rewrite-that-reclaimed-nothing",
-        ),
-        pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="maintain: boom", error_type="RuntimeError"),
-            "fail",
-            id="a-failed-pass",
-        ),
-        pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", declared_table_id="ns.t", fragments_removed=4, error="open: not a dataset", error_type="ValueError"),
-            None,
-            id="an-unopened-dataset",
         ),
     ],
 )

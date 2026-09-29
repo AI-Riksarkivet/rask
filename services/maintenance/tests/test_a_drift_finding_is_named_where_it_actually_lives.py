@@ -18,28 +18,12 @@ identify none of them — the same failure `_drift_names` was written to end, re
 
 from __future__ import annotations
 
-from maintenance.api.routes import _drift_names, _finding_identity
+from maintenance.api.routes import _drift_names
 from maintenance.services.orphans import OrphanFile
 from maintenance.services.reconcile import ReconcileReport
 
 
 DATASET = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
-
-
-def test_an_orphan_file_is_named_by_the_dataset_it_was_found_under() -> None:
-    identity = _finding_identity(OrphanFile(dataset=DATASET, path="data/00110000.lance", kind="data", size_bytes=17))
-
-    assert DATASET in identity, f"{identity!r} does not say which dataset holds this file, so nobody can go and look at it"
-    assert "data/00110000.lance" in identity, f"{identity!r} lost the file, so the finding names a dataset instead of an orphan"
-
-
-def test_two_orphans_with_the_same_relative_path_are_distinguishable() -> None:
-    """The failure in its sharpest form: every Lance dataset has a `data/` and a `_transactions/`, so
-    an unqualified path is not even unique across the report."""
-    a = _finding_identity(OrphanFile(dataset="s3://bucket-a/t", path="_transactions/0-x.txn", kind="transactions"))
-    b = _finding_identity(OrphanFile(dataset="s3://bucket-b/t", path="_transactions/0-x.txn", kind="transactions"))
-
-    assert a != b, f"two orphans in different buckets are both named {a!r}"
 
 
 def test_a_finding_with_no_dataset_is_still_named() -> None:

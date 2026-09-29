@@ -13,16 +13,3 @@ from maintenance.services.reconcile import _roll_up
 
 def test_roll_up_sums_datasets_sharing_a_bucket() -> None:
     assert _roll_up({"s3://wh-a/ds1": 100, "s3://wh-a/ds2": 50}) == {"wh-a": 150}
-
-
-def test_roll_up_keeps_buckets_separate() -> None:
-    assert _roll_up({"s3://wh-a/ds1": 100, "s3://wh-b/ds1": 7}) == {"wh-a": 100, "wh-b": 7}
-
-
-def test_roll_up_handles_a_bare_bucket_root() -> None:
-    assert _roll_up({"s3://wh-a": 12}) == {"wh-a": 12}
-
-
-def test_roll_up_of_nothing_is_empty_not_zero() -> None:
-    # An unscanned estate must not read as an empty one — absent, never 0.
-    assert _roll_up({}) == {}

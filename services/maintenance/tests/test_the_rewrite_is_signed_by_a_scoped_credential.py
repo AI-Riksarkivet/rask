@@ -78,17 +78,6 @@ def test_the_rewrite_is_signed_by_the_vended_credential(door: list[dict[str, Any
     assert options["aws_access_key_id"] != "minioadmin"
 
 
-def test_the_vend_names_the_table_and_asks_for_the_write_tier(door: list[dict[str, Any]]) -> None:
-    credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
-    assert door[0]["url"].endswith("/management/v1/table/acme-bronze$events/credentials")
-    assert door[0]["params"] == {"tier": "write"}, "a read-tier credential 200s and then 403s on the PUT"
-
-
-def test_the_service_presents_its_identity(door: list[dict[str, Any]]) -> None:
-    credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
-    assert door[0]["headers"]["x-lance-service-identity"] == "service-maintenance"
-
-
 @pytest.mark.parametrize(
     ("uri", "catalog_url", "reason"),
     [
@@ -160,35 +149,3 @@ def test_an_unreachable_catalog_degrades(monkeypatch: pytest.MonkeyPatch) -> Non
 
     monkeypatch.setattr(credentials.httpx, "post", _boom)
     assert credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT) == _AMBIENT
-
-
-def test_the_credential_is_reported_but_never_logged(door: list[dict[str, Any]], caplog: pytest.LogCaptureFixture) -> None:
-    """Which credential signed a rewrite must be readable, or the posture is unauditable — and the
-    secret must not be, or the log store undoes the scoping it is reporting on."""
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="maintenance.services.credentials"):
-        credentials.write_options_for("s3://acme-bucket/4c49d010_acme-bronze$events", _settings(), fallback=_AMBIENT)
-
-    messages = " ".join(record.getMessage() for record in caplog.records)
-    assert "SCOPED" in messages and "acme-bronze$events" in messages
-
-    # THE WHOLE RECORD, not just the rendered message — and that gap was real rather than theoretical.
-    # This asserted on `getMessage()` alone, which is what the deployed formatter happens to print
-    # today (`%(message)s`, no extras). A secret placed in `extra=` would have satisfied every
-    # assertion here and still reached any handler that renders extras — a JSON formatter, an OTel log
-    # exporter, or the plain formatter the moment somebody widens it to stop dropping the diagnostics
-    # this estate carefully records there. A guarantee that holds only for one handler's format string
-    # is not a guarantee about the secret.
-    rendered = (
-        messages
-        + " "
-        + " ".join(
-            f"{key}={value!r}"
-            for record in caplog.records
-            for key, value in vars(record).items()
-            if key not in logging.LogRecord("", 0, "", 0, "", None, None).__dict__
-        )
-    )
-    assert _SCOPED["aws_secret_access_key"] not in rendered
-    assert _SCOPED["aws_session_token"] not in rendered

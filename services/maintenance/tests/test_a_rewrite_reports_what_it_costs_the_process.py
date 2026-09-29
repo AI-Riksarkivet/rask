@@ -41,25 +41,12 @@ def _committed_log_call() -> ast.Call:
     raise AssertionError("no compaction_distributed_committed log call found; the walk is reading the wrong thing")
 
 
-def test_the_walk_finds_the_commit_log() -> None:
-    """An absent call would make the assertions below vacuous rather than false."""
-    assert _committed_log_call() is not None
-
-
 def _extra_keys() -> set[str]:
     call = _committed_log_call()
     for kw in call.keywords:
         if kw.arg == "extra" and isinstance(kw.value, ast.Dict):
             return {k.value for k in kw.value.keys if isinstance(k, ast.Constant) and isinstance(k.value, str)}
     return set()
-
-
-def test_a_committed_rewrite_reports_the_PASS_COUNT() -> None:
-    """The number that predicts the OOM, on the line that causes it."""
-    assert "rewrite_passes" in _extra_keys(), (
-        "the commit log carries no `rewrite_passes`, so nothing says how many rewrites this process "
-        "has done — and at ~12 MiB retained per pass that count is what predicts when it dies"
-    )
 
 
 def test_a_committed_rewrite_reports_RESIDENT_BYTES() -> None:

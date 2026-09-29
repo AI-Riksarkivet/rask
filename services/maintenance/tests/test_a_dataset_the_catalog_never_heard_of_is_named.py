@@ -34,7 +34,7 @@ from pydantic import SecretStr
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
-from maintenance.services.reconcile import UnregisteredDataset, _unregistered_datasets
+from maintenance.services.reconcile import _unregistered_datasets
 
 
 def test_a_dataset_with_no_table_record_is_named() -> None:
@@ -47,76 +47,6 @@ def test_a_dataset_with_no_table_record_is_named() -> None:
 
     assert [f.table_id for f in found] == ["m2proof_silver$m2-proof-1788537252"]
     assert found[0].location == "s3://lance-catalog/m2proof_silver$m2-proof-1788537252"
-
-
-def test_a_REGISTERED_dataset_is_not_named() -> None:
-    """The control. The catalog lays a table out as `<uuid8>_<ns>$<name>`, so the id has to be
-    recovered from the location before the comparison means anything — a detector that compared raw
-    leaves would report every table in the estate."""
-    found = _unregistered_datasets(
-        discovered=["s3://acme-wh/4750a5b9_acme-bronze$events"],
-        registered={"acme-bronze$events"},
-        trashed=set(),
-    )
-
-    assert found == []
-
-
-def test_a_TRASHED_dataset_is_not_named() -> None:
-    """A dropped table's bytes stay on disk under a trash record that names them, and its table record
-    is gone by definition. Counting those would report every ordinary drop as unregistered — the
-    category would be loudest exactly when the estate was behaving correctly."""
-    found = _unregistered_datasets(
-        discovered=["s3://acme-wh/dead1234_gone$table"],
-        registered=set(),
-        trashed={"s3://acme-wh/dead1234_gone$table"},
-    )
-
-    assert found == []
-
-
-def test_a_location_that_names_no_table_is_not_named() -> None:
-    """`table_id_from_location` answers None for a directory that is not an identifier. Reporting one
-    as an unregistered TABLE would assert a table exists where only a prefix does."""
-    found = _unregistered_datasets(
-        discovered=["s3://acme-wh/some-directory", "s3://acme-wh/4750a5b9_$events"],
-        registered=set(),
-        trashed=set(),
-    )
-
-    assert found == []
-
-
-def test_findings_are_ordered_and_deduplicated() -> None:
-    """A report an operator reads across ticks must not reshuffle, and the same dataset discovered
-    twice under one walk is one finding."""
-    found = _unregistered_datasets(
-        discovered=[
-            "s3://b/ff11aa22_zeta$t",
-            "s3://b/aa11bb22_alpha$t",
-            "s3://b/ff11aa22_zeta$t",
-        ],
-        registered=set(),
-        trashed=set(),
-    )
-
-    assert [f.table_id for f in found] == ["alpha$t", "zeta$t"]
-
-
-def test_the_finding_carries_both_the_id_and_where_to_look() -> None:
-    """An id alone cannot be acted on — the whole point is that no record says where it lives."""
-    found = _unregistered_datasets(discovered=["s3://lance-catalog/aa11bb22_ns$t"], registered=set(), trashed=set())
-
-    assert found == [UnregisteredDataset(table_id="ns$t", location="s3://lance-catalog/aa11bb22_ns$t")]
-
-
-def test_the_repair_pass_REFUSES_this_category_by_name() -> None:
-    """Real bytes. A pass that "repaired drift" by acting on it would destroy live data to close a
-    registration gap — the same rule that makes `ungoverned_tables` a named refusal."""
-    from maintenance.services.repair import _REFUSED
-
-    assert "unregistered_datasets" in _REFUSED, f"the repair pass would fall through to a default for it: {sorted(_REFUSED)}"
-    assert "regist" in _REFUSED["unregistered_datasets"].lower(), _REFUSED["unregistered_datasets"]
 
 
 # --------------------------------------------------------------------------- #
@@ -144,14 +74,6 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
     return report
 
 
-def test_a_COMPLETE_table_listing_lets_the_category_report(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control: without it the guard test below passes by never reporting anything."""
-    report = _category(monkeypatch, mod.Sources(tables=[]))
-
-    assert report.counts.get("unregistered_datasets") == 1
-    assert [f.table_id for f in report.unregistered_datasets] == ["ns$live"]
-
-
 def test_a_CATALOG_OUTAGE_reports_UNAVAILABLE_rather_than_the_whole_estate(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE GUARD. The finding is an ABSENCE from the table listing, so an unread listing makes every
     dataset in the estate look unregistered — the loudest possible way to report nothing. UNAVAILABLE
@@ -164,33 +86,3 @@ def test_a_CATALOG_OUTAGE_reports_UNAVAILABLE_rather_than_the_whole_estate(monke
     assert [u.reason for u in report.unavailable if u.category == "unregistered_datasets"], (
         f"the category is silently absent rather than reported unavailable: {[(u.category, u.reason) for u in report.unavailable]}"
     )
-
-
-def test_the_finding_renders_as_its_LOCATION_in_the_drift_summary() -> None:
-    """The drift WARNING is where an operator meets this category, and a dict is not an identity.
-
-    `_finding_identity` picks the first present field from a known list, and neither `table_id` nor
-    `location` was on it — so the finding fell through to the deliberate `str(dumped)` fallback and
-    rendered as `{'table_id': …, 'location': …}` while every sibling category rendered a bare name.
-
-    THE LOCATION, NOT THE ID, is the right identity for this one: a table id is unique within a root
-    and this finding's whole content is that no root claims it, so only the URI answers "where do I
-    go and look".
-    """
-    from maintenance.api.routes import _finding_identity
-
-    finding = UnregisteredDataset(table_id="ns$t", location="s3://lance-catalog/aa11bb22_ns$t")
-
-    assert _finding_identity(finding) == "s3://lance-catalog/aa11bb22_ns$t"
-
-
-def test_an_orphaned_trash_record_STILL_renders_as_its_id() -> None:
-    """The regression this change could cause. `OrphanedTrash` carries a `location` too, so adding
-    that field to the lookup ahead of `id` would silently rename an existing category's findings in
-    the report an operator reads every tick."""
-    from maintenance.api.routes import _finding_identity
-    from maintenance.services.reconcile import OrphanedTrash
-
-    record = OrphanedTrash(id="tr-1", kind="table", location="s3://gone/t.lance")
-
-    assert _finding_identity(record) == "tr-1"

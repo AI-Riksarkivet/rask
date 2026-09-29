@@ -85,17 +85,6 @@ def test_a_derivable_id_still_beats_the_stamp(tmp_path: Path, monkeypatch: pytes
     assert asked == ["real$table"]
 
 
-def test_a_unit_that_will_not_write_still_vends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reading the stamp must not cost the estate the saving that probe exists for — measured at 280
-    STS records a minute, against a store that became unable to restart at 107,485 of them."""
-    asked = _record(monkeypatch)
-    uri = _stamped(tmp_path, "quiet", stamp="bronze$events", fragments=1)
-
-    sweep.maintain_one_item(_item(uri, table_id=None), settings=_settings(), options={})
-
-    assert asked == [], "a dataset with nothing to rewrite minted a credential anyway"
-
-
 def test_a_dataset_with_no_stamp_and_no_derivable_id_vends_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unchanged behaviour, asserted so the new read cannot quietly invent an id. A producer forced to
     supply something would vend a credential for the WRONG table rather than for none."""

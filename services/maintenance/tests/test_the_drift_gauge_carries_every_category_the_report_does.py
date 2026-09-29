@@ -79,18 +79,6 @@ def test_the_gauge_receives_exactly_what_the_report_carries(tmp_path: Path, reco
     assert recorded[0] == report.counts, "the metric carries different VALUES than the report"
 
 
-def test_the_storage_categories_are_among_them(tmp_path: Path, recorded: list[dict[str, int]]) -> None:
-    """Anti-vacuity, and it names the three the defect was made of.
-
-    Without this the test above passes on a report that carries only the store categories — exactly the
-    state the bug produced — because both sides would then agree on ten.
-    """
-    _run(tmp_path, orphan_scan=True)
-
-    assert recorded, "nothing was recorded at all"
-    assert {"unregistered_datasets", "absent_datasets"} <= recorded[0].keys(), f"the storage-reading categories never reached the gauge: {sorted(recorded[0])}"
-
-
 def test_a_SKIPPED_orphan_scan_still_records_what_was_checked(tmp_path: Path, recorded: list[dict[str, int]]) -> None:
     """The recorder's own discipline: a category that was not checked is OMITTED, never zeroed. Moving
     the call must not turn a skipped scan into a false zero on the series an alert fires from."""

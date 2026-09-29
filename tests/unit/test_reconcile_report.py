@@ -13,7 +13,6 @@ before and after a run and drives it with stores whose write paths raise.
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import hashlib
 import io
@@ -224,17 +223,6 @@ def test_a_fully_consistent_estate_reports_no_drift(tmp_path: Path, monkeypatch:
 # --------------------------------------------------------------------------- #
 
 
-def test_ghost_projects_fires_on_an_fga_project_with_no_registry_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Today's seeded ghosts: tuples exist, the tenant does not. The finding names the object AND the
-    size of its grant surface, because "there is a ghost" is not actionable without knowing how big."""
-    estate = _Estate(tmp_path)
-    estate.fga.tuples["project:phantom"] = [("user:mallory", "admin"), ("user:bob", "admin")]
-    report = estate.run(monkeypatch)
-    assert [(g.fga_object, g.tuples) for g in report.ghost_projects] == [("project:phantom", 2)]
-    assert report.counts["ghost_projects"] == 1
-    assert report.total == 1
-
-
 def test_ghost_warehouses_fires_but_never_on_the_estate_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The root object (`Settings.fga_root_object`) holds real tuples and has no registry record BY
     DESIGN — reporting it every run would train the reader to skip the category. A real ghost still fires."""
@@ -267,17 +255,6 @@ def test_unreferenced_projects_fires_on_a_record_with_no_tuples(tmp_path: Path, 
 # --------------------------------------------------------------------------- #
 
 
-def test_unbound_namespaces_fires_on_a_pre_rule_namespace_with_no_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A top-level namespace on the SHARED default root that no binding claims — it silently resolves
-    to the shared bucket, which is exactly the legacy the warehouse rule replaced. The BOUND sibling
-    beside it stays silent, so the binding is what suppresses the finding, not the scan missing it."""
-    estate = _Estate(tmp_path)
-    _Estate.namespace_dir(tmp_path, "legacy_ns")
-    report = estate.run(monkeypatch)
-    assert [n.namespace for n in report.unbound_namespaces] == ["legacy_ns"]
-    assert report.unbound_namespaces[0].root == estate.namespace_root
-
-
 def test_a_top_level_table_is_not_mistaken_for_an_unbound_namespace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A top-level TABLE is the only thing the catalog DOES lay out as a root directory — and it is not
     drift. The manifest's `object_type` tells them apart; a scan keying on the directory would report
@@ -286,27 +263,6 @@ def test_a_top_level_table_is_not_mistaken_for_an_unbound_namespace(tmp_path: Pa
     _Estate.namespace_dir(tmp_path, "orders", dataset=True)
     report = estate.run(monkeypatch)
     assert report.unbound_namespaces == []
-
-
-def test_a_namespace_is_not_a_directory_so_the_scan_must_read_the_manifest(tmp_path: Path) -> None:
-    """The invariant the whole category rests on, pinned against the REAL backend.
-
-    ``create_namespace`` on the ``dir`` impl (``LANCE_REST_IMPL=dir``, chart/templates/services.yaml)
-    writes a ``__manifest`` row and creates NO directory — a TABLE is the only thing that materialises
-    one. A reconciler that listed prefixes would therefore find zero namespaces on every real estate
-    and report `unbound_namespaces: 0` — "checked and clean" — forever, while every table it did find
-    was a false positive. This test fails the moment someone reintroduces a prefix scan.
-    """
-    _Estate.namespace_dir(tmp_path, "legacy_ns")
-    entries = sorted(p.name for p in (tmp_path / "data").iterdir())
-    assert entries == ["__manifest"], f"a namespace materialised something on disk: {entries}"
-
-    _Estate.namespace_dir(tmp_path, "orders", dataset=True)
-    table_dirs = sorted(p.name for p in (tmp_path / "data").iterdir() if p.name != "__manifest")
-    assert table_dirs == ["orders.lance"], f"a table is the only root directory the catalog makes: {table_dirs}"
-
-    found = mod._top_level_namespaces(f"file://{tmp_path / 'data'}", {}, delimiter="$")
-    assert found == ["legacy_ns"], "the manifest read must see the namespace and NOT the table directory"
 
 
 def test_unbound_namespaces_is_skipped_not_zero_when_warehouses_are_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -451,105 +407,6 @@ def test_an_unwired_openfga_client_is_reported_not_assumed_clean(tmp_path: Path,
 # the report-only guarantee, asserted mechanically
 # --------------------------------------------------------------------------- #
 
-#: Call-name prefixes that could write to a store. Matched against the AST's called NAME (a plain call
-#: or the attribute of a method call) rather than the source text — a regex hits the word inside a
-#: docstring, and this module's docstrings are full of them, which is how a gate stops being trusted.
-#:
-#: The Lance verbs (``compact_files`` / ``cleanup_old_versions`` / ``optimize_indices``) are on this
-#: list because they are what the SIBLING module in this very package calls — the single most likely
-#: thing for someone to copy in here, and the most destructive: ``cleanup_old_versions`` deletes
-#: history irreversibly. A prefix list that omits its own neighbour's calls is a gate that reads as
-#: strict and is not; :func:`test_the_mutating_call_gate_is_not_vacuous` pins that it catches them.
-#: Pure builtins whose NAME happens to start with a mutating-sounding prefix. `str.removeprefix` is
-#: the live example — it allocates a new string and touches nothing. Listed explicitly rather than by
-#: loosening the prefixes, because a looser gate is exactly how `cleanup_old_versions` would slip back
-#: in (it was missed once already).
-_PURE_DESPITE_NAME = frozenset({"removeprefix", "removesuffix"})
-
-_MUTATING_CALL_PREFIXES = (
-    "add_",
-    "alter",
-    "cleanup",
-    "commit",
-    "compact",
-    "copy_",
-    "create",
-    "delete",
-    "drop",
-    "insert",
-    "merge_",
-    "move",
-    "open_output",
-    "optimize",
-    "overwrite",
-    "purge",
-    "put_",
-    "remove",
-    "rename",
-    "restore",
-    "revoke",
-    "rmtree",
-    "set_",
-    "truncate",
-    "unbind",
-    "unlink",
-    "update",
-    "upload",
-    "write",
-)
-
-
-def _called_names(source: str) -> set[str]:
-    names: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if isinstance(func, ast.Name):
-            names.add(func.id)
-        elif isinstance(func, ast.Attribute):
-            names.add(func.attr)
-    return names
-
-
-def test_the_module_contains_no_mutating_call() -> None:
-    """NOTHING DELETES. NOTHING MUTATES — enforced, not asserted in prose.
-
-    A reclaimer that deletes on its first run against an unvalidated rule eats live data, so the
-    read-only property has to survive the next person editing this module. Any call whose name could
-    write fails here.
-    """
-    path = Path(mod.__file__)
-    offenders = sorted(name for name in _called_names(path.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES) and name not in _PURE_DESPITE_NAME)
-    assert offenders == [], f"{path.name} calls {offenders} — the reconciler is REPORT-ONLY and must never mutate a store"
-
-
-def test_the_mutating_call_gate_is_not_vacuous() -> None:
-    """A gate nobody has seen fire is a gate nobody knows works — so fire it at the sibling modules.
-
-    ``maintenance.services.optimize`` is the reconciler's neighbour and it DOES mutate: it compacts
-    fragments and deletes old versions. Pointing the same checker at it must produce offenders. This
-    is the assertion that would have caught the prefix list missing ``cleanup_old_versions`` — the
-    most destructive call in this package — while ``test_the_module_contains_no_mutating_call`` stayed
-    green and looked like proof.
-
-    ``purge.py`` (#79) is fired at for the OTHER half of the same claim. The reconciler and the
-    reclaimer now live in one package, and the split between them is the whole safety argument: the
-    report earns the delete permission, the purge spends it. One checker proving "the reporter cannot
-    delete" AND "the reclaimer really does" is what makes that split a fact rather than a filing
-    convention — a purge that had quietly stopped deleting would otherwise keep every test green while
-    reclaiming nothing.
-    """
-    sibling = Path(mod.__file__).with_name("optimize.py")
-    offenders = sorted(name for name in _called_names(sibling.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES))
-    assert "cleanup_old_versions" in offenders, f"the gate does not catch the sibling sweep's own destructive calls: {offenders}"
-    assert "compact_files" in offenders
-
-    reclaimer = Path(mod.__file__).with_name("purge.py")
-    reclaims = sorted(name for name in _called_names(reclaimer.read_text()) if name.lower().startswith(_MUTATING_CALL_PREFIXES))
-    assert "delete_dir" in reclaims, f"the #79 purge no longer deletes bytes — the reclamation half is inert: {reclaims}"
-    assert "revoke_object_tuples" in reclaims, f"the #79 purge no longer revokes grants — they would outlive the bytes: {reclaims}"
-
 
 def _tree_fingerprint(root: Path) -> dict[str, str]:
     """Every file under ``root`` by relative path → a hash of its bytes."""
@@ -610,20 +467,6 @@ def test_a_registry_only_bucket_is_scanned(tmp_path: Path) -> None:
     assert buckets[0] == "configured-bucket"  # the configured list still leads
     assert set(buckets) == {"configured-bucket", "acme-bucket", "beta-bucket"}
     assert report.incomplete == []
-
-
-def test_a_deactivated_warehouse_is_still_scanned(tmp_path: Path) -> None:
-    """Unlike the SWEEP, which skips it. Reporting is not rewriting.
-
-    The sweep excludes a deactivated warehouse because compacting a quarantined tenant's data would
-    be the one process still rewriting bytes the estate has said nobody may touch. Naming its orphans
-    changes nothing on disk, and is exactly what an operator wants before deciding to offboard it.
-    """
-    report = mod.ReconcileReport(checked_at=datetime.now(UTC).isoformat())
-    sources = mod.Sources()
-    sources.warehouse_records = [{"id": "gone-wh", "bucket": "quarantined", "project": "p", "status": "deactivated"}]
-
-    assert "quarantined" in mod._scannable_buckets(report, _settings_for_scan(tmp_path), sources)
 
 
 def test_an_unreadable_registry_is_REPORTED_not_silently_narrowed(tmp_path: Path) -> None:

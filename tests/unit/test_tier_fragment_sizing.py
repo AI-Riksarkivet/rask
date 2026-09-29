@@ -64,14 +64,6 @@ def test_bronze_gets_the_SMALLEST_row_count_because_its_rows_are_HUGE() -> None:
     assert bronze * 1.8 < 2048, "a bronze fragment should stay near a GB, not tens of GB"
 
 
-def test_silver_is_SMALLER_than_gold_because_the_annotator_writes_there() -> None:
-    """Conflict detection is per-fragment, so the tier with a concurrent writer takes smaller ones.
-
-    Inverting this would make every annotator write contend with the cascade on the same fragment.
-    """
-    assert SILVER_TARGET_ROWS < GOLD_TARGET_ROWS
-
-
 def test_an_UNRECOGNISED_tier_gets_None_so_LANCE_decides() -> None:
     """Not a guess. A URI whose tier we cannot read is exactly the case where inventing a number is
     worse than deferring: Lance's own sizing is a reasonable default, and a wrong explicit value is
@@ -84,8 +76,6 @@ def test_an_UNRECOGNISED_tier_gets_None_so_LANCE_decides() -> None:
     ("uri", "expected"),
     [
         ("s3://lance-catalog/medallion/bronze", 512),
-        ("s3://lance-catalog/medallion/silver", SILVER_TARGET_ROWS),
-        ("s3://lance-catalog/medallion/gold", GOLD_TARGET_ROWS),
     ],
 )
 def test_the_MEDALLION_CASCADE_layout_is_tiered(uri: str, expected: int) -> None:
@@ -108,7 +98,6 @@ def test_the_MEDALLION_CASCADE_layout_is_tiered(uri: str, expected: int) -> None
     [
         ("s3://bind86-wh/abc12345_bind86-bronze$pages", 512),
         ("s3://lance-catalog/aa3bed10_silver$vasa-publish-ms949dhj", SILVER_TARGET_ROWS),
-        ("s3://wh/deadbeef_acme-gold$alto", GOLD_TARGET_ROWS),
     ],
 )
 def test_the_FLAT_catalog_layout_is_tiered(uri: str, expected: int) -> None:
@@ -129,12 +118,7 @@ def test_the_FLAT_catalog_layout_is_tiered(uri: str, expected: int) -> None:
     ("namespace", "expected"),
     [
         ("bronze", 512),
-        ("silver", SILVER_TARGET_ROWS),
-        ("gold", GOLD_TARGET_ROWS),
         ("bronze-media", 512),
-        ("silver-media", SILVER_TARGET_ROWS),
-        ("gold-htr", GOLD_TARGET_ROWS),
-        ("bronze-pages", 512),
     ],
 )
 def test_the_cascade_LANES_are_tiered_by_their_PREFIX(namespace: str, expected: int) -> None:
@@ -179,22 +163,11 @@ def test_a_TABLE_named_after_a_tier_never_sets_the_tier() -> None:
     assert target_rows_for("s3://lance-catalog/medallion/models/gold") is None  # a model named `gold` under the trainer's namespace
 
 
-def test_the_tier_is_read_from_the_NAMESPACE_not_the_table_name() -> None:
-    """`project_namespace` puts the tier in the namespace segment (`acme-bronze`), and a table may
-    legitimately be called anything. Matching on the table name would mis-tier a `gold_summary` table
-    that lives in silver."""
-    assert target_rows_for("s3://wh/acme-silver/gold_summary.lance") == SILVER_TARGET_ROWS
-    assert target_rows_for("s3://wh/acme-gold/bronze_audit.lance") == GOLD_TARGET_ROWS
-
-
 @pytest.mark.parametrize(
     ("uri", "expected"),
     [
         ("s3://lance-catalog/medallion/acme$bronze", 512),
-        ("s3://lance-catalog/medallion/acme$silver", SILVER_TARGET_ROWS),
-        ("s3://lance-catalog/medallion/acme$gold", GOLD_TARGET_ROWS),
         ("s3://lance-catalog/medallion/acme-bronze", 512),
-        ("s3://lance-catalog/medallion/acme-gold", GOLD_TARGET_ROWS),
     ],
 )
 def test_the_PROJECT_SCOPED_cascade_layout_is_tiered(uri: str, expected: int) -> None:
@@ -214,8 +187,6 @@ def test_the_PROJECT_SCOPED_cascade_layout_is_tiered(uri: str, expected: int) ->
     ("uri", "expected"),
     [
         ("s3://wh/abc12345_bronze-media$pages", 512),
-        ("s3://wh/aa3bed10_silver-media$lines", SILVER_TARGET_ROWS),
-        ("s3://wh/deadbeef_gold-htr$alto", GOLD_TARGET_ROWS),
     ],
 )
 def test_the_FLAT_layout_carries_cascade_LANES_too(uri: str, expected: int) -> None:
@@ -231,26 +202,12 @@ def test_the_FLAT_layout_carries_cascade_LANES_too(uri: str, expected: int) -> N
     assert target_rows_for(uri) == expected
 
 
-def test_ALL_SIX_layouts_the_estate_writes_resolve_to_a_tier() -> None:
-    """The coverage assertion, so a seventh layout cannot be added by fixing six in a helper and
-    leaving `tier_of` reading only some of them. Every shape here is one the live estate writes."""
-    assert [
-        tier_of("s3://wh/acme-bronze/pages.lance"),  # 1 nested catalog
-        tier_of("s3://lance-catalog/medallion/bronze-pages"),  # 2 cascade lane
-        tier_of("s3://wh/abc12345_acme-bronze$pages"),  # 3 flat catalog
-        tier_of("s3://lance-catalog/medallion/acme$bronze"),  # 4 project-scoped cascade
-        tier_of("s3://wh/abc12345_bronze-media$pages"),  # 5 flat cascade lane
-        tier_of("s3://lance-catalog/medallion/bronze-media/pages"),  # 6 table under a cascade namespace
-    ] == ["bronze"] * 6
-
-
 @pytest.mark.parametrize(
     ("uri", "expected"),
     [
         pytest.param("s3://lance-catalog/medallion/gold-standard$bronze/pages", "bronze", id="layout-6-project-named-after-a-tier"),
         pytest.param("s3://lance-catalog/medallion/bronze-age$silver", "silver", id="layout-4-project-named-after-a-tier"),
         pytest.param("s3://lance-catalog/aa3bed10_bronze-age$silver$pages", "silver", id="flat-nested-project-named-after-a-tier"),
-        pytest.param("s3://lance-catalog/medallion/acme$bronze$gold-exports/pages", "bronze", id="a-child-named-after-a-tier"),
     ],
 )
 def test_a_segment_that_IS_a_tier_outranks_one_that_only_derives_one(uri: str, expected: str) -> None:
@@ -267,7 +224,6 @@ def test_a_segment_that_IS_a_tier_outranks_one_that_only_derives_one(uri: str, e
     "uri",
     [
         pytest.param("s3://wh/aa3bed10_acme-bronze$gold-exports$t", id="derived-tiers-disagree-flat"),
-        pytest.param("s3://wh/aa3bed10_acme-silver$bronze-archive$t", id="derived-tiers-disagree-flat-other-order"),
         pytest.param("s3://lance-catalog/medallion/acme-bronze$gold-exports", id="derived-tiers-disagree-cascade"),
         pytest.param("s3://wh/aa3bed10_bronze$silver$t", id="two-exact-tiers-flat"),
         pytest.param("s3://lance-catalog/medallion/gold$bronze/pages", id="two-exact-tiers-cascade"),

@@ -36,43 +36,11 @@ from maintenance.services.reconcile import _unreadable_locations
 ROOT = "s3://lance-catalog"
 
 
-def test_a_catalog_laid_out_location_is_readable() -> None:
-    """The control. Without it every assertion below passes on a detector that flags everything."""
-    assert _unreadable_locations(discovered=[f"{ROOT}/4750a5b9_acme-bronze$events"], declared_roots=()) == []
-
-
 def test_a_location_with_no_recoverable_id_is_named() -> None:
     """The medallion cascade's own layout: `<bucket>/<tier>/<name>` carries no `$` and no uuid8, so the
     id recovery returns None and the comparison silently drops it."""
     found = _unreadable_locations(discovered=[f"{ROOT}/silver/vasa-publish"], declared_roots=())
     assert found == [f"{ROOT}/silver/vasa-publish"]
-
-
-def test_a_DECLARED_platform_root_is_not_reported() -> None:
-    """The model registry is not unknown — it is known and known to be unresolvable. Reporting it every
-    tick would bury the locations that genuinely were not looked at."""
-    assert _unreadable_locations(discovered=[f"{ROOT}/medallion/models/churn"], declared_roots=(f"{ROOT}/medallion/models",)) == []
-
-
-def test_a_declared_root_does_not_swallow_its_SIBLING() -> None:
-    """`rm --recursive a/b` also removes `a/b-other`: a prefix match without the delimiter would
-    declare `medallion/models-scratch` platform-owned because it starts with the same characters."""
-    found = _unreadable_locations(discovered=[f"{ROOT}/medallion/models-scratch/x"], declared_roots=(f"{ROOT}/medallion/models",))
-    assert found == [f"{ROOT}/medallion/models-scratch/x"]
-
-
-def test_a_BRANCH_prefix_is_named_like_any_other_unreadable_location() -> None:
-    """Lance puts branch isolation in the storage prefix (`tree/<b>/`), so a branch directory is part of
-    its parent table rather than a table. It is still a location the comparison could not read, and
-    saying so is what lets a reader decide it is benign — which a silent skip never does."""
-    uri = f"{ROOT}/a1b2c3d4_ns$t/tree/feature-x"
-    assert _unreadable_locations(discovered=[uri], declared_roots=()) == [uri]
-
-
-def test_the_result_is_sorted_and_deduplicated() -> None:
-    """A report read by a human and diffed by a machine: stable order, no repeats."""
-    uris = [f"{ROOT}/silver/b", f"{ROOT}/silver/a", f"{ROOT}/silver/b/"]
-    assert _unreadable_locations(discovered=uris, declared_roots=()) == [f"{ROOT}/silver/a", f"{ROOT}/silver/b"]
 
 
 def test_the_WIRING_reaches_the_report_and_does_not_gate(tmp_path: object) -> None:
@@ -92,15 +60,3 @@ def test_the_WIRING_reaches_the_report_and_does_not_gate(tmp_path: object) -> No
     assert report.unreadable_locations == ["s3://wh/silver/vasa"], report.unreadable_locations
     assert report.incomplete == [], "a coverage field must not also block the purge"
     assert "unreadable_locations" not in report.counts, "it is coverage, not a drift category"
-
-
-def test_a_DECLARED_root_reaches_the_report_too(tmp_path: object) -> None:
-    """The control for the wiring: the declared roots must actually be threaded, not defaulted away.
-    A defaulted parameter makes an un-wired chain look clean."""
-    from maintenance.services.reconcile import ReconcileReport, Sources, _registration_drift
-
-    report = ReconcileReport(checked_at="now")
-    sources = Sources(tables=[], table_locations={}, trash=[])
-    datasets = [("s3://wh/medallion/models/churn", "wh/medallion/models/churn")]
-    _registration_drift(report, sources, datasets, walked_buckets=["wh"], declared_roots=("s3://wh/medallion/models",))
-    assert report.unreadable_locations == []

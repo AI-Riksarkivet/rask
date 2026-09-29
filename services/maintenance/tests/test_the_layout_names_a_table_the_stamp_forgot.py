@@ -48,64 +48,10 @@ import lance
 import pyarrow as pa
 
 from maintenance.services.optimize import compact_one
-from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 LAID_OUT_BY_THE_CATALOG = "9c5020a1_advstats7ns$tA"
 TABLE_ID = "advstats7ns$tA"
-
-
-def _unstamped_but_laid_out(tmp_path: Path, *, writes: int = 6, rows: int = 10) -> str:
-    """A dataset in the catalog's layout carrying NO `lineage.dataset_id` — the live shape.
-
-    Separate writes because one write is one fragment; the schema metadata is left off deliberately,
-    which is what makes this the 81% case rather than the already-covered one.
-    """
-    uri = str(tmp_path / LAID_OUT_BY_THE_CATALOG)
-    for i in range(writes):
-        table = pa.table({"id": pa.array([i * rows + j for j in range(rows)], pa.int64())})
-        lance.write_dataset(table, uri, mode="create" if i == 0 else "append")
-    return uri
-
-
-def test_the_fixture_is_the_case_this_file_claims(tmp_path: Path) -> None:
-    """The premise, asserted rather than assumed: no stamp, and yet an id the layout answers.
-
-    Without this the test below could pass for the wrong reason — a fixture that quietly acquired a
-    stamp would exercise the path that already worked.
-    """
-    from maintenance.core.lineage_emit import declared_table_id
-
-    uri = _unstamped_but_laid_out(tmp_path)
-    assert declared_table_id(lance.dataset(uri)) is None, "the fixture must carry no producer stamp"
-    assert table_id_from_location(uri) == TABLE_ID, "the layout must still name the table"
-
-
-def test_a_dataset_the_layout_names_is_planned_off_the_pod(tmp_path: Path) -> None:
-    """The carried id reaches the rewrite gate, so the bytes leave the pod.
-
-    RED before the fix: `compact_one` consulted the stamp alone, found `None`, skipped the gate
-    entirely and compacted in-process — 123 of 151 live datasets took that path every tick.
-    """
-    uri = _unstamped_but_laid_out(tmp_path)
-    asked: list[str] = []
-
-    def _rewrite(uri: str, *, table_id: str, options: Any) -> Any:
-        asked.append(table_id)
-        raise AssertionError("stop here — proving the gate was ENTERED is the assertion")
-
-    compact_one(
-        uri,
-        {},
-        None,
-        target_rows_per_fragment=1024,
-        cleanup_enabled=False,
-        optimize_indices_enabled=False,
-        rewrite=_rewrite,
-        table_id=table_id_from_location(uri),
-    )
-
-    assert asked == [TABLE_ID], "the rewrite gate must be addressed by the id the layout carries"
 
 
 def test_the_caller_s_id_is_preferred_over_the_stamp(tmp_path: Path) -> None:

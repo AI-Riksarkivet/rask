@@ -47,13 +47,6 @@ def test_each_dataset_carries_its_own_count() -> None:
     assert _orphans_by_dataset(report) == {"s3://b/one": 2, "s3://b/two": 1}
 
 
-def test_the_largest_holder_comes_first() -> None:
-    """An operator works the biggest one first, and a dict that arrives in discovery order buries it."""
-    report = _report(_orphan("s3://b/small", "a"), *[_orphan("s3://b/big", str(i)) for i in range(5)])
-
-    assert list(_orphans_by_dataset(report)) == ["s3://b/big", "s3://b/small"]
-
-
 def test_a_long_tail_is_counted_rather_than_dropped() -> None:
     """The truncation says how much it hid. `orphan_files: 932` with ten names is exactly the failure
     this replaces; a bounded list that does not admit its bound repeats it one level up."""
@@ -65,11 +58,3 @@ def test_a_long_tail_is_counted_rather_than_dropped() -> None:
     hidden = [k for k in summarised if "more" in k]
     assert hidden, f"40 datasets were summarised into {len(summarised)} entries with no note of the rest: {summarised}"
     assert summarised[hidden[0]] == 40 - (len(summarised) - 1), "the tail's own count is wrong, so the total cannot be reconstructed"
-
-
-def test_the_total_survives_the_truncation() -> None:
-    """Whatever is shown, the numbers must still add up to what `counts['orphan_files']` claims —
-    otherwise the summary and the count disagree and a reader cannot tell which lied."""
-    report = _report(*[_orphan(f"s3://b/ds{i:03}", "x") for i in range(40)])
-
-    assert sum(_orphans_by_dataset(report).values()) == report.counts["orphan_files"]

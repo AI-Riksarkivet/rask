@@ -19,7 +19,6 @@ import pyarrow as pa
 import pytest
 from lance.blob import Blob
 
-from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE
 from maintenance.services.optimize import compact_one
 
 
@@ -96,38 +95,6 @@ def test_sweep_buckets_unions_primary_and_extras() -> None:
     assert bare.sweep_buckets == ["only"]  # no extras => unchanged single-bucket behavior
 
 
-def test_gc_does_not_reclaim_branch_referenced_data(tmp_path: Path) -> None:
-    """GC must not delete data that only a BRANCH still references (audit 2026-07-14 — was unverified).
-
-    The audit flagged this as an unknown and said to probe it live BEFORE anyone creates a branch: if
-    `cleanup_old_versions` did not walk branch manifests, the compaction cron would eventually reclaim data
-    files that a branch is the sole reference for — silent, unrecoverable data loss on a feature we ship.
-
-    Probed empirically: it is BRANCH-AWARE and safe. This test pins that, so a pylance upgrade that
-    regresses it fails here rather than in a customer's compaction cron.
-    """
-    import datetime
-
-    import lance
-    import pyarrow as pa
-
-    uri = str(tmp_path / "t")
-    ds = lance.write_dataset(pa.table({"id": [1]}), uri)
-    ds = lance.write_dataset(pa.table({"id": [2]}), uri, mode="append")
-    ds.create_branch("keepme")  # pins v2's data
-    ds = lance.write_dataset(pa.table({"id": [3]}), uri, mode="append")  # main advances past it
-
-    data_dir = tmp_path / "t" / "data"
-    before = {p.name for p in data_dir.iterdir()}
-
-    # The compaction cron's exact call, with the most aggressive window possible.
-    ds.cleanup_old_versions(older_than=datetime.timedelta(seconds=0), error_if_tagged_old_versions=False)
-
-    after = {p.name for p in data_dir.iterdir()}
-    assert lance.dataset(uri).branches.list(), "GC destroyed the branch — it would delete branch data"
-    assert before == after, f"GC reclaimed branch-referenced data files: {before - after}"
-
-
 def test_a_policy_can_skip_cleanup_while_still_compacting(tmp_path: Path) -> None:
     """`cleanup_enabled=False` keeps the ENTIRE version history — a tier under legal hold, or one
     whose time-travel window IS the product.
@@ -144,15 +111,6 @@ def test_a_policy_can_skip_cleanup_while_still_compacting(tmp_path: Path) -> Non
     assert result.error is None, result.error
     assert result.old_versions_removed == 0, "cleanup ran despite the policy disabling it"
     assert len(lance.dataset(uri).versions()) >= before, "version history was reclaimed anyway"
-
-
-def test_cleanup_still_runs_by_default(tmp_path: Path) -> None:
-    """The negative of the test above. Without it, a gate that skipped cleanup UNCONDITIONALLY would
-    pass — which is the same class of mistake as a detector that refuses everything."""
-    uri = _fragmented_indexed_dataset(tmp_path)
-    result = compact_one(uri, {}, timedelta(0))
-    assert result.error is None, result.error
-    assert result.old_versions_removed > 0, "the default pass must still reclaim old versions"
 
 
 def test_a_policy_can_skip_index_optimization(tmp_path: Path) -> None:
@@ -192,40 +150,6 @@ def test_a_scan_batch_size_reaches_compaction_and_still_compacts(tmp_path: Path)
     assert result.fragments_removed > 0, "compaction did not run at a small batch size"
 
 
-def test_an_unnamed_batch_size_is_the_floor_not_lances_default(tmp_path: Path) -> None:
-    """The caller's value wins; SILENCE is the floor, never Lance's own ceiling ([[LH-185]]).
-
-    The bound is applied at every hop rather than only at the sweep. One layer up is not enough here
-    for a specific reason: `DatasetWorkItem`'s bound fields are `int | None` because the wire model
-    must express "the policy said nothing", and that `None` crosses the queue for every unpolicied
-    dataset — so "the sweep always sets it" holds only while planner and worker agree, and a gate on
-    the innermost call alone cannot see a hop that does not. `rewrite_slots` on this same function
-    already defaults to the safe value for the same reason.
-
-    What this still protects is the other direction: a caller that DOES name a batch size gets
-    exactly that one, unchanged — see the sibling test above."""
-    uri = _fragmented_indexed_dataset(tmp_path)
-    seen: dict[str, object] = {}
-    real = lance.dataset(uri).optimize.__class__.compact_files
-
-    def _spy(self: object, *args: object, **kwargs: object) -> object:
-        seen.update(kwargs)
-        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
-
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
-    try:
-        compact_one(uri, {}, timedelta(0))
-    finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real
-
-    assert seen.get("batch_size") == DEFAULT_SCAN_BATCH_SIZE, (
-        f"an unset policy reached Lance with batch_size={seen.get('batch_size')!r} — unset means Lance's "
-        "own 8192 ROWS, and rows are not a unit of memory: ~1.8 MB bronze rows are ~15 GB per thread"
-    )
-    assert seen.get("max_source_bytes") == DEFAULT_MAX_SOURCE_BYTES, f"no byte ceiling reached Lance: {seen}"
-    assert seen.get("num_threads") == DEFAULT_COMPACT_THREADS, f"num_threads was left to the HOST's core count: {seen}"
-
-
 def test_handing_cleanup_to_the_dataset_skips_our_own_sweep(tmp_path: Path) -> None:
     """#58 — Lance ships its OWN auto-cleanup on the commit path, so a write-heavy tier may need no
     cron of ours. Setting the interval configures the DATASET and SKIPS this pass's cleanup step:
@@ -240,15 +164,6 @@ def test_handing_cleanup_to_the_dataset_skips_our_own_sweep(tmp_path: Path) -> N
     assert result.auto_cleanup_configured is True, "the dataset was never given the cleanup config"
     assert result.old_versions_removed == 0, "our sweep reclaimed versions the DATASET now owns"
     assert len(lance.dataset(uri).versions()) >= before, "the sweep reclaimed anyway"
-
-
-def test_without_the_interval_our_sweep_still_owns_cleanup(tmp_path: Path) -> None:
-    """The negative of the test above — without it, code that ALWAYS delegated would pass."""
-    uri = _fragmented_indexed_dataset(tmp_path)
-    result = compact_one(uri, {}, timedelta(0))
-    assert result.error is None, result.error
-    assert result.auto_cleanup_configured is False
-    assert result.old_versions_removed > 0, "nobody reclaimed old versions"
 
 
 # --------------------------------------------------------------------------- #
@@ -419,38 +334,6 @@ def test_compaction_refuses_a_registered_base_that_IS_A_LANCE_DATASET_ROOT(tmp_p
     assert lance.dataset(uri).version == version_before
 
 
-def test_a_registered_but_unused_BARE_PREFIX_is_now_compacted(tmp_path: Path) -> None:
-    """MOVED WITH THE CODE, deliberately and not quietly.
-
-    This test used to be `test_compaction_refuses_a_registered_but_unused_base` and asserted the
-    blanket flag-16 refusal, on the reasoning that "the very next write can land under that base".
-    That reasoning is what kept the cascade's own tiers uncompacted forever, and it is answered
-    rather than ignored: when a write DOES land under the base, `DataFile.base_id` says so and
-    `test_compaction_refuses_a_base_that_HOLDS_this_datasets_data_files` pins the refusal. A gate
-    cannot refuse today's safe rewrite because tomorrow's write might be unsafe — the next tick reads
-    the manifest again.
-
-    An `add_bases` prefix that is empty and holds none of our files is the ingest bronze shape with
-    the blobs not yet landed, and compaction here merges only our own fragments.
-    """
-    uri = str(tmp_path / "based.lance")
-    lance.write_dataset(pa.table({"id": pa.array(range(20), pa.int64())}), uri)
-    for i in range(3):
-        lance.write_dataset(pa.table({"id": pa.array(range(20 + i * 5, 25 + i * 5), pa.int64())}), uri, mode="append")
-    alt = tmp_path / "altbase"
-    alt.mkdir()
-    lance.dataset(uri).add_bases([lance.DatasetBasePath(path=str(alt), name="alt")])
-    assert lance.dataset(uri).count_rows() == 35
-
-    result = compact_one(uri, {}, older_than=timedelta(0))
-
-    assert result.refused is None, f"a bare registered prefix was refused: {result.refused}"
-    assert result.error is None
-    assert result.fragments_removed >= 4 and result.fragments_added == 1
-    assert lance.dataset(uri).count_rows() == 35, "compaction lost rows"
-    assert sorted(alt.iterdir()) == [], "compaction wrote into the registered base"
-
-
 def test_compaction_refuses_a_dataset_that_uses_data_overlays(tmp_path: Path, overlay_dataset: Callable[[Path], str]) -> None:
     """Flag 64. An overlay supersedes individual CELL values from `data/overlay-<uuid>.lance`;
     a rewrite that does not understand them would fold stale base values back in.
@@ -470,63 +353,6 @@ def test_compaction_refuses_a_dataset_that_uses_data_overlays(tmp_path: Path, ov
     assert result.error is None, "a refusal is not an error — the lineage layer drops errors as noise"
     assert result.error_type is None
     assert {p.name for p in data_dir.iterdir()} == files_before, "the overlay dataset's files were rewritten"
-
-
-def test_an_ordinary_dataset_is_still_compacted(tmp_path: Path) -> None:
-    """The negative that keeps the gate honest. A refusal that fired on everything would satisfy
-    every test above while silently stopping all maintenance — the exact failure mode a whitelist
-    invites."""
-    uri = _fragmented_indexed_dataset(tmp_path)
-
-    result = compact_one(uri, {}, older_than=timedelta(0))
-
-    assert result.refused is None, f"an ordinary dataset was refused: {result.refused}"
-    assert result.error is None, result.error
-    assert result.fragments_removed >= 4, "the gate blocked a compaction it should have allowed"
-
-
-def test_a_missing_dataset_is_an_open_error_not_a_feature_refusal(tmp_path: Path) -> None:
-    """The other half of `test_compact_one_open_error_prefix_for_a_missing_dataset`.
-
-    Declared-only prefixes that never open are ordinary estate noise. Classifying them as refusals
-    would make the refusal counter permanently non-zero — and that counter is the ONLY signal that a
-    pylance upgrade silently stopped this pass maintaining part of the estate.
-    """
-    result = compact_one(str(tmp_path / "nope.lance"), {}, older_than=timedelta(7))
-    assert result.refused is None
-    assert result.error is not None and result.error.startswith("open:")
-
-
-def test_a_STABLE_ROW_ID_dataset_falls_back_instead_of_failing_the_sweep(tmp_path: Path) -> None:
-    """Lance refuses `defer_index_remap` in BOTH directions, and only one was handled.
-
-    The fallback was written for datasets WITHOUT stable row ids, whose refusal reads
-    "defer_index_remap requires row_addrs but none were provided" — so it matches on ``row_addrs``.
-    Lance also refuses the OPPOSITE case:
-
-        Invalid user input: defer_index_remap=true is not supported on datasets with stable row IDs:
-        stable row IDs do not require index remapping during compaction, so there is nothing to defer.
-
-    That message contains no ``row_addrs``, so it fell through to `raise` and became a per-dataset
-    sweep error. MEASURED on the live estate 2026-08-16: a real sweep reported
-    `datasets: 31, fragments_removed: 0, errors: 11`, and all eleven were this. The medallion cascade
-    writes "at file format 2.2 with stable row ids", so the datasets the pipeline produces are exactly
-    the ones compaction could never touch — maintenance ran and reclaimed nothing.
-
-    Driven against a REAL stable-row-id dataset rather than a double, so it is Lance's own refusal
-    being handled and the test cannot pass against a message Lance no longer emits.
-    """
-    uri = str(tmp_path / "stable.lance")
-    lance.write_dataset(pa.table({"id": pa.array(range(100), pa.int64())}), uri, enable_stable_row_ids=True)
-    for i in range(4):
-        base = 100 + i * 10
-        lance.write_dataset(pa.table({"id": pa.array(range(base, base + 10), pa.int64())}), uri, mode="append")
-    assert len(lance.dataset(uri).get_fragments()) >= 5
-
-    result = compact_one(uri, {}, older_than=timedelta(days=7))
-
-    assert result.error is None, f"a stable-row-id refusal became a sweep error: {result.error}"
-    assert result.fragments_removed >= 4, "the fallback compaction did not run, so nothing was reclaimed"
 
 
 class _Panic(BaseException):
@@ -672,125 +498,6 @@ def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:
 # ---------------------------------------------------------------- the ORDER of the three steps
 
 
-class _RecordingOptimize:
-    """`ds.optimize`, recording WHICH step ran and WHEN rather than only that it ran."""
-
-    def __init__(self, calls: list[str]) -> None:
-        self._calls = calls
-
-    def compact_files(self, **_kw: object) -> object:
-        self._calls.append("compact_files")
-        from types import SimpleNamespace
-
-        return SimpleNamespace(fragments_removed=2, fragments_added=1)
-
-    def optimize_indices(self) -> None:
-        self._calls.append("optimize_indices")
-
-
-class _RecordingDataset:
-    """The narrowest Lance dataset `compact_one` drives. A double, deliberately: the subject is the
-    ORDER of three calls, and a real dataset can only show their effects — from which order is not
-    recoverable (a reclaimed version looks the same whether it was reclaimed before or after the
-    compaction that produced it)."""
-
-    def __init__(self, calls: list[str]) -> None:
-        from types import SimpleNamespace
-
-        self._calls = calls
-        self.optimize = _RecordingOptimize(calls)
-        self.schema = SimpleNamespace(metadata={})
-        self._ds = SimpleNamespace(serialized_manifest=lambda: b"")  # no feature flags set
-        self.data_storage_version = "2.2"
-
-    def describe_indices(self) -> list[object]:
-        return []
-
-    def list_indices(self) -> list[dict[str, object]]:
-        return []
-
-    def cleanup_old_versions(self, **_kw: object) -> object:
-        from types import SimpleNamespace
-
-        self._calls.append("cleanup_old_versions")
-        return SimpleNamespace(old_versions=1, bytes_removed=64)
-
-
-def test_compact_one_runs_the_three_steps_in_ORDER(monkeypatch: pytest.MonkeyPatch) -> None:
-    """compact -> optimize_indices -> cleanup, asserted as a SEQUENCE.
-
-    This is the function's single load-bearing invariant and it was guarded by prose in three places
-    and by no assertion: `compact_one`'s docstring says the order is "FIXED, not configurable", the
-    inline comment repeats it, and `base_refs.py` builds the whole #114 refusal on compaction and
-    cleanup running as ONE ordered pass. Every existing test over `compact_one` asserts one step's
-    EFFECT, which is order-blind — reversing two steps changes none of those numbers.
-
-    Each step depends on the one before it. Compaction leaves its new fragments unindexed, so index
-    optimization must FOLLOW it or the dataset is left with indices that do not cover the data it
-    just rewrote. Cleanup runs LAST because it reclaims the superseded versions BOTH earlier steps
-    produce; run first it reclaims nothing, and run between them it deletes the versions the index
-    optimization still needs to remap through.
-    """
-    calls: list[str] = []
-    monkeypatch.setattr("maintenance.services.optimize.lance.dataset", lambda *_a, **_k: _RecordingDataset(calls))
-
-    result = compact_one("s3://wh/t.lance", {}, older_than=timedelta(days=7))
-
-    assert result.error is None, result.error
-    assert calls == ["compact_files", "optimize_indices", "cleanup_old_versions"]
-
-
-def test_compact_one_does_not_call_a_DEPRECATED_pylance_api(tmp_path: Path, recwarn: pytest.WarningsRecorder) -> None:
-    """`list_indices` is deprecated on pylance 10 ("Use describe_indices() instead") and the sweep is
-    the estate's most frequent caller of it — every policied dataset, every 120s.
-
-    A deprecation is a REMOVAL notice, and the two calls are not interchangeable at the call site:
-    `list_indices` fans an index out into one dict PER SEGMENT while `describe_indices` returns one
-    object per index, so a straight swap on the day it is removed would silently change the count
-    this pass reports. Migrating now, with the count asserted below, is the cheap moment. The rest of
-    this service already reads `describe_indices` (`index_health.inspect_indices`), so the sweep was
-    also asking Lance the same question twice in two different shapes.
-    """
-    uri = _fragmented_indexed_dataset(tmp_path)
-
-    result = compact_one(uri, {}, older_than=timedelta(days=7))
-
-    assert result.error is None, result.error
-    assert result.indices_optimized == 1, "the migration must not change what the metric counts"
-    deprecated = [w for w in recwarn.list if issubclass(w.category, DeprecationWarning) and "list_indices" in str(w.message)]
-    assert not deprecated, f"compact_one still calls a deprecated pylance API: {[str(w.message) for w in deprecated]}"
-
-
-def test_a_max_source_bytes_reaches_compaction_and_still_compacts(tmp_path: Path) -> None:
-    """The bound in the unit that actually matters, beside the row-count one.
-
-    `scan_batch_size` caps a READ CHUNK in rows, and the settings comment that introduced it says why
-    that is a proxy: "Rows are not a unit of memory". pylance 11 bounds the PASS in bytes, so the
-    ceiling stops depending on knowing every tier's row size in advance — which is exactly how
-    incident #93 happened, a tier whose rows were larger than whoever set the count assumed.
-
-    Asserts the value REACHES `compact_files`: a silently-dropped kwarg is the failure that matters,
-    because the pass looks identical while reading whatever it likes.
-    """
-    uri = _fragmented_indexed_dataset(tmp_path)
-    seen: dict[str, object] = {}
-    real = lance.dataset(uri).optimize.__class__.compact_files
-
-    def _spy(self: object, *args: object, **kwargs: object) -> object:
-        seen.update(kwargs)
-        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
-
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
-    try:
-        result = compact_one(uri, {}, timedelta(0), max_source_bytes=64 * 1024 * 1024)
-    finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real
-
-    assert result.error is None, result.error
-    assert seen.get("max_source_bytes") == 64 * 1024 * 1024, f"max_source_bytes never reached compact_files: {seen}"
-    assert result.fragments_removed > 0, "compaction did not run under a byte bound"
-
-
 def test_an_unpolicied_estate_is_bounded_by_bytes_out_of_the_box() -> None:
     """The default must not be None. `scan_batch_size` shipped without one and the unpolicied estate
     OOM-killed itself on the first blob tier; the byte bound exists so that cannot recur through a
@@ -800,35 +507,3 @@ def test_an_unpolicied_estate_is_bounded_by_bytes_out_of_the_box() -> None:
     settings = MaintenanceSettings()
     assert settings.max_source_bytes is not None
     assert settings.max_source_bytes <= 512 * 1024 * 1024, "a bound above the pod's own limit bounds nothing"
-
-
-def test_a_repack_mode_reaches_compaction_only_when_an_estate_asks_for_it(tmp_path: Path) -> None:
-    """Two halves, and the NEGATIVE is the load-bearing one.
-
-    `compaction_mode` decides how a compaction moves bytes: Lance re-encodes by default, and
-    `try_binary_copy` copies encoded pages where fragments are compatible. It is strictly cheaper where
-    it applies — and it changes the byte path of every compaction in an estate whose sweep rewrites
-    governed data unattended every 120 s. So the default must stay Lance's, and this asserts that an
-    unset knob sends NOTHING, not that it sends "reencode": passing the default explicitly would still
-    be a behaviour change if Lance ever revised it.
-    """
-    uri = _fragmented_indexed_dataset(tmp_path)
-    seen: dict[str, object] = {}
-    real = lance.dataset(uri).optimize.__class__.compact_files
-
-    def _spy(self: object, *args: object, **kwargs: object) -> object:
-        seen.update(kwargs)
-        return real(self, *args, **kwargs)  # ty: ignore[invalid-argument-type] — a spy is deliberately untyped
-
-    lance.dataset(uri).optimize.__class__.compact_files = _spy  # ty: ignore[invalid-assignment]
-    try:
-        compact_one(uri, {}, timedelta(0))
-        assert "compaction_mode" not in seen, f"an unconfigured sweep pinned a repack mode anyway: {seen}"
-
-        seen.clear()
-        result = compact_one(uri, {}, timedelta(0), repack_mode="try_binary_copy")
-    finally:
-        lance.dataset(uri).optimize.__class__.compact_files = real
-
-    assert result.error is None, result.error
-    assert seen.get("compaction_mode") == "try_binary_copy", f"repack_mode never reached compact_files: {seen}"

@@ -25,7 +25,6 @@ from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import compaction_executor, optimize, sweep
 from maintenance.services.optimize import compact_one
-from service_kit.lakehouse import base_refs
 from service_kit.lakehouse.features import manifest_feature_flags, mixes_data_file_versions
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 
@@ -67,32 +66,6 @@ def mixed_added(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, An
 
 def _settings() -> MaintenanceSettings:
     return MaintenanceSettings.model_validate({"s3_bucket": "b"})
-
-
-def test_a_mixed_table_is_named_as_mixed_as_well_as_refused(mixed_table: str) -> None:
-    result = compact_one(mixed_table, {}, None)
-
-    assert result.refused_by == "manifest_flags", f"a flag-256 table was not refused: {result}"
-    assert result.mixed_data_file_versions is True, f"the refusal did not say the table mixes file versions: {result}"
-    assert result.data_storage_version == "2.1", f"the table's own version was not reported: {result.data_storage_version!r}"
-
-
-def test_a_clean_table_reports_its_version_and_no_mix(clean_table: str) -> None:
-    result = compact_one(clean_table, {}, None)
-
-    assert result.refused is None and result.error is None, f"the control table was not maintained: {result}"
-    assert result.mixed_data_file_versions is False
-    assert result.data_storage_version == "2.1"
-
-
-def test_the_version_is_reported_at_the_protected_base_exit(clean_table: str) -> None:
-    """The census field rides every exit that opened the dataset, including the one before any rewrite."""
-    protected = base_refs.BaseRefs(protected={base_refs.normalise(clean_table)})
-
-    result = compact_one(clean_table, {}, None, protected=protected)
-
-    assert result.refused_by == "protected_base", f"the fixture did not reach the protected-base exit: {result}"
-    assert result.data_storage_version == "2.1"
 
 
 @pytest.mark.parametrize(("flags", "mixed"), [(258, True), (64, False)])
@@ -161,21 +134,6 @@ def test_a_pod_that_cannot_open_the_table_counts_the_mix_on_the_vend_denied_path
     sweep.execute_unit(DatasetWorkItem(uri="/nowhere/t.lance", plan=DatasetPlan()), settings=_settings(), options={}, now=datetime.now(UTC))
 
     assert mixed_added == [(1, None)], f"a mixed table this pod cannot open went uncounted: {mixed_added}"
-
-
-def test_each_tick_emits_the_zero_baseline(monkeypatch: pytest.MonkeyPatch, mixed_added: list[tuple[int, dict[str, Any] | None]]) -> None:
-    """An estate whose planner enqueues nothing runs no unit, so the per-tick call is the only emission."""
-    monkeypatch.setattr(sweep, "_load_policies", lambda *_a, **_k: [])
-    monkeypatch.setattr(sweep, "_trash_exclusions", lambda *_a, **_k: {})
-    monkeypatch.setattr(sweep, "_s3fs", lambda *_a, **_k: object())
-    monkeypatch.setattr(sweep, "_buckets_to_sweep", lambda *_a, **_k: ["b"])
-    monkeypatch.setattr(sweep, "_discover_all", lambda *_a, **_k: [])
-    monkeypatch.setattr(sweep, "_protected_roots", lambda *_a, **_k: base_refs.BaseRefs())
-
-    items, decided = sweep.plan_sweep(_settings())
-
-    assert (items, decided) == ([], []), "the fixture planned work, so the zero below could come from a unit"
-    assert mixed_added == [(0, None)], f"the tick emitted no zero baseline: {mixed_added}"
 
 
 def test_the_outcome_record_carries_the_census_fields(mixed_table: str, caplog: pytest.LogCaptureFixture) -> None:

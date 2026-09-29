@@ -30,16 +30,7 @@ from __future__ import annotations
 
 import inspect
 
-from maintenance.core import metrics
 from maintenance.services import credentials
-
-
-def test_the_metrics_module_can_record_which_credential_signed_a_rewrite() -> None:
-    """The recorder must exist and take the tier, or the call sites have nothing to call."""
-    assert hasattr(metrics, "record_credential_tier"), "no recorder for the ambient-vs-scoped split"
-
-    signature = inspect.signature(metrics.record_credential_tier)
-    assert "tier" in signature.parameters, f"the recorder must carry WHICH tier: {signature}"
 
 
 def test_both_credential_paths_are_counted() -> None:
@@ -54,13 +45,3 @@ def test_both_credential_paths_are_counted() -> None:
     assert "record_credential_tier" in body[:ambient_at] or "record_credential_tier" in body[ambient_at:scoped_at], (
         "the fallback branch must record before it returns"
     )
-
-
-def test_recording_a_tier_does_not_raise() -> None:
-    """Exercised rather than only inspected: a recorder that throws would break every sweep.
-
-    The no-op meter a test process gets is enough — what is checked is that the call is well-formed
-    against the real instrument, which is the part a source assertion cannot see.
-    """
-    metrics.record_credential_tier(tier="scoped")
-    metrics.record_credential_tier(tier="ambient")

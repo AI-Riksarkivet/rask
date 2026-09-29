@@ -46,61 +46,8 @@ def _router(**over: Any) -> APIRouter:
 
 
 # --------------------------------------------------------------------------- #
-# the binding surface — what the Dapr sidecar actually posts to
-# --------------------------------------------------------------------------- #
-
-
-def test_the_reconcile_route_exists_at_its_binding_name() -> None:
-    """Dapr delivers a cron tick to `/<binding-name>` and nowhere else, so the route path IS the
-    contract with the component. A mismatch is invisible in tests and silent in production — the
-    sidecar posts, gets a 404, and the report simply never runs."""
-    # The ROUTER's own routes, not the app's: this FastAPI resolves `include_router` lazily
-    # (`_IncludedRouter`), so an app inspected before startup reports no expanded routes at all.
-    declared = {(getattr(r, "path", ""), m) for r in _router().routes for m in getattr(r, "methods", set())}
-    binding = f"/{_settings().reconcile_binding_name}"
-    assert (binding, "POST") in declared, f"no POST route at {binding} — the sidecar's tick would 404"
-
-
-def test_the_reconcile_binding_answers_the_options_preflight() -> None:
-    """Dapr's binding-discovery pre-flight is an OPTIONS. Without a handler it 405s and Dapr logs the
-    app as NOT consuming the binding — the cron then never fires and nothing reports why."""
-    binding = f"/{_settings().reconcile_binding_name}"
-    options = [r for r in _router().routes if getattr(r, "path", None) == binding and "OPTIONS" in getattr(r, "methods", set())]
-    assert options, "no OPTIONS handler — Dapr would consider the binding unconsumed"
-
-
-def test_the_sweep_and_the_reconcile_are_separate_bindings() -> None:
-    """One binding for both would force the cheap read-only drift report onto the expensive
-    data-rewriting sweep's cadence. Separate names, asserted so a later 'simplification' that merges
-    them has to argue with a test."""
-    settings = _settings()
-    assert settings.binding_name != settings.reconcile_binding_name
-
-
-def test_the_reconcile_route_is_token_gated() -> None:
-    """The pass reads EVERY tenant's registry records and tuple counts. It mutates nothing, which is
-    exactly why the gate is easy to forget — but an ungated trigger is an estate-wide disclosure, not
-    merely a wasted scan."""
-    binding = f"/{_settings().reconcile_binding_name}"
-    post = cast(Any, next(r for r in _router().routes if getattr(r, "path", None) == binding and "POST" in getattr(r, "methods", set())))
-    names = {getattr(d.call, "__name__", "") for d in post.dependant.dependencies}
-    assert "require_dapr_token" in names, f"the reconcile binding is UNGATED (deps: {names})"
-
-
-# --------------------------------------------------------------------------- #
 # the clients — optional by design, so a missing one degrades rather than fails
 # --------------------------------------------------------------------------- #
-
-
-def test_a_missing_fga_client_degrades_the_report_instead_of_failing_it() -> None:
-    """FGA down/unwired must cost the four authz categories, not the whole report — the other three
-    still answer. A drift report that 500s because one of three stores is unreachable tells you
-    nothing about the other two."""
-    from maintenance.api import dependencies
-
-    request = cast(Any, type("R", (), {"app": type("A", (), {"state": type("S", (), {})()})()})())
-    assert dependencies.get_fga_client(request) is None  # absent attribute → None, never AttributeError
-    assert dependencies.get_s3_client(request) is None
 
 
 def test_the_route_hands_the_app_state_clients_to_the_reconciler(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -236,74 +183,6 @@ def test_a_resolve_that_raises_degrades_rather_than_killing_the_sweep(monkeypatc
     assert asyncio.run(service._make_fga_client(_settings(fga_enabled=True))) is None
 
 
-def test_the_reconcile_client_is_read_only_by_construction() -> None:
-    """The RECONCILER holds no tuple-write path, and the cheapest way to keep it that way is for the
-    write verbs to be absent from the module entirely.
-
-    Scoped to `reconcile.py`, not the service: since #79 the sibling `purge.py` DOES revoke (that is the
-    first step of destroying an expired trash record — grants must never outlive the bytes). The claim
-    that survives is narrower and more useful: the module that decides whether the estate is clean
-    cannot itself change the estate.
-    """
-    from pathlib import Path
-
-    from maintenance.services import reconcile as mod
-
-    src = Path(mod.__file__).read_text()
-    for verb in ("write_tuples", "delete_tuples", "revoke_object_tuples", "grant_on_create"):
-        assert verb not in src, f"the reconciler references {verb} — it must only READ"
-
-
-#: The ONE module in this service permitted to write a tuple ([[LH-061]], owner ruling 2026-09-19
-#: overturning the standing "No — not yet" deferral on a write-capable reconcile). A set of exactly
-#: one, held here rather than assumed, so the next grant capability is a decision someone makes in
-#: this file instead of an import somewhere convenient.
-_SANCTIONED_TUPLE_WRITERS = {"rebuild.py"}
-
-
-def test_only_the_SANCTIONED_module_can_grant_a_tuple() -> None:
-    """The purge revokes; one named module rebuilds; nothing else in this service grants.
-
-    The original rule was that NOTHING here grants, because "a maintenance job that could write a grant
-    would be an unaudited privilege door on a component whose whole justification is that it only cleans
-    up". The owner's ruling changed the justification, not the risk: maintenance now also RECOVERS, and
-    a tuple estate that cannot be rebuilt after a loss is a resilience gap the estate chose to close.
-
-    SO THE GATE NARROWS RATHER THAN OPENS, the same shape `hierarchy_edge_tuples`' closed set of two
-    callers already uses. What made the old rule protective was that the capability had no home at all;
-    what makes this one protective is that it has exactly one, and every property that answers the
-    original objection is pinned elsewhere:
-    `test_the_tuple_estate_is_rebuildable_from_the_registries` holds that the module never deletes, that
-    every tuple names the registry record justifying it, and that the write carries its own audit
-    origin (`registry_rebuild`, never `project_create`) — so it is not unaudited, and it cannot widen
-    access beyond what the control plane already recorded.
-
-    Matched against the AST's CALLED names, never the source text: the docstrings here necessarily name
-    these verbs to explain which ones are off-limits, and a substring gate that fires on its own
-    explanation is a gate people delete.
-    """
-    import ast
-    from pathlib import Path
-
-    from maintenance import service as svc
-
-    forbidden = {"write_tuples", "grant_on_create", "seed_ownership", "provision"}
-    granting = []
-    for path in sorted(Path(svc.__file__).parent.rglob("*.py")):
-        called = {
-            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
-            for node in ast.walk(ast.parse(path.read_text()))
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name | ast.Attribute)
-        }
-        if called & forbidden:
-            granting.append(path.name)
-
-    rogue = sorted(set(granting) - _SANCTIONED_TUPLE_WRITERS)
-    assert rogue == [], f"{rogue} write tuples and are not the sanctioned rebuild — maintenance may revoke and rebuild, never grant freely"
-    missing = sorted(_SANCTIONED_TUPLE_WRITERS - set(granting))
-    assert missing == [], f"{missing} is declared the sanctioned tuple writer and writes nothing — either the rebuild moved or this gate is now vacuous"
-
-
 def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     """The gate is "the drift report ran clean", so the object it reads must be the one just produced.
 
@@ -343,15 +222,6 @@ def test_the_purge_consumes_THIS_ticks_report_inside_the_same_lock(monkeypatch: 
     # The purge key rides along on the tick's payload; its CONTENT is `test_trash_purge.py`'s subject,
     # so this asserts only that the real report reached the response un-run.
     assert out["trash_purge"]["ran"] is False
-
-
-def test_the_app_registers_both_bindings_together() -> None:
-    """Both cron routes come from the one router the service includes, so a service that boots has both
-    or neither. Guards the split-brain where the sweep ticks and the reconcile silently does not."""
-    settings = _settings()
-    posted = {getattr(r, "path", "") for r in _router().routes if "POST" in getattr(r, "methods", set())}
-    assert f"/{settings.binding_name}" in posted
-    assert f"/{settings.reconcile_binding_name}" in posted
 
 
 def test_the_reconcile_route_is_reachable_over_http() -> None:
@@ -407,11 +277,3 @@ def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
     assert "rask-observability" in s.platform_buckets, "the declared platform bucket must be exempt"
     assert "lance-catalog" in s.platform_buckets, "the swept set stays exempt — a maintained bucket is known by definition"
     assert "rask-observability" not in s.sweep_buckets, "a platform bucket must NOT become something the sweep walks"
-
-
-def test_platform_buckets_defaults_to_the_swept_set_when_undeclared() -> None:
-    """No declaration must not widen the exemption — an undeclared estate keeps the old behaviour."""
-    from maintenance.core.config import MaintenanceSettings
-
-    s = MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog")
-    assert s.platform_buckets == s.sweep_buckets

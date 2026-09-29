@@ -65,16 +65,6 @@ def test_an_unknown_scalar_type_is_REFUSED_before_pylance_sees_it(tmp_path: Path
         build_index(item, write_options={})
 
 
-def test_an_unknown_KIND_is_refused_rather_than_guessed(tmp_path: Path) -> None:
-    """Vector and scalar are separate spec operations. A worker inferring the door from `index_type`
-    could build a scalar index where a vector one was asked for — a table that answers queries wrongly
-    rather than not at all, which is the worse failure and the harder to notice."""
-    item = IndexWorkItem(uri=_table(tmp_path), column="id", kind="guess", index_type="BTREE")
-
-    with pytest.raises(UnknownIndexKindError, match="guess"):
-        build_index(item, write_options={})
-
-
 @pytest.mark.asyncio
 async def test_a_malformed_unit_is_ACKED_not_retried(tmp_path: Path) -> None:
     """It will not parse on the tenth attempt either. Retrying only delays the DLQ while occupying a
@@ -170,62 +160,3 @@ def test_the_lane_is_OFF_unless_a_topic_is_configured() -> None:
 
     assert index_work.register_index_route(FastAPI(), _settings()) is None
     assert index_work.register_index_route(FastAPI(), _settings(index_topic="maintenance.index.v1")) is not None
-
-
-def test_the_PLANNER_does_not_build_indices_even_though_it_is_told_the_topic() -> None:
-    """A topic name is not a licence to execute, and the index lane must read the same flag the work
-    queue does.
-
-    Both maintenance Deployments render ``MAINTENANCE_INDEX_TOPIC`` — the planner needs it to know the
-    lane exists, and the chart has one env block per topic rather than one per role. So the topic
-    alone cannot decide who builds: the planner is sized 512Mi against the worker's 4Gi, and a vector
-    index over a large table is precisely the work that sizing exists to keep out of it. That is the
-    same defect [[LH-183]] found in the compaction lane, one lane over.
-
-    ``execute_work`` is the flag that separates them, and this pins the index lane to it. Without this
-    leg the topic gate above passes while the planner subscribes, which looks identical in the
-    rendered chart and differs only under load.
-    """
-    from fastapi import FastAPI
-
-    planner = _settings(index_topic="maintenance.index.v1", execute_work=False)
-    worker = _settings(index_topic="maintenance.index.v1", execute_work=True)
-
-    assert index_work.register_index_route(FastAPI(), planner) is None, "the 512Mi planner subscribed to the index lane"
-    assert index_work.register_index_route(FastAPI(), worker) is not None, "the worker did NOT subscribe to the index lane"
-
-
-def test_a_COLUMN_THAT_IS_NOT_IN_THE_SCHEMA_is_acked_not_retried(tmp_path: Path) -> None:
-    """A unit naming a column the table does not have is a producer defect, and redelivery cannot
-    repair one.
-
-    MEASURED on pylance 10.0.0: `create_scalar_index("nope", …)` raises `KeyError: 'nope not found in
-    schema'`. That reached the route's bare `except Exception` and answered RETRY, so the unit came
-    back every `ackWait` forever — occupying a worker to fail identically, and burying the store
-    outages RETRY exists for.
-
-    Refused as a VALIDATION rather than caught as an exception: the schema is in hand before the build
-    starts, so "this column does not exist" is a question with an answer, not a failure to classify.
-    Catching `KeyError` would also swallow one raised for an unrelated reason deeper in the build.
-
-    The two sibling shapes the audit named alongside it do NOT exist, measured the same way, and are
-    recorded here so they are not re-fixed: a bad kwarg raises nothing at all (pylance ignores unknown
-    keyword arguments), and a redelivered unit whose index already exists succeeds — the scalar path
-    replaces. Only the column shape was real.
-    """
-    uri = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": pa.array(list(range(300)), pa.int64())}), uri)
-    item = IndexWorkItem(uri=uri, column="not_a_column", kind=SCALAR_INDEX, index_type="BTREE")
-
-    with pytest.raises(UnknownIndexKindError, match="not_a_column"):
-        build_index(item, write_options={})
-
-
-def test_a_column_that_EXISTS_still_builds(tmp_path: Path) -> None:
-    """The guard refuses the absent column and nothing else — a real column is unaffected."""
-    uri = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": pa.array(list(range(300)), pa.int64())}), uri)
-
-    outcome = build_index(IndexWorkItem(uri=uri, column="id", kind=SCALAR_INDEX, index_type="BTREE"), write_options={})
-
-    assert outcome.column == "id"

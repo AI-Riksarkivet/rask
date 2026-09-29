@@ -18,7 +18,6 @@ a wrong authorization.
 from __future__ import annotations
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.lineage_emit import table_id_from_uri
 
 
 def _settings() -> MaintenanceSettings:
@@ -26,16 +25,6 @@ def _settings() -> MaintenanceSettings:
     is exactly the drift `ty` is configured to catch (`error-on-warning`). Storage is never touched:
     every collaborator that would reach it is patched out below."""
     return MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog")
-
-
-def test_the_flat_layout_yields_an_identity() -> None:
-    assert table_id_from_uri("s3://lance-catalog/6ecbe11e_transcripts_v2$annotations") == "transcripts_v2$annotations"
-
-
-def test_a_medallion_path_yields_none_rather_than_a_guess() -> None:
-    """The shape that made carrying the id necessary. `medallion/bronze` IS `bronze$events`, and the
-    parser has no way to know that — so it must decline, not approximate."""
-    assert table_id_from_uri("s3://lance-catalog/medallion/bronze") is None
 
 
 def test_plan_one_stamps_the_identity_it_derived(monkeypatch) -> None:

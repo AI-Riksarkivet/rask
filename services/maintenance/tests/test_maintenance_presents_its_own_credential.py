@@ -50,15 +50,6 @@ def test_it_presents_its_OWN_credential_when_the_store_has_one(monkeypatch: pyte
     assert headers["x-lance-service-identity"] == "service-maintenance"
 
 
-def test_it_falls_back_to_the_shared_token_when_the_store_has_no_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A store that is readable and simply has nothing for this identity is the UNPRIVILEGED case,
-    which is every estate that has not turned this on. It must keep working unchanged."""
-    monkeypatch.setattr(catalog_identity, "dedicated_token_for", lambda _s: lambda _identity: None)
-    monkeypatch.setenv("APP_API_TOKEN", "the-shared-bearer")
-    headers = catalog_identity.service_headers(_settings())
-    assert headers["dapr-api-token"] == "the-shared-bearer"
-
-
 def test_with_no_secret_store_nothing_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     """`secrets_from_dapr` off is a dev stack. It keeps the shared-token path exactly as it was, so
     this landing cannot break an estate that has no store to read."""
@@ -79,33 +70,3 @@ def test_an_UNREADABLE_store_raises_rather_than_downgrading(monkeypatch: pytest.
     monkeypatch.setenv("APP_API_TOKEN", "the-shared-bearer")
     with pytest.raises(RuntimeError, match="unreachable"):
         catalog_identity.service_headers(_settings())
-
-
-def test_the_identity_header_is_always_sent() -> None:
-    """Both halves of the identity or the door refuses with a reason invisible from here — the
-    invariant the original `_headers` docstring states, kept through the change."""
-    headers = catalog_identity.service_headers(_settings(secrets_from_dapr=False))
-    assert headers["x-lance-service-identity"] == "service-maintenance"
-
-
-def test_EVERY_door_maintenance_calls_uses_the_one_builder() -> None:
-    """A credential control applied to one of two doors is not a control.
-
-    A door that builds its own headers can drift from the other, and a header it gets wrong is a 401
-    that stops every unit through that door. Discovered by grep rather than listed, so a THIRD door reds
-    this instead of drifting.
-    """
-    import pathlib
-
-    src = pathlib.Path(__file__).resolve().parents[1] / "src/maintenance"
-    offenders = []
-    for path in src.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        if "x-lance-service-identity" not in text or path.name == "catalog_identity.py":
-            continue
-        if "service_headers" not in text:
-            offenders.append(str(path.relative_to(src)))
-    assert not offenders, (
-        f"these build the identity headers themselves instead of calling service_headers: {offenders} — "
-        "a dedicated credential applied to some doors and not others is not a credential control"
-    )

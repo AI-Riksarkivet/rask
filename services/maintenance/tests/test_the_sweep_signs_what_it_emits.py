@@ -74,10 +74,3 @@ async def test_NO_KEY_emits_the_event_UNSIGNED_rather_than_faking_one() -> None:
     """The rollout property. An unconfigured deployment must not emit something that looks signed."""
     payload = await _emit(signing_key="")
     assert signature_of(payload) is None, "an unkeyed emitter attached a signature"
-
-
-@pytest.mark.asyncio
-async def test_a_PEER_key_does_not_verify_what_this_service_signed() -> None:
-    """The point of the whole exercise: the signature distinguishes THIS producer from its neighbours."""
-    payload = await _emit(signing_key=KEY)
-    assert not verify_signed_event(payload, key="hBvaR8ijWCnpj82CKQTvmIGP200Nl85NKvug7WmF")

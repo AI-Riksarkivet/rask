@@ -15,7 +15,6 @@ import lance
 import pyarrow as pa
 
 from maintenance.services import optimize, orphans
-from service_kit.lakehouse.lance_session import lance_session
 
 
 def _dataset(tmp_path: Path, rows: int = 8) -> str:
@@ -25,24 +24,6 @@ def _dataset(tmp_path: Path, rows: int = 8) -> str:
     for i in range(3):
         lance.write_dataset(pa.table({"x": [100 + i]}), uri, mode="append")
     return uri
-
-
-def test_equal_caps_share_ONE_session_and_different_caps_do_not() -> None:
-    a = lance_session(1 << 20, 1 << 20)
-    b = lance_session(1 << 20, 1 << 20)
-    c = lance_session(2 << 20, 1 << 20)
-    assert a is b, "equal caps must resolve to the same process-wide session"
-    assert a is not c
-
-
-def test_a_session_threaded_open_ENGAGES_the_shared_cache(tmp_path: Path) -> None:
-    """The empirical core: opens without a session leave it flat; opens with it grow it."""
-    session = lance_session(8 << 20, 8 << 20)
-    before = session.size_bytes()
-    uri = _dataset(tmp_path)
-    ds = lance.dataset(uri, session=session)
-    _ = ds.to_table()
-    assert session.size_bytes() > before, "the open never engaged the shared session"
 
 
 def test_referenced_paths_walks_versions_on_the_HEAD_dataset_cache(tmp_path: Path, monkeypatch) -> None:

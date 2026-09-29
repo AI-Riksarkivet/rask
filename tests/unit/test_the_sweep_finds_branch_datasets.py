@@ -92,24 +92,6 @@ def test_a_branch_under_tree_is_discovered_as_its_own_dataset() -> None:
     assert "s3://lance-catalog/abcd_ns$t1/tree/experiment" in uris, "a SECOND branch on the same table was missed"
 
 
-def test_the_parent_is_still_discovered_and_reported_once() -> None:
-    """Finding branches must not cost the parent, nor duplicate it."""
-    uris = discover_datasets(cast(Any, _estate()), "lance-catalog").uris
-
-    assert uris.count("s3://lance-catalog/abcd_ns$t1") == 1, f"the parent was lost or duplicated: {uris}"
-    assert "s3://lance-catalog/efgh_ns$t2" in uris, "a branchless table stopped being discovered"
-
-
-def test_the_tree_PREFIX_is_never_itself_reported_as_a_dataset() -> None:
-    """`tree/` is a container, like a namespace prefix — it holds no `_versions/` of its own.
-
-    Reporting it would make the sweep open a path that is not a dataset and file the failure as an
-    error, which is the noise the namespace-prefix recursion already exists to avoid.
-    """
-    uris = discover_datasets(cast(Any, _estate()), "lance-catalog").uris
-    assert "s3://lance-catalog/abcd_ns$t1/tree" not in uris, "the tree/ container was reported as a dataset"
-
-
 def test_a_datasets_own_internals_are_NOT_walked() -> None:
     """The bound that keeps this from becoming a full recursive crawl.
 

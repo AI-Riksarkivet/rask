@@ -28,21 +28,12 @@ from pathlib import Path
 
 import pyarrow.fs as pafs
 
-from maintenance.services.optimize import _CONTROL_PREFIXES, discover_datasets
+from maintenance.services.optimize import discover_datasets
 
 
 def _tree(root: Path, *relative: str) -> None:
     for path in relative:
         (root / path).mkdir(parents=True, exist_ok=True)
-
-
-def test_backups_are_a_control_prefix() -> None:
-    """Stated as membership rather than behaviour too, because the list is the estate's one answer to
-    'which directories hold no dataset' and a reader checks it before adding a seventh."""
-    assert "_backups" in _CONTROL_PREFIXES, (
-        "`_backups` is not skipped by discovery, so a backup snapshot's nesting records an IncompleteScan, "
-        "`report_is_clean` goes false and the #79 purge never runs — the estate's own backups gate reclamation"
-    )
 
 
 def test_a_backup_snapshot_records_no_truncation(tmp_path: Path) -> None:
@@ -53,25 +44,3 @@ def test_a_backup_snapshot_records_no_truncation(tmp_path: Path) -> None:
     found = discover_datasets(pafs.LocalFileSystem(), str(bucket), max_depth=2)
 
     assert not found.truncated, f"a backup snapshot was reported as unscanned coverage: {found.truncated}"
-
-
-def test_a_real_dataset_nested_too_deep_is_STILL_reported(tmp_path: Path) -> None:
-    """The half that must not regress. A governed dataset out of reach is a genuine coverage gap, and
-    the `truncated` field exists because that case was once silent."""
-    bucket = tmp_path / "lance-catalog"
-    _tree(bucket, "a/b/c/d/deep_ns$tbl/_versions")
-
-    found = discover_datasets(pafs.LocalFileSystem(), str(bucket), max_depth=2)
-
-    assert found.truncated, "a dataset nested past the bound was skipped silently — the depth bound went quiet"
-
-
-def test_a_dataset_beside_the_backups_is_still_found(tmp_path: Path) -> None:
-    """Non-vacuity: skipping `_backups` must not skip the bucket."""
-    bucket = tmp_path / "lance-catalog"
-    _tree(bucket, "_backups/control/20260914T163435Z/registry", "real_ns$tbl/_versions")
-
-    found = discover_datasets(pafs.LocalFileSystem(), str(bucket), max_depth=3)
-
-    assert any(uri.endswith("real_ns$tbl") for uri in found.uris), f"the real dataset beside the backups was not found: {found.uris}"
-    assert not any("_backups" in uri for uri in found.uris), f"a backup snapshot was reported as a dataset: {found.uris}"

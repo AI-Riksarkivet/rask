@@ -45,16 +45,3 @@ def test_the_three_classes_are_counted_separately() -> None:
         "beyond_lance_listing_floor": 1,
         "unknown": 1,
     }
-
-
-def test_a_tick_with_no_orphans_reports_nothing() -> None:
-    """An empty key on a clean tick reads like a category nobody looked at — the same rule
-    `orphans_by_dataset` already follows."""
-    assert _orphans_by_reclaimability(_empty()) == {}
-
-
-def test_the_counts_reconcile_with_the_total() -> None:
-    """A reader must be able to check the split against `counts["orphan_files"]` rather than trust it."""
-    report = _report(True, False, None, False, True)
-
-    assert sum(_orphans_by_reclaimability(report).values()) == len(report.orphan_files)

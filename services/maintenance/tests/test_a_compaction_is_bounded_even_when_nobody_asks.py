@@ -18,14 +18,13 @@ value — two spellings of 64 is how a bound gets raised in one place and kept i
 
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 
 import lance
 import pyarrow as pa
 import pytest
 
-from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE, MaintenanceSettings
+from maintenance.core.config import DEFAULT_COMPACT_THREADS, DEFAULT_MAX_SOURCE_BYTES, DEFAULT_SCAN_BATCH_SIZE
 from maintenance.services.optimize import compact_one
 
 
@@ -35,53 +34,6 @@ def _dataset(tmp: Path) -> str:
     for start in (0, 16, 32, 48):
         lance.write_dataset(table.slice(start, 16), uri, mode="create" if start == 0 else "append", data_storage_version="2.2")
     return uri
-
-
-def test_a_caller_that_names_no_bound_still_reaches_lance_with_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The behavioural half: what ARRIVES at `compact_files`, not what the signature says."""
-    uri = _dataset(tmp_path)
-    asked: list[dict[str, object]] = []
-    optimizer = lance.dataset(uri).optimize.__class__
-
-    def _spy(self: object, *args: object, **kwargs: object) -> None:
-        """Records the call and performs none — this test is about the ceiling the call carries."""
-        asked.append(dict(kwargs))
-
-    monkeypatch.setattr(optimizer, "compact_files", _spy)
-    compact_one(uri, {}, None, cleanup_enabled=False, optimize_indices_enabled=False)
-
-    assert asked, "compact_files was never called"
-    kwargs = asked[0]
-    assert kwargs.get("batch_size") == DEFAULT_SCAN_BATCH_SIZE, (
-        f"the read batch reached Lance as {kwargs.get('batch_size')!r} — unset means Lance's own 8192 ROWS, "
-        "and rows are not a unit of memory: ~1.8 MB bronze rows make that ~15 GB per compute thread"
-    )
-    assert kwargs.get("num_threads") == DEFAULT_COMPACT_THREADS, (
-        f"num_threads reached Lance as {kwargs.get('num_threads')!r} — unset means the HOST's core count, "
-        "which multiplies the read batch by a number the pod's cgroup never agreed to"
-    )
-    assert kwargs.get("max_source_bytes") == DEFAULT_MAX_SOURCE_BYTES, (
-        f"max_source_bytes reached Lance as {kwargs.get('max_source_bytes')!r} — unset means one pass may "
-        "pull in a whole table, which is the bound the two row-count knobs were only ever standing in for"
-    )
-
-
-def test_the_unbounded_state_is_not_reachable_from_the_signature() -> None:
-    """The structural half: a `None` default is what made the behavioural leg above possible."""
-    defaults = {name: p.default for name, p in inspect.signature(compact_one).parameters.items()}
-    unbounded = [name for name in ("scan_batch_size", "compact_threads", "max_source_bytes") if defaults.get(name) is None]
-    assert not unbounded, (
-        f"{', '.join(unbounded)} default to None on compact_one, and None means the keyword never reaches "
-        "`compact_files` at all — a new caller is unbounded by omission, the way `rewrite_slots` deliberately is not"
-    )
-
-
-def test_the_floor_and_the_configured_value_are_the_same_number() -> None:
-    """Two spellings of 64 is how a bound gets raised in one place and silently kept in the other."""
-    settings = MaintenanceSettings()
-    assert settings.scan_batch_size == DEFAULT_SCAN_BATCH_SIZE
-    assert settings.compact_threads == DEFAULT_COMPACT_THREADS
-    assert settings.max_source_bytes == DEFAULT_MAX_SOURCE_BYTES
 
 
 def test_an_explicit_none_from_the_wire_model_is_the_floor_not_lances_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

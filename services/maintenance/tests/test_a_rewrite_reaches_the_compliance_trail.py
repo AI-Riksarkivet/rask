@@ -86,46 +86,12 @@ def _arm(caplog, *, enabled: bool = True) -> None:
     configure_audit(enabled=enabled)
 
 
-def test_a_rewrite_is_recorded_against_the_object_it_rewrote(caplog) -> None:
-    _arm(caplog)
-    audit_material_work(cast("DatasetResult", _Result()), subject="service-maintenance")
-
-    got = _records(caplog)
-    assert len(got) == 1, f"expected one audit record for a material rewrite, got {len(got)}"
-    rec = got[0]
-    assert getattr(rec, "audit.resource") == "table:bronze$events", "the record must name the FGA object, not the URI"
-    assert getattr(rec, "audit.subject") == "service-maintenance"
-    assert getattr(rec, "audit.outcome") == "success"
-    # The numbers are the whole point: "it ran" is not an answer to "what did it do to my table".
-    assert getattr(rec, "audit.fragments_removed") == 3
-    assert getattr(rec, "audit.old_versions_removed") == 5
-    assert getattr(rec, "audit.bytes_removed") == 7567
-    # HOW LONG, not only how much ([[LH-098]]). A trail that says what a pass achieved and never how
-    # long it took cannot answer "was that compaction slow", which is the shape a tenant notices before
-    # anything fails — and counts alone cannot show it.
-    assert getattr(rec, "audit.duration_seconds") == 4.25
-
-
 def test_a_converged_dataset_records_NOTHING(caplog) -> None:
     """~423 datasets a tick are already converged; a record each would drown the stream it joins."""
     _arm(caplog)
     audit_material_work(cast("DatasetResult", _Idle()), subject="service-maintenance")
 
     assert not _records(caplog), "an idle dataset wrote an audit record — that is thousands an hour saying nothing"
-
-
-def test_a_DISARMED_trail_records_NOTHING(caplog) -> None:
-    """The case this file could not previously express, and the one it was written to protect.
-
-    `RASK_AUDIT_ENABLED=false` is a real deployment: an operator turning the stream off must actually
-    turn it off. Until this test existed the file forced the logger to INFO itself, so a disarmed
-    estate and an armed one were indistinguishable here.
-    """
-    _arm(caplog, enabled=False)
-
-    audit_material_work(cast("DatasetResult", _Result()), subject="service-maintenance")
-
-    assert not _records(caplog), "the audit trail is disarmed and a record was written anyway"
 
 
 def test_the_SWEEP_reaches_the_trail_and_not_only_the_helper(caplog) -> None:

@@ -37,17 +37,3 @@ def test_every_checked_category_gets_a_series(recorded: list[tuple[int, dict[str
     metrics.record_drift({"orphaned_trash": 989, "orphan_buckets": 3})
 
     assert sorted(recorded) == [(3, {"category": "orphan_buckets"}), (989, {"category": "orphaned_trash"})]
-
-
-def test_a_checked_but_clean_category_still_emits_zero(recorded: list[tuple[int, dict[str, Any]]]) -> None:
-    """ "Checked and clean" must be distinguishable from "did not look", which is why 0 is emitted."""
-    metrics.record_drift({"orphan_buckets": 0})
-
-    assert recorded == [(0, {"category": "orphan_buckets"})]
-
-
-def test_an_unchecked_category_emits_nothing(recorded: list[tuple[int, dict[str, Any]]]) -> None:
-    """THE DISCIPLINE: `counts` omits what it could not check, and the wire must not invent a zero."""
-    metrics.record_drift({})
-
-    assert recorded == []

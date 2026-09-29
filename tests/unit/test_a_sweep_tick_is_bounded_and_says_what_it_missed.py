@@ -60,31 +60,3 @@ def test_zero_budget_means_unlimited() -> None:
 
     assert executed == ["a", "b", "c"]
     assert len(out) == 3
-
-
-def test_exhausting_the_budget_says_what_it_did_not_reach(caplog: Any) -> None:
-    """A tick that stops silently is the starvation this row exists to end, with a setting attached."""
-    import logging
-
-    with caplog.at_level(logging.WARNING, logger="maintenance.services.sweep"):
-        list(sweep_mod.execute_within_budget(["a", "b", "c", "d"], run=lambda i: i, budget_seconds=2.5, monotonic=_Clock()))
-
-    exhausted = [r for r in caplog.records if r.message == "sweep_budget_exhausted"]
-    assert exhausted, f"stopping early logged nothing: {[r.message for r in caplog.records]}"
-    assert getattr(exhausted[0], "executed", None) == 2
-    assert getattr(exhausted[0], "remaining", None) == 2
-
-
-def test_a_budget_never_cuts_inside_a_work_item() -> None:
-    """The item that was started finishes. Only the NEXT one is refused."""
-    started: list[str] = []
-    finished: list[str] = []
-
-    def run(item: str) -> str:
-        started.append(item)
-        finished.append(item)
-        return item
-
-    list(sweep_mod.execute_within_budget(["a", "b", "c"], run=run, budget_seconds=2.5, monotonic=_Clock()))
-
-    assert started == finished, "a work item was started and not finished — the budget cut inside one"

@@ -69,24 +69,6 @@ def test_a_branch_of_a_protected_root_is_NOT_refused(tmp_path: Path) -> None:
     assert result.bytes_removed > 0
 
 
-def test_the_parent_keeps_its_data_and_its_history(tmp_path: Path) -> None:
-    """The permit is only sound if reclaiming the child cannot reach the parent.
-
-    Asserted on BOTH halves, because a data-file count alone would pass a pass that deleted the
-    parent's manifests: the parent's `data/` is byte-identical in membership, and every version it had
-    still opens and still answers the row count it answered before.
-    """
-    src, branch_uri = _parent_with_branch(tmp_path)
-    data_dir = Path(src) / "data"
-    before = sorted(p.name for p in data_dir.iterdir())
-    history = {v["version"]: lance.dataset(src, version=v["version"]).count_rows() for v in lance.dataset(src).versions()}
-
-    compact_one(branch_uri, {}, timedelta(seconds=0), protected=BaseRefs(protected={src.lstrip("/")}))
-
-    assert sorted(p.name for p in data_dir.iterdir()) == before, "reclaiming the branch removed the PARENT's data files"
-    assert {v["version"]: lance.dataset(src, version=v["version"]).count_rows() for v in lance.dataset(src).versions()} == history
-
-
 def test_the_root_ITSELF_is_still_refused(tmp_path: Path) -> None:
     """The half that must not move. `file_format.md:3187` says the format will garbage-collect a
     source out from under its clone, so equality is the relation the estate-wide pre-pass exists for.

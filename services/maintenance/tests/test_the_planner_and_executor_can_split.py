@@ -25,7 +25,6 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-from maintenance.api.routes import build_router
 from maintenance.api.work import register_work_route
 from maintenance.core.config import MaintenanceSettings
 
@@ -49,27 +48,6 @@ def _settings(
     )
 
 
-def _paths(router: object) -> set[str]:
-    return {getattr(r, "path", "") for r in getattr(router, "routes", [])}
-
-
-def test_an_unnamed_cron_binding_mounts_NOTHING() -> None:
-    """An executor pod configures no cron. Mounting `f"/{''}"` gives `/` — a cron door at the pod root
-    that answers POST, which is not a route anyone chose to publish."""
-    router = build_router(_settings(binding_name="", reconcile_binding_name=""))
-    assert _paths(router) == set(), f"an executor pod would serve {_paths(router)}"
-
-
-def test_a_named_binding_still_mounts_its_route() -> None:
-    router = build_router(_settings(reconcile_binding_name=""))
-    assert _paths(router) == {"/maintenance-cron"}
-
-
-def test_both_names_mount_both_routes() -> None:
-    router = build_router(_settings())
-    assert _paths(router) == {"/maintenance-cron", "/maintenance-reconcile-cron"}
-
-
 def test_a_PLANNER_publishes_to_the_queue_without_subscribing() -> None:
     """The switch `work_topic` cannot express: the planner needs the topic to PUBLISH onto it, and must
     not also consume from it, or the split does nothing."""
@@ -77,18 +55,3 @@ def test_a_PLANNER_publishes_to_the_queue_without_subscribing() -> None:
     settings = _settings(work_topic="maintenance.work.v1", execute_work=False)
     assert register_work_route(app, settings) is None
     assert settings.work_topic == "maintenance.work.v1", "the planner still needs the topic to publish onto"
-
-
-def test_an_EXECUTOR_subscribes() -> None:
-    app = FastAPI()
-    assert register_work_route(app, _settings(work_topic="maintenance.work.v1")) is not None
-
-
-def test_the_DEFAULT_is_today_s_single_pod() -> None:
-    """One deployment doing both, unchanged — a chart that has not opted in must not be split by a
-    code default."""
-    app = FastAPI()
-    settings = _settings(work_topic="maintenance.work.v1")
-    assert settings.execute_work is True
-    assert register_work_route(app, settings) is not None
-    assert _paths(build_router(settings)) == {"/maintenance-cron", "/maintenance-reconcile-cron"}

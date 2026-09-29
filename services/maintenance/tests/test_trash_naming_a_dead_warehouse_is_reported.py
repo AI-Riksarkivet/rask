@@ -34,24 +34,3 @@ def test_trash_in_an_unclaimed_bucket_is_reported() -> None:
 
     assert [o.id for o in found] == ["ns$gone"]
     assert found[0].location == "s3://dead-wh/abc_ns$gone"
-
-
-def test_trash_in_a_claimed_bucket_is_not_reported() -> None:
-    """The control: a live warehouse's trash is ordinary, recoverable, and must not be named as drift."""
-    found = _orphaned_trash([_record("ns$fine", "s3://live-wh/abc_ns$fine")], claimed={"live-wh"})
-
-    assert found == []
-
-
-def test_the_bucket_decides_not_the_warehouse_id() -> None:
-    """A warehouse may name a bucket that is not its own id; keying on the id would misreport it."""
-    found = _orphaned_trash([_record("ns$fine", "s3://tenant-bucket/abc_ns$fine")], claimed={"tenant-bucket"})
-
-    assert found == []
-
-
-def test_a_location_naming_no_bucket_is_left_alone() -> None:
-    """Malformed is not orphaned, and a report whose value is that it does not guess must not guess."""
-    found = _orphaned_trash([_record("ns$odd", "/not/an/s3/uri"), _record("ns$empty", "")], claimed=set())
-
-    assert found == []

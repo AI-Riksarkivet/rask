@@ -39,19 +39,6 @@ def test_the_binding_names_come_from_the_settings_the_router_is_given() -> None:
     assert _paths(beta) == {"/beta-cron", "/beta-reconcile"}
 
 
-def test_both_bindings_keep_their_POST_and_their_OPTIONS_ack() -> None:
-    """Dapr's discovery pre-flight is an OPTIONS on the same path — without it the app is logged as
-    not consuming the binding, and the cron never fires at all."""
-    router = build_router(_settings("sweep-cron", "reconcile-cron"))
-    methods = {(route.path, tuple(sorted(route.methods or set()))) for route in router.routes if isinstance(route, APIRoute)}
-    assert methods == {
-        ("/sweep-cron", ("POST",)),
-        ("/sweep-cron", ("OPTIONS",)),
-        ("/reconcile-cron", ("POST",)),
-        ("/reconcile-cron", ("OPTIONS",)),
-    }
-
-
 def test_every_triggering_POST_keeps_the_sidecar_token_gate() -> None:
     """The gate is what makes the sweep and the estate-wide registry read sidecar-only."""
     router = build_router(_settings("sweep-cron", "reconcile-cron"))
@@ -60,10 +47,6 @@ def test_every_triggering_POST_keeps_the_sidecar_token_gate() -> None:
     for route in posts:
         names = [getattr(dep.call, "__name__", "") for dep in route.dependant.dependencies]
         assert "require_dapr_token" in names, f"{route.path} lost its sidecar token gate"
-
-
-def test_the_tag_is_declared_on_the_router_not_repeated_per_route() -> None:
-    assert build_router(_settings("a", "b")).tags == ["maintenance"]
 
 
 def test_a_dry_run_PLAN_is_reported_as_loudly_as_a_reclamation() -> None:

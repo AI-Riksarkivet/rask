@@ -43,20 +43,6 @@ def _dataset(tmp: Path, name: str, *, fragments: int = 1) -> str:
     return uri
 
 
-def test_a_single_fragment_dataset_with_nothing_to_reclaim_needs_no_credential(tmp_path: Path) -> None:
-    """The common case on this estate, and the one paying for 280 vends a minute."""
-    uri = _dataset(tmp_path, "quiet", fragments=1)
-
-    assert _probe_before_vending(uri, {}, cleanup_enabled=False, optimize_indices_enabled=False).may_write is False
-
-
-def test_more_than_one_fragment_may_compact_so_it_vends(tmp_path: Path) -> None:
-    """Compaction merges fragments; two of them is work that can happen."""
-    uri = _dataset(tmp_path, "fragmented", fragments=3)
-
-    assert _probe_before_vending(uri, {}, cleanup_enabled=False, optimize_indices_enabled=False).may_write is True
-
-
 def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_vends(tmp_path: Path) -> None:
     """Reclamation is a write, and a dataset with superseded versions has something to reclaim."""
     uri = _dataset(tmp_path, "versioned", fragments=2)

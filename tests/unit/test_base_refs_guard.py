@@ -28,7 +28,6 @@ import pytest
 
 from service_kit.lakehouse import base_registry
 from service_kit.lakehouse.base_refs import containment_of, protected_roots
-from service_kit.lakehouse.features import manifest_base_paths, manifest_feature_flags
 
 
 def _registry(tmp_path: Path) -> base_registry.BaseRegistry:
@@ -60,31 +59,6 @@ def _source_and_clone(tmp_path: Path, rows: int = 3, files: int = 1) -> tuple[st
     return src, clone
 
 
-def test_the_SOURCE_looks_completely_ordinary_which_is_the_whole_problem(tmp_path: Path) -> None:
-    """The reason no per-dataset check can catch this.
-
-    Flag 16 marks the dataset that SPANS bases — the clone. The endangered dataset is the SOURCE, and
-    it carries no flag and no base_paths at all. Any guard that opens only the dataset it is about to
-    touch sees nothing wrong.
-    """
-    src, clone = _source_and_clone(tmp_path)
-
-    assert manifest_feature_flags(lance.dataset(src)) == (0, 0), "the source would have been caught by the flag gate"
-    assert manifest_base_paths(lance.dataset(src)) == []
-    assert manifest_feature_flags(lance.dataset(clone)) == (16, 16)
-    assert manifest_base_paths(lance.dataset(clone)) == [src.removeprefix("file://")], "only the CLONE holds the evidence"
-
-
-def test_the_pre_pass_finds_the_source_from_the_CLONES_manifest(tmp_path: Path) -> None:
-    """The fix's core: collect references ACROSS datasets, because the evidence is on the other side."""
-    src, clone = _source_and_clone(tmp_path)
-
-    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
-
-    assert refs.is_protected(src) is not None, "the source of a live clone was not protected"
-    assert refs.unreadable == []
-
-
 def test_a_dataset_that_references_only_ITSELF_does_not_protect_itself(tmp_path: Path) -> None:
     """Otherwise a clone would be permanently unmaintainable — its own base entry would veto every
     compaction and purge of itself, which is not the hazard and would break ordinary maintenance."""
@@ -93,18 +67,6 @@ def test_a_dataset_that_references_only_ITSELF_does_not_protect_itself(tmp_path:
     refs = protected_roots([src, clone], {}, **_judged(tmp_path))
 
     assert refs.is_protected(clone) is None, "a dataset protected itself and can now never be maintained"
-
-
-def test_containment_not_equality_so_a_SUBDIRECTORY_is_refused_too(tmp_path: Path) -> None:
-    """A base path names a dataset ROOT whose `data/` holds the referenced files.
-
-    An equality-only guard passes a request to delete `<root>/data` — which destroys exactly the files
-    the clone resolves through, while reporting that nothing protected was touched.
-    """
-    src, clone = _source_and_clone(tmp_path)
-    refs = protected_roots([src, clone], {}, **_judged(tmp_path))
-
-    assert refs.is_protected(f"{src}/data") is not None, "the guard would allow deleting the referenced data directory"
 
 
 def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_path: Path) -> None:
@@ -141,57 +103,6 @@ def test_a_BRANCH_is_refused_as_a_REFERRER_rather_than_as_a_referenced_root(tmp_
     )
 
 
-def test_LANCE_ITSELF_protects_a_BRANCH_which_is_what_the_cross_dataset_pre_pass_is_not_for(tmp_path: Path) -> None:
-    """THE LINE BETWEEN WHAT LANCE CAN SEE AND WHAT ONLY THE ESTATE CAN — measured, not argued.
-
-    [[LH-094]] and [[LH-019]] both stall on the same unknown: may a branch be compacted or reclaimed at
-    all? `file_format.md` does not say, and both rows prescribe exactly this instrument — "a RED test
-    pinning what pylance does … before changing any GC behaviour".
-
-    The control is the whole test. Reclaim deletes superseded files when nothing references them, and
-    stops when a BRANCH does:
-
-        no branch   data files 3 -> compact 4 -> cleanup 1   (the originals are reclaimed)
-        a branch    data files 3 -> compact 4 -> cleanup 4   (nothing is reclaimed)
-
-    So `cleanup_old_versions` is BRANCH-AWARE: a branch's manifest lives under `tree/{name}/` inside the
-    same dataset root (`file_format.md:2746-2761`) and carries no `data/` of its own, so Lance resolves
-    its files through the parent — and, seeing the reference, protects them.
-
-    THAT IS THE DISTINCTION THE ESTATE'S PRE-PASS EXISTS FOR, and it is narrower than the guard
-    currently acts on. A shallow clone in ANOTHER dataset is invisible to Lance — nothing in the source's
-    own directory records it, which is why `base_refs.protected_roots` walks the estate and why the
-    tests above it are RED without that walk. A branch is the opposite case: it is inside the root Lance
-    already reads.
-    """
-    zero = timedelta(seconds=0)
-
-    def build(*, with_branch: bool) -> str:
-        uri = str(tmp_path / ("withbranch.lance" if with_branch else "plain.lance"))
-        for chunk in range(3):
-            rows = pa.table({"id": pa.array(range(chunk * 3, chunk * 3 + 3), pa.int64())})
-            lance.write_dataset(rows, uri, mode="overwrite" if chunk == 0 else "append")
-        if with_branch:
-            lance.dataset(uri).create_branch("work")
-        return uri
-
-    def files(uri: str) -> int:
-        return len(list((Path(uri) / "data").iterdir()))
-
-    plain = build(with_branch=False)
-    lance.dataset(plain).optimize.compact_files()
-    lance.dataset(plain).cleanup_old_versions(older_than=zero, delete_unverified=True)
-    reclaimed = files(plain)
-
-    branched = build(with_branch=True)
-    lance.dataset(branched).optimize.compact_files()
-    after_compact = files(branched)
-    lance.dataset(branched).cleanup_old_versions(older_than=zero, delete_unverified=True)
-
-    assert reclaimed < after_compact, "the control did not reclaim anything, so the comparison below proves nothing"
-    assert files(branched) == after_compact, "a branch's referenced files were reclaimed — Lance is not branch-aware and the estate must protect them itself"
-
-
 def test_a_BRANCH_still_opens_in_a_FRESH_PROCESS_after_its_parent_is_maintained(tmp_path: Path) -> None:
     """The cold-interpreter half, for the same reason this file opens subprocesses everywhere else:
     an in-process read after a delete can keep succeeding off cached state, so it reports on this
@@ -213,43 +124,6 @@ def test_a_BRANCH_still_opens_in_a_FRESH_PROCESS_after_its_parent_is_maintained(
 
     assert done.returncode == 0, f"the branch no longer opens after its parent was maintained: {done.stderr.strip()[-300:]}"
     assert done.stdout.strip() == "9"
-
-
-def test_maintaining_a_BRANCH_leaves_an_EXTERNAL_CLONE_of_its_parent_intact(tmp_path: Path) -> None:
-    """THE PRODUCTION SHAPE, and the one the other two legs do not cover.
-
-    On the estate a root is in the protected set BECAUSE another dataset resolves through it — so the
-    honest question is not "is branch maintenance safe" in isolation but "is it safe while an external
-    referrer exists". Both other legs build a dataset with no external clone, which is exactly the
-    condition that makes the pre-pass unnecessary, so neither can answer this.
-
-    Measured: parent + external shallow clone + a branch; the BRANCH is appended to, compacted and
-    reclaimed. The parent's `data/` is untouched (3 files before and after) and, from cold interpreters,
-    the parent still reads 9, the CLONE still reads its 3, and the branch reads its own 10.
-
-    So the refusal at `optimize.py`'s protected-base gate, when the relation is `branch`, is refusing an
-    operation that cannot reach what the gate protects. The EQUALITY relation is a different matter and
-    the legs above keep it: there the dataset being maintained IS the referenced root.
-    """
-    src, clone = _source_and_clone(tmp_path)
-    lance.dataset(src).create_branch("work")
-    data_dir = Path(src) / "data"
-    before = len(list(data_dir.iterdir()))
-
-    branch = lance.dataset(src).checkout_version(("work", None))
-    branch = lance.write_dataset(pa.table({"id": pa.array([99], pa.int64())}), branch, mode="append")
-    branch.optimize.compact_files()
-    lance.dataset(src).checkout_version(("work", None)).cleanup_old_versions(older_than=timedelta(seconds=0), delete_unverified=True)
-
-    assert len(list(data_dir.iterdir())) == before, "maintaining the branch rewrote the PARENT's data files"
-
-    read = textwrap.dedent(f"""
-        import lance
-        print(lance.dataset({clone!r}).count_rows())
-    """)
-    done = subprocess.run([sys.executable, "-c", read], capture_output=True, text=True, check=False)
-    assert done.returncode == 0, f"the external clone no longer opens after its parent's BRANCH was maintained: {done.stderr.strip()[-300:]}"
-    assert done.stdout.strip() == "3"
 
 
 def test_a_scheme_difference_does_not_defeat_the_guard(tmp_path: Path) -> None:

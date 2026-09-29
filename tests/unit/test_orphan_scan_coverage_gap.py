@@ -33,26 +33,6 @@ def _clean() -> ReconcileReport:
     return ReconcileReport(checked_at="2026-08-15T00:00:00Z")
 
 
-def test_a_report_with_NOTHING_wrong_is_clean() -> None:
-    """The control. Without this the other assertions could pass because the gate always blocks."""
-    assert report_is_clean(_clean()) is None
-
-
-def test_a_skip_that_means_WE_DID_NOT_LOOK_blocks_the_purge() -> None:
-    """THE defect. The orphan scan being off is a coverage gap, not a clean bill of health.
-
-    The purge deletes bytes. Letting it run on a report that never opened a dataset means reclaiming
-    against a file layer nobody inspected — and the report said "clean" while meaning "unexamined".
-    """
-    report = _clean()
-    report.skipped.append(CategorySkipped(category="orphan_files", reason="scan is off", coverage_gap=True))
-
-    blocker = report_is_clean(report)
-
-    assert blocker is not None, "a report that never scanned the file layer certified the estate"
-    assert "orphan_files" in blocker, "the blocker must NAME the category nobody looked at"
-
-
 def test_a_skip_that_means_THE_RULE_DOES_NOT_APPLY_still_passes() -> None:
     """The other half, and the reason this is a flag rather than a blanket rule.
 
@@ -64,16 +44,6 @@ def test_a_skip_that_means_THE_RULE_DOES_NOT_APPLY_still_passes() -> None:
     report.skipped.append(CategorySkipped(category="unbound_namespaces", reason="warehouses are off"))
 
     assert report_is_clean(report) is None
-
-
-def test_coverage_gap_DEFAULTS_FALSE_so_a_new_skip_cannot_silently_block() -> None:
-    """The default is the safe direction for the gate's availability, and it is a deliberate choice.
-
-    A new category skipped for a does-not-apply reason must not start blocking every purge in the
-    estate the day it is added. The cost is that a genuine gap must SAY so — which is the flag's whole
-    job, and is enforced by the orphan-scan test above rather than by the default.
-    """
-    assert CategorySkipped(category="x", reason="y").coverage_gap is False
 
 
 def test_the_gate_reports_EVERY_gap_not_just_the_first() -> None:

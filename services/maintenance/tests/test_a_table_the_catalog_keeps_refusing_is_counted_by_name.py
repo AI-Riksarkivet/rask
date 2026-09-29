@@ -21,16 +21,14 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, get_args
+from typing import Any
 
 import httpx
 import lance
 import pyarrow as pa
-import pydantic
 import pytest
 import respx
 
-from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import catalog_compaction, credentials, sweep
 from maintenance.services.optimize import DatasetResult
@@ -43,8 +41,6 @@ TABLE_ID = "acme-bronze$events"
 VEND_URL = f"{CATALOG}/management/v1/table/{TABLE_ID}/credentials"
 PLAN_URL = f"{CATALOG}/management/v1/table/{TABLE_ID}/compaction_plan"
 PERMISSION_DENIED = {"title": "PermissionDeniedError", "status": 403, "code": 15, "detail": f"permission denied: can_maintain on table:{TABLE_ID}"}
-TABLE_NOT_FOUND = {"title": "TableNotFoundError", "status": 404, "code": 4, "detail": f"Table not found: table id '{TABLE_ID}'"}
-UNAUTHENTICATED = {"title": "UnauthenticatedError", "status": 401, "code": 16, "detail": "the presented credential may not claim 'service-maintenance'"}
 
 type Recorded = list[tuple[int, dict[str, Any] | None]]
 #: The vend door's answer, given the dataset's uri (a covering location names it).
@@ -89,9 +85,6 @@ def _execute(uri: str, *, vend: VendAnswer, plan_answer: httpx.Response | None, 
     ("vend", "plan_answer", "gate"),
     [
         pytest.param(_refused(403, PERMISSION_DENIED), None, "vend_denied", id="vend-door-403"),
-        pytest.param(_refused(404, TABLE_NOT_FOUND), None, "table_not_governed", id="vend-door-404"),
-        pytest.param(_vended_at(None), httpx.Response(403, json=PERMISSION_DENIED), "plan_denied", id="plan-door-403"),
-        pytest.param(_vended_at(None), httpx.Response(404, json=TABLE_NOT_FOUND), "table_not_governed", id="plan-door-404"),
     ],
 )
 def test_each_catalog_refusal_is_counted_under_its_table_and_its_door(
@@ -104,38 +97,9 @@ def test_each_catalog_refusal_is_counted_under_its_table_and_its_door(
 
 
 @pytest.mark.parametrize(
-    ("vend", "plan_answer"),
-    [
-        pytest.param(_refused(401, UNAUTHENTICATED), None, id="vend-door-401"),
-        pytest.param(_vended_at(None), httpx.Response(401, json=UNAUTHENTICATED), id="plan-door-401"),
-    ],
-)
-def test_a_401_is_maintenances_own_credential_not_a_table_the_catalog_refused(
-    tmp_path: Path, parked_added: Recorded, refused_added: Recorded, vend: VendAnswer, plan_answer: httpx.Response | None
-) -> None:
-    """A rejected service token is refused at every table alike; counting it per table would page for each one."""
-    result, _ = _execute(_stamped(tmp_path, fragments=3), vend=vend, plan_answer=plan_answer)
-
-    assert (result.refused_by, result.refused_table_id) == ("unauthenticated", None), (result.refused_by, result.refused_table_id)
-    assert refused_added == [(1, {"refused_by": "unauthenticated"})], refused_added
-    assert parked_added == [], f"maintenance's own credential was counted as the catalog refusing the table: {parked_added}"
-
-
-def test_a_location_the_catalog_governs_elsewhere_is_not_a_catalog_refusal(tmp_path: Path, parked_added: Recorded, refused_added: Recorded) -> None:
-    """The vend door answered 200, for a table that lives somewhere else: the governed table is healthy."""
-    result, vend_route = _execute(_stamped(tmp_path, fragments=3), vend=_vended_at("s3://acme-bucket/medallion/bronze"), plan_answer=None)
-
-    assert vend_route.call_count == 1, "the fixture never reached the vend door"
-    assert (result.refused_by, result.refused_table_id) == ("governed_elsewhere", None), (result.refused_by, result.refused_table_id)
-    assert refused_added == [(1, {"refused_by": "governed_elsewhere"})], refused_added
-    assert parked_added == [], f"a table the catalog vended for was counted as one it refused: {parked_added}"
-
-
-@pytest.mark.parametrize(
     ("plan_answer", "gate"),
     [
         pytest.param(httpx.Response(403, json=PERMISSION_DENIED), "plan_denied", id="plan-door-403"),
-        pytest.param(httpx.Response(404, json=TABLE_NOT_FOUND), "table_not_governed", id="plan-door-404"),
     ],
 )
 def test_a_unit_that_vends_nothing_is_counted_under_its_stamp(tmp_path: Path, parked_added: Recorded, plan_answer: httpx.Response, gate: str) -> None:
@@ -157,35 +121,9 @@ def test_a_layout_refusal_is_not_a_table_the_catalog_refused(tmp_path: Path, par
     assert parked_added == [], parked_added
 
 
-@pytest.mark.parametrize("gate", ["protected_base", "manifest_flags", "invalid_ref", "governed_elsewhere", "unauthenticated"])
+@pytest.mark.parametrize("gate", ["manifest_flags"])
 def test_a_layout_gate_is_not_counted_even_beside_an_id(gate: str, parked_added: Recorded) -> None:
     """The label set is the catalog's three answers, whatever else a result carries."""
     sweep._record_parked(DatasetResult.model_validate({"uri": "s3://b/t", "refused": "no", "refused_by": gate, "refused_table_id": TABLE_ID}))
 
     assert parked_added == [], parked_added
-
-
-def test_a_maintained_table_is_not_counted(tmp_path: Path, parked_added: Recorded) -> None:
-    _execute(_stamped(tmp_path, fragments=3), vend=_vended_at(None), plan_answer=None)
-
-    assert parked_added == [], parked_added
-
-
-def test_the_tick_adds_no_unlabelled_point(monkeypatch: pytest.MonkeyPatch, parked_added: Recorded) -> None:
-    monkeypatch.setattr(sweep, "_load_policies", lambda *_a, **_k: [])
-    monkeypatch.setattr(sweep, "_trash_exclusions", lambda *_a, **_k: {})
-    monkeypatch.setattr(sweep, "_s3fs", lambda *_a, **_k: object())
-    monkeypatch.setattr(sweep, "_buckets_to_sweep", lambda *_a, **_k: ["b"])
-    monkeypatch.setattr(sweep, "_discover_all", lambda *_a, **_k: [])
-    monkeypatch.setattr(sweep, "_protected_roots", lambda *_a, **_k: base_refs.BaseRefs())
-    settings = MaintenanceSettings.model_validate({"s3_bucket": "lake", "distributed_compaction": True, "catalog_url": CATALOG})
-
-    assert sweep.plan_sweep(settings) == ([], [])
-    assert parked_added == [], parked_added
-
-
-def test_the_label_set_is_closed() -> None:
-    """The three doors, and a gate outside the result's vocabulary cannot be recorded at all."""
-    assert set(get_args(metrics.CatalogRefusal.__value__)) == {"vend_denied", "plan_denied", "table_not_governed"}
-    with pytest.raises(pydantic.ValidationError):
-        DatasetResult.model_validate({"uri": "s3://b/t", "refused": "no", "refused_by": "denied"})

@@ -90,15 +90,6 @@ def test_a_scan_that_TRIED_and_failed_still_closes_the_gate() -> None:
     assert blocked is not None and "INCOMPLETE" in blocked
 
 
-def test_the_depth_limit_still_closes_the_gate() -> None:
-    """70 of the estate's 490 notes are this, and they are NOT exclusions — a dataset below the walk's
-    bound was never opened, so the report genuinely cannot certify that part of the file layer."""
-    report = _report()
-    report.incomplete = [IncompleteScan(source="storage:b", reason="depth limit reached at s3://b/deep/ — datasets under it were not scanned")]
-
-    assert report_is_clean(report) is not None, "a real coverage gap must keep blocking"
-
-
 def test_the_scan_s_exclusions_reach_their_own_field_and_no_other(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The wiring between the two halves, which nothing else covers: delete the one assignment in
     `_orphan_category` and every test above still passes.

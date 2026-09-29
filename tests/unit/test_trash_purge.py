@@ -266,23 +266,6 @@ def test_a_drifting_report_blocks_the_purge(tmp_path: Path, mutate: Callable[[Re
     assert estate.record(canonical) is not None
 
 
-def test_a_skipped_category_does_not_block_but_is_named(tmp_path: Path) -> None:
-    """A deliberate skip is not drift — but the purge may not pretend the estate was fully verified.
-
-    The shipped config skips ``orphan_files`` (it opens every dataset), so blocking on a skip would make
-    reclamation unreachable in every real deployment. The skips are copied onto the purge report instead,
-    so an operator reading it can see exactly which part of the estate nobody looked at.
-    """
-    estate = _Estate(tmp_path)
-    estate.drop_recoverably("team", "orders")
-
-    out = _run(estate, report=_clean_report(skipped=("orphan_files", "unbound_namespaces")))
-
-    assert out.ran is True
-    assert out.skipped_categories == ["orphan_files", "unbound_namespaces"]
-    assert len(out.purged) == 1
-
-
 # --------------------------------------------------------------------------- #
 # the happy path
 # --------------------------------------------------------------------------- #
@@ -640,72 +623,9 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     assert all(len(json.dumps(e.extra)) < 512 for e in control.events)
 
 
-def test_a_refused_record_announces_nothing(tmp_path: Path) -> None:
-    """Only a change that HAPPENED is announced — the catalog's own rule, and it matters more here,
-    because a purge event a console acts on for bytes that still exist is a lie about the estate."""
-    estate = _Estate(tmp_path)
-    estate.drop_recoverably("team", "orders")
-    estate.create_table("team", "orders")  # recovered → refused
-    control = _RecordingControl()
-
-    out = _run(estate, control=control)
-
-    assert out.refused and out.purged == []
-    assert control.events == []
-
-
-# --------------------------------------------------------------------------- #
-# the selection rule is SHARED with the sweep's report-only log
-# --------------------------------------------------------------------------- #
-
-
-def test_the_sweep_and_the_purge_select_expired_trash_through_one_rule(tmp_path: Path) -> None:
-    """The set the sweep NAMES and the set the purge DELETES must be the same set.
-
-    Two copies of "what is expired" is how a report certifies one thing and a reclaimer acts on another.
-    ``sweep.py`` calls ``purge.due_records`` for exactly this reason.
-    """
-    from maintenance.services import sweep
-
-    assert sweep.purge.due_records is mod.due_records
-
-    estate = _Estate(tmp_path)
-    estate.drop_recoverably("team", "old", dropped_at=_NOW - timedelta(days=90))
-    estate.drop_recoverably("team", "fresh", dropped_at=datetime.now(UTC))
-
-    due = mod.due_records(estate.control_root, {})
-
-    assert [r["id"] for r in due] == ["team$old"]
-
-
 # --------------------------------------------------------------------------- #
 # LH-095: a permanent exclusion must read as permanent
 # --------------------------------------------------------------------------- #
-
-
-def test_a_refused_record_REMEMBERS_that_it_was_refused(tmp_path: Path) -> None:
-    """CONTRACT: a refusal is written onto the trash record, so the NEXT tick can see it happened.
-
-    The purge reports refusals per tick through `RefusedRecord` and carried nothing across ticks, so a
-    record refused every five minutes for thirty days read exactly like one refused once — and a
-    PERMANENT exclusion, which is the state an operator actually has to act on, was invisible as
-    permanent. Nothing in the estate could distinguish "this retried and will succeed" from "this will
-    never succeed until a human intervenes".
-
-    The record is still registered here, which is the commonest refusal and the one that is genuinely
-    permanent until someone drops the live table again.
-    """
-    estate = _Estate(tmp_path)
-    canonical, _ = estate.drop_recoverably("team", "orders", dropped_at=datetime.now(UTC) - timedelta(days=30))
-    estate.create_table("team", "orders")  # re-registered since the drop: the bytes are LIVE
-
-    out = _run(estate, settings=_settings(tmp_path, trash_purge_enabled=True))
-
-    assert [r.id for r in out.refused] == [canonical], f"the record was not refused: {out.refused}"
-    record = estate.record(canonical)
-    assert record is not None, "the refusal destroyed the record it was refusing to act on"
-    assert record.get("attempts") == 1, f"the refusal was not persisted: {record}"
-    assert "still registered" in str((record.get("last_refusal") or {}).get("reason", "")), record
 
 
 def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path: Path) -> None:

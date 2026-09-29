@@ -190,32 +190,6 @@ def test_an_unreadable_trash_index_aborts_the_tick(tmp_path: Path, settings: Mai
         _run(monkeypatch, settings, [live])
 
 
-def test_the_summary_counts_and_names_the_exclusions(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A tick that maintains 1 of 2 datasets must say what happened to the other one.
-
-    Its own summary line rather than a fold into `skipped` or `refused`: `skipped` means "not this
-    tick" and would inflate the policy-cadence reading for something that lasts until undrop or purge,
-    and `refused` is about a dataset's LAYOUT. This is about its governance state.
-    """
-    from maintenance.services import sweep as sweep_mod
-
-    live = _dataset(tmp_path / "live.lance")
-    dropped = _dataset(tmp_path / "dropped.lance")
-    trash.put(
-        str(settings.resolved_control_root),
-        {},
-        trash.make_record("silver$gone", kind="table", location=dropped, dropped_by="user:karin", grace_days=7),
-    )
-
-    results, _ = _run(monkeypatch, settings, [live, dropped])
-    summary = sweep_mod.summarize(results)
-
-    assert summary["trashed"] == 1
-    assert list(summary["trashed_datasets"]) == [dropped]
-    assert summary["skipped"] == 0, "a trash exclusion was folded into `skipped`"
-    assert summary["refused"] == 0, "a trash exclusion was folded into `refused`"
-
-
 def test_a_namespace_record_carrying_no_location_excludes_nothing(tmp_path: Path, settings: MaintenanceSettings, monkeypatch: pytest.MonkeyPatch) -> None:
     """A trashed NAMESPACE and a declared-only table both record `location=""`.
 

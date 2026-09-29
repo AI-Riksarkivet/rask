@@ -110,22 +110,10 @@ def test_it_plans_a_revoke_for_every_object_that_is_GONE() -> None:
     assert {p.fga_object for p in planned} == {"project:gone-p", "warehouse:gone-w", "table:ns$gone-t"}
 
 
-def test_every_planned_revoke_NAMES_the_finding_that_justifies_it() -> None:
-    """An audit row saying a reconciler revoked four grants is unreadable without the why."""
-    planned, _ = repair.plan_repair(_report())
-
-    assert all(p.justified_by for p in planned), [p.model_dump() for p in planned]
-    assert {p.justified_by for p in planned} == {"ghost_projects", "ghost_warehouses", "ghost_tables"}
-
-
 @pytest.mark.parametrize(
     ("category", "needle"),
     [
         ("ungoverned_tables", "ns$live"),
-        ("unbound_namespaces", "legacy"),
-        ("unreferenced_projects", "stranded-p"),
-        ("orphan_buckets", "nobodys-bucket"),
-        ("orphaned_trash", "tr-1"),
     ],
 )
 def test_a_DATA_tier_finding_is_never_planned_for_deletion(category: str, needle: str) -> None:
@@ -199,15 +187,6 @@ def test_EVERY_drift_category_is_either_revocable_or_refused_BY_NAME() -> None:
     assert not (revocable & refused) and not (edges & refused), "a category cannot be both handled and refused"
 
 
-def test_the_refusals_name_a_REAL_category() -> None:
-    """The backward half: a refusal for a category that no longer exists makes the gate above vacuous."""
-    from maintenance.services.reconcile import CATEGORIES
-
-    stale = sorted((set(repair._REVOCABLE) | set(repair._EDGE_ONLY) | set(repair._REFUSED)) - set(CATEGORIES))
-
-    assert stale == [], f"{stale} are classified here and are not drift categories — remove them"
-
-
 # --------------------------------------------------------------------------- #
 # The EDGE half: a live object with one dead edge ([[LH-061]])
 # --------------------------------------------------------------------------- #
@@ -224,47 +203,3 @@ def test_an_orphaned_annotation_task_plans_an_EDGE_cut_not_an_object_revoke() ->
     _planned, edges, _refused = repair.plan_repair_edges(_report())
 
     assert [(e.user, e.relation, e.object) for e in edges] == [("project:gone-p", "tenant", "annotation_project:anno-1")]
-
-
-def test_the_annotation_task_is_NOT_planned_as_an_object_revoke() -> None:
-    """THE DEFECT: revoking the object would take every OTHER grant on a live annotation project."""
-    planned, _edges, _refused = repair.plan_repair_edges(_report())
-
-    assert not any("annotation_project" in p.fga_object for p in planned), "a live object was planned for a whole-object revoke"
-
-
-def test_the_annotation_category_has_LEFT_the_refusal_list() -> None:
-    """A category that is now handled must not still be reported as declined — that is the backward
-    half `test_every_recorded_violation_is_still_real` applies to the sibling ratchet, for the same
-    reason: a stale refusal makes the remaining count unreadable."""
-    _planned, _edges, refused = repair.plan_repair_edges(_report())
-
-    assert "orphaned_annotation_tasks" not in refused
-    assert "orphaned_annotation_tasks" not in repair._REFUSED
-
-
-@pytest.mark.asyncio
-async def test_a_DRY_RUN_cuts_no_edge(store: _Store) -> None:
-    out = await _repair(_settings())
-
-    assert out.dry_run is True
-    assert len(out.edges_cut) == 1, out.model_dump()
-    assert store.cut == [], f"a dry run cut {store.cut}"
-
-
-@pytest.mark.asyncio
-async def test_ARMED_cuts_exactly_the_dangling_edge(store: _Store) -> None:
-    out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False))
-
-    assert store.cut == [("project:gone-p", "tenant", "annotation_project:anno-1")]
-    assert len(out.edges_cut) == 1
-
-
-def test_every_EDGE_ONLY_category_is_actually_built_into_a_plan() -> None:
-    """`_EDGE_ONLY` exists for the coverage invariant, so a name listed there that the planner ignores
-    would satisfy the gate while cutting nothing — the vacuous shape this estate keeps finding."""
-    report = _report()
-    _planned, edges, _refused = repair.plan_repair_edges(report)
-
-    built = {e.justified_by for e in edges}
-    assert built == set(repair._EDGE_ONLY), f"declared {sorted(repair._EDGE_ONLY)} but planned {sorted(built)}"

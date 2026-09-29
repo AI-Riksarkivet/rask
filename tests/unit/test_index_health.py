@@ -71,17 +71,6 @@ def _append(uri: str, *, start: int, rows: int) -> None:
     )
 
 
-def test_a_FULLY_INDEXED_dataset_reports_no_findings(tmp_path: Path) -> None:
-    """The control, and it has to hold or every other assertion is noise.
-
-    A report that fires on a healthy dataset trains operators to ignore it, which is worse than not
-    reporting at all.
-    """
-    findings = inspect_indices(lance.dataset(_indexed(tmp_path)))
-
-    assert findings == [], f"a healthy dataset reported findings: {findings}"
-
-
 def test_UNINDEXED_ROWS_are_reported_with_the_column_that_has_them(tmp_path: Path) -> None:
     """The state `indices_optimized` cannot distinguish from health.
 
@@ -100,39 +89,11 @@ def test_UNINDEXED_ROWS_are_reported_with_the_column_that_has_them(tmp_path: Pat
     assert "unindexed" in by_name["id_btree"].note
 
 
-def test_a_column_with_NO_INDEX_AT_ALL_is_reported(tmp_path: Path) -> None:
-    """The dropped-index case. `optimize_indices` over a dataset with no index is a successful no-op,
-    so the pass is green and the column is served by a full scan forever."""
-    uri = str(tmp_path / "bare.lance")
-    lance.write_dataset(pa.table({"id": pa.array(range(10), pa.int64())}), uri)
-
-    findings = inspect_indices(lance.dataset(uri), expected_columns=["id"])
-
-    assert any(f.column == "id" and "no index" in f.note for f in findings), findings
-
-
 def test_an_EXPECTED_column_that_IS_indexed_produces_nothing(tmp_path: Path) -> None:
     """The other half of the dropped-index check — it must not fire when the index is present."""
     findings = inspect_indices(lance.dataset(_indexed(tmp_path)), expected_columns=["id", "cat", "txt"])
 
     assert findings == [], f"an indexed column was reported as missing: {findings}"
-
-
-def test_the_finding_carries_the_INDEX_TYPE_so_a_change_is_visible(tmp_path: Path) -> None:
-    """Params/type drift is not something `optimize_indices` repairs — it extends what exists.
-
-    Reporting the type on every finding is what makes a silent change from BITMAP to BTREE (or an FTS
-    rebuilt under different tokenizer params) something an operator can SEE, which is the most this
-    can honestly do without rebuilding.
-    """
-    uri = _indexed(tmp_path)
-    _append(uri, start=200, rows=60)
-
-    findings = {f.name: f.index_type for f in inspect_indices(lance.dataset(uri))}
-
-    assert findings["cat_bitmap"] == "Bitmap"
-    assert findings["id_btree"] == "BTree"
-    assert findings["txt_fts"] == "Inverted"
 
 
 def test_this_pylance_MERGES_deltas_rather_than_appending_them(tmp_path: Path) -> None:

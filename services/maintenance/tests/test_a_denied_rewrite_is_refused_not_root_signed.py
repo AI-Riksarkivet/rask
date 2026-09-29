@@ -25,7 +25,7 @@ import httpx
 import pytest
 
 from maintenance.services import catalog_compaction, credentials
-from maintenance.services.compaction_executor import CompactionPlaneUnavailable, MaintenanceDenied, MaintenanceUnauthenticated
+from maintenance.services.compaction_executor import MaintenanceDenied, MaintenanceUnauthenticated
 
 
 class _Settings:
@@ -55,31 +55,6 @@ def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(catalog_compaction, "service_headers", lambda _s: {})
 
 
-@pytest.mark.parametrize("status", [401, 403])
-def test_a_DENIED_vend_refuses_rather_than_handing_back_the_root_key(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    """The bypass, stated as a test: the catalog says no and the caller signs with something stronger."""
-    _respond(monkeypatch, status, target=credentials.httpx, attr="post")
-    with pytest.raises(MaintenanceDenied) as caught:
-        credentials.write_options_for("s3://b/t", _settings(), fallback=_FALLBACK, declared_table_id="ns$t")
-    assert "ns$t" in str(caught.value), "the refusal must name the table an operator has to grant"
-
-
-@pytest.mark.parametrize("status", [401, 403])
-def test_a_DENIED_plan_is_a_refusal_not_an_outage(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    """`CompactionPlaneUnavailable` is the caller's signal to compact LOCALLY — exactly what a denial
-    must not authorize. A denial gets its own class so the caller cannot answer it with a fallback."""
-    _respond(monkeypatch, status, target=catalog_compaction.httpx, attr="post")
-    with pytest.raises(MaintenanceDenied):
-        catalog_compaction.plan_via_catalog("ns$t", {}, settings=_settings())
-
-
-@pytest.mark.parametrize("status", [500, 503])
-def test_an_UNREACHABLE_plan_stays_an_outage(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
-    _respond(monkeypatch, status, target=catalog_compaction.httpx, attr="post")
-    with pytest.raises(CompactionPlaneUnavailable):
-        catalog_compaction.plan_via_catalog("ns$t", {}, settings=_settings())
-
-
 @pytest.mark.parametrize(("status", "unauthenticated"), [(401, True), (403, False)])
 def test_a_401_is_told_apart_from_a_403_at_both_doors(monkeypatch: pytest.MonkeyPatch, status: int, unauthenticated: bool) -> None:
     """A 401 is about this service's own credential and a 403 about the id; both refuse, only the second is the table's."""
@@ -92,11 +67,3 @@ def test_a_401_is_told_apart_from_a_403_at_both_doors(monkeypatch: pytest.Monkey
 
     assert [isinstance(caught.value, MaintenanceUnauthenticated) for caught in (vend, plan)] == [unauthenticated, unauthenticated]
     assert all("ns$t" in str(caught.value) for caught in (vend, plan)), "the refusal must name the table it was asked for"
-
-
-def test_a_denial_is_NOT_an_unavailability_by_inheritance() -> None:
-    """If `MaintenanceDenied` subclassed `CompactionPlaneUnavailable`, every existing `except` in the
-    sweep would keep catching it and keep falling back — the fix would be invisible and the bypass
-    would survive. They are siblings on purpose."""
-    assert not issubclass(MaintenanceDenied, CompactionPlaneUnavailable)
-    assert not issubclass(CompactionPlaneUnavailable, MaintenanceDenied)

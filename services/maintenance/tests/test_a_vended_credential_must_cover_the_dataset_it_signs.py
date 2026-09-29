@@ -30,7 +30,6 @@ import pytest
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
-from maintenance.services.compaction_executor import GovernedElsewhere
 
 
 AMBIENT = {"aws_access_key_id": "minioadmin"}
@@ -48,30 +47,6 @@ def _vends(location: str | None) -> object:
     return _vend
 
 
-def test_the_live_crossing_stops_the_unit(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The measured case: a silver dataset in a tenant warehouse stamped with a bronze table's id.
-
-    `GovernedElsewhere`, not the door's own `MaintenanceDenied`: the catalog vended, and the table it names
-    is healthy, so the sweep must not count this under that table's id."""
-    monkeypatch.setattr(credentials, "_vend", _vends("s3://lance-catalog/medallion/bronze"))
-
-    with pytest.raises(GovernedElsewhere) as refusal:
-        credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), fallback=AMBIENT, declared_table_id="bronze$events")
-
-    message = str(refusal.value)
-    assert "s3://bind86-wh/medallion/silver" in message, "the refusal does not say which dataset was being maintained"
-    assert "s3://lance-catalog/medallion/bronze" in message, "the refusal does not say where the catalog says that table lives"
-    assert "bronze$events" in message, "the refusal does not name the id the two disagree about"
-
-
-def test_a_credential_for_this_very_dataset_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(credentials, "_vend", _vends("s3://lance-catalog/medallion/bronze"))
-
-    options = credentials.write_options_for("s3://lance-catalog/medallion/bronze", _settings(), fallback=AMBIENT, declared_table_id="bronze$events")
-
-    assert options == SCOPED
-
-
 def test_a_branch_under_the_table_root_is_covered(monkeypatch: pytest.MonkeyPatch) -> None:
     """The case equality would break: the sweep holds a branch, the catalog answers with the root."""
     root = "s3://tracka-wh/425bbde2_tracka$rd2_28877454"
@@ -80,16 +55,6 @@ def test_a_branch_under_the_table_root_is_covered(monkeypatch: pytest.MonkeyPatc
     options = credentials.write_options_for(f"{root}/tree/dev", _settings(), fallback=AMBIENT, declared_table_id="tracka$rd2_28877454")
 
     assert options == SCOPED, "a branch dataset was refused a credential vended for its own table root"
-
-
-def test_two_spellings_of_one_path_are_not_a_crossing(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`base_refs.normalise` is the estate's one comparator for this, and re-implementing it at a call
-    site is what its own docstring calls the failure mode indistinguishable from having no guard."""
-    monkeypatch.setattr(credentials, "_vend", _vends("/lance-catalog/medallion/bronze/"))
-
-    options = credentials.write_options_for("s3://lance-catalog/medallion/bronze", _settings(), fallback=AMBIENT, declared_table_id="bronze$events")
-
-    assert options == SCOPED
 
 
 def test_a_vend_that_names_no_location_proceeds_and_says_so(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

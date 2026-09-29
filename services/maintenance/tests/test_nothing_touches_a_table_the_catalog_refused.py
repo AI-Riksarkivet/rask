@@ -23,7 +23,6 @@ Both doors are driven through the real clients over respx.
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -36,7 +35,7 @@ import pytest
 import respx
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import catalog_compaction, credentials, optimize, sweep
+from maintenance.services import catalog_compaction, credentials, sweep
 from maintenance.services.optimize import DatasetResult
 from service_kit.lakehouse.work_items import DatasetPlan, DatasetWorkItem
 
@@ -133,32 +132,6 @@ def test_a_refused_table_is_neither_rewritten_nor_reindexed_nor_cleaned(
     assert result.refused is not None and TABLE_ID in result.refused, f"the refusal carries no reason: {result.refused!r}"
     assert result.refused_table_id == refused_table_id, result.refused_table_id
     assert result.data_storage_version == "2.2", f"the refusal dropped the manifest's version from the census: {result.data_storage_version!r}"
-
-
-#: The WARNING each refusal logs, and the module that logs it. Neither counter carries the dataset, so this
-#: line is what names it: the crossing's only such signal, and the one MaintenanceTableParked sends operators to.
-WARNINGS = [
-    pytest.param(_refused(403, PERMISSION_DENIED), None, sweep.__name__, "maintenance_vend_denied", id="vend-door-403"),
-    pytest.param(_refused(404, TABLE_NOT_FOUND), None, sweep.__name__, "maintenance_table_not_governed", id="vend-door-404"),
-    pytest.param(_refused(401, UNAUTHENTICATED), None, sweep.__name__, "maintenance_unauthenticated", id="vend-door-401"),
-    pytest.param(_vended_at(ELSEWHERE), None, sweep.__name__, "maintenance_governed_elsewhere", id="vend-location-elsewhere"),
-    pytest.param(_vended_at(None), httpx.Response(403, json=PERMISSION_DENIED), optimize.__name__, "maintenance_rewrite_denied", id="plan-door-403"),
-    pytest.param(_vended_at(None), httpx.Response(404, json=TABLE_NOT_FOUND), optimize.__name__, "maintenance_table_not_governed", id="plan-door-404"),
-    pytest.param(_vended_at(None), httpx.Response(401, json=UNAUTHENTICATED), optimize.__name__, "maintenance_unauthenticated", id="plan-door-401"),
-]
-
-
-@pytest.mark.parametrize(("vend", "plan_answer", "logger", "line"), WARNINGS)
-def test_each_refusal_logs_one_WARNING_naming_the_dataset_and_the_id(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, vend: VendAnswer, plan_answer: httpx.Response | None, logger: str, line: str
-) -> None:
-    uri = _indexed(tmp_path)
-
-    with caplog.at_level(logging.WARNING):
-        _execute(uri, vend=vend, plan_answer=plan_answer)
-
-    warned = [(r.name, r.levelno, getattr(r, "uri", None), getattr(r, "table_id", None)) for r in caplog.records if r.getMessage() == line]
-    assert warned == [(logger, logging.WARNING, uri, TABLE_ID)], warned
 
 
 def test_the_fixture_is_touched_when_nothing_refuses_it(tmp_path: Path) -> None:

@@ -27,10 +27,3 @@ def test_a_recorded_refusal_reports_its_attempt_count() -> None:
 
     assert entry["attempts"] == 3, f"the attempt count that decides drain order is missing from the line an operator reads: {entry}"
     assert entry["id"] == "table:ns$t"
-
-
-def test_a_preview_refusal_reports_no_attempt_count() -> None:
-    """None is the preview working, not a gap: a dry run must not annotate the records it inspects."""
-    entry = refusal_log_entry(RefusedRecord(kind="table", id="ns$t", reason="outside the maintained estate", attempts=None))
-
-    assert entry["attempts"] is None

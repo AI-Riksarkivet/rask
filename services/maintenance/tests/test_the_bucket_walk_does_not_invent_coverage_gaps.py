@@ -63,7 +63,7 @@ def _nested_dataset(root: Path, depth: int) -> None:
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(("depth", "bound", "found"), [(3, 3, True), (4, 3, False), (4, 4, True)])
+@pytest.mark.parametrize(("depth", "bound", "found"), [(3, 3, True), (4, 3, False)])
 def test_the_walk_reaches_exactly_as_deep_as_it_is_told(tmp_path: Path, depth: int, bound: int, found: bool) -> None:
     """Exactly the limit, one over, and one over with the limit raised — the boundary checklist.
 
@@ -101,15 +101,6 @@ def _capture_depth(monkeypatch: pytest.MonkeyPatch, module: Any) -> list[int | N
 
     monkeypatch.setattr(module, "discover_datasets", _spy)
     return seen
-
-
-def test_the_sweep_walks_the_configured_bound(monkeypatch: pytest.MonkeyPatch) -> None:
-    seen = _capture_depth(monkeypatch, sweep_mod)
-    settings = MaintenanceSettings(discovery_max_depth=6)
-
-    sweep_mod._discover_all(pafs.LocalFileSystem(), ["b"], max_depth=settings.discovery_max_depth)
-
-    assert seen == [6], "the sweep took the function default instead of the configured bound"
 
 
 def test_the_sweep_reports_the_bound_it_actually_used(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

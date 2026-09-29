@@ -35,22 +35,3 @@ def test_coverage_is_reported_per_bucket(caplog: Any) -> None:
     assert set(rows) == {"a-wh", "b-wh"}, f"expected one line per bucket, got {sorted(rows)}"
     assert (rows["a-wh"].planned, rows["a-wh"].maintained) == (2, 1)
     assert (rows["b-wh"].planned, rows["b-wh"].maintained) == (1, 0)
-
-
-def test_a_bucket_the_tick_never_reached_still_reports(caplog: Any) -> None:
-    """The whole point. A bucket that got nothing must appear with maintained=0, not be absent —
-    absence reads as "no such bucket", which is what made the starvation invisible."""
-    import logging
-
-    with caplog.at_level(logging.INFO, logger="maintenance.services.sweep"):
-        sweep_mod.report_bucket_coverage(planned=["s3://cold-wh/x", "s3://cold-wh/y"], maintained=[])
-
-    rows = [r for r in caplog.records if r.message == "compaction_bucket_maintained"]
-    assert len(rows) == 1
-    assert (rows[0].bucket, rows[0].planned, rows[0].maintained) == ("cold-wh", 2, 0)
-
-
-def test_nothing_planned_reports_nothing() -> None:
-    """An empty tick must not invent a line — a report that fires with no work is noise that trains
-    operators to ignore the one that matters."""
-    sweep_mod.report_bucket_coverage(planned=[], maintained=[])

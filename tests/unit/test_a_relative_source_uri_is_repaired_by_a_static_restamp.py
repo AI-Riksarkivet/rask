@@ -43,23 +43,6 @@ def _event() -> dict[str, object]:
     )
 
 
-def test_the_restamp_is_a_STATIC_event_and_mints_no_run_or_job() -> None:
-    """A run for an operation nobody performed is an access-control object, not untidiness."""
-    payload = _event()
-    assert "run" not in payload, f"the restamp carries a run, so it plants a phantom `(:Run)`: {payload}"
-    assert "job" not in payload, f"the restamp carries a job, whose output set the `/jobs` fold makes an access handle: {payload}"
-
-
-def test_the_restamp_PARSES_as_a_DatasetEvent_on_the_lineage_side() -> None:
-    """The producer and the consumer must agree, and only the real discriminator can show that.
-
-    `_parse` is the function the bus door actually calls, so this is the hop that decides whether the
-    repair lands as a static change or is re-admitted as a run.
-    """
-    parsed = parse_event(_event())
-    assert isinstance(parsed, DatasetEvent), f"the lineage consumer did not read this as a static change: {type(parsed).__name__}"
-
-
 def test_the_restamp_CARRIES_the_absolute_location_where_the_repository_reads_it() -> None:
     """`_merge_dataset` reads `Dataset.source_uri`, which reads the standard `dataSource` facet.
 

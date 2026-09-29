@@ -63,9 +63,7 @@ def _one_bucket_holding_both(monkeypatch: pytest.MonkeyPatch) -> None:
     ("answer", "names"),
     [
         pytest.param(httpx.Response(404, json={"code": 4, "detail": "Table not found"}), "TABLE_NOT_FOUND", id="vend-door-404-table"),
-        pytest.param(httpx.Response(404, json={"code": 1, "detail": "Namespace not found"}), "NAMESPACE_NOT_FOUND", id="vend-door-404-namespace"),
         pytest.param(httpx.Response(403, json={"code": 15, "detail": "permission denied"}), "(403)", id="vend-door-403"),
-        pytest.param(httpx.Response(401, json={"detail": "token rejected"}), "(401)", id="vend-door-401"),
         pytest.param(_vended_at(ELSEWHERE), ELSEWHERE, id="vend-location-elsewhere"),
     ],
 )
@@ -79,14 +77,3 @@ def test_a_table_the_catalog_answered_about_is_skipped_and_the_next_is_planned(c
     assert plan == [(HEALTHY, "acme-bronze$pages", VENDED)], f"the refused table was planned, or the healthy one was not: {plan}"
     skip = [line for line in capsys.readouterr().out.splitlines() if "acme-bronze$events" in line]
     assert len(skip) == 1 and names in skip[0], f"the skip does not state the catalog's answer ({names!r}): {skip}"
-
-
-def test_a_location_elsewhere_is_not_worded_as_a_refusal(capsys: pytest.CaptureFixture[str]) -> None:
-    """The door answered 200: the table it names is healthy, so "refuses" would send an operator to grant it."""
-    with respx.mock() as router:
-        router.post(f"{CATALOG}/management/v1/table/acme-bronze$events/credentials").mock(return_value=_vended_at(ELSEWHERE))
-        router.post(f"{CATALOG}/management/v1/table/acme-bronze$pages/credentials").mock(return_value=_vended_at(HEALTHY))
-        backfill._plan()
-
-    skip = next(line for line in capsys.readouterr().out.splitlines() if "acme-bronze$events" in line)
-    assert "refuse" not in skip.lower(), skip

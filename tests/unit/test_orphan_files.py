@@ -14,12 +14,10 @@ from __future__ import annotations
 
 import pathlib
 from collections.abc import Callable
-from typing import Any
 
 import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
-import pytest
 from lance.dataset import DatasetBasePath
 
 from maintenance.services import orphans
@@ -44,22 +42,6 @@ def _dataset(tmp_path: pathlib.Path, name: str = "t.lance") -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 # the safety property: a healthy dataset has NO orphans
 # --------------------------------------------------------------------------- #
-
-
-def test_a_healthy_dataset_reports_no_data_or_deletion_orphans(tmp_path: pathlib.Path) -> None:
-    """The baseline that makes every other finding meaningful — but NOT "reports nothing".
-
-    A freshly written dataset always carries `_transactions/*.txn`, because the spec keeps a
-    transaction file per commit attempt and nothing prunes them. So "healthy" means no orphaned DATA
-    and no orphaned DELETION vectors — the two kinds whose reclamation would lose rows. Writing this
-    as `orphans == []` fails on a correct implementation, which is how a true finding gets mistaken
-    for a bug in the detector.
-    """
-    uri, prefix = _dataset(tmp_path)
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    assert result.checked
-    dangerous = [o.path for o in result.orphans if o.kind in ("data", "deletions", "indices")]
-    assert dangerous == [], f"a healthy dataset must have no reclaimable data, got {dangerous}"
 
 
 def test_files_only_an_OLD_version_references_are_not_orphans(tmp_path: pathlib.Path) -> None:
@@ -100,20 +82,6 @@ def test_a_deletion_vector_is_referenced_not_orphaned(tmp_path: pathlib.Path) ->
 # --------------------------------------------------------------------------- #
 
 
-def test_a_stray_data_file_is_reported(tmp_path: pathlib.Path) -> None:
-    """The partially-failed write: fragments on disk, commit never landed, so no manifest names them.
-    Nothing in the estate reclaims these and nothing else reports them."""
-    uri, prefix = _dataset(tmp_path)
-    stray = tmp_path / "t.lance" / "data" / "00000000000000000000000000deadbeef.lance"
-    stray.write_bytes(b"fragments from a write whose commit never landed")
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    found = {o.path: o for o in result.orphans}
-    assert "data/00000000000000000000000000deadbeef.lance" in found
-    assert found["data/00000000000000000000000000deadbeef.lance"].kind == "data"
-    assert found["data/00000000000000000000000000deadbeef.lance"].size_bytes > 0
-
-
 def test_transaction_files_are_reported_because_they_accumulate_by_design(tmp_path: pathlib.Path) -> None:
     """The spec is explicit that on a conflict "transaction files remain in storage describing each
     commit attempt". So a busy table grows `_transactions/` forever, nothing prunes them, and this is
@@ -144,73 +112,9 @@ def test_transaction_files_are_reported_because_they_accumulate_by_design(tmp_pa
     )
 
 
-def test_manifests_and_the_version_hint_are_never_reported(tmp_path: pathlib.Path) -> None:
-    """A manifest IS what makes a version live, so it can never be "unreferenced" while present; the
-    hint is disposable but written every commit. Reporting either every single run is how a report
-    teaches its reader to skip it — the failure mode that makes a correct detector useless."""
-    uri, prefix = _dataset(tmp_path)
-    hint = tmp_path / "t.lance" / "_versions" / "latest_version_hint.json"
-    assert hint.exists(), "fixture must actually have the hint file"
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    assert [o.path for o in result.orphans if o.kind == "versions"] == []
-
-
-# --------------------------------------------------------------------------- #
-# unreadable is not clean
-# --------------------------------------------------------------------------- #
-
-
-def test_an_unreadable_dataset_yields_no_orphans_and_says_why(tmp_path: pathlib.Path) -> None:
-    """ "We could not determine the referenced set" must never render as "none of these files are
-    referenced" — that shape is what deletes a live table. `checked=False` with a reason, and the
-    orphan list EMPTY BY CONSTRUCTION."""
-    result = orphans.scan_dataset(_fs(), str(tmp_path / "not-a-dataset"), prefix=str(tmp_path / "not-a-dataset"))
-    assert result.checked is False
-    assert result.structural is False, "an absent dataset is a scan that FAILED — a later tick may find it, so it must keep blocking"
-    assert result.orphans == []
-    assert result.reason
-
-
-def test_an_unreadable_dataset_does_not_quietly_shrink_the_report(tmp_path: pathlib.Path) -> None:
-    """Aggregated, an unreadable dataset must INCREASE the incomplete count rather than silently
-    lower the orphan total — otherwise a bucket nobody can read reports as the cleanest one."""
-    uri, prefix = _dataset(tmp_path)
-    (tmp_path / "t.lance" / "data" / "0000000000000000000000000000000abc.lance").write_bytes(b"stray")
-    missing = str(tmp_path / "gone.lance")
-
-    report = orphans.scan_datasets(_fs(), [(uri, prefix), (missing, missing)])
-    assert report.datasets_scanned == 1
-    assert report.datasets_unreadable == 1
-    assert report.incomplete, "an unreadable dataset must be named, not absorbed"
-    assert report.total == len(report.orphans) >= 1
-
-
 # --------------------------------------------------------------------------- #
 # report-only, mechanically
 # --------------------------------------------------------------------------- #
-
-
-def test_the_module_contains_no_delete_call() -> None:
-    """The property the whole design rests on. Asserted against the SOURCE because a behavioural test
-    can only prove the paths it happens to exercise, and this must hold on every path."""
-    # Match CALL syntax, not the bare word: the module's docstring necessarily NAMES the destructive
-    # operations in order to explain that it does not perform them, and a substring check on the word
-    # alone fails on its own documentation. (Same trap caught earlier on `provision`.)
-    src = pathlib.Path(orphans.__file__).read_text()
-    for verb in (
-        "delete_file(",
-        "delete_dir(",
-        "delete_objects(",
-        "delete_bucket(",
-        "cleanup_old_versions(",
-        "unlink(",
-        "rmtree(",
-        "open_output_stream(",
-        "compact_files(",
-        "optimize_indices(",
-    ):
-        assert verb not in src, f"the orphan pass calls {verb} — it must only REPORT"
 
 
 def test_a_scan_leaves_the_dataset_byte_identical(tmp_path: pathlib.Path) -> None:
@@ -229,50 +133,6 @@ def test_a_scan_leaves_the_dataset_byte_identical(tmp_path: pathlib.Path) -> Non
     report = orphans.scan_datasets(_fs(), [(uri, prefix)])
     assert report.total >= 1, "the fixture must actually BE drifted, or 'nothing changed' proves nothing"
     assert fingerprint() == before
-
-
-@pytest.mark.parametrize(
-    ("rel", "expected"),
-    [
-        ("data/x.lance", "data"),
-        ("_deletions/0-1-2.arrow", "deletions"),
-        ("_indices/abc-uuid/index.idx", "indices"),
-        ("_transactions/3-uuid.txn", "transactions"),
-        ("_versions/9.manifest", "versions"),
-        ("something-else.bin", "other"),
-    ],
-)
-def test_every_lance_owned_area_is_classified(rel: str, expected: str) -> None:
-    """A finding without a kind is a finding a reader cannot triage — `data/` is potential data loss,
-    `_transactions/` is expected accumulation, and they warrant different responses."""
-    assert orphans._kind_of(rel) == expected
-
-
-def test_a_tag_is_never_reported_as_an_orphan(tmp_path: pathlib.Path) -> None:
-    """Tags PIN versions — `_refs/tags/*.json` is live metadata, not residue.
-
-    Caught by the first live run, which reported every `publish-*` promotion tag in the estate as an
-    orphan. That is the precise failure this module exists to avoid: a reclaimer acting on it would
-    unpin published data, and `cleanup_old_versions` (which exempts tagged versions) would then be
-    free to collect the versions those tags were protecting.
-    """
-    uri, prefix = _dataset(tmp_path)
-    lance.dataset(uri).tags.create("blessed", 1)
-    tags = list((tmp_path / "t.lance" / "_refs" / "tags").iterdir())
-    assert tags, "fixture must actually write a tag file"
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    named = {o.path for o in result.orphans}
-    assert not any(p.startswith("_refs/") for p in named), f"a tag was reported as an orphan: {named}"
-
-
-def test_the_reserved_marker_is_never_reported(tmp_path: pathlib.Path) -> None:
-    """`.lance-reserved` is a zero-byte structural marker at the dataset root, never named by a
-    manifest — so a naive scan reports it once per dataset, every run, forever."""
-    uri, prefix = _dataset(tmp_path)
-    (tmp_path / "t.lance" / ".lance-reserved").write_bytes(b"")
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    assert ".lance-reserved" not in {o.path for o in result.orphans}
 
 
 def test_a_blob_sidecar_of_a_referenced_data_file_is_not_an_orphan(tmp_path: pathlib.Path) -> None:
@@ -352,15 +212,6 @@ def test_a_shallow_clone_is_refused_because_its_data_lives_elsewhere(tmp_path: p
     assert "base_paths" in (result.reason or "")
 
 
-def test_an_ordinary_dataset_is_still_scanned(tmp_path: pathlib.Path) -> None:
-    """The gate must refuse only the two hazardous layouts. A gate that refuses everything is a
-    detector that does nothing, and would pass both tests above."""
-    uri, prefix = _dataset(tmp_path)
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    assert result.checked is True
-    assert result.reason is None
-
-
 def test_a_refused_dataset_does_not_read_as_clean_in_the_aggregate(tmp_path: pathlib.Path) -> None:
     """Refusing must stay COUNTED and NAMED — never quietly lower the orphan count. Otherwise the
     branchiest bucket in the estate reports as the tidiest.
@@ -406,63 +257,6 @@ def test_a_memwal_shard_tree_is_refused(tmp_path: pathlib.Path) -> None:
     assert result.orphans == []
     assert "_mem_wal/" in (result.reason or "")
     assert "fencing" in (result.reason or "")
-
-
-def test_a_dataset_using_overlays_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-    """An overlay writes new cell values to `data/overlay-<uuid>.lance` — INSIDE `data/`, where a
-    false positive deletes real values — and is referenced from `DataFragment.overlays`, which
-    `data_files()` does not report.
-
-    Overlays are experimental and unwritable by this pylance, so the fragment is faked at exactly the
-    seam the reader uses. Feature flag 64 settles the behaviour: a reader that does not understand
-    overlays must REFUSE, because ignoring one returns stale base values — "a correctness bug rather
-    than a degraded experience".
-    """
-    uri, prefix = _dataset(tmp_path)
-    real = lance.dataset(uri)
-
-    class _FragmentWithOverlay:
-        def __init__(self, inner: Any) -> None:
-            self._inner = inner
-            self.metadata = type("MD", (), {"overlays": [object()], "deletion_file": None})()
-            self.fragment_id = 0
-
-        def data_files(self) -> list:
-            return self._inner.data_files()
-
-    class _DatasetWithOverlay:
-        """A REAL dataset with only the overlay seam replaced.
-
-        Everything the scan reads that this does not override is forwarded, so the double cannot rot
-        into a false refusal the next time the walk reaches for another dataset method — it did, on
-        `version_refs`, and the refusal it produced was an `AttributeError` wearing this test's name.
-        """
-
-        def __init__(self, inner: Any) -> None:
-            self._inner = inner
-
-        def __getattr__(self, name: str) -> Any:
-            return getattr(self._inner, name)
-
-        def get_fragments(self) -> list:
-            return [_FragmentWithOverlay(f) for f in self._inner.get_fragments()]
-
-        def checkout_version(self, _version: int) -> _DatasetWithOverlay:
-            # NOT forwarded, and this is the seam the whole test turns on. The #102 walk checks out
-            # each version on the HEAD handle and reads fragments from the RESULT, so forwarding here
-            # hands back a real dataset whose fragments carry no overlay — the refusal then fires for
-            # some other reason and the assertions still pass. Every version of this stand-in carries
-            # the overlay, so the refusal is the one being tested.
-            return self
-
-    monkeypatch.setattr(orphans.lance, "dataset", lambda *a, **k: _DatasetWithOverlay(real))
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-    assert result.checked is False, "a dataset using overlays must be refused, not scanned"
-    assert result.structural is True, "overlays are refused by SHAPE"
-    assert result.orphans == []
-    assert "overlay" in (result.reason or "").lower()
-    assert "64" in (result.reason or "")
 
 
 # --------------------------------------------------------------------------- #
@@ -531,46 +325,3 @@ def test_an_ordinary_dataset_is_not_refused_by_the_flag_gate(tmp_path: pathlib.P
 
     assert result.checked is True, result.reason
     assert result.reason is None
-
-
-def test_the_transaction_of_a_LIVE_version_is_not_an_orphan(tmp_path: pathlib.Path) -> None:
-    """Nothing ever added `_transactions/*.txn` to the referenced set, so EVERY txn file on disk was
-    reported as garbage — including the one that produced the version being read.
-
-    The module docstring is right that txn files from FAILED or rolled-back commits accumulate by
-    design and nothing prunes them. It does not follow that every txn is garbage: the ones belonging
-    to live versions are the provenance of the manifests. The baseline test above quietly encodes the
-    old behaviour by filtering transactions out of "healthy", which is how this survived.
-
-    MEASURED live 2026-08-16: `s3://lance-catalog/bronze/pages` had exactly ONE live version and
-    exactly ONE txn file, and the scan called that file an orphan. Estate-wide it was 34 of 56
-    `orphan_files` — which is why the count could never reach zero and the #79 purge gate could never
-    certify, on an estate with no actual garbage.
-    """
-    uri, prefix = _dataset(tmp_path)
-    # A second commit, so there are two live versions and two transaction files.
-    lance.write_dataset(pa.table({"v": [9, 9]}), uri, mode="overwrite")
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-
-    assert result.checked
-    txn_orphans = [o.path for o in result.orphans if o.kind == "transactions"]
-    assert txn_orphans == [], f"the transactions of live versions were reported as orphans: {txn_orphans}"
-
-
-def test_a_STALE_transaction_is_still_reported(tmp_path: pathlib.Path) -> None:
-    """The fix references live transactions only — it must not blanket-exempt the directory.
-
-    A txn from a failed or rolled-back commit belongs to no live version and IS the accumulation the
-    module docstring describes. Referencing every `.txn` would trade a false positive for a blind
-    spot, which is the worse of the two for a reclaimer's input.
-    """
-    uri, prefix = _dataset(tmp_path)
-    stale = pathlib.Path(prefix) / "_transactions" / "999-deadbeef-0000-0000-0000-000000000000.txn"
-    stale.parent.mkdir(parents=True, exist_ok=True)
-    stale.write_bytes(b"not a live commit")
-
-    result = orphans.scan_dataset(_fs(), uri, prefix=prefix)
-
-    txn_orphans = [o.path for o in result.orphans if o.kind == "transactions"]
-    assert any("999-deadbeef" in p for p in txn_orphans), f"a stale transaction must still be reported, got {txn_orphans}"

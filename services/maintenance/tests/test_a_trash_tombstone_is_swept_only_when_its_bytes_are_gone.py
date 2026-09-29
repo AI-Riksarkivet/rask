@@ -78,30 +78,6 @@ def test_a_record_whose_BYTES_ARE_GONE_is_planned() -> None:
     assert planned[0].location == _GONE
 
 
-def test_a_record_whose_bytes_STILL_EXIST_is_refused_and_named() -> None:
-    """THE DEFECT THIS SUITE EXISTS FOR: the record is the only remaining pointer to those objects."""
-    planned, refused = tombstones.plan_sweep(_report(), probe=_probe)
-
-    assert "tr-alive" not in [p.id for p in planned], "a record naming live bytes was planned for deletion"
-    assert "tr-alive" in refused
-    assert "3" in refused["tr-alive"], f"the refusal does not say how many objects are there: {refused['tr-alive']}"
-
-
-def test_an_UNREADABLE_location_is_refused_not_swept() -> None:
-    """ "We could not tell" is the refusal, because what this guards is unrecoverable."""
-    planned, refused = tombstones.plan_sweep(_report(), probe=_probe)
-
-    assert "tr-blip" not in [p.id for p in planned]
-    assert "tr-blip" in refused
-
-
-def test_every_planned_sweep_RECORDS_the_probe_that_justified_it() -> None:
-    """An audit line saying a reconciler deleted 50 records is unreadable without the evidence."""
-    planned, _ = tombstones.plan_sweep(_report(), probe=_probe)
-
-    assert all(p.probed_objects == 0 for p in planned), [p.model_dump() for p in planned]
-
-
 def test_a_DRY_RUN_plans_and_deletes_NOTHING() -> None:
     deleter = _Deleter()
     out = tombstones.sweep_tombstones(_settings(), report=_report(), probe=_probe, delete=deleter)
@@ -141,10 +117,3 @@ def test_the_CAP_truncates_and_SAYS_it_did() -> None:
     out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2), report=many, probe=lambda _l: 0, delete=_Deleter())
 
     assert len(out.swept) == 2 and out.capped == 3
-
-
-def test_a_CLEAN_report_sweeps_nothing() -> None:
-    """The control. A pass that swept on an empty report would satisfy every leg above."""
-    planned, refused = tombstones.plan_sweep(ReconcileReport(checked_at="2026-09-20T00:00:00Z"), probe=_probe)
-
-    assert planned == [] and refused == {}

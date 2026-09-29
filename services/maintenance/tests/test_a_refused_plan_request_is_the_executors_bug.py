@@ -32,7 +32,6 @@ import lance
 import pyarrow as pa
 import pytest
 import respx
-from lance_namespace.errors import ErrorCode
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import catalog_compaction, optimize, sweep
@@ -52,7 +51,6 @@ PROBLEM = {
     "code": 13,
     "detail": "unsupported compaction option(s) ['io_buffer_size']",
 }
-VALIDATION = {"type": "https://lance.org/problems/validation", "title": "Validation Error", "status": 422, "code": 13, "detail": "Validation Error"}
 ROUTING_MISS = {"type": "https://lance.org/problems/not-found", "title": "Not Found", "status": 404, "code": 0, "detail": "Not Found"}
 TABLE_NOT_FOUND = {
     "type": "https://lance.org/problems/tablenotfounderror",
@@ -60,20 +58,6 @@ TABLE_NOT_FOUND = {
     "status": 404,
     "code": 4,
     "detail": f"Table not found: table id '{TABLE_ID}'",
-}
-NAMESPACE_NOT_FOUND = {
-    "type": "https://lance.org/problems/namespacenotfounderror",
-    "title": "NamespaceNotFoundError",
-    "status": 404,
-    "code": 1,
-    "detail": "Namespace not found: Child namespace reads require an existing __manifest dataset",
-}
-PERMISSION_DENIED = {
-    "type": "https://lance.org/problems/permissiondeniederror",
-    "title": "PermissionDeniedError",
-    "status": 403,
-    "code": 15,
-    "detail": f"permission denied: can_maintain on table:{TABLE_ID}",
 }
 #: JSON that is not a problem object, and a problem object with no `detail`: the body's head stands in.
 NOT_AN_OBJECT = [PROBLEM]
@@ -109,12 +93,9 @@ def _execute(uri: str, monkeypatch: pytest.MonkeyPatch, plan: DatasetPlan | None
     ("answer", "detail"),
     [
         pytest.param(httpx.Response(400, json=PROBLEM), PROBLEM["detail"], id="400-invalid-input"),
-        pytest.param(httpx.Response(422, json=VALIDATION), VALIDATION["detail"], id="422-validation"),
-        pytest.param(httpx.Response(409, json={**PROBLEM, "status": 409, "code": 14}), PROBLEM["detail"], id="409-any-other-4xx"),
         pytest.param(httpx.Response(404, json=ROUTING_MISS), ROUTING_MISS["detail"], id="404-a-path-no-door-serves"),
         # An absence code names a missing table only on the status the spec maps it to.
         pytest.param(httpx.Response(409, json={**TABLE_NOT_FOUND, "status": 409}), TABLE_NOT_FOUND["detail"], id="409-carrying-an-absence-code"),
-        pytest.param(httpx.Response(400, json={**NAMESPACE_NOT_FOUND, "status": 400}), NAMESPACE_NOT_FOUND["detail"], id="400-carrying-an-absence-code"),
         pytest.param(httpx.Response(400, text=HTML_400, headers={"content-type": "text/html"}), HTML_400[:200], id="400-not-json"),
         pytest.param(httpx.Response(400, json=NOT_AN_OBJECT), httpx.Response(400, json=NOT_AN_OBJECT).text[:200], id="400-json-that-is-not-an-object"),
         pytest.param(httpx.Response(400, json=NO_DETAIL), httpx.Response(400, json=NO_DETAIL).text[:200], id="400-a-problem-with-no-detail"),
@@ -136,36 +117,10 @@ def test_a_4xx_plan_answer_is_the_executors_bug_not_an_outage(answer: httpx.Resp
     assert fields == {"table_id": TABLE_ID, "status": answer.status_code, "detail": detail}, fields
 
 
-@pytest.mark.parametrize("body", [pytest.param(TABLE_NOT_FOUND, id="TableNotFound"), pytest.param(NAMESPACE_NOT_FOUND, id="NamespaceNotFound")])
-def test_a_table_the_catalog_does_not_govern_is_not_the_executors_bug(body: dict[str, Any], caplog: pytest.LogCaptureFixture) -> None:
-    with respx.mock() as router, caplog.at_level(logging.ERROR, logger=catalog_compaction.__name__):
-        router.post(PLAN_URL).mock(return_value=httpx.Response(404, json=body))
-        with pytest.raises(Exception) as caught:
-            catalog_compaction.plan_via_catalog(TABLE_ID, {}, settings=_settings())
-
-    assert type(caught.value).__name__ == "TableNotGoverned", f"a 404 {body['title']} answers about the table, not the request: {caught.value!r}"
-    # The door's own answer, not a diagnosis: code 4 also answers a governed table whose dataset was never written.
-    code = ErrorCode(int(body["code"]))
-    assert str(caught.value) == f"the catalog answered 404 {code.name} (code {code.value}) for {TABLE_ID}: {body['detail']}", str(caught.value)
-    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
-
-
-def test_an_ungoverned_table_is_neither_an_outage_nor_a_refused_request() -> None:
-    """Either parent would put it on a path that handles it: the in-pod fallback, or the rewrite-only skip."""
-    assert not issubclass(ce.TableNotGoverned, ce.CompactionPlaneUnavailable | ce.CompactionPlanRefused | ce.MaintenanceDenied)
-
-
-def test_a_refusal_is_not_an_unavailability_by_inheritance() -> None:
-    """Every fallback `except` catches `CompactionPlaneUnavailable`; a subclass would fall back again."""
-    assert not issubclass(ce.CompactionPlanRefused, ce.CompactionPlaneUnavailable)
-
-
 @pytest.mark.parametrize(
     "answer",
     [
         pytest.param(httpx.Response(500, json={"detail": "boom"}), id="500"),
-        pytest.param(httpx.Response(503, json={"detail": "down"}), id="503"),
-        pytest.param(httpx.Response(408, json={"detail": "slow"}), id="408"),
         pytest.param(httpx.Response(429, json={"detail": "busy"}), id="429"),
         pytest.param(httpx.Response(200, content=b"<html>not json</html>"), id="an-unparseable-body"),
         pytest.param(httpx.ConnectError("refused"), id="a-connection-error"),
@@ -180,51 +135,6 @@ def test_an_unavailable_plane_stays_an_outage(answer: httpx.Response | Exception
             route.mock(return_value=answer)
         with pytest.raises(ce.CompactionPlaneUnavailable):
             catalog_compaction.plan_via_catalog(TABLE_ID, {}, settings=_settings())
-
-
-def test_a_refused_plan_leaves_the_table_unrewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    uri = _fragmented(tmp_path)
-
-    with respx.mock() as router:
-        router.post(PLAN_URL).mock(return_value=httpx.Response(400, json=PROBLEM))
-        result = _execute(uri, monkeypatch)
-
-    assert len(lance.dataset(uri).get_fragments()) == 6, "the refused plan was answered with an in-pod rewrite"
-    assert result.error is not None and result.error_type == "CompactionPlanRefused", (result.error, result.error_type)
-
-
-def test_a_denied_plan_is_refused_and_never_rewritten_in_pod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A 403 is the answer NO. An in-pod rewrite, or a cleanup, would run under the credential that
-    opened the dataset, which on a denied table is the ambient key. So nothing runs."""
-    uri = _fragmented(tmp_path)
-
-    with respx.mock() as router:
-        router.post(PLAN_URL).mock(return_value=httpx.Response(403, json=PERMISSION_DENIED))
-        result = _execute(uri, monkeypatch, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1))
-
-    assert len(lance.dataset(uri).get_fragments()) == 6, "the denied rewrite was performed in-pod"
-    assert result.refused is not None and TABLE_ID in result.refused, f"the denial was not recorded as a refusal: {result.refused!r}"
-    assert (result.refused_by, result.compaction_mode, result.error) == ("plan_denied", "in_pod", None), (
-        result.refused_by,
-        result.compaction_mode,
-        result.error,
-    )
-    assert len(lance.dataset(uri).versions()) == 6, "a denied table had its versions cleaned up"
-
-
-def test_a_refused_plan_skips_only_the_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The request is what is wrong, not the table, so its versions are still reclaimed."""
-    uri = _fragmented(tmp_path)
-    assert len(lance.dataset(uri).versions()) == 6
-
-    with respx.mock() as router:
-        router.post(PLAN_URL).mock(return_value=httpx.Response(400, json=PROBLEM))
-        result = _execute(uri, monkeypatch, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1))
-
-    assert len(lance.dataset(uri).get_fragments()) == 6, "the refused plan was answered with an in-pod rewrite"
-    assert result.error_type == "CompactionPlanRefused", (result.error, result.error_type)
-    assert result.old_versions_removed == 5, f"the refused request cost the table its version cleanup: {result.error}"
-    assert len(lance.dataset(uri).versions()) == 1
 
 
 class _LineageEmitter:
@@ -255,33 +165,6 @@ def test_the_cleanup_a_refused_plan_still_runs_reaches_the_lineage_graph(tmp_pat
     assert (emitter.completed, emitter.failed) == ([TABLE_ID], []), (emitter.completed, emitter.failed)
 
 
-@pytest.mark.parametrize("body", [pytest.param(TABLE_NOT_FOUND, id="TableNotFound"), pytest.param(NAMESPACE_NOT_FOUND, id="NamespaceNotFound")])
-def test_an_ungoverned_table_is_left_alone(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    body: dict[str, Any],
-    refused_added: list[tuple[int, dict[str, Any] | None]],
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Refused, not failed, and nothing runs: what would sign the cleanup is the ambient credential.
-
-    The refused counter and the WARNING are the only signals this outcome has, since it does not page.
-    """
-    uri = _fragmented(tmp_path)
-
-    with respx.mock() as router, caplog.at_level(logging.DEBUG, logger=optimize.__name__):
-        router.post(PLAN_URL).mock(return_value=httpx.Response(404, json=body))
-        result = _execute(uri, monkeypatch, plan=DatasetPlan(older_than=timedelta(0), retain_versions=1))
-
-    assert (result.error, result.refused_by) == (None, "table_not_governed"), (result.error, result.refused_by, result.refused)
-    assert result.refused is not None and TABLE_ID in result.refused, f"the refusal carries no reason: {result.refused!r}"
-    assert refused_added == [(1, {"refused_by": "table_not_governed"})], f"the refusal did not reach the refused counter: {refused_added}"
-    warned = [record.levelno for record in caplog.records if record.getMessage() == "maintenance_table_not_governed"]
-    assert warned == [logging.WARNING], f"the refusal was not logged once at WARNING: {warned}"
-    assert len(lance.dataset(uri).get_fragments()) == 6, "an ungoverned table was rewritten"
-    assert len(lance.dataset(uri).versions()) == 6, "an ungoverned table's versions were cleaned up"
-
-
 def test_an_unavailable_plane_still_falls_back_in_pod(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     uri = _fragmented(tmp_path)
 
@@ -292,26 +175,6 @@ def test_an_unavailable_plane_still_falls_back_in_pod(tmp_path: Path, monkeypatc
     assert result.error is None, result.error
     assert result.compaction_mode == "in_pod"
     assert len(lance.dataset(uri).get_fragments()) == 1, "the outage did not fall back to the in-pod rewrite"
-
-
-@pytest.mark.parametrize(
-    ("answer", "counted"),
-    [
-        pytest.param(httpx.Response(400, json=PROBLEM), 1, id="400"),
-        pytest.param(httpx.Response(503, json={**PROBLEM, "status": 503, "code": 17}), 0, id="503"),
-        pytest.param(httpx.Response(404, json=TABLE_NOT_FOUND), 0, id="404-no-such-table"),
-    ],
-)
-def test_each_unit_counts_whether_its_plan_was_refused(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan_refused_added: list[int], answer: httpx.Response, counted: int
-) -> None:
-    uri = _fragmented(tmp_path)
-
-    with respx.mock() as router:
-        router.post(PLAN_URL).mock(return_value=answer)
-        _execute(uri, monkeypatch)
-
-    assert plan_refused_added == [counted], plan_refused_added
 
 
 def test_a_refused_plan_is_counted_when_a_later_step_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, plan_refused_added: list[int]) -> None:

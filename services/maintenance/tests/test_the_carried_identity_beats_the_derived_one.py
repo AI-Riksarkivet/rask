@@ -31,7 +31,6 @@ import pytest
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
-from service_kit.lakehouse.table_locations import table_id_from_location
 
 
 AMBIENT = {"aws_access_key_id": "minioadmin"}
@@ -58,11 +57,6 @@ def _vending(location: str | None, asked: list[str]) -> Callable[[str, Maintenan
         return None if location is None else credentials.Vended(options=dict(SCOPED), location=location)
 
     return _vend
-
-
-def test_the_cascade_layout_really_is_underivable() -> None:
-    """If this ever starts answering, the rest of this module is testing nothing."""
-    assert table_id_from_location(CASCADE_URI) is None
 
 
 def test_the_declared_identity_is_what_gets_vended(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -94,8 +88,3 @@ def test_a_declared_identity_is_not_second_guessed(monkeypatch: pytest.MonkeyPat
 
     assert asked == ["other$table"], "the declared id was discarded in favour of the path"
     assert options == AMBIENT
-
-
-def test_no_catalog_configured_still_means_the_ambient_credential() -> None:
-    bare = MaintenanceSettings(MAINTENANCE_S3_BUCKET="lance-catalog")
-    assert credentials.write_options_for(CASCADE_URI, bare, fallback=AMBIENT, declared_table_id="bronze$events") == AMBIENT

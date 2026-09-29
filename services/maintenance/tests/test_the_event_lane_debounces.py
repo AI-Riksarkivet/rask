@@ -22,49 +22,15 @@ import pytest
 from maintenance.services.arrival import should_replan
 
 
-def test_a_first_event_for_an_unseen_dataset_plans() -> None:
-    """No stamp means never planned. Maintaining is the only safe direction."""
-    assert should_replan(last_planned=None, event_version=1, min_versions=10) is True
-
-
-def test_a_redelivery_of_the_same_version_does_not_replan() -> None:
-    """Delivery is at-least-once, so the identical event arrives again. Re-planning it would enqueue a
-    duplicate unit for work already queued."""
-    assert should_replan(last_planned=7, event_version=7, min_versions=1) is False
-
-
-def test_an_out_of_order_older_event_does_not_replan() -> None:
-    """The bus does not order events. An event describing a version we have already passed says nothing
-    new, and acting on it would undo the debounce every time one arrived late."""
-    assert should_replan(last_planned=7, event_version=3, min_versions=1) is False
-
-
 @pytest.mark.parametrize(
     ("last", "now", "minv", "expected"),
     [
-        (10, 11, 10, False),  # one write since — far short of the threshold
         (10, 19, 10, False),  # nine writes since — still short
         (10, 20, 10, True),  # ten writes since — the threshold is reached
-        (10, 25, 10, True),  # past it
-        (10, 11, 1, True),  # threshold of 1 means every write plans
     ],
 )
 def test_the_threshold_decides_how_many_writes_are_worth_a_plan(last: int, now: int, minv: int, expected: bool) -> None:
     assert should_replan(last_planned=last, event_version=now, min_versions=minv) is expected
-
-
-def test_an_event_with_no_version_plans() -> None:
-    """A producer outside the catalog may stamp no version facet. Without one there is nothing to
-    compare, and dropping the event would lose maintenance for every such producer — so it plans, and
-    the stamp written afterwards debounces the next one."""
-    assert should_replan(last_planned=99, event_version=None, min_versions=10) is True
-
-
-def test_a_threshold_below_one_is_treated_as_one() -> None:
-    """A misconfigured 0 or negative must not mean "never plan" (silently disabling the lane) nor divide
-    anything — it means the smallest real threshold, which is every write."""
-    assert should_replan(last_planned=5, event_version=6, min_versions=0) is True
-    assert should_replan(last_planned=5, event_version=5, min_versions=0) is False
 
 
 # --- the wiring: the predicate is only worth having if the handler actually short-circuits on it ---

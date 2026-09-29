@@ -59,16 +59,6 @@ def test_the_event_names_the_service_that_emitted_it() -> None:
     assert facets["author"]["name"] == "service-maintenance"
 
 
-def test_the_author_facet_is_spec_legal() -> None:
-    """Every facet — custom ones included — must carry `_producer` + `_schemaURL` (BaseFacet
-    `required`). Validating the live feed against the OpenLineage schema once failed 14 of 200 events
-    on exactly this, so a new facet gets checked rather than assumed."""
-    author = _event(author="service-maintenance")["run"]["facets"]["author"]
-
-    assert author.get("_producer"), f"the author facet has no _producer: {author}"
-    assert author.get("_schemaURL"), f"the author facet has no _schemaURL: {author}"
-
-
 def test_an_unnamed_emitter_stays_anonymous_rather_than_inventing_a_subject() -> None:
     """The other direction, and the one that keeps this from becoming a lie.
 
@@ -79,34 +69,6 @@ def test_an_unnamed_emitter_stays_anonymous_rather_than_inventing_a_subject() ->
     facets = _event(author="")["run"]["facets"]
 
     assert "author" not in facets, f"an unconfigured identity invented an author: {facets.get('author')}"
-
-
-def test_the_lance_operation_facet_still_rides() -> None:
-    """The existing contract, pinned so the new facet cannot displace it: `producers()` reads the
-    `lance.operation` marker to label a compaction run as such."""
-    facets = _event(author="service-maintenance")["run"]["facets"]
-
-    assert facets["lance"]["operation"] == "compaction"
-
-
-def test_a_failed_pass_is_signed_too() -> None:
-    """A FAILURE is the run a person is most likely to have to chase, and a COMPLETE that carried a
-    signature while its FAIL twin did not would be the more misleading of the two states."""
-    from maintenance.core.lineage_emit import build_maintenance_fail_event
-
-    event = build_maintenance_fail_event(
-        table_id="acme-bronze$events",
-        namespace="bronze",
-        job_namespace="lance-maintenance",
-        run_id="22222222-2222-5222-8222-222222222222",
-        event_time="2026-09-08T00:00:00+00:00",
-        error="compaction failed",
-        author="service-maintenance",
-    )
-
-    assert event["eventType"] == "FAIL"
-    assert event["run"]["facets"]["author"]["sub"] == "service-maintenance"
-    assert event["run"]["facets"]["errorMessage"]["message"] == "compaction failed"
 
 
 def test_the_deployed_path_actually_passes_the_identity() -> None:

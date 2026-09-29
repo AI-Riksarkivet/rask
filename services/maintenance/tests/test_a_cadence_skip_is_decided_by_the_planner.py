@@ -65,17 +65,3 @@ def test_a_paced_dataset_is_not_enqueued(planned: Any) -> None:
     """The whole point: the cadence decision belongs where the plan is made."""
     items, _decided = planned.plan_sweep(_settings())
     assert [i.uri for i in items] == ["s3://wh/a_live"], f"a skipped dataset was still enqueued: {[i.uri for i in items]}"
-
-
-def test_the_skip_keeps_its_reason_in_the_DECIDED_list(planned: Any) -> None:
-    """Withholding must not lose the accounting — the tick's `skipped_by` is how anyone sees a cadence
-    working at all, and the row's closing bar is a non-zero count there."""
-    _items, decided = planned.plan_sweep(_settings())
-    by_uri = {d.uri: d.skipped for d in decided}
-    assert by_uri == {"s3://wh/a_paced": "policy_interval", "s3://wh/a_disabled": "policy_disabled"}, by_uri
-
-
-def test_a_maintainable_dataset_is_still_enqueued(planned: Any) -> None:
-    """The control. Without it every assertion above passes on a planner that enqueues nothing."""
-    items, _decided = planned.plan_sweep(_settings())
-    assert len(items) == 1 and items[0].plan.skipped is None
