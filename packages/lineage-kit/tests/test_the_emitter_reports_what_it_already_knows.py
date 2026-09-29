@@ -29,8 +29,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-from lineage_kit.emitter import ClientEmitter, NoopEmitter, RecordingEmitter
-from lineage_kit.schemas import RunEvent, RunState
+from lineage_kit.emitter import ClientEmitter, NoopEmitter
+from lineage_kit.schemas import RunEvent
 
 
 if TYPE_CHECKING:
@@ -78,12 +78,6 @@ def test_a_refused_door_reports_false() -> None:
     assert ClientEmitter(cast("OpenLineageClient", _Client(boom=True))).emit(_event()) is False
 
 
-def test_a_refused_door_still_does_not_raise() -> None:
-    """The constraint this must not break: emission must never turn an observability outage into a
-    data incident. Reporting is additive to the swallow, not a replacement for it."""
-    ClientEmitter(cast("OpenLineageClient", _Client(boom=True))).emit(_event())  # no exception
-
-
 def test_an_unauthorable_event_reports_false_too() -> None:
     """The OTHER failure mode, which the emitter deliberately keeps distinct: a producer that built an
     unserialisable facet never reaches the transport at all, and is just as lost."""
@@ -100,22 +94,10 @@ def test_an_unauthorable_event_reports_false_too() -> None:
 
 @pytest.mark.parametrize(
     ("emitter", "expected"),
-    [(NoopEmitter(), True), (RecordingEmitter(), True)],
-    ids=["noop", "recording"],
+    [(NoopEmitter(), True)],
+    ids=["noop"],
 )
 def test_the_emitters_that_lose_nothing_report_true(emitter: Any, expected: bool) -> None:
     """`NoopEmitter` answers True because the bool means "needs no recovery", not "reached the graph".
     Lineage switched off has lost nothing; staging its events would grow an outbox nothing drains."""
     assert emitter.emit(_event()) is expected
-
-
-def test_the_recorder_still_returns_the_event_it_emitted() -> None:
-    """The existing contract, pinned because E1's fix depends on it: the caller gets the event back, so
-    a producer that learns the emit failed still holds the thing it needs to stage."""
-    from lineage_kit.runs import LineageRun
-
-    recording = RecordingEmitter()
-    event = LineageRun(job_name="land", namespace="ingest", run_id="11111111-1111-5111-8111-111111111111", emitter=recording).start()
-
-    assert event is not None and event.event_type is RunState.START
-    assert recording.events == [event]

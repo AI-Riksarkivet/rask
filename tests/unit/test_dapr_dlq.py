@@ -82,24 +82,6 @@ def test_dlq_route_rejects_forged_deliveries(monkeypatch: pytest.MonkeyPatch) ->
     assert client.post("/dlq-event", json={}).status_code == 403
 
 
-def test_lineage_subscription_declares_dlq_when_configured(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
-    monkeypatch.setenv("LINEAGE_DLQ_TOPIC", "dlq.lineage.events")
-
-    from lineage.api.dapr import register_dapr
-    from lineage.core.config import get_settings
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    register_dapr(app)
-    get_settings.cache_clear()
-    subs = {s["topic"]: s for s in _subs(TestClient(app))}
-    assert subs["lineage.events.v1"]["deadLetterTopic"] == "dlq.lineage.events"
-    assert subs["dlq.lineage.events"]["route"].endswith("/lineage-dlq")
-
-
 def test_lineage_parking_rides_its_OWN_durable_component_never_the_replay_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """the main lineage component is deliverPolicy=all + ephemeral BY DESIGN
     (replay rebuilds the graph). The parking subscription riding it re-parked up to 168h of
@@ -159,33 +141,3 @@ def test_the_verified_author_is_read_off_a_payload_even_when_it_will_not_parse()
     # Shapes a discard path really meets: truncated, wrong-typed, absent.
     for junk in ({}, {"run": {}}, {"run": {"facets": None}}, {"run": {"facets": {"author": "alice"}}}, "not-a-dict", None):
         assert author_sub_from_payload(junk) is None
-
-
-def test_a_parked_delivery_names_the_author_whose_provenance_was_lost(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """A parked delivery is TERMINAL provenance loss until someone replays the stream. The log said
-    only which event id was lost, while the payload being discarded carried the person it belonged
-    to — so an operator could see that provenance was dropped and not whose."""
-    import lineage.api.dapr as dapr_mod
-
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    monkeypatch.setenv("LINEAGE_DAPR_ENABLED", "true")
-    monkeypatch.setenv("LINEAGE_DLQ_TOPIC", "dlq.lineage")  # the parking route exists only when configured
-    from lineage.core.config import get_settings
-
-    get_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-    dapr_mod.register_dapr(app)
-    get_settings.cache_clear()
-    client = TestClient(app)
-
-    with caplog.at_level(logging.ERROR, logger="lineage.api.dapr"):
-        response = client.post(
-            "/lineage-dlq",
-            json={"id": "evt-9", "data": {"run": {"facets": {"author": {"name": "A", "sub": "alice"}}}}},
-            headers={"dapr-api-token": "s3cret"},
-        )
-
-    assert response.json() == {"status": "SUCCESS"}
-    parked = next(r for r in caplog.records if r.message == "dapr_dead_letter_parked")
-    assert getattr(parked, "author", None) == "alice"

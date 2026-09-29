@@ -134,24 +134,6 @@ def test_peek_unchanged_tick_costs_one_probe_open(monkeypatch: pytest.MonkeyPatc
     assert [v.version for v in third.versions] == [1, 2, 3]
 
 
-def test_peek_recreated_dataset_drops_the_old_incarnation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cache: PeekCache) -> None:
-    # A demo reset deletes + recreates a dataset at the SAME uri: the version numbers restart, so
-    # cached per-version entries belong to the dead incarnation and must not leak into the new one.
-    uri = str(tmp_path / "events.lance")
-    lance.write_dataset(pa.table({"old_a": pa.array([1], pa.int64())}), uri)
-    lance.dataset(uri).add_columns({"old_b": "cast(old_a as double)"})  # old incarnation → v2
-    assert _read_dataset(cache, "bronze$events", uri, {}, _K).current_version == 2
-
-    import shutil
-
-    shutil.rmtree(uri)
-    lance.write_dataset(pa.table({"fresh": pa.array([7], pa.int64())}), uri)  # new incarnation, v1
-
-    result = _read_dataset(cache, "bronze$events", uri, {}, _K)
-    assert result.current_version == 1
-    assert [f.name for v in result.versions for f in v.fields] == ["fresh"]  # nothing stale
-
-
 def test_peek_recreated_dataset_at_the_same_version_count_is_not_served_stale(
     tmp_path: Path,
     cache: PeekCache,

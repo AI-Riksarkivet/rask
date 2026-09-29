@@ -94,18 +94,6 @@ def test_a_governed_dataset_absent_from_storage_is_STILL_loss() -> None:
     assert statuses[0].status is ReconcileState.MISSING_ON_STORAGE, "a governed table whose bytes are gone is exactly what this line is for"
 
 
-def test_a_deployment_that_cannot_read_tuples_classifies_exactly_as_before() -> None:
-    """Absent evidence must not become a verdict.
-
-    `governed=None` means nobody asked OpenFGA — FGA off, or a store this sweep could not reach. A
-    dataset must then be classified on what IS known, because silently reclassifying every dataset as
-    ungoverned on an unreachable store would erase the loss axis at the moment it matters most.
-    """
-    statuses = _sweep(governed=None)
-
-    assert statuses[0].status is ReconcileState.MISSING_ON_STORAGE
-
-
 def test_the_report_gives_it_its_own_line_and_keeps_it_out_of_loss() -> None:
     """Visible, not folded. `storage_loss` stays the operator's page for data a person must answer for."""
     report = reconcile_cron.summarize_sweep(

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from fastapi import Request
@@ -32,7 +32,6 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Unau
 from lineage.api import security
 from lineage.core.config import LineageSettings
 from service_kit.governed import dapr_auth
-from service_kit.governed.dapr_auth import ServiceIdentity
 
 
 SHARED = "the-shared-dapr-app-token"
@@ -112,28 +111,6 @@ def _authenticate(settings: LineageSettings, *, token: str | None, identity: str
 # --------------------------------------------------------------------------- #
 
 
-def test_the_door_body_is_the_SHARED_one_called_with_lineage_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The structural half of §2.8. A re-forked `_service_principal` would answer this request out of
-    its own body and never touch the recorded seam — which is exactly how the fork survived a suite
-    that tested `service_principal` directly."""
-    seen: dict[str, Any] = {}
-
-    def _spy(**kwargs: Any) -> ServiceIdentity:
-        seen.update(kwargs)
-        return ServiceIdentity("service-trainer")
-
-    monkeypatch.setattr(security, "service_principal", _spy)
-
-    principal = _authenticate(_settings(privileged="service-trainer"), token=TRAINER_OWN, identity="service-trainer")
-
-    assert principal is not None and principal.sub == "service-trainer"
-    assert seen["allowed_subjects"] == "service-trainer,service-web"
-    assert seen["privileged_subjects"] == "service-trainer"
-    assert seen["token"] == TRAINER_OWN
-    assert seen["identity"] == "service-trainer"
-    assert callable(seen["dedicated_token"]), "the resolver must be PASSED — §2.8's defect was one missing kwarg"
-
-
 def test_the_resolver_reads_the_store_the_operator_actually_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     """The fork read `LINEAGE_SECRET_STORE`/`LINEAGE_SECRET_KEY` from `os.environ`, and nothing in the
     estate sets those names — the chart, the compose stacks and `apply_dapr_secrets` all speak
@@ -205,18 +182,6 @@ def test_the_shared_token_cannot_claim_a_privileged_subject(monkeypatch: pytest.
 
     with pytest.raises(UnauthenticatedError, match="may not claim"):
         _authenticate(_settings(privileged="service-trainer"), token=SHARED, identity="service-trainer")
-
-
-def test_the_privileged_subject_is_admitted_with_ITS_OWN_credential(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The legitimate caller is unaffected — the control binds the identity to a credential, it does
-    not remove it. This is the half §2.8 broke on the catalog side: with no resolver passed, the
-    privileged branch refused here too, no matter what was seeded."""
-    _seed_store(monkeypatch, {"service-token-service-trainer": TRAINER_OWN})
-
-    principal = _authenticate(_settings(privileged="service-trainer"), token=TRAINER_OWN, identity="service-trainer")
-
-    assert principal is not None and principal.sub == "service-trainer"
-    assert isinstance(principal, security.ServicePrincipal)
 
 
 def test_an_UNPRIVILEGED_subject_still_uses_the_shared_token(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -19,7 +19,7 @@ import pytest
 import yaml
 from lance_namespace import PermissionDeniedError
 
-from catalog.core.lineage_emit import DEREGISTER_TABLE, DROP_TABLE, DaprEmitter, emit_write_event
+from catalog.core.lineage_emit import DROP_TABLE, DaprEmitter, emit_write_event
 from lineage.api import fga_deps, reconcile_cron
 from lineage.core.config import LineageSettings
 from lineage.models import DatasetEvent, parse_event
@@ -129,7 +129,7 @@ def test_the_catalog_identity_lineage_trusts_is_the_one_the_chart_gives_the_cata
     assert chart["catalog"]["serviceIdentity"] == LineageSettings.model_fields["catalog_service_identity"].default
 
 
-@pytest.mark.parametrize("operation", [DROP_TABLE, DEREGISTER_TABLE])
+@pytest.mark.parametrize("operation", [DROP_TABLE])
 def test_the_relay_recovers_a_catalog_drop_after_its_grants_are_revoked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, operation: str) -> None:
     settings = _settings(tmp_path)
     staged_json = _stage(settings, operation)

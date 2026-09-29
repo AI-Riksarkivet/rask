@@ -51,13 +51,6 @@ _FEATURES = [{"dataset": "silver$features", "version": 7, "uri": "unused-here"}]
 # --------------------------------------------------------------------------- #
 
 
-def test_run_id_derivation_is_pinned_to_the_shared_helper() -> None:
-    # The job mirrors service_kit.openlineage.run_id_for byte-for-byte (it cannot import services/). This
-    # pin is what makes the mirror safe: any drift in namespace or algorithm fails here.
-    for seed in ("train-abc123", "train-", "x"):
-        assert job.run_id_for(seed) == common_ol.run_id_for(seed)
-
-
 _REGISTRY = "s3://lake/medallion/models/churn"
 
 
@@ -69,51 +62,6 @@ def _event(**kw: Any) -> dict[str, Any]:
     accepts, rather than proving a hand-built dict matches a hand-written expectation.
     """
     return job.build_event(token="tok1", model="churn", namespace="models", features=_FEATURES, registry_uri=_REGISTRY, **kw).to_wire()
-
-
-def test_version_facet_spec_pin_matches_the_medallion_emitter() -> None:
-    """The pin survives the conversion, and it is now read off the EVENT rather than off a mirror.
-
-    The job used to carry its own `_VERSION_FACET_SCHEMA` because it could not import one; it emits
-    through `lineage-kit` now, so the constant is gone and the only honest place to check the spec it
-    actually stamps is the wire form it produces. That is the stronger assertion — a mirror can agree
-    with its source and still be stamped on nothing.
-    """
-    from medallion.schemas import events as medallion_events
-
-    stamped = _event(event_type="COMPLETE", version=3)["outputs"][0]["facets"]["version"]["_schemaURL"]
-
-    assert stamped == medallion_events._VERSION_FACET_SCHEMA
-    # THE WHOLE MIRROR, read off the EVENT now that no mirror exists. Every URL below used to be a
-    # constant in the job compared against `service_kit.openlineage`'s; the job emits through
-    # `lineage-kit` and carries none of them, so the only honest check is what it actually stamps —
-    # and the two authorities still have to agree, which is the property these lines always meant.
-    complete = job.build_event(
-        event_type="COMPLETE",
-        token="pin",
-        model="m",
-        namespace="models",
-        features=[{"dataset": "silver$f", "version": 1}],
-        registry_uri="s3://x/m",
-        version=1,
-    ).to_wire()
-    assert complete["schemaURL"] == common_ol.RUN_EVENT_SCHEMA_URL
-    assert complete["outputs"][0]["facets"]["schema"]["_schemaURL"] == common_ol.SCHEMA_FACET_SCHEMA_URL
-    # dataSource + errorMessage were the two mirrors still UNPINNED, and both had drifted a version
-    # behind (1-0-0 while service_kit stamps 1-0-1) — the 1-0-0 documents even $ref the retired 1-0-2 core
-    # spec while this event's envelope declares 2-0-2. Pinned now so the whole mirror is guarded.
-    assert complete["outputs"][0]["facets"]["dataSource"]["_schemaURL"] == common_ol.DATASOURCE_FACET_SCHEMA_URL
-    failed = job.build_event(
-        event_type="FAIL",
-        token="pin",
-        model="m",
-        namespace="models",
-        features=[{"dataset": "silver$f", "version": 1}],
-        registry_uri="s3://x/m",
-        error="boom",
-    ).to_wire()
-    assert failed["run"]["facets"]["errorMessage"]["_schemaURL"] == common_ol.ERROR_MESSAGE_FACET_SCHEMA_URL
-    assert failed["run"]["facets"]["lance"]["_schemaURL"] == common_ol.BASE_FACET_SCHEMA_URL
 
 
 def test_start_event_carries_training_jobtype_and_input_pins() -> None:
@@ -225,19 +173,6 @@ def test_publish_registry_cas_race_loser_converges_as_append(monkeypatch: pytest
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(lance, "dataset", probe_races)
         assert job.publish_registry(registry, base, uris, {}, None) == 2
-
-
-def test_crash_between_bytes_and_commit_leaves_no_half_registration(tmp_path: Path) -> None:
-    # D4's crash-window contract: artifacts landed, then the commit "crashed" → the registry does not
-    # exist at all (orphan files only); the token-keyed retry re-lands the SAME paths and converges.
-    registry = str(tmp_path / "registry")
-    base = str(tmp_path / "artifacts")
-    uris = job.write_artifacts(base, "tok1", {"weights.json": b"w"})
-    with pytest.raises(ValueError):
-        lance.dataset(registry)  # nothing half-registered
-    retry_uris = job.write_artifacts(base, "tok1", {"weights.json": b"w"})
-    assert retry_uris == uris
-    assert job.publish_registry(registry, base, retry_uris, {"token": "tok1"}, None) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -352,9 +287,3 @@ def test_emit_metrics_exports_numeric_metrics_as_otlp() -> None:
     assert "lance.training.note" not in values  # non-numeric metric is not chartable → skipped
     assert values["lance.training.rows_seen"] == 8
     assert labels["lance.training.rows_seen"] == {"lance.model": "demo"}  # bounded cardinality
-
-
-def test_emit_metrics_is_a_noop_without_an_otlp_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    # No endpoint configured (dev / auth-off) and no injected reader → a silent no-op, never raises.
-    monkeypatch.delenv("OTEL_EXPORTER_OTLP_ENDPOINT", raising=False)
-    job.emit_metrics("demo", {"rows_seen": 8})

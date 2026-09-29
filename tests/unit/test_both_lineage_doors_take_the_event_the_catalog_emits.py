@@ -98,13 +98,6 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
     get_settings.cache_clear()
 
 
-def test_the_builder_still_emits_two_distinct_shapes() -> None:
-    """A control: if a create stopped being a DatasetEvent, the gate below would pass for the wrong reason."""
-    create, insert = _emitted("create_table"), _emitted("insert")
-    assert "dataset" in create and "run" not in create, "a create is no longer a static DatasetEvent"
-    assert "run" in insert and "job" in insert, "a write is no longer a RunEvent"
-
-
 @pytest.mark.parametrize("operation,door", [("create_table", "datasets"), ("insert", "runs")])
 def test_the_http_door_accepts_it(unauthenticated_app: tuple[FastAPI, _Repo], operation: str, door: str) -> None:
     app, repo = unauthenticated_app

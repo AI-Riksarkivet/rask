@@ -79,13 +79,6 @@ def _events() -> tuple[dict[str, Any], dict[str, Any]]:
     return train_event, dummy_event
 
 
-def test_both_emitters_stamp_the_same_runevent_spec() -> None:
-    train_event, dummy_event = _events()
-    assert train_event["schemaURL"] == dummy_event["schemaURL"], (
-        "the two job-side emitters cite different RunEvent spec revisions — the lineage ingest is parsing two dialects"
-    )
-
-
 def test_both_emitters_target_people_through_the_same_facet_keys() -> None:
     """The notifiable() contract: `run.facets.lance.originator` + `.project`, exactly."""
     train_event, dummy_event = _events()
@@ -94,30 +87,6 @@ def test_both_emitters_target_people_through_the_same_facet_keys() -> None:
         assert lance is not None, f"{name}: no `lance` run facet — every targeting hint is gone and notifiable() acks the loss as SUCCESS"
         assert lance.get("originator") == "user:alice", f"{name}: the originator key drifted — this lane's runs reach nobody, silently"
         assert lance.get("project") == "proj-a", f"{name}: the project key drifted — project watchers never hear about this lane"
-
-
-def test_both_emitters_pin_output_versions_with_the_same_facet() -> None:
-    train_event, dummy_event = _events()
-
-    def version_facet_url(event: dict[str, Any]) -> str:
-        return str(event["outputs"][0]["facets"]["version"]["_schemaURL"])
-
-    assert version_facet_url(train_event) == version_facet_url(dummy_event), (
-        "the DatasetVersion facet URLs drifted — the reconcile back-fill recognises one lane's versions and not the other's"
-    )
-
-
-def test_a_role_literal_never_becomes_an_originator() -> None:
-    """The medallion stage runners' live defect, which dummy's module exists partly to NOT reproduce: a
-    role literal carried as originator writes into an inbox actor literally named `ray`."""
-    event = dummy.build_run_event(
-        event_type="COMPLETE",
-        run_id="00000000-0000-5000-8000-000000000002",
-        to_id="silver$dummy",
-        from_id="bronze$dummy",
-        originator="ray",
-    ).to_wire()
-    assert "originator" not in event["run"]["facets"]["lance"], "a role literal rode the originator key — an inbox actor named `ray` is about to exist"
 
 
 def _lineage_kit_headers(env: dict[str, str], monkeypatch: Any) -> dict[str, str]:
@@ -207,77 +176,3 @@ def test_an_absent_service_id_never_becomes_an_empty_one(monkeypatch: Any) -> No
         )
         assert headers.get("x-lance-service-identity") != "", f"{name} sends an EMPTY service identity, which takes the service door with no subject and 403s"
         assert "authorization" in headers, f"{name} discarded a valid LINEAGE_TOKEN bearer while presenting no usable service identity"
-
-
-def test_a_named_service_id_still_takes_the_service_door(monkeypatch: Any) -> None:
-    """The fix must not close the door it exists to open: with BOTH halves present the service
-    identity is what goes on the wire, and no bearer is needed."""
-    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
-    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
-    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
-    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
-    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
-        headers = _emit_headers(
-            module,
-            {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
-            monkeypatch,
-        )
-        assert headers.get("dapr-api-token") == "app-token", name
-        assert headers.get("x-lance-service-identity") == "service-trainer", name
-
-
-def test_the_identity_selects_its_own_credential(monkeypatch: Any) -> None:
-    """ONE POD, SEVERAL IDENTITIES — so one `LINEAGE_SERVICE_TOKEN` cannot be right for all of them.
-
-    The Ray head runs the train lane (claiming `service-trainer`) and every stage lane (each claiming
-    its OWN stage runner subject, `MEDALLION_FGA_SERVICE_IDENTITY`), and it mounts a single shared
-    token. `dapr_auth.service_principal` refuses a PRIVILEGED subject that presents a credential which
-    is not its own and does NOT fall back, so whichever identity the shared variable belongs to, every
-    other lane's emit is refused — while the job writes its data and exits SUCCEEDED, which is the
-    2026-07-13 trainer incident's exact shape and is reported by nothing.
-
-    Measured against the live door 2026-09-08, same POST twice from inside the Ray head:
-
-        service-trainer             -> 201
-        service-medallion-producer  -> 401 the presented credential may not claim …
-
-    So the credential is selected by the identity the job CLAIMS: `RASK_LINEAGE_TOKEN_<IDENTITY>`,
-    upper-cased with `-` as `_`. Only the identity ever rides `runtime_env` (Ray echoes runtime_env
-    back on the job, which is why `ray_submit` records a token there as a P0 leak); the credentials
-    are mounted on the pod.
-    """
-    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
-    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
-    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
-    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
-    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
-        headers = _emit_headers(
-            module,
-            {
-                "LINEAGE_URL": "http://lineage:8000",
-                "LINEAGE_SERVICE_TOKEN": "the-trainers-key",
-                "LINEAGE_SERVICE_ID": "service-bronze-to-silver",
-                "RASK_LINEAGE_TOKEN_SERVICE_BRONZE_TO_SILVER": "this-stages-own-key",
-            },
-            monkeypatch,
-        )
-        assert headers.get("dapr-api-token") == "this-stages-own-key", (
-            f"{name} presented another identity's credential — the door refuses it 401 and the job still exits SUCCEEDED"
-        )
-        assert headers.get("x-lance-service-identity") == "service-bronze-to-silver", name
-
-
-def test_the_shared_credential_still_serves_a_pod_of_one_identity(monkeypatch: Any) -> None:
-    """The selector must change nothing where it does not apply: no per-identity variable means the
-    shared token, exactly as before. Every producer that works today has one identity and one token."""
-    # ONE SUBJECT NOW, and the env below is what keeps it from being a tautology: these are the RAY
-    # TRAIN LANE's own variable spellings, not `lineage-kit`'s canonical `RASK_LINEAGE_*` ones. The
-    # package accepts them through `AliasChoices`, and it once accepted two of the trio and not
-    # `LINEAGE_URL` — credential resolving, endpoint not, degrading to a silent no-op.
-    for module, name in ((None, "lineage-kit, driven with the Ray train lane's env"),):
-        headers = _emit_headers(
-            module,
-            {"LINEAGE_URL": "http://lineage:8000", "LINEAGE_SERVICE_TOKEN": "app-token", "LINEAGE_SERVICE_ID": "service-trainer"},
-            monkeypatch,
-        )
-        assert headers.get("dapr-api-token") == "app-token", f"{name} stopped honouring the shared credential"

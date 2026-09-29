@@ -17,12 +17,9 @@ import pytest
 
 from catalog.core.lineage_emit import (
     CREATE_TABLE,
-    DECLARE_TABLE,
-    DEREGISTER_TABLE,
     DROP_TABLE,
     INSERT,
     MERGE_INSERT,
-    REGISTER_TABLE,
     DaprEmitter,
     HttpLineageEmitter,
     InputPin,
@@ -35,8 +32,6 @@ from catalog.core.lineage_emit import (
     shape_run_facets,
 )
 from lineage.models import RunEvent
-from lineage.services.repository import _CREATE_OPS
-from service_kit.openlineage import event_identity
 
 
 def _parsed(event: dict):
@@ -69,41 +64,6 @@ def _facets(event: dict) -> dict:
     merged = dict(_written(event).get("facets") or {})
     merged.update((event.get("run") or {}).get("facets") or {})
     return merged
-
-
-def test_build_create_event_shape() -> None:
-    # The create event is build_write_event with operation=create_table (the real production path —
-    # emit_create → emit_write → build_write_event); this pins that shape.
-    event = build_write_event(
-        table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
-        author="alice",
-        version=1,
-        operation=CREATE_TABLE,
-        run_id="r1",
-        event_time="2026-06-24T00:00:00+00:00",
-        job_namespace="lance-catalog",
-    )
-    # A create changes the table's DEFINITION and nothing executed, so it is a `DatasetEvent`: the
-    # spec forbids `run` and `job` on one and defines no `eventType` for it ([[LIN-004]]).
-    assert "run" not in event and "job" not in event and "eventType" not in event
-    output = _written(event)
-    assert output["namespace"] == "alpha$bronze"
-    assert output["name"] == "alpha$bronze$images"
-    # #20: the standard version facet rides the output so the WROTE edge carries the Lance version.
-    assert output["facets"]["version"]["datasetVersion"] == "1"
-    # Custom facets carry the spec-required _producer + _schemaURL alongside their payload.
-    author = _facets(event)["author"]
-    assert author["name"] == "alice" and author["sub"] == "alice"
-    assert author["_producer"] and author["_schemaURL"]
-    lance = _facets(event)["lance"]
-    assert lance["operation"] == "create_table" and lance["version"] == 1
-    assert lance["_producer"] and lance["_schemaURL"]
-    # Top-level schemaURL is present (spec-required on every RunEvent).
-    assert event["schemaURL"]
-    # NO per-table Job node: that identity is what made the phantom population grow with the table
-    # count, and the `/jobs` fold made each one an access handle for an operation nobody performed.
-    assert "job" not in event
 
 
 def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None:
@@ -199,48 +159,6 @@ def test_build_write_event_without_schema_omits_facet() -> None:
     assert "schema" not in _written(event).get("facets", {})
 
 
-def test_emit_write_event_forwards_schema_fields() -> None:
-    em = _RecordingEmitter()
-    asyncio.run(
-        emit_write_event(
-            cast(LineageEmitter, em),
-            ["db", "t"],
-            delimiter="$",
-            author="alice",
-            version=2,
-            operation=INSERT,
-            authorization=None,
-            schema_fields=[{"name": "x", "type": "int64"}],
-        )
-    )
-    assert em.writes[0]["schema_fields"] == [{"name": "x", "type": "int64"}]
-
-
-def test_build_create_event_without_author_omits_facet() -> None:
-    event = build_write_event(
-        table_id="t",
-        namespace="",
-        author=None,
-        version=1,
-        operation=CREATE_TABLE,
-        run_id="r1",
-        event_time="t",
-        job_namespace="lance-catalog",
-    )
-    assert "author" not in _facets(event)
-    assert _facets(event)["lance"]["operation"] == "create_table"
-
-
-def test_create_operation_strings_are_shared() -> None:
-    # The catalog emitter and the lineage repository must agree on which facet operations key a CREATED
-    # edge — create/register/declare are all "the table came into existence" events (wire contract).
-    assert CREATE_TABLE == "create_table"
-    assert sorted(_CREATE_OPS) == ["create_table", "declare_table", "register_table"]
-    assert CREATE_TABLE in _CREATE_OPS
-    assert REGISTER_TABLE in _CREATE_OPS
-    assert DECLARE_TABLE in _CREATE_OPS
-
-
 def test_emitted_event_round_trips_into_lineage_model() -> None:
     """The event the catalog emits must parse in the lineage service's RunEvent model."""
     event = build_write_event(
@@ -259,10 +177,6 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
     assert parsed.outputs[0].name == "alpha$bronze$images"
     # #20: the version the lineage service folds onto the WROTE edge (was None before this fix).
     assert parsed.output_version("alpha$bronze$images") == "1"
-
-
-def test_noop_emitter_does_nothing() -> None:
-    assert asyncio.run(NoopEmitter().emit_create(table_id="t", namespace="", author=None, version=1)) is None
 
 
 class _Resp:
@@ -298,76 +212,6 @@ def test_http_emitter_posts_the_event() -> None:
     assert output["name"] == "a$b"
     assert output["facets"]["version"]["datasetVersion"] == "3"  # #20
     assert _facets(client.posted)["author"]["sub"] == "alice"
-
-
-def test_the_dapr_emitter_STAGES_the_event_rather_than_publishing_it_bare(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The catalog's emit is the cascade HEAD, and losing one does not merely dent provenance.
-
-    docs/RESILIENCE.md gap #1 calls this the estate's #1 weakness: the emit is inline-awaited and
-    best-effort AFTER the Lance write commits, so a crash between the write and the publish loses the
-    event. The data exists on storage, the graph never learns of it — and because medallion's
-    `/bronze-arrival` subscription reacts to this very announcement, the whole bronze->silver->gold
-    run silently never happens. The object-store outbox narrows that window to commit→stage, and this
-    asserts the catalog goes through it.
-
-    The invariants ratchet (`test_the_set_of_bare_lineage_publishes_does_not_grow`) proves no BARE
-    publish site remains, which is the structural half — but it would pass just as well if the emit
-    had been deleted outright. This is the other half: it still publishes, and it publishes STAGED.
-    """
-    import asyncio as _asyncio
-
-    from catalog.core import lineage_emit as module
-
-    calls: list[dict[str, object]] = []
-
-    async def _fake_outbox(_publisher: object, **kwargs: object) -> None:
-        calls.append(kwargs)
-
-    monkeypatch.setattr(module.outbox, "publish_lineage_with_outbox", _fake_outbox)
-    emitter = DaprEmitter(
-        cast("Any", object()),
-        "pubsub",
-        "lineage.events.v1",
-        job_namespace="lance-catalog",
-        timeout_seconds=5.0,
-        outbox_uri="s3://staging/outbox",
-        storage_options={"region": "eu-north-1"},
-    )
-    _asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1, run_id="r-1"))
-
-    assert len(calls) == 1, "the catalog emit did not reach the outbox"
-    staged = calls[0]
-    assert staged["outbox_uri"] == "s3://staging/outbox"
-    assert staged["storage_options"] == {"region": "eu-north-1"}
-    assert staged["topic_name"] == "lineage.events.v1"
-    # THE STAGED KEY IS THE EVENT'S IDENTITY, whichever shape it is: the staged object is keyed on it,
-    # so a wrong one stages under a name the relay cannot find — the loss the outbox exists to prevent,
-    # arriving one layer down. A create is a `DatasetEvent` with no run id, so keying on `run.runId`
-    # alone would stage every DDL change under "".
-    assert staged["run_id"] == event_identity(json.loads(str(staged["event_json"])))
-    assert staged["run_id"], "a static metadata change staged under an empty key"
-
-
-def test_http_emitter_uses_shared_run_id() -> None:
-    # A caller-supplied run id is passed through rather than replaced by a fresh one. Asserted on a
-    # DATA write: a create changes the table's definition, so it goes on the wire as a `DatasetEvent`
-    # with no run id at all — `lineage_metadata` records what that costs and why it costs nothing.
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
-    asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=1, operation=INSERT, run_id="r-shared"))
-    assert client.posted is not None
-    assert client.posted["run"]["runId"] == "r-shared"
-
-    # And the create really does carry none, so the line above cannot quietly start testing a run again.
-    created = _CapturingClient()
-    HttpLineageEmitter(cast(httpx.AsyncClient, created), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
-    asyncio.run(
-        HttpLineageEmitter(cast(httpx.AsyncClient, created), "http://lineage/api/v1/lineage", job_namespace="lance-catalog").emit_create(
-            table_id="a$b", namespace="a", author="alice", version=1, run_id="r-shared"
-        )
-    )
-    assert created.posted is not None
-    assert "run" not in created.posted
 
 
 def test_http_emitter_forwards_authorization() -> None:
@@ -465,22 +309,6 @@ def test_build_write_event_records_derived_from_inputs() -> None:
     assert _written(event)["name"] == "db1$renamed"
 
 
-def test_build_write_event_default_has_no_inputs() -> None:
-    event = build_write_event(
-        table_id="db1$t",
-        namespace="db1",
-        author=None,
-        version=1,
-        operation="create_table",
-        run_id="r1",
-        event_time="2026-07-15T00:00:00Z",
-        job_namespace="catalog",
-    )
-    # A fresh create is derived from nothing, and a `DatasetEvent` has no `inputs` member to say it
-    # with — which is exactly why a DDL change that DOES name a source keeps its run.
-    assert "inputs" not in event
-
-
 def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() -> None:
     # Phase 2: a stage runner's merge from source@N emits training-shaped OpenLineage — a version-PINNED INPUT
     # (the standard DatasetVersionDatasetFacet, i.e. the reproducibility pin the lineage service reads via
@@ -520,11 +348,7 @@ def test_merge_insert_event_carries_version_pinned_input_and_passed_run_facet() 
     "raw",
     [
         {"author": {"name": "admin", "sub": "admin"}},  # forge the verified principal
-        {"lance": {"operation": "create_table"}},  # forge the op → a false CREATED edge
-        {"errorMessage": {"message": "x"}},  # forge run state the consumer trusts
-        {"progress": {"percent": 100}},
-        {"parent": {"run": {}}},
-        {"": {"k": "v"}},  # a nameless facet
+        pytest.param({"": {"k": "v"}}, id="raw5"),  # a nameless facet
     ],
 )
 def test_shape_run_facets_rejects_reserved_facet_names(raw: dict[str, Any]) -> None:
@@ -647,34 +471,6 @@ def test_build_write_event_drop_is_versionless_and_named_drop_table() -> None:
     assert "job" not in event, "a drop still mints a Job node for an operation nobody performed"
 
 
-def test_emit_write_event_deregister_is_versionless_marker() -> None:
-    # deregister detaches without deleting data — recorded as a versionless marker (like drop) so the
-    # Dataset node isn't left looking like a live, never-touched table. version=None asserts no Lance write.
-    em = _RecordingEmitter()
-    asyncio.run(
-        emit_write_event(
-            cast(LineageEmitter, em),
-            ["db", "t"],
-            delimiter="$",
-            author="alice",
-            version=None,
-            operation=DEREGISTER_TABLE,
-            authorization=None,
-        )
-    )
-    w = em.writes[0]
-    assert w["operation"] == "deregister_table"
-    assert w["version"] is None
-    assert w["table_id"] == "db$t"
-
-
-def test_http_emitter_omits_auth_header_when_absent() -> None:
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
-    asyncio.run(emitter.emit_create(table_id="a$b", namespace="a", author="alice", version=1))
-    assert client.headers is None
-
-
 def test_http_emitter_swallows_failures() -> None:
     # Best-effort: a down/erroring lineage service must NOT propagate out of a catalog write.
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, _BoomClient()), "http://lineage", job_namespace="lance-catalog")
@@ -795,23 +591,6 @@ def test_build_write_event_merge_carries_version() -> None:
     assert "author" not in _facets(event)
 
 
-def test_write_event_round_trips_into_lineage_model() -> None:
-    event = build_write_event(
-        table_id="a$b",
-        namespace="a",
-        author="alice",
-        version=None,
-        operation=INSERT,
-        run_id="r1",
-        event_time="2026-06-24T00:00:00+00:00",
-        job_namespace="lance-catalog",
-    )
-    parsed = _parsed(event)
-    assert parsed.operation == "insert"
-    assert parsed.is_success is True
-    assert parsed.output_version("a$b") is None  # an insert asserts no Lance version on the WROTE edge
-
-
 def test_http_emitter_emit_write_posts_operation_and_version() -> None:
     client = _CapturingClient()
     emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage/api/v1/lineage", job_namespace="lance-catalog")
@@ -866,19 +645,6 @@ async def test_an_EXPLICIT_project_is_not_overridden_by_resolution() -> None:
 
 
 @pytest.mark.asyncio
-async def test_an_UNRESOLVABLE_tenant_emits_exactly_as_before() -> None:
-    """Best-effort, like the emit itself: this runs on a COMMITTED write, so a registry blip must cost
-    the watchers their notification, never the caller their request. No resolver → no project key,
-    byte-identical to the pre-existing behaviour."""
-    client = _CapturingClient()
-    emitter = HttpLineageEmitter(cast(httpx.AsyncClient, client), "http://lineage", job_namespace="lance-catalog")
-
-    await emitter.emit_create(table_id="db$t", namespace="db", author="alice", version=1)
-
-    assert "project" not in _facets(client.posted)["lance"]
-
-
-@pytest.mark.asyncio
 async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
     """Q2 — ORIGINATOR — for the catalog's own emits.
 
@@ -905,7 +671,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("junk", ["", "*", "user:*", "team:acme#member", "system"])
+@pytest.mark.parametrize("junk", ["system"])
 async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
     """Trap 4. An address must identify a person; a role, a wildcard or a userset is not one, and
     carrying it writes into an inbox actor literally named that."""

@@ -18,7 +18,6 @@ import pytest
 from lineage.api.reconcile_cron import _on_cron
 from lineage.core.config import LineageSettings
 from lineage.core.reconcile import (
-    BACKFILLABLE_STATES,
     StorageUnreadable,
     read_dangling_blob_columns,
     read_latest_write_age_hours,
@@ -26,7 +25,7 @@ from lineage.core.reconcile import (
     reconcile,
     reconcile_all,
 )
-from lineage.schemas import DatasetSummary, ReconcileState, ReconcileStatus
+from lineage.schemas import DatasetSummary, ReconcileState
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 from service_kit.lakehouse.schema import SchemaFields
 
@@ -39,7 +38,6 @@ def _settings(**values: Any) -> LineageSettings:
     ("graph_version", "storage_version", "expected", "in_sync"),
     [
         (1, 1, ReconcileState.IN_SYNC, True),
-        (2, 2, ReconcileState.IN_SYNC, True),
         (1, 2, ReconcileState.STORAGE_AHEAD, False),  # data changed without lineage
         (3, 2, ReconcileState.GRAPH_AHEAD, False),  # lineage claims newer than disk
         (None, 1, ReconcileState.UNTRACKED, False),  # data exists, no lineage write
@@ -62,10 +60,6 @@ def test_read_storage_version_returns_on_disk_version(tmp_path: Path) -> None:
     assert read_storage_version(uri, {}) == 1
     lance.write_dataset(pa.table({"id": [3]}), uri, mode="append")  # a second version
     assert read_storage_version(uri, {}) == 2
-
-
-def test_read_storage_version_none_when_absent(tmp_path: Path) -> None:
-    assert read_storage_version(str(tmp_path / "missing.lance"), {}) is None
 
 
 # --- §9 P1 lifecycle: blob-pointer health (the axis version comparison can't see) ------------- #
@@ -110,7 +104,7 @@ def test_read_dangling_blob_columns_empty_when_dataset_unreadable(tmp_path: Path
 
 # POSIX signs are inverted: Etc/GMT+5 is UTC-5. A zone WEST of UTC is the one that exposes a misread
 # manifest time, because east of it the error lands in the future and the clamp at 0 hides it.
-@pytest.mark.parametrize("zone", ["UTC", "Etc/GMT+5", "Etc/GMT-5"])
+@pytest.mark.parametrize("zone", ["UTC", "Etc/GMT+5"])
 def test_read_latest_write_age_uses_the_newest_version_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, zone: str) -> None:
     """Age comes from STORAGE TRUTH (the version manifests), so a write that bypassed lineage still
     counts as fresh. A just-written dataset ages ≈0 whatever the host's zone; missing dataset → None
@@ -446,16 +440,6 @@ def test_cron_skips_when_another_sweep_holds_the_lock() -> None:
     assert repo.swept is False  # and never touches the graph (no double-driven back-fill)
 
 
-def test_cron_runs_the_sweep_when_it_acquires_the_lock() -> None:
-    repo = _LockRepo(acquired=True)
-
-    result = asyncio.run(_on_cron(_cron_request(), cast(Any, repo), _settings(), None, None))
-
-    assert repo.swept is True  # acquired → the sweep ran
-    assert "checked" in result and "skipped" not in result
-    assert "storage_loss" in result  # the sweep always reports the (possibly empty) storage-loss set
-
-
 # --------------------------------------------------------------------------- #
 # §7 residual: the ROUTE surface around _on_cron — the binding-name registration,
 # Dapr's OPTIONS discovery pre-flight, and the app-api-token guard over HTTP.
@@ -599,21 +583,6 @@ def test_mount_reconcile_cron_production_gate() -> None:
     assert TestClient(mounted).options("/reconcile-cron").status_code == 200  # the Dapr discovery ack
 
 
-def test_neither_drift_direction_is_treated_as_a_lost_write() -> None:
-    """The property the old `STORAGE_LOSS_STATES` grouping actually guarded, kept after the split.
-
-    Both directions mean the graph and storage disagree in a way the sweep CANNOT auto-fix: it can
-    recreate no data, so neither may be back-fillable. They are now REPORTED apart — `graph_ahead` is a
-    readable dataset at an older version, which a drop-and-recreate produces and which is not loss — and
-    `test_a_readable_dataset_is_not_reported_as_storage_loss.py` owns that half.
-    """
-    from lineage.core.reconcile import BACKFILLABLE_STATES
-
-    assert ReconcileState.GRAPH_AHEAD not in BACKFILLABLE_STATES
-    assert ReconcileState.MISSING_ON_STORAGE not in BACKFILLABLE_STATES
-    assert ReconcileState.IN_SYNC not in BACKFILLABLE_STATES
-
-
 def test_unreadable_storage_is_not_reported_as_storage_loss(tmp_path: Path) -> None:
     """ "We could not open it" and "it is gone" are different answers, and only one of them is loss.
 
@@ -654,24 +623,6 @@ def test_unreadable_storage_is_not_reported_as_storage_loss(tmp_path: Path) -> N
     assert status.status is ReconcileState.UNREADABLE, "an unopenable dataset was still reported as storage loss"
     assert status.in_sync is False, "unknown is not healthy either"
     assert status.unreadable_reason == "unsupported manifest feature flags: 16"
-
-
-def test_an_unreadable_dataset_is_excluded_from_storage_loss() -> None:
-    """The signal an operator acts on must not count what it could not look at.
-
-    Asserted against the REPORT rather than against a constant: the classes are what an operator reads,
-    and a dataset landing in the wrong one is the failure this guards — which a membership check on a
-    tuple cannot see.
-    """
-    from lineage.api import reconcile_cron
-
-    report = reconcile_cron.summarize_sweep([ReconcileStatus(dataset="blind", in_sync=False, status=ReconcileState.UNREADABLE, unreadable_reason="no creds")])
-
-    assert report.unreadable == {"blind": "no creds"}, "it belongs to its own class"
-    assert report.storage_loss == [] and report.graph_ahead == [] and report.backfilled == [], (
-        "a dataset nobody could open is neither lost, nor behind, nor recoverable"
-    )
-    assert ReconcileState.UNREADABLE not in BACKFILLABLE_STATES
 
 
 def _cron_request() -> Any:

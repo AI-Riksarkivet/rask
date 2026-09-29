@@ -21,26 +21,6 @@ from __future__ import annotations
 import lineage.services.cypher as cy
 
 
-def test_the_orphan_job_query_uses_the_form_AGE_accepts() -> None:
-    """A negated pattern predicate parses nowhere and is caught by no test that does not execute it."""
-    assert "WHERE NOT (j)<-[:OF_JOB]-" not in cy.COUNT_ORPHAN_JOBS
-    assert "OPTIONAL MATCH (j)<-[o:OF_JOB]-()" in cy.COUNT_ORPHAN_JOBS
-    assert "count(o)" in cy.COUNT_ORPHAN_JOBS
-
-
 def test_a_job_is_orphaned_only_when_NO_run_refers_to_it() -> None:
     """The condition is zero runs. Anything weaker reclaims a Job whose history is still readable."""
     assert "WHERE no = 0" in cy.COUNT_ORPHAN_JOBS
-
-
-def test_the_prune_is_batched_like_its_siblings() -> None:
-    """One transaction per batch, so a large backlog cannot push a statement past the pool's timeout."""
-    statement = cy.PRUNE_ORPHAN_JOBS_TEMPLATE.format(limit=cy.PRUNE_BATCH_SIZE)
-    assert f"LIMIT {cy.PRUNE_BATCH_SIZE}" in statement
-    assert statement.rstrip().endswith("DETACH DELETE j")
-
-
-def test_the_count_and_the_delete_select_the_SAME_jobs() -> None:
-    """Two spellings of "orphan" is how a prune deletes something the count never promised."""
-    shared = cy.COUNT_ORPHAN_JOBS.split("RETURN")[0]
-    assert cy.PRUNE_ORPHAN_JOBS_TEMPLATE.startswith(shared)

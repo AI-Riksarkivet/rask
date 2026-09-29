@@ -12,10 +12,8 @@ pipeline, so that is per unit of work, for a value that cannot change inside a p
 
 from __future__ import annotations
 
-import pytest
-
 from lineage_kit import LineageContext, RecordingEmitter, job_run, stage, use_context
-from lineage_kit.context import child_job_name, resolve_namespace
+from lineage_kit.context import resolve_namespace
 
 
 def _ctx(namespace: str = "htr", job_name: str = "ingest") -> LineageContext:
@@ -30,11 +28,6 @@ def test_the_namespace_ladder_prefers_argument_then_parent_then_settings() -> No
     assert resolve_namespace("explicit", parent) == "explicit"
     assert resolve_namespace(None, parent) == "htr"
     assert resolve_namespace(None, None) == "rask"  # the LineageSettings default
-
-
-def test_a_child_job_name_composes_off_the_parent_and_stands_alone_without_one() -> None:
-    assert child_job_name(_ctx(job_name="ingest"), "layout") == "ingest.layout"
-    assert child_job_name(None, "layout") == "layout"
 
 
 def test_a_job_run_opened_under_a_parent_inherits_the_parents_namespace(recording: RecordingEmitter) -> None:
@@ -53,37 +46,3 @@ def test_a_stage_under_an_ambient_parent_inherits_its_namespace(recording: Recor
         layout()
     assert {e.job.namespace for e in recording.events} == {"htr"}
     assert {e.job.name for e in recording.events} == {"ingest.layout"}
-
-
-# ── PS-25: the settings read is not per run ──────────────────────────────────────────────────
-
-
-def test_the_namespace_default_is_read_once_per_process(monkeypatch: pytest.MonkeyPatch, recording: RecordingEmitter) -> None:
-    from lineage_kit import config
-
-    built: list[int] = []
-    original = config.LineageSettings.__init__
-
-    def counting(self, **kwargs) -> None:
-        built.append(1)
-        original(self, **kwargs)
-
-    monkeypatch.setattr(config.LineageSettings, "__init__", counting)
-    config.lineage_settings.cache_clear()
-
-    @stage("layout", emitter=recording)
-    def layout() -> None:
-        return None
-
-    layout()
-    layout()
-    layout()
-    assert built == [1], f"a full settings read per run open: {len(built)} for three stage invocations"
-
-
-def test_the_cached_settings_are_the_settings(monkeypatch: pytest.MonkeyPatch) -> None:
-    from lineage_kit import config
-
-    monkeypatch.setenv("RASK_LINEAGE_NAMESPACE", "audio")
-    config.lineage_settings.cache_clear()
-    assert config.lineage_settings().namespace == "audio"

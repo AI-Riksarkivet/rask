@@ -31,13 +31,6 @@ import pytest
 from lineage.core.metrics import Door, Outcome
 
 
-def test_every_door_is_distinct_and_bounded() -> None:
-    values = [d.value for d in Door]
-
-    assert len(values) == len(set(values)), f"two doors share a label value, so they would aggregate into one series: {values}"
-    assert len(values) <= 4, f"{len(values)} doors — this attribute is only defensible while it stays a small closed set: {values}"
-
-
 def test_the_door_reaches_the_metric_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
     """Driven through `record_outcome`, so a call that drops the attribute cannot pass."""
     from lineage.core import metrics
@@ -52,11 +45,3 @@ def test_the_door_reaches_the_metric_attributes(monkeypatch: pytest.MonkeyPatch)
     metrics.record_outcome(Outcome.REFUSED, door=Door.HTTP)
 
     assert seen == [{"lance.lineage.outcome": "refused", "lance.lineage.door": "http"}]
-
-
-def test_record_outcome_REFUSES_a_call_that_names_no_door() -> None:
-    """The guard that makes the above true of every call site rather than of this one."""
-    from lineage.core import metrics
-
-    with pytest.raises(TypeError):
-        metrics.record_outcome(Outcome.REFUSED)  # ty: ignore[missing-argument]

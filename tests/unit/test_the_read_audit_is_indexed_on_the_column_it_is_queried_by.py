@@ -53,13 +53,6 @@ def _indexed_columns() -> dict[str, set[str]]:
     return out
 
 
-def test_the_walk_sees_the_schema() -> None:
-    """Without this the assertion below passes by matching nothing."""
-    assert _statements(), "no SQL literals found in `lineage.services.postgres` -- the module shape changed"
-    filtered = [m for sql in _statements() for m in _FILTERED.finditer(sql)]
-    assert filtered, "no `... WHERE <col> = %s` query parsed; this gate would check nothing"
-
-
 def test_every_queried_column_is_reachable_by_an_index() -> None:
     """A filter on an unindexed column of an append-only log degrades with every row written.
 

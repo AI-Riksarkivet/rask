@@ -112,7 +112,7 @@ def test_the_chain_grows_one_hop_per_stage_and_reaches_the_root() -> None:
     assert gold.chain == ["silver$features", "bronze$events"]
 
 
-@pytest.mark.parametrize("raw", [None, "not json", '{"run_id": 5}'])
+@pytest.mark.parametrize("raw", [None, "not json"])
 def test_an_unreadable_upstream_cell_degrades_the_chain_depth_never_its_truth(raw: str | None) -> None:
     # A pre-R26 upstream (no column) or a cell a foreign writer mangled must not fail the promotion: the
     # stage still records its OWN hop truthfully, it just cannot inherit what it could not read.

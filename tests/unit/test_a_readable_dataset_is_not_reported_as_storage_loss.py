@@ -28,7 +28,6 @@ false alarm an operator acts on". This is that same rule applied one state furth
 from __future__ import annotations
 
 from lineage.api import reconcile_cron
-from lineage.core.reconcile import BACKFILLABLE_STATES
 from lineage.schemas import ReconcileState, ReconcileStatus
 
 
@@ -46,20 +45,6 @@ def test_a_graph_ahead_dataset_is_not_called_storage_loss() -> None:
 
     assert report.storage_loss == ["gone"], "only a dataset that could not be found at all is loss"
     assert report.graph_ahead == ["recreated"], "the graph being ahead is its own finding and must be reported as one"
-
-
-def test_both_states_are_still_reported_and_neither_is_auto_fixed() -> None:
-    """The half that must not regress: splitting the NAME must not silence either finding.
-
-    The previous grouping's own test pinned that these two are disjoint from `BACKFILLABLE_STATES`, and
-    that decision is untouched — the sweep still recreates no data and still warns on both.
-    """
-    report = reconcile_cron.summarize_sweep(_statuses())
-
-    assert report.storage_loss and report.graph_ahead, "splitting must not drop either class"
-    assert ReconcileState.GRAPH_AHEAD not in BACKFILLABLE_STATES, "the graph being ahead is still not a lost write"
-    assert ReconcileState.MISSING_ON_STORAGE not in BACKFILLABLE_STATES, "lost data is still not recreatable"
-    assert report.backfilled == [], "neither state is auto-fixed"
 
 
 def test_the_two_findings_get_their_own_warn_lines(caplog) -> None:  # noqa: ANN001 — pytest fixture

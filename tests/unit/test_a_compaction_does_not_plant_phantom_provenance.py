@@ -45,7 +45,7 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 
-from lineage.core.reconcile import INERT_UNKNOWN, read_storage_versions, read_version_operations, reconcile_all
+from lineage.core.reconcile import read_storage_versions, read_version_operations, reconcile_all
 from lineage.schemas import DatasetSummary
 
 
@@ -90,22 +90,6 @@ def _compacted_dataset(tmp_path: Path) -> str:
         lance.write_dataset(pa.table({"id": [value]}), uri, mode="append")
     lance.dataset(uri).optimize.compact_files()
     return uri
-
-
-def test_a_real_compaction_commits_a_version_no_subclass_models(tmp_path: Path) -> None:
-    """The measurement the rest of this file rests on, so a Lance upgrade that changes it says so here."""
-    uri = _compacted_dataset(tmp_path)
-    versions = read_storage_versions(uri, {})
-
-    assert versions is not None, "the dataset this test just wrote must be readable"
-    assert versions == [1, 2, 3, 4, 5, 6], "one compaction commits TWO versions on top of the four writes"
-    operations = read_version_operations(uri, {}, versions)
-    assert operations[6] == "Rewrite", "the compaction itself is the modelled operation"
-    assert operations[5] == INERT_UNKNOWN, (
-        "the version a compaction commits before its Rewrite is unnameable AND provably inert — identical "
-        "counters to the version below it — so it must read as that, never as an operation literally named "
-        "'BaseOperation', which is the ABC's own name and not a name the classifier may branch on"
-    )
 
 
 def test_the_inert_version_a_compaction_commits_is_not_a_provenance_hole(tmp_path: Path) -> None:

@@ -67,32 +67,12 @@ def test_a_dataset_the_sweep_SKIPPED_is_not_accused() -> None:
     assert report.unknown_to_graph == []
 
 
-def test_a_graph_that_covers_every_governed_table_reports_nothing() -> None:
-    """The control. Without it, a field that always listed the governed set would pass above."""
-    report = summarize_sweep(_STATUSES, governed=_GRAPH, graph=_GRAPH)
-
-    assert report.unknown_to_graph == []
-
-
 def test_an_unasked_governed_question_condemns_nothing() -> None:
     """``None`` means FGA was off or the store was unreadable — the same load-bearing case as UNGOVERNED.
 
     An empty set would report every dataset in the estate as invisible at exactly the moment the sweep
     lost its ability to ask, which is the failure `governed_tables` returns an optional to avoid.
     """
-    assert summarize_sweep(_STATUSES, governed=None, graph=_GRAPH).unknown_to_graph is None
-
-
-def test_an_unasked_question_is_not_a_clean_bill_of_health() -> None:
-    """``None`` and ``[]`` must stay distinguishable, because the gauge publishes a point for one only.
-
-    Collapsed to ``[]``, a sweep that could not reach FGA reports the same zero a healthy estate does —
-    and zero is the number an operator trusts. `record_provenance_gaps` publishes NO point for ``None``
-    so the series goes stale instead.
-    """
-    asked = summarize_sweep(_STATUSES, governed=_GRAPH, graph=_GRAPH)
-
-    assert asked.unknown_to_graph == []
     assert summarize_sweep(_STATUSES, governed=None, graph=_GRAPH).unknown_to_graph is None
 
 

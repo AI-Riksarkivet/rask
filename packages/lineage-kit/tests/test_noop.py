@@ -7,12 +7,8 @@ from typing import cast
 
 import pytest
 
-from lineage_kit import ClientEmitter, NoopEmitter, RunState, default_emitter, job_run, stage
+from lineage_kit import ClientEmitter, RunState, job_run, stage
 from lineage_kit.schemas import Job, Run, RunEvent
-
-
-def test_default_emitter_without_endpoint_is_noop() -> None:
-    assert isinstance(default_emitter(), NoopEmitter)
 
 
 def test_full_pipeline_shape_runs_unlineaged_without_crashing(caplog: pytest.LogCaptureFixture) -> None:

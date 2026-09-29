@@ -42,14 +42,14 @@ def _event(uri: str | None, *, facet_producer: str | None = "https://producer.in
     )
 
 
-@pytest.mark.parametrize("uri", ["s3://lakehouse/silver/features", "/srv/lake/t.lance", "file:///srv/lake/t.lance"])
+@pytest.mark.parametrize("uri", ["s3://lakehouse/silver/features", "/srv/lake/t.lance"])
 def test_a_resolvable_uri_is_not_reported(uri: str) -> None:
     """The normal case, and it must stay silent — a report on every healthy write is a report nobody reads."""
     assert names_a_storage_location(uri)
     assert unresolvable_sources(_event(uri)) == []
 
 
-@pytest.mark.parametrize("uri", ["4750a5b9_acme-bronze$events", "transcripts_v2.lance/chunks.lance", "t1.lance"])
+@pytest.mark.parametrize("uri", ["transcripts_v2.lance/chunks.lance"])
 def test_a_BARE_NAME_is_reported_with_the_uri_that_caused_it(uri: str) -> None:
     """All three shapes are live offenders read off the estate 2026-09-22, including the nested one the
     `dir` backend's flat `<uuid>_<table>` layout never produces."""

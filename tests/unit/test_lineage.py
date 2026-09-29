@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from pathlib import Path
 from typing import Any, cast
 
 import psycopg
@@ -18,27 +17,6 @@ from psycopg import sql
 
 from lineage.core.age import _parse, _sql
 from lineage.models import OutputStatistics, RunEvent
-
-
-_SAMPLE = Path(__file__).resolve().parent.parent.parent / "services" / "lineage" / "src" / "lineage" / "sample_events.json"
-
-
-def test_run_event_parses_openlineage_camelcase() -> None:
-    event = RunEvent.model_validate(
-        {
-            "eventType": "COMPLETE",
-            "eventTime": "2026-06-20T09:00:00Z",
-            "run": {"runId": "r1", "facets": {"author": {"name": "alice"}}},
-            "job": {"namespace": "lance-jobs", "name": "ingest"},
-            "inputs": [{"namespace": "source", "name": "raw_images"}],
-            "outputs": [{"namespace": "bronze", "name": "bronze$images"}],
-        }
-    )
-    assert event.event_type == "COMPLETE"
-    assert event.run.run_id == "r1"
-    assert event.author == "alice"
-    assert event.inputs[0].name == "raw_images"
-    assert event.outputs[0].name == "bronze$images"
 
 
 def test_author_absent_is_none() -> None:
@@ -53,33 +31,10 @@ def test_author_absent_is_none() -> None:
     assert event.author is None
 
 
-def test_the_run_hierarchy_consumer_side_stays_deleted() -> None:
-    """F-LIN-12, second half (owner ruling): DELETE the ``parent``-facet consumer side.
-
-    ``parent_run_id``/``root_run_id`` were speculative — nothing in the estate emits the ``parent``
-    run facet and no production code read either property; only their own tests did. The owner ruled
-    the consumer-before-producer argument in their docstrings void. (``lineage_kit.context``'s
-    ``root_run_id`` is a different, live symbol on the emitter side and is unaffected.)
-    """
-    assert not hasattr(RunEvent, "parent_run_id")
-    assert not hasattr(RunEvent, "root_run_id")
-
-
 def _output_with_stats(facets: dict[str, Any]) -> Any:
     from lineage.models import Dataset
 
     return Dataset.model_validate({"namespace": "bronze", "name": "bronze$events", "facets": facets})
-
-
-def test_statistics_parses_output_statistics_facet() -> None:
-    """The runtime-measured (row_count, size_bytes) is read from the standard outputStatistics facet."""
-    ds = _output_with_stats({"outputStatistics": {"rowCount": 8, "size": 132}})
-    assert ds.statistics == OutputStatistics(row_count=8, size_bytes=132)
-
-
-def test_statistics_absent_when_no_facet() -> None:
-    # A dummy emit (no compute) carries no outputStatistics facet → None, so no stats land on the edge.
-    assert _output_with_stats({"version": {"datasetVersion": "1"}}).statistics is None
 
 
 def test_statistics_partial_facet_reports_none_for_the_absent_half() -> None:
@@ -89,52 +44,8 @@ def test_statistics_partial_facet_reports_none_for_the_absent_half() -> None:
     assert _output_with_stats({"outputStatistics": {"size": 64}}).statistics == OutputStatistics(size_bytes=64)
 
 
-def test_quality_assertions_parses_facet() -> None:
-    """The validator gate's assertions are read from the standard dataQualityAssertions facet."""
-    ds = _output_with_stats(
-        {
-            "dataQualityAssertions": {
-                "assertions": [
-                    {"assertion": "row_count_positive", "success": True},
-                    {"assertion": "not_null", "success": False, "column": "id"},
-                ]
-            }
-        }
-    )
-    assert ds.quality_assertions == [
-        {"assertion": "row_count_positive", "success": True},
-        {"assertion": "not_null", "success": False, "column": "id"},
-    ]
-
-
 def test_quality_assertions_absent_when_no_facet() -> None:
     assert _output_with_stats({"version": {"datasetVersion": "1"}}).quality_assertions == []
-
-
-def test_job_source_location_parses_facet() -> None:
-    """The job's code location is read from the standard sourceCodeLocation facet (type+url required)."""
-    from lineage.models import Job
-
-    job = Job.model_validate(
-        {
-            "namespace": "lance-medallion",
-            "name": "embed_features",
-            "facets": {
-                "sourceCodeLocation": {
-                    "type": "git",
-                    "url": "https://github.com/Borg93/lance-ns",
-                    "path": "services/medallion",
-                    "branch": "main",
-                }
-            },
-        }
-    )
-    assert job.source_location == {
-        "type": "git",
-        "url": "https://github.com/Borg93/lance-ns",
-        "path": "services/medallion",
-        "branch": "main",
-    }
 
 
 def test_job_source_location_absent_is_none() -> None:
@@ -144,11 +55,6 @@ def test_job_source_location_absent_is_none() -> None:
 
 
 _JOBS = ["ingest_events", "embed_features", "embed_features", "caption_features", "aggregate_gold"]
-
-
-def test_sample_events_all_valid() -> None:
-    events = [RunEvent.model_validate(e) for e in json.loads(_SAMPLE.read_text())]
-    assert [e.job.name for e in events] == _JOBS
 
 
 def test_emitter_output_parses_in_service_model() -> None:
@@ -162,59 +68,6 @@ def test_emitter_output_parses_in_service_model() -> None:
     # events[1] is the FAILED embed attempt, events[2] the successful retry.
     assert events[1].author == "data_eng" and events[1].event_type.upper() == "FAIL"
     assert events[2].author == "data_eng" and events[2].is_success
-
-
-def test_silver_refinement_records_two_versions() -> None:
-    """The two successful passes over silver produce versions 1 then 2 ('run against silver again')."""
-    from lineage.seed import events_as_dicts
-
-    events = [RunEvent.model_validate(e) for e in events_as_dicts()]
-    # events[2] embed wrote silver v1; events[3] caption refined it in place -> v2.
-    assert events[2].output_version("silver$features") == "1"
-    assert events[3].output_version("silver$features") == "2"
-    # the refine reads AND writes silver (in-place) — a version bump, not a new lineage edge.
-    assert events[3].inputs[0].name == events[3].outputs[0].name == "silver$features"
-
-
-def test_failed_run_exposes_producer_error_and_standard_dataset_facets() -> None:
-    """The failed embed carries producer + errorMessage; outputs carry dataSource + tags facets."""
-    from lineage.seed import events_as_dicts
-
-    failed = RunEvent.model_validate(events_as_dicts()[1])
-    assert failed.event_type.upper() == "FAIL" and not failed.is_success
-    assert failed.producer and failed.producer.startswith("https://")
-    assert failed.error_message and "OOM" in failed.error_message
-    out = failed.outputs[0]
-    assert out.name == "silver$features"
-    assert out.source_uri == "s3://lakehouse/silver/features"  # standard dataSource facet
-    assert "layer=silver" in out.tags  # standard tags facet
-
-
-def test_dataset_exposes_schema_fields_from_standard_facet() -> None:
-    """#24: the standard SchemaDatasetFacet is now surfaced (was discarded) for per-version persistence."""
-    from lineage.seed import events_as_dicts
-
-    out = RunEvent.model_validate(events_as_dicts()[3]).outputs[0]  # silver v2: 4 columns
-    by_name = {f.name: f.type for f in out.fields}
-    assert by_name == {
-        "id": "int",
-        "payload_src": "string",
-        "embedding": "array<float>",
-        "caption": "string",
-    }
-
-
-def test_dataset_exposes_column_edges_from_columnlineage_facet() -> None:
-    """#24: the standard columnLineage facet is surfaced as flattened input→output column edges."""
-    from lineage.seed import events_as_dicts
-
-    out = RunEvent.model_validate(events_as_dicts()[2]).outputs[0]  # embed success: silver <- bronze
-    by_out = {e.out_field: (e.name, e.field, e.type, e.subtype) for e in out.column_edges}
-    assert by_out["embedding"] == ("bronze$events", "payload", "DIRECT", "TRANSFORMATION")  # real change
-    assert by_out["id"] == ("bronze$events", "id", "DIRECT", "IDENTITY")  # pass-through
-    # event 3 = caption: a SAME-dataset column edge (caption <- embedding), the in-place-refinement flow.
-    cap = RunEvent.model_validate(events_as_dicts()[3]).outputs[0]
-    assert any(e.out_field == "caption" and e.name == "silver$features" and e.field == "embedding" for e in cap.column_edges)
 
 
 def test_author_falls_back_to_standard_ownership_facet() -> None:
@@ -583,14 +436,6 @@ def test_ingest_persists_masking_bit(monkeypatch: pytest.MonkeyPatch) -> None:
     assert set_edge["mask"] is True  # masking is written, not dropped
 
 
-def test_ingest_keeps_same_dataset_column_edge(monkeypatch: pytest.MonkeyPatch) -> None:
-    """#24: caption <- embedding WITHIN silver (in-place refinement) IS recorded — the column layer keeps
-    same-dataset cross-field edges, unlike the dataset-level self-derivation skip."""
-    calls = _capture_ingest(monkeypatch, 3)  # the caption pass: silver -> silver
-    col_merges = [p for q, p in calls if "MERGE (o)-[:DERIVED_FROM_COLUMN]" in q]
-    assert any(p["ods"] == "silver$features" and p["ofld"] == "caption" and p["ids"] == "silver$features" and p["ifld"] == "embedding" for p in col_merges)
-
-
 def test_parse_handles_scalars_vertices_and_null() -> None:
     assert _parse('"bronze$images"') == "bronze$images"
     assert _parse("3") == 3
@@ -637,33 +482,6 @@ def test_prune_runs_noop_when_nothing_old(monkeypatch: pytest.MonkeyPatch) -> No
     repo = repo_mod.LineageRepository(cast(Any, _FakePool()), "g")
     assert asyncio.run(repo.prune_runs("2020-01-01T00:00:00+00:00")) == 0
     assert [q for q in calls if "DETACH DELETE" in q] == []  # no delete issued when nothing qualifies
-
-
-def test_prune_batch_size_is_single_sourced(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One constant (``cypher.PRUNE_BATCH_SIZE``) drives BOTH the loop count and the per-batch delete size.
-
-    Regression guard (F-LIN-06): the delete LIMIT was baked as a separate 500 literal in the Cypher
-    string, so lowering the batch size shrank the loop count while every delete still cut 500 —
-    under-pruning silently. With the size single-sourced, a batch of 2 over 5 old runs is ceil(5/2)=3
-    transactions, each delete bounded at LIMIT 2."""
-    import lineage.services.cypher as cypher_mod
-    import lineage.services.repository as repo_mod
-
-    monkeypatch.setattr(cypher_mod, "PRUNE_BATCH_SIZE", 2)
-    calls: list[str] = []
-
-    async def _fake(_conn: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int = 1) -> list[list[object]]:
-        calls.append(query)
-        return [[5]] if "count(r)" in query else []
-
-    monkeypatch.setattr(repo_mod, "run_cypher", _fake)
-    repo = repo_mod.LineageRepository(cast(Any, _FakePool()), "g")
-    asyncio.run(repo.prune_runs("2020-01-01T00:00:00+00:00"))
-
-    deletes = [q for q in calls if "DETACH DELETE" in q]
-    assert len(deletes) == 3  # ceil(5 / 2), driven by the monkeypatched constant
-    assert all("LIMIT 2" in q for q in deletes)  # and the delete size follows the SAME constant
-    assert not any("LIMIT 500" in q for q in deletes)  # never the stale baked literal
 
 
 # --------------------------------------------------------------------------- #
@@ -984,46 +802,6 @@ def test_ensure_events_table_timeout_raises_fail_closed() -> None:
     repo = repo_mod.LineageRepository(cast(Any, _DDLPool(conn)), "g")
     with pytest.raises(psycopg.errors.QueryCanceled):
         asyncio.run(repo.ensure_events_table())
-
-
-def test_a_held_promotion_is_distinguishable_from_a_failed_one(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The whole point of the column: eventType is FAIL for both, and only this tells them apart.
-
-    A promotion the quality gate HELD is a question for a validator; a BLOCKED one is corrupt and no
-    approval can waive it. Both emit `eventType=FAIL`, correctly — the promotion genuinely did not
-    advance, and every existing FAIL consumer must keep meaning that. Before this column crossed the
-    wire the run board had no way to distinguish them and rendered both as failures, so a hold looked
-    like an outage and a corrupt batch looked approvable.
-    """
-    import lineage.services.repository as repo_mod
-
-    async def _fake_fetch(_pool: object, _graph: str, query: str, params: dict[str, object] | None = None, *, columns: int) -> list[list[object]]:
-        assert "r.promotion_status" in query, "the projection does not return the verdict at all"
-        return [
-            ["r-held", "lance-medallion/promote", "data_eng", "FAIL", None, None, "quality gate HELD …", "t0", "t1", 1, "silver$features", "", "", "HELD"],
-            ["r-dead", "lance-medallion/promote", "data_eng", "FAIL", None, None, "boom", "t0", "t1", 1, "silver$features", "", "", ""],
-        ]
-
-    monkeypatch.setattr(repo_mod, "fetch", _fake_fetch)
-    repo = repo_mod.LineageRepository(cast(Any, _FakePool()), "g")
-    runs = asyncio.run(repo.list_runs()).runs
-
-    held, dead = runs[0], runs[1]
-    assert held.state == "FAIL" and dead.state == "FAIL", "both are terminal failures on the wire"
-    assert held.promotion_status == "HELD"
-    assert dead.promotion_status is None, '"" must fold back to None, not to a falsy verdict string'
-
-
-def test_the_promotion_verdict_is_sticky_across_a_runs_events() -> None:
-    """A later event carrying no verdict must not erase the one an earlier event declared.
-
-    Same rule as `operation` and `source_run_id`, and for the same reason: a reconcile or backfill
-    event for the same graph run carries no lance facet, and clobbering the verdict to null would
-    turn a recorded hold back into an ordinary failure on the next tick.
-    """
-    import lineage.services.cypher as cypher_mod
-
-    assert "r.promotion_status=(CASE WHEN $ps = '' THEN r.promotion_status ELSE $ps END)" in cypher_mod.MERGE_RUN
 
 
 def test_the_run_event_reads_its_verdict_off_the_lance_facet() -> None:

@@ -2,9 +2,8 @@
 
 TWO DOORS REACH ONE GRAPH and only one of them was counting its losses. The Dapr subscriber
 classifies every refusal into `Outcome` — `REFUSED` for a denied grant, `UNREPAIRABLE` for a run no
-tuple or redelivery could ever fix — and `test_a_lineage_outcome_that_LOSES_a_run_is_audible` makes
-each of those alertable. The HTTP ingest door recorded `INGESTED` on success and nothing at all on
-refusal.
+tuple or redelivery could ever fix — and an alert rule in `chart/alerting/rules.yml` reads each of
+those. The HTTP ingest door recorded `INGESTED` on success and nothing at all on refusal.
 
 THE ASYMMETRY IS NOT COSMETIC, because the HTTP door is the ONLY door for a producer with no Dapr
 sidecar: the whole Ray lane, every runner, and any external OpenLineage producer. Measured live

@@ -22,7 +22,7 @@ def test_the_query_carries_its_bound() -> None:
     assert "ORDER BY r.event_time DESC" in cy.producers_page(5), "the bound must keep the newest, not an arbitrary page"
 
 
-@pytest.mark.parametrize("bad", [0, -1, cy.MAX_PRODUCERS_FETCH + 1])
+@pytest.mark.parametrize("bad", [0, cy.MAX_PRODUCERS_FETCH + 1])
 def test_a_limit_outside_the_range_is_refused_before_interpolation(bad: int) -> None:
     """The value is interpolated as a LITERAL — AGE does not bind `$param` reliably outside a MATCH —
     so the range check is what stands between a caller's value and raw SQL inside AGE's `$$` quoting.

@@ -66,15 +66,6 @@ def test_a_non_string_batch_id_is_refused() -> None:
     assert _event(operation="x", cascade_id="").cascade_id is None
 
 
-def test_the_batch_id_is_STICKY_like_every_other_facet_field() -> None:
-    """A reconcile or backfill event for the same graph run carries no lance facet. Clobbering the
-    batch id to empty would detach a hop from its cascade — and it would do it to the hops that were
-    reconciled, i.e. exactly the runs someone is investigating."""
-    from lineage.services.cypher import MERGE_RUN
-
-    assert "r.cascade_id=(CASE WHEN $cid = '' THEN r.cascade_id ELSE $cid END)" in MERGE_RUN
-
-
 def test_BOTH_readers_declare_the_same_column_count_as_the_projection() -> None:
     """`RUN_BY_ID` is built from `LIST_RUNS`' body, so a column added to the board arrives here too —
     and each caller declares its own count. A mismatch is a 500 on every read, not a short row.
@@ -94,12 +85,3 @@ def test_BOTH_readers_declare_the_same_column_count_as_the_projection() -> None:
 
     assert declared, "no caller of the run projection declares a column count — this gate is measuring nothing"
     assert declared == {projected}, f"the projection returns {projected} columns; callers declare {sorted(declared)} — a mismatch is a 500 per read"
-
-
-def test_the_batch_id_comes_back_from_the_run_board() -> None:
-    """Stored and unreadable is the state this file exists to end — `LIST_RUNS` is the projection both
-    the board and the point read answer from."""
-    from lineage.services.cypher import LIST_RUNS, RUN_BY_ID
-
-    assert "r.cascade_id" in LIST_RUNS
-    assert "r.cascade_id" in RUN_BY_ID

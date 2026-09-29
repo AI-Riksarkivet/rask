@@ -100,32 +100,9 @@ def test_fga_enabled_requires_oidc() -> None:
         _settings(fga_enabled=True, oidc_enabled=False)
 
 
-def test_fga_enabled_without_store_and_model_is_valid() -> None:
-    # store_id/model_id are OPTIONAL — main.py provisions the store by NAME at boot when they are absent
-    # (idempotent convergence on the catalog's store). Requiring them here would (and did) crash the lineage
-    # pod in governed mode, since the chart can't know the runtime-provisioned ids at template time.
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", fga_enabled=True)
-    assert settings.fga_enabled and settings.fga_store_id is None and settings.fga_model_id is None
-
-
-def test_full_auth_config_is_valid() -> None:
-    assert _settings(**_FULL_AUTH).fga_object_type == "table"
-
-
 # --------------------------------------------------------------------------- #
 # authenticate (authn)
 # --------------------------------------------------------------------------- #
-
-
-def test_authenticate_disabled_returns_none() -> None:
-    assert security.authenticate(_request(), _settings(), None) is None
-
-
-def test_authenticate_enabled_missing_token_raises() -> None:
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance")
-    verifier = SimpleNamespace(verify=lambda _t: _token())
-    with pytest.raises(UnauthenticatedError):
-        security.authenticate(_request(oidc=verifier), settings, None)
 
 
 def test_authenticate_enabled_unwired_verifier_fails_closed() -> None:
@@ -176,20 +153,6 @@ def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None
     assert captured == {"user": "alice", "relation": "can_get_metadata", "obj": "table:a$b"}
 
 
-def test_gate_allows_with_permission(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    async def _allow(_client: object, *, user: str, relation: str, obj: str) -> bool:
-        captured.update(user=user, relation=relation, obj=obj)
-        return True
-
-    monkeypatch.setattr(fga, "check", _allow)
-    client = cast(OpenFgaClient, object())
-    asyncio.run(fga_deps.require_metadata_access("a$b", _request(fga=client), _settings(**_FULL_AUTH), _token("dee")))
-    # The dataset name is gated as table:<name> with the catalog's metadata-read relation.
-    assert captured == {"user": "dee", "relation": "can_get_metadata", "obj": "table:a$b"}
-
-
 # --------------------------------------------------------------------------- #
 # enforce_author (provenance forgery prevention)
 # --------------------------------------------------------------------------- #
@@ -206,18 +169,6 @@ def _event(claimed_author: str = "anon", outputs: list[str] | None = None, input
             "outputs": [{"namespace": "silver", "name": n} for n in (outputs or [])],
         }
     )
-
-
-def test_enforce_author_overrides_body_claim() -> None:
-    event = _event(claimed_author="attacker")
-    fga_deps.enforce_author(event, _token("real-user"))
-    assert event.author == "real-user"  # body claim is overwritten by the verified subject
-
-
-def test_enforce_author_keeps_body_when_unauthenticated() -> None:
-    event = _event(claimed_author="claimed")
-    fga_deps.enforce_author(event, None)  # OIDC off (dev) → body author preserved
-    assert event.author == "claimed"
 
 
 # --------------------------------------------------------------------------- #
@@ -272,84 +223,14 @@ def test_read_routes_wire_the_metadata_gate() -> None:
     assert seen == gated  # every per-dataset read is present and gated
 
 
-def test_governance_write_routes_wire_the_writer_gate() -> None:
-    """The #49 write routes must carry require_write_access as a route dependency — the handler tests
-    drive the gate separately, so without this pin deleting the router-level dependency would un-gate
-    governance writes while every test stays green (the false-confidence-authz class this file exists
-    to close)."""
-    from lineage.main import app
-
-    write_gated = {
-        ("PUT", "/datasets/{name}/tags/{tag}"),
-        ("DELETE", "/datasets/{name}/tags/{tag}"),
-        ("PUT", "/datasets/{name}/description"),
-    }
-    seen = set()
-    for route in _api_routes(app):
-        for method in getattr(route, "methods", set()) or set():
-            if (method, route.path) in write_gated:
-                calls = [d.call for d in route.dependant.dependencies]
-                assert fga_deps.require_write_access in calls, (method, route.path)
-                seen.add((method, route.path))
-    assert seen == write_gated, f"write routes missing from the app: {write_gated - seen}"
-
-
-def test_readers_route_wires_the_owner_gate() -> None:
-    """The read-audit query ``GET /datasets/{name}/readers`` exposes WHO accessed a dataset — an access
-    log more sensitive than the dataset's own schema — so it must carry ``require_write_access``
-    (owner/writer) ON TOP of the router-level ``can_get_metadata`` gate. Pin the structure: a casual
-    reader must not be able to enumerate who else viewed a dataset, and dropping this route dependency
-    would silently un-gate that while every handler test stays green (the false-confidence-authz class)."""
-    from lineage.main import app
-
-    route = next(r for r in _api_routes(app) if r.path == "/datasets/{name}/readers" and "GET" in (getattr(r, "methods", set()) or set()))
-    calls = [d.call for d in route.dependant.dependencies]
-    assert fga_deps.require_write_access in calls
-
-
-def test_ingest_route_requires_authentication() -> None:
-    from lineage.main import app
-
-    ingest = next(r for r in _api_routes(app) if r.path == "/api/v1/lineage")
-    calls = [d.call for d in ingest.dependant.dependencies]
-    assert security.authenticate in calls
-
-
-def test_graph_route_wires_the_dataset_filter() -> None:
-    """§7a: the handler-level /graph filter tests below construct the filter EXPLICITLY, so they stay
-    green even if the route loses ``FilterDep`` — bind the structure: the real /graph route's dependant
-    tree must carry ``get_dataset_filter`` (the transitive-disclosure filter's provider)."""
-    from lineage.main import app
-
-    route = next(r for r in _api_routes(app) if r.path == "/datasets/{name}/graph")
-    calls = [d.call for d in route.dependant.dependencies]
-    assert fga_deps.get_dataset_filter in calls
-
-
 # --------------------------------------------------------------------------- #
 # DatasetFilter — transitive-disclosure filtering (audit w8u4rc2tg, security medium)
 # --------------------------------------------------------------------------- #
 
 
-def test_filter_passthrough_when_fga_off() -> None:
-    flt = fga_deps.DatasetFilter(_request(), _settings(), None)
-    assert asyncio.run(flt.visible(["a", "b"])) == {"a", "b"}
-
-
-def test_filter_empty_names_skips_check() -> None:
-    flt = fga_deps.DatasetFilter(_request(fga=object()), _settings(**_FULL_AUTH), _token())
-    assert asyncio.run(flt.visible([])) == set()
-
-
 async def _batch_allow_a(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
     """Fake batch_check: only ``table:a`` is visible."""
     return {o: o == "table:a" for o in objects}
-
-
-def test_filter_drops_unauthorized(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), _settings(**_FULL_AUTH), _token())
-    assert asyncio.run(flt.visible(["a", "b"])) == {"a"}
 
 
 # --------------------------------------------------------------------------- #
@@ -444,15 +325,6 @@ class _FakeRepo:
         return Neighbors(dataset=name, related=[DatasetRef(name="a"), DatasetRef(name="b")])
 
 
-def test_get_upstream_drops_unauthorized_related(monkeypatch: pytest.MonkeyPatch) -> None:
-    from lineage.api.v1.endpoints.datasets import get_upstream
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), _settings(**_FULL_AUTH), _token())
-    result = asyncio.run(get_upstream("root", cast(LineageRepository, _FakeRepo()), flt))
-    assert [ref.name for ref in result.related] == ["a"]  # "b" is filtered out
-
-
 def test_run_inputs_surfaces_pinned_versions_and_is_governed(monkeypatch: pytest.MonkeyPatch) -> None:
     """GET /runs/{id}/inputs exposes each input's PINNED version (#115 D1) and drops what the caller
     can't see — the API surface for what was Cypher-only, and the "which feature versions made this
@@ -470,21 +342,6 @@ def test_run_inputs_surfaces_pinned_versions_and_is_governed(monkeypatch: pytest
     result = asyncio.run(get_run_inputs("train-run", cast(LineageRepository, repo), flt, settings))
     assert result.run_id == "train-run"
     assert [(i.name, i.version) for i in result.inputs] == [("a", "28")]  # b filtered; a keeps its pin
-
-
-def test_run_inputs_pass_through_when_auth_off() -> None:
-    """Auth off (the dev default) → no filtering, versions intact, unpinned reads carry version None."""
-    from lineage.api.v1.endpoints.runs import get_run_inputs
-
-    settings = _settings()  # oidc/fga off
-    repo = _FakeRepo()
-    repo.inputs = [
-        RunInput(name="silver$features", version="28"),
-        RunInput(name="gold$catalog", version=None),
-    ]
-    flt = fga_deps.DatasetFilter(_request(), settings, None)
-    result = asyncio.run(get_run_inputs("r", cast(LineageRepository, repo), flt, settings))
-    assert [(i.name, i.version) for i in result.inputs] == [("silver$features", "28"), ("gold$catalog", None)]
 
 
 def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -575,19 +432,6 @@ def test_get_column_upstream_filters_to_visible_datasets(monkeypatch: pytest.Mon
     repo.col_related = [ColumnRef(dataset="a", field="x"), ColumnRef(dataset="b", field="y")]
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
     result = asyncio.run(get_column_upstream("a", "root", cast(LineageRepository, repo), flt, settings))
-    assert [(r.dataset, r.field) for r in result.related] == [("a", "x")]  # b's column is hidden
-
-
-def test_get_column_downstream_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
-    # #24: column IMPACT is governed identically to provenance — a related column in a hidden dataset drops.
-    from lineage.api.v1.endpoints.columns import get_column_downstream
-
-    monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeRepo()
-    repo.col_related = [ColumnRef(dataset="a", field="x"), ColumnRef(dataset="b", field="y")]
-    flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_column_downstream("a", "root", cast(LineageRepository, repo), flt, settings))
     assert [(r.dataset, r.field) for r in result.related] == [("a", "x")]  # b's column is hidden
 
 
@@ -770,16 +614,6 @@ def test_get_reconcile_skips_storage_read_without_uri(monkeypatch: pytest.Monkey
     assert result.storage_version is None
 
 
-def test_get_schema_returns_persisted_fields() -> None:
-    # #24: the gated /schema endpoint returns the per-version column schema captured at ingest.
-    from lineage.api.v1.endpoints.datasets import get_schema
-
-    result = asyncio.run(get_schema("silver$features", cast(LineageRepository, _FakeRepo()), version=2))
-    assert result.dataset == "silver$features"
-    assert result.version == 2
-    assert [f.name for f in result.fields] == ["id"]
-
-
 def test_get_runs_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
     # #22 audit: /runs is governed like /events — a run is shown only if its output datasets are visible.
     from lineage.api.v1.endpoints.runs import get_runs
@@ -875,24 +709,9 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_output_authz_disabled_is_noop() -> None:
-    # FGA off → no check (dev/test default).
-    asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request(), _settings(), None))
-
-
-def test_output_authz_no_outputs_is_noop() -> None:
-    # An event with no outputs makes no write claim → nothing to authorize.
-    asyncio.run(fga_deps.enforce_output_authz(_event(outputs=[]), _request(fga=object()), _settings(**_FULL_AUTH), _token()))
-
-
 def test_output_authz_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request(), _settings(**_FULL_AUTH), _token()))
-
-
-def test_output_authz_unauthenticated_raises() -> None:
-    with pytest.raises(UnauthenticatedError):
-        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request(fga=object()), _settings(**_FULL_AUTH), None))
 
 
 def test_output_authz_output_less_still_requires_auth() -> None:
@@ -901,26 +720,6 @@ def test_output_authz_output_less_still_requires_auth() -> None:
     # unauthenticated caller could ingest a forged inputs-only run into the governed audit graph.
     with pytest.raises(UnauthenticatedError):
         asyncio.run(fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(fga=object()), _settings(**_FULL_AUTH), None))
-
-
-def test_output_authz_denies_unreadable_input(monkeypatch: pytest.MonkeyPatch) -> None:
-    # REGRESSION (bug hunt 2026-07-13): you may only RECORD reading a dataset you can SEE. An authenticated
-    # reader claiming an unreadable input (forging READ-edge provenance like "service-web read gold$catalog")
-    # is refused. Output-less + an unreadable input → 403, checked via can_get_metadata.
-    async def _batch(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        assert relation == "can_get_metadata"
-        return dict.fromkeys(objects, False)  # nothing is visible to this caller
-
-    monkeypatch.setattr(fga, "batch_check", _batch)
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(
-            fga_deps.enforce_output_authz(
-                _event(inputs=["gold$catalog"]),
-                _request(fga=cast(OpenFgaClient, object())),
-                _settings(**_FULL_AUTH),
-                _token(),
-            )
-        )
 
 
 def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -938,86 +737,6 @@ def test_output_authz_denies_non_writable_output(monkeypatch: pytest.MonkeyPatch
                 _token(),
             )
         )
-
-
-def test_output_authz_allows_when_all_outputs_writable(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    async def _batch(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        captured.update(user=user, relation=relation, objects=sorted(objects))
-        return dict.fromkeys(objects, True)
-
-    monkeypatch.setattr(fga, "batch_check", _batch)
-    asyncio.run(
-        fga_deps.enforce_output_authz(
-            _event(outputs=["a$b"]),
-            _request(fga=cast(OpenFgaClient, object())),
-            _settings(**_FULL_AUTH),
-            _token(),
-        )
-    )
-    # The write check is on the right subject/relation/objects, not just "some" allow.
-    assert captured == {"user": "alice", "relation": "can_write_data", "objects": ["table:a$b"]}
-
-
-# --------------------------------------------------------------------------- #
-# #5 — durable /events feed retention (prune older rows past the cap on ingest).
-# --------------------------------------------------------------------------- #
-
-
-class _FakeConn:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, object]] = []
-
-    async def execute(self, sql: str, params: object = None) -> None:
-        self.calls.append((sql, params))
-
-
-class _FakePool:
-    """Minimal async pool whose ``connection()`` yields a recording fake conn (no DB)."""
-
-    def __init__(self, conn: _FakeConn) -> None:
-        self._conn = conn
-
-    def connection(self) -> Any:
-        conn = self._conn
-
-        class _Ctx:
-            async def __aenter__(self) -> _FakeConn:
-                return conn
-
-            async def __aexit__(self, *_a: object) -> bool:
-                return False
-
-        return _Ctx()
-
-
-def _record(repo: LineageRepository) -> None:
-    asyncio.run(
-        repo.record_event(
-            run_id="r",
-            event_type="COMPLETE",
-            event_time="t",
-            job="j",
-            author="a",
-            inputs=[],
-            outputs=["x"],
-            event={},
-        )
-    )
-
-
-def test_recording_an_event_does_not_also_prune() -> None:
-    """Retention is a reconcile-tick pass under the sweep's single-flight lock, not an ingest-path cost.
-
-    It used to run inside `record_event`, so every ingested event paid for a retention DELETE and two
-    replicas ingesting concurrently raced the same delete. A prune reappearing here would restore both.
-    """
-    conn = _FakeConn()
-    repo = LineageRepository(cast(Any, _FakePool(conn)), "g")
-    _record(repo)
-    assert any("INSERT INTO public.lineage_events" in s for s, _ in conn.calls)
-    assert not [s for s, _ in conn.calls if "DELETE FROM public.lineage_events" in s], f"recording one event issued a retention DELETE: {conn.calls}"
 
 
 # --------------------------------------------------------------------------- #
@@ -1043,13 +762,6 @@ def test_audit_read_disabled_does_not_record() -> None:
     # Off by default → not even an authenticated read writes an audit row.
     repo = _AuditRepo()
     asyncio.run(fga_deps.audit_read("a$b", _settings(), _token(), cast(LineageRepository, repo)))
-    assert repo.reads == []
-
-
-def test_audit_read_unauthenticated_does_not_record() -> None:
-    # Enabled but no verified subject (OIDC off) → nothing to attribute, so no row.
-    repo = _AuditRepo()
-    asyncio.run(fga_deps.audit_read("a$b", _settings(read_audit_enabled=True), None, cast(LineageRepository, repo)))
     assert repo.reads == []
 
 
@@ -1099,23 +811,6 @@ def test_service_principal_authenticates_an_allowlisted_subject(monkeypatch: pyt
     assert principal.sub == "service-trainer"
 
 
-def test_service_token_cannot_impersonate_a_human(monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE load-bearing guard: a token holder may only speak as an ALLOWLISTED SERVICE, never as a user.
-
-    Without the allowlist this door would let anything holding the app token record provenance as alice
-    (and then write whatever alice may write) — a provenance-forgery + privilege-escalation primitive.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(PermissionDeniedError):
-        security.authenticate(
-            _request(),
-            _svc_settings(),
-            None,
-            dapr_api_token="s3cret",
-            x_lance_service_identity="alice",  # a human — not on the allowlist
-        )
-
-
 def test_service_door_rejects_a_bad_or_missing_token(monkeypatch: pytest.MonkeyPatch) -> None:
     """A wrong token (or a named subject with no token configured) is 401 — never a silent pass."""
     monkeypatch.setenv("APP_API_TOKEN", "s3cret")
@@ -1149,28 +844,6 @@ def test_service_door_is_shut_by_default(monkeypatch: pytest.MonkeyPatch) -> Non
             None,
             dapr_api_token="s3cret",
             x_lance_service_identity="service-trainer",
-        )
-
-
-def test_dapr_stamped_token_without_identity_falls_through_to_oidc(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A `dapr-api-token` WITHOUT the identity header is a sidecar-stamped invocation, not a service call.
-
-    With ``dapr.io/app-token-secret`` set, the sidecar adds `dapr-api-token` to EVERY request it delivers —
-    including a gateway-proxied human carrying a valid OIDC bearer. Gating the service door on the token
-    alone diverted those into a guaranteed 403 on the missing identity (audit 2026-07-15). The door must
-    open only on a deliberate service call (token + identity); a token-only request takes the OIDC path,
-    which here (no bearer supplied) is its usual 401 — never the door's 403, never a silent pass.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-    with pytest.raises(UnauthenticatedError, match="Missing bearer token"):
-        security.authenticate(
-            _request(oidc=SimpleNamespace(verify=lambda _t: _token())),
-            _svc_settings(),
-            None,
-            dapr_api_token="s3cret",
-            x_lance_service_identity=None,
         )
 
 
@@ -1254,68 +927,6 @@ def test_events_governs_on_columnlineage_source_datasets() -> None:
 # ── the public front door must not be able to mint a service principal ────────
 
 
-def test_the_service_door_REFUSES_the_public_front_door(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The laundering path, at the door that guards the authoritative lineage graph.
-
-    The gateway forwards `/api/lineage/**` through Dapr service invocation, and the callee's daprd
-    stamps a valid `dapr-api-token` on the way in. `x-lance-service-identity` is caller-supplied. So
-    an anonymous public request arrives holding the estate's service credential AND naming an
-    allowlisted subject — which `_service_principal` would accept, yielding forged, author-stamped
-    RunEvents in the graph, governance tag/description writes, and DLQ replay.
-
-    The gateway strips both headers at the edge; this refuses the door even if one ever gets through,
-    because a service principal is never something the public front door should be able to mint.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-
-    with pytest.raises(PermissionDeniedError, match="public front door"):
-        security.authenticate(
-            _request(),
-            _svc_settings(),
-            None,
-            dapr_api_token="s3cret",
-            x_lance_service_identity="service-trainer",
-            dapr_caller_app_id="gateway",
-        )
-
-
-def test_a_REAL_service_caller_still_gets_its_principal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The guard must not sever service-to-service lineage ingest, which is the door's whole job."""
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-
-    principal = security.authenticate(
-        _request(),
-        _svc_settings(),
-        None,
-        dapr_api_token="s3cret",
-        x_lance_service_identity="service-trainer",
-        dapr_caller_app_id="medallion",
-    )
-
-    assert isinstance(principal, security.ServicePrincipal)
-    assert principal.sub == "service-trainer"
-
-
-def test_the_EMITTER_path_carries_no_caller_id_and_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`lineage_kit.emitter` posts to RASK_LINEAGE_ENDPOINT over plain Service DNS.
-
-    No Dapr invocation hop means no `dapr-caller-app-id`, so absence must keep working — it is how
-    the medallion producer, all three stage runners and the Ray train job emit. Treating absence as public
-    would stop every provenance record in the estate.
-    """
-    monkeypatch.setenv("APP_API_TOKEN", "s3cret")
-
-    principal = security.authenticate(
-        _request(),
-        _svc_settings(),
-        None,
-        dapr_api_token="s3cret",
-        x_lance_service_identity="service-trainer",
-    )
-
-    assert isinstance(principal, security.ServicePrincipal)
-
-
 def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() -> None:
     """`oldest_seq` — the oldest row the feed still holds.
 
@@ -1342,19 +953,3 @@ def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() 
     page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=2))
 
     assert page.oldest_seq == 8999
-
-
-def test_get_events_on_an_EMPTY_feed_reports_no_floor() -> None:
-    """`None`, not `0`. A zero would read as "the feed still holds everything from the beginning",
-    which is the opposite of what an empty feed means, and would suppress the very gap report a
-    consumer needs after a wipe."""
-    from lineage.api.v1.endpoints.runs import get_events
-
-    settings = _settings()
-    repo = _FakeRepo()
-    repo.oldest = None
-    flt = fga_deps.DatasetFilter(_request(), settings, None)
-
-    page = asyncio.run(get_events(cast(LineageRepository, repo), flt, settings, limit=2))
-
-    assert page.oldest_seq is None

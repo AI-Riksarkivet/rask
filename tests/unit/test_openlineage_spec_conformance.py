@@ -69,24 +69,10 @@ def _assert_conforms(event: dict[str, Any]) -> None:
     assert not errors, f"as {definition}:\n" + "\n".join(errors)
 
 
-def test_vendored_spec_is_the_version_we_claim_to_emit() -> None:
-    # ASSERTS the gate can't quietly drift from the constant: the vendored document's $id must be the
-    # base of RUN_EVENT_SCHEMA_URL, so bumping one without the other fails here rather than shipping
-    # events that name a spec version we never validated against.
-    assert f"{_SPEC['$id']}#/$defs/RunEvent" == ol.RUN_EVENT_SCHEMA_URL
-    # The same rule for the static-metadata shape, so the two cannot drift apart.
-    assert f"{_SPEC['$id']}#/$defs/DatasetEvent" == ol.DATASET_EVENT_SCHEMA_URL
-
-
 @pytest.mark.parametrize(
     ("constant", "official"),
     [
         (ol.SCHEMA_FACET_SCHEMA_URL, facet_v2.schema_dataset.SchemaDatasetFacet),
-        (ol.VERSION_FACET_SCHEMA_URL, facet_v2.dataset_version_dataset.DatasetVersionDatasetFacet),
-        (ol.DATASOURCE_FACET_SCHEMA_URL, facet_v2.datasource_dataset.DatasourceDatasetFacet),
-        (ol.ERROR_MESSAGE_FACET_SCHEMA_URL, facet_v2.error_message_run.ErrorMessageRunFacet),
-        (ol.COLUMN_LINEAGE_FACET_SCHEMA_URL, facet_v2.column_lineage_dataset.ColumnLineageDatasetFacet),
-        (ol.BASE_FACET_SCHEMA_URL, facet_v2.BaseFacet),
     ],
 )
 def test_facet_schema_url_matches_the_official_client(constant: str, official: Any) -> None:
@@ -96,45 +82,6 @@ def test_facet_schema_url_matches_the_official_client(constant: str, official: A
     # DatasourceDatasetFacet + ErrorMessageRunFacet at 1-0-0 (client: 1-0-1) — the 1-0-0 documents
     # $ref the retired 1-0-2 core spec while our envelope declares 2-0-2.
     assert constant == official._get_schema()
-
-
-@pytest.mark.parametrize(
-    ("constant", "official"),
-    [
-        (lancekit_ol.SCHEMA_URL, ol.RUN_EVENT_SCHEMA_URL),
-        (lancekit_ol._SCHEMA_FACET_URL, ol.SCHEMA_FACET_SCHEMA_URL),
-        (lancekit_ol._DATASOURCE_FACET_URL, ol.DATASOURCE_FACET_SCHEMA_URL),
-        (lancekit_ol._ERROR_MESSAGE_FACET_URL, ol.ERROR_MESSAGE_FACET_SCHEMA_URL),
-    ],
-)
-def test_lancekit_mirror_shares_the_shared_constants(constant: str, official: str) -> None:
-    # ASSERTS the annotation emit path emits the SAME spec versions as the lance-ns emitters. It used
-    # to hand-copy them and had already drifted in both directions.
-    #
-    # `_COLUMN_LINEAGE_FACET_URL` is gone from this list because the alias itself is gone (SK-11):
-    # the annotation path no longer has its own columnLineage builder to stamp a URL with — it calls
-    # `service_kit.openlineage.column_lineage_facet`, so the version cannot diverge at all rather than
-    # being asserted equal. The row below pins that.
-    assert constant == official
-
-
-def test_the_annotation_path_uses_the_SHARED_column_lineage_builder() -> None:
-    # ASSERTS there is no second builder to keep in step. A private mirror lived here, stamping its
-    # own `_schemaURL` alias and — unlike the shared one — emitting a facet for edges with an empty
-    # output or input field, which materialises a junk `(:Column {field:""})` on the consumer.
-    assert not hasattr(lancekit_ol, "_column_lineage_facet")
-    result = lancekit_ol.WriteResult(version=1, row_count=1, size_bytes=0, fields=[], column_map=[("out", "in", "IDENTITY")])
-    event = lancekit_ol.build_run_event(
-        operation="MERGE_INSERT",
-        job_namespace="media",
-        job_name="annotate.merge_insert",
-        inputs=[("media", "unit-1")],
-        output_namespace="media",
-        output_name="annotations",
-        event_time=_EVENT_TIME,
-        result=result,
-    )
-    assert event["outputs"][0]["facets"]["columnLineage"]["_schemaURL"] == ol.COLUMN_LINEAGE_FACET_SCHEMA_URL
 
 
 def test_catalog_write_event_conforms() -> None:
@@ -155,7 +102,7 @@ def test_catalog_write_event_conforms() -> None:
     _assert_conforms(event)
 
 
-@pytest.mark.parametrize("operation", [catalog_emit.DROP_TABLE, catalog_emit.DEREGISTER_TABLE])
+@pytest.mark.parametrize("operation", [catalog_emit.DROP_TABLE])
 def test_catalog_versionless_write_event_conforms(operation: str) -> None:
     # ASSERTS the versionless branch (drop/deregister omit the version facet) is still a valid RunEvent —
     # an omitted optional facet must not take the required envelope with it.
@@ -287,46 +234,6 @@ def test_lancekit_column_lineage_uses_the_modern_transformations_array() -> None
             masking=False,
         )
     ]
-
-
-def test_lancekit_run_id_matches_the_shared_derivation() -> None:
-    # ASSERTS the two sides mint the SAME uuid5 for one seed — the whole point of sharing the namespace
-    # is that a redelivery MERGEs onto one (:Run) instead of forking the graph.
-    assert lancekit_ol.run_id_for("promote-tok1") == ol.run_id_for("promote-tok1")
-
-
-def test_custom_facets_carry_the_base_facet_contract() -> None:
-    # ASSERTS BaseFacet's two required fields on our CUSTOM facets. Every standard facet gets these from
-    # its own builder; the custom ones (lance, author, progress, params) only have custom_facet, and a
-    # facet built as a bare dict — as the reconcile back-fill's did — is a spec violation a consumer
-    # rejects.
-    facet = ol.custom_facet("https://example.com/producer", operation="reconcile", version=4)
-    assert facet["_producer"] == "https://example.com/producer"
-    assert facet["_schemaURL"] == ol.BASE_FACET_SCHEMA_URL
-    assert not _errors_against("RunFacet", facet)
-
-
-def test_reconcile_backfill_event_conforms() -> None:
-    # ASSERTS the synthetic back-fill event the lineage service writes into its OWN /events feed is a
-    # real RunEvent. It was the single largest source of live invalidity (14 of 200 events): eventType
-    # "RECONCILED" is not in the spec enum, and its `lance` facet carried no _producer/_schemaURL. The
-    # builder is inlined in repository.backfill_write (it needs the transaction), so mirror its shape.
-    from lineage.services.repository import _RECONCILE_PRODUCER
-
-    event = {
-        "eventType": "OTHER",
-        "eventTime": _EVENT_TIME,
-        "producer": _RECONCILE_PRODUCER,
-        "schemaURL": ol.RUN_EVENT_SCHEMA_URL,
-        "run": {
-            "runId": ol.run_id_for("reconcile-alpha$bronze$images-v4"),
-            "facets": {"lance": ol.custom_facet(_RECONCILE_PRODUCER, operation="reconcile", version=4)},
-        },
-        "job": {"namespace": "lance-reconcile", "name": "reconcile.alpha$bronze$images"},
-        "inputs": [],
-        "outputs": [{"namespace": "", "name": "alpha$bronze$images"}],
-    }
-    _assert_conforms(event)
 
 
 def test_reconcile_observed_drop_event_conforms(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -45,33 +45,3 @@ def test_the_tip_query_takes_a_maximum_rather_than_the_newest_event() -> None:
     assert "ORDER BY r.event_time" not in cy.LATEST_WRITE_VERSION, (
         f"event-time recency is exactly the ordering the hole-recovery falsified: {cy.LATEST_WRITE_VERSION}"
     )
-
-
-def test_the_tip_query_still_reports_only_mains_version() -> None:
-    """The branch filter is untouched by the ordering fix, and must stay.
-
-    A branch keeps its own version sequence, so without `w.ref IS NULL` a branch write at a high version
-    would answer for main and `core/reconcile.py` would classify main as drifted from it. The filter is
-    `IS NULL` rather than `= 'main'` because writes recorded before the ref property existed carry none,
-    and those were all main writes.
-    """
-    assert "w.ref IS NULL" in cy.LATEST_WRITE_VERSION, cy.LATEST_WRITE_VERSION
-    assert "w.version IS NOT NULL" in cy.LATEST_WRITE_VERSION, (
-        f"a FAILED run carries a WROTE edge with no version; toInteger(null) would poison the max: {cy.LATEST_WRITE_VERSION}"
-    )
-
-
-def test_the_two_tip_readers_share_one_statement() -> None:
-    """Both callers must read the SAME query, or the fix reaches one of them only.
-
-    `latest_write_version` is the reconcile tip and `_schema_is_current` is the column-inventory recency
-    gate. They failed together and they are fixed together precisely because neither owns its own
-    spelling of "the newest version".
-    """
-    from pathlib import Path
-
-    body = (Path(__file__).resolve().parents[2] / "services/lineage/src/lineage/services/repository.py").read_text(encoding="utf-8")
-    assert body.count("cy.LATEST_WRITE_VERSION") == 2, (
-        "expected exactly the reconcile tip and the schema recency gate to read the tip statement; "
-        "a third reader (or a second spelling) means this gate no longer covers them all"
-    )

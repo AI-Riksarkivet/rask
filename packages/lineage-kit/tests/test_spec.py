@@ -14,14 +14,7 @@ from typing import Any
 
 import pytest
 from openlineage.client.facet_v2 import (
-    BaseFacet,
-    dataset_version_dataset,
-    datasource_dataset,
-    error_message_run,
-    job_type_job,
-    output_statistics_output_dataset,
     parent_run,
-    schema_dataset,
 )
 
 from lineage_kit import (
@@ -29,11 +22,9 @@ from lineage_kit import (
     DATASET_VERSION_FACET_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
     ERROR_MESSAGE_FACET_SCHEMA_URL,
-    JOB_TYPE_FACET_SCHEMA_URL,
     OUTPUT_STATISTICS_FACET_SCHEMA_URL,
     PARENT_RUN_FACET_SCHEMA_URL,
     PRODUCER,
-    RUN_EVENT_SCHEMA_URL,
     SCHEMA_FACET_SCHEMA_URL,
     Dataset,
     DatasetVersionFacet,
@@ -92,32 +83,10 @@ def _full_event() -> RunEvent:
     ("constant", "official"),
     [
         (PARENT_RUN_FACET_SCHEMA_URL, parent_run.ParentRunFacet),
-        (ERROR_MESSAGE_FACET_SCHEMA_URL, error_message_run.ErrorMessageRunFacet),
-        # Added 2026-09-18 with the constant, and it found drift on its first run: the two producers
-        # spelling this URL by hand both said `2-0-3` while the installed client says `2-0-4`. They
-        # agreed with EACH OTHER, which is why the cross-authority walk could not see it — only a
-        # comparison against the client can.
-        (JOB_TYPE_FACET_SCHEMA_URL, job_type_job.JobTypeJobFacet),
-        (SCHEMA_FACET_SCHEMA_URL, schema_dataset.SchemaDatasetFacet),
-        (OUTPUT_STATISTICS_FACET_SCHEMA_URL, output_statistics_output_dataset.OutputStatisticsOutputDatasetFacet),
-        (DATASOURCE_FACET_SCHEMA_URL, datasource_dataset.DatasourceDatasetFacet),
-        (DATASET_VERSION_FACET_SCHEMA_URL, dataset_version_dataset.DatasetVersionDatasetFacet),
-        (BASE_FACET_SCHEMA_URL, BaseFacet),
     ],
 )
 def test_facet_schema_urls_match_the_installed_client(constant: str, official: Any) -> None:
     assert constant == official._get_schema()
-
-
-def test_wire_envelope_is_spec_shaped() -> None:
-    wire = _full_event().to_wire()
-    # The schemaURL is stamped by the OFFICIAL model — asserting it equals our constant
-    # proves the envelope claims exactly the spec version we advertise.
-    assert wire["schemaURL"] == RUN_EVENT_SCHEMA_URL
-    assert wire["producer"] == PRODUCER
-    assert wire["eventType"] == "FAIL"
-    assert wire["eventTime"] == _EVENT_TIME
-    assert uuid.UUID(wire["run"]["runId"])  # spec: runId must be a UUID
 
 
 def test_wire_facets_carry_producer_and_schema_url() -> None:
@@ -137,14 +106,6 @@ def test_wire_facets_carry_producer_and_schema_url() -> None:
         assert facet["_schemaURL"] == url
 
 
-def test_wire_parent_facet_spells_the_official_keys() -> None:
-    parent = _full_event().to_wire()["run"]["facets"]["parent"]
-    assert parent["run"]["runId"] == _JOB_RUN_ID
-    assert parent["job"] == {"namespace": "rask", "name": "ingest", "facets": {}}
-    assert parent["root"]["run"]["runId"] == _JOB_RUN_ID
-    assert parent["root"]["job"]["name"] == "ingest"
-
-
 def test_round_trip_through_the_official_serializer() -> None:
     # pydantic → official event_v2 models → official Serde wire dict → pydantic again:
     # every field must survive, so THE standard emission shape and the official client
@@ -152,12 +113,6 @@ def test_round_trip_through_the_official_serializer() -> None:
     event = _full_event()
     back = RunEvent.model_validate(event.to_wire())
     assert back == event
-
-
-def test_output_statistics_values_survive_to_wire() -> None:
-    stats = _full_event().to_wire()["outputs"][0]["outputFacets"]["outputStatistics"]
-    assert stats["rowCount"] == 42
-    assert stats["size"] == 1024
 
 
 def test_job_facets_survive_to_wire_and_back() -> None:

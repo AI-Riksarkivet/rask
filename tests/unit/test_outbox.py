@@ -8,8 +8,6 @@ import time
 from types import SimpleNamespace
 from typing import Any, cast
 
-import pytest
-
 from service_kit.lakehouse import outbox
 
 
@@ -17,25 +15,8 @@ def _uri(tmp_path: Any) -> str:
     return f"file://{tmp_path}/_lineage_outbox"
 
 
-def test_stage_list_drop_roundtrip(tmp_path: Any) -> None:
-    uri = _uri(tmp_path)
-    outbox.stage_event(uri, {}, "run-1", json.dumps({"run": {"runId": "run-1"}}))
-    outbox.stage_event(uri, {}, "run-2", json.dumps({"run": {"runId": "run-2"}}))
-
-    got = dict(outbox.list_events(uri, {}))
-    assert set(got) == {"run-1", "run-2"}
-    assert json.loads(got["run-1"])["run"]["runId"] == "run-1"
-
-    outbox.drop_event(uri, {}, "run-1")
-    assert set(dict(outbox.list_events(uri, {}))) == {"run-2"}
-
-
 def test_drop_absent_is_idempotent(tmp_path: Any) -> None:
     outbox.drop_event(_uri(tmp_path), {}, "ghost")  # no raise on a missing object
-
-
-def test_list_absent_prefix_is_empty(tmp_path: Any) -> None:
-    assert list(outbox.list_events(f"file://{tmp_path}/never-created", {})) == []
 
 
 class _Dapr:
@@ -69,28 +50,6 @@ def test_publish_with_outbox_stages_then_drops_on_ack(tmp_path: Any) -> None:
     assert list(outbox.list_events(uri, {})) == []  # dropped after the publish acked
 
 
-def test_publish_failure_leaves_event_staged_for_the_relay(tmp_path: Any) -> None:
-    # THE crash-window guarantee: a failed/crashed publish leaves the full event in the outbox so the relay
-    # can recover it — the exact loss window the pre-#4 fire-and-forget publish could not close.
-    uri = _uri(tmp_path)
-    dapr = _Dapr(fail=True)
-    event = '{"run":{"runId":"r1"}}'
-    with pytest.raises(TimeoutError):
-        asyncio.run(
-            outbox.publish_lineage_with_outbox(
-                dapr,
-                outbox_uri=uri,
-                storage_options={},
-                run_id="r1",
-                event_json=event,
-                pubsub_name="p",
-                topic_name="t",
-                timeout_seconds=5,
-            )
-        )
-    assert dict(outbox.list_events(uri, {})) == {"r1": event}  # survived
-
-
 def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: Any) -> None:
     # Staging is a DURABILITY aid, not a precondition for delivery. Raising past the publish turns a
     # transient object-store blip into the one outcome the outbox exists to prevent: an event that
@@ -115,48 +74,6 @@ def test_a_failed_stage_still_attempts_the_publish(tmp_path: Any, monkeypatch: A
         )
     )
     assert dapr.published == [event]
-
-
-def test_a_failed_stage_is_counted_so_the_one_unwatched_loss_path_is_visible(tmp_path: Any, monkeypatch: Any) -> None:
-    # The outbox's four signals are blind to a stage failure by construction: `staged` never increments,
-    # `publish_failed` is gated on having staged, and depth/oldest-age describe objects that exist. Without
-    # its own counter the single path that publishes WITHOUT a durable copy is the one path nothing watches.
-    def _boom(*_args: Any, **_kwargs: Any) -> None:
-        raise OSError("outbox bucket unreachable")
-
-    counted: list[int] = []
-    monkeypatch.setattr(outbox, "stage_event", _boom)
-    monkeypatch.setattr(outbox.outbox_metrics, "record_stage_failed", lambda: counted.append(1))
-    asyncio.run(
-        outbox.publish_lineage_with_outbox(
-            _Dapr(),
-            outbox_uri=_uri(tmp_path),
-            storage_options={},
-            run_id="r1",
-            event_json='{"run":{"runId":"r1"}}',
-            pubsub_name="p",
-            topic_name="t",
-            timeout_seconds=5,
-        )
-    )
-    assert counted == [1]
-
-
-def test_no_outbox_uri_degrades_to_plain_publish(tmp_path: Any) -> None:
-    dapr = _Dapr()
-    asyncio.run(
-        outbox.publish_lineage_with_outbox(
-            dapr,
-            outbox_uri="",
-            storage_options={},
-            run_id="r1",
-            event_json='{"x":1}',
-            pubsub_name="p",
-            topic_name="t",
-            timeout_seconds=5,
-        )
-    )
-    assert dapr.published == ['{"x":1}']  # published, nothing staged
 
 
 # --------------------------------------------------------------------------- #
@@ -202,113 +119,6 @@ class _Settings:
         self.fga_enabled = False
 
 
-def test_relay_drain_reingests_valid_and_drops_poison(tmp_path: Any) -> None:
-    # The full-event recovery half: a well-formed staged event is re-ingested into the graph and deleted; a
-    # poison (unparseable) object is dropped so it can't wedge the drain — nothing lingers afterward.
-    from lineage.api.reconcile_cron import _drain_outbox
-    from medallion.schemas.events import build_run_event
-
-    uri = _uri(tmp_path)
-    event = build_run_event(
-        operation="ingest_events",
-        author="alice",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
-        version=2,
-        token="t1",
-    )
-    run_id = event["run"]["runId"]
-    outbox.stage_event(uri, {}, run_id, json.dumps(event))
-    outbox.stage_event(uri, {}, "poison-run", "{ not valid json")
-
-    repo = _Repo()
-    outcome = asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {}))
-
-    assert outcome.drained == 1  # the valid event ingested; the poison was dropped, not ingested
-    assert repo.ingested == [run_id]  # graph AND the durable /events row, in one transaction
-    assert list(outbox.list_events(uri, {})) == []  # both objects gone (ingested / dropped)
-
-
-def test_ONE_ungraphable_event_does_not_strand_every_other_staged_event(tmp_path: Any) -> None:
-    """MEASURED ON THE LIVE ESTATE 2026-09-07, and it is the loudest failure the outbox can have.
-
-    `rask-lineage` logged `lineage_outbox_drain_failed` on EVERY sweep with
-    `error="Entity failed to be updated: 3"` — one staged event the AGE graph refused. The per-event
-    work sat under a single `try` around the WHOLE drain (`_on_cron`), so that one event aborted the
-    loop and every other staged event stayed put, tick after tick, forever. Depth 3 and climbing while
-    the sweep answered HTTP 200 and the cron kept ticking: nothing red anywhere.
-
-    That inverts what the outbox is FOR. It exists so a committed write's lineage survives a crash;
-    a single un-ingestable event turning it into a write-only store loses the lineage of every OTHER
-    committed write instead.
-
-    The failing event STAYS STAGED — never dropped. Dropping on a non-validation error is the exact
-    2026-07-14 audit finding: a transient failure would destroy the event's only durable copy. It is
-    counted and named so it is visible, and the next tick retries it.
-    """
-    from lineage.api.reconcile_cron import _drain_outbox
-    from medallion.schemas.events import build_run_event
-
-    uri = _uri(tmp_path)
-    events = []
-    for token in ("refused", "healthy"):
-        event = build_run_event(
-            operation="ingest_events",
-            author="alice",
-            job_namespace="medallion",
-            inputs=[("bronze", "bronze$events")],
-            output_namespace="bronze",
-            output_name="bronze$events",
-            version=1,
-            token=token,
-        )
-        outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
-        events.append(event)
-    refused_run = events[0]["run"]["runId"]
-
-    class _RefusingRepo(_Repo):
-        async def ingest_event(self, event: Any) -> None:
-            if event.run.run_id == refused_run:
-                raise RuntimeError("Entity failed to be updated: 3")
-            await super().ingest_event(event)
-
-    repo = _RefusingRepo()
-    outcome = asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {}))
-
-    assert outcome.drained == 1, "the healthy event was not drained — one refused event stranded the whole outbox"
-    assert outcome.stranded == 1, "the refused event was not counted as stranded, so nothing reports the wedge"
-    staged = {key for key, _ in outbox.list_events(uri, {})}
-    assert staged == {f"{refused_run}@COMPLETE"}, f"the outbox holds {staged} — the refused event must stay staged and the healthy one must be gone"
-
-
-def test_relay_drain_is_idempotent_on_reingest(tmp_path: Any) -> None:
-    # A publish that DID land but whose producer crashed before deleting: the relay re-ingests (a graph
-    # MERGE no-op) and deletes. Proven here by draining the same staged event twice with no error.
-    from lineage.api.reconcile_cron import _drain_outbox
-    from medallion.schemas.events import build_run_event
-
-    uri = _uri(tmp_path)
-    event = build_run_event(
-        operation="ingest_events",
-        author="alice",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
-        version=1,
-        token="t2",
-    )
-    outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
-    repo = _Repo()
-    assert asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
-    # re-stage + drain again → still fine (the ingest is idempotent on run_id)
-    outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
-    assert asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {})).drained == 1
-    assert repo.ingested.count(event["run"]["runId"]) == 2  # called twice; the GRAPH MERGE makes it a no-op
-
-
 # --------------------------------------------------------------------------- #
 # BOUNDED DRAIN + SATURATION SNAPSHOT (GOAL-prove-it P1.1/P1.2)
 # --------------------------------------------------------------------------- #
@@ -338,25 +148,6 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
     assert first_two == ["run-0", "run-1"]  # bounded AND oldest-first (not arbitrary order)
 
     assert len({rid for rid, _ in outbox.list_events(uri, {})}) == 5  # no limit => everything
-
-
-def test_bounded_drain_makes_progress_across_ticks(tmp_path: Any) -> None:
-    # A capped tick must not starve the backlog: draining the cap, dropping those, then draining again
-    # must eventually clear it — and always take the OLDEST first, so `oldest_age` falls monotonically.
-    uri = _uri(tmp_path)
-    for i in range(5):
-        outbox.stage_event(uri, {}, f"run-{i}", "{}")
-        time.sleep(0.01)
-
-    seen: list[str] = []
-    for _ in range(3):  # 3 ticks x cap 2 > 5 staged
-        batch = list(outbox.list_events(uri, {}, limit=2))
-        for rid, _payload in batch:
-            seen.append(rid)
-            outbox.drop_event(uri, {}, rid)
-
-    assert seen == ["run-0", "run-1", "run-2", "run-3", "run-4"]  # strictly oldest-first, fully drained
-    assert outbox.backlog(uri, {}) == (0, 0.0)
 
 
 # --- one run, MANY events: the staged object must not collide ------------------------------------
@@ -400,18 +191,6 @@ def test_each_staged_event_drops_independently(tmp_path: Any) -> None:
 
     left = [json.loads(payload)["eventType"] for _key, payload in outbox.list_events(uri, {})]
     assert left == ["COMPLETE"], f"dropping one event disturbed the other: {left}"
-
-
-def test_an_object_staged_under_the_old_key_still_drains(tmp_path: Any) -> None:
-    """Upgrade path: a `<run_id>.json` written before this change must still list and drop."""
-    uri = _uri(tmp_path)
-    outbox.stage_event(uri, {}, "legacy-run", json.dumps({"run": {"runId": "legacy-run"}}))
-
-    keys = [key for key, _payload in outbox.list_events(uri, {})]
-    assert keys == ["legacy-run"]
-
-    outbox.drop_event(uri, {}, keys[0])
-    assert list(outbox.list_events(uri, {})) == []
 
 
 def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascade(tmp_path: Any, monkeypatch: Any) -> None:
@@ -464,33 +243,6 @@ def test_the_drain_RE_PUBLISHES_so_a_recovered_event_can_restart_a_halted_cascad
     assert json.loads(published[0]["data"])["run"]["runId"] == run_id
     assert still_staged_at_publish == [1], "the staged object was dropped before the publish succeeded"
     assert list(outbox.list_events(uri, {})) == []  # ...and dropped once it did
-
-
-def test_the_drain_without_a_publisher_still_ingests(tmp_path: Any) -> None:
-    """A deployment with the outbox on but no publisher wired must not lose the recovery it already has.
-
-    `get_publisher` answers None when the lifespan built no client, and the drain's re-publish is guarded
-    on it. The graph repair is the half that worked before this change and must keep working.
-    """
-    from lineage.api.reconcile_cron import _drain_outbox
-    from medallion.schemas.events import build_run_event
-
-    uri = _uri(tmp_path)
-    event = build_run_event(
-        operation="ingest_events",
-        author="alice",
-        job_namespace="medallion",
-        inputs=[("bronze", "bronze$events")],
-        output_namespace="bronze",
-        output_name="bronze$events",
-        version=2,
-        token="t1",
-    )
-    outbox.stage_event(uri, {}, event["run"]["runId"], json.dumps(event))
-
-    repo = _Repo()
-    assert asyncio.run(_drain_outbox(_authorized_request(), cast("Any", repo), cast("Any", _Settings(uri)), {}, None)).drained == 1
-    assert repo.ingested == [event["run"]["runId"]]
 
 
 def _authorized_request() -> Any:

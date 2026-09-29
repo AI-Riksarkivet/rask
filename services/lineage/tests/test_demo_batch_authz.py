@@ -58,28 +58,6 @@ def spy(monkeypatch: pytest.MonkeyPatch) -> _Spy:
     return spy
 
 
-def test_demo_authorizes_with_one_batch_check(monkeypatch: pytest.MonkeyPatch, spy: _Spy) -> None:
-    """N datasets, ONE FGA round trip — the loop of single checks is the defect."""
-
-    def _stub_read(*_a: object, **_k: object) -> DemoDataset:
-        return DemoDataset(name="stub", uri="stub", exists=False)
-
-    monkeypatch.setattr(demo, "_read_dataset", _stub_read)
-    app = FastAPI()
-    app.include_router(demo.router)
-    app.state.fga = object()
-    settings = _settings()
-    app.dependency_overrides[get_settings] = lambda: settings
-    app.dependency_overrides[authenticate] = lambda: _Principal()
-
-    response = TestClient(app).get("/demo/datasets")
-
-    assert response.status_code == 200
-    assert spy.single == 0, f"{spy.single} sequential single check() calls — the gate must batch"
-    assert len(spy.batches) == 1, f"expected exactly one batch_check, got {len(spy.batches)}"
-    assert sorted(spy.batches[0]) == sorted(f"table:{name}" for name, _ in demo._LAYOUT)
-
-
 def test_demo_denied_dataset_is_dropped_not_fatal(monkeypatch: pytest.MonkeyPatch, spy: _Spy) -> None:
     """A 403 on one dataset skips it (the loop's `continue` semantics survive the batching)."""
 

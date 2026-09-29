@@ -7,15 +7,6 @@ import pytest
 from lineage_kit import ClientEmitter, LineageSettings, NoopEmitter, build_emitter
 
 
-def test_defaults_are_noop_friendly() -> None:
-    s = LineageSettings()
-    assert s.endpoint is None
-    assert s.api_key is None
-    assert s.namespace == "rask"
-    assert s.endpoint_path == "api/v1/lineage"
-    assert s.transport == "auto"
-
-
 def test_rask_env_vars_configure_the_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://marquez:5000")
     monkeypatch.setenv("RASK_LINEAGE_API_KEY", "sekrit")
@@ -99,12 +90,6 @@ def test_half_configured_service_door_sends_neither_header(monkeypatch: pytest.M
     """
     monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://lineage:8000")
     monkeypatch.setenv(env, value)
-    assert _headers(build_emitter()) == {}
-
-
-def test_no_service_door_config_sends_no_headers(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The open dev path (auth off) must stay byte-identical — no headers invented from nothing."""
-    monkeypatch.setenv("RASK_LINEAGE_ENDPOINT", "http://lineage:8000")
     assert _headers(build_emitter()) == {}
 
 

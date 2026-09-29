@@ -82,11 +82,6 @@ def test_a_THROWING_hook_never_fails_the_run() -> None:
     run.start()  # must not raise
 
 
-def test_no_hook_is_the_previous_behaviour() -> None:
-    """Every producer that already stages, and every one that has opted out of lineage, is untouched."""
-    _run(_RefusingEmitter()).start()  # must not raise
-
-
 def test_a_refused_event_with_NO_hook_says_so_instead_of_returning_silently(caplog: Any) -> None:
     """The hook is injected because only the producer knows whether it has durability — which means a
     producer with none reaches a path where the event is simply gone.

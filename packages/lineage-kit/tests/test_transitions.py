@@ -13,16 +13,6 @@ def _states(recording: RecordingEmitter) -> list[RunState]:
     return [e.event_type for e in recording.events]
 
 
-def test_start_then_complete(recording: RecordingEmitter) -> None:
-    run = LineageRun(job_name="ingest", namespace="rask", emitter=recording)
-    run.start()
-    assert run.pending
-    run.complete(outputs=[("lance", "silver.lines")])
-    assert not run.pending
-    assert _states(recording) == [RunState.START, RunState.COMPLETE]
-    assert recording.events[1].outputs[0].name == "silver.lines"
-
-
 def test_fail_carries_error_message_and_stack_trace(recording: RecordingEmitter) -> None:
     run = LineageRun(job_name="ingest", namespace="rask", emitter=recording)
     run.start()

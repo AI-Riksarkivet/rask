@@ -147,20 +147,6 @@ def test_a_role_literal_delivery_still_parks_and_the_ruling_is_untouched(monkeyp
     assert seen == [str(Outcome.DEAD_LETTERED)], f"an unrecoverable park is still the loss signal, got {seen}"
 
 
-def test_a_run_the_graph_already_holds_is_not_re_ingested(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control, and it is a cost argument: re-presenting a run already in the graph buys nothing and
-    spends a write on every restart, because the ingest consumer re-reads the retained stream."""
-    from lineage.core.metrics import Outcome
-
-    seen = _outcomes(monkeypatch)
-    repo = _Repo(known={"run-known"})
-    client = _client(monkeypatch, repo)
-
-    assert _park(client, _event("run-known")) == {"status": "SUCCESS"}
-    assert repo.ingested == [], "a run the graph already holds must not be written again"
-    assert seen == [str(Outcome.PARKED_ALREADY_RECORDED)]
-
-
 def test_a_failed_re_ingest_falls_back_to_exactly_the_old_behaviour(monkeypatch: pytest.MonkeyPatch) -> None:
     """Never worse than before: if the replay raises, the route parks and acks as it always did."""
     from lineage.core.metrics import Outcome

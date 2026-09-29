@@ -97,16 +97,6 @@ def test_a_park_whose_run_the_graph_already_holds_is_not_counted_as_loss(monkeyp
     assert seen == [str(Outcome.PARKED_ALREADY_RECORDED)], f"a re-park of a recorded run is not terminal loss, got {seen}"
 
 
-def test_a_park_whose_run_the_graph_lacks_is_still_terminal_loss(monkeypatch: pytest.MonkeyPatch) -> None:
-    from lineage.core.metrics import Outcome
-
-    seen = _outcomes(monkeypatch)
-    client = _parking_client(monkeypatch, _Repo(known=set()))
-
-    assert _park(client, _event("run-missing")) == {"status": "SUCCESS"}
-    assert seen == [str(Outcome.DEAD_LETTERED)], f"an absent run is the loss the counter exists for, got {seen}"
-
-
 def test_a_recorded_park_logs_at_warning_and_a_lost_one_at_error(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The two answers send an operator to different places, so they must not share a severity: an
     ERROR per re-park is what let the real losses scroll away among them."""

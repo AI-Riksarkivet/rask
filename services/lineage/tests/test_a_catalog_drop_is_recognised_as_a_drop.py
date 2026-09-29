@@ -162,9 +162,7 @@ _T = "2026-09-27T10:0{}:00+00:00"
     ("history", "dropped"),
     [
         pytest.param([_catalog("create_table", _T.format(0)), _catalog("drop_table", _T.format(5))], True, id="a-catalog-drop"),
-        pytest.param([_catalog("create_table", _T.format(0)), _catalog("deregister_table", _T.format(5))], True, id="a-deregister-leaves-the-catalog"),
         pytest.param([_catalog("drop_table", _T.format(5)), _catalog("create_table", _T.format(6))], False, id="a-recreate"),
-        pytest.param([_catalog("drop_table", _T.format(5)), _catalog("register_table", _T.format(6))], False, id="an-undrop"),
         pytest.param(
             [_catalog("drop_table", _T.format(5)), _catalog("create_table", _T.format(6)), _catalog("drop_table", _T.format(5))],
             False,

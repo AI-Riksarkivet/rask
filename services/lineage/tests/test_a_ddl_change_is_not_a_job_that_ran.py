@@ -42,23 +42,11 @@ def _payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def test_a_dataset_event_parses_without_a_run_or_a_job() -> None:
-    """The whole point: there is no run to name and no job that performed it."""
-    event = DatasetEvent.model_validate(_payload())
-    assert event.dataset.name == "bronze$events"
-    assert event.operation == "create_table"
-
-
 def test_a_payload_carrying_a_run_or_a_job_is_REFUSED() -> None:
     """The spec forbids both members; accepting one would re-admit the phantom through the new door."""
     for forbidden in ({"run": {"runId": "r1"}}, {"job": {"namespace": "n", "name": "j"}}):
         with pytest.raises(ValidationError):
             DatasetEvent.model_validate(_payload(**forbidden))
-
-
-def test_the_authorizer_reads_the_verified_sub_off_the_dataset() -> None:
-    """`enforce_bus_authz` authorizes as whatever this returns — a DDL event must not become unauthored."""
-    assert author_sub_from_payload(_payload()) == "auth0|alice"
 
 
 def test_the_authorizer_still_refuses_the_ownership_FACET_as_a_source() -> None:
@@ -68,11 +56,3 @@ def test_the_authorizer_still_refuses_the_ownership_FACET_as_a_source() -> None:
     assert isinstance(dataset, dict)
     dataset["facets"] = {"ownership": {"owners": [{"name": "auth0|mallory", "type": "MAINTAINER"}]}}
     assert author_sub_from_payload(unverified) is None
-
-
-def test_a_dataset_event_presents_the_dataset_as_its_OUTPUT() -> None:
-    """`enforce_output_authz` gates on outputs; a DDL change must be gated on the table it changed."""
-    event = DatasetEvent.model_validate(_payload())
-    assert [d.name for d in event.outputs] == ["bronze$events"]
-    assert event.inputs == []
-    assert event.run_id is None

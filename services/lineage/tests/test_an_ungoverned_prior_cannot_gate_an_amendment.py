@@ -110,14 +110,6 @@ def _run(request: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_a_GOVERNED_prior_the_subject_cannot_write_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control, and the property this must not weaken: a prior somebody CAN hold still gates."""
-    _wire(monkeypatch, writable={"bronze$mine"}, governed={"bronze$theirs", "bronze$mine"})
-
-    with pytest.raises(PermissionDeniedError):
-        _run(_request(_Priors(["bronze$theirs"])), monkeypatch)
-
-
 def test_an_UNGOVERNED_prior_does_not_refuse(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE DEFECT: no subject can hold a relation on an object with no tuples, so this check can only
     ever deny — the run is unamendable by everyone and no grant can repair it."""

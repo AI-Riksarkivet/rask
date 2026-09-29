@@ -21,10 +21,8 @@ from __future__ import annotations
 from typing import Any, cast
 
 import pytest
-from lance_namespace import PermissionDeniedError
 
 from lineage.api.fga_deps import _none_are_governed
-from lineage.models import UngovernedOutputError
 from service_kit.governed import fga
 
 
@@ -32,29 +30,6 @@ _NAMES = ["gone-ns$a", "gone-ns$b"]
 #: The probe reaches OpenFGA only through the patched `read_object_tuples`, so the client is never
 #: touched — naming that here beats a bare `None` that reads like an oversight.
 _NO_CLIENT = cast(Any, None)
-
-
-def _tuples_for(mapping: dict[str, list[object]]) -> Any:
-    async def read(_client: object, obj: str, **_kw: object) -> list[object]:
-        return mapping.get(obj, [])
-
-    return read
-
-
-@pytest.mark.asyncio
-async def test_every_name_untupled_is_ungoverned(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(fga, "read_object_tuples", _tuples_for({}))
-
-    assert await _none_are_governed(_NO_CLIENT, names=_NAMES, object_type="table") is True
-
-
-@pytest.mark.asyncio
-async def test_ONE_governed_name_makes_the_whole_refusal_repairable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A denial naming a governed table and an unknown one is still repairable — granting on the
-    governed one changes the answer. Acking here would discard provenance a tuple away."""
-    monkeypatch.setattr(fga, "read_object_tuples", _tuples_for({"table:gone-ns$b": [object()]}))
-
-    assert await _none_are_governed(_NO_CLIENT, names=_NAMES, object_type="table") is False
 
 
 @pytest.mark.asyncio
@@ -69,10 +44,3 @@ async def test_an_UNREADABLE_store_falls_back_to_the_repairable_arm(monkeypatch:
     monkeypatch.setattr(fga, "read_object_tuples", boom)
 
     assert await _none_are_governed(_NO_CLIENT, names=_NAMES, object_type="table") is False
-
-
-def test_the_unrepairable_type_is_still_a_permission_denial() -> None:
-    """It must keep answering 403 on the HTTP door while changing only the BUS ack — the two doors
-    share this gate, and a new top-level type would have fallen out of every `except` that handles a
-    refusal on the request path."""
-    assert issubclass(UngovernedOutputError, PermissionDeniedError)

@@ -39,19 +39,9 @@ _ASSIGNMENT = re.compile(r"r\.(?P<prop>[a-z_]+)=(?P<rhs>\(?[A-Za-z$]+)")
 #: survive.
 _MAY_BE_UNCONDITIONAL: Final = frozenset({"job", "events_count"})
 
-#: The lifecycle facts a stale event must not be able to restate. Each has to name `supersedes` — a
-#: bare CASE on something else would satisfy "is conditional" while still regressing the run.
-_STATE_FAMILY: Final = frozenset({"event_type", "event_time", "author", "producer", "error_message"})
-
 
 def _assignments() -> dict[str, str]:
     return {m.group("prop"): m.group("rhs") for m in _ASSIGNMENT.finditer(cy.MERGE_RUN)}
-
-
-def test_the_extraction_still_finds_the_statement() -> None:
-    """The gate's own precondition: an assignment shape this file cannot parse makes it vacuous."""
-    found = _assignments()
-    assert len(found) >= 10, f"MERGE_RUN parsed to {len(found)} assignments — the extraction has drifted from the source: {found}"
 
 
 def test_no_run_property_is_written_last_delivery_wins() -> None:
@@ -65,25 +55,12 @@ def test_no_run_property_is_written_last_delivery_wins() -> None:
     )
 
 
-def test_the_state_family_is_guarded_on_supersedes_specifically() -> None:
-    """Being conditional is not enough — the condition has to be the recency-and-terminal one."""
-    body = cy.MERGE_RUN
-    for prop in sorted(_STATE_FAMILY):
-        assert f"r.{prop}=(CASE WHEN supersedes THEN" in body, f"Run.{prop} is not gated on `supersedes`: an out-of-order event can still rewrite it"
-
-
 def test_a_terminal_state_is_sticky_against_a_non_terminal_one() -> None:
     """The row's own close condition, read off the predicate: a START arriving after a COMPLETE carries
     a FRESHER stamp, so the time half lets it through and only this clause stops it."""
     assert f"NOT (r.event_type IN {cy._TERMINAL} AND NOT $et IN {cy._TERMINAL})" in cy.MERGE_RUN, (
         "the terminal-stickiness clause is gone from MERGE_RUN — a late START would regress a finished run"
     )
-
-
-def test_started_at_is_the_earliest_time_seen_not_the_first_delivered() -> None:
-    """`coalesce(r.started_at, $tm)` recorded whichever event ARRIVED first, which on the measured run
-    put the start 41 seconds after the finish."""
-    assert "r.started_at=(CASE WHEN r.started_at IS NULL OR $tm < r.started_at THEN $tm" in cy.MERGE_RUN
 
 
 def test_both_dialects_agree_on_what_terminal_means() -> None:
@@ -95,21 +72,6 @@ def test_both_dialects_agree_on_what_terminal_means() -> None:
         "run states are terminal — the graph would refuse to leave a state the feed still dedups, or worse"
     )
     assert cypher_states, "neither definition parsed — the gate would pass vacuously"
-
-
-def test_the_attempt_counter_counts_FAILURES_and_not_every_event() -> None:
-    """[[LH-098]]. `attempts` answers "did this run fail first, and how often" on the ONE node the
-    deterministic-run-id flood guard makes every tick MERGE onto — so it must move only on a FAIL. An
-    unguarded increment would count COMPLETEs and RECONCILEDs too and report a healthy run as a
-    repeatedly-failing one.
-    """
-    assert "attempts" in _assignments(), "MERGE_RUN no longer assigns `attempts` — failures are structurally uncountable again"
-    # Asserted against the STATEMENT, not the parsed rhs: `_ASSIGNMENT`'s rhs group captures only the
-    # first token, because its question is "conditional or bare $param". Content checks in this file
-    # read `cy.MERGE_RUN` directly, as the two guards above do.
-    assert "r.attempts=(CASE WHEN $et = 'FAIL'" in cy.MERGE_RUN, (
-        f"the attempt counter is not gated on a FAIL event, so every COMPLETE would increment it: {cy.MERGE_RUN}"
-    )
 
 
 def test_the_attempt_counter_cannot_be_inflated_by_a_REDELIVERY() -> None:

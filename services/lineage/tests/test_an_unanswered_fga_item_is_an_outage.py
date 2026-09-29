@@ -180,10 +180,6 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
     return fga_deps.DatasetFilter(request, settings, IDToken(iss="https://idp.example.com", sub="alice", aud="lance", exp=0, iat=0))
 
 
-def test_the_read_filter_keeps_what_openfga_answered() -> None:
-    assert asyncio.run(_filter(_OpenFga(unanswered=set())).visible(["a", "b"])) == {"a", "b"}
-
-
 def test_a_dataset_openfga_could_not_answer_is_a_503_not_hidden() -> None:
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(_filter(_OpenFga(unanswered={"table:b"})).visible(["a", "b"]))

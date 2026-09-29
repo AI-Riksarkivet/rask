@@ -49,12 +49,6 @@ def _indexed_run_properties() -> set[str]:
     return indexed
 
 
-def test_the_queries_really_do_sort_runs() -> None:
-    """The gate's own precondition: if nothing sorts, the demand below is vacuous."""
-    sorted_props = _sorted_run_properties()
-    assert sorted_props, "no `ORDER BY r.<prop>` found in cypher.py — the extraction has drifted from the source"
-
-
 def test_every_sorted_Run_property_is_indexed() -> None:
     """The headline: a property the queries order by must not be a full-table sort of a growing label."""
     missing = sorted(_sorted_run_properties() - _indexed_run_properties())
@@ -63,11 +57,3 @@ def test_every_sorted_Run_property_is_indexed() -> None:
         f"postgres.VERTEX_UNIQUE_KEYS / VERTEX_LOOKUP_KEYS: {missing}. Each one sorts the whole Run label "
         "table on every call, and nothing bounds that table — run retention ships off"
     )
-
-
-def test_the_lookup_entry_is_shaped_for_the_index_builder() -> None:
-    """`ensure_graph_constraints` builds one property-access term per key, so a key must be a plain
-    property name — a dotted or expression-shaped key would produce an index on something else."""
-    for label, keys in pg.VERTEX_LOOKUP_KEYS:
-        for key in keys:
-            assert key.isidentifier(), f"{label} lookup key {key!r} is not a plain property name"

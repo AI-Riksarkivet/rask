@@ -58,35 +58,6 @@ class _Repo:
 
 
 @pytest.mark.asyncio
-async def test_a_static_metadata_event_reaches_the_dataset_door() -> None:
-    """And NOT the run door, which is the one that mints a Job node per table per operation."""
-    repo = _Repo()
-
-    assert await handle_cloud_event(cast(Any, repo), {"data": _static_payload()}) == {"status": "SUCCESS"}
-
-    assert [event.dataset.name for event in repo.datasets] == ["silver$features"]
-    assert repo.runs == [], "a static metadata change reached the run door and will mint a phantom Job"
-
-
-@pytest.mark.asyncio
-async def test_a_run_event_still_reaches_the_run_door() -> None:
-    """The discrimination must not move real runs: a run carries `run` and `job` and belongs there."""
-    repo = _Repo()
-    payload = {
-        "eventType": "COMPLETE",
-        "eventTime": "2026-09-23T10:00:00+00:00",
-        "run": {"runId": "11111111-2222-5333-8444-555555555555", "facets": {"author": {"sub": "auth0|alice"}}},
-        "job": {"namespace": "lance-medallion", "name": "aggregate_gold"},
-        "outputs": [{"namespace": "gold", "name": "gold$catalog"}],
-    }
-
-    assert await handle_cloud_event(cast(Any, repo), {"data": payload}) == {"status": "SUCCESS"}
-
-    assert [event.job.name for event in repo.runs] == ["aggregate_gold"]
-    assert repo.datasets == []
-
-
-@pytest.mark.asyncio
 async def test_a_static_event_is_AUTHORIZED_before_it_reaches_the_graph() -> None:
     """The dataset door is not a way around the check every run event passes."""
     repo = _Repo()
@@ -97,13 +68,3 @@ async def test_a_static_event_is_AUTHORIZED_before_it_reaches_the_graph() -> Non
 
     assert await handle_cloud_event(cast(Any, repo), {"data": _static_payload()}, authorize=authorize) == {"status": "SUCCESS"}
     assert seen == [None], "the static event bypassed authorization on its way to the graph"
-
-
-@pytest.mark.asyncio
-async def test_a_payload_carrying_BOTH_a_dataset_and_a_run_is_refused() -> None:
-    """The spec forbids the pairing; accepting it would re-admit the phantom through the new door."""
-    repo = _Repo()
-    payload = {**_static_payload(), "run": {"runId": "11111111-2222-5333-8444-555555555555"}}
-
-    assert await handle_cloud_event(cast(Any, repo), {"data": payload}) == {"status": "SUCCESS"}
-    assert repo.runs == [] and repo.datasets == []

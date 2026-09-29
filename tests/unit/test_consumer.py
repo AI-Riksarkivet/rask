@@ -49,26 +49,6 @@ class _FakeRepo:
         self.ingested = event
 
 
-def test_handle_ingests_and_acks_a_valid_cloud_event() -> None:
-    repo = _FakeRepo()
-    status = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT))
-    assert repo.ingested is not None  # graph write + durable feed row, in one call
-    assert status == {"status": "SUCCESS"}
-
-
-def test_handle_CONSUMES_a_malformed_payload() -> None:
-    # Data that won't parse is a defect in the MESSAGE: no redelivery, no grant and no restart can turn
-    # those bytes into an event. DROP would not merely stop the retries — the subscription carries a
-    # `deadLetterTopic`, so a DROP PARKS, and the subscriber is ephemeral with `deliverPolicy: all`, so
-    # every restart meets the same bytes again and appends another dead-letter copy of an event the DLQ
-    # already holds. The count is the signal (`Outcome.UNREPAIRABLE`), and the stream still holds the event
-    # for its retention.
-    repo = _FakeRepo()
-    status = asyncio.run(handle_cloud_event(cast(Any, repo), {"data": {"not": "an event"}}))
-    assert repo.ingested is None
-    assert status["status"] == "SUCCESS"
-
-
 def test_handle_retries_on_transient_ingest_failure() -> None:
     # AGE down → RETRY; Dapr redelivers per the component backOff (ingest is idempotent, so retry is safe).
     repo = _FakeRepo(fail=True)

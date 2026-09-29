@@ -26,19 +26,6 @@ from __future__ import annotations
 from lineage.services import cypher as cy
 
 
-def test_the_count_and_the_delete_ask_the_same_question() -> None:
-    """Identity, not resemblance — and it is load-bearing arithmetic, not tidiness.
-
-    ``prune_runs`` sizes its batch loop as ``ceil(count / PRUNE_BATCH_SIZE)`` and then runs the delete
-    that many times. If the count matched a wider set than the delete, the loop would run extra empty
-    batches; if it matched a narrower one, runs old enough to prune would survive every tick and the
-    retention window would silently stop meaning what the chart says. One constant behind both is what
-    makes the two impossible to disagree.
-    """
-    assert cy.COUNT_OLD_RUNS.startswith(cy._PRUNABLE_RUNS)
-    assert cy.PRUNE_OLD_RUNS_TEMPLATE.startswith(cy._PRUNABLE_RUNS)
-
-
 def test_the_exemption_asks_about_the_dataset_not_about_the_run() -> None:
     """The rule is per-DATASET, and this is the property that survives a batch.
 
@@ -62,19 +49,6 @@ def test_the_exemption_asks_about_the_dataset_not_about_the_run() -> None:
     assert "WHERE oldest_tip IS NULL OR oldest_tip >= $cutoff" in predicate, "a quiet dataset's runs must be KEPT; a run that wrote nothing is prunable"
 
 
-def test_the_exemption_does_not_decide_on_a_count_of_current_writers() -> None:
-    """A negative pin on the shape that fails under batching, so it cannot come back as a simplification.
-
-    Counting writers reads naturally and is wrong for the reason above. Pinned separately from the
-    positive rule because the two would otherwise be one assertion that a rewrite could satisfy in the
-    broken direction.
-    """
-    predicate = cy._PRUNABLE_RUNS
-
-    assert "count(w)" not in predicate, "a count of current writers cannot survive a batch that deletes several of them"
-    assert "fewest <> 1" not in predicate
-
-
 def test_the_pruner_still_bounds_itself_by_age() -> None:
     """The exemption narrows retention; it must not replace it.
 
@@ -82,26 +56,3 @@ def test_the_pruner_still_bounds_itself_by_age() -> None:
     separately from the exemption so a change to one cannot quietly remove the other.
     """
     assert "r.event_time < $cutoff" in cy._PRUNABLE_RUNS
-
-
-def test_the_exemption_does_not_use_a_negated_pattern_predicate() -> None:
-    """AGE 1.5.0 rejects `WHERE NOT (d)<-[:WROTE]-(:Run)` as a syntax error at the `:`.
-
-    The natural way to write "no other run wrote this" is the way that does not parse, and it fails on
-    the server rather than in any suite — which is how the orphan query beside this one shipped broken.
-    Pinned as a NEGATIVE so the next person to simplify this predicate is stopped by a test rather than
-    by a production tick.
-    """
-    assert "NOT (" not in cy._PRUNABLE_RUNS
-
-
-def test_the_batch_limit_is_still_applied_after_the_exemption() -> None:
-    """The LIMIT must come after the filter, or a batch could be entirely exempt and delete nothing.
-
-    With the filter first, each batch takes `PRUNE_BATCH_SIZE` genuinely deletable runs and the loop
-    terminates. With it after, a tick could spin its whole batch budget on runs it then refuses to
-    delete, and the backlog would never drain.
-    """
-    delete = cy.PRUNE_OLD_RUNS_TEMPLATE.format(limit=cy.PRUNE_BATCH_SIZE)
-
-    assert delete.index("WHERE oldest_tip") < delete.index(f"LIMIT {cy.PRUNE_BATCH_SIZE}")

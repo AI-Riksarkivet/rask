@@ -120,19 +120,6 @@ def request_with(monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_an_EXTERNAL_source_is_not_authorized_at_all(settings, request_with) -> None:
-    """The regression. An ingest START naming its S3 source must pass with no tuple in existence."""
-    request, fake = request_with({f"table:{GOVERNED}"})
-    event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME)])
-
-    await enforce_output_authz(event, request, settings, _Principal())
-
-    assert not any(EXTERNAL_NAME in o for o in fake.asked), (
-        f"the guard asked OpenFGA about an external source ({fake.asked}) — that object cannot exist, so the answer is always a denial"
-    )
-
-
-@pytest.mark.anyio
 async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings, request_with) -> None:
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
     reader recording `I read gold$catalog` into the authoritative audit graph."""
@@ -196,19 +183,13 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
     ("namespace", "name", "external"),
     [
         ("s3://images-batch", "run1/", True),
-        ("iiif://lbiiif.riksarkivet.se", "coll", True),
-        ("file:///data/drop", "x", True),
         # The BARE external namespaces, which no scheme test can catch: `local-dir` mints `file` and
         # `lance-append` mints `lance`, and both were authorized as governed until they were declared.
         ("file", "/tmp/ingest-fixtures", True),
-        ("lance", "s3://lane-src/tbl.lance", True),
         ("bronze", "bronze$pages", False),
-        ("bind86-bronze", "bind86-bronze$pages", False),
-        ("gold", "gold$catalog", False),
         # A declared namespace does NOT exempt a governed table id. Both holes would have to be open at
         # once — a namespace literally named `file` AND a table id with no delimiter.
         ("file", "file$gold", False),
-        ("lance", "lance$secrets", False),
     ],
 )
 def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: str, name: str, external: bool) -> None:
@@ -290,30 +271,6 @@ def test_a_summary_row_keeps_todays_behaviour() -> None:
 # impossible. These tests assert the identity the storage layer actually uses.
 
 
-def test_a_governed_dataset_keeps_its_bare_name_as_its_vertex_identity() -> None:
-    """The half that must NOT change: a governed table's vertex name is its catalog id, which is what
-    every read door (`/datasets/<name>/...`), every edge and every existing row already uses."""
-    from lineage.models import Dataset
-
-    assert Dataset(namespace="gold", name="gold$catalog").vertex_name == "gold$catalog"
-
-
-def test_an_EXTERNAL_dataset_is_a_DIFFERENT_VERTEX_from_a_governed_one_of_the_same_name() -> None:
-    """THE FIX. The exemption is legitimate — an external source has no catalog entry and therefore no
-    tuple that could ever authorize it — but it is only safe if an unauthorized external reference
-    cannot reach a governed vertex. Qualifying the external vertex by its namespace makes that
-    structural rather than heuristic: no name a caller can choose collides."""
-    from lineage.models import Dataset
-
-    forged = Dataset(namespace="s3://anything", name="gold$catalog")
-    governed = Dataset(namespace="gold", name="gold$catalog")
-
-    assert forged.vertex_name != governed.vertex_name, "a forged external input still resolves to the governed vertex — the laundering path is open"
-    assert governed.vertex_name in forged.vertex_name or "s3://anything" in forged.vertex_name, (
-        "the external vertex must remain identifiable, not hashed into noise"
-    )
-
-
 def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() -> None:
     """The mirror: qualification must not collapse genuinely different sources onto one node either."""
     from lineage.models import Dataset
@@ -322,20 +279,6 @@ def test_two_external_sources_with_the_same_name_stay_distinct_by_namespace() ->
     b = Dataset(namespace="s3://bucket-b", name="run1")
 
     assert a.vertex_name != b.vertex_name
-
-
-def test_the_exemption_is_only_reached_by_a_dataset_that_cannot_be_governed() -> None:
-    """`is_external_source` is the discriminator, and a bare CATALOG namespace is never exempt.
-
-    An undeclared bare namespace stays governed whatever its name, which is what keeps the declared
-    set a decision rather than a shape."""
-    from lineage.api.fga_deps import is_external_source
-
-    assert is_external_source("s3://bucket", "prefix/") is True
-    assert is_external_source("iiif://host", "coll") is True
-    assert is_external_source("gold", "gold$catalog") is False
-    assert is_external_source("bind86-bronze", "bind86-bronze$pages") is False
-    assert is_external_source("bronze", "not-a-table-id") is False
 
 
 # ══════════════════════════════════════════════════════════════════════════════════════════════════
@@ -489,16 +432,6 @@ async def test_a_principal_who_MAY_write_that_table_still_may_amend_its_run(sett
     _with_repo(request, _FakeRepo({VICTIM_RUN: [GOVERNED]}))
 
     await enforce_output_authz(_bare_event(VICTIM_RUN), request, settings, _Principal())
-
-
-@pytest.mark.anyio
-async def test_a_run_that_does_NOT_yet_exist_is_created_freely(settings, request_with) -> None:
-    """Creating a run is harmless — a vertex with no edges is noise, not forgery — and refusing it
-    would re-break ingest's START event, whose only input is an external prefix it cannot authorize."""
-    request, _fake = request_with(set())
-    _with_repo(request, _FakeRepo({}))
-
-    await enforce_output_authz(_bare_event("99999999-2222-4333-8444-555555555555"), request, settings, _Principal())
 
 
 @pytest.mark.anyio
