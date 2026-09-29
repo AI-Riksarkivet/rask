@@ -15,10 +15,8 @@ FAIL CLOSED IS THE RULING (owner, 2026-09-07): the subject starts with nothing, 
 it exactly what should be public — at which point "what can the public see" is a readable, revocable
 set of tuples instead of whatever a service happens to hold.
 
-THE SEEDS ARE GATED AND THE THREE E2E SUITES WERE FIXED IN THE SAME CHANGE, because they were the
-reason the grants looked load-bearing: `test_medallion_e2e` and `test_media_e2e` read lineage AS
-`service-web`, so they asserted what a logged-out visitor sees while appearing to assert governance.
-Both read as a user now.
+A SUITE THAT READS LINEAGE AS `service-web` is what makes these grants look load-bearing: it asserts
+what a logged-out visitor sees while appearing to assert governance.
 """
 
 from __future__ import annotations

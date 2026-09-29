@@ -249,8 +249,8 @@ groups:
       # A BARE `absent()`, NOT `absent(X) and on() (...)`, and that is not a simplification. GreptimeDB
       # REJECTS absent() as an operand of a set operator — the estate measured both of its own former
       # composites answering HTTP 500 / 400 against the live store while promtool reported SUCCESS over
-      # them, because promtool is Prometheus and production is not. `tests/unit/test_invariants.py::
-      # test_no_alert_rule_combines_absent_with_a_set_operator` holds that shut.
+      # them, because promtool is Prometheus and production is not. The `alert-rules-drill` CI lane
+      # (scripts/alert_rules_drill.py) replays every expression against that engine and fails on a refusal.
       #
       # SO THE TWO CAUSES ARE DELIBERATELY CONFLATED, and the conflation is the honest reading: whether
       # the sweep is not running at all or it is running and cannot see who is governed, the operational
@@ -569,7 +569,7 @@ groups:
       #    is valid PromQL, promtool passes it, and GreptimeDB answers HTTP 400 for this one and HTTP 500
       #    for the maintenance twin below — so from the day the absent() half was added to the day it was
       #    split (2026-08-23) NEITHER rule could fire at all. The correct shape is the scheduler's own:
-      #    a bare absent() in its OWN rule. Pinned by test_no_alert_rule_combines_absent_with_a_set_operator.
+      #    a bare absent() in its OWN rule, which the `alert-rules-drill` lane replays against GreptimeDB.
         expr: sum(rate(notifications_ingress_events_total{lance_notifications_lane="feed"}[30m])) == 0
         for: 30m
         labels:
@@ -738,9 +738,8 @@ groups:
       # One table the catalog keeps refusing, which the ratio rule cannot see. A rename leaves the old id with no
       # tuples, so on a governed estate both doors answer it 403 on every tick. A worker's series first appears at
       # 1, which increase() cannot see, so a deploy of N workers leaves N+1 sweep periods plus ackWait between
-      # counts: 4h holds two workers at the hourly backstop (pinned against the rendered chart by
-      # test_the_parked_table_alert_can_fire_at_the_sweep_cadence.py). vmalert keeps `for:` in memory, so its own
-      # restart restarts the clock.
+      # counts: 4h holds two workers at the hourly backstop. vmalert keeps `for:` in memory, so its own restart
+      # restarts the clock.
       - alert: MaintenanceTableParked
         expr: sum by (table_id) (increase(compaction_tables_parked_total[4h])) > 0
         for: 24h
@@ -1002,9 +1001,9 @@ groups:
   # regression, not a chronic mis-size — which is exactly the shape an alert catches and a one-off
   # limit bump does not. Nothing reported any of the 13.
   #
-  # These depend on the `greptimedb` scrape job in chart/templates/otel-collector.yaml. That
-  # dependency is pinned in BOTH directions by test_every_job_selector_names_a_real_scrape_job:
-  # the rules cannot ship without the job, and the job cannot be deleted while the rules exist.
+  # These depend on the `greptimedb` scrape job in chart/templates/otel-collector.yaml, in BOTH
+  # directions: the rules must not ship without the job, and the job must not be deleted while the
+  # rules exist.
   - name: lance-observability
     rules:
 
@@ -1032,8 +1031,8 @@ groups:
       #
       # 6442450944 = 6GiB = 75% of the current 8Gi limit. This literal MUST move with
       # greptimedb-standalone.resources.limits.memory in values.yaml — rules.yml is mounted via
-      # .Files.Get and cannot be templated, so the coupling is held by a test instead:
-      # test_the_greptimedb_memory_threshold_tracks_the_chart_limit.
+      # .Files.Get and cannot be templated, so a change to the limit changes this literal in the same
+      # commit.
       - alert: GreptimeDBMemoryHigh
         expr: max(process_resident_memory_bytes{job="greptimedb"}) > 6442450944
         for: 10m
@@ -1103,10 +1102,9 @@ groups:
   # younger than the longest window the policy grants. That claim is true under any load.
   #
   # The series come from the `sqlquery/daprstate` receiver in chart/templates/otel-collector.yaml,
-  # which runs one query against the Dapr state store's own database. That dependency is pinned in
-  # both directions by test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares: these
-  # rules cannot ship without the receiver, and the receiver cannot be deleted (nor its metrics
-  # renamed) while the rules are here.
+  # which runs one query against the Dapr state store's own database. That dependency runs in both
+  # directions: these rules must not ship without the receiver, and the receiver must not be deleted
+  # (nor its metrics renamed) while the rules are here.
   - name: dapr-workflow-state
     rules:
 
@@ -1114,8 +1112,8 @@ groups:
       # for the scheduler's own cadence, not slack: a row is only eligible once its instance reaches a
       # terminal state, so a legitimately-retained row can be a little older than the nominal window.
       # This literal MUST move with dapr.workflowRetention in chart/values.yaml — rules.yml is mounted
-      # via .Files.Get and cannot be templated, so the coupling is held by a test instead:
-      # test_the_workflow_history_alert_threshold_TRACKS_the_retention_policy.
+      # via .Files.Get and cannot be templated, so a change to the retention changes this literal in the
+      # same commit.
       #
       # `for: 30m` rather than something shorter because this is a slow failure with a slow fix. It is
       # never urgent by the minute and a brief blip during a scheduler restart should not page.
@@ -1136,8 +1134,8 @@ groups:
             docs/runbooks/RUNBOOK-oncall.md#workflow-history-not-collected
 
       # Two rules, not one composite — GreptimeDB refuses `X > N or absent(X)` outright (HTTP 500).
-      # See the note at NotificationsReconcilerStalled, and the gates that enforce it
-      # (test_no_alert_rule_combines_absent_with_a_set_operator).
+      # See the note at NotificationsReconcilerStalled, and the `alert-rules-drill` lane that replays
+      # every expression against GreptimeDB.
       #
       # This is the watcher's watcher, and it is not decoration. `max(...)` over an empty vector
       # returns nothing, so a receiver that stops running makes the rule above permanently quiet —

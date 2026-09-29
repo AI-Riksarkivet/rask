@@ -155,9 +155,9 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str, parent_relat
 
     That is why the pairing is a function rather than a rule people are expected to remember — a
     one-directional link is a perfectly valid tuple that simply never resolves, so it is invisible to
-    every mocked-client test and to the API itself. The set of callers is closed, and
-    `tests/unit/test_invariants.py::test_only_the_sanctioned_writers_seed_a_hierarchy_edge` holds it
-    that way: `grant_on_create` below (where the catalog's create-door seed lands) and
+    every mocked-client test and to the API itself. The set of callers is closed, and the TID251
+    banned-api entry on `service_kit.governed.fga.hierarchy_edge_tuples` holds it that way:
+    `grant_on_create` below (where the catalog's create-door seed lands) and
     `medallion.services.train`, whose model registry datasets have no catalog record and so reach no
     create door at all. `scripts/seed_medallion_fga.sh` pairs the two directions in its own `link`
     helper, being shell.
@@ -423,11 +423,11 @@ def _plain(value: Any) -> Any:
 #: The model grammar's EMPTY MESSAGES, whose presence is the value: ``this: {}`` is a direct assignment
 #: and ``wildcard: {}`` is what makes ``[user:*]`` differ from ``[user]``. They are the only fields the
 #: SDK's model schema types as ``object``, walked rather than listed in
-#: `tests/test_an_unchanged_model_is_not_rewritten_on_every_boot.py`.
+#: `packages/service-kit/tests/test_fga_provision.py::test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form`.
 _EMPTY_MESSAGES: Final = frozenset({"this", "wildcard"})
 
 #: The schema's MAP fields, whose keys are names an author chose (a relation, a condition, a parameter)
-#: rather than grammar fields. Walked off the SDK's schema in the same test module as the empty messages.
+#: rather than grammar fields.
 _NAMED_MAPS: Final = frozenset({"conditions", "parameters", "relations"})
 
 
@@ -564,7 +564,7 @@ class ModelHistoryTooLongError(Exception):
 
 #: How long a booting service waits for its store and its image's model before failing closed. It runs
 #: inside the fleet's startup budget (`lance.appProbes`: 30 x 10 s) beside the lifespan's other steps,
-#: the Dapr secret fetch alone up to ~80 s; pinned by `test_resolve_fits_the_startup_budget.py`.
+#: the Dapr secret fetch alone up to ~80 s, so the budget has to hold this deadline plus those steps.
 RESOLVE_DEADLINE_SECONDS: Final = 120.0
 
 

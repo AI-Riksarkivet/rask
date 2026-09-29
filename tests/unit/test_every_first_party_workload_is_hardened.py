@@ -1,22 +1,22 @@
 """Hardening covers every first-party workload we TEMPLATE — Deployments, StatefulSets, Jobs, and the
 init containers inside them.
 
-[[XC-061]]. `test_every_first_party_container_carries_the_HARDENING_the_chart_claims` walks Deployments
-and their `containers` only, so three kinds of workload were never asked:
+[[XC-061]]. A gate that walks Deployments and their `containers` only never asks three kinds of
+workload:
 
 - **Jobs and StatefulSets.** Six Jobs and the AGE StatefulSet render with none of the baseline. A Job
   runs with the same reach as a Deployment and several of these hold credentials — the OpenBao seed and
   the MinIO user-provisioning Jobs by definition.
-- **initContainers.** `rask-lineage` passes the existing gate on its app container while its `wait-age`
-  init container carries nothing. An init container shares the pod and runs FIRST.
+- **initContainers.** `rask-lineage` hardens its app container while its `wait-age` init container
+  carries nothing. An init container shares the pod and runs FIRST.
 - **Workloads the exemption list calls subcharts and we actually template.** `_UNCOVERED_DEPLOYMENTS`
   lumps "not ours to template" together with OpenBao, Dex and MinIO — all rendered from
   `rask/templates/`. The row's title names the first two as the ones that most need it: the secret
   store and the IdP.
 
 DERIVED FROM THE RENDER SOURCE, not from a name list. Every doc rendered from `rask/templates/` is ours;
-anything under `rask/charts/` belongs to a subchart. A hand-written tuple is how the gate this widens
-skipped four fleet Deployments silently, and the same tuple is why OpenBao reads as a subchart it is not.
+anything under `rask/charts/` belongs to a subchart. A hand-written name list is how a gate skips a
+first-party workload silently, and `_UNCOVERED_DEPLOYMENTS` is why OpenBao reads as a subchart it is not.
 
 MEASURED 2026-09-23 under default values, reading the EFFECTIVE context: **14 containers across 11
 first-party workloads** are missing at least one baseline key. The row says "7 first-party containers

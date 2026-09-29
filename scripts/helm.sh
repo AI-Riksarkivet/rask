@@ -79,8 +79,8 @@ fi
 # SO A MUTATING CALLER DECLARES AND THIS REFUSES. `RASK_EXPECT_CONTEXT` is the caller's statement of
 # which cluster it means; a mismatch exits non-zero rather than warning, because CI reads exit codes
 # and a warning is read by nobody. Unset stays permitted: the guard's job is to catch a caller whose
-# intent is KNOWN and contradicted, not to break every target that has always meant this estate —
-# `tests/unit/test_a_mutating_script_declares_the_cluster_it_mutates.py` is what makes them declare.
+# intent is KNOWN and contradicted, not to break every target that has always meant this estate.
+# Declaring is each mutating caller's own job; nothing checks that a caller did.
 if [[ -n "${RASK_EXPECT_CONTEXT:-}" ]]; then
   actual="$(kubectl config current-context 2>/dev/null || echo '<none>')"
   if [[ "$actual" != "$RASK_EXPECT_CONTEXT" ]]; then

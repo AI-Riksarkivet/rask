@@ -5,10 +5,8 @@ The estate is built with the CATALOG's own registry writers against a local file
 reconciler reads what the catalog actually writes rather than a copy of the layout that could drift.
 OpenFGA and S3 are faked at the seam the reconciler uses (``fga.read_tuples`` / ``list_buckets``).
 
-Two invariants carry the module and are asserted MECHANICALLY, not by comment:
-:func:`test_the_module_contains_no_mutating_call` walks the AST of ``reconcile.py`` for any call that
-could write, and :func:`test_a_full_run_leaves_every_store_byte_identical` snapshots the control root
-before and after a run and drives it with stores whose write paths raise.
+REPORT ONLY is asserted MECHANICALLY, not by comment: :func:`test_a_full_run_leaves_every_store_byte_identical`
+snapshots the control root before and after a run and drives it with stores whose write paths raise.
 """
 
 from __future__ import annotations

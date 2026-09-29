@@ -34,9 +34,8 @@ def record_refusal(topic: str, reason: str) -> None:
     """Count one pre-I/O refusal.
 
     Both labels are bounded by construction, which is the rule this estate has already been burned by
-    breaking: `topic` can only be a named settings field or constant (an inline literal is rejected by
-    `test_every_publish_site_uses_a_named_topic_constant`), and `reason` is a closed set owned by this
-    module. Never label with anything off the payload — the refused payload's SIZE is a log field, where
+    breaking: `topic` must be a named settings field or constant, never an inline literal, and
+    `reason` is a closed set owned by this module. Never label with anything off the payload — the refused payload's SIZE is a log field, where
     it already is; as a label it would be one series per byte count.
     """
     _refused.add(1, {"lance.bus.topic": topic, "lance.bus.reason": reason})

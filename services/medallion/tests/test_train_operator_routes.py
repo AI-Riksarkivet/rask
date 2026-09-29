@@ -2,8 +2,7 @@
 
 `POST /train` returns 202 and schedules a durable watcher, and until this change there was no HTTP
 means to learn whether that watcher was alive, had abandoned the run at its poll ceiling, or had never
-been scheduled at all -- which, on the default chart, was what actually happened (see
-`tests/unit/test_train_watch_is_hosted.py`, fixed in the same change).
+been scheduled at all -- which, on the default chart, was what actually happened.
 
 Both routes are gated on `can_administer` over the project the watch records. Reading the status of
 compute a caller may not spend is not public, and the estate already argues exactly that on

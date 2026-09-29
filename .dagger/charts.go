@@ -17,9 +17,7 @@ const chartsBaseImage = "debian:trixie-slim"
 // would answer a question nobody asked.
 //
 // Pinned here and pinned there: `chart/charts/greptimedb-standalone-0.4.5.tgz` carries
-// `image.registry/repository/tag`, and `tests/unit/test_the_drill_replays_against_the_engine_the_estate_runs.py`
-// derives that from the vendored subchart rather than trusting this line. A bump on either side that
-// does not reach the other reds it.
+// `image.registry/repository/tag`, so a bump on either side has to reach the other in the same change.
 const greptimeImage = "docker.io/greptime/greptimedb:v1.1.1"
 
 // helmVersion pins Helm deliberately. The CI `test` job uses azure/setup-helm@v4 with no version input
@@ -173,9 +171,9 @@ func (m *Rask) Charts(
 // stops being read and the production path goes back to uncovered.
 //
 // Supplying them is what a real deployment does, and it changes nothing the gate is testing: the
-// guard is about the SHAPE of the reference, and these values are never resolved by a render.
-// `tests/unit/test_the_production_render_gate_can_pass.py` reads the guard for every value it
-// compares against a published literal and fails if this list stops covering one.
+// guard is about the SHAPE of the reference, and these values are never resolved by a render. If this
+// list stops covering a value the guard compares against a published literal, the guard fails this
+// render and names the value.
 const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum " +
 	"--set-string frontend.oidc.publicIssuer=http://localhost:8080/dex " +

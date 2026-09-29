@@ -122,12 +122,8 @@ spec:
               #
               # Both creation helpers are `if exists; then skip`, so a stream created ONCE with the wrong
               # retention keeps it forever and the chart is right while the cluster is wrong — exactly the
-              # drift the work-queue helper below documents for that stream, generalised. (Kept off one
-              # line on purpose: `test_the_INGEST_stream_has_ONE_definition_and_the_chart_agrees_with_the_code`
-              # finds the creation call by scanning for a line naming both the stream and the helper, so a
-              # COMMENT mentioning both hijacks it — which is exactly what this comment first did.)
-              # What each wrong value
-              # costs is not cosmetic:
+              # drift the work-queue helper below documents for that stream, generalised. What each wrong
+              # value costs is not cosmetic:
               #
               #   work      on a stream with MULTIPLE per-app durables: the FIRST ack deletes the message,
               #             so the apps steal deliveries from each other. The cascade silently under-runs —

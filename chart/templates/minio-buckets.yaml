@@ -31,8 +31,8 @@ spec:
       {{- end }}
       {{- /* A FIRST-PARTY IMAGE NEEDS THE ESTATE'S PULL SECRETS, which `minio/mc` never did: it came
              from a public registry, so this Job was the one pod spec that could skip them. Running the
-             rask image makes it an ordinary first-party workload and
-             `test_a_first_party_pod_can_pull_from_a_private_registry` holds it to the same rule. */}}
+             rask image makes it an ordinary first-party workload, which takes the same pull secrets
+             as every other. */}}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -53,9 +53,8 @@ spec:
 
                  `lance.catalogImage`, not a second name for the same artefact: the catalog family
                  already runs one image under many entrypoints, and naming it again here would be
-                 the duplicate-specification defect `test_every_surface_names_the_same_image_for_
-                 the_same_component` exists to catch. It also means a side-loaded stack builds
-                 nothing extra for this Job. */}}
+                 a second specification of one image, free to drift from the first. It also means
+                 a side-loaded stack builds nothing extra for this Job. */}}
           image: "{{ include "lance.catalogImage" . }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- include "lance.rootlessSecurityContext" 10001 | nindent 10 }}

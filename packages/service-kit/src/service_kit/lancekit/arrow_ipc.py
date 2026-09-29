@@ -20,8 +20,8 @@ honest projection of such a field is dense too.
 Every service that reads Arrow bytes reads them through this module — the catalog's write doors
 through :func:`decode_arrow_stream`, the annotator's import through
 :func:`decode_arrow_stream_or_file`, the catalog's ``/query`` response through
-:func:`decode_arrow_response`; pinned by
-``tests/unit/test_a_caller_arrow_body_is_decoded_by_the_validating_decoder.py``.
+:func:`decode_arrow_response`; pinned by the TID251 banned-api entries on the ``pyarrow.ipc``
+readers in the root ``pyproject.toml``.
 
 ``pyarrow`` is imported inside the functions, not at module scope, so a module that only needs
 :data:`ARROW_STREAM_MEDIA_TYPE` (a header value on a publish path that keeps the heavy import off its

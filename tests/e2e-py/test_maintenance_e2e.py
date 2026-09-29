@@ -69,11 +69,10 @@ def test_sweep_compacts_real_datasets_and_meters(urls: tuple[str, str]) -> None:
     # measured 288 datasets at ~12 s, and 30 s left no headroom on a busier one.
     # RETRY WHILE THE CRON HOLDS THE LOCK, which a single blind trigger cannot survive on a live
     # estate. The sweep is single-flight: a tick that finds one in progress answers 200 `skipped` and
-    # does no work — the documented contract ("the next tick retries"), not a failure. `test_outbox_e2e`
-    # measured what that costs a one-shot caller: "one sweep checks 347 datasets in 158 s against an
-    # `@every 300s` cron, so a single blind trigger lands on a busy lock about half the time". This leg
-    # fired once and asserted on the answer, so it reported a healthy estate as an overlapping sweep
-    # roughly every other drive. Same shape as the sibling suite rather than a second invention.
+    # does no work — the documented contract ("the next tick retries"), not a failure. What that costs a
+    # one-shot caller, measured: "one sweep checks 347 datasets in 158 s against an `@every 300s` cron,
+    # so a single blind trigger lands on a busy lock about half the time". A leg that fires once and
+    # asserts on the answer reports a healthy estate as an overlapping sweep roughly every other drive.
     body: dict[str, Any] = {}
     deadline = time.monotonic() + 900
     while time.monotonic() < deadline:

@@ -404,7 +404,7 @@ def test_list_objects_clears_the_estate_gate_and_qualifies_a_bare_subject(
     # The GATE assertion moved out of this test: it is a router dependency now, so a direct handler
     # call does not run it and `gate_seen` would stay empty no matter what the route declares.
     # `test_gate_is_can_observe_events_on_the_root_object` asserts the relation and object, and
-    # `test_access_router_gate.py` asserts every route carries it — including this one.
+    # `test_every_access_route_is_covered_by_that_gate` asserts every route carries it — including this one.
     # What remains here is what this test is actually named for.
     # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
     assert seen == {"user": "user:alice", "relation": "can_read_data", "object_type": "table", "qualify": False}

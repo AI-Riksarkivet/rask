@@ -633,9 +633,7 @@ def publish_stage_ready(ctx: WorkflowActivityContext, payload: StageReport) -> N
     async def _publish() -> None:
         # `service_kit.dapr_publish.publish_event`, never the SDK call directly: the bare
         # `publish_event` is unbounded, so a wedged sidecar hangs this activity forever — and a
-        # workflow activity that never returns is a workflow that never advances. The estate has an
-        # invariant test for exactly this (`test_every_publish_goes_through_the_timeout_wrapper`),
-        # which is what caught the first draft of this function.
+        # workflow activity that never returns is a workflow that never advances.
         async with DaprClient() as client:
             await publish_event(
                 client,
@@ -886,7 +884,6 @@ def register(runtime: wf.WorkflowRuntime) -> None:
     `activity||<name>` spans, which `report_stage_outcome` reads to attach the cascade identity.
 
     Recorded rather than left silent, because a sweep that finds no reasoning re-raises the finding.
-    Pinned by `tests/unit/test_activity_naming_is_a_recorded_deviation.py`.
     """
     for w in WORKFLOWS:
         runtime.register_workflow(w)

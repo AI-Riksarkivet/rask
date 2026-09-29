@@ -23,8 +23,8 @@ which location, so this walks the namespace tree and asks.
 
 SAFETY. `ensure_declared_dataset_id` is a metadata-only commit: it rewrites no data file, re-mints no
 row id, MERGES rather than replaces (so `lineage.namespace`, `lineage.create_run_id` and a user's own
-`description` all survive — pinned by
-`packages/service-kit/tests/test_the_declared_id_backfill_keeps_its_neighbours.py`), refuses an empty
+`description` all survive — pinned by `test_the_correction_keeps_every_other_metadata_key` in
+`packages/service-kit/tests/test_stage_stamp_is_one_implementation.py`), refuses an empty
 id, and is a no-op on a table that is already correct. Re-running it costs nothing and creates no
 version. It reports by default and writes only under `--apply`.
 """

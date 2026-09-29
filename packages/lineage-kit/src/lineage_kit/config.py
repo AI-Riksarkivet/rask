@@ -96,9 +96,9 @@ class LineageSettings(BaseSettings):
         `runtime_env`; `ray_submit` records that as a P0 leak because Ray echoes it back on the job.
         Only the IDENTITY rides there, and it is not a secret.
 
-        The same two lines live in the two stdlib-only job emitters, which cannot import this package
-        (`scripts/ray_train_job.py`, `runners/dummy/.../lineage.py`); the three copies are pinned
-        together by `tests/unit/test_lineage_emitters_share_one_wire_contract.py`.
+        The two job emitters (`scripts/ray_train_job.py`, `runners/dummy/.../lineage.py`) build their
+        emitter through this package, so this is the rule's one home, pinned by
+        `packages/lineage-kit/tests/test_the_identity_selects_its_own_credential.py`.
 
         Falls through silently when no such variable exists, so every producer that already works —
         one identity, one token, the auth-off path — is unchanged.

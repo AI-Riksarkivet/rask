@@ -110,9 +110,8 @@ async def media_lifespan(
     # audience, the FGA coordinates), and every settings object that reaches here is a `MediaSettings`
     # ALSO mixing in `GovernedAuthSettings` — `ViewerSettings`, `SearchSettings`, `AnnotatorSettings`
     # all do. Python has no intersection type to say that, and typing the parameter as the protocol
-    # instead would lose the `MediaSettings` that `AppState` requires. The invariant is enforced where
-    # it can be: `tests/unit/test_governed_services_wire_their_gate.py` refuses a governed service
-    # whose settings do not carry the mixin.
+    # instead would lose the `MediaSettings` that `AppState` requires. Only those class definitions
+    # hold the invariant, so a new governed media service's settings must mix it in as well.
     await attach_auth(app, cast(_GovernedSettings, settings), service=service)
     if setup is not None:
         await setup(app, state)

@@ -5,8 +5,8 @@ carries does not exist when that image's pods start, so they wait and then fail 
 runs the hook against the release's new image before any of its resources change; `post-install` stays
 for a first install, where OpenFGA itself is one of the resources and there is nothing to write into yet.
 
-Read off the source, like `test_a_revision_named_hook_job_is_reaped.py`: the rule is about how the
-template is written, and the annotation renders the same under every value set.
+Read off the source: the rule is about how the template is written, and the annotation renders the
+same under every value set.
 """
 
 from __future__ import annotations

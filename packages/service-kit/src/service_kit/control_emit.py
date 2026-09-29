@@ -7,10 +7,9 @@ tables), maintenance (the expired-trash purge destroys bytes and revokes grants)
 
 **One implementation, and the history is the argument for it.** This began as a catalog module and was
 copy-pasted into maintenance, whose docstring recorded the reason: *maintenance may not import the
-catalog* (``tests/unit/test_declared_dependencies.py`` — declaring it would drag the catalog's whole
-closure into that image). That justified not importing the CATALOG; it never justified a second
-implementation. ``service_kit`` is importable by every service by construction, so the third producer
-made the shared home obvious. ``tests/unit/test_invariants.py`` now fails on a fourth copy.
+catalog* (declaring it would drag the catalog's whole closure into that image). That justified not
+importing the CATALOG; it never justified a second implementation. ``service_kit`` is importable by
+every service by construction, so the third producer made the shared home obvious.
 
 **Publish is inline-awaited and best-effort.** A mutation endpoint awaits it AFTER the backend/FGA
 change and its audit succeed — so a change that did not happen is never announced — but every error is

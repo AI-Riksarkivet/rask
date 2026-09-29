@@ -6,12 +6,10 @@ IDS ARE STABLE AND ARE NEVER REUSED OR RENUMBERED. The first cut of this registe
 1..267 by POSITION, which made every id a moving target: closing item 5 renamed old 6 to 5, so
 "work on 13" meant different things before and after a close and no reference survived a session.
 Per-phase ids (`LH-`, `XC-`, `CP-`, `CTL-`, `FE-`, `LOW-`) are assigned once; closing one leaves
-every other id exactly where it was. A gap in the sequence is the CORRECT residue of a closed item,
-which is why the counts gate checks uniqueness rather than continuity.
+every other id exactly where it was. A gap in the sequence is the CORRECT residue of a closed item:
+an id has to be unique, never continuous.
 
-The phase table at the top still has to agree with the rows, and
-`tests/unit/test_the_backlog_counts_itself.py` fails if it drifts, so this re-derives it in the same
-pass.
+The phase table at the top still has to agree with the rows, so this re-derives it in the same pass.
 
 NOTHING IS ARCHIVED, deliberately. The owner's instruction when this register was created
 (2026-09-10): *"I dont care about keep tracking what have been done."* A closed item leaves in the
@@ -31,11 +29,10 @@ REGISTER = Path(__file__).resolve().parents[1] / "open_backlog_left_new2.md"
 
 _ITEM_START = re.compile(r"^\*\*([A-Z]+-\d+) · ", re.MULTILINE)
 
-#: EVERY `##` heading, not only the six the table names — because that is how
-#: `tests/unit/test_the_backlog_counts_itself.py` attributes a row, and the two readings have to be the
-#: same one. Restricted to the six, this counted rows sitting under an intervening heading (`RIPE
-#: DECISIONS`, `Dropped as ALREADY DONE`) as belonging to the phase above them, so the gate and the
-#: writer disagreed by exactly those rows.
+#: EVERY `##` heading, not only the six the table names — because a row belongs to the nearest heading
+#: above it, and `_blocks` and `_walk` have to be the same reading. Restricted to the six, this would
+#: count rows sitting under an intervening heading (`RIPE DECISIONS`, `Dropped as ALREADY DONE`) as
+#: belonging to the phase above them, and the phase table would be off by exactly those rows.
 _SECTION = re.compile(r"^## (.+)$", re.MULTILINE)
 #: `| **NAME** | open | workable | high |` — THREE counts. Written against a two-column table, this
 #: matched no line at all, so `--recount` printed "phase table re-derived" and rewrote nothing;
@@ -45,7 +42,7 @@ _TABLE_ROW = re.compile(r"^\| \*\*(.+?)\*\* \| (\d+) \| (\d+) \| (\d+) \|$", re.
 #: All three numbers in the headline sentence, not just the first: a total that stays honest beside a
 #: stale blocked count is the harder error to notice.
 #: A row that needs a decision before anyone can finish it — on its OWN line, so a mention in prose is
-#: not a gate. Same reading as the counts test.
+#: not a gate. Same reading as `_BLOCKED` in scripts/backlog_status.py.
 _BLOCKED_LINE = re.compile(r"^- \*\*blocked:\*\*", re.MULTILINE)
 _TOTAL = re.compile(r"^\*\*(\d+) open items\*\*, of which \*\*(\d+) are blocked on a decision\*\* and \*\*(\d+) can be picked up today\*\*", re.MULTILINE)
 
@@ -71,10 +68,10 @@ def _blocks(text: str) -> list[tuple[str, int, int]]:
 
 
 def _walk(text: str) -> list[tuple[str, str]]:
-    """(section, body) for every rendered row — THE GATE'S OWN READING, deliberately.
+    """(section, body) for every rendered row — the reading `_blocks` cuts by, deliberately.
 
     A row's body runs to the next row or the next `##`, whichever comes first, and its section is the
-    nearest heading above it. Deriving the counts any other way is how a writer and its gate end up
+    nearest heading above it. Deriving the counts any other way is how the table and the rows end up
     disagreeing about the same file.
     """
     sections = [(m.start(), m.group(1).strip()) for m in _SECTION.finditer(text)]
@@ -122,8 +119,8 @@ def main() -> int:
 
     if args.recount:
         # ADDING a row is the other half of draining, and it drifts the phase table exactly as closing
-        # one does. Without this the only way to re-derive was to close something, so a hand-added row
-        # left the counts gate red and invited a hand-edited total — the drift this file exists to end.
+        # one does. Without this the only way to re-derive would be to close something, so a hand-added
+        # row would leave the table stale and invite a hand-edited total — the drift this file exists to end.
         if args.ids:
             print("!! --recount closes nothing; pass it alone")
             return 1

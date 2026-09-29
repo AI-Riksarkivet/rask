@@ -115,8 +115,8 @@ def setup_otel(app: FastAPI, service_name: str, settings: Settings | None = None
     retries with exponential backoff. The suite did not fail; it *slept*. Measured on this branch:
     `packages/service-kit/tests` took **33s at HEAD with 31 tests and 128s with 47** — ~2.7s per unit
     test, all of it backoff — and a full run sat in `hrtimer_nanosleep` at ~1.7% CPU for the best part
-    of an hour. `test_setup_otel_noop_when_disabled` has been asserting exactly this and failing on
-    main; it was reporting a real defect, not being wrong.
+    of an hour. `packages/service-kit/tests/test_otel.py::test_an_explicit_OFF_beats_an_ambient_endpoint`
+    pins that an explicit OFF wins over that ambient endpoint.
 
     The fallback is preserved for the case that motivated it: `services/gateway` calls this with no
     `Settings` at all and opts in through the endpoint alone. Production is unaffected either way —

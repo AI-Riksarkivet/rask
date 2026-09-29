@@ -112,8 +112,8 @@ class _Settings:
         self.dapr_publish_timeout_seconds = 5.0
         # The relay authorizes a staged event before ingesting it (`enforce_bus_authz`), which reads this
         # first and returns immediately when it is false. OFF here on purpose: these tests pin the drain's
-        # INGEST/PUBLISH/DROP mechanics, and the gate's own behaviour is pinned by
-        # `test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`. Absent rather than false, it would
+        # INGEST/PUBLISH/DROP mechanics, and what the drain does on a refusal is pinned by
+        # `test_a_governance_refusal_is_not_a_relay_fault.py`. Absent rather than false, it would
         # have failed as an AttributeError the tick's error boundary swallows into `stranded` — the exact
         # failure this class's comment above warns about, met on the first change that read a new field.
         self.fga_enabled = False
@@ -250,7 +250,7 @@ def _authorized_request() -> Any:
 
     `enforce_bus_authz` returns immediately when `settings.fga_enabled` is false, and these `_Settings`
     doubles do not enable it — so the gate is a no-op here and every assertion below still pins what it
-    always pinned: the drain's INGEST/PUBLISH/DROP behaviour. The authorization behaviour itself is
-    pinned by `test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`, which is where it belongs.
+    always pinned: the drain's INGEST/PUBLISH/DROP behaviour. What the drain does on a refusal is
+    pinned by `test_a_governance_refusal_is_not_a_relay_fault.py`, which is where it belongs.
     """
     return cast("Any", SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())))

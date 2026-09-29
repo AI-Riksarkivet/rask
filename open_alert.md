@@ -28,7 +28,7 @@ That is not a gap in the sense of "missing work". Everything except the decision
 | Piece | State |
 | --- | --- |
 | `chart/alerting/rules.yml` | **29 alerts**, all with a `for:` window (23 + the two absence-halves split out + four for the telemetry backend) |
-| `chart/alerting/rules_test.yml` | synthetic-series tests — the rules are proven to FIRE against PROMETHEUS. Every alert now has a case, gated by `test_every_alert_rule_has_a_promtool_case`; six did not until that gate was added |
+| `chart/alerting/rules_test.yml` | synthetic-series tests — the rules are proven to FIRE against PROMETHEUS. Every alert has a case (measured 2026-09-29: 55 of 55); nothing gates that, so a new rule brings its case in the same change |
 | `make alert-rules-check` | `promtool check rules` + `promtool test rules`, wired and green — and **not sufficient on its own**, see §6 |
 | `make alert-rules-drill` | **NEW.** Replays every rule against a REAL GreptimeDB and asserts each evaluates. This is the half promtool cannot do: it checks the LANGUAGE the production engine accepts, not the logic. Skips with no reachable datasource |
 | `chart/templates/alerting.yaml` | renders vmalert + Alertmanager + both ConfigMaps |

@@ -231,11 +231,11 @@ func (m *Rask) ScanConfig(
 // Verification is an API call, so a provider that accepts ANY string of its key shape turns every
 // match into a "verified" credential. Measured 2026-09-24 on this repo's history: the gating pass
 // returned 620 findings and ALL 620 were Lob — whose test keys are `test_`-prefixed, which is the
-// name of every pytest function ever written here. Raw results included
-// `test_every_lineage_producer_uri_resolves`. Not one was a credential, and the gate had failed every
-// run since it landed on 2026-08-05: fifty days of a red build that gated nothing and taught everyone
-// to look past it. The 24 Postgres and 3 Stripe matches in the same scan stayed UNVERIFIED, which is
-// the mechanism working — those hostnames answer nobody.
+// name of every pytest function ever written here. Raw results included pytest function names. Not
+// one was a credential, and the gate had failed every run since it landed on 2026-08-05: fifty days
+// of a red build that gated nothing and taught everyone to look past it. The 24 Postgres and 3
+// Stripe matches in the same scan stayed UNVERIFIED, which is the mechanism working — those
+// hostnames answer nobody.
 //
 // So a detector is excluded when its verification carries no information, and excluded from BOTH
 // passes: leaving it in the report-only pass buries the findings a reviewer needs under hundreds it

@@ -51,9 +51,8 @@ def _helm_template(*set_values: str) -> str:
     argv += ["--set", "image.localImages=true"]
     # The identity values every render needs since auth defaults ON (2026-08-06). The chart refuses
     # OIDC without a session secret ON PURPOSE — that refusal is what stops a forgotten values file
-    # installing an ungoverned estate, and it is asserted directly by
-    # `test_the_chart_REFUSES_to_render_oidc_without_a_session_secret`. Supplying dev values HERE
-    # keeps every other render test testing its own subject rather than re-testing the guard.
+    # installing an ungoverned estate. Supplying dev values HERE keeps every other render test testing
+    # its own subject rather than re-testing the guard.
     argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
@@ -416,7 +415,7 @@ def test_every_pod_whose_app_fails_closed_on_the_app_token_is_given_one() -> Non
 #: A render whose images come from a registry off this node — which `prod-credentials.yaml` reads as a
 #: real deployment and refuses while any well-known dev credential survives. Supplying real values here
 #: keeps a test about IMAGE PINNING testing its own subject, exactly as `_helm_template` does for the
-#: OIDC identity; the refusal itself is asserted by `test_a_real_registry_refuses_dev_credentials.py`.
+#: OIDC identity.
 _REAL_REGISTRY = (
     "image.localImages=false",
     "image.repository=reg.example",

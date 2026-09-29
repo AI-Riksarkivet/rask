@@ -682,8 +682,7 @@ async def unbind_warehouse_namespace(
 
     # DEACTIVATION GATE, mirroring `create_warehouse_namespace`: this handler resolves the bucket
     # connection directly from the binding's `root_uri` and never routes through `get_namespace`, so the
-    # resolver's quarantine does not cover it (audit #2/#6, pinned by
-    # `test_no_warehouse_bucket_access_bypasses_the_deactivation_gate`). A quarantined warehouse is a
+    # resolver's quarantine does not cover it (audit #2/#6). A quarantined warehouse is a
     # tenant mid-offboarding: unbinding it there would let a principal who still holds the rung dismantle
     # the routing the quarantine froze, and the offboarding path is the warehouse delete's cascade.
     if (record.get("status") or "active") != "active":

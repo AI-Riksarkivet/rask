@@ -93,7 +93,6 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # on `no repository definition for https://nvidia.github.io/k8s-device-plugin,
 # https://ray-project.github.io/kuberay-helm/` the first time it ran in five days. A tenth subchart
 # cannot break this now. `oci://` repositories are skipped — helm resolves those without a repo add.
-# Pinned by `tests/unit/test_the_e2e_stack_adds_every_chart_repository.py`.
 while read -r url; do
   [ -n "$url" ] || continue
   name="$(printf '%s' "$url" | sed -E 's#^https?://([^./]+).*#\1#')"

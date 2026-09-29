@@ -125,8 +125,8 @@ CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", 
 #: The MIDDLE two are the binding guards refusing a takeover, and swallowing them is the ghost this
 #: script exists to stop making at its worst: the run would then declare tables into a bucket it does not
 #: own and write ``namespace:<name>#validator`` onto another tenant's namespace, and report success. Same
-#: class and same code, so the guard's own wording is the only discriminator there is — pinned against the
-#: catalog's source by ``test_the_binding_guards_still_say_what_this_script_matches_on``.
+#: class and same code, so the guard's own wording is the only discriminator there is, and a change to
+#: that wording in the catalog has to reach this tuple in the same commit.
 BINDING_REFUSALS: tuple[str, ...] = ("already bound to another warehouse", "already exists in the default root")
 #: ``/v1/access`` answers 501 when the stack runs auth-off: there is no tuple store to seed, which is a
 #: legitimate local configuration, not a failure. Loud, never silent — the estate is then unguarded.
@@ -292,11 +292,9 @@ DEMO_ESTATE = Estate(
         # the stage runner that raised it — and without this grant the whole review path ends in
         # `403 can_update_tag`, AFTER a person has already said yes. Measured 2026-08-23: the
         # orchestration reported FAILED with exactly that, and the approval was silently worthless.
-        # WRITTEN OUT, never looped. `test_seeders_agree_on_stage_runner_rungs.py` parses these literals
-        # and compares them against `seed_medallion_fga.sh`'s, which is the only thing keeping two
-        # seeders in two languages agreeing about one identity's rungs. A generator expression is
-        # shorter and makes the file unreadable to that gate — its non-vacuity check caught exactly
-        # that on 2026-09-10, reporting "no longer grants the gold stage runner anything".
+        # The same rungs `seed_medallion_fga.sh` grants per tenant, in another language. Nothing checks
+        # the two seeders against each other, so a change to one's rungs has to reach the other in the
+        # same commit.
         Grant("user:service-bronze-to-silver", "writer", "namespace:acme-silver"),
         Grant("user:service-bronze-to-silver", "publisher", "namespace:acme-silver"),
         Grant("user:service-bronze-to-silver", "validator", "namespace:acme-silver"),

@@ -223,8 +223,8 @@ async def health(client: JobSubmissionClient | None, dashboard_url: str) -> RayH
 #:
 #: A `rask.` prefix was tried first and is wrong: the medallion's submitter also stamps
 #: ``rask.token`` (`ray_submit.py`), so a prefix match puts that token into every jobs-board row —
-#: precisely the leak `test_ray_job_wire_parity` was written to prevent, and precisely why
-#: `metadata` was stripped whole before this. An allowlist cannot regress that way: a new key is
+#: the leak `test_dashboard_bounds.py::test_the_work_token_never_survives_the_projection` pins, and
+#: precisely why `metadata` was stripped whole before this. An allowlist cannot regress that way: a new key is
 #: kept only when someone adds it here and says why.
 #:
 #: What survives is the run's IDENTITY — who it was for, which tenant, which stage, which

@@ -76,16 +76,10 @@ func (m *Rask) TestPackage(
 		WithMountedCache("/root/.cache/uv", dag.CacheVolume("rask-uv-cache")).
 		WithDirectory("/src", src, dagger.ContainerWithDirectoryOpts{
 			// `.dagger` is NOT excluded here, unlike every other context in this module, and the
-			// difference is load-bearing. The root suite contains gates that READ `.dagger/*.go` —
-			// `test_ci_invocations.py` (every `dagger call` in the Makefile/CI resolves to a real
-			// function), `test_dagger_context_is_hermetic.py` (no context ships a developer `.env`) and
-			// `test_e2e_collection_gate.py` (a suite must be selected by a make target, a CI job, a
-			// script OR a Dagger function). Excluding the directory made all of them find NOTHING, so
-			// they passed locally and failed inside the very container they describe.
-			//
-			// That is not hypothetical: `test_ci_invocations.py` has been in the tree since 2026-07-29
-			// and this lane could not have passed since. The failure was invisible because the lane
-			// itself was — first hanging on the NATS binding above, and before that simply not green.
+			// difference is load-bearing for any gate in the root suite that READS `.dagger/*.go` (a
+			// `dagger call` in the Makefile/CI it must resolve to a real function, a context's exclude
+			// list, a suite a Dagger function selects): excluding the directory makes such a gate find
+			// NOTHING, so it passes locally and fails inside the very container it describes.
 			// A gate that reads the build system has to be able to see the build system.
 			Exclude: []string{"**/.env", "**/.env.*", ".venv", ".git", "node_modules", "frontend/node_modules"},
 		}).

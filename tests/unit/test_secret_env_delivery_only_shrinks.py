@@ -10,9 +10,8 @@ zero would be red from the moment it lands and would be skipped or deleted withi
 rule with no gate becomes a rule with no effect. A ratchet fails on the THIRTY-FIRST while the rest
 migrate, so the number can only fall.
 
-THE RATCHET ALONE WOULD SIT STILL AND STAY GREEN, which is why it is not the only thing here. A budget
-nobody is obliged to spend down is a budget; `test_a_pod_that_CAN_read_the_store_does_not_take_its_app_token_through_env`
-below states the RULE for the subset with nothing left to build, and that is what moves the number.
+THE RATCHET ALONE SITS STILL AND STAYS GREEN. A budget nobody is obliged to spend down is a budget; what
+moves the number is a RULE for the subset with nothing left to build, and this file does not state one.
 
 WHY IT DID NOT EXIST AND WHY THAT MATTERS. Several tests already pin SPECIFIC `secretKeyRef` entries as
 CORRECT — the Ray pod's `S3_SECRET`, the app token — each guarding its own plane. Nothing counted them

@@ -339,8 +339,7 @@ spec:
              OOMKilled the pod this split exists to unload, so reading it here would move the OOM onto
              a new pod name rather than remove it. `dedicatedWorkers.resources` is the tier the values
              file already declares for this container ("Sized for the WORK, unlike the planner's
-             512Mi"), and until now nothing read it. Pinned by
-             `tests/unit/test_the_planner_does_not_execute_the_work.py`. */}}
+             512Mi"). */}}
           resources: {{- toYaml $root.Values.maintenance.dedicatedWorkers.resources | nindent 12 }}
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}

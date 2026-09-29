@@ -108,9 +108,9 @@ def _warehouse_tenancy(record: dict[str, str]) -> RebuiltTuple | None:
     `model.fga` defines `project: [project]` on the warehouse type, and `parent` is a relation that
     type does not declare; writing it makes OpenFGA reject the whole seed with a 503. The catalog's
     `seed_warehouse` writes this relation directly for the same reason, and its being a plain pointer
-    rather than a hierarchy edge is why rebuilding it does not touch
-    `test_invariants.py::test_only_the_sanctioned_writers_seed_a_hierarchy_edge`, whose closed set of
-    two callers is about `parent`/`child` pairs.
+    rather than a hierarchy edge is why rebuilding it does not touch the TID251 banned-api entry on
+    `service_kit.governed.fga.hierarchy_edge_tuples`, whose closed set of callers is about
+    `parent`/`child` pairs.
     """
     warehouse, project = record.get("id"), record.get("project")
     if not warehouse or not project:

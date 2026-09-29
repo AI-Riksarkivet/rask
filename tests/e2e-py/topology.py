@@ -10,8 +10,8 @@ withholding the env that had been making them skip. Each fired the root door, DI
 and then failed further down on a parent that had never been created: `test_governance_e2e` read the
 400 as a governance defect, `test_client_direct_e2e` and `test_multibase_e2e` got 403
 `can_create_table required on namespace:<n>` — a refusal on a namespace that does not exist — and
-`test_observability_e2e` errored in fixture setup. Only `test_auth_e2e` had been migrated, by hand,
-on 2026-08-25.
+`test_observability_e2e` errored in fixture setup. Only one suite had been migrated, by hand, on
+2026-08-25.
 
 So the door choice lives in ONE place. A copy per suite is what let one migration happen and four not,
 and `tests/e2e-py/conftest.py` puts this directory on `sys.path` precisely so a flat helper beside a
@@ -45,8 +45,8 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 #:
 #: An outsider who is secretly privileged does not make a 403 leg fail honestly — it makes it allege a
 #: governance hole that is not there, which this estate has now nearly filed twice. Worse, a leg can go
-#: GREEN for the wrong reason: `test_commit_is_governed` passed only because its namespace had never
-#: been created, so bob's commit 403'd on a missing parent rather than on a missing grant.
+#: GREEN for the wrong reason: a commit leg passed only because its namespace had never been
+#: created, so bob's commit 403'd on a missing parent rather than on a missing grant.
 #:
 #: `scripts/e2e_live.sh` chooses the same way — it ASKS the store which candidate is non-admin rather
 #: than naming one — and `LANCE_E2E_OUTSIDER` overrides where an estate's outsider is someone else.
@@ -55,8 +55,8 @@ WAREHOUSE = os.environ.get("LANCE_E2E_WAREHOUSE", "")
 #: stack (`dagger call governance-chain`) mounts `.docker/dex.config.yaml`, which knows alice and bob
 #: and nobody else, and seeds neither `team:eng` nor `project:acme` — so bob is a genuine outsider
 #: there and `publisher@rask.internal` is not an identity at all. That lane sets the override, and
-#: `tests/unit/test_a_hermetic_lane_asks_its_dex_for_a_user_it_has.py` holds both halves of the
-#: pairing so neither side can be repointed alone.
+#: the override and that Dex config are a pair: repointing either one alone leaves the lane minting a
+#: token for a user its Dex does not have.
 OUTSIDER = os.environ.get("LANCE_E2E_OUTSIDER", "publisher@rask.internal")
 
 

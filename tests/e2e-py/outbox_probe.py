@@ -1,23 +1,21 @@
 """The staged-event probe's shared setup: a bearer, the subject it names, and an owned output table.
 
-TWO SUITES STAGE AN EVENT INTO THE OUTBOX AND EXPECT THE RELAY TO DRAIN IT — `test_outbox_e2e` and
-`test_outbox_crash_e2e` — and `enforce_bus_authz` asks the same two questions of both: does the
-event's author resolve to a real subject, and may that subject write the output table it names.
+`test_outbox_crash_e2e` STAGES AN EVENT INTO THE OUTBOX AND EXPECTS THE RELAY TO DRAIN IT, and
+`enforce_bus_authz` asks two questions of that event: does its author resolve to a real subject, and
+may that subject write the output table it names.
 
-ONLY ONE OF THE TWO ANSWERED THEM, WHICH IS WHY THIS IS A MODULE RATHER THAN A COPY. Measured on the
-deployed estate 2026-09-20: `s3://lance-catalog/_lineage_outbox` held five objects dated 2026-09-14,
-one per run of the crash suite, each `author="e2e"` with `output_name="e2e_crash_ds"` — a role LITERAL
-that no `sub` can ever match, and a BARE table id for which no catalog object exists. Neither can be
-authorized by anyone, so every run added one and none ever left: `lineage_outbox_drained drained=0
-stranded=0 refused=5`, unchanged for six days.
+AN EVENT THAT ANSWERS NEITHER NEVER LEAVES. Measured on the deployed estate 2026-09-20:
+`s3://lance-catalog/_lineage_outbox` held five objects dated 2026-09-14, one per run of the crash
+suite, each `author="e2e"` with `output_name="e2e_crash_ds"` — a role LITERAL that no `sub` can ever
+match, and a BARE table id for which no catalog object exists. Neither can be authorized by anyone, so
+every run added one and none ever left: `lineage_outbox_drained drained=0 stranded=0 refused=5`,
+unchanged for six days.
 
-THE REMEDY IS THE ONE THE OTHER SUITE ALREADY CARRIED — create the table so it HAS an FGA object, and
-stamp the identity that created it so the event's author is a subject the gate can resolve. Sharing it
-is what stops the two from drifting again, which is the whole reason the crash suite was still
-producing residue after the probe suite stopped.
+SO THE PROBE ANSWERS BOTH: it creates the table so it HAS an FGA object, and stamps the identity that
+created it so the event's author is a subject the gate can resolve.
 
 AN OPEN STACK ANSWERS `""` and the caller keeps its old author: with authz off there is nothing to
-authorize against, and demanding a token there would skip these suites on the deployments they were
+authorize against, and demanding a token there would skip the suite on the deployments it was
 written for.
 """
 

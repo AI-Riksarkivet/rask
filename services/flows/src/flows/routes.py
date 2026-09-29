@@ -113,9 +113,8 @@ async def validate(
     "/runs",
     # NO `response_model=`: the return annotation is `RunState` and FastAPI derives the schema from
     # it, so restating it would carry no information — the argument is reserved for a wire shape that
-    # DIFFERS from the annotation (`tests/unit/test_response_model_is_not_redundant.py`). It was not
-    # redundant while this route was declared `-> RunState | JSONResponse`; the union is gone
-    # (FLOWS-422-BYPASSES-HIERARCHY) and so is the reason for the argument.
+    # DIFFERS from the annotation. Ruff's FAST001 refuses the restatement here, because this module
+    # does not postpone its annotations.
     #
     # HTTPStatus, not `fastapi.status.HTTP_422_UNPROCESSABLE_ENTITY`: starlette deprecated that alias
     # in favour of ..._CONTENT and emits a warning at IMPORT of this module. `service_kit.exceptions`

@@ -25,8 +25,7 @@ spec:
   metadata:
     - { name: host, value: {{ $ch.email.host | quote }} }
     {{- /* hasKey+ternary, never `| default` — an explicit `port: 0` is falsy, so a default would
-           silently resurrect 587 on a value someone deliberately set. Pinned estate-wide by
-           tests/unit/test_invariants.py::test_no_numeric_helm_default_can_swallow_an_explicit_zero. */}}
+           silently resurrect 587 on a value someone deliberately set. */}}
     - { name: port, value: {{ hasKey $ch.email "port" | ternary $ch.email.port 587 | quote }} }
     - { name: emailFrom, value: {{ $ch.email.from | quote }} }
     - name: user

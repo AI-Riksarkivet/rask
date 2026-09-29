@@ -209,7 +209,7 @@ spec:
 
                It fed the compute zone's inference playground, deleted 2026-08-07 (a single-app,
                HTR-only duplicate of studio's flow canvas — see compute/src/lib/nav.ts). With no reader
-               left, injecting it would be the dead config `test_no_dead_chart_env_vars` exists to catch.
+               left, injecting it would be dead config: set on the pod and read by nothing.
 
                It also took TWO renderings to express, and they collided: an ungated row here plus a
                ray-enabled row further down set the SAME name on the SAME zone, so the env list carried
@@ -237,8 +237,7 @@ spec:
             {{- /*
                NO `MEDALLION_API`. Its ONLY frontend reader was the models zone's `/pipeline` trigger
                door (`medallion.remote.ts` → POST /produce, /train), deleted 2026-08-07 — so injecting it
-               now would be exactly the dead config `tests/unit/test_invariants.py::
-               test_no_dead_chart_env_vars` exists to catch: a plane fully "configured" and read by
+               now would be dead config: a plane fully "configured" and read by
                nobody. The medallion is still reachable SERVER-side, through the gateway's own
                `RASK_MEDALLION_API_URL` row, which is a different variable with a live reader.
             */}}

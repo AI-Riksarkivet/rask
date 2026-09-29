@@ -124,10 +124,8 @@ def test_an_explicit_OFF_beats_an_ambient_endpoint(monkeypatch: object) -> None:
     suite did not fail, it slept: ~2.7s per unit test, and a full run sat in `hrtimer_nanosleep` at
     ~1.7% CPU.
 
-    Pinning it here rather than only in `test_setup_otel_noop_when_disabled` because the two assert
-    different things: that one says "off means off with a clean environment", this one says "off means
-    off even when something else in the environment wants it on" — which is the case that actually
-    occurred, and the one a future `or` would quietly re-break.
+    It pins "off means off even when something else in the environment wants it on", which is the case
+    that actually occurred, and the one a future `or` would quietly re-break.
     """
     import pytest
 

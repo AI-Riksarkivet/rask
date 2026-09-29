@@ -149,7 +149,7 @@ url LANCE_E2E_MAINTENANCE_URL "$MAINT"
 [ -z "$_missing" ] || printf '   NOT DISCOVERED (their suites will skip):%s\n' "$_missing"
 export LANCE_E2E_TOKEN="$ALICE"
 export LANCE_E2E_ADMIN_TOKEN="$ALICE"
-# NOT exported blind. `test_create_warehouse_denied_for_non_admin` asserts a 403, and on THIS estate
+# NOT exported blind. A leg asserting a 403 with this token needs a genuine non-admin, and on THIS estate
 # bob is a member of `team:eng` which is bound to `project:acme` — and `project.admin` is
 # "[user, role#assignee] or member from team", so bob is an admin and the create succeeds. The suite
 # then fails on a false premise and reads as a governance hole. It is not one; the identity was wrong.

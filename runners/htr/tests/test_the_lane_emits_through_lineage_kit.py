@@ -6,10 +6,9 @@ that can take a path dependency — the remaining six carry no `uv.lock`, so
 `.docker/ray-runner.dockerfile`'s `uv sync --locked` cannot build them at all ([[CP-032]]).
 
 WHAT THESE PIN IS THE LANE'S POLICY, not the envelope. Every `_schemaURL`, the producer URI and the
-wire form belong to `lineage_kit` and are gated estate-wide by
-`tests/unit/test_the_openlineage_envelope_has_one_vocabulary.py`. What is this runner's own statement
-is: that its datasets are EXTERNAL store URIs rather than governed table ids, that a role literal is
-not an address, and that a FAIL claims no rows.
+wire form belong to `lineage_kit` and are pinned in its own suite (`packages/lineage-kit/tests/test_spec.py`).
+What is this runner's own statement is: that its datasets are EXTERNAL store URIs rather than governed
+table ids, that a role literal is not an address, and that a FAIL claims no rows.
 """
 
 from __future__ import annotations

@@ -242,16 +242,15 @@ def discover_staged(dataset_uri: str, run_id: str, storage_options: dict[str, st
     Appending both writes those units twice, and nothing downstream would catch it — the lander's
     commit is a blind `Append`.
 
-    That last part used to say `merge_insert` was "forbidden by test_ingest_invariants.py", which is
-    simply false: I4's allowlist is `LANDER_ALLOWED = {"lander.py"}`, so the lander is precisely
-    where `merge_insert` IS permitted. The real reason is structural and was measured rather than
-    assumed. `MergeInsertBuilder.execute` takes a `ReaderLike` and coerces it (`lance/dataset.py`
+    The commit is an append rather than a `merge_insert` for a structural reason, measured rather
+    than assumed. `MergeInsertBuilder.execute` takes a `ReaderLike` and coerces it (`lance/dataset.py`
     `_coerce_reader`); there is no `FragmentMetadata` overload on it or on `execute_uncommitted`,
     and the lander holds exactly that — JSON from `FragmentMetadata.to_json()`. The one route that
     works (commit `detached=True`, read the staged rows back, re-wrap with `blob_array`, upsert)
     requires materialising every payload in the lander and rewriting all of it, which writes the
     archive twice and pushes every byte through the single process the fan-out design exists to keep
-    them out of. So a blind append is right; the reason it is right had nothing to do with I4.
+    them out of. So a blind append is right: nothing forbids `merge_insert` in the lander, it simply
+    cannot take what the lander holds.
 
     So this resolves ownership instead of collecting. Largest unit set first, and a fragment is
     taken only if it adds units nothing already taken covers:

@@ -103,9 +103,9 @@ os.environ.setdefault("RASK_INSECURE_ALLOW_UNAUTHENTICATED", "true")
 # to exercise what the HANDLER does, and configure no token because the door is not what they are
 # testing. That is "open because I meant it", and it is declared here rather than left implicit.
 #
-# It costs nothing in coverage, because the door has its own tests and they take this variable away
-# first: `test_the_dapr_door_fails_closed_without_a_token.py` and `test_annotation_jobs_gate.py` both
-# `delenv` it, which `setdefault` leaves them free to do. The DEPLOYMENT half is gated separately by
+# It costs nothing in coverage, because the door has its own tests and they decide this variable for
+# themselves: `test_annotation_jobs_gate.py` `delenv`s it and `test_produce_auth.py` sets it `false`,
+# which `setdefault` leaves them free to do. The DEPLOYMENT half is gated separately by
 # `test_every_dapr_door_has_a_token_to_check.py`, reading the render — so a service that ships with no
 # token to check is caught there, not hidden here.
 os.environ.setdefault("RASK_ALLOW_UNAUTHENTICATED_DAPR", "true")
@@ -140,18 +140,17 @@ def _bounded_dapr_handshake(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bound the sidecar handshake for every test, WITHOUT stubbing the handshake itself.
 
     The distinction is the whole point, and it is the same one `_no_dapr_proxy_factory_carryover`
-    makes below: patching `DaprHealth.wait_for_sidecar` would delete the estate's only evidence of a
-    live production defect, because `test_adversarial_inbox.py` exists to prove that handshake blocks
-    the event loop. Lowering the BUDGET leaves the mechanism exactly as it is — it still polls, still
-    sleeps, still raises — and only stops it costing a minute per call.
+    makes below: a stub of `DaprHealth.wait_for_sidecar` would swap the handshake production runs for
+    one it never runs, so a test that reaches the SDK would stop observing it. Lowering the BUDGET
+    leaves the mechanism exactly as it is — it still polls, still sleeps, still raises — and only
+    stops it costing a minute per call.
 
     Thirty of the estate's thirty-one Dapr-touching files mock at `typed_proxy`/`inbox_for` and never
     reach the SDK. This is for the thirty-first, whichever it turns out to be next: a per-file guard
     was added for the one that caused the last hang and the hang returned through a different file.
 
-    A test that needs a specific duration sets its own inside a `MonkeyPatch.context`, as the
-    adversarial inbox test does — function-scoped monkeypatch here loses to a narrower patch and is
-    restored after.
+    A test that needs a specific duration sets its own inside a `MonkeyPatch.context` —
+    function-scoped monkeypatch here loses to a narrower patch and is restored after.
     """
     try:
         from dapr.conf import settings as dapr_settings
@@ -170,18 +169,16 @@ def _no_dapr_proxy_factory_carryover() -> None:
     default factory on the CLASS (`_default_proxy_factory`), and `_get_default_factory_instance`
     assigns it only after the constructor RETURNS. Two consequences, both observed:
 
-    * A test that successfully builds one leaves it built for the rest of the process. `services/
-      notifications/tests/test_adversarial_inbox.py::test_opening_an_inbox_blocks_the_whole_event_loop_
-      while_it_looks_for_a_sidecar` asserts a `TimeoutError` from that construction, so it fails
-      `DID NOT RAISE` whenever something warmed the cache first. Its result was a function of
-      collection order, which is the definition of a test bug (F.I.R.S.T., Independent).
+    * A test that successfully builds one leaves it built for the rest of the process, so a later
+      test that expects that construction to raise a `TimeoutError` (no sidecar) fails `DID NOT
+      RAISE` whenever something warmed the cache first. Its result becomes a function of collection
+      order, which is the definition of a test bug (F.I.R.S.T., Independent).
     * Where the constructor RAISES — no sidecar — nothing is cached, so every later call pays the full
       `DAPR_HEALTH_TIMEOUT` again. That is the 60 s-per-call arithmetic behind the CI hang.
 
-    Deliberately NOT patching `DaprHealth.wait_for_sidecar` globally: the adversarial test above exists
-    to prove that handshake blocks the event loop, and a harness that stubbed it would delete the
-    estate's only evidence of a live production defect. Resetting the cache leaves the mechanism intact
-    and only removes the cross-test coupling.
+    Deliberately NOT patching `DaprHealth.wait_for_sidecar` globally, for the reason
+    `_dapr_handshake_budget` gives above. Resetting the cache leaves the mechanism intact and only
+    removes the cross-test coupling.
 
     Cheap by construction: setting one class attribute to `None`. Tests that mock at a higher level
     (`typed_proxy`, `inbox_for` — thirty of the estate's thirty-one Dapr-touching files) never reach it.

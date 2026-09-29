@@ -5,10 +5,10 @@ tidiness: it is what makes the estate's write path auditable. One writer means o
 commit is registered with the catalog, one place that stamps the run id into commit metadata, and
 one place to look when a version appears that nobody can explain.
 
-`tests/unit/test_ingest_invariants.py` enforces it by grep — `lance.write_dataset`, `merge_insert`
-and `lance.fragment.write_fragments` may appear in this module and nowhere else under
-`services/ingest`. That gate is proven to fail on a seeded violation, unlike the ratch docstring it
-replaces.
+The TID251 banned-api entries on `lance.write_dataset` and `lance.fragment.write_fragments`
+(restated in `services/ingest/pyproject.toml`) hold it: the two calls below carry the line-level
+`noqa`, and the same call in any other module of `services/ingest/src` fails ruff. `merge_insert` is a
+dataset method, which a banned-api entry cannot name, so no rule holds that one.
 
 THE CREATION TWO-STEP (§0 C10). The obvious design — workers write fragments, the lander commits
 them — cannot create a dataset, because the catalog's client-direct fragment door hardcodes

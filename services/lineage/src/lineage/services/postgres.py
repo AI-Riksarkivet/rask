@@ -146,8 +146,8 @@ INSERT_READ: Final = "INSERT INTO public.lineage_reads (reader, dataset) VALUES 
 # (measured live 2026-09-21, unchanged since 2026-09-14: `drained=0 refused=7` every tick).
 #
 # WHY A TABLE AND NOT A PREFIX. Moving the object to `<outbox>/_refused/` is a PutObject and the chart
-# grants this service exactly `s3:DeleteObject` on `*/_lineage_outbox/*` (`DrainItsOwnOutboxAndNothingElse`,
-# pinned by `test_the_lineage_plane_writes_nothing_it_does_not_own.py`). Delete it may; it simply had
+# grants this service exactly `s3:DeleteObject` on `*/_lineage_outbox/*` (`DrainItsOwnOutboxAndNothingElse`
+# in `chart/templates/minio-scoped-users.yaml`). Delete it may; it simply had
 # nowhere to put the evidence first. This service already provisions its own schema at boot, so recording
 # the verdict here needs no capability it does not hold.
 #

@@ -36,9 +36,7 @@ build:
 # Python tests via pytest. THE FRONTENDS DO HAVE A UNIT SUITE and this line used to deny it: 128
 # tracked vitest files across the 18 packages that declare a `test` script. `make test` does not run
 # them — `bun --cwd=frontend run test` does, and CI runs both — so the honest statement is that this
-# target covers ONE plane, not that the other plane has nothing to cover. Pinned by
-# tests/unit/test_makefile_claims.py, because a comment is exactly the kind of assertion that rots
-# without one.
+# target covers ONE plane, not that the other plane has nothing to cover.
 # `not e2e`: tests/e2e-py is collectable (so the collection gate in
 # tests/unit/test_e2e_collection_gate.py can see it) but its suites need a LIVE deployed
 # stack — run them via `make e2e-ci` / `make e2e-ray-ci` / the per-suite targets.
@@ -861,8 +859,8 @@ k3s-converge: ## Roll a WHOLE image stem to one tag and upgrade (the resolution 
 	@# `helm upgrade ...; rm -f "$$LIVE"` hands make the `rm`'s status and a FAILED upgrade reports
 	@# success. Measured here: a post-upgrade hook timed out, helm printed `UPGRADE FAILED`, and the
 	@# target still exited 0 and printed ">> every stem converged" — a half-applied deploy reading as
-	@# clean, which is the worst direction for this failure to go. Gated by
-	@# tests/unit/test_a_deploy_cannot_report_success_when_helm_failed.py.
+	@# clean, which is the worst direction for this failure to go. So the recipe keeps the upgrade's
+	@# status in rc and exits with it after the cleanup.
 	@test -n "$(TAG)" || { echo "!! TAG is required, e.g. make k3s-converge TAG=main-$$(git rev-parse --short=8 HEAD)"; exit 2; }
 	@set -a; [ -f .env ] && . ./.env; set +a; 	STEM="$${STEM:-lance-rest-catalog}"; 	LIVE=$$(mktemp); 	$(HELM) get values rask -o yaml >"$$LIVE" 2>/dev/null || { echo "!! no live release to read image settings from"; exit 1; }; 	grep -q 'repository:' "$$LIVE" || { echo "!! the live release carries no image.repository; run make k3s-up first"; exit 1; }; 	echo ">> converging stem $$STEM -> $(TAG)"; 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership 	  -f "$$LIVE" 	  -f chart/values-local.yaml 	  --set image.tags.$$STEM=$(TAG) 	  --set explorer.enabled=$(EXPLORER) 	  --set-string frontend.oidc.publicIssuer=$(DEV_ISSUER) 	  --set-string frontend.oidc.publicOrigin=$(DEV_ORIGIN) 	  --set-string frontend.oidc.sessionSecret=$(DEV_SESSION_SECRET) 	  --set-string dex.issuer=$(DEV_ISSUER) 	  --set explorer.corpus.mode=$(CORPUS) 	  --set explorer.corpus.accessMode=$(CORPUS_ACCESS_MODE) 	  $${HF_TOKEN:+--set-string secrets.hfToken=$$HF_TOKEN}; 	rc=$$?; 	rm -f "$$LIVE"; 	[ $$rc -eq 0 ] || { echo "!! helm upgrade FAILED (exit $$rc) — the release was NOT converged, and the cluster may now disagree with it"; exit $$rc; }
 	@# SINGLE QUOTES around the suggested command, never backticks: a backtick inside an echo is

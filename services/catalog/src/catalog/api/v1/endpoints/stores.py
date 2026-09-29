@@ -25,7 +25,7 @@ from fastapi import APIRouter, Body
 # The SPEC taxonomy, not `service_kit.exceptions` — the catalog's clients dispatch on the Lance
 # numeric `code`, which only `install_problem_handlers`'s translation of lance_namespace errors
 # carries. The fleet import stood here twice (catalog-api-01, then members.py repeated it as RV-03);
-# `test_catalog_api_speaks_the_spec_taxonomy.py` now closes the class.
+# the `.importlinter` contract `catalog-api-speaks-the-spec-taxonomy` forbids it in `catalog.api`.
 from lance_namespace import ConcurrentModificationError, InvalidInputError, NamespaceAlreadyExistsError, ServiceUnavailableError
 from pydantic import TypeAdapter
 

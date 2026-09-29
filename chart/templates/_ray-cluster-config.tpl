@@ -163,11 +163,9 @@
                   value: {{ include "lance.s3Endpoint" . | quote }}
                 {{- /* The literal, matching `services.yaml:121` and both maintenance templates. A new
                      `minio.region` value would be a fourth spelling of one constant that nothing in
-                     this estate varies. `test_every_chart_value_a_template_names_actually_exists`
-                     does NOT catch such a key on its own: it refuses an UNGUARDED undeclared path,
-                     and a `| default` supplies a value so nothing nil reaches the manifest — measured
-                     2026-09-24 by rendering `.Values.minio.region | default "us-east-1"` past it.
-                     The convention is what keeps the spelling from multiplying, not that gate. Inert today —
+                     this estate varies, and a `| default` on it would keep an undeclared key from
+                     ever reaching the manifest as nil, so nothing would flag the new spelling.
+                     The convention is what keeps the spelling from multiplying. Inert today —
                      `scripts/ray_stage_job.py:89` defaults to the same string — and here so the pod
                      owns the whole pair rather than half of it. */}}
                 - name: S3_REGION
@@ -270,8 +268,7 @@
                      the rendered pod spec does not advertise — so an operator-injected default would
                      have produced zero targets with nothing to indicate why. Declared here, the head's
                      telemetry surface is a property of this manifest rather than of the operator's
-                     defaults, and it is asserted by
-                     tests/unit/test_invariants.py::test_the_ray_head_declares_the_port_its_metrics_are_served_on.
+                     defaults.
                      Every future workerGroupSpecs container needs the same entry — workers serve their
                      own per-node metrics and are scraped by the same job. */}}
                 - {containerPort: 8080, name: metrics}

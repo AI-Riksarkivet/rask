@@ -1,11 +1,10 @@
 """The repository's files, for the gates that scan the whole tree — with or without git.
 
-The repo-shape gates (`test_no_docker`, the locator sweep, the auth-name sweep, the producer-URI
-sweep) enumerate every file and grep it. Each shelled out to `git ls-files`, which is exact and, in
-the container CI runs them in, absent: `ms-test` fails with `FileNotFoundError: [Errno 2] No such
-file or directory: 'git'`, and has done for days. A gate that cannot RUN is worse than one that
-cannot fail — it reports nothing at all, and the job around it goes red for a reason no reader
-connects to the rule being enforced.
+A repo-shape gate enumerates every file and greps it. `git ls-files` is exact and, in the
+container CI runs such gates in, absent: `ms-test` fails with `FileNotFoundError: [Errno 2] No such
+file or directory: 'git'`. A gate that cannot RUN is worse than one that cannot fail — it reports
+nothing at all, and the job around it goes red for a reason no reader connects to the rule being
+enforced.
 
 `.dagger`'s base container excludes `.git` deliberately (the build cache would bust on every commit),
 so the answer is not to ship the history into CI. It is that a repo-shape gate should read the source
@@ -21,8 +20,7 @@ walked against 3,832 tracked, zero tracked files missing; the extra 1,981 are lo
 report violations in junk. It never is: git answers wherever git exists.
 
 GIT FIRST WHERE IT EXISTS, so a developer's run is byte-identical to what it has always been and the
-fallback is exercised only where it is needed. `test_the_fallback_walk_loses_no_tracked_file` pins the
-superset property on any host that has both.
+fallback is exercised only where it is needed.
 """
 
 from __future__ import annotations

@@ -1,9 +1,9 @@
 """The unit work queue — the ONE module permitted to import `nats` (invariant I3).
 
 Everything else in the plane publishes events through Dapr pub/sub, which is what keeps the broker a
-chart value rather than a code dependency. This module is the documented exception, and
-`tests/unit/test_ingest_invariants.py` counts it: an exception stays an exception only if something
-enforces the boundary.
+chart value rather than a code dependency. This module is the documented exception, and the TID251
+banned-api entry on `nats` holds the boundary: this module is its one per-file ignore outside the
+tests and scripts trees, so an import of the broker from any other production module fails ruff.
 
 **Why a direct client here and Dapr everywhere else.** The unit queue needs semantics Dapr's pubsub
 component cannot express, and every one of them is load-bearing:

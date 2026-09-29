@@ -17,9 +17,7 @@ version whose data files were reclaimed can be, which is why evidence reads open
 `fresh_lance_session`. Both are recorded in `service_kit.lakehouse.lance_session`, with its
 thread-safety under concurrent opens.
 
-THE STRUCTURAL HALF LIVES IN `tests/unit/test_no_lakehouse_service_opens_lance_unbounded.py`, which
-holds all four lakehouse services to the rule at once — one gate rather than four copies that drift.
-What stays here is what is specific to the catalog's own session.
+What this file pins is what is specific to the catalog's own session.
 """
 
 from __future__ import annotations

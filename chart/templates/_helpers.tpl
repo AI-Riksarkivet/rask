@@ -294,10 +294,7 @@ dapr.io/config: "lance-tracing"
      telemetry off in exactly that posture while every other pod kept exporting.
 
      The service name is the PLATFORM's, never a workload's — CLAUDE.md: no chart may know a workload's
-     name. The workload rides in Ray Serve's own `application`/`deployment` label values.
-     Pinned by tests/unit/test_invariants.py::test_ray_telemetry_is_release_derived_like_every_other_pods,
-     ::test_the_platform_chart_does_not_name_a_WORKLOAD_in_rays_telemetry_identity and
-     ::test_externalising_telemetry_does_not_silently_drop_ray. */}}
+     name. The workload rides in Ray Serve's own `application`/`deployment` label values. */}}
 {{/* The OTLP target for DAPR SIDECARS — a BARE host:port, which is why it cannot reuse
      `lance.otlpEndpoint`. Dapr sets no URL path of its own: with `protocol: http` it posts to
      `<endpointAddress>/v1/traces`, while GreptimeDB ingests at `/v1/otlp/v1/traces` — a prefix Dapr
@@ -463,9 +460,7 @@ dapr.io/config: "lance-tracing"
          twice a second: 31,916 spans in three hours, measured, eight times the workflow keepalive
          everyone had noticed instead. Each probe costs SEVERAL spans, not one — ASGI
          instrumentation emits a child per send/receive, which is why `GET /api/health http send`
-         outnumbered `GET /api/health` three to one.
-         Pinned by `test_every_probe_path_the_chart_configures_is_excluded_from_tracing`, which reads
-         each pod's OWN probe paths out of the render rather than trusting this list to stay in step. */}}
+         outnumbered `GET /api/health` three to one. */}}
   value: "/livez,/readyz,/healthz,/api/health,/metrics"
 - name: OTEL_SERVICE_NAME
   value: {{ $svc | quote }}
@@ -916,9 +911,8 @@ filter deleted every crash log and every daprd line on 10 pods — measured 2026
 {{/* Don't trace the k8s probe endpoints — they're hit every 10s and bury real request spans (otel
 signals.md § Exclude noisy endpoints). The FastAPI instrumentor reads this itself, launcher or not —
 which is why the fleet carries it too. */}}
-{{- /* Must MATCH `rask.otelEnv`'s list byte for byte — pinned by
-     `test_both_planes_agree_on_the_otel_env_that_ACTUALLY_APPLIES`, which caught exactly this
-     file being updated in one plane and not the other. Covers every path fleet.yaml points a
+{{- /* Must MATCH `rask.otelEnv`'s list byte for byte, so a change to one plane changes the other
+     in the same commit. Covers every path fleet.yaml points a
      probe at, not just the operational pair — including `/api/health` and the gateway's `/healthz`,
      which remain served as badges even though no probe asks for them any more. */}}
 - { name: OTEL_PYTHON_FASTAPI_EXCLUDED_URLS, value: "/livez,/readyz,/healthz,/api/health,/metrics" }
@@ -1650,8 +1644,7 @@ measured decision, and a second copy would drift without anything saying so. */}
      4317 and 4318 and was already wired into the traces pipeline.
 
      Gated on otelEnabled, NOT observability.enabled: telemetry also ships to an external collector
-     (externalOtlpEndpoint). Pinned by
-     tests/unit/test_invariants.py::test_dapr_sidecar_spans_actually_have_an_exporter.
+     (externalOtlpEndpoint).
   */}}
   tracing:
     samplingRate: {{ .Values.observability.samplingRate | quote }}

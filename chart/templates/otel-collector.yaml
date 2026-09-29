@@ -263,7 +263,7 @@ data:
             # kube-state-metrics is not deployed and is not even a toggle — so there was no second
             # path either. A store that cannot be observed cannot be alerted on, which is why this
             # job has to land BEFORE the GreptimeDB* rules in chart/alerting/rules.yml can exist
-            # (pinned both ways by test_every_job_selector_names_a_real_scrape_job).
+            # and has to stay for as long as they do.
             #
             # Selector verified live: pod label app.kubernetes.io/name=greptimedb-standalone, and
             # the HTTP port is named `http` (4000), not `metrics` — it serves /v1/otlp, /v1/sql,
@@ -342,8 +342,8 @@ data:
          is the ONLY thing that removes workflow history — there is deliberately no application-side
          purge (DaprWorkflowClient has no list-instances API, so a sweep could not name what to purge
          after a restart) — and if it stops collecting, the first symptom is a full disk. These two
-         gauges are what chart/alerting/rules.yml's `dapr-workflow-state` group alerts on, pinned in
-         both directions by test_every_collector_sourced_ALERT_names_a_metric_the_RECEIVER_declares.
+         gauges are what chart/alerting/rules.yml's `dapr-workflow-state` group alerts on, so a rename
+         here has to reach those rules in the same change.
 
          A COLLECTOR RECEIVER RATHER THAN A postgres_exporter SIDECAR: no second image to vendor, scan
          and size, no second credential path, and the query lives in the file that already owns "get
@@ -365,7 +365,7 @@ data:
          The real shape is `<app>||dapr.internal.default.<app>.workflow||<id>||history-000006`. A filter
          taken from the doc matches nothing, the gauge is a permanent 0, and DaprWorkflowHistoryNotCollected
          can never fire — which is indistinguishable from a healthy estate. Same class of defect as
-         `outbox_oldest_age`. Pinned by test_the_workflow_history_query_matches_the_REAL_key_shape.
+         `outbox_oldest_age`.
 
          The password is an ENV REFERENCE, not a literal: the Collector expands ${env:...} at load, and
          the value arrives by secretKeyRef on the Deployment below, so no credential is in this ConfigMap.

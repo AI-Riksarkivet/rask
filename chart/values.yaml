@@ -722,8 +722,8 @@ lifecycle:
 # This line used to say "every app container", and for six Deployments it was false: fleet.yaml and
 # controlplane.yaml called the helper nowhere, so gateway/compute/controlplane/flows/ingest/notifications
 # rendered with no securityContext at all — including the pod the Ingress routes /api to. They call it
-# now, and `test_every_first_party_container_carries_the_HARDENING_the_chart_claims` derives its subject
-# list from the render, so a new first-party Deployment is covered by default rather than by memory.
+# now, and tests/unit/test_every_first_party_workload_is_hardened.py derives its subject list from the
+# render, so a new first-party workload is covered by default rather than by memory.
 # INFRA pods are a separate, deliberately staged decision — see security.infraContexts below.
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
 # baseline). readOnlyRootFilesystem is the one tunable: on by default (each app has a writable /tmp
@@ -1573,8 +1573,7 @@ maintenance:
   #
   # With the event lane ON, the cron becomes a BACKSTOP and should be relaxed to hourly, but no slower than
   # 75 minutes: MaintenanceTableParked's 4h window must hold (workers + 1) periods plus ackWait, or it never
-  # fires (tests/unit/test_the_parked_table_alert_can_fire_at_the_sweep_cadence.py). It
-  # still has to exist — the bus is provably incomplete (ingest, Ray TRAIN and external OpenLineage
+  # fires. It still has to exist — the bus is provably incomplete (ingest, Ray TRAIN and external OpenLineage
   # producers emit over HTTP only and never reach the topic; the catalog's lineage lane has no outbox,
   # so a lost trigger is silent) and clock-due work like old-version GC has no write to react to. What
   # it stops being is the thing that finds work first. Measured before the lane landed: every tick paid
@@ -1645,7 +1644,7 @@ maintenance:
   # ON, and it is the SECOND of a pair that only works together. `workTopic` alone makes the planner
   # enqueue and then consume its own messages in the same 512Mi pod — the identical defect with an
   # extra hop. This switch is what sets `MAINTENANCE_EXECUTE_WORK=false` on the planner, so it
-  # publishes and does not consume. Pinned by `tests/unit/test_the_planner_does_not_execute_the_work.py`.
+  # publishes and does not consume.
   dedicatedWorkers:
     enabled: true
     replicas: 2
@@ -2571,9 +2570,8 @@ ray:
   # .docker/ray-cluster.dockerfile builds with `uv sync --package ray-cluster-env` from the root uv.lock,
   # and packages/ray-cluster-env requires ray[data,default,serve]>=2.58. This read 2.56.1 while the container ran 2.57.0 —
   # so the KubeRay operator, which uses rayVersion for its own compatibility gating (see authOptions
-  # below, which needs >= 2.52.0), was reasoning about a cluster that did not exist. The drift was
-  # silent until tests/unit/test_invariants.py::test_the_chart_tells_kuberay_the_ray_version_the_image_actually_ships
-  # started comparing the two; bump this WITH the lock, never on its own.
+  # below, which needs >= 2.52.0), was reasoning about a cluster that did not exist. Nothing compares
+  # the two automatically, so bump this WITH the lock, never on its own.
   rayVersion: "2.58.0"
   image:
     # `ray-cluster`: names the KubeRay cluster image, distinct from the fleet's
@@ -2680,8 +2678,7 @@ ingress:
   # strictly worse than polling. 3600s lets a stream idle for an hour; a genuinely dead upstream is
   # still reaped, just on a timescale that matches a human session. proxy-send-timeout moves with it —
   # the two are one setting in practice, and leaving the send side at 60s reaps the same connection
-  # from the other end. Pinned by
-  # tests/unit/test_invariants.py::test_ingress_holds_a_live_stream_open_longer_than_nginx_default.
+  # from the other end.
   annotations:
     nginx.ingress.kubernetes.io/proxy-buffer-size: 16k
     nginx.ingress.kubernetes.io/proxy-buffers-number: "4"
@@ -2760,8 +2757,7 @@ nats:
     #
     # The subchart key is `config.cluster.*` — NOT `replicaCount`, which the nats chart does not have.
     # A `--set nats.replicaCount=3` is a silent no-op that leaves one node running while every stream
-    # asks for 3 replicas and JetStream refuses to create them (tests/unit/test_invariants.py:320
-    # `test_every_helm_set_key_in_our_scripts_exists_in_values` exists for exactly this class of bug).
+    # asks for 3 replicas and JetStream refuses to create them.
     #
     # Cost, stated rather than discovered: 3 pods and 3 PVCs instead of 1. `replicas: 3` is the
     # subchart's own default once cluster.enabled is true, and is the minimum for raft quorum — the

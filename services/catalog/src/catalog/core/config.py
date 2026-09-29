@@ -69,9 +69,8 @@ class CatalogStorageSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Object store (MinIO / S3). Credentials are required — no default — so a
@@ -109,9 +108,8 @@ class CatalogControlBusSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     control_root: str = Field(default="", alias="LANCE_CONTROL_ROOT")
@@ -155,9 +153,8 @@ class CatalogDaprSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Secret consumption — when on, read the sensitive S3 secret from the Dapr secret store (OpenBao) at
@@ -187,9 +184,8 @@ class CatalogLineageSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Lineage emission (opt-in). When enabled, the catalog emits an OpenLineage event to the lineage
@@ -221,9 +217,8 @@ class CatalogMaintenanceSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Maintenance: when true, reject mutating /v1 requests with 503 + Retry-After — for
@@ -256,9 +251,8 @@ class CatalogUserStateSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Per-subject user state (`GET/PUT/DELETE /v1/user-state/*`) on the Dapr state store. The default names
@@ -278,9 +272,8 @@ class CatalogVendingSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Data-plane credential vending (pluggable; see services/catalog/core/vending.py). Target = S3-compatible
@@ -302,9 +295,8 @@ class CatalogAuthzSettings(BaseSettings):
 
     Split out of the 464-line `Settings` ([[LH-113]]) so one domain's configuration can be read,
     changed and reasoned about without the other six in the way. Composed onto `Settings` exactly as
-    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are — the fields, aliases
-    and defaults are unchanged, which is asserted field-by-field against a pre-split snapshot by
-    `test_the_settings_split_changed_no_field.py`.
+    `LanceSessionCaps` and the estate-wide `GovernedAuthSettings` already are, so `Settings` exposes
+    every one of its fields, aliases and defaults.
     """
 
     # Bare FGA subjects (comma-separated) that may call the catalog as an in-cluster SERVICE, using

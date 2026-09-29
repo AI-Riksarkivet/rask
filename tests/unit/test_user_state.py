@@ -265,7 +265,7 @@ def app_client(monkeypatch: pytest.MonkeyPatch, store: UserStateStore, tmp_path:
 
     The root is `tmp_path` rather than a fixed `/tmp/lance-user-state-test` — the settings override and
     the environment variable have to agree, so both take it. See the note in
-    `tests/integration/conftest.py` and the gate in `tests/unit/test_no_fixed_tmp_roots.py`.
+    `tests/integration/conftest.py`.
     """
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
     monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))

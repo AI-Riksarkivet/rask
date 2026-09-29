@@ -112,11 +112,12 @@ class DrainOutcome(BaseModel):
     `drained=1 stranded=0` the moment ingest's credential landed), so the numbers reported a wedged relay
     that did not exist.
 
-    THE HANDLING IS UNCHANGED AND THE EVENT STAYS STAGED. This splits the REPORTING only. Retiring a
-    permanently-refused event is not available to this service: moving it aside is a PutObject and the
-    relay is denied that by policy (`test_the_lineage_plane_writes_nothing_it_does_not_own.py` pins
-    `not (allowed & {"s3:PutObject", ...})`), and destroying the only durable copy of a committed write's
-    provenance is the wrong answer to "you may not record this" in any case.
+    A REFUSED EVENT IS RETIRED ONLY ONCE IT IS RECORDED. Its verdict and payload reach Postgres first
+    (`record_refusal`, [[LH-182]]) and the staged object is deleted after. Moving it aside instead
+    would be a PutObject, and the chart grants this service no write but `s3:DeleteObject` on its own
+    outbox (`DrainItsOwnOutboxAndNothingElse` in `chart/templates/minio-scoped-users.yaml`); deleting it
+    unrecorded would destroy the only durable copy of a committed write's provenance, which is the
+    wrong answer to "you may not record this" in any case.
     """
 
     drained: int = 0

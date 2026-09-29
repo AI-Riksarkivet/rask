@@ -8,8 +8,8 @@ all. A redelivered unit then had nothing of its own to overwrite, so the old fra
 both survived into `discover_staged`, and the lander appended both: FOUR units in, SIX rows out.
 
 Nothing downstream would have caught it. The commit is a blind `LanceOperation.Append`, and
-`merge_insert` — the one thing that would collapse duplicate rows — is forbidden by
-`tests/unit/test_ingest_invariants.py`.
+`merge_insert` — the one thing that would collapse duplicate rows — cannot take the staged fragments:
+it coerces a reader of rows, and the lander holds `FragmentMetadata` (`staging.py` records the measurement).
 
 A3 cannot reach this. It kills the pod immediately after the 202, so the crash lands before any
 flush; and the window is one ack round trip wide, which no wall-clock kill can be aimed at. Hence a

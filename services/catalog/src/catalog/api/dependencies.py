@@ -163,8 +163,8 @@ def namespace_for_root(request: Request, settings: Settings, root_uri: str, *, e
     """The (cached) namespace connection rooted at ``root_uri`` — one per warehouse bucket.
 
     PUBLIC on purpose — the warehouse/namespace lifecycle endpoints resolve bucket-rooted connections
-    through it — and every caller must pair it with a warehouse deactivation-status gate
-    (``test_no_warehouse_bucket_access_bypasses_the_deactivation_gate`` refuses one that does not).
+    through it — and every caller must pair it with a warehouse deactivation-status gate, or a
+    quarantined warehouse's bucket stays reachable through that caller.
 
     KEYED ON ``(root, endpoint)``, not on the root alone ([[LH-067]]). A root is immutable but an
     endpoint is caller-owned and may be corrected, and a root-only key would serve the connection built

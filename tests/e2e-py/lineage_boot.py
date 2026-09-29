@@ -13,7 +13,7 @@ invisible while the file is read top to bottom and fails the moment anything reo
 
 So the boot sequence lives in ONE place and mirrors `main.py`'s: a step added to the service's
 lifespan reaches every test by being added here, instead of reaching whichever tests were written
-after it. Pinned by `tests/unit/test_an_e2e_test_that_ingests_boots_the_repository_first.py`.
+after it.
 """
 
 from __future__ import annotations

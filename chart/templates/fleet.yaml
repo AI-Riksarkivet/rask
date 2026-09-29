@@ -25,8 +25,7 @@ metadata:
     {{- include "rask.componentLabels" (list $root $name) | nindent 4 }}
 spec:
   # hasKey+ternary, never `| default` — an explicit `replicas: 0` (scale to zero) is
-  # falsy, so `| default 1` would silently resurrect the workload. Pinned by
-  # tests/unit/test_invariants.py::test_no_numeric_helm_default_can_swallow_an_explicit_zero.
+  # falsy, so `| default 1` would silently resurrect the workload.
   replicas: {{ hasKey $svc "replicas" | ternary $svc.replicas 1 }}
   {{- if $svc.singleton }}
   strategy:

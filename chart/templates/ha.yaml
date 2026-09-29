@@ -129,7 +129,7 @@ spec:
      `dedicatedWorkers.replicas` (2) and executes every compaction in the estate, so a drain taking
      both at once stops maintenance entirely. The PLANNER deliberately gets none: it is one replica,
      and `minAvailable: 1` over one replica blocks every voluntary drain — the inverse hazard this
-     file's header records and `test_no_single_replica_deployment_carries_a_disruption_budget` gates. */}}
+     file's header records. */}}
 {{- if and .Values.maintenance.enabled .Values.maintenance.dedicatedWorkers.enabled .Values.maintenance.workTopic }}
 {{- if gt (int .Values.maintenance.dedicatedWorkers.replicas) 1 }}
 ---

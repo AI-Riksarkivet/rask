@@ -1,9 +1,8 @@
 """What `open_backlog_left_new2.md` says about itself, derived from the rows rather than asserted.
 
-`make backlog`. The register states its own counts and
-`tests/unit/test_the_backlog_counts_itself.py` gates them; this is the same derivation in a form you
-read rather than assert against, plus the two cuts that decide what to work next: what is HIGH in the
-phase currently in focus, and what is waiting on an owner decision.
+`make backlog`. The register states its own counts and `scripts/backlog_close.py` re-derives them on
+every close; this derives them from the rows again in a form you read, plus the two cuts that decide
+what to work next: what is HIGH in the phase currently in focus, and what is waiting on an owner decision.
 
 Phase order is the owner's (2026-09-10): finish the lakehouse, then compute, then the controlplane.
 So the phases print in that order and the low-priority section prints last — a backlog that sorts by

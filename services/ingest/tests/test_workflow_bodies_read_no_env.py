@@ -1,14 +1,10 @@
-"""The determinism gate banned env reads at MODULE scope, which is not where the hazard lives.
+"""A WORKFLOW BODY must not read env, because every replay re-executes it against today's environment.
 
-`test_replay_hygiene.py::test_the_workflow_module_reads_NO_env_at_import` walks the AST and refuses
-`os.getenv` / `os.environ` OUTSIDE any function. That catches a real defect — a module constant is
-fixed per POD, not per RUN — but it is the weaker half. An `os.getenv` inside a WORKFLOW BODY passes
-it untouched, and that is the one the plane already paid for: `RunLimits` records the exact break,
-`if max_run_hours > 0` decides whether a durable timer exists, so a rolling deploy that changed the
-variable between a run's first execution and its replay produced an action stream the history does
-not match. `resolve_limits` exists to pin those numbers in history instead.
-
-So the estate had a gate that would have let the defect it was written about come straight back.
+An env read at MODULE scope fixes a value per POD, not per RUN, but an `os.getenv` inside a WORKFLOW
+BODY is the one the plane already paid for: `RunLimits` records the exact break, `if max_run_hours > 0`
+decides whether a durable timer exists, so a rolling deploy that changed the variable between a run's
+first execution and its replay produced an action stream the history does not match. `resolve_limits`
+exists to pin those numbers in history instead.
 
 The distinction that makes this precise, and why the gate cannot simply ban env reads everywhere:
 an ACTIVITY may read env freely — its result is recorded in history, so every replay sees the value
@@ -59,8 +55,8 @@ class TestTheRealModuleIsClean:
 
 
 class TestTheGateActuallyCATCHES:
-    """The half that matters. A detector nobody has seen fail is a detector nobody knows works, and
-    this one exists precisely because its predecessor passed the case it was meant to stop."""
+    """The half that matters. A detector nobody has seen fail is a detector nobody knows works, and a
+    read inside a body is exactly the case a module-scope scan passes untouched."""
 
     @pytest.mark.parametrize(
         "body",
@@ -96,8 +92,9 @@ class TestItDoesNotOverREACH:
         assert env_reads_in_workflow_bodies(source, {"ingest_run"}) == []
 
     def test_a_module_constant_is_the_OTHER_gates_job(self) -> None:
-        """Not silently double-covered — test_replay_hygiene owns module scope, and two gates
-        reporting one defect is how a fix gets applied to the wrong one."""
+        """Not silently double-covered — the module-scope case is observed by the replay in
+        `test_replay_hygiene.py::test_a_replay_creates_the_DEADLINE_TIMER_the_history_records_even_when_this_pod_has_no_ceiling`,
+        and two gates reporting one defect is how a fix gets applied to the wrong one."""
         source = "import os\n\nLIMIT = os.getenv('X')\n\n\ndef ingest_run(ctx, payload):\n    yield ctx.call_activity(x)\n"
         assert env_reads_in_workflow_bodies(source, {"ingest_run"}) == []
 
@@ -114,8 +111,8 @@ def test_the_gate_cannot_go_vacuous_on_a_parse_failure() -> None:
 
 class TestTheGateFollowsHELPERS:
     """The checklist defines workflow scope as "the body of any function decorated with
-    `@wfr.workflow` ... OR ANY HELPER CALLED FROM SUCH A FUNCTION", and this gate covered only the
-    first half -- the same shape of hole its own docstring criticises in the suite it replaced.
+    `@wfr.workflow` ... OR ANY HELPER CALLED FROM SUCH A FUNCTION", so a gate that scans only the
+    bodies misses a read one call away from them.
 
     Not a live divergence: today's workflow scope is clean either way. It is the GATE that was blind,
     and `bound_errors` -- called from both generator bodies, capping a payload whose size is exactly

@@ -162,9 +162,7 @@ def standing_features(stack: tuple[str, str, str], alice: dict[str, str]) -> Non
     if _silver_written():
         return
     # `Idempotency-Key` is REQUIRED by both write doors and has no default, so FastAPI 422s at header
-    # validation before auth, before the lane, before anything this suite means to exercise. The same
-    # omission was fixed in test_medallion_e2e and test_media_e2e by `f0b97870`; this suite was skipping
-    # then, so it kept the miss.
+    # validation before auth, before the lane, before anything this suite means to exercise.
     resp = requests.post(
         f"{lance_ray}/produce",
         headers={"dapr-api-token": DAPR_TOKEN, "Idempotency-Key": f"e2e-{uuid.uuid4().hex[:16]}"},

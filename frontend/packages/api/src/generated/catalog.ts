@@ -509,11 +509,10 @@ export interface paths {
          *     GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
          *     surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
          *     whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
-         *     / `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for
-         *     `can_get_metadata` by analogy with table and namespace; it does not exist on this type, and
-         *     `test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it — OpenFGA rejects an
-         *     undefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would
-         *     have made this endpoint permanently unavailable.
+         *     / `can_grant_*` / `can_read_assignments`, all admin or member tier. `can_get_metadata`, the
+         *     analogy with table and namespace, does not exist on this type, and OpenFGA rejects an undefined
+         *     relation with a 400 that fails closed to a 503 for every caller, so gating on it would make this
+         *     endpoint permanently unavailable.
          *
          *     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
          *     at (`can_create_annotation_project: member`), and a caller with no relationship to the project
@@ -1045,8 +1044,8 @@ export interface paths {
          *
          *     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
          *     version of it: the caller acts on the version list, so
-         *     ``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather
-         *     than asserting the branch reached ``open_dataset``.
+         *     ``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with
+         *     what ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``.
          */
         post: operations["preview_maintenance_management_v1_table__id__maintenance_preview_post"];
         delete?: never;

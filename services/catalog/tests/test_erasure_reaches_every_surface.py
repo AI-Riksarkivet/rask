@@ -1,7 +1,7 @@
 """An erasure request removes the subject from every ref the catalog serves ([[LH-073]]).
 
-The counterpart to `tests/unit/test_an_erased_row_survives_in_three_places.py`, which characterises
-the defect: today a `delete_from_table` reaches ONE of four surfaces and the other three stay live.
+A plain `delete_from_table` reaches ONE of the four surfaces a table serves (main) and leaves the other
+three live: a branch, a tag and the version history.
 
 THESE DRIVE REAL LANCE, not a fake, because the claim is about the format's behaviour — that a branch
 pins the parent's history, that a tag pins a version against reclamation — and a fake would restate

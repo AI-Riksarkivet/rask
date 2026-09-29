@@ -629,8 +629,8 @@ def _cron_request() -> Any:
     """A Request stand-in for `_on_cron`, which threads one to the drain's authorization gate.
 
     FGA is off in these `_settings()` doubles, so `enforce_bus_authz` returns before touching it — these
-    tests keep pinning the tick's REPORT shape, which is what they were written for. The gate's own
-    behaviour is pinned by `test_the_outbox_relay_refuses_what_the_bus_door_refuses.py`.
+    tests keep pinning the tick's REPORT shape, which is what they were written for. What the drain
+    does when the gate refuses is pinned by `test_a_governance_refusal_is_not_a_relay_fault.py`.
     """
     from types import SimpleNamespace
 

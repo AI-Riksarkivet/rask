@@ -9,9 +9,9 @@ the image resolved 203 packages, none of them pillow, and every stage job died w
 a purely tabular run that would never touch an image, because the import is unconditional.
 
 NOTHING WAS RED. The dockerfile built, the lock resolved, the chart rendered, the deployment rolled
-out and reported success; the failure appeared only when a job actually ran. The existing
-ray-cluster-env gates check that the dockerfile syncs that member and that the chart's `rayVersion`
-matches the lock — both true here, and neither says the environment can import the code it ships.
+out and reported success; the failure appeared only when a job actually ran. The dockerfile synced
+that member and the chart's `rayVersion` matched the lock — both true here, and neither says the
+environment can import the code it ships.
 
 ASSERTED AGAINST `uv export`, not a built image and not a hand-rolled walk of the lock: export is the
 same resolution `uv sync --package ray-cluster-env --frozen` performs, so it answers exactly what the

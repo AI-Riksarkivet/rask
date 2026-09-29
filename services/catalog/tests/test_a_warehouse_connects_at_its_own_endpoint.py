@@ -123,9 +123,8 @@ def test_the_connection_cache_keys_on_the_ENDPOINT_too(settings: Settings, captu
 def test_every_namespace_for_root_CALLER_passes_an_endpoint() -> None:
     """A warehouse-rooted connection built without the record's endpoint opens the ESTATE's store.
 
-    DERIVED from the source rather than listed, the shape `test_the_maintenance_doors_refuse_a_branch_
-    they_cannot_honour` uses: a new door resolving a warehouse connection inherits this without an edit
-    here. Three callers were found ignoring the endpoint after the resolver already threaded it — the
+    DERIVED from the source rather than listed: a new door resolving a warehouse connection inherits
+    this without an edit here. Three callers were found ignoring the endpoint after the resolver already threaded it — the
     create-namespace door, the delete cascade and the undrop — and none of them failed loudly: each
     opened the estate's store, where the warehouse's namespaces simply are not, so a cascade would
     report a clean delete having dropped nothing.

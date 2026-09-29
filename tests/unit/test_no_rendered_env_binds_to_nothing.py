@@ -2,12 +2,11 @@
 
 Q17-20's general form. An env var that binds to no setting is indistinguishable from a control when
 read: three live stage runners carried `MEDALLION_RAY_S3_ACCESS_KEY_ID=rask-ray-compute`, and that one
-string was the evidence quoted by `open_goal.md`, by the backlog's own zero-trust row, and by
-`test_the_medallion_runs_as_its_own_storage_identity`'s docstring, for the claim that the Ray lane
-ran on a scoped storage identity. No service read it and no template rendered it — it was residue
-of the approach `ray_submit.py` abandoned once the Ray Jobs API was found to echo `runtime_env` back
-on an unauthenticated read. The identity was real, on the Ray POD; the variable was decoration that
-three documents mistook for proof.
+string was quoted in three documents — `open_goal.md` and the backlog's own zero-trust row among them —
+as the evidence that the Ray lane ran on a scoped storage identity. No service read it and no template
+rendered it — it was residue of the approach `ray_submit.py` abandoned once the Ray Jobs API was found
+to echo `runtime_env` back on an unauthenticated read. The identity was real, on the Ray POD; the
+variable was decoration that three documents mistook for proof.
 
 WHAT THIS CATCHES AND WHAT IT CANNOT. That instance was live drift, which no render-time gate can
 see — Q17-17 is the row for drift. This closes the half that IS in the repo: a template that renders
@@ -24,16 +23,10 @@ the catalog, flows and notifications alike; asking whether one particular class 
 accuse a variable that its own service reads perfectly well. The union under-reports and never
 falsely accuses, which is the right trade for a gate whose whole subject is "binds to NOTHING".
 
-THE WEB ZONES ARE OUT OF SCOPE OF THE PYTHON GATE AND THAT IS NOT AN EXEMPTION. Their
-`LINEAGE_SERVICE_TOKEN`, `LINEAGE_API`, `LINEAGE_SERVICE_ID` and `LANCE_GATEWAY_URL` are read by
-SvelteKit (`bff.ts`), a plane with no `BaseSettings` at all — which is why the gate above names the
-Python plane in its title. That left the zone and runner planes checked by NOTHING, so
-:func:`test_no_rendered_env_on_ANY_plane_is_read_only_by_prose` covers them by a different mechanism,
-below: it asks whether any first-party SOURCE reads the name.
-
-PROSE IS NOT A READER, and that is the whole difference between that second gate and a text search.
-Q17-20's variable WAS present in the tree — in the docstring that wrongly credited it — so a grep
-would have found it and passed. A mention inside a comment or a docstring therefore does not count.
+THE WEB ZONES ARE OUT OF THIS GATE'S SCOPE. Their `LINEAGE_SERVICE_TOKEN`, `LINEAGE_API`,
+`LINEAGE_SERVICE_ID` and `LANCE_GATEWAY_URL` are read by SvelteKit (`bff.ts`), a plane with no
+`BaseSettings` at all — which is why the gate names the Python plane in its title. The zone and runner
+planes are checked by nothing here.
 """
 
 from __future__ import annotations

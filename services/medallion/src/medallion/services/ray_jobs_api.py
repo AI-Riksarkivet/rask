@@ -11,8 +11,9 @@ is duplicated.
 WHY ENGINE KNOWLEDGE MAY LIVE HERE. It is an ADAPTER, not a consumer: the cascade reaches it through
 `service_kit.lakehouse.executor`, so swapping the engine means adding a sibling adapter rather than
 editing a workflow. That is the same role `services/compute` plays for the dashboard, and the rule
-`tests/unit/test_no_service_depends_on_a_compute_engine.py` encodes — a service may adapt an engine,
-and must not depend on one.
+two `.importlinter` contracts encode — `the-lakehouse-is-not-built-on-ray` refuses a `ray` or
+`ray_kit` import in any lakehouse service, and `the-workflow-reads-ray-through-the-port` keeps
+`medallion.workflow` off this module: a service may adapt an engine, and must not depend on one.
 """
 
 from __future__ import annotations

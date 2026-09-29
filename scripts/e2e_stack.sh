@@ -78,7 +78,6 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # on `no repository definition for https://nvidia.github.io/k8s-device-plugin,
 # https://ray-project.github.io/kuberay-helm/` the first time it ran in five days. A tenth subchart
 # cannot break this now. `oci://` repositories are skipped — helm resolves those without a repo add.
-# Pinned by `tests/unit/test_the_e2e_stack_adds_every_chart_repository.py`.
 while read -r url; do
   [ -n "$url" ] || continue
   name="$(printf '%s' "$url" | sed -E 's#^https?://([^./]+).*#\1#')"
@@ -233,7 +232,7 @@ kubectl port-forward "svc/$RELEASE-lineage" 18000:8000 >/tmp/pf-lin.log 2>&1 & P
 # `rask-minio` since 2026-09-11; nothing renders `-rustfs` any more, so this port-forward addressed an
 # object that does not exist and the chaos drill below scaled a Deployment that does not exist.
 # Verified against the running estate rather than the templates: `svc/rask-minio` and
-# `statefulset.apps/rask-minio`. Pinned by `tests/unit/test_the_e2e_stack_names_objects_the_chart_renders.py`.
+# `statefulset.apps/rask-minio`.
 kubectl port-forward "svc/$RELEASE-minio"  9900:9000 >/tmp/pf-rfs.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-dex"     5556:5556 >/tmp/pf-dex.log 2>&1 & PF_PIDS+=($!)
 kubectl port-forward "svc/$RELEASE-openfga" 8081:8080 >/tmp/pf-fga.log 2>&1 & PF_PIDS+=($!)

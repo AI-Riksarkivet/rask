@@ -52,8 +52,8 @@ describe('RayJobSchema', () => {
 		// THIS DOES NOT DESCRIBE `/api/ray/jobs`, and its previous name ("the medallion path") claimed
 		// it did. `ray_kit.schemas.RayJob` is `extra="ignore"` and does not declare `metadata`, so the
 		// compute service strips it from every row and this field can only ever be its `{}` default
-		// there. The two suites asserted opposite things about the same field and both stayed green;
-		// `tests/unit/test_ray_job_wire_parity.py` now ties the two declarations together.
+		// there. A suite on each side of the wire can assert its own declaration of this field and stay
+		// green while the two disagree.
 		//
 		// Stripping is CORRECT and security-motivated rather than an oversight: the medallion's own
 		// submitter puts `rask.token` into that dict (`ray_submit.py:166`) alongside `rask.originator`

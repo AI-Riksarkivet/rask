@@ -31,8 +31,7 @@ _APP_LOGGERS = (
     # `maintenance`, NOT `compaction`. The service was renamed and this entry was not, so it named a
     # package that no longer existed while the real one inherited root's WARNING — which muted
     # `log.info("maintenance_sweep", extra=summary)`, the sweep's only account of what it did, for the
-    # whole life of the renamed service. Guarded by
-    # test_invariants.py::test_every_service_that_raises_its_loggers_is_ON_the_allowlist.
+    # whole life of the renamed service. A renamed service is renamed here in the same change.
     "maintenance",
     # The shared platform library's own loggers (fga provisioning, outbox, warehouse registry …).
     "service_kit",

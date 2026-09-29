@@ -135,7 +135,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     # 2. alice creates namespace + bronze table -> 200 (app seeds owner; catalog emits create-lineage).
     # Through whichever door this estate admits: with warehouses on, the root door answers 400
     # `must belong to a warehouse` — a TOPOLOGY refusal — and this suite read that as a governance
-    # failure. `test_auth_e2e` was migrated 2026-08-25 and this one was not.
+    # failure.
     assert_parent_exists(create_top_level(server, ns, ah), ns)
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
     create = requests.post(f"{server}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)

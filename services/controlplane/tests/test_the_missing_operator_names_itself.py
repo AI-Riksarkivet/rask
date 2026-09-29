@@ -17,8 +17,8 @@ the deployment, not a reachability problem.
 
 So the contract these tests pin is discrimination, not tolerance. THE 404 IS NEVER SWALLOWED: an
 empty `200 {"projects": []}` would be the worst answer of all — a gallery that looks successful on
-an estate that has no project operator — and `test_a_missing_operator_is_never_an_empty_list`
-refuses exactly that shape.
+an estate that has no project operator — and `test_a_missing_project_operator_is_not_reported_as_unreachable`
+refuses exactly that shape by requiring the 501.
 """
 
 from __future__ import annotations

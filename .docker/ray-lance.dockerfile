@@ -42,7 +42,7 @@ FROM rayproject/ray:2.58.0-py312-cpu@sha256:c3c9573c5c6bfe4127885f79622d6a32064d
 #   ModuleNotFoundError: No module named 'service_kit'
 #
 # while the stage runner logged `medallion_stage_dispatched_to_workflow` and reported a terminal job — a
-# dead cascade wearing a dispatched one. Pinned by `test_a_baked_job_gets_every_repo_package_it_imports`.
+# dead cascade wearing a dispatched one.
 #
 # EXPORTED, NOT SYNCED. `.docker/ray-cluster.dockerfile` builds a `/opt/venv` from the root lock, which
 # is right for a `nvidia/cuda` base it owns outright. This base is `rayproject/ray`, which brings its

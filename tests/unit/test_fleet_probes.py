@@ -133,10 +133,10 @@ def test_the_gateway_probe_REPORTS_the_drain() -> None:
 #
 # The routing half of that finding closed with the split above. Its Fix has a SECOND clause: the gate
 # must assert the two probes differ "for any service that mounts the probes router" — i.e. the
-# exemption must be DERIVED from what an app serves, not matched on its name. `test_liveness_and_
-# readiness_are_not_the_SAME_path` did the latter (`name.endswith("-gateway")`), which is a blind
-# spot rather than a rule: a second front-door service is exempted only if someone remembers, and a
-# gateway that later grows the shared pair stays unchecked forever.
+# exemption must be DERIVED from what an app serves, not matched on its name. A name match
+# (`name.endswith("-gateway")`) is a blind spot rather than a rule: a second front-door service is
+# exempted only if someone remembers, and a gateway that later grows the shared pair stays unchecked
+# forever.
 #
 # Deriving it turns out to delete the exemption instead of improving it. The gateway is the one fleet
 # app still hand-rolling its drain check — built with a bare `FastAPI(...)`, serving neither probe,

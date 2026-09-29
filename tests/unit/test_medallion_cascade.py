@@ -13,8 +13,8 @@ asserts BOTH halves:
   i.e. the exact graph the lineage consumer would ingest.
 
 The Dapr pub/sub fan-out + AGE ingest are exercised by the gated live e2e
-(``tests/e2e-py/test_medallion_e2e.py``); here we prove the compute + lineage contract the whole cascade
-rests on, runnably and deterministically.
+(``tests/e2e-py/test_governed_union_e2e.py::test_governed_allow_full_cascade_with_quality_verdicts``); here
+we prove the compute + lineage contract the whole cascade rests on, runnably and deterministically.
 """
 
 from __future__ import annotations

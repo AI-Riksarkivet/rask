@@ -22,8 +22,8 @@ anything capped silently — a truncated scan that reads as "all clear" is worse
 page ceiling, unreadable record and paginated listing lands in :attr:`ReconcileReport.incomplete`.
 
 Why the registries are re-read here rather than imported from the catalog: compaction has no catalog
-client BY DESIGN, and declaring one would put the whole catalog closure in the compaction image (the
-`tests/unit/test_declared_dependencies.py` contract). This is the same catalog↔compaction shape as
+client BY DESIGN, and declaring one would put the whole catalog closure in the compaction image, because
+`uv sync --package` installs a member's declared closure. This is the same catalog↔compaction shape as
 :mod:`service_kit.lakehouse.maintenance_policies` and :mod:`service_kit.lakehouse.warehouse_registry`:
 one service writes the records, another reads them straight off the bucket. The record layout is the
 shared contract, and the reader below is deliberately the *tolerant* half of it — a record it cannot

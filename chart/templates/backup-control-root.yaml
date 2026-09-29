@@ -85,7 +85,7 @@ spec:
                 # `s3_client` resolves it from this chain while the keys come from the mounted file.
                 # `RASK_S3_ENDPOINT_URL`, which is the name `storage/client.py:34` actually resolves
                 # (`_ENDPOINT_ENVS`). The bare `RASK_S3_ENDPOINT` reads correctly and is read by
-                # nothing — caught by `test_no_dead_chart_env_vars`, which exists for exactly this.
+                # nothing.
                 - name: RASK_S3_ENDPOINT_URL
                   value: {{ include "lance.s3Endpoint" . | quote }}
               command: ["python", "/srv/control_root_backup.py"]

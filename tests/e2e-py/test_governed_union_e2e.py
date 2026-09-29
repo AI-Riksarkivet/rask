@@ -235,10 +235,9 @@ def _idem(prefix: str) -> str:
     """A fresh `Idempotency-Key`, REQUIRED by every medallion write door since 2026-08-27 (`2da0164c`).
 
     The header is declared with no default, so FastAPI answers 422 at header validation — before auth,
-    before the lane, before anything a governance suite means to exercise. `f0b97870` fixed the identical
-    omission in test_medallion_e2e and test_media_e2e; this suite was skipping then (the runner withheld
-    `LANCE_E2E_LANCERAY_URL`), so it kept the miss and all five legs below died on a validation error
-    rather than on the governance they assert.
+    before the lane, before anything a governance suite means to exercise. A leg that omits it dies on a
+    validation error rather than on the governance it asserts, and while the runner withholds
+    `LANCE_E2E_LANCERAY_URL` this suite skips, so no run of it would surface the miss.
     """
     return f"{prefix}-{uuid.uuid4().hex[:16]}"
 
@@ -900,11 +899,12 @@ def test_media_lane_derives_under_governance(stack: tuple[str, str], alice: dict
     upstream = requests.get(f"{lineage}/datasets/silver-media$features/upstream", headers=alice, timeout=8)
     upstream.raise_for_status()
     assert "bronze-media$objects" in {d["name"] for d in upstream.json().get("related", [])}
-    # The external s3:// SOURCE objects are recorded in the graph (the auth-off media e2e —
-    # tests/e2e-py/test_media_e2e.py via `make e2e-media` — asserts their PRESENCE, which is what keeps
-    # this negative non-vacuous) but alice holds no grant on them — the transitive-disclosure filter
-    # must DROP them from her governed view rather than leak external-source names through a
-    # related-datasets side channel.
+    # The external s3:// SOURCE objects are the ingest event's inputs — one per source object, pinned by
+    # tests/unit/test_media_ingest.py::test_ingest_emits_lineage_then_publishes_media_trigger — but alice
+    # holds no grant on them, so the transitive-disclosure filter must DROP them from her governed view
+    # rather than leak external-source names through a related-datasets side channel. That pin stops at
+    # the emitted event: nothing here reads them back from the graph, so an empty answer below cannot by
+    # itself tell the filter from a graph that never recorded them.
     #
     # NO per-object positive control is possible here, BY CONSTRUCTION (2026-07-10 review, verified
     # against OpenFGA's tuple validation): an OpenFGA object id must contain exactly one ':', so

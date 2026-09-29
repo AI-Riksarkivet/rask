@@ -571,11 +571,10 @@ def test_the_wakeup_carries_the_FLAG_and_goes_to_the_stage_runners_OWN_topic(mon
 def test_register_ACTUALLY_registers_every_definition() -> None:
     """The failure this prevents is a deploy-time one with an unhelpful message.
 
-    `test_every_activity_is_registered` checks the CONTENTS of WORKFLOWS/ACTIVITIES; nothing checked
-    that `register()` hands them to the runtime. A definition present in the tuple but never passed to
-    `register_activity` fails at runtime with "no such activity" — after the workflow has already
-    started, on a pod whose probes are green. That is precisely the asymmetry ingest's lifespan
-    docstring describes ("a definition registered in the API process but not the worker").
+    A definition present in WORKFLOWS/ACTIVITIES but never passed to `register_activity` fails at
+    runtime with "no such activity" — after the workflow has already started, on a pod whose probes
+    are green. That is precisely the asymmetry ingest's lifespan docstring describes ("a definition
+    registered in the API process but not the worker").
     """
     from medallion.workflow import ACTIVITIES, WORKFLOWS, register
 

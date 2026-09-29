@@ -130,9 +130,8 @@ RUN --network=none --mount=from=builder,source=/opt/venv,target=/tmp/venv \
 # actually runs, and it did not, so every submitted stage job died with
 #   python: can't open file '/home/ray/jobs/ray_stage_job.py': No such file or directory
 # and exit code 2. The cascade's success path had therefore never once run — the failure looked like
-# missing data rather than a missing file. Pinned by
-# `test_the_ray_image_BAKES_every_job_script_the_medallion_entrypoints_name`, which reads the
-# entrypoint defaults out of the config so the two halves cannot drift apart again.
+# missing data rather than a missing file. The entrypoint defaults and this COPY name the same files,
+# so a change to either changes the other in the same commit.
 #
 # `--chown` rather than a following `RUN chown`: one layer instead of two, and the ownership is part
 # of the copy rather than a correction to it.
@@ -173,8 +172,7 @@ ENV PATH=/opt/venv/bin:$PATH \
 # NUMERIC, not `app`. The kubelet compares runAsNonRoot against a NUMBER, so a named user is
 # refused outright — `cannot verify user is non-root` — and the container never starts while its
 # previous pod keeps serving, so the deployment silently stops being able to roll. Same uid the
-# useradd above creates; only the spelling changes. Pinned by
-# tests/unit/test_invariants.py::test_an_image_the_chart_hardens_declares_a_NUMERIC_user
+# useradd above creates; only the spelling changes.
 USER 10001
 WORKDIR /app
 

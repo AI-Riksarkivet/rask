@@ -13,8 +13,8 @@
    post-install/post-upgrade, so the fleet's pods are already rolling when it fires: a release that both
    repoints RASK_FGA_ROOT_OBJECT and first writes these tuples hands every estate door a 403 for as long
    as the hook takes. While the setting still names a warehouse the estate grants are inert-but-present,
-   which is exactly what is wanted. `test_the_estate_root_is_seeded_before_anything_checks_it` holds the
-   two in that order, and `make fga-estate-migrate` carries the holders this hook does not know about.
+   which is exactly what is wanted. The release sequence is what holds the two in that order, and
+   `make fga-estate-migrate` carries the holders this hook does not know about.
 
    THE SERVICE GRANTS DO NOT DEPEND ON A HUMAN ADMIN BEING NAMED, and this whole Job used to. Its gate
    was `and .Values.auth.enabled .Values.auth.bootstrapAdmin`, so an estate that never chose a first
@@ -79,8 +79,9 @@ spec:
                The DEFAULT WAREHOUSE, matching `fga_default_warehouse_object` in
                packages/service-kit/src/service_kit/governed/settings.py — the structural root a
                top-level namespace hangs off, not the estate root the privileges are checked on.
-               `test_the_chart_only_grants_relations_the_model_defines` holds the two apart by
-               checking each grant list against the type its own object names.
+               `tests/unit/test_the_bootstrap_hook_grants_against_the_model_its_image_carries.py`
+               holds the two apart: it runs this hook's default-render grants against a stub OpenFGA
+               that refuses a relation its object's own type does not define.
             */}}
             - { name: FGA_ROOT_OBJECT, value: "warehouse:lance_catalog" }
             {{- with .Values.auth.fgaStoreId }}
@@ -105,7 +106,6 @@ spec:
               # CHECKS IT. This hook is post-install/post-upgrade, so the fleet's pods are already
               # rolling when it runs; writing the tuples one release AHEAD of the repoint is what keeps
               # the window between them from being a window of 403s.
-              # `test_the_estate_root_is_seeded_before_anything_checks_it` holds the two in that order.
               estate_obj = "estate:rask"
               subject = {{ .Values.auth.bootstrapAdmin | quote }}
               user = subject if ":" in subject else f"user:{subject}"

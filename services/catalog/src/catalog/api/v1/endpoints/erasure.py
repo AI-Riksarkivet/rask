@@ -6,9 +6,9 @@ from `/catalog`; 42 of them sit on spec prefixes today and each has callers that
 A NEW route has none — so the prefix gets established by something with zero migration risk, and the
 42 move against a door that already exists rather than against a plan.
 
-`tests/integration/test_the_spec_surface_carries_only_spec_operations.py` is what would have caught
-this going to `/v1/table/{id}/erasure` instead: the gate fails on any operation added to a spec prefix
-that the spec does not define.
+`tests/integration/test_spec_conformance.py::test_no_NEW_rask_route_appears_on_a_spec_prefix` fails on
+any operation added to a spec prefix that the spec does not define, so this door mounted at
+`/v1/table/{id}/erasure` would turn it red.
 
 WHY ERASURE IS ITS OWN VERB RATHER THAN A FLAG ON DELETE. `delete_from_table` removes rows from ONE
 ref and is a data operation a writer performs routinely. This removes a subject from every ref the

@@ -188,7 +188,8 @@ if [ -n "$PROJECT" ]; then
   # THE SAME THREE RUNGS the estate-level block grants, never `owner` — see the reasoning there.
   # This block is per-TENANT and was missed on the first pass of that narrowing (2026-09-10); the
   # estate block alone would have left every project-qualified tenant over-granted while the change
-  # looked applied. `test_seeders_agree_on_stage_runner_rungs.py` is what caught it.
+  # looked applied. Nothing checks this block against the estate block or against seed_estate.py, so
+  # a change to one rung list has to reach the others in the same commit.
   for rung in writer publisher validator; do
     w "user:service-bronze-to-silver" "$rung" "namespace:$PROJECT-silver"
     w "user:service-silver-to-gold" "$rung" "namespace:$PROJECT-gold"

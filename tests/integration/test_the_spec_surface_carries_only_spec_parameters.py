@@ -1,7 +1,7 @@
 """A spec-prefixed route may take only query parameters the Lance Namespace spec defines.
 
-[[LH-021]]'s SECOND closing clause — "a spec client observes only spec-shaped responses there". Its
-sibling `test_the_spec_surface_carries_only_spec_operations.py` closed the ROUTE half and is
+[[LH-021]]'s SECOND closing clause — "a spec client observes only spec-shaped responses there". The
+ROUTE half is `test_spec_conformance.py::test_no_NEW_rask_route_appears_on_a_spec_prefix`, and it is
 structurally blind to this one: a route can be a perfectly legal spec operation and still advertise
 a parameter no spec client has vocabulary for.
 

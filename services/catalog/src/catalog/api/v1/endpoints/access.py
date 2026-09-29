@@ -310,11 +310,10 @@ async def my_project_permissions(id: str, client: FgaClientDep, settings: Settin
     GATED ON `member`, A BASE RUNG, and that is a deliberate departure worth reading. Every other
     surface here gates on a `can_*` action, but the `project` type defines NO reader-tier action — its
     whole action surface is `can_administer` / `can_create_warehouse` / `can_create_annotation_project`
-    / `can_grant_*` / `can_read_assignments`, all admin or member tier. I reached for
-    `can_get_metadata` by analogy with table and namespace; it does not exist on this type, and
-    `test_every_fga_relation_in_code_exists_in_the_compiled_model` caught it — OpenFGA rejects an
-    undefined relation with a 400 that fails closed to a 503 for every caller, so the analogy would
-    have made this endpoint permanently unavailable.
+    / `can_grant_*` / `can_read_assignments`, all admin or member tier. `can_get_metadata`, the
+    analogy with table and namespace, does not exist on this type, and OpenFGA rejects an undefined
+    relation with a 400 that fails closed to a 503 for every caller, so gating on it would make this
+    endpoint permanently unavailable.
 
     `member` is the reader-equivalent for this type: it is the tier ordinary tenant work already sits
     at (`can_create_annotation_project: member`), and a caller with no relationship to the project

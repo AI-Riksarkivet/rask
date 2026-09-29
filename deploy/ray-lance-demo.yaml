@@ -54,9 +54,8 @@ spec:
             # endpoint. `rask-minio` is what the chart renders whenever `minio.enabled`
             # (`chart/values.yaml:3306`), and it is what the running estate serves: measured
             # 2026-09-24, `svc/rask-minio` answers on 9000 and no `rask-rustfs-io` exists at all.
-            # A name here is a THIRD copy of a fact the chart already states, so it is pinned by
-            # `tests/unit/test_the_e2e_stack_names_objects_the_chart_renders.py`, which renders the
-            # chart and requires every workload this file names to be an object that render produced.
+            # A name here is a THIRD copy of a fact the chart already states, and nothing checks it
+            # against the render: a rename in the chart has to reach this file in the same change.
             - { name: S3_ENDPOINT, value: "http://rask-minio:9000" }
             # THE SCOPED COMPUTE CREDENTIAL, never the tenant root. This read "rustfsadmin" — the
             # RustFS root key — so re-applying this file silently reverted the credential scoping that

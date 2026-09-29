@@ -32,9 +32,8 @@ the same defect as reclaiming main, delivered as information instead of as delet
 The estate has paid for this twice. ``indices.py`` records why the spec index doors declare the field
 only to refuse it, and ``ff9604be`` fixed the destructive version: a branch-targeted
 ``drop_table_index`` was destroying MAIN's index and answering 200. The reindex door added on
-2026-09-15 reintroduced the pattern on a new route the same day, which is why the gate
-(``test_the_maintenance_doors_refuse_a_branch_they_cannot_honour``) is derived from the mounted routes
-rather than written door by door — a fifth verb inherits it without an edit.
+2026-09-15 reintroduced the pattern on a new route the same day, so every verb mounted here either
+answers about the ref it is given or refuses it; none may act on main in its place.
 """
 
 from __future__ import annotations
@@ -108,8 +107,8 @@ async def preview_maintenance(
 
     Previewing MAIN and labelling it the branch's answer is the failure this replaces, not a lesser
     version of it: the caller acts on the version list, so
-    ``test_the_gc_preview_previews_the_ref_the_request_names`` compares the ANSWER between refs rather
-    than asserting the branch reached ``open_dataset``."""
+    ``test_the_gc_preview_names_exactly_what_the_run_deletes.py`` compares the ANSWER, per ref, with
+    what ``/run`` deletes on that ref rather than asserting the branch reached ``open_dataset``."""
     segments = parse_identifier(id, settings.delimiter)
     ds = await run_in_threadpool(open_dataset, ns, so, segments, branch=branch)
     result = await run_in_threadpool(

@@ -161,8 +161,7 @@ RUN --network=none --mount=from=workload-builder,source=/opt/runner-venv,target=
 # is the platform's and therefore has lance. This image's interpreter is the WORKLOAD's and does not
 # (measured below), so a job script baked here would resolve to a python that cannot import lance and
 # die `ModuleNotFoundError` instead of `can't open file` — a worse failure, because it names the
-# module rather than the image. The union gate
-# `test_every_ray_job_script_is_BAKED_INTO_SOME_image` is satisfied by the cluster image.
+# module rather than the image. Every job script is baked into the cluster image.
 
 # The WORKLOAD venv wins on PATH, and that is the ONLY environment this image's default interpreter
 # has. Measured in the built image 2026-08-25:
@@ -199,8 +198,7 @@ ENV PATH=/opt/runner-venv/bin:$PATH \
 # NUMERIC, not `app`. The kubelet compares runAsNonRoot against a NUMBER, so a named user is
 # refused outright — `cannot verify user is non-root` — and the container never starts while its
 # previous pod keeps serving, so the deployment silently stops being able to roll. Same uid the
-# useradd above creates; only the spelling changes. Pinned by
-# tests/unit/test_invariants.py::test_an_image_the_chart_hardens_declares_a_NUMERIC_user
+# useradd above creates; only the spelling changes.
 USER 10001
 WORKDIR /app
 

@@ -31,5 +31,4 @@ DatasetParam = Annotated[str | None, Query(description="Dataset id (default DB w
 # is the change that removed them: the annotator's write routes now take `CurrentSubject`
 # (annotator/api/security.py), which is `anon` with OIDC off and the verified `sub` with it on,
 # with deliberately no header fallback. The gateway additionally strips `x-user` at the public edge
-# (`_CLIENT_SPOOFABLE`), so the header means nothing anywhere. Pinned by
-# `tests/unit/test_annotator_governed_auth.py::test_the_header_seam_itself_is_GONE`.
+# (`_CLIENT_SPOOFABLE`), so the header means nothing anywhere.

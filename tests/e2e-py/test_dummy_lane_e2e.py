@@ -56,9 +56,9 @@ PROJECT = os.environ.get("LANCE_E2E_PROJECT", "acme")
 #: RayService only under `singleTenant.enabled`; every other estate — including the k3s dev one —
 #: runs a plain Deployment, so this cannot be the only thing looked for. See `_head_pod`.
 RAY_SERVICE = os.environ.get("LANCE_E2E_RAY_SERVICE", "rask-ray")
-#: The fallback: the standalone head Deployment, spelled exactly as `test_ray_batch_e2e.py` spells
-#: it, because the two suites drive the same cluster and disagreeing about its name is how one of
-#: them silently stops running.
+#: The fallback: the standalone head Deployment, spelled exactly as `deploy/ray-lance-demo.yaml`
+#: names it, because disagreeing with the manifest about its name is how a suite silently stops
+#: running.
 RAY_HEAD_DEPLOY = os.environ.get("LANCE_E2E_RAY_HEAD_DEPLOY", "ray-lance-head")
 #: Where the JOB posts its provenance (in-cluster, from the head pod) and where the TEST reads it
 #: back (port-forwarded). Two different addresses for one service, which is the whole reason they
@@ -130,8 +130,8 @@ def _head_pod() -> str:
     to check the new image. That reasoning is sound, and it is why the RayService is tried first.
 
     What it got wrong was treating it as the ONLY shape. `chart/templates/rayservice.yaml` renders
-    only under `singleTenant.enabled`; the k3s dev estate runs a standalone `ray-lance-head`
-    Deployment, and `test_ray_batch_e2e.py` has always driven that one. So this suite asked for a
+    only under `singleTenant.enabled`; the k3s dev estate runs the standalone `ray-lance-head`
+    Deployment that `deploy/ray-lance-demo.yaml` defines. So this suite asked for a
     RayService named `rask-ray`, found none, and `pytest.skip`ped — reporting `3 passed, 4 skipped`
     and exit 0 while the lane it exists to prove was in fact broken (the image baked
     `ray_dummy_job.py` without `dummy_runner`, so every submission died `ModuleNotFoundError`).

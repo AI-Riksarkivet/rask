@@ -10,11 +10,10 @@ deployed estate 2026-09-10 by staging two probe events and reading the strand:
              AWS Error ACCESS_DENIED during PutObject operation: Access Denied"
 
 The chart's policy is not the bug. Its statement is named `DrainItsOwnOutboxAndNothingElse` and grants
-exactly `s3:DeleteObject` on `*/_lineage_outbox/*`, and
-`test_the_lineage_plane_writes_nothing_it_does_not_own.py` pins that lineage gets NO `PutObject`
-anywhere — measured against the source, because the only bytes lineage changes are these deletes.
-Widening the policy would grant a capability the service has no code to use AND leave a delete path
-that writes; the mechanism is what was wrong.
+exactly `s3:DeleteObject` on `*/_lineage_outbox/*`, and nothing in lineage's policy grants `PutObject`
+anywhere, because the only bytes lineage changes are these deletes. Widening the policy would grant a
+capability the service has no code to use AND leave a delete path that writes; the mechanism is what
+was wrong.
 
 WHY IT MATTERED MORE THAN A STRANDED OBJECT. `reconcile_cron` ingests, re-publishes, THEN drops. The
 first two succeeded, so every staged event was re-delivered to `lineage.events.v1` on every tick —

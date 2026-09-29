@@ -1467,10 +1467,12 @@ class LineageRepository:
         """Append one event to the durable feed on its OWN connection.
 
         A SEEDING PRIMITIVE WITH NO PRODUCTION CALLER, deliberately — the same shape as the registry's
-        `put_warehouse`/`put_project`, and pinned as such by
-        ``tests/unit/test_the_events_feed_has_one_door.py``. Every write that HAS a graph transaction to
-        join writes its feed row inside it (:meth:`ingest_event`, :meth:`backfill_write`), because a feed
-        row that can fail on its own is a feed that silently desynchronises from the graph it projects.
+        `put_warehouse`/`put_project`, though a method is beyond a banned-api entry's reach, so only
+        review keeps it that way. Every write that HAS a graph transaction to join writes its feed row
+        inside it (:meth:`ingest_event`, :meth:`backfill_write`), because a feed row that can fail on its
+        own is a feed that silently desynchronises from the graph it projects;
+        ``tests/e2e-py/test_lineage_e2e.py::test_a_failed_feed_write_takes_the_graph_write_with_it``
+        pins that for :meth:`ingest_event`.
         What is left for this method is writing a feed row with no graph write at all, which only the
         feed's own dedup tests need.
         """

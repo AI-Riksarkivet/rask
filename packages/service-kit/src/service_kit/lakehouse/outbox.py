@@ -130,9 +130,9 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     A DELETE MUST NEED ONLY DELETE PERMISSION, and through pyarrow it did not. `S3FileSystem.delete_file`
     re-creates the parent directory marker after removing the object, so this path issued a **PutObject**
     on the prefix — and the relay's identity is granted, deliberately and correctly, only
-    `s3:DeleteObject` on its own outbox (`rustfs-scoped-users.yaml`, and
-    `test_the_lineage_plane_writes_nothing_it_does_not_own.py` pins that it gets no `PutObject`
-    anywhere). So the drain had never once succeeded:
+    `s3:DeleteObject` on its own outbox (`chart/templates/minio-scoped-users.yaml`, statement
+    `DrainItsOwnOutboxAndNothingElse`; the policy grants lineage no `PutObject` anywhere). So the drain
+    had never once succeeded:
 
         lineage_outbox_event_stranded error="When creating key '_lineage_outbox/' in bucket
         'lance-catalog': AWS Error ACCESS_DENIED during PutObject operation" (measured 2026-09-10)

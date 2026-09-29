@@ -29,10 +29,10 @@ REPO = Path(__file__).resolve().parents[2]
 def _load(path: Path, name: str) -> Any:  # noqa: ANN401 — a by-path module has no static type
     """Load BY PATH: `scripts/` is not a workspace member, so it cannot be imported as a package.
 
-    The estate's existing convention for pinning a script's behaviour (`test_annotate.py`,
-    `test_lineage_emitters_share_one_wire_contract.py`), and it works here for the same reason it works
-    there — the module is deliberately stdlib-only. If it ever grows a dependency, this failing at load
-    is the correct signal that the premise changed.
+    The estate's existing convention for pinning a script's behaviour (`test_annotate.py` loads
+    `scripts/seed_annotations.py` the same way). It works here because the module is deliberately
+    stdlib-only. If it ever grows a dependency, this failing at load is the correct signal that the
+    premise changed.
     """
     spec = importlib.util.spec_from_file_location(name, path)
     assert spec and spec.loader

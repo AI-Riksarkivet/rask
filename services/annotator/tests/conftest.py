@@ -7,11 +7,11 @@ because the project actor is briefly unreachable"), so a test that reaches one d
 WAITS, the exception is swallowed, and the only symptom is time.
 
 MEASURED 2026-09-23. With `DAPR_HTTP_PORT` pointed at a dead port — which is what CI has —
-`test_task_history_is_bounded.py` runs past 300s and is killed, and
-`test_publish_token_after_credential_removal.py::test_the_idp_mint_is_still_the_configured_path`
-times out too. On a developer box both pass, because something answers on 127.0.0.1:3500; on this host
-that was a `fake_sidecar.py` left running for 57 days. A suite whose result depends on a stray local
-process is not measuring what it claims to, and `ms-test` had been red on exactly that difference.
+`test_task_history_is_bounded.py` runs past 300s and is killed, and a publish-token mint through
+`lakehouse.publish_token` times out too. On a developer box both complete, because something answers
+on 127.0.0.1:3500; on this host that was a `fake_sidecar.py` left running for 57 days. A suite whose
+result depends on a stray local process is not measuring what it claims to, and `ms-test` had been red
+on exactly that difference.
 
 REFUSING RATHER THAN STUBBING A RETURN VALUE, because the two are different claims. A stub that
 returns a mock says "the sidecar answered"; this says "an offline test must not ask". Every source
@@ -48,10 +48,10 @@ def refuse_sidecar_secret_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     """The OTHER sidecar door, and the one that actually hung the second file.
 
     `lakehouse.publish_token` calls `fetch_required_secrets` before it ever reaches the IdP URL, and
-    that goes to the Dapr secret store over the same 127.0.0.1:3500. Measured 2026-09-23:
-    `test_the_idp_mint_is_still_the_configured_path` timed out there, not on `https://idp.example` as
-    its own text suggests — the test asserts only that "any failure proves the branch was entered", so
-    a connect timeout satisfied it and hid which door was being knocked on.
+    that goes to the Dapr secret store over the same 127.0.0.1:3500. Measured 2026-09-23: a
+    publish-token mint timed out there, not on `https://idp.example`, and an assertion that "any failure
+    proves the branch was entered" is satisfied by that connect timeout, which hides which door was
+    being knocked on.
 
     Refusing makes that failure immediate and NAMED.
 

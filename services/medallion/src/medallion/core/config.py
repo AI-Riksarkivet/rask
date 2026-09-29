@@ -513,8 +513,7 @@ class MedallionSettings(OidcSettings, FgaSettings, BaseSettings):
         # flag chose between two enforcement points. The flag is gone, and generalising the check to
         # "every writing stage runner needs a catalog" would delete a mode the estate supports and pins:
         # an UNGOVERNED deployment writes to its configured URIs with no catalog at all
-        # (`test_an_ungoverned_deployment_still_uses_its_configured_URI`,
-        # `test_no_catalog_url_still_writes_to_its_configured_uri`). Such a stage runner writes and never
+        # (`test_no_catalog_url_still_writes_to_its_configured_uri`). Such a stage runner writes and never
         # promotes, which is correct: promotion is a tag move and there is no tag without a catalog.
         return self
 

@@ -293,7 +293,9 @@ async def handle_train_trigger(settings: MedallionSettings, event: Any, *, fga_c
         #
         # Every OTHER governed object gets its hierarchy edge from the create-door seed, and a third
         # writer would mean two services asserting one edge in shapes that can drift. That split is
-        # pinned by `tests/unit/test_invariants.py::test_only_the_sanctioned_writers_seed_a_hierarchy_edge`.
+        # held by the TID251 banned-api entry on `service_kit.governed.fga.hierarchy_edge_tuples`:
+        # `fga.py` defines it and the call below carries the entry's line-level `noqa`, so a third
+        # production caller fails ruff.
         #
         # Seeded BEFORE the submit and before the ack: an FGA outage then RETRYs rather than acking with
         # the link missing. Idempotent (duplicate writes are swallowed), so redelivery is free, and a

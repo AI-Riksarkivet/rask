@@ -16,10 +16,10 @@ THE ESTATE HAD ALREADY PAID FOR THIS EXACT BUG, six days earlier, and left a not
 service does nothing. Measured on the live estate: that is exactly what shipped when the settings and
 the gate landed without this line." I wrote the same shape into a third service without reading it.
 
-WHY X6'S OWN TEST COULD NOT SEE IT: `test_search_is_governed.py` overrides
-`security._deps.current_subject` and `security._deps.get_checker` to drive the decision — the two
-dependencies that would have 503'd. Overriding the thing under test is how a gate can be proven to
-DECIDE correctly while never being proven to be REACHED. So this file runs the real lifespan.
+WHY A DECISION TEST CANNOT SEE IT: a test that overrides `security._deps.current_subject` and
+`security._deps.get_checker` to drive the decision replaces exactly the two dependencies that would
+have 503'd. Overriding the thing under test is how a gate can be proven to DECIDE correctly while
+never being proven to be REACHED. So this file runs the real lifespan.
 
 The disposal half comes with it: the lifespan's `yield` was bare, so an exception past it skipped the
 resource loop, and the FGA client was never closed at all — the leak `service_kit.governed.fga.

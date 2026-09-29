@@ -780,11 +780,10 @@ async def undrop_namespace(
     bound = record.get("binding") or None
     if bound:
         warehouse_id = str(bound["warehouse_id"])
-        # THE DEACTIVATION GATE, and it is not optional — `test_no_warehouse_bucket_access_bypasses_the
-        # _deactivation_gate` refuses any module that reaches a warehouse bucket through
-        # `namespace_for_root` without one, and it caught this exact bypass when the re-resolve first
-        # landed. `get_namespace` gates every ordinary request this way; re-deriving the connection here
-        # steps around that dependency, so the check has to come with it.
+        # THE DEACTIVATION GATE, and it is not optional: every caller of `namespace_for_root` pairs it
+        # with one, or a quarantined warehouse's bucket stays reachable through that caller.
+        # `get_namespace` gates every ordinary request this way; re-deriving the connection here steps
+        # around that dependency, so the check has to come with it.
         #
         # Deactivation is offboarding step one, so recovering a subtree INTO a quarantined warehouse is
         # precisely what it exists to stop. Fail-closed on both failure kinds, symmetric with

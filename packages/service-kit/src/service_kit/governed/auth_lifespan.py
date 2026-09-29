@@ -4,9 +4,8 @@ WHY THIS EXISTS. Every service with a door carried its own ~30-line copy of this
 two mechanisms — and a duplicated bootstrap is one a fix cannot travel through. The estate has paid for
 that twice in the same shape: the ING-02 blocking-verify fix landed on the ingest copy of a duplicated
 auth function and never reached the medallion copy, and split-horizon discovery was written into five
-copies and omitted from the sixth (`tests/unit/test_oidc_discovery_parity.py`), where every
-service-to-service test passed anyway because the service-token path returns before the verifier is
-touched.
+copies and omitted from the sixth, where every service-to-service test passed anyway because the
+service-token path returns before the verifier is touched.
 
 THE POSTURES ARE PARAMETERS, and that is what makes the collapse honest rather than lossy. The copies
 were not stylistic variants; they encoded three decisions, and a single-posture helper is why ten of
@@ -20,10 +19,10 @@ them survived the first extraction:
     Measured live 2026-09-09: 1,256 models in the store, the oldest carrying no `pass_grants`,
     `managed_access` or `maintainer`, and three services running images whose vendored `model.fga` had
     no `maintainer` rung at all.
-    Pinned by `tests/unit/test_only_one_service_may_publish_the_authorization_model.py`. Older text
-    read `ingest` and `maintenance` pass
-    `False`: a data writer that mints a store and writes an authorization model becomes the source of
-    truth for everyone else's permissions. They resolve read-only and fail closed against an estate
+    Pinned by `packages/service-kit/tests/test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`,
+    and the TID251 banned-api entry on `service_kit.governed.fga.provision` keeps the call at one site.
+    `ingest` and `maintenance` pass `False` explicitly: a data writer that mints a store and writes an
+    authorization model becomes the source of truth for everyone else's permissions. They resolve read-only and fail closed against an estate
     that has not been bootstrapped. Reading which store exists is not authoring one, which is the
     distinction `fga.resolve` exists for.
   * **`fatal`** — whether a failed build takes the pod down. `catalog`, `lineage` and both medallion

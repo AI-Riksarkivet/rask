@@ -108,9 +108,7 @@ lane_values() {
 # `image.repository` is the REGISTRY; `image.catalog.repository` is a per-component NAME override —
 # two different kinds of value wearing one key name. `lance.catalogImage` feeds the second to
 # `rask.image` AS THE NAME, which prefixes the registry itself, so a registry-qualified value here
-# renders `localhost:5000/localhost:5000/lance-rest-catalog:dev`. Pinned by
-# `tests/unit/test_a_rendered_image_names_its_registry_once.py`, which reads these flags out of this
-# function so the gate cannot drift from what the lane actually passes.
+# renders `localhost:5000/localhost:5000/lance-rest-catalog:dev`.
 render() {
 	helm template "$RELEASE" "$ROOT/chart" \
 		--namespace "$NS" \

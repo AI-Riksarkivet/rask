@@ -1238,9 +1238,8 @@ tests:
 
   # ------------------------------------------------------------------------------------------------
   # Dapr workflow history retention. The threshold is 2851200s = 792h = the longest configured
-  # retention window (720h) plus a 72h collection margin; the coupling to values.yaml is held by
-  # test_the_workflow_history_alert_threshold_TRACKS_the_retention_policy, since rules.yml is mounted
-  # via .Files.Get and cannot be templated.
+  # retention window (720h) plus a 72h collection margin; the coupling to values.yaml is held by hand,
+  # since rules.yml is mounted via .Files.Get and cannot be templated.
   # ------------------------------------------------------------------------------------------------
 
   # A history row 33.5 days old — past 792h — held for 40 min. The scheduler has stopped collecting.

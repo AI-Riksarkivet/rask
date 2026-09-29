@@ -22,7 +22,7 @@ from tests.unit.test_invariants import _helm_template
 
 
 #: The split needs a queue: with no work topic there is nothing for a worker to consume, so the chart
-#: renders no worker at all. Pinned by `test_the_split_requires_a_queue`.
+#: renders no worker at all.
 _QUEUE = "maintenance.workTopic=maintenance.work.v1"
 
 

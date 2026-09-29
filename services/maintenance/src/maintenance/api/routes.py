@@ -53,18 +53,15 @@ log = logging.getLogger(__name__)
 # outlast the cron interval. Without this, the next tick starts a SECOND concurrent sweep and the two race
 # compact_files()/cleanup_old_versions() on the same datasets (concurrent commits + a GC deleting versions
 # the other is reading). Module-level asyncio.Lock created without binding a loop (py3.10+); with
-# ONE replica this is cluster-wide single-flight — which holds today, but not for the reason this comment
-# used to give. It cited `compactionReplicas=1 (values.yaml)`; that key EXISTS NOWHERE in the chart
-# (diff2 F10 item 7), so the citation was itself drift. What actually pins it is
-# `chart/templates/maintenance.yaml:47`, which HARDCODES `replicas: 1` — scaling is not reachable through
-# values at all, only by a kubectl scale or a template edit. So the lock is safe by accident of an
-# unparameterised template, and anyone who adds that values key without also making this lock
-# distributed silently gets two concurrent sweeps racing compact_files()/cleanup_old_versions() on the
-# same datasets. That coupling is now MECHANICAL rather than planned:
-# tests/unit/test_invariants.py::test_the_sweep_lock_is_only_correct_while_maintenance_CANNOT_scale
-# fails the moment `replicas` stops being a literal 1 while this lock is still an `asyncio.Lock`, so
-# parameterising the deployment forces the distributed-lock conversation instead of silently starting a
-# second concurrent sweep. (The guard keys on the LOCK, so replacing it lifts the restriction.)
+# ONE replica this is cluster-wide single-flight. What pins the one replica is
+# `chart/templates/maintenance.yaml`, which HARDCODES `replicas: 1` — scaling is not reachable through
+# values at all, only by a kubectl scale or a template edit — and rolls out with `Recreate`, so no surge
+# pod runs a second sweep mid-deploy. Anyone who parameterises the replica count without also making this
+# lock distributed silently gets two concurrent sweeps racing compact_files()/cleanup_old_versions() on
+# the same datasets.
+# `tests/unit/test_a_correctness_pinned_replica_does_not_surge.py::test_the_maintenance_deployment_uses_Recreate`
+# fails the moment the rendered deployment stops being one replica rolled out with `Recreate`. It reads
+# the render, not this lock, so a distributed lock is what would let that pin go.
 # The reconcile sweep does the same
 # with a pg advisory lock — maintenance is stateless (no DB), so an in-process lock is the analog. A tick
 # that finds a sweep already running SKIPS (does not queue): the running sweep already covers every dataset,

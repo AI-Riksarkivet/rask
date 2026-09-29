@@ -60,9 +60,8 @@ services:
   # THIRD ingress is the cron reconciler, whose overlap guard is an `asyncio.Lock`: per process. At
   # two replicas both pods tick, both read the same un-advanced cursor, and both walk the same rows —
   # double the FGA and actor load, silently, exactly when lineage or the sidecar is already slow.
-  # Enforced by tests/unit/test_invariants.py::test_notifications_stays_single_replica_while_its_
-  # single_flight_lock_is_process_local, which also states what would unblock it: a cross-pod guard
-  # that SKIPS (not an actor — actors are turn-based, so ticks would queue instead).
+  # Nothing but this note holds it at 1. What would unblock it is a cross-pod guard that SKIPS (not
+  # an actor — actors are turn-based, so ticks would queue instead).
   ingest:
     replicas: 2 # the run store is an explicitly NON-authoritative read-side index that falls back to the durable workflow engine on a miss
   compute:
@@ -213,7 +212,7 @@ maintenance:
   #
   # Relax it FURTHER only alongside `workTopic`: with the event lane off this cron IS the trigger, and
   # an hourly primary would leave a busy estate an hour behind. Never past 75 minutes: MaintenanceTableParked's
-  # 4h window must hold three periods plus ackWait (test_the_parked_table_alert_can_fire_at_the_sweep_cadence.py).
+  # 4h window must hold three periods plus ackWait, or the alert never fires.
   schedule: "0 0 * * * *" # hourly — the backstop under the event lane
   olderThanDays: 7
 

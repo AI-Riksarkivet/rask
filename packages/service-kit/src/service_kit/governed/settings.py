@@ -115,9 +115,7 @@ class FgaSettings:
         "deleted" that a running deployment can observe.
 
         (The retired spellings are deliberately not written out here. `RETIRED_AUTH_ENV_NAMES` builds
-        them from prefix-by-suffix precisely so no literal survives in the tree, which is what lets
-        `test_the_retired_names_are_gone_from_the_repository` scan every tracked file — prose
-        included — without needing an exemption list to be argued over.)
+        them from prefix-by-suffix precisely so no literal survives in the tree.)
 
         SCANS BOTH SOURCES pydantic-settings would read: the process environment AND the configured
         `env_file`. It checked only `os.environ` at first, justified by "every deployment path in this

@@ -196,7 +196,8 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
     was replaced by an Overwrite — must be a NON-RETRYABLE 400, never a 409/500/silent success. This is the
     P4 audit fix: a 409 "re-read and re-commit" would replay the stale fragments into a semantically-different
     (overwritten) table and CORRUPT it, so incompatible ≠ retryable-conflict. (The unit test
-    test_stale_append_after_overwrite_is_a_conflict pins the same taxonomy; this proves it end to end.)
+    `tests/unit/test_client_direct_commit.py::test_a_stale_read_version_after_an_overwrite_to_2_2_stays_the_NOT_retryable_400`
+    pins the same taxonomy; this proves it end to end.)
     """
     tok = _token("alice@example.com")
     st, m = _store_model()

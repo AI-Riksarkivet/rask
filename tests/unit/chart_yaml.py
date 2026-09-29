@@ -12,9 +12,8 @@ and instrumentation attributed ~57 % of `tests/unit`'s wall clock to that one pu
 two loaders were compared document-by-document on the same render and returned equal results, so this
 is a parser swap and not a semantic one.
 
-DEGRADING IS NOT THE SAME AS SAYING NOTHING: `test_the_chart_gate_parses_with_libyaml.py` asserts the
-fast loader is the one actually in use on THIS platform, so a machine that quietly lost libyaml reports
-it as one failing test rather than as a suite that got three times slower for no visible reason.
+DEGRADING COSTS TIME, NEVER CORRECTNESS: a platform without libyaml pays the 10x parse penalty above,
+which `pytest --durations` shows, and parses to the same result.
 """
 
 from __future__ import annotations
