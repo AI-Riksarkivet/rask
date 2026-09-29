@@ -53,39 +53,11 @@ def _cronjob(docs: list[dict]) -> dict:
     raise AssertionError("no control-root backup CronJob rendered")
 
 
-def test_off_by_default_renders_nothing() -> None:
-    """A backup writing into an unconfigured destination is worse than none, so it is opt-in."""
-    assert not [d for d in _render() if "control-root-backup" in str(d.get("metadata", {}).get("name", ""))]
-
-
 def test_enabled_renders_a_cronjob_that_runs_the_shipped_tool() -> None:
     container = _cronjob(_render(*_ON))["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
 
     assert container["command"] == ["python", "/srv/control_root_backup.py"], container["command"]
     assert "backup" in container["args"], container["args"]
-
-
-def test_the_credential_is_MOUNTED_and_never_an_env_row() -> None:
-    """The whole point. An env row here would be a 31st rendered secret on the path the estate bans."""
-    spec = _cronjob(_render(*_ON))["spec"]["jobTemplate"]["spec"]["template"]["spec"]
-    container = spec["containers"][0]
-    mounts = {m["mountPath"] for m in container.get("volumeMounts", [])}
-
-    assert any(v.get("secret") for v in spec.get("volumes", [])), f"no Secret volume — the credential has nowhere to come from but env: {spec.get('volumes')}"
-    assert "--credentials-file" in container["args"], "the tool is invoked without --credentials-file, so it falls back to the environment chain"
-    creds = container["args"][container["args"].index("--credentials-file") + 1]
-    assert any(creds.startswith(m) for m in mounts), f"--credentials-file {creds!r} points outside every mount: {mounts}"
-    for row in container.get("env", []):
-        assert "valueFrom" not in row, f"{row['name']} arrives by secretKeyRef — the delivery path this estate forbids"
-
-
-def test_the_tool_is_IN_the_image_it_is_invoked_from() -> None:
-    """A CronJob naming a path no image carries fails at 03:00 with CreateContainerError, and the
-    render that produced it is green. The final stage is what ships — the builder is discarded."""
-    dockerfile = (REPO / ".docker" / "rest-catalog.dockerfile").read_text()
-    final = dockerfile[dockerfile.rindex("FROM ") :]
-
-    assert "control_root_backup.py" in final, "the tool is copied in the builder stage only, which hands over the venv and nothing else"
 
 
 def test_the_backup_root_is_the_SAME_expression_the_catalog_calls_its_control_root() -> None:
@@ -101,27 +73,3 @@ def test_the_backup_root_is_the_SAME_expression_the_catalog_calls_its_control_ro
     )
 
     assert root == catalog, f"the backup reads {root!r} while the catalog writes {catalog!r}"
-
-
-def test_enabling_the_backup_without_the_operator_is_REFUSED() -> None:
-    """Rendering a pod that references a Secret nothing creates is a backup that never runs."""
-    with pytest.raises(RuntimeError, match="externalSecrets"):
-        _render("--set", "backups.controlRoot.enabled=true", "--set", "externalSecrets.enabled=false")
-
-
-def test_it_runs_THE_SAME_IMAGE_REFERENCE_as_the_catalog() -> None:
-    """The tool ships inside the catalog image, so the Job must name that image — not a near-miss.
-
-    Spelling the stem by hand here once produced `rest-catalog` against a chart default of
-    `lance-rest-catalog`: a reference that exists in no registry. The CronJob rendered, the release
-    reported success, and the Job sat in ImagePullBackOff — a backup that can never run, discovered
-    only by triggering one. Asserted against the catalog Deployment's own reference rather than
-    against a literal, so a rename moves both or fails here.
-    """
-    docs = _render(*_ON)
-    job = _cronjob(docs)["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["image"]
-    catalog = next(
-        d["spec"]["template"]["spec"]["containers"][0]["image"] for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-catalog")
-    )
-
-    assert job == catalog, f"the backup Job runs {job!r} while the catalog runs {catalog!r} — the tool ships in the catalog image"

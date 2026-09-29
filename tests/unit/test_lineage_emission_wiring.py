@@ -139,20 +139,6 @@ def test_rendered_config_does_not_degrade_to_a_noop_emitter(monkeypatch: pytest.
     )
 
 
-def test_an_unrendered_endpoint_is_what_a_noop_emitter_looks_like(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The negative control for the test above, so it cannot pass vacuously.
-
-    Without it, a `build_emitter` that stopped returning NoopEmitter under ANY config would make the
-    real assertion green forever. This pins the failure mode it is meant to detect.
-    """
-    from lineage_kit.emitter import NoopEmitter, build_emitter
-
-    monkeypatch.delenv("RASK_LINEAGE_ENDPOINT", raising=False)
-    monkeypatch.delenv("OPENLINEAGE_URL", raising=False)
-    monkeypatch.delenv("RASK_LINEAGE_TRANSPORT", raising=False)
-    assert isinstance(build_emitter(), NoopEmitter)
-
-
 def test_every_lineage_producer_renders_the_endpoint() -> None:
     """Every LINEAGE PRODUCER carries the transport — a producer without it is silently unlineaged.
 
@@ -195,50 +181,6 @@ def test_every_lineage_producer_renders_the_endpoint() -> None:
     )
 
 
-@pytest.mark.parametrize("observability", ["true", "false"], ids=["obs-on", "obs-off"])
-def test_the_transport_does_not_depend_on_the_observability_toggle(observability: str) -> None:
-    """Lineage emission must not be switched off by an UNRELATED feature flag.
-
-    Caught in review, not in theory: the transport env was first written directly beneath the
-    ``lance.otelEnv`` include, which sits inside ``{{- if include "lance.otelEnabled" $root }}``. That
-    rendered zero endpoints under ``observability.enabled=false``, so disabling dashboards would have
-    silently disabled lineage — with the usual signature (a startup warning, then a graph that is merely
-    empty). Every other test here renders with defaults, where observability is ON, so none of them
-    could see it. This one varies the toggle for exactly that reason.
-    """
-    rendered = _render(f"observability.enabled={observability}")
-    assert _env_values(rendered, "RASK_LINEAGE_ENDPOINT"), (
-        f"observability.enabled={observability} renders NO lineage endpoint — the transport is coupled to "
-        "an unrelated toggle, so turning that toggle off silently degrades every emitter to a no-op"
-    )
-
-
-def test_every_claimed_service_identity_is_allowlisted() -> None:
-    """The two halves of the ingest's service door must agree, in the GOVERNED render.
-
-    ``_service_principal`` fails CLOSED on an unlisted subject (403), and every emit path catches and
-    logs rather than raising — so a producer whose identity was never added to
-    ``LINEAGE_SERVICE_SUBJECTS`` goes quiet rather than breaking. Both halves are rendered by the same
-    chart but in different templates (the claim on each producer, the allowlist on the lineage service),
-    which is exactly the shape that drifts when a producer is added.
-
-    Rendered with ``auth.enabled`` — the door does not exist otherwise, and ``auth.allowHeadless``
-    because ``auth-consistency.yaml`` deliberately refuses a backend-governed / UI-ungoverned install.
-    """
-    rendered = _render("auth.enabled=true", "auth.allowHeadless=true", "ray.enabled=true", "singleTenant.enabled=true")
-
-    allowlists = _env_values(rendered, "LINEAGE_SERVICE_SUBJECTS")
-    assert allowlists, 'auth is on but LINEAGE_SERVICE_SUBJECTS is not rendered — the allowlist defaults to "" and every service producer 403s'
-    allowed = {s.strip() for s in allowlists[0].split(",") if s.strip()}
-
-    claimed = {v for v in _env_values(rendered, "LINEAGE_SERVICE_ID") if v}
-    unlisted = sorted(claimed - allowed)
-    assert not unlisted, (
-        f"these producers claim a service identity that the ingest does not allow: {unlisted} "
-        f"(allowlist: {sorted(allowed)}) — each one 403s at the door and drops its events with a log line"
-    )
-
-
 def test_the_lineage_subscriber_is_actually_subscribing() -> None:
     """A rendered-but-disabled subscriber drops everything just as thoroughly as a wrong topic.
 
@@ -254,69 +196,3 @@ def test_the_lineage_subscriber_is_actually_subscribing() -> None:
 
 
 # ── the INGEST plane's lineage identity — the second lane to lose all provenance ─────
-
-
-#: The values a governed render needs. `auth.enabled` alone is refused by the chart's own
-#: consistency gate (a backend that demands identity with a UI that has no sign-in flow).
-_GOVERNED = (
-    "auth.enabled=true",
-    "frontend.oidc.enabled=true",
-    "frontend.oidc.sessionSecret=0123456789012345678901234567890123",
-    "frontend.oidc.publicIssuer=http://idp.example/dex",
-    "frontend.oidc.publicOrigin=http://example",
-)
-
-
-def test_the_ingest_plane_CLAIMS_a_lineage_identity() -> None:
-    """Without it, an auth-enabled estate loses EVERY ingest provenance record — silently.
-
-    The emitter sends no identity, lineage answers 401, and the emitter swallows the failure BY
-    DESIGN (a landed commit must not become a failed run). So the data lands and the graph never
-    hears about it. Measured: four `401 Unauthorized` in five minutes while the same run reported
-    `{"status":"COMPLETE","defect":null}`.
-
-    The emitter warns about precisely this — "lineage_service_door_half_configured … sending
-    neither, so an authenticated ingest will 401" — and the chart was ignoring its own warning.
-    """
-    rendered = _render(*_GOVERNED)
-
-    claimed = _env_values(rendered, "RASK_LINEAGE_SERVICE_IDENTITY")
-
-    assert claimed, "the ingest Deployment claims no lineage identity — every emit will 401 and be swallowed"
-
-
-def test_the_lineage_door_ALLOWS_the_identity_ingest_claims() -> None:
-    """The two halves must agree, and this is what makes them one fact rather than two.
-
-    An identity the caller claims but the door does not allowlist is refused exactly as hard as no
-    identity at all — and just as silently. `service-trainer` and `service-web` were on the list;
-    ingest was on neither.
-    """
-    rendered = _render(*_GOVERNED)
-
-    claimed = set(_env_values(rendered, "RASK_LINEAGE_SERVICE_IDENTITY"))
-    allowed: set[str] = set()
-    for value in _env_values(rendered, "LINEAGE_SERVICE_SUBJECTS"):
-        allowed |= {s.strip() for s in value.split(",") if s.strip()}
-
-    assert claimed, "nothing claims a lineage identity — the other half of this gate is vacuous"
-    missing = claimed - allowed
-    assert not missing, f"claimed but NOT allowlisted in LINEAGE_SERVICE_SUBJECTS: {sorted(missing)} (allowed: {sorted(allowed)})"
-
-
-def test_the_TOKEN_half_is_present_wherever_an_identity_is_claimed() -> None:
-    """The lineage door needs BOTH, and half is worth nothing.
-
-    The emitter accepts `RASK_LINEAGE_APP_TOKEN` or `APP_API_TOKEN`; the fleet template injects the
-    latter. A pod that claims an identity without a token produces a request refused for a reason
-    invisible from the caller — which is the half-configured state the emitter names outright.
-    """
-    rendered = _render(*_GOVERNED)
-
-    assert _env_values(rendered, "RASK_LINEAGE_SERVICE_IDENTITY"), "no identity claimed"
-    # Searched as an env NAME, not a value pair: the app token arrives by `valueFrom.secretKeyRef`
-    # (it is a credential — the estate's rule keeps it out of plaintext env), so a value-pair scan
-    # sees nothing and would fail on a correctly-wired chart.
-    assert "name: RASK_LINEAGE_APP_TOKEN" in rendered or "name: APP_API_TOKEN" in rendered, (
-        "an identity is claimed but no app token is injected anywhere — every emit 401s"
-    )

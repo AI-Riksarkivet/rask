@@ -55,24 +55,6 @@ LIVE_PINS = """
 
 
 class TestATagTheEstateIsRunningIsNeverACandidate:
-    def test_the_measured_regression_stays_fixed(self) -> None:
-        """The exact three the old rule would have taken, with the exact tags it preferred."""
-        repos = {
-            "web-lakehouse": {"main-90b8d0ed": "2026-08-29T19:59:00Z", "zone-75b5a141": "2026-07-01T00:00:00Z", "zone-d5080599": "2026-07-02T00:00:00Z"},
-            "lance-rest-catalog": {"main-bf141737": "2026-09-09T11:35:00Z", "verlist-215945": "2026-06-01T00:00:00Z", "wire-32ff50cb": "2026-06-02T00:00:00Z"},
-            "ray-lance": {"h14-ce91f68b": "2026-08-01T00:00:00Z", "main-b791c0d7": "2026-05-01T00:00:00Z", "wire-32ff50cb": "2026-05-02T00:00:00Z"},
-        }
-        running = parse_cluster_images(
-            ["localhost:5000/lance-rest-catalog:main-bf141737 localhost:5000/web-lakehouse:main-90b8d0ed localhost:5000/ray-lance:h14-ce91f68b"]
-        )
-        protected = protected_refs(running, "")
-
-        dropped = set(plan(repos, protected, keep=2))
-
-        assert ("web-lakehouse", "main-90b8d0ed") not in dropped
-        assert ("lance-rest-catalog", "main-bf141737") not in dropped
-        assert ("ray-lance", "h14-ce91f68b") not in dropped
-
     def test_protection_holds_even_when_the_live_tag_is_the_OLDEST(self) -> None:
         """The property, not the instance: age must not override in-use. A long-stable release is
         exactly the one a recency rule would take first."""

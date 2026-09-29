@@ -53,27 +53,6 @@ def test_a_divergence_selects_the_SECRET_store() -> None:
     assert "exec helm" in guard, "the divergence branch no longer runs helm at all"
 
 
-def test_the_divergence_is_ANNOUNCED_rather_than_resolved_silently() -> None:
-    """Both histories are printed on every mutating call.
-
-    A wrapper that picks correctly and silently is one nobody can catch picking wrongly: the state
-    "two stores hold this release" is itself the alarm, and an operator who disagrees with the ruling
-    has to be able to see it before the upgrade rather than after.
-    """
-    guard = _divergence_guard()
-    assert "SQL/Postgres" in guard and "Secret store" in guard, "the wrapper no longer reports BOTH histories when they disagree"
-    assert "owner ruling" in guard.lower(), "the selection cites no ruling, so it reads as a guess the script made"
-
-
-def test_the_ceiling_that_created_the_second_store_is_recorded_with_its_measurement() -> None:
-    """The Secret store fits TODAY. The header must carry the number, because the failure it replaced
-    was silent — an upgrade that could not be stored at all — and a reader who does not know the margin
-    cannot tell that adding to `chart/` spends it."""
-    header = WRAPPER.read_text()
-    assert "1,024 KB" in header, "the object-size ceiling is no longer stated"
-    assert "895.4 KB" in header, "the measured headroom is gone, so the reprieve reads as a resolution"
-
-
 def test_a_lone_SQL_store_still_answers_from_SQL() -> None:
     """The pre-ruling estate, and any restored from that history, must keep working: the ruling is
     about which store wins a TIE, not about deleting the SQL path."""

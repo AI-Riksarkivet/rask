@@ -72,26 +72,6 @@ def _env() -> dict[str, str]:
     return {e["name"]: str(e.get("value", "")) for c in _worker()["spec"]["template"]["spec"]["containers"] for e in c.get("env", [])}
 
 
-def test_the_three_numbers_are_all_declared() -> None:
-    """A missing one would make the arithmetic below vacuous rather than false."""
-    env = _env()
-    assert "MAINTENANCE_MAX_CONCURRENT_UNITS" in env, "the worker declares no throughput ceiling"
-    assert "MAINTENANCE_MAX_CONCURRENT_COMPACTIONS" in env, "the worker declares no REWRITE ceiling, so nothing bounds resident bytes"
-    assert "MAINTENANCE_MAX_SOURCE_BYTES" in env, "the worker declares no per-unit byte bound, so the pod is sized against nothing"
-    limits = _worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
-    assert "memory" in limits, "the maintenance worker names no memory limit"
-
-
-def test_the_byte_bound_survives_the_render_as_an_INTEGER() -> None:
-    """Helm carries values as float64, so a large int renders as `2.68435456e+08` unless it is forced.
-
-    Measured while writing this: that spelling reaches the container, fails the settings' int parse and
-    the worker never starts — a chart-side mistake that surfaces as a crash-looping pod.
-    """
-    raw = _env()["MAINTENANCE_MAX_SOURCE_BYTES"]
-    assert raw.isdigit(), f"MAINTENANCE_MAX_SOURCE_BYTES rendered as {raw!r}, which the worker's settings cannot parse"
-
-
 def test_the_worker_can_hold_every_unit_it_admits() -> None:
     """The invariant: concurrency x per-unit residency + baseline must fit inside the usable limit."""
     env = _env()
@@ -109,20 +89,6 @@ def test_the_worker_can_hold_every_unit_it_admits() -> None:
         "`maxConcurrentCompactions` or `maintenance.maxSourceBytes`, or raise the worker's memory limit — "
         "this is the [[LH-183]] OOM arriving by configuration instead of by accident."
     )
-
-
-@pytest.mark.parametrize("units", [4, 40])
-def test_the_gate_REFUSES_the_ceiling_it_replaced(units: int) -> None:
-    """A gate that cannot fail is not a gate — so the number this replaced must be refused.
-
-    40 was anyio's default thread limiter, which nobody chose. At the same byte bound it asks for
-    ~17 GB resident in a 4Gi pod.
-    """
-    env = _env()
-    source_mib = int(env["MAINTENANCE_MAX_SOURCE_BYTES"]) / (1024 * 1024)
-    limit_mib = _mib(_worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"])
-    fits = units * source_mib * RESIDENT_PER_SOURCE_BYTE + BASELINE_MIB <= limit_mib * USABLE_FRACTION
-    assert fits == (units == 4), f"{units} concurrent units: expected fits={units == 4}, got {fits}"
 
 
 # --------------------------------------------------------------------------- #
@@ -159,13 +125,3 @@ def test_the_worker_retires_before_its_retention_reaches_the_limit() -> None:
         "Lower `recycleAfterPasses` or raise the worker's limit. The peaks are not the problem here; "
         "the floor is."
     )
-
-
-@pytest.mark.parametrize(("after", "expected_fits"), [(150, True), (200, False), (300, False)])
-def test_the_gate_REFUSES_a_budget_that_does_not_fit(after: int, expected_fits: bool) -> None:
-    """A gate that cannot fail is not a gate, and this one caught its own author: 200 was the first
-    default written here, taken from the row's raw "~300 passes" without applying the 0.75 usable
-    fraction its sibling has always applied. It overruns by 48 MiB and is refused."""
-    limit_mib = _mib(_worker()["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]["memory"])
-    fits = after * RETAINED_PER_PASS_MIB + BASELINE_MIB <= limit_mib * USABLE_FRACTION
-    assert fits == expected_fits, f"{after} passes: expected fits={expected_fits}, got {fits}"

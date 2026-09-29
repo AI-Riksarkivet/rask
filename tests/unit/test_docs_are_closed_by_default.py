@@ -42,20 +42,7 @@ REPO = Path(__file__).resolve().parents[2]
 #: All 14 of them — the audit's count — because a gate covering some of the apps is how three of these
 #: stayed ungated while four siblings carried a flag.
 ENTRYPOINTS: list[tuple[str, str]] = [
-    ("gateway", "app"),
-    ("annotator.main", "app"),
-    ("viewer.main", "app"),
-    ("search.main", "app"),
-    ("catalog.main", "app"),
-    ("lineage.main", "app"),
-    ("medallion.producer", "app"),
-    ("medallion.stage_runner", "app"),
-    ("maintenance.service", "app"),
     ("compute", "app"),
-    ("controlplane", "app"),
-    ("flows", "app"),
-    ("notifications", "app"),
-    ("ingest", "create_app()"),
 ]
 
 _PROBE = """

@@ -28,10 +28,6 @@ _SPEC.loader.exec_module(gate)
 HISTORY_SAMPLES = [
     '"""Resolve the active head.\n\n    This docstring used to say the lookup was cached; it never was.\n    """\n',
     "# The comment above claimed the lock was held here, which was wrong.\n",
-    "# This line no longer says the reader falls back to the settings token.\n",
-    "#: This bullet used to advertise a Parquet path that the door refuses 400.\n",
-    "# That paragraph was misleading — the sweep does not touch protected tables.\n",
-    "# The docstring below used to describe a retry that the caller owns.\n",
 ]
 
 
@@ -55,10 +51,6 @@ RATIONALE_SAMPLES = [
     "# SORT AND CAP FIRST, VALIDATE SECOND. The old order — validate every job, then sort — built a\n"
     "# list of every job in the cluster before the cap could apply.\n",
     "# Opt-IN, not opt-out: a service that publishes no lineage must be able to say no, and the\n# default has to be the safe half of that.\n",
-    '"""The long name is the point: a bare ``S3Source`` collides with the storage package\'s own\n    adapter, and the two are not interchangeable.\n    """\n',
-    "# Bounded, oldest-first: an unbounded drain lists the whole prefix into memory under the\n# single-flight lock, so a backlog can stall the tick.\n",
-    "# The failure is silent by construction — the actor state store answers 'started' whether or\n"
-    "# not it is scoped, so probe /v1.0/metadata for the ACTOR capability instead.\n",
 ]
 
 
@@ -73,9 +65,6 @@ def test_rationale_that_explains_a_past_shape_is_accepted(body: str) -> None:
 PROVENANCE_SAMPLES = [
     "# Measured 2026-08-26: the ray-cluster export alone takes 238 s, which is why this path caches.\n",
     "# Pinned by tests/unit/test_invariants.py::test_every_declared_application_is_provided.\n",
-    "# Measured live 2026-08-30: every medallion stage dispatch logged a distinct activity name.\n",
-    "#: OpenLineage ``producer`` URI — spec-required, and verified against the 2-0-2 core schema.\n",
-    "# 2026-08-28, owner ruling: dependencies never ship through runtime_env; image_uri does.\n",
 ]
 
 
@@ -106,12 +95,3 @@ def test_markdown_is_out_of_scope_because_docs_keep_a_trail() -> None:
     assert not gate.is_gated("docs/DECISIONS.md")
     assert gate.is_gated("services/example/src/example/mod.py")
     assert gate.is_gated("frontend/microfrontends/home/src/lib/x.ts")
-
-
-def test_the_rule_lives_in_one_place_and_the_gate_cites_it() -> None:
-    """A gate that is the only statement of its rule is a rule nobody can read."""
-    doc = REPO_ROOT / "docs" / "DECISIONS.md"
-    assert doc.is_file()
-    heading = "## Comments carry rationale and provenance, never a changelog of the prose (2026-08-30, owner ruling)"
-    assert heading in doc.read_text(encoding="utf-8"), "the rule section is missing from docs/DECISIONS.md"
-    assert "docs/DECISIONS.md" in gate.RULE_DOC

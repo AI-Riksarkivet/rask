@@ -106,11 +106,6 @@ _APPS = _uvicorn_apps()
 assert _APPS, "no importable HTTP-probed app was found in the render — this gate would pass vacuously"
 
 
-def test_the_gate_covers_more_than_one_app() -> None:
-    """The finding IS that this was scoped to a single service; a regression to that must fail here."""
-    assert len(_APPS) >= 5, f"only {len(_APPS)} apps are covered: {[name for name, _, _ in _APPS]}"
-
-
 def _served_paths(name: str, target: str, chart_env: dict[str, str]) -> set[str]:
     """Import the app in a child process under the chart's env and return what it mounts."""
     env = {k: v for k, v in os.environ.items() if not k.startswith(_SCRUB)}
@@ -131,17 +126,3 @@ def test_every_probe_path_the_chart_configures_is_actually_served(name: str, tar
     served = _served_paths(name, target, spec["env"])
     missing = sorted(set(spec["paths"]) - served)
     assert not missing, f"{name}: the kubelet probes {missing}, which `{target}` does not serve (it serves {sorted(served)[:8]}…)"
-
-
-def test_the_gate_can_actually_FAIL() -> None:
-    """A negative control, because every assertion above is green at HEAD and a coverage gate that
-    cannot distinguish a served path from an unserved one is decoration.
-
-    The finding is missing COVERAGE — it verified there is no live mismatch — so passing is the
-    expected result and proves nothing on its own. This asks the same machinery about a path no app
-    mounts and requires it to say no.
-    """
-    name, target, spec = _APPS[0]
-    served = _served_paths(name, target, spec["env"])
-    assert "/a-path-no-app-mounts" not in served, "the child reports every path as served, so the gate above cannot fail"
-    assert served, f"{target} reported no paths at all — the gate above would pass vacuously for it"

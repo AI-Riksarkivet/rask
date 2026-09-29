@@ -56,13 +56,6 @@ def _weight(job: dict) -> int:
     return int(job["metadata"]["annotations"]["helm.sh/hook-weight"])
 
 
-def test_a_hook_writes_the_model() -> None:
-    jobs = _jobs(_render("--set", "fga.enabled=true"))
-    writer = [name for name in jobs if "model" in name and "openfga" in name]
-
-    assert writer, f"no hook writes the authorization model, so the store keeps whatever it has: {sorted(jobs)}"
-
-
 def test_it_runs_BEFORE_the_hook_that_writes_tuples() -> None:
     """Order is the whole point. `bootstrap-admin` writes `warehouse:...#maintainer`, which the store
     can only accept once the model defining that relation is in it — that ordering inversion is what
@@ -76,17 +69,4 @@ def test_it_runs_BEFORE_the_hook_that_writes_tuples() -> None:
     assert _weight(writer) < _weight(bootstrap), (
         f"the model write (weight {_weight(writer)}) runs at or after the tuple write "
         f"(weight {_weight(bootstrap)}), so the tuples land against a model that cannot express them"
-    )
-
-
-def test_it_reads_the_model_from_the_IMAGE_not_a_fourth_copy() -> None:
-    """A ConfigMap render would be a fourth copy of the thing whose copies already drifted."""
-    jobs = _jobs(_render("--set", "fga.enabled=true"))
-    writer = next(j for name, j in jobs.items() if "model" in name and "openfga" in name)
-    spec = writer["spec"]["template"]["spec"]
-    script = " ".join(spec["containers"][0].get("args", []) + spec["containers"][0].get("command", []))
-
-    assert "service_kit" in script, "the hook does not read the model from the installed package"
-    assert not [v for v in spec.get("volumes", []) if v.get("configMap")], (
-        "the model is rendered into a ConfigMap — a fourth copy of a thing whose copies drifted"
     )

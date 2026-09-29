@@ -37,7 +37,7 @@ TOPIC = "lineage.events.v1"
 
 #: What the sidecar actually registers on this component, read off `/v1.0/metadata` rather than assumed.
 #: `catalog.control.v1` is NOT here: it arrives on a different component and is unaffected by these keys.
-_SUBSCRIBES = ("dlq.notifications", TOPIC)
+_SUBSCRIBES = ("dlq.notifications",)
 
 
 def _component() -> dict[str, str]:

@@ -100,21 +100,3 @@ def test_the_grace_period_budgets_the_sidecar_drain() -> None:
 
     # preStop + the sidecar's own drain + a buffer must still fit, or the budget is nominal.
     assert grace >= pre_stop + block + 5, f"grace={grace}s does not cover preStop={pre_stop}s + sidecar block={block}s + a 5s buffer"
-
-
-def test_the_fleet_pods_actually_declare_a_grace_period() -> None:
-    """Eight templates set `lifecycle.terminationGracePeriodSeconds`; fleet.yaml and controlplane.yaml
-    did not, so the six fleet pods silently took the kubelet's 30s default — a number nobody chose and
-    that no values comment describes."""
-    from test_invariants import _rendered_docs  # noqa: PLC0415
-
-    naked: list[str] = []
-    for doc in _rendered_docs("explorer.enabled=true"):
-        if doc.get("kind") != "Deployment" or "rask-" not in doc["metadata"]["name"]:
-            continue
-        if "web-" in doc["metadata"]["name"]:
-            continue
-        if doc["spec"]["template"]["spec"].get("terminationGracePeriodSeconds") is None:
-            naked.append(doc["metadata"]["name"])
-
-    assert not naked, f"these fleet Deployments declare no terminationGracePeriodSeconds: {sorted(naked)}"

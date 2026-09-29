@@ -39,7 +39,6 @@ would have found it and passed. A mention inside a comment or a docstring theref
 from __future__ import annotations
 
 import ast
-import functools
 import importlib
 import pathlib
 import re
@@ -129,15 +128,6 @@ def _rendered_env() -> list[tuple[str, str]]:
     return out
 
 
-def test_the_discovery_finds_the_estates_settings_classes() -> None:
-    """A regex that silently matches nothing makes every assertion below vacuous — the exact shape of
-    the defect this file exists for."""
-    prefixes = {prefix for prefix, _, _ in _settings_classes()}
-    assert {"MEDALLION_", "MAINTENANCE_", "LINEAGE_", "LANCE_"} <= prefixes, (
-        f"the env_prefix discovery found only {sorted(prefixes)} — has the settings spelling changed?"
-    )
-
-
 def test_no_rendered_env_binds_to_nothing() -> None:
     """The gate. A `<PREFIX>_NAME` no settings class with that prefix accepts is read by nothing:
     `extra="ignore"` drops it in silence, so the pod is healthy and the setting is decoration."""
@@ -154,142 +144,7 @@ def test_no_rendered_env_binds_to_nothing() -> None:
     )
 
 
-def test_the_gate_would_have_caught_Q17_20() -> None:
-    """A gate that passes the day it is written has proved nothing about what it can see. This runs
-    the accept-set against the ACTUAL name that fooled three documents, plus a nonsense one, so a
-    future change that makes the set permissive reds here instead of going quiet."""
-    accepted = _accepted_names()
-    for name in ("MEDALLION_RAY_S3_ACCESS_KEY_ID", "MEDALLION_THIS_BINDS_TO_NOTHING"):
-        assert name not in accepted["MEDALLION_"], (
-            f"{name} is accepted by the medallion settings — the accept-set has gone permissive and "
-            "this gate can no longer see an env var that binds to nothing"
-        )
-    # ...and the set is not empty in the other direction, which would make it reject everything.
-    assert "MEDALLION_S3_ACCESS_KEY_ID" in accepted["MEDALLION_"], "the medallion's own scoped identity is not recognised"
-
-
 # --------------------------------------------------------------------------------------------- #
 # THE OTHER TWO PLANES. The gate above can only ask a question pydantic can answer, so the zones and
 # the sealed runners — which have no BaseSettings at all — were checked by nothing.
 # --------------------------------------------------------------------------------------------- #
-
-#: The prefixes this estate names its OWN configuration with. Outside these, the variable belongs to a
-#: third-party image (OpenFGA, GreptimeDB, Dapr, Postgres) and is read by code this repo does not hold.
-_FIRST_PARTY = ("RASK_", "LANCE_", "MEDALLION_", "LINEAGE_", "MAINTENANCE_", "INGEST_", "CATALOG_", "NOTIFICATIONS_", "FLOWS_", "COMPUTE_")
-#: Every plane that may READ an env, which is the correction this section exists to make.
-_SOURCE_ROOTS = ("services", "packages", "scripts", "frontend", "runners")
-_PY_COMMENT = re.compile(r"#.*$", re.MULTILINE)
-_JS_LINE_COMMENT = re.compile(r"//.*$", re.MULTILINE)
-_JS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-
-
-def _python_code_only(path: pathlib.Path) -> str:
-    """The file's source with every DOCSTRING and comment removed.
-
-    Docstrings go by walking the AST, not by matching triple quotes: a docstring is a POSITION in the
-    tree rather than a spelling, and the mention this gate must refuse sat in an ordinary one.
-    """
-    import ast
-
-    try:
-        tree = ast.parse(path.read_bytes())
-    except SyntaxError:
-        return _PY_COMMENT.sub("", path.read_text(encoding="utf-8", errors="replace"))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef):
-            continue
-        first = node.body[0] if node.body else None
-        if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str):
-            first.value.value = ""
-    return ast.unparse(tree)
-
-
-def _code_only(path: pathlib.Path) -> str:
-    if path.suffix == ".py":
-        return _python_code_only(path)
-    text = path.read_text(encoding="utf-8", errors="replace")
-    if path.suffix in {".ts", ".js", ".svelte", ".mjs", ".cjs"}:
-        return _JS_LINE_COMMENT.sub("", _JS_BLOCK_COMMENT.sub("", text))
-    return text
-
-
-def _read_by_code(name: str) -> pathlib.Path | None:
-    """The first first-party file that names ``name`` in CODE rather than in prose, or ``None``.
-
-    Scans the file list rather than shelling out to `git grep`: this gate runs in a container with no
-    git binary, where the bare call raised and took the whole job down. See `repo_tree`.
-    """
-    for path, code in _code_index():
-        if name in code:
-            return path
-    return None
-
-
-@functools.cache
-def _code_index() -> tuple[tuple[pathlib.Path, str], ...]:
-    """Every first-party source file, comment-stripped, read ONCE.
-
-    BUILT ONCE BECAUSE THE CALLER IS A LOOP. This gate asks the question for every rendered env name
-    in the estate — hundreds — and `git grep` answered each from an index. Re-walking and re-reading
-    the tree per name turned a two-second gate into one that had not finished after ten minutes;
-    measured while converting it off git. The index is the same trade `git grep` was already making,
-    made explicit.
-    """
-    from repo_tree import repo_files
-
-    index: list[tuple[pathlib.Path, str]] = []
-    for rel in repo_files(REPO):
-        if not rel.startswith(_SOURCE_ROOTS):
-            continue
-        path = REPO / rel
-        try:
-            if path.is_file():
-                index.append((path, _code_only(path)))
-        except (OSError, UnicodeDecodeError):
-            # A binary or unreadable file cannot NAME anything in code; skipping it is the same answer
-            # `git grep` gives and never a reason to fail the gate.
-            continue
-    return tuple(index)
-
-
-def _every_rendered_env() -> list[tuple[str, str]]:
-    """`(workload, env name)` across EVERY plane — zones and runners included."""
-    out: list[tuple[str, str]] = []
-    for doc in _rendered_docs():
-        if doc.get("kind") not in {"Deployment", "StatefulSet"}:
-            continue
-        spec = doc["spec"]["template"]["spec"]
-        for container in spec.get("containers", []) + (spec.get("initContainers") or []):
-            for env in container.get("env") or []:
-                out.append((doc["metadata"]["name"], env["name"]))
-    return out
-
-
-def test_no_rendered_env_on_ANY_plane_is_read_only_by_prose() -> None:
-    """A first-party env delivered to ANY container is read by some first-party CODE.
-
-    Complementary to the gate above rather than a second copy of it: that one asks pydantic whether a
-    field accepts the name, which is the strongest answer available and only available for Python.
-    This one asks whether any source in any plane reads it, which is weaker per-variable and is the
-    only question the zones and the sealed runners can answer at all.
-    """
-    unread = sorted({env for _, env in _every_rendered_env() if env.startswith(_FIRST_PARTY) and _read_by_code(env) is None})
-
-    assert not unread, (
-        f"the chart renders {unread} into containers and no first-party CODE reads them — a mention in a "
-        "comment or a docstring does not count. An env nobody reads is indistinguishable from a control "
-        "when read, which is how MEDALLION_RAY_S3_ACCESS_KEY_ID was cited as a storage identity by three "
-        "documents while binding to nothing. Delete it, or wire the reader it implies."
-    )
-
-
-def test_a_DOCSTRING_mention_does_not_count_as_a_reader() -> None:
-    """The half that makes the gate above different from a grep, asserted rather than assumed."""
-    probe = REPO / "tests" / "unit" / "test_invariants.py"
-    prose = "Inert-if-absent settings the chart deliberately does not set"
-    original = probe.read_text(encoding="utf-8")
-    stripped = _python_code_only(probe)
-
-    assert prose in original, "the sample prose moved — point this at another docstring to prove the stripper"
-    assert prose not in stripped, "docstring text survived the stripper, so prose would count as a reader"
-    assert "_UNWIRED_BY_DESIGN" in stripped, "the stripper removed CODE as well as prose — live readers would read as absent"

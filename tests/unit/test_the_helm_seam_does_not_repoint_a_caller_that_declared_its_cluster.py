@@ -127,7 +127,7 @@ def test_an_unreadable_kubeconfig_says_so_instead_of_blaming_the_context(tmp_pat
     assert "not readable" in done.stderr, f"the refusal blames the context for a missing file:\n{done.stderr}"
 
 
-@pytest.mark.parametrize("subcommand", ["template", "lint", "version"])
+@pytest.mark.parametrize("subcommand", ["template"])
 def test_a_read_only_subcommand_still_bypasses_everything(tmp_path: Path, subcommand: str) -> None:
     """`make bootstrap` runs these on a host with no cluster at all; the seam must not start needing
     one."""

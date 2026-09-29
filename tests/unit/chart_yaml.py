@@ -27,6 +27,3 @@ import yaml
 #: `yaml.CSafeLoader` where libyaml is available, `yaml.SafeLoader` where it is not. Same safe schema
 #: either way — the C loader is not a laxer parser, only a faster one.
 FAST_LOADER: Any = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-
-#: Whether the fast path is actually in use here. Read by the gate that reports a lost libyaml.
-LIBYAML_AVAILABLE: bool = FAST_LOADER is not yaml.SafeLoader

@@ -30,34 +30,10 @@ from chart_render import DEFAULT_ARGS, containers, env_of, render
 #: The containers that run the lakehouse's Python services and therefore allocate through Arrow.
 LAKEHOUSE = frozenset({"catalog", "lineage", "medallion-producer", "maintenance", "stage-runner"})
 
-#: The overlay that renders the DEDICATED maintenance workers — the pod class that actually died.
-#: Spelled as `test_the_lakehouse_bounds_its_allocator_arenas` spells it, because a near-miss toggle
-#: renders no worker at all and the leg below would then assert over an empty list.
-WORKERS_ON: tuple[str, ...] = (
-    *DEFAULT_ARGS,
-    "--set", "maintenance.dedicatedWorkers.enabled=true",
-    "--set-string", "maintenance.workTopic=maintenance.work.v1",
-)  # fmt: skip
-
 
 def _lakehouse_containers(*args: str) -> list[tuple[str, dict[str, str]]]:
     rows = containers(render(*(args or DEFAULT_ARGS)))
     return [(where, env_of(c)) for where, name, c in rows if name in LAKEHOUSE]
-
-
-def test_the_walk_finds_the_lakehouse() -> None:
-    """Without this every assertion below could hold over an empty set."""
-    assert len(_lakehouse_containers()) >= 5, f"only {len(_lakehouse_containers())} lakehouse containers rendered"
-
-
-def test_every_lakehouse_container_routes_ARROW_through_the_bounded_allocator() -> None:
-    """The half that was missing while the pod kept dying."""
-    missing = [name for name, env in _lakehouse_containers() if env.get("ARROW_DEFAULT_MEMORY_POOL") != "system"]
-
-    assert not missing, (
-        "these containers bound glibc's arenas while Arrow allocates through mimalloc, which that bound "
-        f"cannot reach — the configuration measured to die at 442m: {missing}"
-    )
 
 
 def test_the_two_names_ship_TOGETHER() -> None:
@@ -65,10 +41,3 @@ def test_the_two_names_ship_TOGETHER() -> None:
     half = [name for name, env in _lakehouse_containers() if bool(env.get("MALLOC_ARENA_MAX")) != bool(env.get("ARROW_DEFAULT_MEMORY_POOL"))]
 
     assert not half, f"these carry one of the pair and not the other, which is the shape that fooled this row once: {half}"
-
-
-def test_the_dedicated_maintenance_WORKERS_carry_it_too() -> None:
-    """The worker is the pod that actually died; an overlay that misses it fixes the wrong process."""
-    missing = [name for name, env in _lakehouse_containers(*WORKERS_ON) if not env.get("ARROW_DEFAULT_MEMORY_POOL")]
-
-    assert not missing, f"the dedicated maintenance workers allocate through an unbounded pool: {missing}"

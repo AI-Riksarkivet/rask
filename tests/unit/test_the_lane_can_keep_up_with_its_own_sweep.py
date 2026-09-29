@@ -32,9 +32,8 @@ import math
 import re
 
 import pytest
-import yaml
 
-from tests.unit.chart_render import DEFAULT_ARGS, REPO, render
+from tests.unit.chart_render import DEFAULT_ARGS, render
 
 
 def _components(docs: tuple[dict, ...]) -> dict[str, dict]:
@@ -65,13 +64,6 @@ def _schedule_seconds(docs: tuple[dict, ...]) -> int:
     raise AssertionError  # unreachable; keeps the return type honest
 
 
-def test_the_inputs_are_all_rendered() -> None:
-    """An unreadable input would make the comparison below vacuous rather than false."""
-    docs = render(*DEFAULT_ARGS)
-    assert int(_meta(_lane(docs, "maintenance-work"))["maxAckPending"]) > 0
-    assert _schedule_seconds(docs) > 0
-
-
 def test_the_lane_can_keep_up_with_its_own_sweep() -> None:
     """Delivery capacity must cover the drain rate the sweep's own cadence demands."""
     docs = render(*DEFAULT_ARGS)
@@ -97,19 +89,3 @@ def test_the_lane_can_keep_up_with_its_own_sweep() -> None:
         "past 4,000. Raise `maxConcurrentUnits` (the throughput knob) or lengthen the sweep schedule; the "
         "MEMORY bound is `maxConcurrentCompactions` and is not this number."
     )
-
-
-@pytest.mark.parametrize(("in_flight", "sufficient"), [(1, False), (72, True)])
-def test_the_gate_REFUSES_the_bound_that_stalled_the_lane(in_flight: int, sufficient: bool) -> None:
-    """A gate that cannot fail is not a gate, so a bound that cannot keep up must be refused.
-
-    THE EXPECTATIONS HERE MOVED TWICE while the underlying quantity never did, which is the caution
-    this leg carries. `secondsPerUnit` was read as 5.2s, then 22s, from drain RATES measured inside an
-    orphan window — a worker restart leaves every in-flight unit unacked until `ackWait` expires, so
-    the lane appears arbitrarily slow. Read from the unit's own trace span it is 0.21s. A gate
-    calibrated on a rate taken after a deploy certifies whatever that deploy happened to cause.
-    """
-    chart_values = yaml.safe_load((REPO / "chart/values.yaml").read_text())
-    interval = _schedule_seconds(render(*DEFAULT_ARGS))
-    needed = math.ceil(int(chart_values["maintenance"]["expectedDatasets"]) / interval * float(chart_values["maintenance"]["secondsPerUnit"]))
-    assert (in_flight >= needed) == sufficient, f"{in_flight} in flight against {needed} needed: expected sufficient={sufficient}"

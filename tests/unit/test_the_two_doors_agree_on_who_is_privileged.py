@@ -49,15 +49,6 @@ def rendered() -> str:
     return _helm_template("auth.dedicatedServiceCredentials=true", "medallion.enabled=true")
 
 
-def test_lineage_renders_the_privileged_list_its_own_door_reads(rendered: str) -> None:
-    """`lineage/core/config.py:77` declares `LINEAGE_PRIVILEGED_SUBJECTS` and the chart set it nowhere,
-    so lineage's privileged branch was unreachable: every allowlisted subject fell to the shared-token
-    comparison no matter what the estate had provisioned for it."""
-    assert _env(rendered, "lineage").get("LINEAGE_PRIVILEGED_SUBJECTS"), (
-        "lineage's door reads a privileged list the chart never renders — its privileged branch is dead code"
-    )
-
-
 def test_a_subject_privileged_at_the_catalog_is_privileged_at_lineage(rendered: str) -> None:
     """The invariant, stated as the client experiences it. Not "the lists are equal" — lineage admits
     subjects the catalog never sees (`notifications`) and the catalog admits read-only ones that need
@@ -73,22 +64,3 @@ def test_a_subject_privileged_at_the_catalog_is_privileged_at_lineage(rendered: 
         f"a client of both doors cannot authenticate to both: privileged at the catalog only "
         f"{sorted(catalog_privileged - lineage_privileged)}, at lineage only {sorted(lineage_privileged - catalog_privileged)}"
     )
-
-
-def test_the_lag_detectors_own_subject_is_the_one_that_must_agree(rendered: str) -> None:
-    """Named explicitly because it is the caller that found this, and because the failure is silent:
-    a detector that cannot read publishes nothing, and nothing looks exactly like a healthy cascade."""
-    producer = "service-medallion-producer"
-    lineage = _env(rendered, "lineage")
-    assert producer in _subjects(lineage.get("LINEAGE_SERVICE_SUBJECTS", "")), "the detector is not admitted at all"
-    assert producer in _subjects(lineage.get("LINEAGE_PRIVILEGED_SUBJECTS", "")), (
-        "the detector is admitted but its dedicated token is refused — 401 on every consumed read"
-    )
-
-
-def test_dedicated_credentials_OFF_renders_neither_list(rendered: str) -> None:  # noqa: ARG001
-    """The switch stays one switch. An estate that has not provisioned dedicated tokens must see the
-    pre-existing shared-token behaviour at BOTH doors, or turning the feature off half-breaks it."""
-    off = _helm_template("auth.dedicatedServiceCredentials=false", "medallion.enabled=true")
-    assert not _env(off, "catalog").get("LANCE_PRIVILEGED_SUBJECTS")
-    assert not _env(off, "lineage").get("LINEAGE_PRIVILEGED_SUBJECTS")

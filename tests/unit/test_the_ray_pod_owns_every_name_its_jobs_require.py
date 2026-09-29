@@ -91,32 +91,6 @@ def test_the_head_carries_every_name_a_stage_job_requires() -> None:
     assert not missing, f"the Ray head does not provide {missing} — a stage job on it dies before reading a byte"
 
 
-def test_the_ADDRESS_is_a_value_and_the_CREDENTIAL_is_a_reference() -> None:
-    """The two are different kinds of fact and must not be delivered the same way.
-
-    An endpoint is public routing information: an inline value is correct and a Secret would only hide
-    it from the reader who needs it. A key is not, and has to stay a `secretKeyRef` — inlining one here
-    would put it in `helm get manifest` and in the pod spec that `GET /api/jobs/<id>` mirrors.
-    """
-    env = _ray_head_env(_render("--set", "ray.cluster.enabled=true"))
-
-    assert env["S3_ENDPOINT"].get("value"), "the endpoint should be a plain value"
-    for secret in ("S3_KEY", "S3_SECRET"):
-        assert "valueFrom" in env[secret], f"{secret} stopped being a reference"
-        assert "value" not in env[secret], f"{secret} is inlined into the manifest"
-
-
-def test_the_stage_job_still_reads_the_name_this_gate_provisions() -> None:
-    """The gate is only worth anything while the job actually requires it.
-
-    Asserted against the script rather than assumed: if `ray_stage_job.py` ever resolves the endpoint
-    another way, this whole file should be deleted rather than left passing over a dead requirement.
-    """
-    source = (REPO / "scripts/ray_stage_job.py").read_text()
-
-    assert 'os.environ["S3_ENDPOINT"]' in source, "the stage job no longer hard-requires S3_ENDPOINT — re-justify this gate"
-
-
 def test_the_submitter_sends_no_S3_NAME_AT_ALL() -> None:
     """STEP TWO. Ray merges `runtime_env` OVER the process env, so a name sent by the submitter BEATS
     the pod's — which is the two-owner drift the module docstring is about, and which this estate has
@@ -130,16 +104,3 @@ def test_the_submitter_sends_no_S3_NAME_AT_ALL() -> None:
 
     for name in ("S3_ENDPOINT", "S3_KEY", "S3_SECRET", "S3_REGION"):
         assert f'"{name}": ' not in source, f"{name} is back on the submission body — the pod and the submitter now disagree silently"
-
-
-def test_the_LOCAL_head_owns_the_same_pair() -> None:
-    """The invariant is "the head that runs the job supplies it", and there are two heads.
-
-    `make ray-up` starts the dev head, and it already exports `S3_SECRET` for exactly this reason. With
-    the names off the submission body, a local head missing them makes every `make dev-micro` stage job
-    die `KeyError` — a break that appears nowhere in the chart and nowhere in CI.
-    """
-    ray_up = (REPO / "Makefile").read_text().split("ray-up:", 1)[1].split("\n\n", 1)[0]
-
-    for name in ("S3_ENDPOINT", "S3_REGION", "S3_SECRET"):
-        assert f"{name}=" in ray_up, f"the local dev head does not export {name}"

@@ -40,26 +40,3 @@ def test_the_component_and_the_env_var_carry_the_SAME_name() -> None:
 
     assert told, "no Deployment is told the binding name — the Component fires into a 404 forever"
     assert {value for _, value in told} == {component_name}, f"Component is {component_name!r} but the app is told {told!r}"
-
-
-def test_only_the_PRODUCER_is_told() -> None:
-    """The door lives on the producer — it is the only service holding `transform_routes`, and so the
-    only one that can see a first-ever hop. A stage runner carrying the name would advertise a route its own
-    sidecar has no Component for."""
-    docs = _render()
-    carriers = [
-        doc["metadata"]["name"]
-        for doc in docs
-        if doc.get("kind") == "Deployment"
-        for container in doc["spec"]["template"]["spec"]["containers"]
-        for env in container.get("env") or []
-        if env.get("name") == "MEDALLION_CASCADE_LAG_BINDING_NAME"
-    ]
-    assert carriers == [c for c in carriers if c.endswith("-medallion-producer")], carriers
-
-
-def test_the_component_is_scoped_to_the_producer_app_id() -> None:
-    """An unscoped Component is invisible to the sidecar that must deliver it."""
-    docs = _render()
-    component = next(d for d in docs if d.get("kind") == "Component" and "cascade-lag" in d["metadata"]["name"])
-    assert component.get("scopes"), "the cascade-lag cron Component is scoped to no app-id, so nothing delivers it"

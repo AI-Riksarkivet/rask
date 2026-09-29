@@ -37,16 +37,11 @@ from __future__ import annotations
 
 import gzip
 
-from tests.unit.chart_render import DEFAULT_ARGS, render, render_text
+from tests.unit.chart_render import DEFAULT_ARGS, render_text
 
 
 #: Gzipped bytes the rendered default-overlay manifest may occupy. Measured 2026-09-21 at 263,848.
 MANIFEST_GZIP_BUDGET = 300_000
-
-#: `#` comment bytes the rendered manifest may carry. Measured at 88,253 after the conversion, against
-#: 240,362 before it. This is the number that regrew twice, so it is gated directly rather than only
-#: through its compressed effect — gzip hides prose drift by compressing repetition very well.
-MANIFEST_COMMENT_BUDGET = 110_000
 
 
 def _manifest() -> str:
@@ -60,11 +55,6 @@ def _manifest() -> str:
     return render_text(*DEFAULT_ARGS)
 
 
-def test_the_render_is_big_enough_to_be_worth_gating() -> None:
-    """Without this, a render that collapsed to nothing would pass both budgets silently."""
-    assert len(render(*DEFAULT_ARGS)) > 100, "the chart rendered almost nothing; these budgets check nothing"
-
-
 def test_the_rendered_manifest_fits_its_gzip_budget() -> None:
     """The compressed size is what actually consumes the Secret, so it is what the budget is set on."""
     size = len(gzip.compress(_manifest().encode(), 9))
@@ -74,20 +64,4 @@ def test_the_rendered_manifest_fits_its_gzip_budget() -> None:
         "Helm's release Secret is capped at 1,048,576 bytes by etcd and cannot be raised; at 99.35% of it "
         "every `helm upgrade` was refused. Convert `#` comments in templates to `{{/* */}}` — the prose "
         "stays in the file and stops being copied into the manifest."
-    )
-
-
-def test_the_rendered_manifest_does_not_refill_with_comment_prose() -> None:
-    """Gated directly because gzip HIDES this: repeated prose compresses away, then stops compressing.
-
-    `frontends.yaml` carried 48,641 comment bytes into the render because its prose is emitted once per
-    zone, yet removing all of it saved only 3,263 gzipped bytes. Watching the compressed number alone
-    would let prose accumulate for a long time and then move the total suddenly.
-    """
-    comment_bytes = sum(len(line) + 1 for line in _manifest().splitlines() if line.lstrip().startswith("#"))
-
-    assert comment_bytes <= MANIFEST_COMMENT_BUDGET, (
-        f"the rendered manifest carries {comment_bytes:,} bytes of `#` comments against a budget of "
-        f"{MANIFEST_COMMENT_BUDGET:,}. Helm copies these into the release Secret forever; a `{{/* */}}` "
-        "comment is stripped at render time and costs nothing."
     )

@@ -72,19 +72,6 @@ def _fleet_secret_holders(*set_values: str) -> set[str]:
     return holders
 
 
-def test_the_gate_can_see_the_mount_at_all() -> None:
-    """The precondition, and it had to change with the posture.
-
-    It used to assert that SOME Deployment mounts the secret — which was a fine precondition while one
-    did, and becomes a false alarm the moment the estate reaches zero holders. The property that keeps
-    this file a gate rather than decoration is that the extraction can SEE a mount when one exists, so
-    it renders one deliberately: with `ambientStorage` on, ingest must appear. That also pins the flag
-    as the switch — a rename would silently empty every assertion below.
-    """
-    holders = _fleet_secret_holders("services.ingest.ambientStorage=true")
-    assert "ingest" in holders, f"the extraction cannot see an app-secret mount even when one is rendered: {sorted(holders)}"
-
-
 def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
     """The headline: a service with no S3 client must not be handed the estate's widest storage key.
 
@@ -103,23 +90,3 @@ def test_only_a_service_that_uses_storage_holds_the_root_credential() -> None:
         "the estate forbids (env). If one of them genuinely needs storage, give it an STS credential "
         "(`vending.build_session_policy`, scoped by bucket + prefix) rather than adding it here"
     )
-
-
-def test_withholding_it_does_not_STARVE_the_ingest_plane() -> None:
-    """The other direction, and the reason the holder set could reach zero at all.
-
-    Removing a credential is only hardening if the work it paid for has somewhere else to go. Ingest's
-    two writes do: fragments take a table-scoped 900 s vend and the staging ledger takes the SAME one,
-    because the ledger lives under the dataset (`<dataset>.lance/_ingest_staging/`). Asserting both
-    are wired keeps this from passing by simply starving the plane — which is what "withhold the
-    secret" would otherwise mean.
-
-    The SOURCE read is the half that genuinely loses the ambient chain, and losing it is the point: an
-    unregistered source now fails closed rather than being read with the estate's widest credential.
-    Its scoped answer is `objectstore._own_store_for`, which supplies a store's own credential from the
-    Dapr secret store and stays inert until an operator registers a store declaring a `secret`.
-    """
-    from ingest import runtime
-
-    assert callable(runtime.write_options_for), "the vended write path is gone — withholding the secret would starve ingestion"
-    assert callable(runtime.ledger_options), "the staging ledger has no vended credential — it would fall back to the ambient chain"

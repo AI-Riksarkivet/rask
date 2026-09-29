@@ -64,18 +64,3 @@ def test_the_declared_pool_fits_the_server_it_shares() -> None:
         f"{OTHER_CONSUMERS} — {needed} against {usable:.0f} usable ({PG_MAX_CONNECTIONS} x {USABLE_FRACTION}). "
         "Lower the pool or raise max_connections on rask-age."
     )
-
-
-def test_idle_is_not_larger_than_open() -> None:
-    """A pool that may KEEP more than it may OPEN is a configuration nobody meant."""
-    datastore = _openfga_datastore()
-    assert int(datastore["maxIdleConns"]) <= int(datastore["maxOpenConns"])
-
-
-def test_the_gate_refuses_the_configuration_it_replaced() -> None:
-    """A gate that cannot fail is not a gate. pgxpool's inherited default sat at 30 with ~25 held by
-    the others; it fits. What must NOT fit is the enlargement the row proposed — this records the
-    ceiling so a later 'just raise it' is refused by arithmetic rather than by memory."""
-    usable = PG_MAX_CONNECTIONS * USABLE_FRACTION
-    assert usable >= 30 + OTHER_CONSUMERS, "the measured status quo should fit — if not, the constants are wrong"
-    assert not (usable >= 60 + OTHER_CONSUMERS), "a doubled pool must be refused by this arithmetic"

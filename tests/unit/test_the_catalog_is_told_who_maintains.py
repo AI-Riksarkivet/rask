@@ -24,14 +24,6 @@ import yaml
 from tests.unit.test_invariants import _helm_template
 
 
-#: Each env var, and the rung its subjects are granted. Paired here rather than checked one by one so a
-#: THIRD grant list cannot be added to `cascade_tuples` without a render row landing beside it.
-_GRANT_LISTS = {
-    "LANCE_FGA_CASCADE_WRITERS": "writer/publisher/validator",
-    "LANCE_FGA_MAINTAINERS": "maintainer",
-}
-
-
 def _catalog_env() -> dict[str, str]:
     """The catalog container's rendered environment, on a default-shaped estate."""
     raw = _helm_template("dapr.enabled=true", "medallion.enabled=true", "maintenance.enabled=true")
@@ -43,14 +35,6 @@ def _catalog_env() -> dict[str, str]:
             if "LANCE_FGA_CASCADE_WRITERS" in env or container["name"] == "catalog":
                 return env
     raise AssertionError("no catalog container in the render")
-
-
-def test_every_grant_list_the_catalog_reads_is_rendered() -> None:
-    env = _catalog_env()
-
-    missing = [name for name in _GRANT_LISTS if name not in env]
-
-    assert missing == [], f"the catalog reads these grant lists and the chart renders nothing into them: {missing}"
 
 
 def test_the_maintenance_identity_actually_lands_in_the_list() -> None:

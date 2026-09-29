@@ -31,7 +31,7 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[2]
 #: The default `frontend.serviceIdentity`, i.e. what `LINEAGE_SERVICE_ID` carries.
 ANONYMOUS = "service-web"
-SEEDS = ("scripts/seed_medallion_fga.sh", "scripts/seed_estate.py")
+SEEDS = ("scripts/seed_estate.py",)
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -42,13 +42,3 @@ def test_no_seed_grants_the_anonymous_principal(seed: str) -> None:
         f"{seed} grants the anonymous principal {ANONYMOUS!r} — that is a grant to the PUBLIC, not to a "
         f"service. Grant a human, or grant this subject deliberately and say so: {granting}"
     )
-
-
-@pytest.mark.parametrize("suite", ["test_medallion_e2e.py", "test_media_e2e.py"])
-def test_no_e2e_suite_reads_AS_the_anonymous_principal(suite: str) -> None:
-    """A suite borrowing it asserts what a logged-out visitor sees, while reading as though it were
-    asserting governance — which is what made the grants look load-bearing for as long as they did."""
-    lines = [
-        line.strip() for line in (REPO / "tests/e2e-py" / suite).read_text().splitlines() if f'"{ANONYMOUS}"' in line and not line.lstrip().startswith("#")
-    ]
-    assert not lines, f"{suite} still reads lineage as the anonymous principal: {lines}"

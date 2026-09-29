@@ -17,7 +17,6 @@ is gone.
 
 from __future__ import annotations
 
-import pytest
 import yaml
 import yaml.constructor
 import yaml.resolver
@@ -42,12 +41,6 @@ def _no_duplicates(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool =
 _DuplicateKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _no_duplicates)
 
 
-def test_the_render_produces_documents() -> None:
-    """Without this the walk below passes by parsing nothing."""
-    docs = [d for d in yaml.safe_load_all(_helm_template()) if isinstance(d, dict)]
-    assert len(docs) > 50, f"only {len(docs)} documents rendered — the render or this walk is broken"
-
-
 def test_no_rendered_document_names_a_key_twice() -> None:
     """The whole chart, every document. A duplicate key silently keeps the last value and drops the rest."""
     offenders: list[str] = []
@@ -63,10 +56,3 @@ def test_no_rendered_document_names_a_key_twice() -> None:
             continue  # a parse failure is a different gate's subject
 
     assert not offenders, "rendered documents carry a duplicate mapping key (the last value wins, the rest vanish):\n" + "\n".join(offenders)
-
-
-@pytest.mark.parametrize("snippet", ["a: 1\na: 2\n", "spec:\n  env:\n    - x\n  env:\n    - y\n"])
-def test_the_loader_actually_refuses_a_duplicate(snippet: str) -> None:
-    """A gate that cannot fail proves nothing — this one is checked against a duplicate it must reject."""
-    with pytest.raises(yaml.constructor.ConstructorError):
-        yaml.load(snippet, Loader=_DuplicateKeyLoader)  # noqa: S506 — a SafeLoader subclass

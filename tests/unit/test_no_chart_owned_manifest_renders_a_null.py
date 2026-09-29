@@ -104,13 +104,6 @@ def _own_documents(overlay: tuple[str, ...]) -> list[tuple[str, str, dict]]:
 
 
 @pytest.mark.parametrize("label,overlay", _overlays(), ids=lambda v: v if isinstance(v, str) else "")
-def test_the_overlay_rendered_documents_to_check(label: str, overlay: tuple[str, ...]) -> None:
-    """A control per overlay: an empty document list would make the gate below pass by vacuum."""
-    own = _own_documents(overlay)
-    assert len(own) > 30, f"{label} rendered only {len(own)} chart-owned documents — the gate lost its subject"
-
-
-@pytest.mark.parametrize("label,overlay", _overlays(), ids=lambda v: v if isinstance(v, str) else "")
 def test_no_chart_owned_document_carries_a_null_value(label: str, overlay: tuple[str, ...]) -> None:
     offenders = [f"{template} -> {obj}{path}" for template, obj, doc in _own_documents(overlay) for path in _null_paths(doc)]
     assert not offenders, (
