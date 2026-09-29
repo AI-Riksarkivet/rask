@@ -1,6 +1,6 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-317, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-324, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
@@ -9,14 +9,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-265** widened to every test file (the prune, in waves), **LH-279**, then **LH-280**, **LH-281** — the test audit, and the catalog's provenance and governance holes.
+1. **LH-265** widened to every test file (the prune to the audit's keep list), then **LH-280**, **LH-281** — the test audit, and the catalog's provenance and governance holes.
    Why now: lakehouse components first (owner, 2026-09-28). The suite reached 12,067 tests (231k test lines against 120k production lines; +3,500 since 2026-09-10), so every test file is audited for relevance and pruned now, in waves (owner, 2026-09-28: the prune is the priority); a row adds at most one test per closes-when clause.
 2. **LH-064**, **LH-220** (with **XC-076** as LH-220's enabler: one ServiceAccount per service) — signed provenance and per-pod service identity.
    Why now: provenance and governance; XC-076 is taken for what LH-220 needs, not as chart work in itself.
 3. **XC-090** (with **XC-096** as its enabler: the CI lanes it runs on) — the Phase 1 acceptance proof.
    Why now: without it, "Phase 1 done" means only that every row closed.
 4. **LH-265**; **XC-049** only when a lakehouse chart fix needs the release space (Kueue is decoupled and low).
-   Why now: test cleanup stage 2; the release object has 784 bytes of headroom (rev 256).
+   Why now: test cleanup stage 2; the release object has 408 bytes of headroom (rev 257).
 <!-- FOCUS:END -->
 
 ## Owner rulings in force
@@ -68,14 +68,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 104 | 102 | 26 |
+| **PHASE 1 · LAKEHOUSE** | 103 | 101 | 25 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**242 open items**, of which **10 are blocked on a decision** and **232 can be picked up today**; 54 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**241 open items**, of which **10 are blocked on a decision** and **231 can be picked up today**; 53 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -888,14 +888,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* Route both through the shared client; a MockTransport test proves the shared client serves them.
 - *Closes when:* Both calls go through the shared client, pinned by a test.
 - *Evidence:* docs/audits/2026-09-25/06-lakehouse-test-audit.md § Real product defects
-
-**LH-279 · A table writer can add a base to its own manifest after create; the catalog then serves another table's rows with its root credential, and maintenance and the purge freeze for the victim or the whole bucket**
-`catalog, maintenance, service-kit, lineage` · **HIGH**
-- *What is left:* Manifest bases are sanctioned only at create (dataplane.py:248-262; ingest runtime.py:320-324), and register judges flag 256 only (tables.py:835-853). After create, an UpdateBases commit (`add_bases`, proto field 114) changes them with no ownership check on pylance 12.0.0. It writes only `_versions/` and `_transactions/`, so a write vend reaches it (LH-202), and vending.py:164-168 itself calls the base input "CHOSEN BY A WRITER". Measured: (1) /commit accepts fragments whose files resolve through the planted base, because `_verify_fragment_data_files` skips any non-null base_id (dataplane.py:936), so table B reads A's rows under B's INSERT lineage event. (2) An unsanctioned base turns /credentials and describe(vend_credentials) into server_mediated (credentials.py:151-153; tables.py:457); the catalog then reads with its root credential with no base check on the read path (namespace.py:110-205), and DirectoryNamespace.query_table returned the victim's rows. (3) base_refs.protected_roots puts every non-self base of any manifest into the protected set (base_refs.py:98-110,174-230), so compact_one (optimize.py:841) and delete_location (purge.py:459-460) refuse the victim ('is'). A base naming the bucket root refuses EVERY dataset under it ('under'), including ones created later, while the attacker's own table still opens. The sweep and the purge both run this pre-pass (sweep.py:267-282; purge.py:878-899). (4) The lineage reconcile classes UpdateBases as '<inert>' maintenance (lineage reconcile.py:193-195,315), the same answer it gives compaction's ReserveFragments (proto 107), so nothing reports it. (1)-(2) need the victim's data file names, which no door below can_read_data/can_maintain discloses except a shared data base (LH-252). (3) needs only the victim's location, which describe returns. Lance also commits a base_id that base_paths does not hold, and the table then fails to read; that forgery is LH-211's.
-- *Why:* Criterion 2, zero trust: a confused deputy, where the root credential reads a location the caller holds no rung on. Criterion 1: another table's rows land under a lineage event that names the writer's table. Criterion 5: one metadata commit naming the bucket root stops compaction, index optimisation, version reclamation and purge estate-wide.
-- *How:* Bases are manifest state, set only by initial_bases or UpdateBases (lance_docs/file_format.md:3076-3108,5232-5250), so rask keeps its own record of the bases each table may resolve through. The record is written at create and register, the decision dataplane.py:248-262 already makes. It is also written by LH-097's planned silver `Overwrite(initial_bases=[bronze root])`, a deliberate cross-table base made after create. Every consumer compares `manifest_base_paths` with the record: (a) /commit refuses a base_id that resolves to an unrecorded base; this defines LH-211's "a base the table owns". (b) /credentials and describe(vend) refuse with a typed error instead of answering server_mediated, which stays for classified columns only. (c) open_dataset and the native query path refuse a table that declares an unrecorded base. (d) base_refs lets only a branch (tree/) or a recorded clone relation protect anything, and reports an unrecorded foreign or ancestor base as a finding. (e) The reconcile reports base drift by comparing base_paths, not its counters. Lakekeeper's rule is that every signed location sits under the table location, and no table location equals, contains or sits under another (docs/audits/2026-09-25/lakekeeper-deep-read/storage-vending.md:134,287, citing sign.rs:492-529 and tabular/mod.rs:545-583). LH-202's narrowed writer policy closes the planting path.
-- *Closes when:* A fixture plants UpdateBases with the estate key, once naming another table and once naming the bucket root. Mutation-checked RED tests then show that /commit through the planted base is refused and the table is unchanged; that /credentials, describe(vend) and query_table refuse; that compact_one and delete_location on the victim are not refused because of the planted base; that the reconcile report names the drift; and that LH-097's recorded bronze base still protects bronze.
-- *Evidence:* services/catalog/src/catalog/services/dataplane.py:248-262,922-942 · services/catalog/src/catalog/api/v1/endpoints/credentials.py:151-153 · tables.py:457,835-853 · data.py:692-697 · services/catalog/src/catalog/core/namespace.py:110-205 · services/catalog/src/catalog/core/vending.py:115-120,164-168,463-470 · packages/service-kit/src/service_kit/lakehouse/base_refs.py:98-110,174-230 · services/maintenance/src/maintenance/services/optimize.py:841 · purge.py:459-460,878-899 · sweep.py:267-282 · services/lineage/src/lineage/core/reconcile.py:193-195,315 · txn-types-memwal/m1_update_bases.py, m4_native_ns.py, m2_clone_reserve.py · dir-bases-proto/probe_bases.py · verify-dir-bases-proto/probe_base_freeze.py
 
 **LH-280 · A /commit run marker is caller-owned and unauthenticated, so any writer of the table can pre-claim another run's id and make that run's finalize report success while its rows never land**
 `catalog, ingest, lineage` · **HIGH**
@@ -2158,3 +2150,13 @@ Found by the LH-183 review rounds (2026-09-28) and parked under the same rule (o
 - LH-314 · LOW · On pod termination the Dapr sidecar's `dapr.io/block-shutdown-duration` (20 s) ends before the app's drain (preStop 5 s + bound 25 s, or 105 s on maintenance), against the chart's own "the sidecar must outlive the app's drain" invariant; a response or publish after about t=20 s has no sidecar. A self-recycle is unaffected (the sidecar never stops) · `chart`
 - LH-315 · LOW · A refused second drain arm inside the notifications and both medallion lifespans (which bind `_disarm_drain` inside `try:`) surfaces as UnboundLocalError and skips the rest of their `finally` (Dapr client close, workflow runtime shutdown); reachable only through a wiring bug no estate process has · `service-kit, notifications, medallion`
 - LH-316 · LOW · `repo_tree.walked_files` lists a git worktree's `.git` file, so `test_the_walk_skips_what_a_repo_shape_gate_must_not_read` fails in every worktree and whenever agent worktrees sit under `.claude/worktrees/` · `tests`
+
+Found by the LH-279 review rounds and live proof (2026-09-28/29) and parked under the same rule. Measurements: the LH-279 commit (68a07c12) and the rev 257 deploy record.
+
+- LH-317 · LOW · A backslash spelling (`sub\..\..\victim`) is judged the table's own and reads another table only on `file://` roots, where pylance's URL parser splits on `\`; on `s3://` it reads nothing, and the register door already refuses `\..\` · `service-kit`
+- LH-318 · LOW · The sweep's trash exclusion keys `_trash/` records by the encoded spelling, so a recoverably dropped table with a non-ASCII or `%` name is not excluded and the sweep may rewrite bytes an undrop would restore · `maintenance`
+- LH-319 · MEDIUM · A purge of a table with a non-ASCII or `%` name reclaims none of its bytes: pylance 12's dir namespace writes `.lance-reserved` under the literal encoded prefix while the data lands under the decoded one, so `delete_location` refuses or deletes nothing. Measured live 2026-09-29: two purged `räksmörgås` test tables (and their `tree/work` branches) still hold their bytes and are still discovered by every sweep tick · `catalog, maintenance`
+- LH-320 · LOW · The per-dataset reconcile door (`GET .../reconcile`) returns `unrecorded_bases: []` without running the drift axis, so it answers "found nothing" for a table the sweep reports as drifting · `lineage`
+- LH-321 · LOW · A branch's owning root is looked up among readable datasets only, so a transient failure to open the parent yields one tick's false `maintenance_unrecorded_base` finding and leaves the parent unprotected for that tick · `service-kit, maintenance`
+- LH-322 · LOW · `LINEAGE_CONTROL_ROOT` follows `maintenance.controlRoot` but the catalog's control root is fixed to the estate bucket, so an operator who moves maintenance's control root would make lineage and maintenance read base records where the catalog never writes them · `chart`
+- LH-323 · LOW · Native data ops that carry no version (`get_table_stats`, main-arm insert/merge_insert, `alter_table_backfill_columns`, index creation) are judged on the latest manifest, so a base planted between the judge and the native open is read or written unjudged in a window two opens wide · `catalog`
