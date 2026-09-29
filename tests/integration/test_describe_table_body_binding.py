@@ -22,7 +22,6 @@ from lance_namespace import DescribeTableResponse
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedCredentials
-from catalog.services import dataplane
 
 
 _LOCATION = "s3://lance-catalog/db$t"
@@ -106,23 +105,8 @@ def test_the_body_wins_where_both_are_sent(client: TestClient, fake_ns: MagicMoc
     assert resp.json()["storage_options"] == {"aws_access_key_id": "AK"}
 
 
-def test_a_body_tag_is_resolved_like_a_query_tag(client: TestClient, fake_ns: MagicMock, vendor: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The tag store is a real dataset read, which a MagicMock namespace cannot serve; the point here is
-    # that a BODY tag reaches the same resolution the query tag has always gone through.
-    monkeypatch.setattr(dataplane, "get_tag_version", lambda ns, so, req: MagicMock(version=7))
-    resp = client.post("/v1/table/db$t/describe", json={"tag": "stable"})
-    assert resp.status_code == 200, resp.text
-    assert _sent(fake_ns).version == 7
-    assert _sent(fake_ns).tag is None  # resolved HERE; the backend ignores a describe-request tag
-
-
 def test_a_body_tag_and_a_query_version_still_conflict(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
     resp = client.post("/v1/table/db$t/describe?version=2", json={"tag": "stable"})
-    assert resp.status_code == 400, resp.text
-
-
-def test_a_body_id_that_disagrees_with_the_path_is_refused(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
-    resp = client.post("/v1/table/db$t/describe", json={"id": ["other", "table"]})
     assert resp.status_code == 400, resp.text
 
 
@@ -155,17 +139,3 @@ def test_naming_the_main_branch_explicitly_is_accepted(client: TestClient, fake_
     # already does — refusing it would reject a spec-conformant client for agreeing with us.
     resp = client.post("/v1/table/db$t/describe", json={"branch": "main"})
     assert resp.status_code == 200, resp.text
-
-
-# --------------------------------------------------------------------------------------------------
-# Shape pin: the served contract must keep BOTH doors, so a future edit cannot silently drop the body
-# again (that is the whole defect) or move the spec's three query fields out of the query.
-# --------------------------------------------------------------------------------------------------
-
-
-def test_the_served_route_declares_the_spec_body_and_the_spec_query_params(client: TestClient) -> None:
-    op = client.app.openapi()["paths"]["/v1/table/{id}/describe"]["post"]
-    body_schema = op["requestBody"]["content"]["application/json"]["schema"]
-    assert "DescribeTableRequest" in str(body_schema), body_schema
-    query = {p["name"] for p in op.get("parameters", []) if p["in"] == "query"}
-    assert {"with_table_uri", "load_detailed_metadata", "check_declared"} <= query

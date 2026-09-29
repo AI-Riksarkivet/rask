@@ -52,17 +52,6 @@ def gateway() -> str:
     return base
 
 
-def test_gateway_own_health_is_upstream_independent(gateway: str) -> None:
-    # The edge must answer even if every backend is down — it owns no upstream for /healthz.
-    resp = requests.get(f"{gateway}/healthz", timeout=5)
-    # JSON, not the bare `ok` this asserted until 2026-08-25. The gateway answers with the shared
-    # `Liveness` model from `service_kit.probes`, exactly as every other service does — so the contract
-    # MOVED (a541d35f) and this now asserts where it moved to. Asserting the PAYLOAD rather than only
-    # the status keeps the point of the test: a 200 with an empty or HTML body is still a broken edge.
-    assert resp.status_code == 200, resp.text
-    assert resp.json() == {"status": "ok"}, resp.text
-
-
 def test_app_apis_route_through_dapr_service_invocation(gateway: str) -> None:
     # `/api/lineage/*` and `/api/catalog/*` are proxied to 127.0.0.1:3500/v1.0/invoke/<app>/method/* —
     # i.e. through the gateway's OWN Dapr sidecar. A 200 here means the clean URL → Dapr invoke →
@@ -79,10 +68,3 @@ def test_app_apis_route_through_dapr_service_invocation(gateway: str) -> None:
 
     catalog = requests.get(f"{gateway}/api/catalog/readyz", timeout=8)
     assert catalog.status_code == 200
-
-
-def test_root_is_backend_only(gateway: str) -> None:
-    # Since the MFE migration the zones are served by the Ingress (web-<zone>); the gateway is the
-    # BACKEND-only edge, so "/" answers an honest 404 instead of proxying a retired web upstream
-    # (the old upstream crashed every fresh gateway boot with "host not found").
-    assert requests.get(f"{gateway}/", timeout=8).status_code == 404

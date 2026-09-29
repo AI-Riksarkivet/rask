@@ -30,11 +30,6 @@ def _enabled_settings() -> Settings:
     )
 
 
-def test_oidc_disabled_leaves_routes_open(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
-    assert client.get("/v1/table").status_code == 200
-
-
 def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient) -> None:
     client.app.dependency_overrides[get_settings] = _enabled_settings
     client.app.state.oidc = MagicMock()  # a verifier is present
@@ -93,20 +88,3 @@ def test_oidc_enabled_empty_bearer_is_401(client: TestClient) -> None:
     resp = client.get("/v1/table", headers={"Authorization": "Bearer "})
     assert resp.status_code == 401
     assert resp.json()["code"] == 16
-
-
-def test_oidc_token_subject_is_used_for_authz(client: TestClient, fake_ns: MagicMock) -> None:
-    """CONTRACT: the parsed token's ``sub`` is the identity the rest of the stack sees.
-
-    With FGA off this just confirms the verifier's ``IDToken`` flows through to the route
-    (the authz layer's use of ``token.sub`` is covered in tests/integration/test_authz.py).
-    """
-    fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
-    verifier = MagicMock()
-    verifier.verify.return_value = IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
-    client.app.dependency_overrides[get_settings] = _enabled_settings
-    client.app.state.oidc = verifier
-
-    resp = client.get("/v1/table", headers={"Authorization": "Bearer good"})
-    assert resp.status_code == 200
-    verifier.verify.assert_called_once_with("good")

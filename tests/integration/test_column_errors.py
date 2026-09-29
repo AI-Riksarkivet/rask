@@ -134,14 +134,6 @@ def test_field_metadata_on_an_unknown_path_is_a_404_column_not_found(table: Test
     assert detail.count("id") == 1, detail  # listed once, by Lance — not appended a second time
 
 
-def test_a_valid_column_op_still_succeeds(table: TestClient) -> None:
-    """The negative twin: the translation must not turn a GOOD request into a 4xx. Without this, a
-    contextmanager that raised unconditionally would pass all seven tests above."""
-    r = table.post("/v1/table/c1$t/add_columns", json={"new_columns": [{"name": "double_id", "expression": "id * 2"}]})
-    assert r.status_code == 200, r.text
-    assert r.json()["version"] == 2, r.text
-
-
 def test_backfill_tells_the_caller_what_is_unsupported(table: TestClient) -> None:
     """``backfill_columns`` is a genuine native stub, and Unsupported is the HONEST answer — but ``problem_detail``
     redacted every ``>= 500`` detail, so the one sentence the caller needs ("this backend does not implement

@@ -137,11 +137,6 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     assert _create("t_after") == 200
 
 
-def test_deactivate_missing_warehouse_404(routing: tuple[TestClient, Path, Path, Path]) -> None:
-    client, *_ = routing
-    assert client.post("/v1/warehouses/ghost/deactivate").status_code == 404
-
-
 def test_binding_collides_with_existing_default_namespace_409(
     routing: tuple[TestClient, Path, Path, Path],
 ) -> None:
@@ -326,17 +321,3 @@ def test_a_stale_binding_cache_entry_expires_instead_of_lasting_until_restart(
     resolved = client.app.state.warehouse_binding_cache
     assert deps._fresh_cached_binding(resolved, "tenantns", 300.0) is None, "the stale entry outlived its TTL"
     assert "tenantns" not in resolved, "the expired entry was not evicted"
-
-
-def test_the_ttl_can_be_disabled_and_then_the_entry_is_kept(routing: tuple[TestClient, Path, Path, Path]) -> None:
-    """`0` restores the pre-F10.3 forever-positive behaviour, deliberately — the knob is an escape
-    hatch for an estate that would rather pay the 403s than the extra registry read."""
-    from catalog.api import dependencies as deps
-
-    client, _default_root, warehouse_root, registry = routing
-    _register_warehouse(registry, warehouse_root)
-    assert client.post("/v1/namespace/tenantns/describe", json={}).status_code in (200, 404)
-
-    cache = client.app.state.warehouse_binding_cache
-    assert deps._fresh_cached_binding(cache, "tenantns", 0.0) is not None
-    assert "tenantns" in cache

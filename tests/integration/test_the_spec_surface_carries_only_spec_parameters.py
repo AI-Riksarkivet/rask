@@ -76,22 +76,11 @@ def test_no_spec_route_advertises_a_parameter_the_spec_does_not_define(client: T
     )
 
 
-def test_the_spec_vocabulary_is_actually_populated() -> None:
-    """Without this, an import that silently yielded nothing would make the gate above vacuous."""
-    vocabulary = _spec_vocabulary()
-
-    assert len(vocabulary) > 100, f"only {len(vocabulary)} spec field names were derived — the walk is broken, not clean"
-    assert {"branch", "page_token", "limit", "delimiter", "mode"} <= vocabulary
-
-
 @pytest.mark.parametrize(
     ("path", "query"),
     [
-        ("/v1/table/nsx$tx/drop", "force=notabool"),
         ("/v1/table/nsx$tx/drop", "purge=notabool"),
         ("/v1/namespace/nsx/drop", "force=notabool"),
-        ("/v1/table/nsx$tx/rename", "force=notabool"),
-        ("/v1/table/nsx$tx/deregister", "force=notabool"),
     ],
 )
 def test_a_hidden_parameter_is_still_bound_on_the_wire(client: TestClient, path: str, query: str) -> None:

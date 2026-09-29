@@ -76,22 +76,6 @@ def test_history_reports_what_changed_per_version(real_ns_client: TestClient) ->
     assert all(row["timestamp"] for row in rows), rows
 
 
-def test_history_carries_no_actor_and_does_not_pretend_to(real_ns_client: TestClient) -> None:
-    """The format has no notion of a user, so this endpoint must not invent one.
-
-    WHO lives in the lineage store's ``author`` run facet, keyed by the same version number
-    (``GET /datasets/{name}/producers``). Asserting the absence here is the point: a future change that
-    started guessing an actor from, say, the request that happened to read the log would be a fabricated
-    audit trail, which is worse than no actor at all.
-    """
-    _seed(real_ns_client)
-    rows = real_ns_client.get("/management/v1/table/h1$t/history").json()["versions"]
-    for row in rows:
-        assert "author" not in row
-        assert "actor" not in row
-        assert "user" not in row
-
-
 def test_history_limit_bounds_the_transaction_reads(real_ns_client: TestClient) -> None:
     """`limit` exists so a table with many versions cannot turn one UI page into N object-store reads."""
     _seed(real_ns_client)

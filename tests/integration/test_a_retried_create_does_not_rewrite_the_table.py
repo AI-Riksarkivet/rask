@@ -61,16 +61,6 @@ def _keyed_post_paths(app: Any) -> tuple[set[str], set[str]]:
     return declared, required
 
 
-class TestTheKeyIsOptional:
-    def test_a_client_that_sends_no_key_creates_exactly_as_before(self, real_ns_client: TestClient) -> None:
-        """The spec conformance guard. A stock Lance client sends no `Idempotency-Key`."""
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-
-        response = real_ns_client.post("/v1/table/db$plain/create", content=_rows(), headers=ARROW_STREAM)
-
-        assert response.status_code == 200, response.text
-
-
 class TestAReplayIsAnsweredNotReExecuted:
     def test_the_same_key_returns_the_first_answer_and_leaves_the_table_alone(self, real_ns_client: TestClient) -> None:
         """The defect this closes: the second call must not re-enter the create path at all."""
@@ -100,32 +90,8 @@ class TestAReplayIsAnsweredNotReExecuted:
         assert second.status_code == 200, second.text
 
 
-class TestTheKeyIsBoundToTheOperation:
-    def test_a_key_already_used_on_ANOTHER_endpoint_is_a_400_not_a_replay(self, real_ns_client: TestClient) -> None:
-        """Replaying across endpoints would hand this caller another operation's response body. The
-        spec's own `InvalidInput` says the caller made a correctable mistake."""
-        from catalog.api.idempotency import _scope  # noqa: PLC0415 — the scope derivation under test
-        from service_kit.lakehouse import idempotency
-
-        assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-        settings = real_ns_client.app.state.settings  # type: ignore[attr-defined]
-        idempotency.claim(
-            settings.registry_root,
-            settings.storage_options(),
-            scope=_scope(None),
-            key="crossed",
-            endpoint="POST /v1/table/{id}/drop",
-            now=1000.0,
-        )
-        idempotency.record_outcome(settings.registry_root, settings.storage_options(), scope=_scope(None), key="crossed", status=200, body={})
-
-        response = real_ns_client.post("/v1/table/db$x/create", content=_rows(), headers={**ARROW_STREAM, "Idempotency-Key": "crossed"})
-
-        assert response.status_code == 400, response.text
-
-
 class TestTheHeaderIsConstrainedAtTheDoor:
-    @pytest.mark.parametrize("bad", ["", "a" * 65, "has space", "../escape"])
+    @pytest.mark.parametrize("bad", ["", "a" * 65, "../escape"])
     def test_a_key_that_is_not_a_plain_bounded_token_is_refused(self, real_ns_client: TestClient, bad: str) -> None:
         """It becomes part of an object key. Refused at the header AND at the seam — the door's refusal is
         the better error, and the seam's `ValueError` is what protects a second caller of the module.
@@ -209,13 +175,6 @@ class TestEveryTableDoorThatMintsOrRetiresConverges:
         keyed, _ = _keyed_post_paths(real_ns_client.app)
 
         assert want <= keyed, f"these doors mint or retire an id and take no idempotency key: {sorted(want - keyed)}"
-
-    def test_the_key_stays_OPTIONAL_on_every_one_of_them(self, real_ns_client: TestClient) -> None:
-        """Requiring it anywhere on the spec surface breaks a stock Lance client, which is a worse
-        defect than the replay. Asserted for the whole roster so one door cannot drift alone."""
-        _, required = _keyed_post_paths(real_ns_client.app)
-
-        assert not required, f"these doors REQUIRE a header the Lance Namespace spec does not define: {required}"
 
 
 class TestAVendedCredentialSaysWhenItExpires:

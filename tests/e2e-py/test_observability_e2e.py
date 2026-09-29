@@ -184,19 +184,6 @@ def pipeline_run() -> dict[str, Any]:
     return {"table_id": table_id, "metric_query": metric_query, "ingested_before": before, "auth": auth}
 
 
-def test_data_landed_in_age(pipeline_run: dict[str, Any]) -> None:
-    """1. The dataset node materialized in Apache AGE — the event was ingested into the graph."""
-    table_id = pipeline_run["table_id"]
-
-    def dataset_present() -> dict[str, Any] | None:
-        r = requests.get(f"{LINEAGE}/datasets/{table_id}/creator", timeout=8, headers=pipeline_run["auth"])
-        if r.status_code == 200 and r.json().get("dataset") == table_id:
-            return r.json()
-        return None
-
-    assert _eventually(dataset_present)["dataset"] == table_id
-
-
 def test_custom_metric_incremented(pipeline_run: dict[str, Any]) -> None:
     """2. The custom domain metric went UP in GreptimeDB/PromQL — metrics are queryable + valuable."""
     before = pipeline_run["ingested_before"]

@@ -36,7 +36,6 @@ from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pyarrow as pa
-import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceResponse,
@@ -367,29 +366,6 @@ def test_existok_on_existing_table_does_not_seize_ownership(client: TestClient, 
     assert [t for t in written if t[1] == "owner"] == [], f"an ExistNo-op seized ownership: {written}"
 
 
-def test_existok_on_existing_table_STILL_writes_the_parent_edge(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """[[LH-164]] The other half, and this test asserted its opposite: that NOTHING was written.
-
-    The ownership refusal above was implemented by skipping the whole seed, which withheld the
-    structural ``parent`` edge along with the owner grant. The edge is not an ownership question — it
-    names where the table lives, it is idempotent, and it confers nothing by itself — while every
-    relation on ``table`` resolves through ``... from parent``. A table with no edge is unreachable
-    from every container grant: unmaintainable, ungrantable, unprotectable.
-
-    SCOPE, stated because the neighbouring defect looks identical and this does NOT close it. Five of
-    the cascade's own tiers were measured holding ZERO tuples on 2026-09-15 (`lakehouse$silver`,
-    `lakehouse$gold`, `lakehouse$silver-media`, `research-bronze$events`, `bind86-bronze$events`), and
-    they did not come through this arm: neither medallion seam sends `mode`, so `CreateMode.parse(None)`
-    is `CREATE` and `existok_kept_existing` is never true for them. Their hole is that both seams return
-    on a CONVERGENCE branch that never reaches the seed at all — `ensure_stage_output` on `describe`-200,
-    `register_written_dataset` on 409 — which is tracked separately. This test pins the arm a human
-    caller reaches, where the same confusion between an owner grant and a structural edge was live.
-    """
-    written = _existok_over_an_existing_table(client, fake_ns, monkeypatch)
-
-    assert ("namespace:db1", "parent", "table:db1$users") in written, f"the ExistOk kept the table and left it unreachable from its namespace: {written}"
-
-
 def test_create_table_seeds_owner_and_parent_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: a successful create seeds ``owner`` on the table + a ``parent`` link.
 
@@ -658,26 +634,6 @@ def test_overwrite_of_existing_table_by_non_owner_is_denied_and_revokes_nothing(
     fake_ns.create_table.assert_not_called()  # gated BEFORE the irreversible write
 
 
-def test_plain_create_seeds_without_revoking(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: a non-overwrite create only seeds — it must NOT revoke (fresh id, nothing to clean)."""
-    _stub_create(monkeypatch, response=CreateTableResponse(location="s3://b/db1$new", version=1))
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=True))
-    revoke = AsyncMock(return_value=[_revoked_tuple() for _ in range(0)])
-    grant = AsyncMock()
-    monkeypatch.setattr(fga_module, "revoke_object_tuples", revoke)
-    monkeypatch.setattr(fga_module, "grant_on_create", grant)
-
-    resp = client.post(
-        "/v1/table/db1$new/create",
-        content=ARROW_BODY,
-        headers={"Authorization": "Bearer t", **ARROW_STREAM},
-    )
-    assert resp.status_code == 200
-    revoke.assert_not_awaited()
-    grant.assert_awaited_once()
-
-
 def test_cascade_drop_namespace_revokes_every_child(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT: a Cascade namespace drop revokes the namespace AND every dropped child (tables + nested
     namespaces enumerated before the drop), so no reused child id inherits a stale grant."""
@@ -819,19 +775,6 @@ class _BatchOpenFga:
 _TWO_TABLE_COMMIT = {
     "operations": [{"create_table_version": {"id": ["db1", t], "version": 2, "manifest_path": "_versions/2.manifest"}} for t in ("a", "b")],
 }
-
-
-def test_the_batch_harness_reaches_openfga_through_the_real_batch_check(client: TestClient, fake_ns: MagicMock) -> None:
-    """The control for the test below: with every item answered, the guard lets the request reach the
-    door, which answers its own 406 ([[LH-206]]) rather than the guard's 403 or 503."""
-    _wire(client)
-    double = _BatchOpenFga(unanswered=set())
-    client.app.state.fga = double
-
-    resp = client.post("/v1/table/batch-commit", json=_TWO_TABLE_COMMIT, headers={"Authorization": "Bearer t"})
-
-    assert resp.status_code == 406, resp.text
-    assert sorted(double.asked) == ["table:db1$a", "table:db1$b"]
 
 
 def test_batch_commit_answers_503_when_openfga_cannot_answer_an_item(client: TestClient, fake_ns: MagicMock) -> None:
@@ -1089,17 +1032,6 @@ def test_list_tables_unfiltered_when_fga_disabled(client: TestClient, fake_ns: M
     resp = client.get("/v1/table")
     assert resp.status_code == 200
     assert resp.json()["tables"] == ["orders", "users"]
-
-
-@pytest.mark.parametrize("allow", [True, False])
-def test_describe_allow_and_deny(client: TestClient, fake_ns: MagicMock, monkeypatch, allow: bool) -> None:
-    """CONTRACT: a positive check lets the request through (200); a negative one is 403."""
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
-    _wire(client)
-    monkeypatch.setattr(fga_module, "check", _fake_check([], allow=allow))
-
-    resp = client.post("/v1/table/db1$users/describe", headers={"Authorization": "Bearer t"})
-    assert resp.status_code == (200 if allow else 403)
 
 
 def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:

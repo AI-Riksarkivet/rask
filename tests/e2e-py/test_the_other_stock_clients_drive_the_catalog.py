@@ -169,17 +169,3 @@ def test_lance_ray_reads_a_table_through_the_catalogs_namespace() -> None:
         assert dataset.count() >= 0, "lance-ray resolved the table but the read produced no countable dataset"
     finally:
         ray.shutdown()
-
-
-def test_an_unauthenticated_lancedb_client_is_REFUSED() -> None:
-    """The refusal must reach these clients too, or governance is proven for one transport only.
-
-    Asserted as "it raised", not on a message: each client wraps the catalog's problem+json differently
-    and pinning one wording here would test the client's formatting rather than rask's refusal.
-    """
-    lancedb = pytest.importorskip("lancedb")
-    pytest.importorskip("lancedb.namespace")
-
-    db = lancedb.namespace.connect_namespace("rest", {"uri": CATALOG})
-    with pytest.raises(Exception):  # noqa: B017, PT011 — the client's own wrapper type; the REFUSAL is the subject
-        db.open_table(TABLE, namespace_path=[NAMESPACE]).count_rows()

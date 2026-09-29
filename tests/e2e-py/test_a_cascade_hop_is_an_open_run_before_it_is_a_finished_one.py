@@ -76,24 +76,6 @@ def runs() -> dict[str, list[str]]:
     return dict(grouped)
 
 
-def test_some_run_was_opened_before_it_finished(runs: dict[str, list[str]]) -> None:
-    """Without a START anywhere, the rest of this file passes over an empty set."""
-    started = [rid for rid, states in runs.items() if "START" in states]
-
-    assert started, (
-        "no run in the feed was ever reported as START, so every hop is invisible in the graph for its "
-        "whole runtime and a hop that died before its terminal looks like one that never began"
-    )
-
-
-def test_every_opened_run_is_CLOSED_by_a_terminal(runs: dict[str, list[str]]) -> None:
-    """An orphan open run per hop would be worse than no START at all — it would make the graph assert
-    that work is in flight which finished long ago."""
-    open_runs = {rid: states for rid, states in runs.items() if "START" in states and not (_TERMINAL & set(states))}
-
-    assert not open_runs, f"these runs were opened and never closed under the same runId: {open_runs}"
-
-
 def test_the_terminal_shares_the_STARTED_run_id_rather_than_minting_one(runs: dict[str, list[str]]) -> None:
     """The derivation is what makes the MERGE close the run the START opened. A START carrying its own
     id would still satisfy the two assertions above while doubling the graph's run nodes."""

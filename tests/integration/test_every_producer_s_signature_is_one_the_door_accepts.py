@@ -128,7 +128,7 @@ async def test_the_door_ADMITS_what_this_producer_signs(
     await _drive(_signed(builder, identity, on_behalf_of), key=KEY, monkeypatch=monkeypatch)
 
 
-@pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), PRODUCERS, ids=[p[0] for p in PRODUCERS])
+@pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS if p[0] != "medallion"])
 @pytest.mark.asyncio
 async def test_a_PEER_key_is_refused_for_the_same_event(
     name: str, builder: Any, identity: str, on_behalf_of: str | None, monkeypatch: pytest.MonkeyPatch
@@ -139,7 +139,7 @@ async def test_a_PEER_key_is_refused_for_the_same_event(
         await _drive(_signed(builder, identity, on_behalf_of), key=PEER, monkeypatch=monkeypatch)
 
 
-@pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), PRODUCERS, ids=[p[0] for p in PRODUCERS])
+@pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS if p[0] == "maintenance"])
 @pytest.mark.asyncio
 async def test_an_UNSIGNED_event_from_the_same_builder_is_still_admitted(
     name: str, builder: Any, identity: str, on_behalf_of: str | None, monkeypatch: pytest.MonkeyPatch

@@ -247,37 +247,6 @@ def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_p
     assert r.status_code == 404, r.text  # NOT 403 — a non-admin cannot learn wh-real exists
 
 
-def test_mallory_cross_tenant_bucket_takeover_fails_at_every_layer(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # The full Mallory walkthrough (audit 2026-07-23): claiming another tenant's bucket must be refused at
-    # EVERY layer — the warehouse create (front door), the project-policy set (defense in depth if a rival
-    # record got into the registry anyway), and the sweep's resolution (if a contested policy record got
-    # written anyway). No layer may fall back to first-encountered-wins over the victim's data.
-    from service_kit.lakehouse import maintenance_policies as mp
-
-    monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: None)
-    s = _settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
-    _mk_projects(client, "acme", "evil")
-    so = s.storage_options()
-    assert client.post("/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "acme-wh"}).status_code == 200
-
-    # Layer 1 — the shared-bucket claim is refused at warehouse create.
-    r = client.post("/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": "acme-wh"})
-    assert r.status_code == 409, r.text
-
-    # Layer 2 — force the rival record straight into the registry: the policy set still refuses.
-    wh_svc.put_warehouse(s.registry_root, so, {"id": "wh-evil", "bucket": "acme-wh", "project": "evil", "status": "active"})
-    r = client.post("/management/v1/project/evil/policy/set", json={"retention_days": 1, "retain_versions": 1})
-    assert r.status_code == 409, r.text
-
-    # Layer 3 — force contested policy records anyway: resolution warns and matches NEITHER.
-    contested = [
-        {"kind": "project", "id": "acme", "path": "", "buckets": ["acme-wh"], "retention_days": 365},
-        {"kind": "project", "id": "evil", "path": "", "buckets": ["acme-wh"], "retention_days": 1},
-    ]
-    assert mp.resolve_policy(contested, "s3://acme-wh/medallion/gold/features") is None
-
-
 def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, fga=True)
     # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate

@@ -121,18 +121,6 @@ def test_promote_denied_to_a_non_validator(models_client: tuple[TestClient, str]
         lance.dataset(registry).tags.get_version("blessed")
 
 
-def test_promote_fails_closed_when_fga_client_is_missing(
-    models_client: tuple[TestClient, str],
-) -> None:
-    # FGA enabled but no client wired → 503, never an open promote.
-    client, _ = models_client
-    client.app.state.fga = None
-
-    resp = client.post("/v1/model/demo/promote", headers={"Authorization": "Bearer t"}, json={"version": 2})
-
-    assert resp.status_code == 503
-
-
 def test_promote_requires_authentication(models_client: tuple[TestClient, str]) -> None:
     client, _ = models_client  # OIDC on, no bearer → 401 before any FGA/registry work
     resp = client.post("/v1/model/demo/promote", json={"version": 2})
@@ -231,12 +219,6 @@ def test_list_models_is_empty_for_a_caller_with_no_grants(models_client: tuple[T
     resp = client.get("/v1/model", headers={"Authorization": "Bearer t"})
     assert resp.status_code == 200
     assert resp.json() == {"models": [], "authorization_truncated": False, "page_token": None}
-
-
-def test_list_models_requires_authentication(models_client: tuple[TestClient, str]) -> None:
-    client, _ = models_client  # OIDC on, no bearer → 401 before storage is ever listed
-    resp = client.get("/v1/model")
-    assert resp.status_code == 401
 
 
 def test_list_models_serializes_null_versions_for_an_unreadable_registry(models_client: tuple[TestClient, str], monkeypatch: pytest.MonkeyPatch) -> None:

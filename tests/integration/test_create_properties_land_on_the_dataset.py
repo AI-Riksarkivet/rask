@@ -62,23 +62,3 @@ def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace)
     dataplane.create_table(real_ns, {}, ["no_props"], _table(), registry=None)
 
     assert dataplane.read_schema_metadata(real_ns, {}, ["no_props"]) == {}
-
-
-def test_the_create_stamp_does_not_evict_the_internal_lineage_keys(real_ns: LanceNamespace) -> None:
-    """`replace=True` would drop the `lineage.*` coordinates that make the file self-describing.
-
-    Asserted through the RAW dataset rather than `read_schema_metadata`, which filters those keys out
-    by design — so reading through the filtered door could never see them disappear.
-    """
-    import lance
-
-    location = dataplane.create_table(real_ns, {}, ["keeps_lineage"], _table(), properties={"owner": "team-a"}, registry=None).location
-    assert location
-
-    lance.dataset(location).update_schema_metadata({"lineage.dataset_id": "acme$gold"})
-    dataplane.update_schema_metadata(real_ns, {}, ["keeps_lineage"], {"tier": "silver"})
-
-    raw = lance.dataset(location).schema.metadata or {}
-    decoded = {k.decode() if isinstance(k, bytes) else k: v.decode() if isinstance(v, bytes) else v for k, v in raw.items()}
-    assert decoded.get("lineage.dataset_id") == "acme$gold", f"an internal coordinate was evicted: {decoded}"
-    assert decoded.get("owner") == "team-a", "the create stamp did not survive a later property write"

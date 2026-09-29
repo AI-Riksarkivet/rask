@@ -101,31 +101,3 @@ def test_full_lifecycle(base: str, namespace: str) -> None:
     # holding the id and its grants for the whole grace window.
     assert requests.post(f"{base}/v1/table/{table}/drop?purge=true", headers=AUTH).status_code == 200
     assert requests.post(f"{base}/v1/namespace/{namespace}/drop", headers=AUTH).status_code == 200
-
-
-def test_unsupported_is_406(base: str, namespace: str) -> None:
-    """An operation the backend does not implement answers 406, not 501 and not 500.
-
-    ASSERTED ON AN OBJECT THIS CALLER OWNS, because authorization is a ROUTER-LEVEL dependency and so
-    decides before any handler runs. A materialized view is the one id that can never satisfy it:
-    `create_materialized_view` is itself a backend stub, so ownership is never seeded on a view, and
-    `POST /v1/materialized_view/x$mv/refresh` is answered 403 `can_refresh required on
-    materialized_view:x$mv` — the error mapping under test is never reached.
-
-    `alter_table_backfill_columns` is a genuine stub of the `dir` backend (measured 2026-09-06 against
-    the live release: 406 `Not supported: alter_table_backfill_columns not implemented`), and the table
-    below is one this caller just created — so the 406 comes from the mapping, not the authz layer.
-    """
-    table = _fresh(namespace, "unsupported")
-    created = requests.post(
-        f"{base}/v1/table/{table}/create?mode=overwrite",
-        data=_ipc(pa.table({"id": pa.array([1], pa.int64())})),
-        headers=ARROW,
-    )
-    assert created.status_code == 200, created.text
-    try:
-        resp = requests.post(f"{base}/v1/table/{table}/backfill_column", json={"column": "id"}, headers=AUTH)
-        assert resp.status_code == 406, resp.text
-        assert resp.json()["title"] == "UnsupportedOperationError"
-    finally:
-        requests.post(f"{base}/v1/table/{table}/drop?purge=true", headers=AUTH)

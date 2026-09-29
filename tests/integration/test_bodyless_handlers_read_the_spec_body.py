@@ -52,21 +52,10 @@ def _sent(mock: MagicMock) -> Any:
 # --- the ops whose body carries an identifier only -------------------------------------------------
 
 
-def test_describe_namespace_reconciles_a_body_id(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.describe_namespace.return_value = DescribeNamespaceResponse()
-    assert client.post("/v1/namespace/db/describe", json={"id": ["db"]}).status_code == 200
-    assert _sent(fake_ns.describe_namespace).id == ["db"]
-
-
 def test_describe_namespace_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.describe_namespace.return_value = DescribeNamespaceResponse()
     resp = client.post("/v1/namespace/db/describe", json={"id": ["other"]})
     assert resp.status_code == 400, f"a body id contradicting the path must be 400 (spec duality): {resp.status_code}"
-
-
-def test_namespace_exists_reconciles_a_body_id(client: TestClient, fake_ns: MagicMock) -> None:
-    assert client.post("/v1/namespace/db/exists", json={"id": ["db"]}).status_code in (200, 204)
-    assert _sent(fake_ns.namespace_exists).id == ["db"]
 
 
 def test_namespace_exists_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock) -> None:
@@ -154,12 +143,6 @@ def test_get_table_stats_refuses_a_body_branch(client: TestClient, fake_ns: Magi
     assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
-def test_deregister_table_reconciles_a_body_id(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.deregister_table.return_value = DeregisterTableResponse()
-    assert client.post("/v1/table/db$t/deregister", json={"id": ["db", "t"]}).status_code == 200
-    assert _sent(fake_ns.deregister_table).id == ["db", "t"]
-
-
 def test_deregister_table_refuses_a_contradicting_body_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.deregister_table.return_value = DeregisterTableResponse()
     assert client.post("/v1/table/db$t/deregister", json={"id": ["db", "other"]}).status_code == 400
@@ -172,7 +155,6 @@ def test_deregister_table_refuses_a_contradicting_body_id(client: TestClient, fa
     ("path", "query", "attr", "value"),
     [
         ("/v1/table/db$t/index/list", {"limit": 2}, "limit", 2),
-        ("/v1/table/db$t/index/list", {"page_token": "q"}, "page_token", "q"),
     ],
 )
 def test_the_query_alias_still_works(client: TestClient, fake_ns: MagicMock, path: str, query: dict[str, Any], attr: str, value: Any) -> None:

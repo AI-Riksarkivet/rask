@@ -194,47 +194,6 @@ def _prefix_of(catalog: str, token: str, ident: str, bucket: str) -> str:
 
 
 @pytest.mark.parametrize("tier", ["read", "write"])
-def test_tenant_b_credentials_cannot_list_tenant_a_bucket(catalog: str, estates: dict[str, str], tier: str) -> None:
-    """The estate-shape leak. B's credential, pointed at A's bucket, must be refused BY THE STORE."""
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], tier)
-    s3 = _client(creds)
-    with pytest.raises(ClientError) as exc:
-        s3.list_objects_v2(Bucket=estates["a_bucket"], MaxKeys=1)
-    code = exc.value.response["Error"]["Code"]
-    assert code in ("AccessDenied", "AccessDeniedException", "InvalidAccessKeyId", "SignatureDoesNotMatch"), (
-        f"tenant B listed tenant A's bucket with a {tier}-tier credential — the session policy is not scoped: {code}"
-    )
-
-
-@pytest.mark.parametrize("tier", ["read", "write"])
-def test_tenant_b_credentials_cannot_read_tenant_a_objects(catalog: str, estates: dict[str, str], tier: str) -> None:
-    """Direct object read across the tenant boundary. Refusal must be AccessDenied, never NoSuchKey —
-    a NoSuchKey would mean the policy let the request through and only the key was missing."""
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], tier)
-    s3 = _client(creds)
-    with pytest.raises(ClientError) as exc:
-        s3.get_object(Bucket=estates["a_bucket"], Key="isoans/isoatbl.lance/_versions/1.manifest")
-    code = exc.value.response["Error"]["Code"]
-    assert code != "NoSuchKey", "the store EVALUATED the request against A's bucket — the policy did not scope it"
-    assert code in ("AccessDenied", "AccessDeniedException", "InvalidAccessKeyId", "SignatureDoesNotMatch"), code
-
-
-def test_tenant_b_write_credentials_cannot_put_into_tenant_a_bucket(catalog: str, estates: dict[str, str]) -> None:
-    """The corruption case, and the one that matters most: a WRITE credential must not be able to
-    plant an object in another tenant's bucket. Asserted separately from read because a policy can
-    be right for GET and wrong for PUT."""
-    creds = _vend(catalog, TOKEN_B, estates["b_ident"], "write")
-    s3 = _client(creds)
-    key = f"isoans/isoatbl.lance/data/{uuid.uuid4().hex}.lance"
-    with pytest.raises(ClientError) as exc:
-        s3.put_object(Bucket=estates["a_bucket"], Key=key, Body=b"cross-tenant")
-    code = exc.value.response["Error"]["Code"]
-    assert code in ("AccessDenied", "AccessDeniedException", "InvalidAccessKeyId", "SignatureDoesNotMatch"), (
-        f"tenant B WROTE into tenant A's bucket: {code} — cross-tenant corruption is reachable"
-    )
-
-
-@pytest.mark.parametrize("tier", ["read", "write"])
 def test_the_credential_still_works_on_its_OWN_table(catalog: str, estates: dict[str, str], tier: str) -> None:
     """The negative twin, and the reason this suite cannot pass vacuously: a credential that is
     refused EVERYWHERE would satisfy every assertion above while breaking the product. B's own

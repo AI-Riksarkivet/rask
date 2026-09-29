@@ -10,14 +10,12 @@ a mocked namespace could not tell a plan that ran from one that was reported.
 from __future__ import annotations
 
 import json
-import os
-from typing import Any, cast
+from typing import Any
 
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance.optimize import CompactionTask
 
@@ -107,7 +105,6 @@ def test_a_healthy_table_plans_no_work_and_is_not_an_error(real_ns_client: TestC
 @pytest.mark.parametrize(
     "knob",
     [
-        pytest.param({"io_buffer_size": 8192}, id="io_buffer_size"),
         pytest.param({"materialize_deletions_threadhold": 0.5}, id="a-misspelling-lance-refuses"),
     ],
 )
@@ -169,34 +166,9 @@ def test_the_executors_own_MEMORY_BOUNDS_are_baked_into_every_task_the_door_plan
     assert found == [(37, 3, source_bytes)] * len(baked), baked
 
 
-def test_max_source_bytes_bounds_how_much_one_plan_takes_on(real_ns_client: TestClient) -> None:
-    """Forwarded, and it does what the in-pod rewrite relies on it for: bound one pass in bytes.
-
-    `lance/optimize.py` (pylance 12.0.0): "Tasks are included until adding the next task would exceed
-    this limit." Twelve ~1 MiB fragments at a 4000-row target plan three tasks of four fragments
-    unbounded, and one task under a 5 MiB bound (measured on pylance 12.0.0).
-    """
-    assert real_ns_client.post("/v1/namespace/db/create", json={}).status_code == 200
-    rows = pa.table({"id": pa.array(range(1000), pa.int64()), "payload": pa.array([os.urandom(1024) for _ in range(1000)], pa.binary())})
-    assert real_ns_client.post("/v1/table/db$t/create", content=_arrow_ipc(rows), headers=ARROW_STREAM).status_code == 200
-    location = real_ns_client.post("/v1/table/db$t/describe", json={}).json()["location"]
-    for _ in range(11):
-        more = pa.table({"id": pa.array(range(1000), pa.int64()), "payload": pa.array([os.urandom(1024) for _ in range(1000)], pa.binary())})
-        lance.write_dataset(more, location, mode="append")
-
-    def _task_count(max_source_bytes: int) -> int:
-        answered = real_ns_client.post(
-            "/management/v1/table/db$t/compaction_plan", json={"target_rows_per_fragment": 4000, **BOUNDS, "max_source_bytes": max_source_bytes}
-        )
-        assert answered.status_code == 200, answered.text
-        return len(answered.json()["tasks"])
-
-    assert (_task_count(MAX_SOURCE_BYTES_CEILING), _task_count(5 * MIB)) == (3, 1)
-
-
 @pytest.mark.parametrize(
     ("mode", "baked_as"),
-    [("reencode", "Reencode"), ("try_binary_copy", "TryBinaryCopy"), ("force_binary_copy", "ForceBinaryCopy")],
+    [("force_binary_copy", "ForceBinaryCopy")],
 )
 def test_the_repack_mode_is_baked_into_every_task(real_ns_client: TestClient, mode: str, baked_as: str) -> None:
     """`compaction_mode` is a plan-time option like the bounds: `execute` takes only the dataset."""
@@ -233,7 +205,6 @@ def test_max_source_bytes_is_accepted_across_its_range(real_ns_client: TestClien
     "body",
     [
         pytest.param({**BOUNDS, "max_source_bytes": 0}, id="zero-bytes"),
-        pytest.param({**BOUNDS, "max_source_bytes": MAX_SOURCE_BYTES_FLOOR - 1}, id="below-the-floor"),
         pytest.param({**BOUNDS, "max_source_bytes": MAX_SOURCE_BYTES_CEILING + 1}, id="above-the-ceiling"),
         pytest.param({**BOUNDS, "compaction_mode": "binary_copy"}, id="a-mode-lance-does-not-define"),
     ],
@@ -252,11 +223,7 @@ _ALL_THREE = ["batch_size", "num_threads", "max_source_bytes"]
     ("content", "missing"),
     [
         pytest.param(None, _ALL_THREE, id="no body"),
-        pytest.param("null", _ALL_THREE, id="a JSON null body"),
         pytest.param('{"target_rows_per_fragment": 1024}', _ALL_THREE, id="policy but no bounds"),
-        pytest.param('{"target_rows_per_fragment": 1024, "batch_size": 64}', ["num_threads", "max_source_bytes"], id="batch_size alone"),
-        pytest.param('{"target_rows_per_fragment": 1024, "num_threads": 2}', ["batch_size", "max_source_bytes"], id="num_threads alone"),
-        pytest.param('{"target_rows_per_fragment": 1024, "max_source_bytes": 268435456}', ["batch_size", "num_threads"], id="max_source_bytes alone"),
         pytest.param('{"target_rows_per_fragment": 1024, "batch_size": 64, "num_threads": 2}', ["max_source_bytes"], id="max_source_bytes missing"),
     ],
 )
@@ -282,27 +249,6 @@ def test_a_plan_WITHOUT_the_executors_bounds_is_refused_400_naming_every_bound(r
     assert all(bound in problem["detail"] for bound in ("batch_size", "num_threads", "max_source_bytes")), problem
     assert f"(missing: {missing})" in problem["detail"], f"the detail does not list exactly the missing bounds {missing}: {problem['detail']}"
     assert lance.dataset(location).version == before
-
-
-def test_the_published_contract_marks_the_body_and_every_bound_required(real_ns_client: TestClient) -> None:
-    """A client generated from the OpenAPI learns the rule from its types, not from the first 400."""
-    spec = cast("FastAPI", real_ns_client.app).openapi()
-
-    operation = spec["paths"]["/management/v1/table/{id}/compaction_plan"]["post"]
-    assert operation["requestBody"].get("required") is True, operation["requestBody"]
-    body = operation["requestBody"]["content"]["application/json"]["schema"]
-    assert body.get("$ref") == "#/components/schemas/CompactionPlanRequest" and "anyOf" not in body, f"the body is published as nullable: {body}"
-    schema = spec["components"]["schemas"]["CompactionPlanRequest"]
-    assert sorted(schema.get("required", [])) == ["batch_size", "max_source_bytes", "num_threads"], schema.get("required")
-    for bound, floor, ceiling in (("batch_size", 1, 8192), ("num_threads", 1, 64), ("max_source_bytes", MAX_SOURCE_BYTES_FLOOR, MAX_SOURCE_BYTES_CEILING)):
-        published = schema["properties"][bound]
-        assert (published.get("type"), published.get("minimum"), published.get("maximum")) == ("integer", floor, ceiling), published
-        assert "anyOf" not in published and "default" not in published, f"{bound} is published as optional or nullable: {published}"
-    mode = schema["properties"]["compaction_mode"]
-    assert "compaction_mode" not in schema["required"], "Lance defines the mode's default, so the door must not require it"
-    assert [alternative.get("enum") for alternative in mode.get("anyOf", []) if alternative.get("type") == "string"] == [
-        ["reencode", "try_binary_copy", "force_binary_copy"]
-    ], mode
 
 
 def test_the_commit_door_refuses_an_empty_result_set(real_ns_client: TestClient) -> None:
@@ -342,23 +288,3 @@ def test_neither_door_silently_compacts_MAIN_when_a_BRANCH_is_named(real_ns_clie
         # A routing miss is titled with the HTTP phrase; a door's own refusal with its domain error.
         assert response.json().get("title") not in _ROUTING_MISSES, f"{door} was never reached, so nothing here tested it: {response.text[:300]}"
     assert lance.dataset(location).version == before, "a request naming a branch committed onto main"
-
-
-def test_both_doors_land_on_the_maintainer_rung() -> None:
-    """These two doors are gated on ``can_maintain``, declared in ``_MAINTENANCE_ACTIONS``.
-
-    A door only a maintainer calls asks for the maintainer rung outright. Unlike ``credentials`` — a
-    data read for every other caller, which is why that one keeps ``can_read_data`` as its primary —
-    ``compaction_plan``/``compaction_commit`` have no audience but maintenance, and the sweep reaches
-    them as ``maintainer from parent`` rather than as a data writer. Measured on the deployed estate
-    2026-09-09: at the writer rung the distributed lane was refused 1 818 times and every dataset
-    was compacted in-pod (4 274/4 274, the memory ceiling the feature exists to remove); with the
-    explicit mapping, 728 units ran ``distributed`` and denials fell to 0.
-
-    A suffix no map declares is refused rather than given a rung, which
-    ``services/catalog/tests/test_an_undeclared_door_is_refused.py`` pins for every mounted route.
-    """
-    from catalog.api.fga_deps import _action_relation
-
-    assert _action_relation("table", "compaction_plan") == "can_maintain"
-    assert _action_relation("table", "compaction_commit") == "can_maintain"

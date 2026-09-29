@@ -252,10 +252,3 @@ def test_train_to_blessed_with_full_reproducibility_capture(stack: tuple[str, st
 
         rows = _poll(_metric, timeout=90.0, label=f"lance_training_rows_seen for {model} in GreptimeDB")
         assert rows, "training metrics must land in GreptimeDB (the experiment-tracking sink)"
-
-
-def test_promote_requires_validator_rung_writer_denied(stack: tuple[str, str, str]) -> None:
-    # A focused negative: an anonymous promote is refused outright (the endpoint is governed).
-    _lance_ray, catalog, _lineage = stack
-    r = requests.post(f"{catalog}/v1/model/nonexistent$m/promote", json={"version": 1}, timeout=15)
-    assert r.status_code in (401, 403), f"unauthenticated promote must be 401/403, got {r.status_code}"

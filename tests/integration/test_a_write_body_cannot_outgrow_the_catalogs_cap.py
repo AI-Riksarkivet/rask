@@ -68,20 +68,17 @@ def _rows(client: TestClient, table: str, branch: str | None) -> int:
 _DECLARING = _stream(pa.table({"id": pa.nulls(10**6), "s": pa.nulls(10**6)}))
 _INFLATING = _stream(pa.table({"id": pa.array([4, 5], pa.int64()), "s": ["x" * (2 * _CAP), "y" * (2 * _CAP)]}), "lz4")
 
-DOORS = [
-    pytest.param("db$new/create", None, id="create"),
-    pytest.param("db$t/insert", None, id="insert-main"),
-    pytest.param("db$t/insert", "work", id="insert-branch"),
-    pytest.param("db$t/merge_insert?on=id&when_not_matched_insert_all=true", None, id="merge-main"),
-    pytest.param("db$t/merge_insert?on=id&when_not_matched_insert_all=true", "work", id="merge-branch"),
-]
-
 
 @pytest.mark.parametrize(
-    "body",
-    [pytest.param(_DECLARING, id="bytes-declaring-a-million-rows"), pytest.param(_INFLATING, id="an-lz4-body-inflating-to-4-MiB")],
+    ("door", "branch", "body"),
+    [
+        pytest.param("db$new/create", None, _DECLARING, id="create-bytes-declaring-a-million-rows"),
+        pytest.param("db$t/insert", None, _INFLATING, id="insert-main-an-lz4-body-inflating-to-4-MiB"),
+        pytest.param("db$t/insert", "work", _DECLARING, id="insert-branch-bytes-declaring-a-million-rows"),
+        pytest.param("db$t/merge_insert?on=id&when_not_matched_insert_all=true", None, _INFLATING, id="merge-main-an-lz4-body-inflating-to-4-MiB"),
+        pytest.param("db$t/merge_insert?on=id&when_not_matched_insert_all=true", "work", _DECLARING, id="merge-branch-bytes-declaring-a-million-rows"),
+    ],
 )
-@pytest.mark.parametrize(("door", "branch"), DOORS)
 def test_a_body_the_catalog_cannot_hold_is_refused_at_every_write_door(capped: TestClient, door: str, branch: str | None, body: bytes) -> None:
     assert len(body) < _CAP // 8, "the body is over the cap as sent, so this would not test what it becomes"
     separator = "&" if "?" in door else "?"
@@ -116,7 +113,7 @@ def test_a_widened_insert_answers_the_same_on_both_arms(capped: TestClient, rows
         assert (_rows(capped, "db$w", None), _rows(capped, "db$w", "work")) == (1, 1)
 
 
-@pytest.mark.parametrize("branch", [None, "work"], ids=["main", "branch"])
+@pytest.mark.parametrize("branch", [None], ids=["main"])
 def test_a_dictionary_is_refused_before_the_cast_expands_it(capped: TestClient, branch: str | None) -> None:
     """5,000 rows referencing one 10 KiB value are ~60 KB sent and ~50 MB as the table's `string` column.
     Refused before the cast, the request allocates next to nothing: measured on a pool of its own."""

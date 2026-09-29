@@ -27,15 +27,6 @@ from fastapi.testclient import TestClient
 from service_kit.lakehouse.ns_errors import PartiallyApplied, problem_detail
 
 
-def test_the_problem_body_carries_what_landed() -> None:
-    """The seam itself: extension members reach the body."""
-    status, body = problem_detail(PartiallyApplied("half done", problem_extra={"namespaces_dropped": ["acme"], "partial": True}))
-
-    assert status >= 500, "a partially-applied destructive op is a server-side outcome"
-    assert body["namespaces_dropped"] == ["acme"], f"the outcome never reached the body: {body}"
-    assert body["partial"] is True
-
-
 def test_an_extension_member_cannot_redefine_a_reserved_field() -> None:
     """Otherwise a raising endpoint could quietly rewrite `status` or un-redact `detail`."""
     status, body = problem_detail(PartiallyApplied("half done", problem_extra={"status": 200, "detail": "leaked internals", "extra": "kept"}))

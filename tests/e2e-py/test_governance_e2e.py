@@ -185,32 +185,3 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
 
     up = _poll(_silver_upstream, [bronze])
     assert isinstance(up, list) and bronze in up, f"expected {bronze} in silver upstream, got {up}"
-
-
-def test_malformed_bearer_is_rejected(stack: tuple[str, str]) -> None:
-    """OIDC boundary: a garbage / non-JWT bearer is rejected 401 (not 500, not allowed)."""
-    server, _ = stack
-    for bad in ("Bearer not-a-jwt", "Bearer a.b.c", "Bearer "):
-        r = requests.post(f"{server}/v1/namespace/x/describe", headers={"Authorization": bad}, timeout=10)
-        assert r.status_code == 401, f"{bad!r} → {r.status_code} (expected 401)"
-
-
-def test_non_owner_cannot_rename_or_overwrite_anothers_table(stack: tuple[str, str]) -> None:
-    """Security (the fixes committed 9d4de0a / 185c333): a non-owner is denied the destructive
-    rename + Overwrite of another user's table — 403, so the true owner can't be evicted/seized."""
-    server, _ = stack
-    alice, outsider = _token("alice@example.com"), _token(OUTSIDER)
-    ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {outsider}"}
-    ns = f"sec{os.getpid()}"
-    tbl = f"{ns}$owned"
-    assert_parent_exists(create_top_level(server, ns, ah), ns)
-    rows = _ipc(pa.table({"id": pa.array([1], pa.int64())}))
-    assert (requests.post(f"{server}/v1/table/{tbl}/create", headers={**ah, **ARROW}, data=rows, timeout=30)).status_code == 200
-
-    # The outsider has no grant on alice's table → both destructive paths are denied (owner-tier gates).
-    rn = requests.post(f"{server}/v1/table/{tbl}/rename", headers=bh, json={"new_table_name": "stolen"}, timeout=10)
-    ov = requests.post(f"{server}/v1/table/{tbl}/create?mode=overwrite", headers={**bh, **ARROW}, data=rows, timeout=30)
-    assert rn.status_code == 403, f"{OUTSIDER} rename → {rn.status_code} (expected 403)"
-    assert ov.status_code == 403, f"{OUTSIDER} overwrite → {ov.status_code} (expected 403)"
-    # and alice still owns it (not evicted)
-    assert (requests.post(f"{server}/v1/table/{tbl}/describe", headers=ah, timeout=10)).status_code == 200

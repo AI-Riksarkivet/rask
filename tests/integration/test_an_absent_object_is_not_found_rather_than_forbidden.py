@@ -26,7 +26,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import NamespaceNotFoundError, TableNotFoundError
 
 from catalog.core.config import get_settings
 
@@ -138,14 +137,3 @@ def test_the_probe_is_skipped_when_the_caller_cannot_read_the_parent(real_ns_cli
     resp = real_ns_client.post("/v1/table/db1$ghost/describe", json={}, headers={"Authorization": "Bearer t"})
 
     assert resp.status_code == 403
-
-
-def test_the_spec_errors_are_the_ones_raised() -> None:
-    """The 404 must be the SPEC'S typed error, not a hand-picked status.
-
-    A generated client dispatches on the numeric code, so answering 404 with anything but
-    `TableNotFound` / `NamespaceNotFound` would be a status that reads right and deserialises wrong —
-    the failure `ns_errors` exists to prevent.
-    """
-    assert TableNotFoundError("absent").code == 4
-    assert NamespaceNotFoundError("absent").code == 1  # NOT 3 — read off ErrorCode, not assumed

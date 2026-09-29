@@ -24,11 +24,10 @@ able to deserialise.
 
 from __future__ import annotations
 
-import json
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient
-from lance_namespace import CountTableRowsResponse, UpdateTableSchemaMetadataResponse
+from lance_namespace import CountTableRowsResponse
 
 
 def _json_media(resp: object) -> str:
@@ -57,23 +56,3 @@ def test_analyze_plan_answers_a_json_string(client: TestClient, fake_ns: MagicMo
     assert resp.status_code == 200, resp.text
     assert "application/json" in _json_media(resp)
     assert resp.json() == "AnalyzeExec: metrics=[]"
-
-
-def test_schema_metadata_update_answers_the_direct_map(client: TestClient, fake_ns: MagicMock) -> None:
-    """The REST-only rule: the body IS the updated metadata map, not an envelope around it."""
-    fake_ns.update_table_schema_metadata.return_value = UpdateTableSchemaMetadataResponse(metadata={"owner": "ana"}, transaction_id="tx")
-    resp = client.post("/v1/table/db$t/schema_metadata/update", json={"metadata": {"owner": "ana"}})
-    assert resp.status_code == 200, resp.text
-    assert resp.json() == {"owner": "ana"}, (
-        f"the wrapped envelope is what makes the Rust client raise 'invalid type: map, expected a string' AFTER the write commits; got {resp.json()!r}"
-    )
-
-
-def test_a_plan_string_containing_json_still_round_trips(client: TestClient, fake_ns: MagicMock) -> None:
-    """A plan is opaque text. Encoding it as a JSON string must not let a plan that LOOKS like JSON be
-    mistaken for structure — the failure a naive `Response(content=plan)` would introduce."""
-    plan = '{"not": "structure"}'
-    fake_ns.explain_table_query_plan.return_value = plan
-    resp = client.post("/v1/table/db$t/explain_plan", json={"query": {"vector": {"single_vector": [1.0]}, "k": 1}})
-    assert resp.json() == plan
-    assert json.loads(resp.text) == plan

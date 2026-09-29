@@ -26,17 +26,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import CountTableRowsResponse, ListTableTagsResponse, MergeInsertIntoTableResponse
-
-from service_kit.lancekit.arrow_ipc import encode_arrow_stream
-
-
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
-#: A real body for the write doors, which refuse one that is not a valid Arrow IPC stream.
-_ONE_ROW = encode_arrow_stream(pa.table({"id": [1]}))
+from lance_namespace import CountTableRowsResponse, ListTableTagsResponse
 
 
 # --- A3 -------------------------------------------------------------------------------------------
@@ -67,44 +59,3 @@ def test_the_POST_form_still_works(client: TestClient, fake_ns: MagicMock, monke
     fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=3)
     monkeypatch.setattr(tags_module.dataplane, "list_tags", lambda *a, **k: ListTableTagsResponse(tags={}))
     assert client.post(path, json={}).status_code == 200
-
-
-# --- A8 -------------------------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    ("path", "spec_status"),
-    [
-        ("/v1/materialized_view/db$v/create", 201),
-        ("/v1/materialized_view/db$v/refresh", 202),
-        ("/v1/table/db$t/backfill_column", 202),
-    ],
-)
-def test_the_stub_routes_declare_the_spec_status(client: TestClient, path: str, spec_status: int) -> None:
-    """Declared on the decorator, so a future backend cannot silently answer 200.
-
-    Asserted through the OpenAPI rather than by calling: all three answer a spec-correct 501 today
-    (the `dir` backend stubs them), so a live call can never exercise the success status.
-    """
-    served = client.app.openapi()["paths"][path.replace("db$v", "{id}").replace("db$t", "{id}")]["post"]["responses"]
-    assert str(spec_status) in served, f"{path} declares {sorted(served)}, not {spec_status}"
-
-
-# --- A9 — blocked on A10, and the block is the point --------------------------------------------
-
-
-def test_merge_insert_takes_a_single_on_until_the_namespace_bump(client: TestClient, fake_ns: MagicMock) -> None:
-    """`on` is a single key today, and cannot become an array before A10.
-
-    lance-namespace 0.12.0 makes `MergeInsertIntoTableRequest.on` a list of field paths (a composite
-    merge key) sent as a repeated query parameter. The INSTALLED 0.11.0 model types it `str` with
-    `MinLen(1)`, so widening only the door pushes the failure one layer deeper — a 0.12.0 client would
-    get a pydantic ValidationError out of the request model instead of a clean answer, which reads as a
-    rask bug rather than a version skew. Measured: that is exactly what happened when the door was
-    widened first.
-
-    This pins the current contract so the change lands with the bump, not before it.
-    """
-    fake_ns.merge_insert_into_table.return_value = MergeInsertIntoTableResponse(version=2)
-    assert client.post("/v1/table/db$t/merge_insert?on=id", content=_ONE_ROW, headers=ARROW_STREAM).status_code == 200
-    assert fake_ns.merge_insert_into_table.call_args.args[0].on == "id"

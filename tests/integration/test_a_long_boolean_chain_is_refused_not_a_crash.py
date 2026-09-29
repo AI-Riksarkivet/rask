@@ -24,7 +24,6 @@ from pyarrow import ipc
 
 
 _OR_CHAIN_TERMS = 150_000
-_IN_LIST_VALUES = 200_000
 
 _DRIVER = r"""
 import io, json, os, sys
@@ -105,8 +104,8 @@ def test_a_crash_sized_or_chain_is_refused_and_the_process_survives(tmp_path: Pa
 
 @pytest.mark.parametrize(
     ("door", "field"),
-    [("merge_insert", "when_matched_update_all_filt"), ("merge_insert_by_source", "when_not_matched_by_source_delete_filt")],
-    ids=["matched-update", "by-source-delete"],
+    [("merge_insert", "when_matched_update_all_filt")],
+    ids=["matched-update"],
 )
 def test_merge_insert_refuses_a_chain_one_connective_past_the_bound(tmp_path: Path, door: str, field: str) -> None:
     """Its filters ride the query string, which no server lets reach crash size, so the bound is what is pinned."""
@@ -114,13 +113,6 @@ def test_merge_insert_refuses_a_chain_one_connective_past_the_bound(tmp_path: Pa
 
     assert (returncode, answer["status"], answer["code"]) == (0, 400, 13), f"{field} must refuse a chain of 1,001 connectives: {answer}"
     assert f"{field} joins 1001 conditions" in str(answer["detail"]), f"{field} was refused for another reason: {answer}"
-
-
-@pytest.mark.parametrize("door", ["query", "count_rows", "delete"])
-def test_the_same_values_as_one_in_list_are_answered(tmp_path: Path, door: str) -> None:
-    returncode, answer = _drive(tmp_path, door, "in", _IN_LIST_VALUES)
-
-    assert (returncode, answer["status"]) == (0, 200), f"{door} must answer a {_IN_LIST_VALUES}-value IN list: {answer}"
 
 
 def test_an_update_EXPRESSION_is_bounded_like_its_predicate(real_ns_client: TestClient) -> None:

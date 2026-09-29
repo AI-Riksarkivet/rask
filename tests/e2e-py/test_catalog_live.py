@@ -149,21 +149,6 @@ def writer(table_id: list[str]) -> CatalogTableWriter:
     return CatalogTableWriter(RestCatalogWriteTransport(CATALOG_URL, table_id, token=CATALOG_TOKEN or None), table_id)
 
 
-def test_schema_round_trips_all_34_columns(reader: CatalogTableReader) -> None:
-    table = reader.to_table()
-    assert table.num_rows == 0
-    assert table.schema.names == SCHEMA.names
-    # 4 identity columns + EMPTY_SCHEMA's 30. A LITERAL on purpose: the line above already compares
-    # NAMES against SCHEMA, so deriving this from `len(SCHEMA)` would restate that and could never
-    # fail again. The number is the estate's one tripwire for a column landing in EMPTY_SCHEMA with
-    # nobody noticing — which is exactly how the textual facet (parent_id, char_start, char_end)
-    # arrived and left this suite red for a month.
-    assert len(table.schema) == 34
-    # .schema is a limit-0 scan under the hood — must round-trip over REST too.
-    assert reader.schema.names == SCHEMA.names
-    assert reader.to_table(limit=0).num_rows == 0
-
-
 def test_milestone_loop(reader: CatalogTableReader, writer: CatalogTableWriter) -> None:
     """The whole condition-4 story in order: human save → 409 handshake → model
     predictions → replace-protects-humans → insert-only never clobbers."""

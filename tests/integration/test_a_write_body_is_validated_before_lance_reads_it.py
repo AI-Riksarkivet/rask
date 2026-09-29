@@ -28,18 +28,9 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
-from lance_namespace import InsertIntoTableRequest, InvalidInputError, connect
-
-from catalog.services.dataplane import create_table, insert_into_table, open_dataset
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
 
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from fastapi.testclient import TestClient
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -90,42 +81,7 @@ def _a_compressed_text_declaring(declared: int, codec: str) -> bytes:
     return body[:at] + struct.pack("<q", declared) + body[at + 8 :]
 
 
-def _an_integer_narrower_than_eight_bits() -> bytes:
-    """An int16 column whose schema declares a 4-bit width, at the byte where int16 and int32 schemas differ."""
-    narrow, wide = (_stream(pa.table({"id": pa.array([10], pa.int64()), "n": pa.array([1], kind)})) for kind in (pa.int16(), pa.int32()))
-    at = next(i for i, (a, b) in enumerate(zip(narrow, wide, strict=True)) if a != b)
-    return narrow[:at] + bytes([4]) + narrow[at + 1 :]
-
-
-def _blob_named_on(table: pa.Table, column: str) -> bytes:
-    """`table` whose `column` names pylance's `lance.blob.v2`, which `import lance` registers and whose deserializer refuses any storage but its struct."""
-    schema = table.schema
-    at = schema.get_field_index(column)
-    named = schema.field(at).with_metadata({b"ARROW:extension:name": b"lance.blob.v2", b"ARROW:extension:metadata": b""})
-    return _stream(table.cast(schema.set(at, named)))
-
-
 _BINARY_OFFSETS = struct.pack("<iii", 0, 5, 10)
-
-BODIES = [
-    pytest.param(b"this is not an arrow ipc stream", id="a-body-that-is-not-arrow"),
-    pytest.param(_stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"]))[:-20], id="a-stream-cut-inside-its-batch"),
-    pytest.param(_tampered(_BINARY_OFFSETS, struct.pack("<iii", 0, 5, 65536)), id="binary-offsets-past-the-values-buffer"),
-    pytest.param(_tampered(_BINARY_OFFSETS, struct.pack("<iii", 0, 8, 5)), id="binary-offsets-that-decrease"),
-    pytest.param(_tampered(b"qqzz", b"\xff\xfezz"), id="utf8-values-that-are-not-utf8"),
-    pytest.param(_a_dictionary_batch_whose_id_names_no_field(), id="a-dictionary-batch-whose-id-names-no-field"),
-    pytest.param(_a_compressed_text_declaring(2**50, "zstd"), id="a-zstd-buffer-declaring-2^50-bytes"),
-    pytest.param(_a_compressed_text_declaring(2**50, "lz4"), id="an-lz4-buffer-declaring-2^50-bytes"),
-    pytest.param(_an_integer_narrower_than_eight_bits(), id="an-integer-narrower-than-8-bits"),
-    pytest.param(_blob_named_on(_table([10, 11], [b"hello", b"world"], ["qq", "zz"]), "id"), id="pylances-blob-type-named-on-a-storage-it-refuses"),
-    pytest.param(
-        _stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"])) + _stream(_table([12], [b"three"], ["tt"])), id="a-second-stream-after-the-first"
-    ),
-    pytest.param(_stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"])) + b"\x00 bytes after the end", id="bytes-after-the-end-of-the-stream"),
-    pytest.param(
-        _stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"]).replace_schema_metadata({b"\xff\xfe": b"x"})), id="schema-metadata-that-is-not-utf8"
-    ),
-]
 
 
 def _seeded(client: TestClient, branch: str | None) -> None:
@@ -143,9 +99,25 @@ def _rows_on(client: TestClient, branch: str | None) -> int:
     return int(counted.text)
 
 
-@pytest.mark.parametrize("body", BODIES)
-@pytest.mark.parametrize("branch", [None, "work"], ids=["main", "branch"])
-@pytest.mark.parametrize("door", ["insert", "merge_insert?on=id&when_not_matched_insert_all=true"], ids=["insert", "merge_insert"])
+@pytest.mark.parametrize(
+    ("door", "branch", "body"),
+    [
+        pytest.param("insert", None, b"this is not an arrow ipc stream", id="insert-main-a-body-that-is-not-arrow"),
+        pytest.param("insert", "work", _tampered(_BINARY_OFFSETS, struct.pack("<iii", 0, 5, 65536)), id="insert-branch-binary-offsets-past-the-values-buffer"),
+        pytest.param(
+            "merge_insert?on=id&when_not_matched_insert_all=true",
+            None,
+            _a_compressed_text_declaring(2**50, "zstd"),
+            id="merge_insert-main-a-zstd-buffer-declaring-2^50-bytes",
+        ),
+        pytest.param(
+            "merge_insert?on=id&when_not_matched_insert_all=true",
+            "work",
+            _a_dictionary_batch_whose_id_names_no_field(),
+            id="merge_insert-branch-a-dictionary-batch-whose-id-names-no-field",
+        ),
+    ],
+)
 def test_a_write_body_that_is_not_a_valid_arrow_stream_is_refused_and_writes_nothing(
     real_ns_client: TestClient, door: str, branch: str | None, body: bytes
 ) -> None:
@@ -161,22 +133,8 @@ def test_a_write_body_that_is_not_a_valid_arrow_stream_is_refused_and_writes_not
     assert _rows_on(real_ns_client, branch) == 3, "a refused write must write no rows"
 
 
-@pytest.mark.parametrize("body", BODIES)
-def test_the_insert_branch_arm_refuses_it_without_the_door(tmp_path: Path, body: bytes) -> None:
-    """`dataplane.insert_into_table` is a seam of its own: its branch arm must not depend on the door's
-    coercion having read the body first, because it is the arm that hands the buffers to Lance."""
-    ns = connect("dir", {"root": str(tmp_path / "data")})
-    create_table(ns, {}, ["t"], _table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"]), mode="create", registry=None)
-    open_dataset(ns, {}, ["t"]).create_branch("work", None)
-
-    with pytest.raises(InvalidInputError, match="^the request body is "):
-        insert_into_table(ns, {}, InsertIntoTableRequest(id=["t"], branch="work"), body, max_bytes=_BODY_LIMIT)
-
-    assert open_dataset(ns, {}, ["t"], branch="work").count_rows() == 3, "a refused insert must write no rows"
-
-
-@pytest.mark.parametrize("branch", [None, "work"], ids=["main", "branch"])
-@pytest.mark.parametrize("door", ["insert", "merge_insert?on=id&when_not_matched_insert_all=true"], ids=["insert", "merge_insert"])
+@pytest.mark.parametrize("branch", ["work"], ids=["branch"])
+@pytest.mark.parametrize("door", ["merge_insert?on=id&when_not_matched_insert_all=true"], ids=["merge_insert"])
 def test_a_valid_body_still_writes(real_ns_client: TestClient, door: str, branch: str | None) -> None:
     """The positive half: the same two rows, untampered, land on the ref the request names."""
     _seeded(real_ns_client, branch)

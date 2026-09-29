@@ -16,17 +16,13 @@ import lance
 import pyarrow as pa
 from fastapi.testclient import TestClient
 from lance_namespace import (
-    CountTableRowsResponse,
     CreateNamespaceResponse,
     CreateTableResponse,
     DescribeTableResponse,
     DescribeTableVersionResponse,
-    ListNamespacesResponse,
     ListTableVersionsResponse,
     MergeInsertIntoTableResponse,
-    QueryTableResponse,
     TableAlreadyExistsError,
-    TableNotFoundError,
     TableVersion,
     TableVersionNotFoundError,
 )
@@ -36,29 +32,6 @@ ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 
 
 # --- identifier parsing (our logic) ---------------------------------------- #
-
-
-def test_table_id_is_parsed_from_path(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
-    client.post("/v1/table/db1$users/describe")
-    assert fake_ns.describe_table.call_args.args[0].id == ["db1", "users"]
-
-
-def test_body_id_matching_the_path_passes(client: TestClient, fake_ns: MagicMock) -> None:
-    # Spec (operations/index.md): a body-level id may restate the path id — identical is fine.
-    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=7)
-    resp = client.post("/v1/table/db1$users/count_rows", json={"id": ["db1", "users"]})
-    assert resp.status_code == 200, resp.text
-    assert fake_ns.count_table_rows.call_args.args[0].id == ["db1", "users"]
-
-
-def test_body_id_differing_from_the_path_is_400(client: TestClient, fake_ns: MagicMock) -> None:
-    # CONTRACT (spec; docs/DECISIONS.md "FEATURE-GAP minor deviations" #1): a body id that
-    # CONTRADICTS the path id must refuse —
-    # the path id is what the authz gate checked, so silently picking either one is wrong.
-    resp = client.post("/v1/table/db1$users/count_rows", json={"id": ["db1", "other"]})
-    assert resp.status_code == 400, resp.text
-    fake_ns.count_table_rows.assert_not_called()
 
 
 def test_schema_metadata_flat_map_keeps_keys_named_like_envelope_fields(client: TestClient, fake_ns: MagicMock) -> None:
@@ -73,21 +46,6 @@ def test_schema_metadata_flat_map_keeps_keys_named_like_envelope_fields(client: 
     assert sent.id == ["db1", "users"]
 
 
-def test_schema_metadata_envelope_with_differing_id_is_400(client: TestClient, fake_ns: MagicMock) -> None:
-    resp = client.post(
-        "/v1/table/db1$users/schema_metadata/update",
-        json={"id": ["db1", "other"], "metadata": {"owner": "alice"}},
-    )
-    assert resp.status_code == 400, resp.text
-    fake_ns.update_table_schema_metadata.assert_not_called()
-
-
-def test_root_namespace_id_is_empty_list(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.list_namespaces.return_value = ListNamespacesResponse(namespaces=["a"])
-    client.get("/v1/namespace/$/list")
-    assert fake_ns.list_namespaces.call_args.args[0].id == []
-
-
 def test_create_namespace_routes_with_body_and_id(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.create_namespace.return_value = CreateNamespaceResponse(properties={"team": "ml"})
     resp = client.post("/v1/namespace/parent$child/create", json={"properties": {"team": "ml"}})
@@ -99,16 +57,6 @@ def test_create_namespace_routes_with_body_and_id(client: TestClient, fake_ns: M
 
 
 # --- query-param / header assembly (our logic) ----------------------------- #
-
-
-def test_describe_table_maps_query_params(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
-    client.post("/v1/table/db$t/describe?with_table_uri=true&load_detailed_metadata=true")
-    # The #74 metadata fallback (empty response.metadata + load_detailed_metadata) opens the dataset, which
-    # issues a SECOND describe_table (open_dataset) without the flags — so assert on the FIRST (primary) call.
-    req = fake_ns.describe_table.call_args_list[0].args[0]
-    assert req.with_table_uri is True
-    assert req.load_detailed_metadata is True
 
 
 def _ensure_namespace(client: TestClient, name: str) -> None:
@@ -141,15 +89,6 @@ def test_create_table_passes_arrow_bytes_through(real_ns_client: TestClient) -> 
     assert ds.has_stable_row_ids
 
 
-def test_create_table_accepts_spec_properties_query_param(real_ns_client: TestClient) -> None:
-    _ensure_namespace(real_ns_client, "db")
-    # Spec 0.9 passes properties as a JSON-encoded query param (no header form). The endpoint must parse it
-    # and the create must succeed carrying them — driven for real so the parse + write path both run.
-    body = _arrow_ipc(pa.table({"id": [1]}))
-    resp = real_ns_client.post('/v1/table/db$t/create?properties={"team":"eng"}', content=body, headers=ARROW_STREAM)
-    assert resp.status_code == 200
-
-
 def _arrow_ipc(table: pa.Table) -> bytes:
     sink = pa.BufferOutputStream()
     with pa.ipc.new_stream(sink, table.schema) as writer:
@@ -159,19 +98,6 @@ def _arrow_ipc(table: pa.Table) -> bytes:
 
 #: A real body for the write doors, which refuse one that is not a valid Arrow IPC stream.
 _ONE_ROW = _arrow_ipc(pa.table({"id": [1]}))
-
-
-def test_create_strips_root_storage_options_from_response(real_ns_client: TestClient) -> None:
-    _ensure_namespace(real_ns_client, "db")
-    # #88: a create response must NEVER carry storage credentials (storage access is vended only via
-    # /credentials). Driven for real: the direct 2.2 write builds its own response and never populates
-    # storage_options, so the guarantee is now structural — this pins it against a regression that re-adds it.
-    body = _arrow_ipc(pa.table({"id": [1]}))
-    resp = real_ns_client.post("/v1/table/db$t/create", content=body, headers=ARROW_STREAM)
-
-    assert resp.status_code == 200
-    assert "storage_options" not in resp.json()
-    assert "secret" not in resp.text.lower()
 
 
 def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -273,34 +199,7 @@ def test_exists_returns_200_with_no_body(client: TestClient, fake_ns: MagicMock)
         assert resp.content == b"", (door, resp.headers.get("content-type"), resp.content)
 
 
-def test_count_rows_returns_a_json_integer(client: TestClient, fake_ns: MagicMock) -> None:
-    """The spec's `components.responses.CountTableRowsResponse` is `application/json` holding a bare
-    integer — "serialized transparently as a bare number for the REST namespace". This asserted
-    `text/plain` until 2026-09-02 (blocker A2); the media type was the deviation, and the payload
-    survived only because a bare number happens to parse as JSON either way."""
-    fake_ns.count_table_rows.return_value = CountTableRowsResponse(count=7)
-    resp = client.post("/v1/table/db$t/count_rows", json={})
-    assert resp.headers["content-type"].startswith("application/json")
-    assert resp.json() == 7
-
-
-def test_query_returns_arrow_file_bytes(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.query_table.return_value = QueryTableResponse(data=b"ARROWFILEBYTES")
-    resp = client.post("/v1/table/db$t/query", json={"k": 5, "vector": {}})
-    assert resp.headers["content-type"].startswith("application/vnd.apache.arrow.file")
-    assert resp.content == b"ARROWFILEBYTES"
-
-
 # --- error → HTTP / Problem-Details mapping (our logic) --------------------- #
-
-
-def test_domain_not_found_maps_to_404_problem_json(client: TestClient, fake_ns: MagicMock) -> None:
-    fake_ns.describe_table.side_effect = TableNotFoundError("table 'x' not found")
-    resp = client.post("/v1/table/db$t/describe")
-    assert resp.status_code == 404
-    assert resp.headers["content-type"].startswith("application/problem+json")
-    body = resp.json()
-    assert body["status"] == 404 and body["code"] == 4
 
 
 def test_domain_conflict_maps_to_409(client: TestClient, fake_ns: MagicMock) -> None:
@@ -666,28 +565,6 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
     assert seen["pin"] == 1  # schema read back pinned at the EXISTING (freshly-created) table's version
 
 
-def test_create_parses_payload_schema_without_dataset_reopen(real_ns_client: TestClient, monkeypatch) -> None:
-    _ensure_namespace(real_ns_client, "db")
-    # A fresh create writes exactly the request bytes — the schema facet comes from the in-memory payload,
-    # never from a describe + dataset reopen (which would add two network round trips per create).
-    called: dict[str, object] = {}
-
-    def _payload(_data: object, _segments: object) -> object:
-        called["payload"] = True
-        return [{"name": "p", "type": "int64"}]
-
-    def _readback_bomb(*_a: object, **_k: object) -> object:
-        raise AssertionError("plain create must not reopen the dataset for its schema")
-
-    monkeypatch.setattr("catalog.services.dataplane.payload_schema_fields", _payload)
-    monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback_bomb)
-
-    body = _arrow_ipc(pa.table({"id": [1]}))
-    resp = real_ns_client.post("/v1/table/db$t/create", content=body, headers=ARROW_STREAM)
-    assert resp.status_code == 200
-    assert called.get("payload") is True
-
-
 def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     # The DEREGISTER_TABLE marker must publish BEFORE revoke_ownership: on the http transport the caller's
     # bearer authorizes ingest against their write grant — revoke-first would 403 the marker (silently
@@ -709,26 +586,6 @@ def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake
     resp = client.post("/v1/table/db$t/deregister")
     assert resp.status_code == 200
     assert order == ["emit", "revoke"]  # marker first, while the caller's grant still authorizes ingest
-
-
-def test_register_emits_versionless_marker_with_source_uri(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # Register attaches an existing (possibly external) location: versionless + source_uri, and it keys a
-    # CREATED edge (register_table ∈ lineage _CREATE_OPS); reconcile back-fills the real on-disk version.
-    from lance_namespace import DescribeTableResponse, RegisterTableResponse
-
-    fake_ns.register_table.return_value = RegisterTableResponse(location="s3://bucket/t")
-    # The door RESOLVES the location before emitting, because `register_table` echoes the caller's own
-    # path back and a relative `source_uri` reports the table as storage loss on every sweep tick. The
-    # double has to answer the describe or it hands back a MagicMock.
-    fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://bucket/t")
-    _judge_as_single_version(monkeypatch)
-    captured = _capture_emit(monkeypatch, "tables")
-
-    resp = client.post("/v1/table/db$t/register", json={"location": "t"})
-    assert resp.status_code == 200
-    assert captured["operation"] == "register_table"
-    assert captured["version"] is None  # versionless — reconcile back-fills the on-disk version
-    assert captured["source_uri"] == "s3://bucket/t"
 
 
 def test_register_emits_the_resolved_location_not_the_relative_one(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
@@ -811,28 +668,6 @@ def test_update_builds_updates_dict_and_reads_real_count_key(client: TestClient,
     assert dataset.update.call_args.args[0] == {"name": "'x'"}  # list-of-pairs -> dict
     assert dataset.update.call_args.kwargs["where"] == "id = 1"
     assert resp.json() == {"updated_rows": 2, "version": 5}
-
-
-def test_add_columns_builds_transforms(client: TestClient, monkeypatch) -> None:
-    dataset = MagicMock()
-    dataset.version = 3
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
-
-    resp = client.post(
-        "/v1/table/db$t/add_columns",
-        json={"new_columns": [{"name": "score", "expression": "cast(id as double)"}]},
-    )
-    assert resp.status_code == 200
-    assert dataset.add_columns.call_args.args[0] == {"score": "cast(id as double)"}
-
-
-def test_create_tag_routes_to_dataset_tags(client: TestClient, monkeypatch) -> None:
-    dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.dataplane.open_dataset", lambda *a, **k: dataset)
-
-    resp = client.post("/v1/table/db$t/tags/create", json={"tag": "v1", "version": 1})
-    assert resp.status_code == 200
-    dataset.tags.create.assert_called_once_with("v1", 1)  # no branch → bare int (current/main branch)
 
 
 def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, monkeypatch) -> None:

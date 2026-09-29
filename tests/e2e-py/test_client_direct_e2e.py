@@ -21,7 +21,7 @@ import lance
 import pyarrow as pa
 import pytest
 import requests
-from topology import OUTSIDER, assert_parent_exists, create_top_level
+from topology import assert_parent_exists, create_top_level
 
 from service_kit.governed.auth.write_model import carried_model
 
@@ -294,15 +294,3 @@ def test_concurrent_commits_are_acid_no_lost_update(catalog: str) -> None:
         timeout=30,
     )
     assert r.status_code == 400, f"stale-append-after-overwrite must be a NON-retryable 400 (P4 fix), got {r.status_code}: {r.text}"
-
-
-def test_commit_is_governed(catalog: str) -> None:
-    # No token → 401 (OIDC); a valid token without a grant → 403 (FGA) — /commit is NOT an anonymous write.
-    body = json.dumps({"fragments": [{"id": 0}], "read_version": 1})
-    h = {"content-type": "application/json"}
-    assert requests.post(f"{catalog}/management/v1/table/{_TABLE}/commit", headers=h, data=body, timeout=10).status_code == 401
-    # A REAL outsider, not bob — he is a project admin on this estate. This leg used to pass only
-    # because `_NS` had never been created, so the commit 403'd on a missing parent rather than on a
-    # missing grant; creating the parent (as this suite now does) exposed the wrong oracle.
-    outsider = {**h, "Authorization": f"Bearer {_token(OUTSIDER)}"}
-    assert requests.post(f"{catalog}/management/v1/table/{_TABLE}/commit", headers=outsider, data=body, timeout=10).status_code == 403

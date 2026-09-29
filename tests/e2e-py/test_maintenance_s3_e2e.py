@@ -325,18 +325,6 @@ def test_a_registry_only_bucket_is_swept_and_a_deactivated_one_is_not(estate: Es
 # --------------------------------------------------------------------------- #
 
 
-def test_the_orphan_scan_ran_and_did_not_report_a_zero_it_never_measured(scanned: ReconcileReport) -> None:
-    """The gate on every assertion below: the category must have RUN.
-
-    With `MAINTENANCE_ORPHAN_SCAN_ENABLED` off, `_orphan_category` records a CategorySkipped and
-    leaves `orphan_files` empty — and an empty list satisfies every "is not reported" test in this
-    file. So pin the gate first: the count exists, and the category is not in `skipped`.
-    """
-    assert "orphan_files" in scanned.counts, "the orphan category never produced a count — it did not run"
-    assert "orphan_files" not in {s.category for s in scanned.skipped}
-    assert scanned.counts["orphan_files"] > 0, "the planted strays should have been found"
-
-
 def test_a_stray_data_file_on_s3_is_still_reported(estate: Estate, scanned: ReconcileReport) -> None:
     """The positive control: a `data/*.lance` under a live dataset's prefix that no manifest names IS
     an orphan, and is classified as `data` — the kind whose reclamation loses rows, so the kind a

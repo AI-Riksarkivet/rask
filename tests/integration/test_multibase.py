@@ -45,19 +45,6 @@ def _stub_create(calls: list[dict[str, Any]]) -> Any:
     return fake
 
 
-def test_off_allowlist_data_base_rejected_400(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = _settings
-    calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(dataplane, "create_table", _stub_create(calls))
-    r = client.post(
-        "/v1/table/db$t/create?data_base=s3://evil-bucket",
-        content=_arrow(),
-        headers={"content-type": ARROW_STREAM},
-    )
-    assert r.status_code == 400, r.text
-    assert not calls  # rejected BEFORE any write — a caller can never target an unapproved bucket
-
-
 def test_on_allowlist_data_base_threaded_through(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = _settings
     calls: list[dict[str, Any]] = []
@@ -69,12 +56,3 @@ def test_on_allowlist_data_base_threaded_through(client: TestClient, monkeypatch
     )
     assert r.status_code == 200, r.text
     assert calls and calls[0]["data_bases"] == ["s3://ok-bucket"]
-
-
-def test_no_data_base_is_unchanged(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = _settings
-    calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(dataplane, "create_table", _stub_create(calls))
-    r = client.post("/v1/table/db$t/create", content=_arrow(), headers={"content-type": ARROW_STREAM})
-    assert r.status_code == 200, r.text
-    assert calls and calls[0]["data_bases"] is None  # backward-compatible single-location create

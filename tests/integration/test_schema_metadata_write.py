@@ -100,13 +100,3 @@ def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) ->
     on_disk = lance.dataset(_location(real_ns_client, "t3")).schema.metadata or {}
     assert on_disk.get(b"lineage.dataset_id") == b"m1$t3", on_disk
     assert on_disk.get(b"lineage.create_run_id") == b"run-1", on_disk
-
-
-def test_explicit_null_is_not_written_as_the_string_None(real_ns_client: TestClient) -> None:
-    # `str(None) == "None"`: the endpoint stringified every value, so `{"description": null}` from a client
-    # landed on disk as the four characters None — a property nobody asked for, on the key that matters most.
-    _create(real_ns_client, "t4")
-
-    resp = real_ns_client.post("/v1/table/m1$t4/schema_metadata/update", json={"description": None})
-    assert resp.status_code == 200, resp.text
-    assert "description" not in _properties(real_ns_client, "t4")

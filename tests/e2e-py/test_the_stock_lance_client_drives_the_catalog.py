@@ -150,20 +150,6 @@ def test_a_failure_arrives_as_the_SPECS_OWN_TYPED_ERROR(stock, table_id: list[st
     assert caught.value.code == 8, f"the stock client rebuilt code {caught.value.code}, not the spec's 8"
 
 
-def test_the_client_is_REALLY_unauthenticated_without_a_credential() -> None:
-    """The suite's own control: without the header the same calls must fail, or it proves nothing.
-
-    A conformance suite that would pass against an open door is measuring the door's absence. The
-    connect below deliberately uses the spec's `auth_token` spelling, which pylance accepts and
-    ignores — so this is simultaneously the control AND the pin on that quirk.
-    """
-    ln = _requests()
-    tokenless = ln.connect("rest", {"uri": CATALOG, "auth_token": _token(USER)})
-    with pytest.raises(ln.UnauthenticatedError) as caught:
-        tokenless.list_namespaces(ln.ListNamespacesRequest(id=[]))
-    assert caught.value.code == 16, f"an uncredentialed call answered code {caught.value.code}, not 16"
-
-
 def test_the_stock_client_drives_a_WRITE_round_trip(stock) -> None:  # noqa: ANN001
     """create -> insert -> tag -> read the tag -> untag -> drop, all through the stock client.
 

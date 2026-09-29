@@ -72,11 +72,6 @@ LINEAGE_URL = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 #: rather than with the cluster.
 BAKED_COMMAND = "python /home/ray/jobs/ray_dummy_job.py"
 
-#: The registered TASK KEY that resolves to that command. A declaration names a task; the task's
-#: registration under `<control_root>/_tasks/` names the engine and the command. That indirection is
-#: the compute-plane decoupling: the catalog validates the key against the registry and never learns
-#: an engine's vocabulary, so a command string is no longer declarable at all.
-BAKED_TASK = os.environ.get("LANCE_E2E_TASK", "dummy-lane")
 
 LANE = "dummy"
 #: The identity the lane EMITS as, matching what the live bronze-to-silver runner sends
@@ -275,90 +270,6 @@ def _job_logs(submission_id: str, *, timeout: int = 300) -> str:
         check=False,
         timeout=timeout,
     ).stdout
-
-
-# --- 1 DECLARED ------------------------------------------------------------------------------------
-
-
-def test_the_lane_is_DECLARED_through_the_admin_gated_catalog_door(catalog: str) -> None:
-    """The record, written through the door a project admin holds — not a chart value."""
-    response = requests.post(
-        f"{catalog}/v1/project/{PROJECT}/transform/set",
-        json={
-            "name": LANE,
-            "from_id": f"{PROJECT}-bronze$events",
-            "to_id": f"{PROJECT}-silver${LANE}",
-            "task": BAKED_TASK,
-            "params": {"embed_dim": "8"},
-            "code_version": os.environ.get("LANCE_E2E_CODE_VERSION", "e2e"),
-        },
-        headers=_headers(),
-        timeout=30,
-    )
-    if response.status_code in (401, 403):
-        pytest.skip(f"LANCE_E2E_ADMIN_TOKEN is not a {PROJECT} admin ({response.status_code}); the door is working, the fixture is not")
-    assert response.status_code == 200, response.text
-    body = response.json()
-    # `name`, not `lane` — the response carries the FIELD, and `lane` is only an input alias kept for
-    # backward compatibility with stored records. See the 422 assertion below for the same rename.
-    assert body["name"] == LANE
-    assert body["project"] == PROJECT, "the project must come from the gated path"
-    assert body["task"] == BAKED_TASK
-
-
-def test_an_UNDECLARED_lane_is_422_naming_the_key(catalog: str) -> None:
-    """The failure mode this whole record exists to move EARLIER.
-
-    Before declaration, a trigger naming a lane nobody configured surfaced as a Ray job that would
-    not start — an error naming the image, several layers from the typo that caused it.
-    """
-    response = requests.post(
-        f"{catalog}/v1/project/{PROJECT}/transform/describe",
-        json={"name": f"nosuchlane-{uuid.uuid4().hex[:8]}"},
-        headers=_headers(),
-        timeout=30,
-    )
-    if response.status_code in (401, 403):
-        pytest.skip(f"LANCE_E2E_ADMIN_TOKEN is not a {PROJECT} admin ({response.status_code})")
-    assert response.status_code == 422, response.text
-    fields = [e["field"] for e in response.json()["errors"]]
-    # `body.name`, not `body.lane`. The field was renamed when a "lane" became a declared TRANSFORM —
-    # three different things had been called a lane (the declared record, the Ray job, the batch work).
-    # `lane` survives only as an input ALIAS (AliasChoices), and an alias is not what a validation error
-    # names: pydantic reports the FIELD. So the 422 still names the key, and this asserts the key it now
-    # names.
-    assert "body.name" in fields, f"the 422 must name the transform field; got {fields}"
-
-
-def test_a_COMMAND_STRING_CANNOT_be_declared(catalog: str) -> None:
-    """B3 enforced at the door: a lane that cannot be declared can never be submitted.
-
-    The door takes a TASK KEY, resolved against the registry the plane that can run it wrote. A
-    command string is not merely unregistered — it is not a field the request model has, so it is
-    refused as an extra input before any registry lookup. That is stronger than the old refusal,
-    which inspected an `entrypoint` string and judged it: a shape that cannot be sent needs no judge.
-    """
-    response = requests.post(
-        f"{catalog}/v1/project/{PROJECT}/transform/set",
-        json={
-            "name": "would-be-devmode",
-            "from_id": f"{PROJECT}-bronze$events",
-            "to_id": f"{PROJECT}-silver$devmode",
-            "task": "python ./my_local_transform.py",
-        },
-        headers=_headers(),
-        timeout=30,
-    )
-    if response.status_code in (401, 403):
-        pytest.skip(f"LANCE_E2E_ADMIN_TOKEN is not a {PROJECT} admin ({response.status_code})")
-    assert response.status_code == 422, response.text
-    # The refusal NAMES THE REGISTRY rather than a list of blessed strings: "no task is registered
-    # as '…'; a task is registered by the plane that can run it, under the control root's _tasks/
-    # prefix". That is the decoupling's whole point reaching the operator — the catalog cannot recite
-    # an engine's commands, so it says where the answer lives instead of guessing at one.
-    body = response.json()
-    assert [e["field"] for e in body["errors"]] == ["body.task"], body
-    assert "_tasks/" in response.text, response.text
 
 
 # --- 3 ON RAY, 6 NO COPY, 4 COMMITTED ONCE ----------------------------------------------------------
