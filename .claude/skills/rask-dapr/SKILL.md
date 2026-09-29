@@ -137,11 +137,12 @@ hand-built workflow without history, replay or per-step retry — should be Work
 
 ## The one open candidate
 
-**Distributed lock** for the notifications reconciler. The values-prod note + the invariant test
-record the exit condition: a cross-pod guard that SKIPS. A lock component IS try-acquire-or-fail
-(skip on failure — the right shape, where an actor queues), but the API is Alpha. Adopting it is an
-owner decision; until then notifications stays at 1 replica and the constraint is enforced by
-`test_notifications_stays_single_replica_while_its_single_flight_lock_is_process_local`.
+**Distributed lock** for the notifications reconciler. The exit condition is a cross-pod guard that
+SKIPS. A lock component IS try-acquire-or-fail (skip on failure — the right shape, where an actor
+queues), but the API is Alpha. Adopting it is an owner decision; until then notifications stays at
+the chart's 1 replica, and nothing enforces that: the reconcile tick's overlap guard is a
+process-local `asyncio.Lock`, so a second replica would re-walk the same rows (twice the FGA and actor
+load, not a wrong answer).
 
 ## Sidecar map — who can call Dapr APIs at all
 

@@ -11,17 +11,17 @@ reads as decided regardless of what the prose around it says.
 
 ---
 
-## Landed and pinned
+## Landed, and what pins each
 
 | | Invariant | Where it is pinned |
 | --- | --- | --- |
-| **B1** | History and events carry identifiers and counts — never payloads | `tests/unit/test_activity_results_carry_no_payload.py` walks each workflow module's own `ACTIVITIES` tuple, so a NEW activity is covered rather than only the two models somebody remembered to name |
-| **B2** | Never pre-gate a Ray submission on capacity or resource labels | `tests/unit/test_invariants.py::test_a_ray_SUBMISSION_is_never_pre_gated_on_cluster_capacity` |
+| **B1** | History and events carry identifiers and counts — never payloads | No test. Ingest's runtime budgets (`_refuse_oversized_dispatch`, `FANIN_RETURN_BUDGET_BYTES`) refuse a dispatch or fan-in large enough for a payload to matter |
+| **B2** | Never pre-gate a Ray submission on capacity or resource labels | No test: it is a rule about code not yet written, and no linter rule expresses it |
 | **B3** | The submission id carries the full work identity | `packages/ray-kit/tests/test_submission_id.py` (both axes) **plus** a rendered-chart test — the deploy axis is fed by ONE chart line, and `test_an_unset_code_version_reproduces_the_previous_id_exactly` blesses an empty code on purpose, so deleting that line was indistinguishable from the compatibility path |
-| **B6** | Refuse new runs while draining | `service_kit.draining` + `services/medallion/tests/test_run_doors_refuse_while_draining.py`, which sweeps every `@router.post` so a new door cannot be added ungated |
-| **B10** | Monotonic clocks; the same number lands in the lineage facet | `services/medallion/tests/test_one_duration_reaches_both.py` |
+| **B6** | Refuse new runs while draining | `service_kit.draining` + `services/medallion/tests/test_run_doors_refuse_while_draining.py`, which checks the `/produce` door only: nothing sweeps the other run doors, so a new one can be added ungated |
+| **B10** | Monotonic clocks; the same number lands in the lineage facet | No test. Its behavioural home is a `handle_stage` test on the Ray wake-up trigger that asserts the emitted COMPLETE's duration, and that test does not exist yet |
 | **B12** | Randomise iteration order | `tests/unit/test_batch_invariants_are_actually_guarded.py` — both the dataset list and the failure-retry list |
-| **B13** | Single-flight claims get chart gates | the same file, binding the stage runner's `asyncio.Lock` to `stageRunnerReplicas: 1` in both values files |
+| **B13** | Single-flight claims get chart gates | No test: `stageRunnerReplicas: 1` in both values files is the only guard of the stage runner's process-local `asyncio.Lock`. Its home is a `maximum: 1` in a chart values schema, and the chart ships no schema yet |
 
 **B10 was the only live defect among them.** On the Ray lane the stage runner runs twice — submit, then a
 wake-up hours later to measure and emit — and the metric used the watcher's measured span while the

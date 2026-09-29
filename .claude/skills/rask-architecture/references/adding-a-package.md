@@ -77,9 +77,9 @@ those are **per-package turbo tasks**, never centralized in the root.
 Add the import name to `pyproject.toml`
 `[tool.ruff.lint.isort] known-first-party` so import sorting treats it as
 first-party. The list is COMPLETE — every first-party import name on disk, and
-nothing else — and `tests/unit/test_known_first_party_names_the_estate.py`
-compares it against the workspace globs in both directions, so a member added
-or deleted without touching it fails that gate.
+nothing else — and nothing checks it: a member added without its name sorts into
+the third-party block, and a deleted member's name lingers, with every lint still
+green. Add or remove the name in the same change as the member.
 
 ## 5. If it has tests
 

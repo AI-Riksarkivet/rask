@@ -95,7 +95,7 @@ app = make_service_app(
   stays green (`services/catalog`, `services/lineage` — one pinning a privilege escalation, one a commit
   duplication — ran nowhere until 2026-08-09). A new **top-level** `tests/<x>/` matches no glob and must
   be added to `testpaths` by hand, which is exactly how `tests/e2e-py` was lost once.
-  Measured 2026-08-22: `services/search` and `services/viewer` shipped **no tests at all** (`packages/ratch` was the third — dissolved 2026-08-28); both have since gained suites (`test_search_is_governed`, `test_the_search_door_is_wired`, the viewer's gating suites), and the residue is tracked in the lakehouse register, row Q3-37 (drained 2026-09-10; in git history)/Q3-38 (the blanket ruff exemption, and `ray_kit.submit` untested), not here.
+  Measured 2026-08-22: `services/search` and `services/viewer` shipped **no tests at all** (`packages/ratch` was the third — dissolved 2026-08-28); both have since gained suites (`test_the_gate_authorizes_the_table_it_reads`, `test_the_search_door_is_wired`, the viewer's gating suites), and the residue is tracked in the lakehouse register, row Q3-37 (drained 2026-09-10; in git history)/Q3-38 (the blanket ruff exemption, and `ray_kit.submit` untested), not here.
 - **A sealed runner's tests are invisible to the root pytest, and to CI.** `runners/*` is matched by no
   workspace or testpaths glob by design, so `make test` and `make test-slow` loop over every
   `runners/*/tests` themselves, running each suite from inside its runner directory with

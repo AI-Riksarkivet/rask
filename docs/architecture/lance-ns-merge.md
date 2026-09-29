@@ -345,7 +345,7 @@ frontend claims falsifiable and must be wired into rask's test run or it silentl
   `media.corpus.mode` defaults to `emptyDir` (a fresh cluster comes up with zero node preparation) with
   `pvc` for prod — existing `claimName` or a chart-created, `resource-policy: keep` PVC — and `hostPath`
   demoted to an opt-in mode, rendered `DirectoryOrCreate` so it can no longer wedge the trio in
-  `ContainerCreating`. Pinned by `test_invariants.py::test_no_workload_mounts_a_hostpath_that_must_pre_exist`.
+  `ContainerCreating`. No test pins it.
   lance-ns `#103` (corpus as catalog-governed project tables) remains the eventual shape, but it is no
   longer blocking: the chart no longer depends on a prepared node.
 

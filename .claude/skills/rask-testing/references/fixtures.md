@@ -48,8 +48,8 @@ flows and notifications; `build_gateway_settings()` in the gateway):
 
 - Set the env the whole directory needs around the first import, in its `conftest.py`, then hand it
   back. Copy `services/controlplane/tests/conftest.py`. Env left set leaks into every other testpath,
-  because pytest collects all of them before it runs any test, and
-  `tests/unit/test_a_conftest_hands_the_environment_back.py` fails a conftest that sets and keeps it.
+  because pytest collects all of them before it runs any test, and nothing checks for the leak: the
+  suite stays green while a later module builds its app from the wrong values.
 - A test that needs another value sets it with `monkeypatch.setenv` and calls
   `importlib.reload(<package>)` (`services/gateway/tests/test_notifications_proxy_shapes.py`).
 - Code in `service_kit` itself builds a synthetic app with `make_service_app(..., settings=...)`
@@ -120,8 +120,8 @@ dagger core container from --address="$IMG" with-exposed-port --port=4222 \
 RASK_NATS_URL=nats://127.0.0.1:14222 uv run pytest services/ingest/tests/test_worker_queue.py services/ingest/tests/test_run_chain.py -rs
 ```
 
-Verified 2026-09-28: 12 passed, no skips (without the broker, `test_worker_queue.py` alone reports
-6 skipped).
+Verified 2026-09-29 against `nats:2.14.2-alpine`: 10 passed, no skips (without the broker,
+`test_worker_queue.py` alone reports 4 skipped).
 
 ## The Ray job client
 

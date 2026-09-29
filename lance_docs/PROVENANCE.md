@@ -9,25 +9,21 @@ and no date, and a citation from them could not be checked against anything.
 changes under an unchanged `info.version` — see the spec entry below — so "1.0.0 both sides" is not
 evidence of agreement.
 
-## Machine-checked
+## A single upstream file
 
-| File | Source | Pinned at | Checked by |
+| File | Source | Pinned at | Read by |
 | --- | --- | --- | --- |
 | `ns_catalog/spec.yaml` | [`lance-format/lance-namespace`](https://github.com/lance-format/lance-namespace) `docs/src/spec.yaml` | commit `eb1de88e3c7e77537ec35514c0ce8b4fdace5515` (2026-09-01) | `tests/integration/test_spec_conformance.py` |
 
-Three gates read it, and they cover different failures:
-
-- `test_spec_has_54_operations` — the vendored copy SHRINKING.
-- `test_the_vendored_spec_still_matches_UPSTREAM` — upstream ADDING or RETIRING an operation.
-- `test_the_vendored_spec_matches_upstream_on_PARAMETER_SHAPES_too` — an operation that upstream
-  CHANGED. The first two are blind to it, and that is not hypothetical: commit `eb1de88e`
-  (`feat(spec)!: allow multiple columns for the merge insert on key`, 2026-09-01) turned
-  `merge_insert`'s `on` from a `string` into a repeatable array, and the op-id check reported "zero
-  difference either way" across it on 2026-09-09 while the vendored copy sat 79 lines behind carrying
-  the superseded shape.
-
-The last two are network-gated and SKIP when upstream is unreachable — drift is measured in weeks, not
-in the commit in front of you, and a gate that fails on an offline laptop teaches people to ignore it.
+`test_every_spec_operation_is_served` checks that every operation in the VENDORED copy has a served
+catalog route. Nothing checks the copy itself: not its operation count, not whether it still matches
+upstream, and not whether the pin above names the commit its bytes came from. Each of those drifts
+silently. A shrunken copy weakens the route check without failing it, and an upstream change is
+invisible, which is not hypothetical: commit `eb1de88e` (`feat(spec)!: allow multiple columns for the
+merge insert on key`, 2026-09-01) turned `merge_insert`'s `on` from a `string` into a repeatable array,
+and an operation-id comparison reported "zero difference either way" across it on 2026-09-09 while
+the vendored copy sat 79 lines behind carrying the superseded shape. Comparing the copy with upstream
+is a network check; its home is a scheduled job, and none exists yet.
 
 **A known, deliberate deviation rides on this file.** The catalog's `merge_insert` door still takes
 `on` as a single key (`catalog/api/v1/endpoints/data.py`): the installed `lance-namespace` 0.11.0 model
@@ -94,8 +90,9 @@ against the live source as the paragraph above instructs. All three are unchange
 `rust/lance-table/src/feature_flags.rs` allocates ELEVEN plus a sentinel at `1 << 11`. The six it does
 not name are `disable_transaction_file`, `unstable_data_overlay_files`, `covered_index_metadata`,
 `mixed_data_file_versions`, `frag_reuse_with_stable_row_ids` and `fragment_reuse_index`. That gap is
-why `service_kit.lakehouse.features` reads the Rust source rather than this bundle, and is pinned by
-`packages/service-kit/tests/test_a_refused_flag_is_refused_BY_NAME.py`.
+why `service_kit.lakehouse.features` reads the Rust source rather than this bundle. No test compares
+its names with `feature_flags.rs`: `tests/unit/test_maintenance_features.py` pins only the names of
+the two flags it exercises (mixed data file versions and data overlays).
 
 **`guide.md:229` (and `:894`) holds for the manifest's version under every commit except
 `write_dataset(mode="overwrite", data_storage_version=X)`; it does not bind each data file's version.**
@@ -155,5 +152,7 @@ curl -fsSL -o lance_docs/ns_catalog/spec.yaml \
 uv run pytest tests/integration/test_spec_conformance.py -q
 ```
 
-Then update the commit in the table above — the pin and the file are one change, and a pin that names
-a different commit than the bytes is worse than no pin.
+The test checks only that the catalog serves every operation in the new copy. Then update the commit
+in the table above — the pin and the file are one change, and a pin that names a different commit
+than the bytes is worse than no pin. Nothing checks the pin, so the table is only as right as this
+step.

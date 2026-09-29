@@ -136,8 +136,7 @@ No template names a StorageClass. `rustfs.storageClass`, `ray.hfCacheStorageClas
 `explorer.corpus.storageClass` all default to `""`, which omits `storageClassName` so the **cluster's
 default** class provisions — the only portable answer (`local-path` is k3s's provisioner name and does not
 exist on kind, whose default is `standard`). Note `storageClassName: ""` is *not* the same as omitting it:
-the empty string disables dynamic provisioning, which is why the templates use `with`. Pinned by
-`tests/unit/test_invariants.py::test_no_pvc_hardcodes_a_provisioner_specific_storage_class`.
+the empty string disables dynamic provisioning, which is why the templates use `with`. No test pins it.
 
 ### Observability stack (`observability.enabled`)
 

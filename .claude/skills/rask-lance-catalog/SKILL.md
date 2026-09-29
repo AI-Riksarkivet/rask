@@ -16,9 +16,10 @@ Two contracts stack here, and confusing them is how bugs happen:
 ## The spec surface (verified 2026-08-04 against lance.org)
 
 - **Operations: 54/54 ROUTED, 47 backend-backed.** `tests/integration/test_spec_conformance.py`
-  asserts both halves — every spec op has a served route, and the vendored
-  `lance_docs/ns_catalog/spec.yaml` still carries 54 ops (a shrunken spec would silently weaken the
-  check). The other **7 answer a spec-correct 406**: four because the native `dir` backend stubs them —
+  asserts that every op in the vendored `lance_docs/ns_catalog/spec.yaml` has a served route. Nothing
+  counts the vendored ops or compares them with upstream, so a shrunken or stale spec weakens that
+  check silently (`lance_docs/PROVENANCE.md`). The other **7 answer a spec-correct 406**: four because
+  the native `dir` backend stubs them —
   `backfill_column`, `alter_transaction` and BOTH materialized-view ops — and the three version-TRACKING
   ops because the catalog refuses them while it never advertises `managed_versioning` —
   `create_table_version`, `batch_create_table_versions`, `batch_commit_tables`
@@ -388,9 +389,9 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   `target_rows_per_fragment=32` — NATIVE `dataset.optimize.compact_files` reduces **4 → 2**. Same
   dataset shape, same option, opposite result, so Lance is not the defect. The job's call matches
   lance-ray 0.5.0's signature (`compact_files(uri, *, compaction_options, num_workers,
-  storage_options, ...)`), so it is not misuse either. `tests/e2e-py/test_ray_batch_e2e.py` carries a
-  **strict** xfail with this reason: switching the job to native compaction would delete the capability
-  the test exists to prove, and strict means the suite goes red — correctly — the day upstream fixes it.
+  storage_options, ...)`), so it is not misuse either. Nothing tracks the upstream fix: no suite drives
+  this demo job, which exercises lance-ray itself and not rask's production Ray path
+  (`scripts/ray_stage_job.py`).
 - **CHECK THE TRASH RECORD BEFORE TOUCHING BYTES — including when you are "only looking".** The sweep
   reports `versions_removed: 0` on datasets holding versions far older than the retention, and the
   reason is almost always the F6(d) exclusion: a recoverably-dropped dataset (`_trash/` record) is
@@ -636,6 +637,7 @@ governing their data. The project-scoped surface is home's `/projects/<p>` § Ma
   the cross-tenant read/write against the session-policy document the vendor really builds (IAM
   semantics, per tier, with two negative twins — B still reaches B's own table, and a read-tier
   credential cannot write its own), and `tests/e2e-py/test_credential_isolation_e2e.py` drives the
-  real attack with vended credentials (LIST/GET/PUT, env-gated — the CI half is #84). The offline
+  real attack with vended credentials at table scope (LIST and PUT against a sibling table in the same
+  bucket, and a read-tier PUT into its own table; env-gated — the CI half is #84). The offline
   half deliberately mocks no store: moto does not enforce inline session policies. Byte-placement
   isolation stays proven by `test_warehouse_routing.py` / `test_warehouses_e2e.py`.

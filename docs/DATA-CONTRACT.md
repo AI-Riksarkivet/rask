@@ -122,8 +122,9 @@ the breaking-change detector in §4 is OUR item to build, not something the form
 ## 7 · The event fabric contract
 
 The bus half of the contract, made explicit (2026-07-23). Four rules; every one cites the code that
-enforces it, and the topic constants below are pinned by `tests/unit/test_invariants.py` so a rename
-or an inline topic literal fails CI, not a live stack.
+enforces it. No test pins the topic constants' values or refuses an inline topic literal at a publish
+site: producers and consumers that import the same constant cannot disagree, and a literal typed at a
+publish site is caught by review alone.
 
 ### 7.1 Envelope: CloudEvents, supplied by Dapr
 
@@ -195,9 +196,8 @@ already support (subjects `lineage.events.*` style bindings cost nothing).
 A registry earns its keep when producers and consumers ship independently. Here they cannot drift:
 **one repo, one CI** — producers and consumers import the same model classes
 (`common.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
-in the same run, and `tests/unit/test_invariants.py` pins the topic constants and rejects inline
-topic literals at publish sites. A registry would add an operand and a failure mode to re-prove a
-property CI already proves. **Revisit trigger:** the moment a consumer is deployed from OUTSIDE
+in the same run. A registry would add an operand and a failure mode to re-prove a property CI already
+proves. **Revisit trigger:** the moment a consumer is deployed from OUTSIDE
 this repo's CI — an independently-released service, or tenant-authored consumers on the bus — the
 structural guarantee dissolves and a registry (or published JSON-schema artifacts per topic
 version) becomes the contract carrier.

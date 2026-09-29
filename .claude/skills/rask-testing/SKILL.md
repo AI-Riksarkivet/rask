@@ -52,14 +52,15 @@ consequences it does not spell out.
   the moment it exists; only a new top-level `tests/<x>/` needs adding by hand. Coverage's
   `source = ["services", "packages"]` with `[tool.coverage.report] include_namespace_packages` counts
   every member's `src` in the denominator with no edit.
-- **A live suite runs only when something names it.** Every offline lane deselects `e2e`. A new
-  `tests/e2e-py` file needs a per-suite marker registered in the root `pyproject.toml` with a
-  `make e2e-<suite>` target (listed in `E2E_SUITES`), or its path in the Makefile, `ci.yml`, a
-  `.dagger/*.go` lane or a `scripts/*.sh`; `tests/unit/test_e2e_collection_gate.py` fails a suite
-  with neither. A `make e2e-<suite>` target alone is not CI: if `scripts/e2e_stack.sh`,
-  `scripts/ray_e2e_stack.sh` and `ci.yml` never name that suite's files,
-  `tests/unit/test_a_declared_e2e_suite_is_driven_by_something.py` fails until they do or the suite is
-  added to that file's `UNDRIVEN` set.
+- **A live suite runs only when something names it, and nothing offline checks that it is named.**
+  Every offline lane deselects `e2e`. A new `tests/e2e-py` file needs a per-suite marker registered in
+  the root `pyproject.toml` with a `make e2e-<suite>` target (listed in `E2E_SUITES`), or its path in
+  `ci.yml`, a `.dagger/*.go` lane or a `scripts/*.sh`. A `make e2e-<suite>` target alone is not CI: CI
+  runs only the files `scripts/e2e_stack.sh`, `scripts/ray_e2e_stack.sh` and `.dagger/*.go` name.
+  `tests/unit/test_e2e_collection_gate.py` checks only that every `tests/e2e-py/test_*.py` collects.
+  A change that deletes a suite deletes its marker, its target, its `E2E_SUITES` entry and every
+  script line that names it: pytest exits 4 on a path that does not exist and 5 on a marker no test
+  carries, and either kills the lane.
 - **A runner suite runs only from the Makefile.** No root testpath reaches `runners/`. `make test`
   and `make test-slow` loop over every `runners/*/tests`, running `uv run --frozen pytest` from inside
   that runner's directory, so a new `runners/<name>/tests` runs in both with no edit; `--frozen` needs
@@ -70,9 +71,9 @@ consequences it does not spell out.
   `references/testing.md` § Fixtures).
 - **Markers.** `slow` means real models or a long runtime; `make test` and CI deselect it. `e2e`
   means a live stack: `tests/e2e-py/conftest.py` applies it to everything collected there, and each
-  per-suite selector (`auth`, `media`, ...) rides on top of it. Neither `strict_markers` nor
+  per-suite selector (`cas`, `governed_union`, ...) rides on top of it. Neither `strict_markers` nor
   `--strict-markers` is configured, so pass `--strict-markers` when you add or use a marker (the whole
-  suite, 12,225 tests, collects cleanly under it, measured 2026-09-28).
+  suite, 6,040 tests, collects cleanly under it, measured 2026-09-29).
 - **Async is strict.** No `asyncio_mode` is set, so pytest-asyncio runs in strict mode. The `anyio`
   plugin is loaded too; most async tests use `@pytest.mark.asyncio`, so write new ones that way.
 - **Code-shape rules live in ruff and import-linter.** A banned name is a `TID251` entry in the root
@@ -133,10 +134,10 @@ process-global actor-proxy factory, and closes medallion's pooled Ray client.
 - **Skips not to copy**: `pytest.skip("helm not available")` in `chart_render.render_text` and every
   file `git grep -l 'helm not available'` lists, and the ingest suites' `skipif` when no NATS answers.
   CI provides both, so the skip only hides the test on a developer box.
-- **Shapes not to copy**: many `tests/unit` files read the Makefile, `pyproject.toml`, source or prose
-  instead of running code (51 of 507 parse an AST, measured 2026-09-28), including the wiring gates
-  § Wiring names. They still fail as described there. Don't write a new test in their shape: a
-  code-shape rule goes to ruff, and a behaviour claim drives the code.
+- **Shapes not to copy**: some `tests/unit` files still read the Makefile, `pyproject.toml`, source or
+  prose instead of running code (4 of 371 parse an AST, measured 2026-09-29). Don't write a new test in
+  their shape: a code-shape rule goes to ruff or an import-linter contract, and a behaviour claim
+  drives the code.
 - **Test docstrings and comments follow CLAUDE.md's comment rule**: rationale and provenance, never
   history. The `comment-history-gate` prek hook checks staged lines; `make comment-gate` checks the
   worktree.

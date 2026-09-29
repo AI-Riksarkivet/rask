@@ -109,8 +109,8 @@ and derives whatever the blob **content** supports (`medallion/services/derivers
 inline `thumbnail` + `embedding`; unrecognised media carries through untouched; tabular datasets are a
 no-op), writing `silver-media$features`. Undecodable-after-probe payloads are deterministic bad data:
 the run FAILs in lineage and the trigger is DROPPED (the quality-gate contract), never retried.
-Live-regression-guarded by `make e2e-media` (part of the `make e2e` umbrella; skips on compute-off
-stacks). Governed mode needs the media grants — `scripts/seed_medallion_fga.sh` seeds them. Ray note:
+Live-regression-guarded by `make e2e-governed-union`, whose media case drives `/ingest-media` under
+governance. Governed mode needs the media grants — `scripts/seed_medallion_fga.sh` seeds them. Ray note:
 medallion-producer 0.4.2 reads blob BYTES correctly (its datasource reconstructs them via `take_blobs`), but
 exposes blob-v2 columns as plain LargeBinary — so until the stage job re-attaches `blob_field` on
 write and ships the deriver (+Pillow) in the ray image, blob upstreams take the in-process path.
@@ -209,7 +209,7 @@ against an in-memory fake filesystem (`tests/unit/test_ingest_seam.py`), with th
 
 ```bash
 make medallion        # fire medallion-producer /produce, then print gold's provenance (the cascade result)
-make e2e-medallion    # the automated regression test: produce → assert gold derives from bronze end-to-end
+make e2e-governed-union  # the automated regression test: produce → the governed cascade reaches gold, with its lineage
 ```
 
 ## What you can observe (all verified)

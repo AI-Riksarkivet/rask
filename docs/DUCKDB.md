@@ -6,8 +6,8 @@ output directly — no export, no bespoke reader. DuckDB does this through its *
 consumer**, not an embedded query engine for the platform (the in-process query/consumption engine stays
 parked, `#20`); it is the "an analyst can point DuckDB at our tables" path.
 
-Proven live against **pylance 8.0.0** datasets over the deployed RustFS store — regression-guarded by
-`tests/e2e/test_duckdb_lance_e2e.py` (runs in the `e2e-stack` CI job).
+Proven live against **pylance 8.0.0** datasets over the deployed RustFS store. No test guards it: it
+exercises pylance and DuckDB's extension, and no rask code sits between them.
 
 ## Install
 
@@ -63,5 +63,5 @@ without leaving DuckDB.
   new DuckDB versions. If `INSTALL lance` 404s for a very new DuckDB, use the DuckDB version the extension is
   published for, or build from source (`duckdb -unsigned -c "LOAD 'build/release/extension/lance/lance.duckdb_extension'"`).
 - Format compat with the **pylance version the platform writes** (currently 8.0.0) is the thing that can break
-  on a lance-core bump — `test_duckdb_lance_e2e.py` writes with pylance and reads back with the extension,
-  asserting count + values + schema, so a format regression fails CI rather than surfacing downstream.
+  on a lance-core bump, and CI does not check it: after a pylance bump, read a governed table back through
+  the extension and compare count, values and schema.
