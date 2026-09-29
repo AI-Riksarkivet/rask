@@ -26,13 +26,41 @@ def box(x: float, y: float, w: float, h: float, label: str = "person") -> dict[s
     return {"shape_type": "bbox", "x": x, "y": y, "width": w, "height": h, "label": label}
 
 
+def poly(points: list[float], label: str = "region") -> dict[str, object]:
+    return {"shape_type": "polygon", "polygon": points, "label": label}
+
+
+def seg(t0: float, t1: float, label: str = "speech") -> dict[str, object]:
+    return {"shape_type": "segment", "t_start": t0, "t_end": t1, "label": label}
+
+
 # ── geometry ────────────────────────────────────────────────────────────────────────────────────
 
 
-def test_half_overlapping_boxes_score_a_third() -> None:
-    """Worth stating numerically: two 10x10 boxes offset by 5 on one axis share 50 of 150 united
-    area, so IoU is 1/3 — BELOW the 0.5 threshold. "Half overlapping" is not "the same object"."""
-    assert shape_iou(box(0, 0, 10, 10), box(5, 0, 10, 10)) == pytest.approx(1 / 3)
+@pytest.mark.parametrize(
+    ("a", "b", "iou"),
+    [
+        # Two 10x10 boxes offset by 5 on one axis share 50 of 150 united area, so IoU is 1/3 — BELOW
+        # the 0.5 threshold. "Half overlapping" is not "the same object".
+        pytest.param(box(0, 0, 10, 10), box(5, 0, 10, 10), 1 / 3, id="half-overlapping-boxes"),
+        # True area, not the bounding box: two triangles splitting one square share its whole bounding
+        # box and none of its area. The owner chose shapely over an extent approximation for this shape.
+        pytest.param(poly([0, 0, 10, 0, 0, 10]), poly([10, 10, 10, 0, 0, 10]), 0.0, id="triangles-splitting-a-square"),
+        # A polygon that crosses itself is a drawing artefact. shapely's predicates are undefined on
+        # invalid geometry, so it is repaired rather than raised, and the repaired shape matches itself.
+        pytest.param(poly([0, 0, 10, 10, 10, 0, 0, 10]), poly([0, 0, 10, 10, 10, 0, 0, 10]), 1.0, id="self-intersecting-polygon"),
+        pytest.param(poly([0, 0, 1, 1]), poly([0, 0, 1, 1]), 0.0, id="polygon-with-too-few-points"),
+        # Audio/video's analogue of a box: [0,10] and [5,15] share 5 of 15 united seconds.
+        pytest.param(seg(0, 10), seg(5, 15), 1 / 3, id="half-overlapping-segments"),
+        # A box and a temporal segment describe different things; scoring one against the other would
+        # invent a number out of unrelated coordinates.
+        pytest.param(box(0, 0, 10, 10), seg(0, 10), 0.0, id="box-against-segment"),
+        # A whole-item tag has no geometry, so agreement IS label agreement and the extent always matches.
+        pytest.param({"shape_type": "tag", "label": "letter"}, {"shape_type": "tag", "label": "x"}, 1.0, id="tags-have-no-extent"),
+    ],
+)
+def test_iou_is_the_true_shared_extent_of_two_shapes(a: dict[str, object], b: dict[str, object], iou: float) -> None:
+    assert shape_iou(a, b) == pytest.approx(iou)
 
 
 def test_a_zero_area_box_matches_nothing() -> None:
@@ -57,10 +85,17 @@ def test_matching_is_BEST_FIRST_not_first_fit() -> None:
 # ── kappa ───────────────────────────────────────────────────────────────────────────────────────
 
 
-def test_kappa_is_UNDEFINED_when_everyone_agrees_on_everything() -> None:
-    """Unanimity makes expected agreement 1 and kappa 0/0. Returning the 0 the division suggests
-    would invert the reading completely — total agreement reported as none."""
-    assert fleiss_kappa([["a", "a"], ["a", "a"]]) is None
+@pytest.mark.parametrize(
+    "table",
+    [
+        # Unanimity makes expected agreement 1 and kappa 0/0. Returning the 0 the division suggests
+        # would invert the reading completely — total agreement reported as none.
+        pytest.param([["a", "a"], ["a", "a"]], id="everyone-agrees-on-everything"),
+        pytest.param([["a"], ["b"]], id="fewer-than-two-raters"),
+    ],
+)
+def test_kappa_is_UNDEFINED_where_its_formula_has_no_answer(table: list[list[str]]) -> None:
+    assert fleiss_kappa(table) is None
 
 
 def test_kappa_is_UNDEFINED_with_no_slots() -> None:

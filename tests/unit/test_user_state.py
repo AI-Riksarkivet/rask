@@ -44,7 +44,7 @@ from service_kit.governed.user_state import (
     decode_subject,
     state_key,
 )
-from service_kit.schemas.workflow import WorkflowGraph
+from service_kit.schemas.workflow import SavedView, SearchSpec, WorkflowGraph
 
 
 # ── a stand-in for the local Dapr sidecar's state API ────────────────────────────────────────────────
@@ -288,18 +288,27 @@ def _as(client: TestClient, who: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {who}"}
 
 
-def test_alice_writes_and_reads_her_own_canvas(app_client: TestClient) -> None:
-    graph = _graph().model_dump(mode="json", by_alias=True, exclude_none=True)
-    put = app_client.put("/v1/user-state/workflow-graph", json=graph, headers=_as(app_client, "alice"))
+@pytest.mark.parametrize(
+    ("document", "value"),
+    [
+        pytest.param("workflow-graph", _graph().model_dump(mode="json", by_alias=True, exclude_none=True), id="workflow-graph"),
+        pytest.param(
+            "saved-views",
+            [SavedView(name="ambiguous speakers", dataset="", spec=SearchSpec(q="speaker")).model_dump(mode="json", by_alias=True, exclude_none=True)],
+            id="saved-views",
+        ),
+    ],
+)
+def test_alice_writes_and_reads_her_own_document(app_client: TestClient, document: str, value: Any) -> None:
+    put = app_client.put(f"/v1/user-state/{document}", json=value, headers=_as(app_client, "alice"))
     assert put.status_code == 200, put.text
     assert put.json()["subject"] == "alice"
 
-    got = app_client.get("/v1/user-state/workflow-graph", headers=_as(app_client, "alice"))
+    got = app_client.get(f"/v1/user-state/{document}", headers=_as(app_client, "alice"))
     assert got.status_code == 200
     body = got.json()
     assert body["exists"] is True and body["subject"] == "alice"
-    assert body["value"] == graph
-    assert body["value"]["config"]["q1"]["q"] == "alice's canvas"
+    assert body["value"] == value
 
 
 def test_bob_cannot_read_alices_state(app_client: TestClient) -> None:

@@ -66,7 +66,17 @@ def test_retiring_TWICE_signals_once(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(sent) == 1, f"a retiring worker must not re-signal on every later unit: {sent}"
 
 
-def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("committed", "memory_fraction", "retired"),
+    [
+        pytest.param(200, 0.0, "retired@200:passes", id="pass-budget-spent"),
+        # The hop that was missing on the live estate: this lane commits no rewrite, so `passes_committed()`
+        # is 0 forever, and a handler that asked only that walked a worker to its OOM with a working
+        # mitigation in the same file.
+        pytest.param(0, 0.70, "retired@0:memory", id="memory-with-zero-committed-passes"),
+    ],
+)
+def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.MonkeyPatch, committed: int, memory_fraction: float, retired: str) -> None:
     """The hop a green predicate cannot prove. `should_retire` being correct says nothing about
     `handle_unit` calling it, and the ORDER is the part that matters: the signal must be raised after
     the unit's status is settled, or the response carrying its ack is abandoned mid-flight and the
@@ -91,8 +101,12 @@ def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.Monkey
     monkeypatch.setattr(work_module, "emit_sweep_lineage", _no_lineage)
     monkeypatch.setattr(work_module, "ack_for", lambda _r: (order.append("acked"), "SUCCESS")[1])
     monkeypatch.setattr(work_module.base_refs, "sibling_base_refs", lambda uri, opts, *, configured, record_of: work_module.base_refs.BaseRefs())
-    monkeypatch.setattr(work_module, "passes_committed", lambda: 200)
-    monkeypatch.setattr(work_module, "retire_this_worker", lambda *, passes, reason: order.append(f"retired@{passes}"))
+    monkeypatch.setattr(work_module, "passes_committed", lambda: committed)
+    monkeypatch.setattr(work_module, "memory_readings", lambda: {"rss_bytes": int(4 * 1024**3 * 0.9), "python_blocks": 1, "session_bytes": 1})
+    monkeypatch.setattr(work_module, "container_memory_limit", lambda: 4 * 1024**3)
+    monkeypatch.setattr(
+        work_module, "retire_this_worker", lambda *, passes, reason: order.append(f"retired@{passes}:{'memory' if reason == 'memory' else 'passes'}")
+    )
 
     settings = cast(
         Any,
@@ -100,7 +114,7 @@ def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.Monkey
             storage_options=lambda: {},
             delimiter="$",
             recycle_after_passes=200,
-            recycle_at_memory_fraction=0.0,
+            recycle_at_memory_fraction=memory_fraction,
             external_blob_base_list=[],
             resolved_control_root="/nonexistent/control",
         ),
@@ -109,7 +123,7 @@ def test_the_HANDLER_asks_after_acking_and_not_before(monkeypatch: pytest.Monkey
     got = asyncio.run(work_module.handle_unit(event, settings, cast(Any, object())))
 
     assert got == {"status": "SUCCESS"}, got
-    assert order == ["executed", "acked", "retired@200"], f"the retirement must come last: {order}"
+    assert order == ["executed", "acked", retired], f"the retirement must come last: {order}"
 
 
 def test_the_handler_does_NOT_retire_below_the_mark(monkeypatch: pytest.MonkeyPatch) -> None:

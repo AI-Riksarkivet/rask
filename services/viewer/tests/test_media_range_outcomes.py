@@ -13,13 +13,27 @@ and the caller matches on type instead of rebinding state.
 
 from __future__ import annotations
 
+import pytest
+
 from viewer.api.v1.endpoints import media as media_ep
 
 
-def test_a_satisfiable_range_is_a_typed_result_not_a_tuple() -> None:
-    rng = media_ep.parse_range("bytes=0-10", 100)
+@pytest.mark.parametrize(
+    ("header", "start", "end"),
+    [
+        pytest.param("bytes=0-10", 0, 10, id="bounded"),
+        # `bytes=-N` is the last N bytes of the body.
+        pytest.param("bytes=-10", 90, 99, id="suffix"),
+        # A suffix longer than the body is the whole body: the start clamps at 0 rather than going negative.
+        pytest.param("bytes=-500", 0, 99, id="suffix-longer-than-the-body"),
+        # An open end runs to the last byte.
+        pytest.param("bytes=95-", 95, 99, id="open-ended"),
+    ],
+)
+def test_a_satisfiable_range_is_a_typed_result_not_a_tuple(header: str, start: int, end: int) -> None:
+    rng = media_ep.parse_range(header, 100)
     assert isinstance(rng, media_ep.ByteRange), f"expected a ByteRange, got {type(rng).__name__}"
-    assert (rng.start, rng.end) == (0, 10)
+    assert (rng.start, rng.end) == (start, end)
 
 
 def test_an_ignorable_header_is_a_verdict_not_a_string_sentinel() -> None:

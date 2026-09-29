@@ -20,26 +20,36 @@ docstring records a poller that watched an id the submitter never used.
 
 from __future__ import annotations
 
+import pytest
+
+from medallion.services.engine_names import IN_PROCESS_ENGINE, RAY_ENGINE
+from medallion.services.inprocess_executor import InProcessExecutor
 from medallion.services.rayjobs_api_executor import RayJobsApiExecutor
 
 
 def test_the_adapter_refuses_a_task_registered_for_another_engine() -> None:
     """`validate_task` is the declaration-time half of the port, and refusing is its whole job."""
-    import pytest
-
-    from medallion.services.engine_names import IN_PROCESS_ENGINE
     from service_kit.lakehouse.executor import TaskRegistration
 
     with pytest.raises(Exception, match="inprocess"):
         RayJobsApiExecutor().validate_task(TaskRegistration(task="t", engine=IN_PROCESS_ENGINE, command="whatever"))
 
 
-def test_the_registry_resolves_the_ray_engine_to_this_adapter() -> None:
-    """The point of the adapter: `executor_for` stops being a function with one arm and zero callers."""
-    from medallion.services.engine_names import RAY_ENGINE
+@pytest.mark.parametrize(
+    ("engine", "adapter"),
+    [
+        pytest.param(RAY_ENGINE, RayJobsApiExecutor, id="ray"),
+        # `engine_for` answers with a name; something must turn that name into the thing that runs it,
+        # or the choice is advisory and the execution is hard-coded elsewhere.
+        pytest.param(IN_PROCESS_ENGINE, InProcessExecutor, id="inprocess"),
+    ],
+)
+def test_the_registry_resolves_each_engine_to_its_adapter(engine: str, adapter: type) -> None:
+    """The point of the adapters: `executor_for` stops being a function with one arm and zero callers."""
     from medallion.services.engine_registry import executor_for, hosted_engines
 
-    resolved = executor_for(RAY_ENGINE, storage_options={})
+    resolved = executor_for(engine, storage_options={})
 
-    assert isinstance(resolved, RayJobsApiExecutor)
-    assert RAY_ENGINE in hosted_engines(), "the registry must report what it can now actually resolve"
+    assert isinstance(resolved, adapter)
+    assert resolved.name == engine
+    assert engine in hosted_engines(), "the registry must report what it can now actually resolve"

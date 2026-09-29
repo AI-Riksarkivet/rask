@@ -139,10 +139,12 @@ def test_a_drop_field_outside_its_vocabulary_drops_nothing(real_ns_client: TestC
     assert _exists(real_ns_client, "namespace", "db"), "a refused drop must leave the namespace in place"
 
 
-@pytest.mark.parametrize("mode", ["ExistOk"])
-def test_a_register_mode_outside_its_two_attaches_nothing(real_ns_client: TestClient, tmp_path: Path, mode: str) -> None:
+@pytest.mark.parametrize("mode", ["ExistOk", "Overwrite"])
+def test_a_register_mode_the_door_refuses_attaches_nothing(real_ns_client: TestClient, tmp_path: Path, mode: str) -> None:
     """`register` has two modes, not `create`'s three. `ExistOk` is a real word on the create doors, so a
-    caller reusing it here is the likeliest way to reach this refusal."""
+    caller reusing it here is the likeliest way to reach the parse's refusal. `Overwrite` is one of the
+    two, and this door refuses it by name: replacing a registration would detach bytes the catalog does
+    not own from the table that points at them."""
     _namespace(real_ns_client, "db")
     lance.write_dataset(pa.table({"id": pa.array([1, 2], pa.int64())}), str(tmp_path / "ext"), data_storage_version="2.2", enable_stable_row_ids=True)
 

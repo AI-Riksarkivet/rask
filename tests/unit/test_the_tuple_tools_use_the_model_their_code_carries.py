@@ -3,12 +3,13 @@
 A tuple request that names no `authorization_model_id`, or names the store's newest model, is validated against
 whichever image wrote last. LH-201 lets a legacy image's narrower body stay the newest for as long as that image
 boots (the 2026-09-03 compute, controlplane and flows images still provision their own), and against it every
-`estate:rask` request fails on `type 'estate' not found`. So `make fga-estate-migrate` finds its store
-and model by `write_model.carried_model`, the rule `bootstrap-admin` uses: the pinned store, else the newest named
-`lance-catalog`, and in it the model whose body is the code's own `model.json`.
+`estate:rask` request fails on `type 'estate' not found`. So `make fga-estate-migrate` and the e2e grant helpers
+find their store and model by `write_model.carried_model`, the rule `bootstrap-admin` uses: the pinned store,
+else the newest named `lance-catalog`, and in it the model whose body is the code's own `model.json`.
 
 RUN, not read, against `openfga_stub`. The migration is piped to `python -` exactly as `make fga-estate-migrate`
-pipes it into the catalog pod.
+pipes it into the catalog pod, which puts it in a subprocess coverage does not follow, so `carried_model` is
+also called in-process: the one run of its store choice and its paged history read that this suite measures.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from service_kit.governed.auth.write_model import carried_model
 from tests.unit.openfga_stub import BY_NAME, CARRYING, PINNED, STORE, Recorded, openfga
 
 
@@ -49,3 +51,12 @@ def test_the_estate_migration_grants_against_the_model_it_carries(stores: list[d
     assert not _not_carrying(recorded), _not_carrying(recorded)
     assert done.returncode == 0, f"the migration exited {done.returncode}:\n{done.stdout}{done.stderr}"
     assert {(user, relation, "estate:rask") for user, relation, _ in _OLD_ROOT} <= recorded.written
+
+
+@_STORES
+def test_the_carried_model_is_the_checkouts_body_in_the_estates_store(stores: list[dict[str, str]], pin: str) -> None:
+    # The stub's history puts a legacy body newest, on page one, and this checkout's model on page two: a reader
+    # that stops at the first page, or takes the newest, answers LEGACY. Pinned, a NEWER `lance-catalog` sits
+    # beside the pinned store, so ignoring the pin answers the wrong store.
+    with openfga(stores, Recorded()) as url:
+        assert carried_model(url, pinned=pin) == (STORE, CARRYING)

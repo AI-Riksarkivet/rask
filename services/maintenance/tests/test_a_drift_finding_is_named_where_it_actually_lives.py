@@ -18,19 +18,39 @@ identify none of them — the same failure `_drift_names` was written to end, re
 
 from __future__ import annotations
 
+import pytest
+from pydantic import BaseModel
+
 from maintenance.api.routes import _drift_names
 from maintenance.services.orphans import OrphanFile
-from maintenance.services.reconcile import ReconcileReport
+from maintenance.services.reconcile import OrphanedTrash, ReconcileReport, UnregisteredDataset
 
 
 DATASET = "s3://lance-catalog/6ecbe11e_transcripts_v2$annotations"
 
 
-def test_a_finding_with_no_dataset_is_still_named() -> None:
-    """The fallback must not regress: a category whose model carries no `dataset` keeps its own name."""
+@pytest.mark.parametrize(
+    ("category", "finding", "name"),
+    [
+        pytest.param("orphan_files", OrphanFile(dataset=DATASET, path="data/x.lance", kind="data"), f"{DATASET}/data/x.lance", id="orphan-file"),
+        # No root claims this table, so a table id (unique only WITHIN a root) cannot be its identity and
+        # the URI is the only answer to "where do I go and look".
+        pytest.param(
+            "unregistered_datasets",
+            UnregisteredDataset(table_id="ns$t", location="s3://lance-catalog/aa11bb22_ns$t"),
+            "s3://lance-catalog/aa11bb22_ns$t",
+            id="unregistered-dataset",
+        ),
+        # An orphaned trash record carries a `location` too and is named by its `id`: ranking `location`
+        # ahead of `id` would silently rename an existing category's findings in the report an operator
+        # reads every tick.
+        pytest.param("orphaned_trash", OrphanedTrash(id="tr-1", kind="table", location="s3://gone/t.lance"), "tr-1", id="orphaned-trash"),
+    ],
+)
+def test_a_drift_finding_is_named_by_where_it_lives(category: str, finding: BaseModel, name: str) -> None:
     report = ReconcileReport(checked_at="2026-09-16T13:50:21+00:00")
-    report.orphan_files = [OrphanFile(dataset=DATASET, path="data/x.lance", kind="data")]
+    setattr(report, category, [finding])
 
     named = _drift_names(report)
 
-    assert named["orphan_files"] == [f"{DATASET}/data/x.lance"], named
+    assert named[category] == [name], named

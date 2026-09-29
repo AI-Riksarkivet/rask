@@ -421,17 +421,18 @@ def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> N
     assert repo.list_events_calls[-1]["summary"] is True
 
 
-def test_get_column_upstream_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
-    # #24: column provenance is governed — a related column in a dataset the caller can't see is dropped
-    # (a column has no ACL of its own; it inherits its owning table's visibility).
-    from lineage.api.v1.endpoints.columns import get_column_upstream
+@pytest.mark.parametrize("door", ["get_column_upstream", "get_column_downstream"])
+def test_get_column_neighbours_filter_to_visible_datasets(monkeypatch: pytest.MonkeyPatch, door: str) -> None:
+    # #24: column provenance and column impact are governed alike — a related column in a dataset the caller
+    # can't see is dropped (a column has no ACL of its own; it inherits its owning table's visibility).
+    from lineage.api.v1.endpoints import columns
 
     monkeypatch.setattr(fga, "batch_check", _batch_allow_a)  # only "a" visible
     settings = _settings(**_FULL_AUTH)
     repo = _FakeRepo()
     repo.col_related = [ColumnRef(dataset="a", field="x"), ColumnRef(dataset="b", field="y")]
     flt = fga_deps.DatasetFilter(_request(fga=cast(OpenFgaClient, object())), settings, _token())
-    result = asyncio.run(get_column_upstream("a", "root", cast(LineageRepository, repo), flt, settings))
+    result = asyncio.run(getattr(columns, door)("a", "root", cast(LineageRepository, repo), flt, settings))
     assert [(r.dataset, r.field) for r in result.related] == [("a", "x")]  # b's column is hidden
 
 

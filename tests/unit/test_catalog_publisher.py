@@ -110,7 +110,7 @@ def _publisher(create: _Create | None = None, tags: _Tags | None = None, **kw: A
 @pytest.mark.asyncio
 async def test_create_posts_exist_ok_with_schema_typed_rows_and_the_facet_header() -> None:
     create = _Create(version=9)
-    publisher = _publisher(create, token="svc-token")
+    publisher = _publisher(create, token="svc-token", originator="alice")
 
     version = await publisher.create_table(
         "silver$vasa_0123456789ab",
@@ -127,6 +127,8 @@ async def test_create_posts_exist_ok_with_schema_typed_rows_and_the_facet_header
     headers = call["_headers"]
     assert json.loads(headers[RUN_FACETS_HEADER]) == {"annotationProject": {"projectId": "p1"}}
     assert headers["Authorization"] == "Bearer svc-token"
+    # The service's bearer authors the events, so this header is the only place the human survives.
+    assert headers["x-lance-originator"] == "alice"
     # The body must be a readable Arrow-IPC STREAM carrying the published schema — an IPC file, or
     # inferred types, would fail the catalog's reader or type an all-sentinel publish as nulls.
     table = pa.ipc.open_stream(call["body"]).read_all()

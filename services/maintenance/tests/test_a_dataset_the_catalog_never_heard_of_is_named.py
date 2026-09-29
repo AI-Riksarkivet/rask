@@ -37,16 +37,43 @@ from maintenance.services import reconcile as mod
 from maintenance.services.reconcile import _unregistered_datasets
 
 
-def test_a_dataset_with_no_table_record_is_named() -> None:
-    """THE DEFECT: 300 live rows that no category counted."""
-    found = _unregistered_datasets(
-        discovered=["s3://lance-catalog/m2proof_silver$m2-proof-1788537252"],
-        registered={"acme-bronze$events"},
-        trashed=set(),
-    )
+@pytest.mark.parametrize(
+    ("discovered", "registered", "trashed", "named"),
+    [
+        # THE DEFECT: 300 live rows that no category counted.
+        pytest.param(
+            ["s3://lance-catalog/m2proof_silver$m2-proof-1788537252"],
+            {"acme-bronze$events"},
+            set(),
+            [("m2proof_silver$m2-proof-1788537252", "s3://lance-catalog/m2proof_silver$m2-proof-1788537252")],
+            id="no-table-record",
+        ),
+        # The control. The catalog lays a table out as `<uuid8>_<ns>$<name>`, so the id has to be recovered
+        # from the location before the comparison means anything: a detector that compared raw leaves would
+        # report every table in the estate.
+        pytest.param(["s3://acme-wh/4750a5b9_acme-bronze$events"], {"acme-bronze$events"}, set(), [], id="registered"),
+        # A dropped table's bytes stay on disk under a trash record that names them, and its table record is
+        # gone by definition. Counting those would make the category loudest exactly when the estate is
+        # behaving correctly.
+        pytest.param(["s3://acme-wh/dead1234_gone$table"], set(), {"s3://acme-wh/dead1234_gone$table"}, [], id="trashed"),
+        # `table_id_from_location` answers None for a directory that is not an identifier; reporting one as
+        # an unregistered TABLE would assert a table exists where only a prefix does.
+        pytest.param(["s3://acme-wh/some-directory", "s3://acme-wh/4750a5b9_$events"], set(), set(), [], id="not-a-table-identifier"),
+        # A report an operator reads across ticks must not reshuffle, and one dataset discovered twice in a
+        # walk is one finding.
+        pytest.param(
+            ["s3://b/ff11aa22_zeta$t", "s3://b/aa11bb22_alpha$t", "s3://b/ff11aa22_zeta$t"],
+            set(),
+            set(),
+            [("alpha$t", "s3://b/aa11bb22_alpha$t"), ("zeta$t", "s3://b/ff11aa22_zeta$t")],
+            id="ordered-and-deduplicated",
+        ),
+    ],
+)
+def test_a_dataset_with_no_table_record_is_named(discovered: list[str], registered: set[str], trashed: set[str], named: list[tuple[str, str]]) -> None:
+    found = _unregistered_datasets(discovered=discovered, registered=registered, trashed=trashed)
 
-    assert [f.table_id for f in found] == ["m2proof_silver$m2-proof-1788537252"]
-    assert found[0].location == "s3://lance-catalog/m2proof_silver$m2-proof-1788537252"
+    assert [(f.table_id, f.location) for f in found] == named
 
 
 # --------------------------------------------------------------------------- #

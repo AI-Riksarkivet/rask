@@ -28,20 +28,42 @@ registered table or mis-resolve every ordinary one.
 
 from __future__ import annotations
 
+import pytest
+
 from maintenance.services.reconcile import ReconcileReport, Sources, _absent_datasets, _registration_drift
 
 
 ROOT = "s3://lance-catalog"
 
 
-def test_a_record_whose_location_is_absent_is_reported() -> None:
-    found = _absent_datasets(
-        registered={"bronze$events": (ROOT, "s3://lance-catalog/medallion/bronze")},
-        discovered={"s3://lance-catalog/bronze/pages"},
-        trashed=set(),
-    )
-    assert [f.table for f in found] == ["bronze$events"]
-    assert found[0].location == "s3://lance-catalog/medallion/bronze"
+@pytest.mark.parametrize(
+    ("registered", "discovered", "trashed", "absent"),
+    [
+        pytest.param(
+            {"bronze$events": (ROOT, "s3://lance-catalog/medallion/bronze")},
+            {"s3://lance-catalog/bronze/pages"},
+            set(),
+            [("bronze$events", "s3://lance-catalog/medallion/bronze")],
+            id="location-absent",
+        ),
+        # The control: without it the case above passes on a detector that reports everything.
+        pytest.param({"bronze$pages": (ROOT, "s3://lance-catalog/bronze/pages")}, {"s3://lance-catalog/bronze/pages"}, set(), [], id="bytes-present"),
+        # `lance_docs/namespace.md:974` — "Relative path to the table directory within the root". Found under
+        # its root it is present, and missing it is reported RESOLVED, or nobody can go and look.
+        pytest.param({"ns$t": (ROOT, "a1b2c3d4_ns$t")}, {f"{ROOT}/a1b2c3d4_ns$t"}, set(), [], id="relative-location-present"),
+        pytest.param({"ns$t": (ROOT, "a1b2c3d4_ns$t")}, set(), set(), [("ns$t", f"{ROOT}/a1b2c3d4_ns$t")], id="relative-location-absent"),
+        # The false positive the schema itself rules out: `location` is nullable, "only for tables".
+        pytest.param({"ns$reserved": (ROOT, None)}, set(), set(), [], id="declared-only-table"),
+        # A trashed table's record is gone by definition while its bytes remain, so neither side of the pair
+        # is a defect: the same exclusion `_unregistered_datasets` makes, in the other direction.
+        pytest.param({"ns$dropped": (ROOT, "s3://lance-catalog/gone")}, set(), {"s3://lance-catalog/gone"}, [], id="dropped-awaiting-the-purge"),
+    ],
+)
+def test_a_record_is_drift_only_when_its_resolved_location_is_absent(
+    registered: dict[str, tuple[str, str | None]], discovered: set[str], trashed: set[str], absent: list[tuple[str, str]]
+) -> None:
+    found = _absent_datasets(registered=registered, discovered=discovered, trashed=trashed)
+    assert [(f.table, f.location) for f in found] == absent
 
 
 # --------------------------------------------------------------------------- #

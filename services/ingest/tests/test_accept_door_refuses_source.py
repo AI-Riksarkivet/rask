@@ -18,6 +18,7 @@ still orphan a table while looking correct from the caller's side.
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 import pytest
@@ -43,10 +44,28 @@ def _req(*, kind: str = "lance-append", options: dict[str, object] | None = None
     return IngestRequest(kind=kind, project="acme", dataset="probe", options=options or {})
 
 
+@pytest.mark.parametrize(
+    ("source", "refusal"),
+    [
+        pytest.param("outside-the-root", "outside RASK_INGEST_LANCE_ROOT", id="outside-the-confinement-root"),
+        # The security guard. Its message names where the caller SHOULD go, or they build the second,
+        # unlineaged copy path by hand.
+        pytest.param(
+            "governed",
+            "is a catalog-governed dataset; ingest does not copy between governed tiers — that is the medallion stage runner's job",
+            id="governed-dataset",
+        ),
+        pytest.param("no-uri", "lance-append source requires options.uri", id="missing-required-option"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_outside_the_confinement_root_is_400(lance_root: str, tmp_path) -> None:
-    with pytest.raises(ValidationError, match="outside RASK_INGEST_LANCE_ROOT"):
-        await _refuse_unusable_source(_req(options={"uri": "/etc/passwd.lance"}))
+async def test_an_unusable_source_is_400_and_says_why(lance_root: str, tmp_path, monkeypatch, source: str, refusal: str) -> None:
+    sources: dict[str, dict[str, object]] = {"outside-the-root": {"uri": "/etc/passwd.lance"}, "governed": {"uri": lance_root}, "no-uri": {}}
+    options = sources[source]
+    if source == "governed":
+        monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
+    with pytest.raises(ValidationError, match=re.escape(refusal)):
+        await _refuse_unusable_source(_req(options=options))
 
 
 @pytest.mark.asyncio

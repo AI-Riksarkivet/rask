@@ -10,6 +10,7 @@ lines apart, instead of once on the router that owns both.
 
 from __future__ import annotations
 
+import pytest
 from fastapi import APIRouter
 from fastapi.routing import APIRoute
 from pydantic import SecretStr
@@ -31,12 +32,19 @@ def _paths(router: APIRouter) -> set[str]:
     return {route.path for route in router.routes if isinstance(route, APIRoute)}
 
 
-def test_the_binding_names_come_from_the_settings_the_router_is_given() -> None:
-    alpha = build_router(_settings("alpha-cron", "alpha-reconcile"))
-    beta = build_router(_settings("beta-cron", "beta-reconcile"))
-
-    assert _paths(alpha) == {"/alpha-cron", "/alpha-reconcile"}
-    assert _paths(beta) == {"/beta-cron", "/beta-reconcile"}
+@pytest.mark.parametrize(
+    ("binding", "reconcile", "paths"),
+    [
+        pytest.param("alpha-cron", "alpha-reconcile", {"/alpha-cron", "/alpha-reconcile"}, id="alpha"),
+        pytest.param("beta-cron", "beta-reconcile", {"/beta-cron", "/beta-reconcile"}, id="beta"),
+        pytest.param("maintenance-cron", "", {"/maintenance-cron"}, id="named-sweep-only"),
+        # An executor pod configures no cron. Mounting `f"/{''}"` gives `/`: a cron door at the pod root
+        # that answers POST, which is not a route anyone chose to publish.
+        pytest.param("", "", set(), id="executor-pod-names-none"),
+    ],
+)
+def test_the_binding_names_come_from_the_settings_the_router_is_given(binding: str, reconcile: str, paths: set[str]) -> None:
+    assert _paths(build_router(_settings(binding, reconcile))) == paths
 
 
 def test_every_triggering_POST_keeps_the_sidecar_token_gate() -> None:

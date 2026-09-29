@@ -22,6 +22,8 @@ record — keying on the id would report a record as orphaned while it is perfec
 
 from __future__ import annotations
 
+import pytest
+
 from maintenance.services.reconcile import _orphaned_trash
 
 
@@ -29,8 +31,15 @@ def _record(canonical_id: str, location: str) -> dict[str, str]:
     return {"id": canonical_id, "kind": "table", "location": location}
 
 
-def test_trash_in_an_unclaimed_bucket_is_reported() -> None:
-    found = _orphaned_trash([_record("ns$gone", "s3://dead-wh/abc_ns$gone")], claimed={"live-wh"})
+@pytest.mark.parametrize(
+    ("records", "orphaned"),
+    [
+        pytest.param([("ns$gone", "s3://dead-wh/abc_ns$gone")], [("ns$gone", "s3://dead-wh/abc_ns$gone")], id="unclaimed-bucket"),
+        # Malformed is not orphaned, and a report whose value is that it does not guess must not guess.
+        pytest.param([("ns$odd", "/not/an/s3/uri"), ("ns$empty", "")], [], id="location-naming-no-bucket"),
+    ],
+)
+def test_trash_in_an_unclaimed_bucket_is_reported(records: list[tuple[str, str]], orphaned: list[tuple[str, str]]) -> None:
+    found = _orphaned_trash([_record(record_id, location) for record_id, location in records], claimed={"live-wh"})
 
-    assert [o.id for o in found] == ["ns$gone"]
-    assert found[0].location == "s3://dead-wh/abc_ns$gone"
+    assert [(o.id, o.location) for o in found] == orphaned

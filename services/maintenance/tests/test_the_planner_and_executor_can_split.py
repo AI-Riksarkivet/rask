@@ -23,6 +23,7 @@ So the split is two switches, and both default to today's behaviour:
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 
 from maintenance.api.work import register_work_route
@@ -48,10 +49,11 @@ def _settings(
     )
 
 
-def test_a_PLANNER_publishes_to_the_queue_without_subscribing() -> None:
+@pytest.mark.parametrize(("execute_work", "subscribes"), [pytest.param(False, False, id="planner"), pytest.param(True, True, id="executor")])
+def test_only_an_EXECUTOR_subscribes_while_both_keep_the_topic(execute_work: bool, subscribes: bool) -> None:
     """The switch `work_topic` cannot express: the planner needs the topic to PUBLISH onto it, and must
     not also consume from it, or the split does nothing."""
     app = FastAPI()
-    settings = _settings(work_topic="maintenance.work.v1", execute_work=False)
-    assert register_work_route(app, settings) is None
+    settings = _settings(work_topic="maintenance.work.v1", execute_work=execute_work)
+    assert (register_work_route(app, settings) is not None) is subscribes
     assert settings.work_topic == "maintenance.work.v1", "the planner still needs the topic to publish onto"

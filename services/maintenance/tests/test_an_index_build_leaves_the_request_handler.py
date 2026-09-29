@@ -29,9 +29,23 @@ import respx
 
 from maintenance.api import index_work
 from maintenance.core.config import MaintenanceSettings
-from maintenance.core.lineage_emit import NoopEmitter
+from maintenance.core.lineage_emit import COMPACTION, NoopEmitter
 from maintenance.services.index_build import UnknownIndexKindError, build_index
 from service_kit.lakehouse.work_items import SCALAR_INDEX, VECTOR_INDEX, IndexWorkItem
+
+
+class _Emitter:
+    """Records what it was asked to emit — the operation included, which is the point."""
+
+    def __init__(self) -> None:
+        self.emitted: list[dict[str, Any]] = []
+        self.failed: list[dict[str, Any]] = []
+
+    async def emit_maintenance(self, *, table_id: str, namespace: str, operation: str = COMPACTION) -> None:
+        self.emitted.append({"table_id": table_id, "namespace": namespace, "operation": operation})
+
+    async def emit_maintenance_failed(self, *, table_id: str, namespace: str, error: str, operation: str = COMPACTION) -> None:
+        self.failed.append({"table_id": table_id, "namespace": namespace, "error": error, "operation": operation})
 
 
 def _table(tmp_path: Path, *, rows: int = 256) -> str:
@@ -56,12 +70,23 @@ def test_the_worker_builds_the_index_the_unit_describes(tmp_path: Path) -> None:
     assert [i.name for i in lance.dataset(uri).describe_indices()] == ["id_idx"]
 
 
-def test_an_unknown_scalar_type_is_REFUSED_before_pylance_sees_it(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("column", "index_type", "named"),
+    [
+        pytest.param("id", "NOT_A_TYPE", "NOT_A_TYPE", id="unknown-scalar-type"),
+        # MEASURED on pylance 10.0.0: `create_scalar_index("nope", …)` raises `KeyError: 'nope not found in
+        # schema'`, which the route's bare `except Exception` answered with RETRY, so the unit came back every
+        # `ackWait` forever. The schema is in hand before the build starts, so the column is a question
+        # with an answer, refused as a validation rather than caught as an exception.
+        pytest.param("not_a_column", "BTREE", "not_a_column", id="column-not-in-the-schema"),
+    ],
+)
+def test_an_unknown_scalar_type_is_REFUSED_before_pylance_sees_it(tmp_path: Path, column: str, index_type: str, named: str) -> None:
     """A value arriving off a broker is producer-controlled. Narrowing it here makes an unknown type a
     named refusal instead of a `TypeError` deep inside pylance, which reads as a worker crash."""
-    item = IndexWorkItem(uri=_table(tmp_path), column="id", kind=SCALAR_INDEX, index_type="NOT_A_TYPE")
+    item = IndexWorkItem(uri=_table(tmp_path), column=column, kind=SCALAR_INDEX, index_type=index_type)
 
-    with pytest.raises(UnknownIndexKindError, match="NOT_A_TYPE"):
+    with pytest.raises(UnknownIndexKindError, match=named):
         build_index(item, write_options={})
 
 
@@ -82,7 +107,11 @@ async def test_a_producer_DEFECT_is_acked_and_a_STORE_failure_retries(tmp_path: 
     """
     uri = _table(tmp_path)
     unbuildable = {"data": IndexWorkItem(uri=uri, column="id", kind="guess", index_type="BTREE").model_dump()}
-    assert await index_work.handle_index_unit(unbuildable, _settings(), NoopEmitter()) == {"status": "SUCCESS"}
+    emitter = _Emitter()
+    assert await index_work.handle_index_unit(unbuildable, _settings(), emitter) == {"status": "SUCCESS"}
+    # Acked, not run, so there is no run to record: a FAIL here would put a maintenance failure on a
+    # dataset nothing maintained.
+    assert emitter.emitted == [] and emitter.failed == []
 
     missing = {"data": IndexWorkItem(uri=str(tmp_path / "gone.lance"), column="id", kind=SCALAR_INDEX, index_type="BTREE").model_dump()}
     assert await index_work.handle_index_unit(missing, _settings(), NoopEmitter()) == {"status": index_work.RETRY}

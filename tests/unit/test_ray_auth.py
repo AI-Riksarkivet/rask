@@ -3,20 +3,10 @@
 The live tokenless-rejection proof runs at the cluster gates; these tests pin what
 `helm template` can prove offline:
 
-  * auth ON  -> the token Secret renders (key `auth_token`, the KubeRay convention),
-    the RayService hands it to the kuberay >= 1.6.0 operator NATIVELY via
-    rayClusterConfig.authOptions (mode token + secretName) — the operator injects the
-    RAY_AUTH_MODE/RAY_AUTH_TOKEN pair into every Ray container and its RayService
-    controller authenticates its own /api/serve reconcile calls from the same Secret —
-    and the pair lands on EXACTLY the Ray-talking fleet services (compute, R22 — the
-    orchestrator died at P7a; search-api/volumes-api/core-api died in the R6/R20 wave)
-    — least privilege: gateway/controlplane never talk to Ray and never see it.
-  * auth OFF (default) -> zero auth manifests/env anywhere (current behavior intact).
-  * externalSecrets ON -> the ESO ExternalSecret owns the same-named Secret and the
-    static one is skipped (no plaintext token in the chart).
-  * prod signal (openbao.devMode=false) -> the render FAILS CLOSED when Ray deploys
-    without auth, and on the REPLACE-ME token placeholder — same pattern as the
-    dapr-app-token / infra-credentials guards.
+  * externalSecrets ON -> the ESO ExternalSecret owns the same-named Secret, reads the OpenBao KV
+    property `ray-auth-token`, and the static one is skipped (no plaintext token in the chart).
+  * in every shape (in-cluster or external Ray, static or ESO) -> whatever references the token
+    Secret, the render also creates it exactly once.
 """
 
 from __future__ import annotations
@@ -39,7 +29,7 @@ def _helm(*set_values: str, check: bool = True) -> subprocess.CompletedProcess[s
         pytest.skip("helm not available")
     argv = [helm, "template", "rask", str(CHART)]
     # Since auth defaults ON (2026-08-06) every render needs identity values; the chart refuses OIDC
-    # without a session secret ON PURPOSE, and that refusal has its own test in test_invariants.py.
+    # without a session secret ON PURPOSE.
     argv += ["--set-string", "frontend.oidc.sessionSecret=test-session-secret-32-chars-minimum"]
     argv += ["--set-string", "frontend.oidc.publicIssuer=http://localhost:8080/dex"]
     argv += ["--set-string", "frontend.oidc.publicOrigin=http://localhost:8080"]
@@ -60,6 +50,17 @@ def _docs(rendered: str) -> list[str]:
 def _name(doc: str) -> str:
     m = re.search(r"^\s*name:\s*(\S+)", doc, re.MULTILINE)
     return m.group(1) if m else "?"
+
+
+def test_external_secrets_owns_the_token_and_the_static_secret_is_skipped() -> None:
+    rendered = _helm("singleTenant.enabled=true", "ray.auth.enabled=true", "externalSecrets.enabled=true").stdout
+    docs = _docs(rendered)
+    static = [d for d in docs if re.search(r"^kind: Secret$", d, re.MULTILINE) and "rask-ray-auth-token" in d]
+    assert not static, "with ESO on, no plaintext token Secret may ship in the chart"
+    es = [d for d in docs if "kind: ExternalSecret" in d and "rask-ray-auth-token" in d]
+    assert len(es) == 1, "the ESO path must sync the same-named Secret from Vault"
+    assert "property: ray-auth-token" in es[0], "token must come from the established secretPath (OpenBao KV property ray-auth-token)"
+    assert "auth_token:" in es[0], "the synced Secret must keep the auth_token data key the consumers reference"
 
 
 @pytest.mark.parametrize("single_tenant", [False, True], ids=["external-ray", "in-cluster-ray"])

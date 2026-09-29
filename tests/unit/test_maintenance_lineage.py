@@ -269,9 +269,16 @@ def test_emit_sweep_lineage_root_table_has_empty_namespace() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_make_emitter_noop_when_disabled() -> None:
-    emitter = make_emitter(enabled=False, dapr=None, pubsub="p", topic="t", job_namespace="compaction")
-    assert isinstance(emitter, NoopEmitter)
+@pytest.mark.parametrize(
+    ("enabled", "dapr", "emitter_type"),
+    [
+        pytest.param(False, None, NoopEmitter, id="disabled"),
+        pytest.param(True, cast(Any, object()), DaprMaintenanceEmitter, id="enabled-and-wired"),
+    ],
+)
+def test_make_emitter_is_noop_when_disabled_and_dapr_when_wired(enabled: bool, dapr: Any, emitter_type: type) -> None:
+    emitter = make_emitter(enabled=enabled, dapr=dapr, pubsub="lineage-pubsub", topic="lineage.events.v1", job_namespace="compaction")
+    assert isinstance(emitter, emitter_type)
 
 
 class _FakeDaprClient:
