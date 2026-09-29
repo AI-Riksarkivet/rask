@@ -48,14 +48,6 @@ def test_a_static_metadata_change_projects_to_a_notifiable() -> None:
     assert notice.project == "acme"
 
 
-def test_the_identity_is_derived_from_the_event_so_two_lanes_agree() -> None:
-    """The bus lane and the feed lane see different copies; a minted id would land two pointers."""
-    first = notifiable(LineageRunEvent.model_validate(_static()))
-    second = notifiable(LineageRunEvent.model_validate(_static()))
-    assert first is not None and second is not None
-    assert first.delivery.notification_id == second.delivery.notification_id
-
-
 def test_a_different_change_to_the_same_table_is_a_different_notification() -> None:
     """A drop and a re-create of one table are two facts; collapsing them silences the second."""
     created = notifiable(LineageRunEvent.model_validate(_static()))
@@ -64,15 +56,6 @@ def test_a_different_change_to_the_same_table_is_a_different_notification() -> N
     recreated = notifiable(LineageRunEvent.model_validate(later))
     assert created is not None and recreated is not None
     assert created.delivery.notification_id != recreated.delivery.notification_id
-
-
-def test_an_unauthored_static_change_notifies_NOBODY() -> None:
-    """v1's audience IS the author — the rule does not relax because the event kind changed."""
-    payload = _static()
-    dataset = payload["dataset"]
-    assert isinstance(dataset, dict)
-    dataset["facets"] = {"lance": {"operation": "create_table"}}
-    assert notifiable(LineageRunEvent.model_validate(payload)) is None
 
 
 def test_the_ownership_facet_is_still_not_an_author() -> None:

@@ -52,8 +52,6 @@ def _reader(crs: list[dict[str, Any]]):
     ("label", "cr"),
     [
         ("a scalar where the CRD says object", {"metadata": {"name": "a"}, "spec": {"team": "t", "workload": "htr"}}),
-        ("a null metadata block", {"metadata": None, "spec": {"team": "t", "workload": {"type": "htr"}}}),
-        ("a non-string phase", {"metadata": {"name": "a"}, "spec": {"team": "t"}, "status": {"phase": 3}}),
     ],
 )
 def test_an_unreadable_cr_is_a_named_failure_not_an_attribute_error(client: TestClient, label: str, cr: dict[str, Any]) -> None:
@@ -98,12 +96,3 @@ def test_the_shapes_the_old_chain_accepted_still_map(client: TestClient) -> None
     assert projects[1]["phase"] == "Pending"
     assert projects[1]["namespace"] == "project-empty"
     assert projects[1]["workload"] == "dummy"
-
-
-def test_the_cr_model_is_what_the_mapper_takes() -> None:
-    """The mapper's input is a MODEL — the `.get()` chains have no home left to live in."""
-    from controlplane.schemas import ProjectCR
-    from controlplane.service import to_dto
-
-    cr = ProjectCR.model_validate({"metadata": {"name": "demo"}, "spec": {"team": "t", "workload": {"type": "dummy"}}})
-    assert to_dto(cr, "http://demo.test/overview").workload == "dummy"

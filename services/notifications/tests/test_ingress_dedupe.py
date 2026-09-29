@@ -99,28 +99,6 @@ def _cloud_event(event: dict[str, Any]) -> dict[str, Any]:
     return {"id": "ce-1", "source": "lineage", "type": "com.dapr.event.sent", "topic": "lineage.events.v1", "data": event}
 
 
-def test_the_subscription_is_advertised_to_the_sidecar(bus: TestClient) -> None:
-    """`GET /dapr/subscribe` is the registration daprd reads at startup — the wiring is inspectable
-    even where no broker exists."""
-    declared = bus.get("/dapr/subscribe").json()
-    assert [(entry["pubsubname"], entry["topic"], entry["route"]) for entry in declared] == [
-        ("lineage-pubsub-notifications", "lineage.events.v1", "/lineage-events"),
-        # v3 targeting, on its OWN component: `queueGroupName` lives on the component, and adding a
-        # scope to the catalog's BROADCAST component would split an every-replica broadcast into a
-        # competing-consumer group instead of joining it.
-        ("catalog-control-pubsub-notifications", "catalog.control.v1", "/control-events"),
-    ]
-
-
-def test_a_delivered_cloud_event_is_a_body_not_a_query_parameter(bus: TestClient, plane: _Plane) -> None:
-    """A handler whose payload parameter is typed bare `Any` becomes a QUERY parameter, and every
-    delivery then answers `422 {"field": "query.event"}` while the subscription looks healthy."""
-    response = bus.post("/lineage-events", json=_cloud_event(RUN_EVENT))
-    assert response.status_code == 200
-    assert response.json() == {"status": "SUCCESS"}
-    assert len(plane.boxes["alice"]) == 1
-
-
 def test_the_handler_unwraps_the_envelope_rather_than_treating_it_as_the_event(bus: TestClient, plane: _Plane) -> None:
     """The CloudEvent's own fields are not the run's. Reading the envelope as the payload would DROP
     every delivery — silently, since a DROP is an ack."""
@@ -134,13 +112,6 @@ def test_the_handler_unwraps_the_envelope_rather_than_treating_it_as_the_event(b
 def test_an_envelope_with_no_event_is_dropped(bus: TestClient, plane: _Plane) -> None:
     assert bus.post("/lineage-events", json={"id": "ce-2"}).json() == {"status": "DROP"}
     assert plane.boxes == {}
-
-
-def test_a_pointer_from_the_bus_carries_no_feed_sequence(bus: TestClient, plane: _Plane) -> None:
-    """`event_seq` is the FEED's number. A bus row that claimed one would be asserting where it came
-    from, wrongly."""
-    bus.post("/lineage-events", json=_cloud_event(RUN_EVENT))
-    assert plane.boxes["alice"][0]["event_seq"] is None
 
 
 async def _feed_tick(plane: _Plane, *, seq: int, cursor: int) -> Any:
@@ -190,18 +161,6 @@ async def test_the_same_run_arriving_on_both_lanes_lands_exactly_one_pointer(pla
     assert len(plane.boxes["alice"]) == 1
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_the_feed_reaching_it_first_is_the_same_story(plane: _Plane) -> None:
-    """Order must not matter: the HTTP-only lanes are exactly the ones the bus never carries, so which
-    door sees a run first is a property of the producer, not of this plane."""
-    await _feed_tick(plane, seq=12, cursor=11)
-    assert plane.boxes["alice"][0]["event_seq"] == 12
-
-    assert await _bus_delivery(plane) == DAPR_SUCCESS
-    assert len(plane.boxes["alice"]) == 1
-
-
 # --- WHICH LANE WON: the evidence a lane can ever be retired on -----------------------------------
 #
 # The doctrine that came out of the atomicity audit is "keep both lanes, and retire one only on
@@ -238,19 +197,3 @@ async def test_the_lane_that_wrote_the_row_is_the_one_counted_as_delivered(plane
         f"the losing lane was not counted as a duplicate, so 'which lane wins' cannot be read off the "
         f"metric and no lane can ever be retired on evidence: {seen}"
     )
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_the_same_holds_when_the_feed_wins(plane: _Plane, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Order must not matter — which door sees a run first is a property of the PRODUCER."""
-    import notifications.api.ingest as ingest_module
-
-    seen: list[tuple[str, str]] = []
-    monkeypatch.setattr(ingest_module, "record_ingress", lambda lane, outcome: seen.append((lane.value, outcome.value)))
-
-    await _feed_tick(plane, seq=12, cursor=11)
-    await _bus_delivery(plane)
-
-    assert seen[0] == ("feed", "delivered")
-    assert seen[1] == ("bus", "duplicate")

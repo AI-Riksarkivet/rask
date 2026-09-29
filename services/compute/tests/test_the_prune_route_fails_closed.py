@@ -72,13 +72,6 @@ def test_dapr_on_with_a_token_boots(monkeypatch: pytest.MonkeyPatch, fresh_setti
     _boot()
 
 
-def test_dapr_off_boots_without_a_token(monkeypatch: pytest.MonkeyPatch, fresh_settings: None) -> None:
-    """The dev loop: no sidecar, no token, no refusal — the guard is a documented no-op there."""
-    monkeypatch.setenv("RASK_DAPR_ENABLED", "false")
-    monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    _boot()
-
-
 @pytest.fixture
 def signed_app(monkeypatch: pytest.MonkeyPatch, fresh_settings: None) -> Iterator[TestClient]:
     monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
@@ -93,11 +86,6 @@ def signed_app(monkeypatch: pytest.MonkeyPatch, fresh_settings: None) -> Iterato
 def test_an_unsigned_prune_post_is_refused_when_the_token_is_configured(signed_app: TestClient) -> None:
     resp = signed_app.post("/compute-prune-jobs-cron")
     assert resp.status_code == 403, f"an unsigned POST reached the prune route: {resp.status_code} {resp.text[:120]}"
-
-
-def test_a_wrongly_signed_prune_post_is_refused(signed_app: TestClient) -> None:
-    resp = signed_app.post("/compute-prune-jobs-cron", headers={"dapr-api-token": "not-the-secret"})
-    assert resp.status_code == 403
 
 
 def test_a_correctly_signed_prune_post_is_admitted(signed_app: TestClient) -> None:

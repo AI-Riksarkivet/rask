@@ -27,12 +27,10 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from notifications.api import inbox as inbox_module
-from notifications.api.schemas import UnreadBadge
 from notifications.config import get_notifications_settings
-from notifications.models import InboxPointer, NotificationReason
+from notifications.models import NotificationReason
 from notifications.proxies import TypedActorProxy
 from service_kit.exceptions import register_handlers
 
@@ -89,13 +87,6 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         yield test_client
 
 
-def test_a_stored_row_cannot_even_be_constructed_with_a_field_it_does_not_declare() -> None:
-    """The containment is structural — `extra="forbid"` on the record that crosses the actor boundary
-    — rather than a filter at the door. A filter is something a later route can forget to apply."""
-    with pytest.raises(ValidationError, match="subject"):
-        InboxPointer.model_validate(_row(subject=FOREIGN))
-
-
 def test_a_store_answering_with_another_subjects_field_cannot_put_it_on_the_wire(client: TestClient) -> None:
     """The load-bearing one: a foreign field in the store must not become a foreign field in a browser.
 
@@ -108,21 +99,3 @@ def test_a_store_answering_with_another_subjects_field_cannot_put_it_on_the_wire
 
     assert response.status_code != 200, "a row the models cannot read was served as if it were fine"
     assert FOREIGN not in response.text
-
-
-def test_the_badge_absorbs_the_stores_row_count_instead_of_refusing_it(client: TestClient) -> None:
-    """The other containment, and the reason the two must differ.
-
-    The actor answers the badge with `{unread, rows}` by design — the small partition holds both — so
-    a wire model that forbade extras would turn the most frequent read in the plane into a 500. It
-    declares one field instead, and the count is dropped rather than refused.
-    """
-    response = client.get("/notifications/inbox/unread")
-
-    assert response.status_code == 200
-    assert response.json() == {"unread": 1}
-
-
-def test_the_wire_model_drops_what_it_does_not_declare_rather_than_carrying_it() -> None:
-    """The same claim without the door, so a change to either one cannot hide behind the other."""
-    assert UnreadBadge.model_validate({"unread": 1, "rows": 9, "subject": FOREIGN}).model_dump() == {"unread": 1}

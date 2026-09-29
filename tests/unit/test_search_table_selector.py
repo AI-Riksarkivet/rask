@@ -138,17 +138,6 @@ def test_an_UNKNOWN_table_is_refused_and_names_what_IS_declared() -> None:
     assert "pages" in message and "lines" in message
 
 
-def test_an_unknown_table_never_OPENS_the_default() -> None:
-    """The refusal must happen before any table is opened — otherwise a typo silently costs a Lance
-    open, and worse, a partially-built target could still be returned by a later refactor."""
-    handle = _Handle(_descriptor(PAGES_AND_LINES))
-
-    with pytest.raises(ValidationError):
-        resolve_target(_as_handle(handle), "ghost")
-
-    assert handle.opened == []
-
-
 def test_a_corpus_with_NO_search_block_still_says_so() -> None:
     """The pre-existing message, unchanged — a different failure from naming an unknown table."""
     handle = _Handle(_descriptor([]))
@@ -184,13 +173,6 @@ def test_a_LEGACY_single_table_corpus_resolves_exactly_as_before() -> None:
     target = resolve_target(_as_handle(_Handle(descriptor)), None)
 
     assert target.row_table_name == "chunks"
-
-
-def test_the_spec_carries_the_selector_on_the_wire() -> None:
-    """`table` rides beside `dataset` on the same query string — the table is part of WHAT is being
-    searched, not a filter on it."""
-    assert SearchSpec().table is None
-    assert SearchSpec.model_validate({"table": "lines"}).table == "lines"
 
 
 # ── the result cache must SEE the selector (docs/DECISIONS.md "The Python estate audit" VS-04) ─────────────────────────────

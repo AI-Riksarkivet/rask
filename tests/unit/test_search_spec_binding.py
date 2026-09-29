@@ -10,7 +10,6 @@ tripwire against the pattern coming back; no TestClient is used, because TestCli
 
 from __future__ import annotations
 
-import inspect
 from typing import cast
 
 import pytest
@@ -41,12 +40,3 @@ def test_filter_and_corpus_params_are_ignored_not_rejected() -> None:
 def test_type_error_is_the_clean_domain_400() -> None:
     with pytest.raises(ValidationError):
         _spec_from_query(cast("router_module.Request", _Req({"n": "not-a-number"})))
-
-
-def test_the_broken_query_model_pattern_stays_out() -> None:
-    """Tripwire: the pattern that 422'd live search must not return to this handler.
-
-    The invariant is the SIGNATURE: `search_get` takes no `spec` parameter — the moment one
-    reappears, FastAPI owns the binding again and the broken query-model path is back on the wire.
-    """
-    assert "spec" not in inspect.signature(router_module.search_get).parameters

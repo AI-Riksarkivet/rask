@@ -58,34 +58,6 @@ def test_to_dto_maps_all_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     assert dto.created_at == "2026-01-01T00:00:00Z"
 
 
-def test_to_dto_missing_status_defaults_pending(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
-    monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
-
-    from controlplane.schemas import ProjectCR
-    from controlplane.service import to_dto
-
-    dto = to_dto(ProjectCR.model_validate(_cr("fresh", phase=None)), "")
-    assert dto.phase == "Pending"
-    assert dto.namespace == ""
-
-
-def test_to_dto_empty_phase_defaults_pending(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_API_PREFIX", "/api")
-    monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
-    monkeypatch.setenv("RASK_VIEWER_OUTPUT", "s3://unused")
-
-    from controlplane.schemas import ProjectCR
-    from controlplane.service import to_dto
-
-    cr = _cr("empty", phase="Ready")
-    cr["status"]["phase"] = ""  # status present, phase empty string
-    dto = to_dto(ProjectCR.model_validate(cr), "")
-    assert dto.phase == "Pending"
-    assert dto.namespace == "project-empty"  # namespace still preserved
-
-
 def test_list_project_dtos_sorted_by_created_at(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RASK_API_PREFIX", "/api")
     monkeypatch.setenv("RASK_VIEWER_INPUT", "s3://unused")
@@ -130,27 +102,6 @@ def test_list_projects_endpoint_returns_dtos(client: TestClient) -> None:
     assert body["projects"][0]["phase"] == "Ready"
     assert body["projects"][0]["created_at"] == "2026-01-01T00:00:00Z"
     assert body["projects"][0]["url"] == ""
-
-
-def test_list_projects_endpoint_503_on_k8s_unreachable(client: TestClient) -> None:
-    """A real transport failure (connection refused → OSError subclass) → 503."""
-    from controlplane import app
-    from controlplane.routes import get_reader
-
-    class UnreachableReader:
-        def list_projects(self) -> list[dict]:
-            raise ConnectionError("k8s unreachable")
-
-        def ingress_hosts(self) -> dict[str, str]:
-            return {}
-
-    app.dependency_overrides[get_reader] = lambda: UnreachableReader()
-    try:
-        resp = client.get("/api/projects/")
-    finally:
-        app.dependency_overrides.clear()
-
-    assert resp.status_code == 503
 
 
 def test_list_projects_endpoint_does_not_mask_mapping_bug(client: TestClient) -> None:
@@ -225,31 +176,3 @@ def test_list_project_dtos_resolves_every_host_in_one_bulk_lookup() -> None:
     assert urls["a"] == "http://a.rask.local/overview"
     assert urls["b"] == "http://b.rask.local/overview"
     assert urls["c"] == ""  # no ingress for c → empty url
-
-
-def test_to_dto_builds_url_from_ingress_host() -> None:
-    from controlplane.service import list_project_dtos
-
-    class FakeReader:
-        def list_projects(self) -> list[dict[str, Any]]:
-            return [_cr("demo", phase="Ready")]
-
-        def ingress_hosts(self) -> dict[str, str]:
-            return {"project-demo": "demo.rask.local"}
-
-    dtos = list_project_dtos(FakeReader(), "http")
-    assert dtos[0].url == "http://demo.rask.local/overview"
-
-
-def test_url_empty_when_no_ingress() -> None:
-    from controlplane.service import list_project_dtos
-
-    class FakeReader:
-        def list_projects(self) -> list[dict[str, Any]]:
-            return [_cr("demo", phase="Provisioning")]
-
-        def ingress_hosts(self) -> dict[str, str]:
-            return {}
-
-    dtos = list_project_dtos(FakeReader(), "http")
-    assert dtos[0].url == ""

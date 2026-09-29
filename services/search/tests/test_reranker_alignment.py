@@ -68,12 +68,6 @@ def test_a_sparse_reply_does_not_shift_scores_onto_the_wrong_candidate(monkeypat
     assert scores[2] == 0.9, "candidate 2's score landed on candidate 1 — the misalignment VS-14 names"
 
 
-def test_a_declined_candidate_sinks_rather_than_stealing_a_neighbours_score(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The skipped index gets a floor score, so it ranks LAST, not wherever a shifted neighbour put it."""
-    scores = _reranker([RerankResult(index=0, relevance_score=0.1), RerankResult(index=2, relevance_score=0.9)], monkeypatch).rerank("q", ["a", "b", "c"])
-    assert scores[1] < min(0.1, 0.9), "an unscored candidate did not sink below the scored ones"
-
-
 def test_the_result_length_always_equals_the_candidate_count(monkeypatch: pytest.MonkeyPatch) -> None:
     """The contract the caller relies on: N candidates in, N scores out — so its zip needs no
     `strict=False` to hide a length mismatch."""

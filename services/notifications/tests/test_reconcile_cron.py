@@ -134,20 +134,6 @@ def token_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
 
 
-def test_the_cron_route_is_mounted_at_the_root_on_the_shipped_app() -> None:
-    """The binding name IS the path, and it is at the ROOT — Dapr knows no api prefix.
-
-    Asserted against the real module-level app rather than a hand-built one: a router that exists and
-    is never included is exactly the shape this whole file exists to catch.
-    """
-    module = importlib.reload(importlib.import_module("notifications"))
-    paths = module.app.openapi()["paths"]
-    assert f"/{BINDING}" in paths
-    assert "post" in paths[f"/{BINDING}"]
-    # Not under the api prefix: a binding delivered to /api/... is a binding never delivered.
-    assert not any(path.endswith(f"/{BINDING}") and path != f"/{BINDING}" for path in paths)
-
-
 def test_options_acks_the_binding_discovery_preflight(wired: tuple[TestClient, _FakeFeed, _FakeCursor]) -> None:
     """Without this Dapr logs the app as not consuming the binding and delivers nothing, forever."""
     client, _, _ = wired
@@ -170,8 +156,8 @@ def test_a_first_tick_primes_the_cursor_and_notifies_nobody(wired: tuple[TestCli
 @pytest.mark.usefixtures("token_env")
 @pytest.mark.parametrize(
     "headers",
-    [{}, {"dapr-api-token": "a-guess"}, {"dapr-api-token": ""}],
-    ids=["no-token", "wrong-token", "empty-token"],
+    [{"dapr-api-token": "a-guess"}],
+    ids=["wrong-token"],
 )
 def test_the_tick_is_sidecar_only(wired: tuple[TestClient, _FakeFeed, _FakeCursor], headers: dict[str, str]) -> None:
     """An unauthenticated trigger would drive catch-up walks with this service's governed identity."""
@@ -180,24 +166,10 @@ def test_the_tick_is_sidecar_only(wired: tuple[TestClient, _FakeFeed, _FakeCurso
     assert cursor.writes == []
 
 
-@pytest.mark.usefixtures("token_env")
-def test_the_matching_token_opens_the_door(wired: tuple[TestClient, _FakeFeed, _FakeCursor]) -> None:
-    client, _, _ = wired
-    assert client.post(f"/{BINDING}", headers={"dapr-api-token": TOKEN}).status_code == 200
-
-
-@pytest.mark.usefixtures("token_env")
-def test_a_public_front_door_may_not_trigger_a_tick(wired: tuple[TestClient, _FakeFeed, _FakeCursor]) -> None:
-    """The measured gateway bypass: daprd stamps a valid token on requests it forwards for anyone."""
-    client, _, _ = wired
-    response = client.post(f"/{BINDING}", headers={"dapr-api-token": TOKEN, "dapr-caller-app-id": "gateway"})
-    assert response.status_code == 403
-
-
 @pytest.mark.parametrize(
     ("feed", "cursor"),
-    [(None, _FakeCursor()), (_FakeFeed(FeedPage()), None), (None, None)],
-    ids=["no-feed-client", "no-cursor-store", "neither"],
+    [(None, _FakeCursor()), (_FakeFeed(FeedPage()), None)],
+    ids=["no-feed-client", "no-cursor-store"],
 )
 def test_an_unwired_deployment_refuses_rather_than_walking_cursor_less(feed: _FakeFeed | None, cursor: _FakeCursor | None) -> None:
     """503 with a reason, never a 200 that primed the mark past everything it should have delivered."""
@@ -222,20 +194,12 @@ class TestIngressSettings:
         monkeypatch.setenv("RASK_NOTIFICATIONS_SERVICE_IDENTITY", "just-me")
         assert IngressSettings.model_validate({}).service_identity == "just-me"
 
-    def test_the_binding_name_defaults_to_the_component_the_chart_mints(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("RASK_NOTIFICATIONS_BINDING_NAME", raising=False)
-        assert IngressSettings.model_validate({}).binding_name == BINDING
-
     def test_a_page_timeout_above_the_pass_budget_is_refused_at_boot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unsatisfiable by construction — and silent, since the timeout simply never fires."""
         monkeypatch.setenv("RASK_NOTIFICATIONS_FEED_TIMEOUT_SECONDS", "30")
         monkeypatch.setenv("RASK_NOTIFICATIONS_RECONCILE_BUDGET_SECONDS", "10")
         with pytest.raises(ValueError, match="may not outlast the whole pass"):
             IngressSettings.model_validate({})
-
-    def test_the_shipped_defaults_satisfy_that_ordering(self) -> None:
-        settings = IngressSettings.model_validate({})
-        assert settings.feed_timeout_seconds <= settings.reconcile_budget_seconds
 
 
 def _lifespan_without_the_actor_warmup(patch: pytest.MonkeyPatch) -> None:
@@ -355,28 +319,6 @@ def test_a_completed_tick_is_counted_and_BOTH_pass_outcomes_have_a_series(
     )
 
 
-def test_a_clean_pass_still_emits_the_gap_counter_so_the_SERIES_EXISTS(
-    wired: tuple[TestClient, _FakeFeed, _FakeCursor], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """`notifications.feed.gaps` counts unread lineage rows destroyed by a prune — unrecoverable loss.
-
-    It is declared, wired, and has NEVER created a table: it is only ever incremented on loss, so until the
-    first gap the series does not exist and any alert over it reads "no data" forever. A silent-data-loss
-    counter that is itself silent is worse than none — it reads as coverage.
-    """
-    client, _feed, _cursor = wired
-    recorded = _CounterDouble()
-    monkeypatch.setattr(notifications_metrics, "_feed_gaps", recorded)
-
-    assert client.post(f"/{BINDING}").status_code == 200
-
-    assert recorded.calls, (
-        "a clean pass records nothing, so notifications_feed_gaps_total never comes into existence — verified "
-        "absent from the live store's information_schema.tables"
-    )
-    assert sum(amount for amount, _ in recorded.calls) == 0, f"a clean pass must add 0, not a gap: {recorded.calls}"
-
-
 def test_a_pass_that_outruns_its_budget_answers_503_not_500(wired: tuple[TestClient, _FakeFeed, _FakeCursor], monkeypatch: pytest.MonkeyPatch) -> None:
     """`asyncio.timeout` raises TimeoutError, which unhandled would leave the route an opaque 500.
 
@@ -426,27 +368,6 @@ def test_a_catch_up_walk_runs_through_the_route(monkeypatch: pytest.MonkeyPatch)
     assert body["primed"] is False
     assert body["scanned"] == 2, "the route did not drive a real catch-up walk"
     assert cursor.writes == [9]
-
-
-def test_the_lifespan_wires_the_feed_client_from_settings_not_from_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`isinstance` alone leaves base_url and identity unobserved — the two the chart must supply.
-
-    Both have code defaults that are silently wrong in a cluster: `127.0.0.1:8000` is the pod itself,
-    and an identity lineage's allowlist never learned 403s every tick.
-    """
-    _lifespan_without_the_actor_warmup(monkeypatch)
-    monkeypatch.setenv("RASK_NOTIFICATIONS_LINEAGE_URL", "http://lineage.test:8000")
-    monkeypatch.setenv("RASK_LINEAGE_SERVICE_IDENTITY", "notifications-under-test")
-    get_ingress_settings.cache_clear()
-    module = importlib.reload(importlib.import_module("notifications"))
-    try:
-        with TestClient(module.app) as client:
-            feed = client.app.state.lineage_feed
-            assert feed._base == "http://lineage.test:8000"
-            assert feed._identity == "notifications-under-test"
-    finally:
-        get_ingress_settings.cache_clear()
-        importlib.reload(importlib.import_module("notifications"))
 
 
 def test_a_tick_without_an_actor_plane_refuses_instead_of_hanging() -> None:

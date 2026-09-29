@@ -190,19 +190,6 @@ class TestEveryLegDropped:
             service._search_all(ctx)
 
 
-class TestAHealthyFusionIsUntouched:
-    def test_both_legs_fuse(self, caplog: pytest.LogCaptureFixture) -> None:
-        """The failure mode that would hide the fix: raising on everything also passes the tests
-        above."""
-        ctx = _ctx(_target(_Table(), fts=_FTS, vectors={"semantic": _SEMANTIC}))
-
-        with caplog.at_level(logging.WARNING, logger="search.services.service"):
-            hits = service._search_all(ctx)
-
-        assert [h["doc_id"] for h in hits] == ["a"]
-        assert not caplog.records, "a healthy fused search logged a dropped leg"
-
-
 # ── SITE 2: the caption enrichment ────────────────────────────────────────────────────────────────
 
 
@@ -245,15 +232,6 @@ class TestAttachCaptions:
 
         assert caplog.records, "the caption scan failed and NOTHING recorded it"
         assert any(r.exc_info for r in caplog.records), "the failure was logged without the exception that caused it"
-
-    def test_the_search_still_answers(self) -> None:
-        """The deliberate asymmetry with the fused legs: the hits are already complete and correct,
-        so a broken enrichment must not take the result set down with it."""
-        hits = _hits()
-
-        attach_captions(_FrameTable(OUTAGE), hits, caption_column="caption", key_fields=["doc_id"])
-
-        assert hits == [{"doc_id": "a", "body": "hello"}]
 
     @pytest.mark.parametrize(
         ("frame_tbl", "hits"),

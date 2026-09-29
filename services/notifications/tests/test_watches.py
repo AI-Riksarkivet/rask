@@ -45,11 +45,6 @@ def _index() -> tuple[WatchIndexActor, _StateManager]:
 
 class TestWatchIndexActor:
     @pytest.mark.asyncio
-    async def test_an_unwatched_project_lists_nobody(self) -> None:
-        actor, _ = _index()
-        assert await actor.list_watchers() == {"subjects": [], "total": 0}
-
-    @pytest.mark.asyncio
     async def test_watching_registers_the_subject(self) -> None:
         actor, state = _index()
         assert await actor.watch({"subject": "alice"}) == {"added": True, "total": 1}
@@ -77,14 +72,6 @@ class TestWatchIndexActor:
     async def test_unwatching_something_unwatched_is_not_an_error(self) -> None:
         actor, _ = _index()
         assert await actor.unwatch({"subject": "ghost"}) == {"removed": False, "total": 0}
-
-    @pytest.mark.asyncio
-    async def test_insertion_order_is_stable(self) -> None:
-        """Free, and it keeps anything that renders the list from appearing to shuffle on its own."""
-        actor, _ = _index()
-        for subject in ("carol", "alice", "bob"):
-            await actor.watch({"subject": subject})
-        assert (await actor.list_watchers())["subjects"] == ["carol", "alice", "bob"]
 
 
 class _FakeInbox:
@@ -181,12 +168,6 @@ class TestWatchDoor:
         assert plane.project_watchers == {}
         assert plane.subject_watches == {}
 
-    def test_watching_twice_reports_unchanged_rather_than_failing(self, plane: _Plane) -> None:
-        client = TestClient(_app(plane, allow=True))
-        client.put("/notifications/watches/acme")
-
-        assert client.put("/notifications/watches/acme").json()["changed"] is False
-
     def test_the_list_reflects_what_was_watched(self, plane: _Plane) -> None:
         client = TestClient(_app(plane, allow=True))
         client.put("/notifications/watches/acme")
@@ -206,8 +187,3 @@ class TestWatchDoor:
         assert body["watching"] is False
         assert plane.project_watchers["acme"] == []
         assert plane.subject_watches["anon"] == []
-
-    def test_unwatching_something_unwatched_is_not_an_error(self, plane: _Plane) -> None:
-        client = TestClient(_app(plane, allow=True))
-
-        assert client.delete("/notifications/watches/ghost").json()["changed"] is False

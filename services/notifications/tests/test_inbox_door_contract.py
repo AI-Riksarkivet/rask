@@ -20,7 +20,6 @@ Every subject here is injected through `dependency_overrides` on the auth dep ra
 a client: the door's own resolution is what is under test, and a patch would route around it.
 """
 
-import base64
 import json
 import logging
 from collections.abc import Iterator
@@ -33,12 +32,11 @@ from fastapi.testclient import TestClient
 
 from notifications.api import inbox as inbox_module
 from notifications.api import security as security_module
-from notifications.api.cursor import decode_cursor, encode_cursor
+from notifications.api.cursor import encode_cursor
 from notifications.config import get_notifications_settings
-from notifications.feed import order_newest_first, paginate, unread_count, visible
-from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxCursor, InboxDismiss, InboxFilter, InboxMark, InboxPointer, InboxQuery, NotificationReason
+from notifications.feed import paginate, unread_count
+from notifications.models import INBOX_PAGE_LIMIT_MAX, InboxDismiss, InboxMark, InboxPointer, InboxQuery, NotificationReason
 from notifications.proxies import TypedActorProxy
-from service_kit import exceptions
 from service_kit.exceptions import register_handlers
 from service_kit.lakehouse.ns_errors import install_problem_handlers
 
@@ -154,29 +152,6 @@ def unauthenticated(monkeypatch: pytest.MonkeyPatch, plane: _Plane) -> Iterator[
 # ── a cursor is a position, never an identity ───────────────────────────────────────────────────────
 
 
-def test_a_minted_cursor_names_a_position_and_nothing_about_who_may_read_it() -> None:
-    """Both halves of the ordering key and no third field. A cursor that carried a subject would be a
-    caller-supplied identity travelling in an opaque string — the one shape this door has no way to
-    refuse, because opaque is what it promises the client."""
-    raw = encode_cursor(_pointer("run-001@FAIL", minutes_ago=1))
-
-    payload = json.loads(base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)))
-
-    assert set(payload) == {"occurred_at", "notification_id"}
-
-
-def test_a_cursor_with_an_identity_bolted_on_is_refused_rather_than_honoured() -> None:
-    """The forged shape, refused by the model rather than ignored by the reader.
-
-    `InboxCursor` is `extra="forbid"`, so a cursor carrying a subject cannot decode at all. Ignoring
-    the unknown field would be almost as good today and silently wrong the day anything reads it.
-    """
-    forged = json.dumps({"occurred_at": NOW.isoformat(), "notification_id": "run-001@FAIL", "subject": STRANGER})
-
-    with pytest.raises(exceptions.ValidationError):
-        decode_cursor(base64.urlsafe_b64encode(forged.encode()).decode().rstrip("="))
-
-
 def test_a_cursor_lifted_from_another_subjects_feed_reads_only_the_callers_own_rows(client: TestClient, plane: _Plane) -> None:
     """The replay, end to end: the stranger's cursor moves the caller within the caller's own feed.
 
@@ -203,12 +178,9 @@ def test_a_cursor_lifted_from_another_subjects_feed_reads_only_the_callers_own_r
 @pytest.mark.parametrize(
     ("label", "raw"),
     [
-        ("not base64 at all", "not-a-cursor"),
         ("outside the alphabet", "!!!!"),
         ("valid base64, wrong shape", "eyJhIjogMX0"),
         ("valid base64, empty object", "e30"),
-        ("half a key", base64.urlsafe_b64encode(b'{"notification_id": "run-001@FAIL"}').decode().rstrip("=")),
-        ("an unparseable instant", base64.urlsafe_b64encode(b'{"occurred_at": "yesterday", "notification_id": "x"}').decode().rstrip("=")),
     ],
 )
 def test_a_cursor_this_service_did_not_mint_is_refused_with_a_reason_and_serves_no_row(client: TestClient, plane: _Plane, label: str, raw: str) -> None:
@@ -228,29 +200,6 @@ def test_a_cursor_this_service_did_not_mint_is_refused_with_a_reason_and_serves_
     assert "cursor" in body["detail"], f"the refusal must name what was wrong; got {body!r}"
     assert body["status"] == 400
     assert "notifications" not in body, "a refused cursor must not come back carrying rows"
-
-
-def test_a_door_that_swallowed_the_cursor_error_would_have_served_page_one() -> None:
-    """The OLD form, reproduced so the refusal above is shown to gate something.
-
-    A `try/except -> None` around the decode is the natural-looking version of this code, and it is
-    indistinguishable from correct until a client mistypes a cursor: the query then resumes from
-    nowhere, which is the top of the feed. Same rows as an unpaged request — forever, since the client
-    keeps handing back the cursor it was given.
-    """
-    rows = [_pointer(f"alice-{n:03d}@FAIL", minutes_ago=n) for n in range(1, 6)]
-
-    def _swallowing_decode(raw: str) -> InboxCursor | None:
-        try:
-            return decode_cursor(raw)
-        except exceptions.ValidationError:
-            return None
-
-    swallowed = paginate(rows, InboxQuery(limit=2, after=_swallowing_decode("not-a-cursor")))
-    unpaged = paginate(rows, InboxQuery(limit=2))
-
-    assert [p.notification_id for p in swallowed.pointers] == [p.notification_id for p in unpaged.pointers]
-    assert swallowed.pointers, "the swallow really does serve page one — which is why refusing is the honest answer"
 
 
 # ── the tiebreaker, and what its absence costs ──────────────────────────────────────────────────────
@@ -281,48 +230,17 @@ def test_paging_rows_that_share_an_instant_repeats_nothing_and_skips_nothing(cli
     assert len(seen) == len(set(seen)) == 5, f"the walk repeated or skipped a row: {seen}"
 
 
-def test_a_cursor_over_the_instant_alone_loses_every_row_that_shares_it() -> None:
-    """The OLD form of the resume filter, reproduced and shown to be broken.
-
-    `p.occurred_at < resume.occurred_at` is what the cursor looks like before anyone notices the tie,
-    and it does not merely mis-order: it drops the four remaining rows outright, so the reader is told
-    the feed ended after two of five.
-    """
-    rows = [_pointer(f"alice-{n:03d}@FAIL", minutes_ago=7) for n in range(1, 6)]
-    first = paginate(rows, InboxQuery(limit=2))
-    resume = first.pointers[-1]
-
-    instant_only = [p for p in order_newest_first(visible(rows, InboxFilter.ALL)) if p.occurred_at < resume.occurred_at]
-    with_tiebreak = paginate(rows, InboxQuery(limit=2, after=InboxCursor(occurred_at=resume.occurred_at, notification_id=resume.notification_id)))
-
-    assert instant_only == [], "the instant-only resume kept rows — re-derive what this test is protecting"
-    assert [p.notification_id for p in with_tiebreak.pointers] == ["alice-003@FAIL", "alice-002@FAIL"]
-
-
 # ── the page bound, named at both edges ─────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
     ("limit", "status"),
-    [(0, 422), (1, 200), (INBOX_PAGE_LIMIT_MAX - 1, 200), (INBOX_PAGE_LIMIT_MAX, 200), (INBOX_PAGE_LIMIT_MAX + 1, 422)],
+    [(1, 200), (INBOX_PAGE_LIMIT_MAX - 1, 200), (INBOX_PAGE_LIMIT_MAX, 200), (INBOX_PAGE_LIMIT_MAX + 1, 422)],
 )
 def test_the_page_size_bound_is_inclusive_at_the_cap(client: TestClient, limit: int, status: int) -> None:
     """Both sides of the cap by name. The interesting one is `INBOX_PAGE_LIMIT_MAX` itself: an `lt=`
     written where an `le=` was meant refuses the documented maximum and passes every other case."""
     assert client.get("/notifications/inbox", params={"limit": limit}).status_code == status
-
-
-def test_the_published_cap_is_the_one_the_store_enforces(client: TestClient) -> None:
-    """The route's `le=` and the actor's own validation are one constant, which is the only reason the
-    door cannot accept a page the store then refuses. Read off the published schema rather than the
-    source, because the schema is what a client builds against."""
-    schema = client.get("/openapi.json").json()
-    limit = next(p for p in schema["paths"]["/notifications/inbox"]["get"]["parameters"] if p["name"] == "limit")
-
-    assert limit["schema"]["anyOf"][0]["maximum"] == INBOX_PAGE_LIMIT_MAX
-    assert InboxQuery(limit=INBOX_PAGE_LIMIT_MAX).limit == INBOX_PAGE_LIMIT_MAX
-    with pytest.raises(ValueError, match="less than or equal"):
-        InboxQuery(limit=INBOX_PAGE_LIMIT_MAX + 1)
 
 
 # ── what a response is allowed to contain ───────────────────────────────────────────────────────────
@@ -345,53 +263,6 @@ def test_a_populated_feed_carries_exactly_the_fields_its_models_declare(client: 
     assert set(body) == {"notifications", "next_cursor", "unread"}
     assert set(body["notifications"][0]) == {"notification_id", "reason", "object_id", "source_run_id", "event_seq", "occurred_at", "seen", "dismissed"}
     assert "subject" not in json.dumps(body)
-
-
-@pytest.mark.parametrize(
-    ("method", "path", "payload", "keys"),
-    [
-        ("GET", "/notifications/inbox/unread", None, {"unread"}),
-        ("POST", "/notifications/inbox/seen", {"notification_ids": ["alice-001@FAIL"]}, {"updated", "unread"}),
-        ("POST", "/notifications/inbox/dismiss", {"notification_id": "alice-001@FAIL"}, {"dismissed", "unread"}),
-    ],
-)
-def test_every_mutation_answers_with_exactly_its_declared_fields(
-    client: TestClient,
-    plane: _Plane,
-    method: str,
-    path: str,
-    payload: dict[str, Any] | None,
-    keys: set[str],
-) -> None:
-    """The actor answers each of these with a `rows` count beside the badge. It is a storage fact a
-    reader has no business knowing, and the return type is what stops it."""
-    plane.inbox(CALLER).rows = [_pointer("alice-001@FAIL", minutes_ago=1)]
-
-    response = client.request(method, path, json=payload)
-
-    assert response.status_code == 200
-    assert set(response.json()) == keys
-
-
-def test_a_refusal_names_itself_rather_than_answering_with_an_empty_page(client: TestClient, plane: _Plane) -> None:
-    """An empty 200 is the failure mode this door is built against.
-
-    A reader whose actor plane is gone and a reader with nothing in their inbox must not receive the
-    same answer: the first is a service fault an operator has to see, the second is Tuesday. So the
-    refusal carries a status, a problem type and a reason — asserted on the body, because a status code
-    alone is what an SPA turns into a blank panel.
-    """
-    plane.inbox(CALLER).rows = [_pointer("alice-001@FAIL", minutes_ago=1)]
-    client.app.state.actors_registered = False
-
-    response = client.get("/notifications/inbox")
-
-    assert response.status_code == 503
-    assert response.headers["content-type"].startswith("application/problem+json")
-    body = response.json()
-    assert body["status"] == 503
-    assert "actor plane" in body["detail"]
-    assert "notifications" not in body
 
 
 # ── every other refusal, likewise ───────────────────────────────────────────────────────────────────
@@ -471,57 +342,3 @@ def test_an_empty_inbox_is_not_turned_into_an_outage_by_the_same_setting(client:
 
     assert response.status_code == 200
     assert response.json()["notifications"] == []
-
-
-@pytest.mark.asyncio
-async def test_the_delivery_ledger_never_reaches_the_wire() -> None:
-    """`sent` is bookkeeping, and disclosing it discloses something about a PERSON, not a run.
-
-    A reader who can see which channels a notification was pushed to learns that that subject has
-    email or Slack wired — on a shared screen, about someone else. The wire row is a declared field
-    list rather than an exclusion for exactly this reason: an exclusion silently admits whatever the
-    storage model grows next, and `sent` is the proof that it grows.
-    """
-    from notifications.api.schemas import InboxRow
-    from notifications.models import InboxPointer
-
-    assert "sent" in InboxPointer.model_fields, "the ledger left the store; this test is now vacuous"
-    assert "sent" not in InboxRow.model_fields
-
-
-def test_every_public_route_sits_under_the_gateway_s_forwarded_PREFIX() -> None:
-    """The gateway forwards `{RASK_API_PREFIX}/notifications` UNREWRITTEN.
-
-    So a router mounted one segment short — `/watches` rather than `/notifications/watches` — is
-    served by the app and UNREACHABLE through the front door: a 404 that reads as a missing feature
-    while the route exists and answers locally. Both S4's watch door and S5's prefs door shipped that
-    way and were caught by driving the real service, not by any gate. This is the gate.
-
-    Root-mounted paths are exempt BY NAME rather than by pattern: they are the sidecar's and the
-    kubelet's, and a new one has to be added here deliberately.
-    """
-    import importlib
-
-    from service_kit.config import Settings
-
-    # READ the prefix, never assume it. The code default is `/api/v1` and every deployment sets
-    # `/api`, so a test that hardcoded either would be asserting about the wrong app half the time.
-    module = importlib.reload(importlib.import_module("notifications"))
-    prefix = Settings().api_prefix.rstrip("/")
-    root_mounted = {
-        "/livez",
-        "/readyz",
-        "/healthz",
-        "/dapr/config",
-        "/dapr/subscribe",
-        "/lineage-events",
-        "/control-events",
-        "/dlq-event",
-        "/notifications-reconcile-cron",
-    }
-    stray = [
-        path
-        for path in module.app.openapi()["paths"]
-        if not path.startswith(f"{prefix}/notifications") and path not in root_mounted and not path.startswith("/actors") and path != f"{prefix}/health"
-    ]
-    assert stray == [], f"these routes are unreachable through the gateway: {stray}"

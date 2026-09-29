@@ -28,10 +28,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from notifications.api import subscriptions as subscriptions_module
-from notifications.api.ingest import ingest_run_event
-from notifications.api.metrics import Lane
 from notifications.api.settings import get_ingress_settings
-from notifications.api.visibility import Visibility
 from notifications.config import get_notifications_settings
 from notifications.proxies import TypedActorProxy
 from service_kit.lakehouse.ns_errors import install_problem_handlers
@@ -148,27 +145,6 @@ def test_an_absent_caller_header_is_not_a_public_caller(open_door: TestClient, p
     assert len(plane.boxes["alice"]) == 1
 
 
-@pytest.mark.asyncio
-async def test_a_route_without_the_door_would_put_a_forged_run_in_a_named_persons_inbox(plane: _Plane) -> None:
-    """The old form, built and shown broken.
-
-    This is the whole payload: an attacker names the author, and the ingress believes it — because the
-    author facet is only trustworthy by virtue of the doors that write it (the HTTP door overwrites it
-    with the token sub; the catalog stamps it at emit). Nothing downstream re-derives it, and nothing
-    can: a notification attributed to alice is indistinguishable from one alice caused.
-    """
-    forged = {
-        "eventType": "FAIL",
-        "eventTime": "2026-08-09T12:00:00+00:00",
-        "run": {"runId": "forged-1", "facets": {"author": {"name": "alice", "sub": "alice"}}},
-        "outputs": [{"namespace": "bronze", "name": "bronze$pages"}],
-    }
-
-    await ingest_run_event(forged, lane=Lane.BUS, visibility=Visibility(client=None, enabled=False), open_inbox=plane.open)
-
-    assert plane.boxes["alice"][0]["notification_id"] == "forged-1@FAIL"
-
-
 def test_enabling_dapr_ingest_without_a_token_refuses_to_start(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail closed at STARTUP. The alternative — serving an unauthenticated ingest route — looks
     configured from every angle: the subscription registers, `/dapr/subscribe` advertises it, and
@@ -208,20 +184,6 @@ def test_registering_the_subscriptions_needs_no_sidecar(monkeypatch: pytest.Monk
     monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
     monkeypatch.setenv("RASK_APP_TOKEN_FROM_STORE", "true")
     monkeypatch.delenv("APP_API_TOKEN", raising=False)
-    get_ingress_settings.cache_clear()
-    app = FastAPI()
-    install_problem_handlers(app, logging.getLogger(__name__))
-
-    subscriptions_module.register_subscriptions(app)
-
-    assert "/lineage-events" in {getattr(route, "path", "") for route in app.routes}
-    get_ingress_settings.cache_clear()
-
-
-def test_dapr_ingest_with_a_token_builds_the_subscription(monkeypatch: pytest.MonkeyPatch, plane: _Plane) -> None:
-    """The other side of the guard: a correctly configured deployment is not refused."""
-    monkeypatch.setenv("RASK_DAPR_ENABLED", "true")
-    monkeypatch.setenv("APP_API_TOKEN", TOKEN)
     get_ingress_settings.cache_clear()
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))

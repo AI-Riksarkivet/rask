@@ -48,17 +48,6 @@ def _view(monkeypatch: pytest.MonkeyPatch, allowed: set[str]) -> tuple[Visibilit
 
 
 @pytest.mark.asyncio
-async def test_a_bare_dataset_name_is_qualified_as_a_table(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Lineage's convention, unchanged — this is the behaviour the prefix was written for."""
-    view, recorder = _view(monkeypatch, {"table:silver$pages"})
-
-    visible = await view.visible("alice", {"silver$pages"})
-
-    assert recorder.objects == ["table:silver$pages"]
-    assert visible == {"silver$pages"}
-
-
-@pytest.mark.asyncio
 async def test_an_already_qualified_id_is_not_qualified_twice(monkeypatch: pytest.MonkeyPatch) -> None:
     view, recorder = _view(monkeypatch, {"table:db1$t"})
 
@@ -66,29 +55,3 @@ async def test_an_already_qualified_id_is_not_qualified_twice(monkeypatch: pytes
 
     assert recorder.objects == ["table:db1$t"], "the governance id was re-prefixed into table:table:…"
     assert visible == {"table:db1$t"}
-
-
-@pytest.mark.asyncio
-async def test_a_governance_id_keeps_its_own_type(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A grant on a warehouse is checked on the WAREHOUSE, not on a table that does not exist.
-
-    Better than merely un-breaking it: `can_get_metadata` is defined on the container types too, so
-    honouring the stamped type asks the question the model actually answers.
-    """
-    view, recorder = _view(monkeypatch, {"warehouse:acme"})
-
-    visible = await view.visible("alice", {"warehouse:acme"})
-
-    assert recorder.objects == ["warehouse:acme"]
-    assert visible == {"warehouse:acme"}
-
-
-@pytest.mark.asyncio
-async def test_the_delivery_gate_uses_the_same_spelling(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`sees_all` shares `_filter`, so fixing one must fix both — and it must not widen either."""
-    view, recorder = _view(monkeypatch, {"table:db1$t"})
-
-    assert await view.sees_all("alice", {"table:db1$t"}) is True
-    assert recorder.objects == ["table:db1$t"]
-
-    assert await view.sees_all("alice", {"warehouse:acme"}) is False

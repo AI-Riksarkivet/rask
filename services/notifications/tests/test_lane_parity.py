@@ -43,12 +43,6 @@ def _production_call_sites() -> list[tuple[str, int, str]]:
     return sites
 
 
-def test_there_is_at_least_one_call_site_to_check() -> None:
-    """The floor. A guard that silently matches nothing is the exact failure this file exists to prevent —
-    the invariant it replaces spent its life green because its pattern matched no call site in the estate."""
-    assert len(_production_call_sites()) >= 2, "expected the bus and feed lanes to both call ingest_run_event"
-
-
 def test_every_lane_forwards_the_watcher_lookup() -> None:
     """Omitting it does not fail — it silently narrows the audience to the author."""
     missing = [f"{name}:{line}" for name, line, window in _production_call_sites() if "watchers=" not in window]

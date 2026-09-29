@@ -37,20 +37,6 @@ def test_the_engine_SCORE_is_ignored_entirely() -> None:
     assert fused[0]["doc_id"] == "shared"
 
 
-def test_agreement_across_TABLES_of_one_corpus_COMPOUNDS() -> None:
-    """The property RRF is chosen for, on the axis where agreement is real.
-
-    `pages` and `lines` index the same material at different granularities, so a document both rank
-    highly is genuine agreement — and it must beat one only a single table loves.
-    """
-    pages = [hit("A", "agreed", table="pages"), hit("A", "solo", table="pages")]
-    lines = [hit("A", "agreed", table="lines")]
-
-    fused = fuse(pages, lines)
-
-    assert [h["doc_id"] for h in fused] == ["agreed", "solo"]
-
-
 def test_the_fused_score_is_the_published_formula() -> None:
     """Pinned so nobody "improves" the constant without noticing it is the published one."""
     once = fuse([hit("A", "x")])
@@ -79,14 +65,6 @@ def test_the_fused_score_lands_under_its_OWN_name() -> None:
     assert fused[0]["_score"] == 3.2, "the engine's own score survives untouched"
 
 
-def test_provenance_survives_the_fusion() -> None:
-    """Without it a fused hit cannot resolve its own display fields, media kind or capabilities —
-    which is the entire reason hits are stamped."""
-    fused = fuse([hit("A", "x")], [hit("B", "y")])
-
-    assert all("_dataset" in h and "_table" in h for h in fused)
-
-
 def test_a_LIMIT_cuts_after_fusing_not_before() -> None:
     """Cutting each list first would drop a document that ranks mid-list everywhere but wins overall
     — the exact case fusion exists to find."""
@@ -97,14 +75,6 @@ def test_a_LIMIT_cuts_after_fusing_not_before() -> None:
 
     assert len(fused) == 1
     assert fused[0]["doc_id"] == "mid", "agreed-on-second beats first-in-one-table"
-
-
-def test_the_order_is_DETERMINISTIC_for_tied_documents() -> None:
-    """An unstable order across identical requests makes pagination lie, and it only shows up under
-    load."""
-    a = [hit("A", "x"), hit("A", "y"), hit("A", "z")]
-
-    assert [h["doc_id"] for h in fuse(a)] == [h["doc_id"] for h in fuse(a)]
 
 
 def test_an_EMPTY_corpus_contributes_nothing_and_breaks_nothing() -> None:

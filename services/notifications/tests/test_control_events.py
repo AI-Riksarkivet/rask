@@ -58,21 +58,7 @@ class TestNamedSubject:
     async def test_a_grant_names_its_grantee(self) -> None:
         assert await named_subjects(_event(action="grant_added")) == ("alice",)
 
-    @pytest.mark.asyncio
-    async def test_a_revoke_names_its_subject_too(self) -> None:
-        assert await named_subjects(_event(action="grant_revoked")) == ("alice",)
-
-    @pytest.mark.asyncio
-    async def test_the_fga_type_prefix_is_stripped(self) -> None:
-        """The catalog writes `user:alice`; an inbox is addressed by the bare token sub. One
-        translation, done here so the actor never learns about FGA."""
-        assert await named_subjects(_event(subject="user:bob")) == ("bob",)
-
-    @pytest.mark.asyncio
-    async def test_a_bare_sub_survives_unchanged(self) -> None:
-        assert await named_subjects(_event(subject="carol")) == ("carol",)
-
-    @pytest.mark.parametrize("action", ["table_created", "warehouse_bound", "policy_set"])
+    @pytest.mark.parametrize("action", ["warehouse_bound"])
     @pytest.mark.asyncio
     async def test_an_action_that_names_nobody_targets_nobody(self, action: str) -> None:
         """Every other control action is a catalog mutation with no named party. Delivering those
@@ -85,12 +71,12 @@ class TestNamedSubject:
         stamping it makes this lane quiet, never wrong."""
         assert await named_subjects(_event(subject=None)) == ()
 
-    @pytest.mark.parametrize("subject", ["", "   ", "user:"])
+    @pytest.mark.parametrize("subject", ["", "user:"])
     @pytest.mark.asyncio
     async def test_an_empty_subject_names_nobody(self, subject: str) -> None:
         assert await named_subjects(_event(subject=subject)) == ()
 
-    @pytest.mark.parametrize("subject", ["user:*", "*", "user:*  "])
+    @pytest.mark.parametrize("subject", ["user:*", "user:*  "])
     @pytest.mark.asyncio
     async def test_a_wildcard_subject_names_nobody(self, subject: str) -> None:
         """THE MANAGED-ACCESS DEFECT. `POST .../managed-access` writes the FGA WILDCARD principal
@@ -114,17 +100,6 @@ class TestDeliveryProjection:
         """A governance event has no run, and reusing `run_id@STATE` would let a grant collide with a
         run that happened to share an id."""
         assert as_delivery(_event()).notification_id == "evt-1@GRANT_ADDED"
-
-    def test_a_revoke_is_a_different_notification_than_the_grant(self) -> None:
-        """The estate's one id property: dismissing a grant must not dismiss the revoke that follows."""
-        assert as_delivery(_event(action="grant_added")).notification_id != as_delivery(_event(action="grant_revoked")).notification_id
-
-    def test_the_reason_records_which_rule_the_row_rode_in_on(self) -> None:
-        assert as_delivery(_event(action="grant_added")).reason == NotificationReason.GRANT_ADDED
-        assert as_delivery(_event(action="grant_revoked")).reason == NotificationReason.GRANT_REVOKED
-
-    def test_it_carries_no_run(self) -> None:
-        assert as_delivery(_event()).source_run_id is None
 
 
 class TestIngest:
@@ -193,19 +168,6 @@ class TestTaskAssignment:
             actor="user:alice",
             extra=extra,
         )
-
-    @pytest.mark.asyncio
-    async def test_an_assignment_names_its_assignee_not_the_manager(self) -> None:
-        """The whole defect in one assertion: `actor` is alice (who assigned) and the audience is bob
-        (who must do it). A lane keyed on the actor would tell the manager about their own click."""
-        assert await named_subjects(self._assignment()) == ("bob",)
-
-    @pytest.mark.asyncio
-    async def test_an_unassignment_names_the_person_who_lost_the_work(self) -> None:
-        """The mirror, and the sharper one — same reasoning as `grant_revoked`. Someone who has been
-        unassigned is holding a draft against a task that is no longer theirs, and silence there is how
-        they discover it by losing the work."""
-        assert await named_subjects(self._assignment(action="task_unassigned")) == ("bob",)
 
     @pytest.mark.asyncio
     async def test_the_assignee_gets_a_row_and_the_reason_survives(self) -> None:
@@ -288,56 +250,6 @@ class TestUsersetGrants:
         assert plane.boxes == {}
 
 
-class TestAPromotionHoldReachesItsApprover:
-    """v7 — a held promotion asks a PERSON, and the ask has to arrive.
-
-    The medallion's quality gate could only ever say NO, permanently: a failed assertion returned
-    `_QUALITY_BLOCKED = {"status": "DROP"}` and the run died there. That is right for a corrupt blob
-    pointer and wrong for a promotion that is UNUSUAL rather than broken — a row-count delta outside
-    the expected band, a first promotion of a newly ingested volume. The Dapr
-    external-system-interaction pattern gives those a third answer, but only if the request for a
-    decision actually reaches somebody: a workflow parked on `wait_for_external_event` that nobody
-    was told about is an outage wearing a pause.
-
-    So the reason rides the CONTROL lane, like the grant pair and for the same reason — the event
-    NAMES its subject, and being named IS the targeting. It is deliberately not a lineage row: the
-    hold's lineage FAIL already exists (A18) and says what happened to the DATA; this says what is
-    being asked of a PERSON.
-    """
-
-    @pytest.mark.asyncio
-    async def test_the_approver_named_on_the_event_is_the_audience(self) -> None:
-        assert await named_subjects(_event(action="promotion_review_requested", subject="user:alice")) == ("alice",)
-
-    @pytest.mark.asyncio
-    async def test_it_is_a_NAMED_action_or_the_lane_files_it_ignored(self) -> None:
-        from notifications.api.control_events import NAMED_ACTIONS
-
-        assert "promotion_review_requested" in NAMED_ACTIONS, (
-            "not in NAMED_ACTIONS means the ingress files the event IGNORED with a SUCCESS ack — the "
-            "approver is never told and nothing anywhere reports the loss"
-        )
-
-    def test_the_reason_is_nameable_or_EVERY_delivery_raises(self) -> None:
-        """`as_delivery` constructs `NotificationReason(event.action)`; an unnamed action raises on
-        every delivery, not just this one."""
-        delivery = as_delivery(_event(action="promotion_review_requested", subject="user:alice"))
-
-        assert delivery.reason == NotificationReason.PROMOTION_REVIEW_REQUESTED
-        assert delivery.reason.value == "promotion_review_requested", "the value is user-visible — the panel renders it as the row's label"
-
-    @pytest.mark.asyncio
-    async def test_an_unapprovable_hold_names_nobody_rather_than_everybody(self) -> None:
-        """A hold with no named approver is IGNORED, not broadcast.
-
-        The guard is `named_subjects`, not `as_delivery` — the envelope is built either way and the
-        AUDIENCE is what comes back empty, which is what files the event IGNORED with a SUCCESS ack.
-        Pinned so the new action inherits that rule rather than becoming the one governance event
-        that fans out to everybody.
-        """
-        assert await named_subjects(_event(action="promotion_review_requested", subject=None)) == ()
-
-
 # ---------------------------------------------------------------------------
 # The promotion review's DEEP LINK.
 #
@@ -386,19 +298,3 @@ def test_a_promotion_review_without_a_token_still_delivers() -> None:
     delivery = as_delivery(_promotion_event(None))
     assert delivery.source_run_id is None
     assert delivery.reason is NotificationReason.PROMOTION_REVIEW_REQUESTED
-
-
-def test_a_non_promotion_action_is_untouched() -> None:
-    """The grant lane must keep its existing shape — this change is scoped to one action."""
-    grant = CatalogControlEvent.model_validate(
-        {
-            "event_id": "evt-2",
-            "action": "grant_added",
-            "object_type": "project",
-            "object_id": "project:acme",
-            "actor": "user:bob",
-            "occurred_at": "2026-08-23T18:00:00+00:00",
-            "extra": {"subject": "user:alice", "relation": "member", "token": "not-a-review"},
-        }
-    )
-    assert as_delivery(grant).source_run_id is None

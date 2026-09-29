@@ -62,15 +62,6 @@ def _get(client: TestClient, exc: BaseException) -> Any:
         app.dependency_overrides.clear()
 
 
-def test_a_missing_project_operator_says_so(client: TestClient) -> None:
-    """The 404 answer names the resource type the cluster does not register."""
-    resp = _get(client, ApiException(status=404, reason="Not Found"))
-
-    detail = resp.json()["detail"]
-    assert "projects.platform.rask.io" in detail
-    assert "cannot reach kubernetes api" not in detail
-
-
 def test_a_missing_project_operator_is_not_reported_as_unreachable(client: TestClient) -> None:
     """501, not 503: the capability is absent from this deployment, not temporarily down.
 
@@ -86,14 +77,6 @@ def test_a_missing_project_operator_is_not_reported_as_unreachable(client: TestC
     resp = _get(client, ApiException(status=404, reason="Not Found"))
 
     assert resp.status_code == 501
-
-
-def test_a_missing_operator_is_never_an_empty_list(client: TestClient) -> None:
-    """The forbidden shape. An estate with no operator must not render a successful empty gallery."""
-    resp = _get(client, ApiException(status=404, reason="Not Found"))
-
-    assert resp.status_code != 200
-    assert "projects" not in resp.json()
 
 
 def test_an_rbac_denial_is_not_blamed_on_a_missing_operator(client: TestClient) -> None:

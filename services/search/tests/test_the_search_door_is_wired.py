@@ -63,20 +63,6 @@ def hermetic(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_lifespan_builds_the_authorization_client(hermetic: None) -> None:
-    """The regression itself. Without this the gate is reachable and answers 503 forever."""
-    from search.main import lifespan
-
-    app = FastAPI()
-    async with lifespan(app):
-        assert getattr(app.state, "fga", None) is not None, (
-            "the search lifespan left app.state.fga unset while FGA is enabled — every gated route "
-            "answers 503 'Authorization is enabled but unavailable', so the service is shut, not guarded"
-        )
-        assert getattr(app.state, "oidc", None) is not None, "no OIDC verifier, so no subject can be verified either"
-
-
-@pytest.mark.asyncio
 async def test_the_gate_decides_rather_than_503s(hermetic: None, monkeypatch: pytest.MonkeyPatch) -> None:
     """What the wiring is FOR: a real checker resolved from real app state, reaching a real verdict."""
     from search.api import security

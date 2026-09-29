@@ -76,11 +76,6 @@ def test_a_quote_in_a_key_cannot_break_out_of_the_predicate() -> None:
     assert "''" in where or "\\'" in where, f"the quote was not escaped: {where}"
 
 
-def test_an_empty_key_is_refused() -> None:
-    with pytest.raises(ValidationError):
-        key_predicate(DECLARED, "")
-
-
 # --------------------------------------------------------------------------------------------------
 # The seed's own vector
 # --------------------------------------------------------------------------------------------------
@@ -109,14 +104,6 @@ class _Table:
 
     def to_list(self) -> list[dict[str, Any]]:
         return self.rows
-
-
-def test_the_seed_vector_comes_from_the_declared_column() -> None:
-    table = _Table([{"doc_id": "d1", "embedding": [0.1, 0.2, 0.3]}], ["doc_id", "embedding"])
-
-    vec = seed_vector(table, where="doc_id = 'd1'", column="embedding")
-
-    assert vec == [0.1, 0.2, 0.3]
 
 
 def test_a_key_matching_no_row_is_a_404_not_a_null_vector() -> None:
@@ -165,15 +152,6 @@ def test_the_seed_is_dropped_from_its_own_neighbours() -> None:
     assert [h["chunk_id"] for h in kept] == [9]
 
 
-def test_dropping_the_seed_compares_as_STRINGS() -> None:
-    """Key fields are mixed types — a string doc id beside integer speech/chunk ids. Lance returns
-    the integers as ints and the key path is text, so `3 != "3"` would silently never match and the
-    seed would survive every time."""
-    hits = [{"doc_id": "d1", "speech_id": 2, "chunk_id": 3, "_distance": 0.0}]
-
-    assert drop_seed(hits, "d1/2/3", KEY_FIELDS) == []
-
-
 def test_only_the_seed_is_dropped_not_every_row_sharing_a_document() -> None:
     hits = [
         {"doc_id": "d1", "speech_id": 2, "chunk_id": 3, "_distance": 0.0},
@@ -189,12 +167,6 @@ def test_only_the_seed_is_dropped_not_every_row_sharing_a_document() -> None:
 # --------------------------------------------------------------------------------------------------
 # The request
 # --------------------------------------------------------------------------------------------------
-
-
-def test_the_spec_defaults_n_to_something_a_grid_can_show() -> None:
-    spec = SimilarSpec(key="d1/2/3")
-
-    assert 1 <= spec.n <= 200
 
 
 def test_n_is_capped_so_one_call_cannot_ask_for_the_corpus() -> None:

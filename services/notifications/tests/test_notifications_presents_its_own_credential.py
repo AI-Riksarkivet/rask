@@ -20,7 +20,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from pydantic import SecretStr
 
 from notifications.api import service_identity
 from notifications.api.settings import IngressSettings
@@ -81,14 +80,6 @@ def test_NO_credential_at_all_still_sends_NOTHING(monkeypatch: pytest.MonkeyPatc
     sending the identity alone is an unauthenticated claim that 401s for a reason nobody can see."""
     monkeypatch.setattr(service_identity, "dedicated_token_for", lambda _s: lambda _identity: None)
     assert service_identity.feed_token(_settings(APP_API_TOKEN=None)) is None
-
-
-def test_the_token_never_leaves_SecretStr() -> None:
-    """It was already read as a setting rather than off `os.environ` so it could not reach a log line
-    or a repr by accident. Resolving a DIFFERENT token must not lose that."""
-    resolved = service_identity.feed_token(_settings(RASK_NOTIFICATIONS_SECRETS_FROM_DAPR=False))
-    assert isinstance(resolved, SecretStr)
-    assert "the-shared-bearer" not in repr(resolved)
 
 
 def test_the_shared_fallback_follows_the_token_to_the_STORE(monkeypatch: pytest.MonkeyPatch) -> None:

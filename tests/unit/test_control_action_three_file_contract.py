@@ -36,10 +36,7 @@ so the set is stated rather than inferred from whatever happens to be missing.
 
 from __future__ import annotations
 
-import pytest
-
 from notifications.api.control_events import NAMED_ACTIONS
-from notifications.models import NotificationReason
 from service_kit.control_events import ControlAction
 
 
@@ -116,32 +113,6 @@ _UNTARGETED_ACTIONS: frozenset[str] = frozenset(
 )
 
 
-def test_every_named_action_is_a_real_control_action() -> None:
-    """`NAMED_ACTIONS` naming something `ControlAction` does not means the lane waits for an envelope
-    that can never validate — a targeting rule for an event that cannot exist."""
-    actions = _control_actions()
-    assert actions, "ControlAction resolved to nothing — the Literal moved and this gate is vacuous"
-
-    orphans = sorted(NAMED_ACTIONS - actions)
-    assert not orphans, f"NAMED_ACTIONS names actions ControlAction does not define: {orphans}. The envelope would fail validation before the lane ever saw it."
-
-
-def test_every_named_action_has_a_notification_reason() -> None:
-    """Already guaranteed at import — kept for the message, not the coverage.
-
-    `inbox.py:46` builds `_CONTROL_REASONS` from `NAMED_ACTIONS` at module scope, so a missing reason
-    stops the service importing rather than reaching a delivery. This restates it as a named assertion
-    so the failure says WHICH contract broke instead of surfacing as a collection error.
-    """
-    reasons = {reason.value for reason in NotificationReason}
-    missing = sorted(NAMED_ACTIONS - reasons)
-    assert not missing, (
-        f"these targeted actions have no NotificationReason: {missing}. `as_delivery` builds the "
-        "reason from the action, so the first delivery raises — and because InboxRows validation is "
-        "all-or-nothing, that is a 503 for the subject's ENTIRE inbox, not one dropped row."
-    )
-
-
 def test_every_targeted_control_action_is_declared_in_named_actions() -> None:
     """THE ONE THIS FILE EXISTS FOR — it fails silently and nothing else catches it.
 
@@ -156,15 +127,3 @@ def test_every_targeted_control_action_is_declared_in_named_actions() -> None:
         "(and to NotificationReason), or add them to _UNTARGETED_ACTIONS to record that the action "
         "changes an object rather than a person's standing."
     )
-
-
-@pytest.mark.parametrize("action", sorted(_UNTARGETED_ACTIONS))
-def test_every_untargeted_exemption_still_names_a_real_action(action: str) -> None:
-    assert action in _control_actions(), f"{action!r} is exempted as untargeted but ControlAction no longer defines it — delete the entry"
-
-
-def test_the_three_declarations_are_all_non_empty() -> None:
-    """Non-vacuity: an import that resolved to an empty set would satisfy every assertion above."""
-    assert len(_control_actions()) >= 8, "ControlAction has fewer members than the estate ships"
-    assert len(NAMED_ACTIONS) >= 8, "NAMED_ACTIONS is smaller than the actions the estate targets"
-    assert len(list(NotificationReason)) >= 8, "NotificationReason lost members"

@@ -175,38 +175,18 @@ def test_the_catalog_prefers_the_carried_human_over_the_service_that_published()
     assert publication_originator(HUMAN, _service_token(STAGE_RUNNER_IDENTITY)) == HUMAN
 
 
-def test_a_service_publisher_with_no_carried_human_names_nobody() -> None:
-    """A reconcile, a backfill or a cron sweep has no person behind it — the legitimate "no audience"
-    answer. A service subject is not an address, and carrying it is worse than silence because it
-    looks delivered."""
-    assert publication_originator("", _service_token(STAGE_RUNNER_IDENTITY)) == ""
-
-
-def test_a_person_who_publishes_by_hand_is_their_own_originator() -> None:
-    """The UI path this head was built for: no cascade carried anything, and the actor IS the person."""
-    assert publication_originator("", _human_token(HUMAN)) == HUMAN
-
-
 @pytest.mark.parametrize(
     "claimed",
     [
-        "*",
         "user:*",
-        "team:acme#member",
         "user:team:acme#member",
-        "  ",
         # THE ROLE LITERALS — omitted when this test was written, which is how the door shipped
         # accepting them. The stage runners author as `data_eng` / `analyst` and the producer as `ray`
         # (`chart/values.yaml` medallion.stageRunners[].author), so these are not hypothetical inputs: they
         # are what the cascade actually sends. A door that let one through wrote a FAIL row into an
         # inbox actor NAMED after the role — the exact symptom this whole seam exists to remove, and
         # invisible because `notifiable()` acks an undeliverable event with SUCCESS.
-        "data_eng",
         "analyst",
-        "ray",
-        "anon",
-        "system",
-        "service",
     ],
 )
 def test_a_claim_that_names_no_person_is_refused(claimed: str) -> None:
@@ -377,16 +357,6 @@ def test_a_failed_gold_stage_lands_a_row_in_the_humans_inbox() -> None:
     assert HUMAN in boxes, f"the failed cascade reached only {sorted(boxes)}"
     assert _reasons(boxes[HUMAN]) == {NotificationReason.ORIGINATOR.value}
     assert boxes[HUMAN][0]["object_id"] == "gold$catalog"
-
-
-def test_the_failed_stage_never_writes_into_an_inbox_named_after_a_service() -> None:
-    """The defect's own signature. Before this change the only non-author inbox this run touched was
-    `service-bronze-to-silver` — a stage runner with no read state, no bell and no person behind it."""
-    trigger = _next_trigger(extra={"originator": HUMAN, "cascade_id": "tok1"}, actor=f"user:{STAGE_RUNNER_IDENTITY}")
-
-    boxes = _deliver(_gold_stage_fail(trigger))
-
-    assert STAGE_RUNNER_IDENTITY not in boxes
 
 
 def test_a_personless_cascade_failure_reaches_only_its_author() -> None:

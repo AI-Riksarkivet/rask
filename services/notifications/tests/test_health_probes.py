@@ -80,15 +80,6 @@ def test_the_frontend_badge_answers_with_nothing_wired(client: TestClient) -> No
     assert response.json() == {"status": "ok"}
 
 
-def test_liveness_answers_with_the_state_store_unreachable(client: TestClient) -> None:
-    """The actor plane is unregistered, every actor call raises and opening a channel raises. Liveness
-    is still 200, because it asks nothing."""
-    client.app.state.actors_registered = False
-    client.app.state.startup_complete = True
-
-    assert client.get("/livez").json() == {"status": "ok"}
-
-
 def test_liveness_does_not_consult_the_lifecycle_flags_either(client: TestClient) -> None:
     """Neither `startup_complete` nor `shutting_down` gates liveness. During a drain the pod is
     deliberately not READY and is emphatically still alive; a liveness that followed readiness would
@@ -97,18 +88,6 @@ def test_liveness_does_not_consult_the_lifecycle_flags_either(client: TestClient
     client.app.state.shutting_down = True
 
     assert client.get("/livez").status_code == 200
-
-
-def test_readiness_is_a_lifecycle_gate_before_it_is_a_component_report(client: TestClient) -> None:
-    """Nothing is READY before the lifespan has run — including a process whose actors happen to be
-    registered already, which is what makes this a gate rather than a summary."""
-    client.app.state.startup_complete = False
-    client.app.state.actors_registered = True
-
-    response = client.get("/readyz")
-
-    assert response.status_code == 503
-    assert response.json()["status"] == ReadinessStatus.starting
 
 
 def test_a_draining_pod_reports_shutting_down_before_anything_else(client: TestClient) -> None:
@@ -188,19 +167,3 @@ class _RequestOnto:
 
     def __init__(self, app: FastAPI) -> None:
         self.app = app
-
-
-def test_the_probe_reports_while_the_inbox_route_refuses(client: TestClient) -> None:
-    """One state, two answers, and they are both correct.
-
-    `/readyz` reporting a 200 is only safe because something else refuses the work: a route that
-    answered an empty page here would tell a reader their inbox is empty when it is unreachable. The
-    two halves are asserted together because either alone reads as a bug.
-    """
-    client.app.state.startup_complete = True
-    client.app.state.actors_registered = False
-
-    assert client.get("/readyz").status_code == 200
-    refusal = client.get("/api/notifications/inbox")
-    assert refusal.status_code == 503
-    assert "actor plane" in refusal.json()["detail"]

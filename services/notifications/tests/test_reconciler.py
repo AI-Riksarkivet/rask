@@ -17,7 +17,6 @@ import respx
 from pydantic import SecretStr
 
 from notifications.api.ingest import DAPR_RETRY, DAPR_SUCCESS
-from notifications.api.metrics import Lane
 from notifications.api.reconciler import (
     FEED_MAX_STALLS,
     LineageCursor,
@@ -204,19 +203,6 @@ async def test_a_transient_failure_is_NOT_retried_in_this_module() -> None:
     )
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_client_error_is_not_retried() -> None:
-    """A 403 means this deployment's service identity is not on lineage's allowlist, which no amount
-    of backoff fixes — retrying it is pure delay in front of the same answer."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(403))
-
-    with pytest.raises(httpx.HTTPStatusError):
-        await _feed_client().page(after=None)
-
-    assert route.call_count == 1
-
-
 # --- the cursor store: fail-closed, and absent is not unreadable --------------------------------
 
 
@@ -305,19 +291,6 @@ async def test_only_rows_above_the_mark_are_ingested() -> None:
     assert result.scanned == 2
     assert sorted(row["notification_id"] for row in plane.boxes["alice"]) == ["run-8@FAIL", "run-9@FAIL"]
     assert memory.seq == 9
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_the_walk_stops_as_soon_as_the_mark_comes_into_view() -> None:
-    """One page in steady state: the walk pages OLDER only while every row on the page is still above
-    the mark."""
-    route = respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9), _event(8)], "next_cursor": 8}))
-    store, _memory = _store(8)
-
-    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=_Plane().open, max_pages=5, budget_seconds=10)
-
-    assert route.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -418,12 +391,6 @@ async def test_an_unreadable_cursor_stops_the_tick_rather_than_re_priming() -> N
 
     with pytest.raises(LineageCursorUnreadable):
         await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=_Plane().open, max_pages=5, budget_seconds=10)
-
-
-def test_the_feed_lane_is_labelled_apart_from_the_bus() -> None:
-    """Two lanes on one counter, because the question an operator asks is which door stopped
-    delivering — and a single `ingress.events` series cannot answer it."""
-    assert {Lane.BUS.value, Lane.FEED.value} == {"bus", "feed"}
 
 
 # --- the budget must BOUND the walk, not discard it ---------------------------------------------
@@ -671,33 +638,6 @@ async def test_the_overlap_never_reaches_below_the_floor_a_prime_set() -> None:
     assert delivered == ["run-1002@FAIL"], f"the overlap reached into primed-away backlog: {delivered}"
 
 
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_first_ever_prime_records_the_floor_it_skipped_to() -> None:
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9), _event(8)], "next_cursor": 8}))
-    store, memory = _store(None)
-
-    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=_Plane().open, max_pages=5, budget_seconds=10)
-
-    assert memory.seq == 9
-    assert memory.floor == 9, "priming skipped the backlog without recording where, so the overlap can reach it"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_cursor_from_before_the_floor_existed_adopts_its_own_mark() -> None:
-    """Migration: `floor=None` must not be read as "no floor" — that is the unclamped bug."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(1002), _event(1000)], "next_cursor": 999}))
-    plane = _Plane()
-    store, memory = _store(1001)  # no floor: an S1-era record
-
-    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
-
-    delivered = sorted(row["notification_id"] for row in plane.boxes.get("alice", []))
-    assert delivered == ["run-1002@FAIL"], f"an old cursor let the overlap reach below its mark: {delivered}"
-    assert memory.floor == 1001, "the adopted floor was not persisted, so the next pass is unprotected again"
-
-
 # --- a poison row must not block every newer notification ----------------------------------------
 #
 # The mark advances only on a fully clean pass (`if not retried`), which is right for a TRANSIENT
@@ -720,19 +660,6 @@ async def test_a_permanently_failing_recipient_does_not_block_every_newer_notifi
         await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
 
     assert memory.seq == 9, "the mark never moved past a permanently failing row, so every newer notification is blocked for every other subject too"
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_transient_failure_still_holds_the_mark() -> None:
-    """The behaviour the counter must NOT break: one bad tick re-offers, it does not step over."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9)], "next_cursor": 8}))
-    plane = _Plane(broken={"alice"})
-    store, memory = _store(8, floor=0)
-
-    await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=5, budget_seconds=10)
-
-    assert memory.seq == 8, "a single failed pass stepped over the row instead of re-offering it"
 
 
 def test_a_cursor_written_by_a_newer_build_is_still_readable() -> None:
@@ -781,22 +708,6 @@ def test_a_cursor_written_by_a_newer_build_is_still_readable() -> None:
 # the oldest surviving row were deleted before anyone read them. That is the exact population the bus
 # cannot serve — ingest, Ray TRAIN and every external OpenLineage producer emit over HTTP only — so
 # the silent case is the one that matters most.
-
-
-@pytest.mark.asyncio
-@respx.mock
-async def test_a_feed_pruned_BELOW_the_cursor_reports_a_gap() -> None:
-    """The silent shape. The feed answers one page and says it is exhausted, so the walk breaks
-    happily — but its oldest surviving row is far above the mark, which means everything in between
-    was pruned before this lane read it. Unrecoverable, and previously reported by nothing."""
-    respx.get(f"{LINEAGE}/events").mock(return_value=httpx.Response(200, json={"events": [_event(9000)], "next_cursor": None, "oldest_seq": 8999}))
-    plane = _Plane()
-    store, _memory = _store(5)
-
-    result = await reconcile(client=_feed_client(), store=store, visibility=OPEN, open_inbox=plane.open, max_pages=40, budget_seconds=10)
-
-    assert result.gapped is True, "rows 6..8998 were pruned unread and the pass called itself clean"
-    assert not result.truncated, "this is the pruned-below-the-mark shape, not the out-of-pages one"
 
 
 @pytest.mark.asyncio

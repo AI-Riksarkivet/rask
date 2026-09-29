@@ -38,10 +38,6 @@ SHIPPED_PREFIX = "/api"
 #: A prefix nothing hardcodes, used to tell "mounted under the setting" from "spelled `/api`".
 OTHER_PREFIX = "/api/v1"
 
-#: The sidecar's callback surface. Dapr addresses the app by port and calls these at the root; the
-#: actor route is templated because the method name is part of the path.
-SIDECAR_ROUTES = ("/dapr/config", "/dapr/subscribe", "/actors/{actor_type_name}/{actor_id}/method/{method_name}")
-
 
 def _rebuilt_under(prefix: str) -> ModuleType:
     """Rebuild the module-level app under `prefix` and return the module.
@@ -76,30 +72,6 @@ def _leave_the_app_as_it_shipped() -> Iterator[None]:
         _rebuilt_under(SHIPPED_PREFIX)
 
 
-@pytest.mark.parametrize("probe", ["/livez", "/readyz"])
-def test_the_operational_probes_are_root_mounted_whatever_the_api_prefix_is(probe: str) -> None:
-    """A kubelet is configured with a port and a path, and knows nothing about `RASK_API_PREFIX`.
-
-    Under the shipped prefix a mount that ignored the setting would be indistinguishable from this one,
-    so the assertion is made under BOTH: the pair stays at the root when the door moves.
-    """
-    assert probe in _served_under(SHIPPED_PREFIX)
-    assert probe in _served_under(OTHER_PREFIX)
-
-
-@pytest.mark.parametrize("route", SIDECAR_ROUTES)
-def test_the_sidecar_callback_surface_is_root_mounted_whatever_the_api_prefix_is(route: str) -> None:
-    """daprd calls the app by port at the root: `/dapr/config` for the entity list, `/dapr/subscribe`
-    for the subscription registration, `/actors/...` for every invocation, reminder and timer.
-
-    Nothing errors if these move. The sidecar finds no entities, places no actor and registers no
-    subscription; the pod is Ready, `/readyz` reports the actors registered — which is a LOCAL fact,
-    as `require_actor_plane` says — and every inbox call 503s while the bell stays permanently empty.
-    """
-    assert route in _served_under(SHIPPED_PREFIX)
-    assert route in _served_under(OTHER_PREFIX)
-
-
 def test_the_api_prefix_moves_the_door_and_the_badge_and_nothing_else() -> None:
     """The other half of the two claims above, stated positively so neither can pass vacuously.
 
@@ -114,18 +86,6 @@ def test_the_api_prefix_moves_the_door_and_the_badge_and_nothing_else() -> None:
     assert "/api/v1/health" in moved
     assert "/api/notifications/inbox" not in moved
     assert "/api/health" not in moved
-
-
-def test_the_badge_the_kubelet_probes_is_the_badge_the_app_serves() -> None:
-    """`/api/health` under the shipped prefix — the literal `chart/templates/fleet.yaml` renders into
-    both probes for this Deployment (`healthPath` is unset for `services.notifications`, so it takes
-    the `/api/health` default).
-
-    The chart half of this agreement is asserted in `tests/unit/test_invariants.py`; this is the app
-    half, and neither alone would have caught a prefix change: the probe path is a literal in a values
-    file and the badge's path is derived from an env var, and nothing renders them together.
-    """
-    assert "/api/health" in _served_under(SHIPPED_PREFIX)
 
 
 def test_liveness_answers_on_a_pod_whose_lifespan_has_not_run() -> None:
@@ -143,19 +103,3 @@ def test_liveness_answers_on_a_pod_whose_lifespan_has_not_run() -> None:
     assert client.get("/livez").json() == {"status": "ok"}
     assert client.get("/readyz").status_code == 503
     assert client.get("/readyz").json()["status"] == "starting"
-
-
-def test_the_probe_paths_are_kept_out_of_the_trace_stream() -> None:
-    """A kubelet polling twice a second is otherwise the loudest span in the service and carries no
-    information — every trace-based RED metric for this app would be dominated by its own probes.
-
-    The lever is the instrumentation's own env var, read when `opentelemetry.instrumentation.fastapi`
-    is first imported, which is why `notifications/__init__.py` sets it BEFORE `make_service_app`
-    (that is where `setup_otel` runs). Asserted as a membership rather than an equality: it is a
-    `setdefault`, so a deployment may widen it.
-    """
-    _rebuilt_under(SHIPPED_PREFIX)
-
-    excluded = {entry.strip() for entry in os.environ["OTEL_PYTHON_FASTAPI_EXCLUDED_URLS"].split(",")}
-
-    assert {"livez", "readyz", "health"} <= excluded

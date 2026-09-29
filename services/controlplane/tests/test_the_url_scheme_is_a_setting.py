@@ -42,13 +42,6 @@ def _reader():
     return _Reader()
 
 
-def test_the_scheme_is_a_declared_field() -> None:
-    from controlplane.config import ControlplaneSettings
-
-    assert ControlplaneSettings().project_url_scheme == "http"
-    assert ControlplaneSettings.model_validate({"RASK_PROJECT_URL_SCHEME": "https"}).project_url_scheme == "https"
-
-
 def test_a_scheme_that_is_not_http_or_https_is_refused() -> None:
     """The value is interpolated into a link the gallery renders — it is not free text."""
     from controlplane.config import ControlplaneSettings

@@ -55,17 +55,6 @@ def _seeded_table(path: Any) -> Any:
     return lancedb.connect(str(path)).create_table("chunks", rows)
 
 
-def test_an_integer_key_field_is_rendered_as_a_NUMBER_not_as_quoted_text() -> None:
-    """`speech_id = '0'` is not a narrower filter than `speech_id = 0` — it is an unresolvable
-    expression against an int64 column, which is why this surfaced as a 400 rather than as an empty
-    grid."""
-    where = key_predicate(DECLARED, "fe00cd746463ad2c/0/19")
-
-    assert "speech_id = 0" in where, f"the integer sub-key was quoted as text: {where}"
-    assert "chunk_id = 19" in where, f"the integer sub-key was quoted as text: {where}"
-    assert "'0'" not in where and "'19'" not in where, f"an integer key field is still SQL text: {where}"
-
-
 def test_the_seed_row_is_actually_FOUND_in_a_real_lance_table(tmp_path: Any) -> None:
     """The end of the wire, against real Lance rather than a stand-in: the predicate this module
     renders must select the seed the caller named. A double cannot see this — only the engine

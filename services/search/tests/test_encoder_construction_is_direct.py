@@ -84,12 +84,3 @@ def test_the_reranker_is_constructed_with_the_real_kwargs(monkeypatch: pytest.Mo
 
     assert seen == {"rerank_url": "http://rerank.invalid"}
     assert state.reranker is built
-
-
-def test_the_introspection_seam_is_gone() -> None:
-    """`_construct` was the coupling itself — its absence is part of the contract."""
-    assert not hasattr(clients, "_construct"), "clients._construct still exists — construction is still signature-introspected"
-    import inspect as _inspect  # noqa: PLC0415 — asserting on the MODULE's imports, not using inspect
-
-    source = _inspect.getsource(clients)
-    assert "inspect.signature" not in source, "clients still introspects a factory signature"

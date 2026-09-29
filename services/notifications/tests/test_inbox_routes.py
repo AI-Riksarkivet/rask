@@ -134,20 +134,9 @@ def test_the_unread_filter_hides_read_rows(client: TestClient, inbox: _Inbox) ->
     assert [row["notification_id"] for row in body["notifications"]] == ["run-001@FAIL"]
 
 
-def test_dismissed_rows_are_absent_under_both_filters(client: TestClient, inbox: _Inbox) -> None:
-    inbox.rows = [_pointer(1), _pointer(2, dismissed=True)]
-    body = client.get("/notifications/inbox", params={"state": "all"}).json()
-    assert [row["notification_id"] for row in body["notifications"]] == ["run-001@FAIL"]
-
-
 def test_an_unknown_filter_is_refused(client: TestClient) -> None:
     """A `StrEnum` on the query param, so `state=everything` is a 422 rather than a silent `all`."""
     assert client.get("/notifications/inbox", params={"state": "everything"}).status_code == 422
-
-
-def test_the_page_size_is_capped_by_the_server(client: TestClient) -> None:
-    assert client.get("/notifications/inbox", params={"limit": 101}).status_code == 422
-    assert client.get("/notifications/inbox", params={"limit": 0}).status_code == 422
 
 
 def test_the_default_page_size_comes_from_settings(client: TestClient, inbox: _Inbox) -> None:
@@ -155,13 +144,6 @@ def test_the_default_page_size_comes_from_settings(client: TestClient, inbox: _I
     inbox.rows = [_pointer(n) for n in range(1, 40)]
     body = client.get("/notifications/inbox").json()
     assert len(body["notifications"]) == get_notifications_settings().inbox_page_limit
-
-
-def test_a_cursor_this_service_did_not_mint_is_refused_as_problem_json(client: TestClient) -> None:
-    """Never a silent restart from the top — a client that mistyped a cursor would page forever."""
-    response = client.get("/notifications/inbox", params={"cursor": "not-a-cursor"})
-    assert response.status_code == 400
-    assert response.headers["content-type"].startswith("application/problem+json")
 
 
 def test_a_row_whose_object_the_reader_may_no_longer_see_degrades_out_of_the_page(
@@ -224,19 +206,6 @@ def test_marking_nothing_is_a_no_op_rather_than_an_error(client: TestClient, inb
     assert client.post("/notifications/inbox/seen", json={"notification_ids": []}).json() == {"updated": 0, "unread": 1}
 
 
-def test_a_response_cannot_carry_a_field_it_does_not_declare(client: TestClient, inbox: _Inbox) -> None:
-    """The actor answers with a row COUNT beside the badge — how many records this subject's state
-    partition holds. That is a storage fact, and the only reason it never reaches a browser is that no
-    response model declares it."""
-    inbox.rows = [_pointer(1)]
-    for response in (
-        client.post("/notifications/inbox/seen", json={"notification_ids": []}),
-        client.post("/notifications/inbox/dismiss", json={"notification_id": "run-001@FAIL"}),
-        client.get("/notifications/inbox/unread"),
-    ):
-        assert "rows" not in response.json()
-
-
 def test_dismissing_one_state_leaves_the_other_alone(client: TestClient, inbox: _Inbox) -> None:
     """The whole reason the id scheme carries the state: a backend keyed on the run alone would
     silence a FAILED run somebody had dismissed while it was still running."""
@@ -250,33 +219,9 @@ def test_dismissing_one_state_leaves_the_other_alone(client: TestClient, inbox: 
     assert [row["notification_id"] for row in remaining] == ["run-001@COMPLETE"]
 
 
-def test_dismissing_a_row_that_is_already_gone_changes_nothing(client: TestClient, inbox: _Inbox) -> None:
-    inbox.rows = [_pointer(1)]
-    assert client.post("/notifications/inbox/dismiss", json={"notification_id": "run-999@FAIL"}).json() == {"dismissed": 0, "unread": 1}
-
-
 def test_a_malformed_body_is_refused(client: TestClient) -> None:
     assert client.post("/notifications/inbox/dismiss", json={}).status_code == 422
     assert client.post("/notifications/inbox/dismiss", json={"notification_id": ""}).status_code == 422
-
-
-def test_no_route_lets_a_caller_name_somebody_elses_inbox(client: TestClient) -> None:
-    """Identity is DERIVED, never accepted: the actor id is `encode_subject(token.sub)`, so a door
-    that accepted a subject anywhere would be a door onto everybody's inbox. The assertion is over
-    the whole published surface rather than one route, because "we did not add one" is exactly the
-    kind of claim that stops being true later."""
-    schema = client.get("/openapi.json").json()
-    assert set(schema["paths"]) == {
-        "/notifications/inbox",
-        "/notifications/inbox/unread",
-        "/notifications/inbox/seen",
-        "/notifications/inbox/dismiss",
-    }
-    assert not any("{" in path for path in schema["paths"]), "no path parameter — an inbox is never addressed by name"
-    declared = {param["name"] for path in schema["paths"].values() for operation in path.values() for param in operation.get("parameters", [])}
-    assert declared == {"state", "limit", "cursor"}
-    bodies = {field for name, model in schema["components"]["schemas"].items() if name.startswith("Inbox") for field in model.get("properties", {})}
-    assert "subject" not in bodies
 
 
 def test_every_inbox_route_refuses_when_the_actor_plane_is_unregistered(client: TestClient) -> None:

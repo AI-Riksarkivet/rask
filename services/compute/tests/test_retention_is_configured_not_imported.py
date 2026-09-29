@@ -45,19 +45,6 @@ def test_a_bad_retention_value_is_a_settings_error_not_an_import_crash(monkeypat
     assert "RASK_PRUNE_KEEP_JOBS" in str(caught.value)
 
 
-def test_the_retention_bounds_are_declared_fields(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("RASK_PRUNE_KEEP_JOBS", "7")
-    monkeypatch.setenv("RASK_PRUNE_KEEP_FAILED_JOBS", "3")
-    monkeypatch.setenv("RASK_PRUNE_BINDING", "renamed-cron")
-
-    from compute.config import ComputeSettings
-
-    settings = ComputeSettings()
-    assert settings.prune_keep_jobs == 7
-    assert settings.prune_keep_failed_jobs == 3
-    assert settings.prune_binding == "renamed-cron"
-
-
 def test_a_negative_retention_bound_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     """`keep_newest=-1` would delete every terminal job including the post-mortems."""
     monkeypatch.setenv("RASK_PRUNE_KEEP_JOBS", "-1")

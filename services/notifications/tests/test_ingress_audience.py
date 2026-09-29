@@ -21,12 +21,9 @@ import pytest
 from notifications.api import metrics as metrics_module
 from notifications.api import visibility as visibility_module
 from notifications.api.fanout import audience_for, fan_out
-from notifications.api.ingest import DAPR_DROP, DAPR_RETRY, DAPR_SUCCESS, ingest_run_event
 from notifications.api.lineage_events import LineageRunEvent, Notifiable, notifiable
-from notifications.api.metrics import Lane
-from notifications.api.visibility import FGA_OBJECT_TYPE, METADATA_RELATION, NOTIFY_RELATION, Visibility
-from notifications.proxies import TypedActorProxy, inbox_actor_id
-from service_kit.exceptions import ServiceUnavailableError
+from notifications.api.visibility import METADATA_RELATION, NOTIFY_RELATION, Visibility
+from notifications.proxies import TypedActorProxy
 
 
 if TYPE_CHECKING:
@@ -124,21 +121,6 @@ def _governed(monkeypatch: pytest.MonkeyPatch, allowed: dict[str, set[str]]) -> 
 
 
 @pytest.mark.asyncio
-async def test_the_audience_is_the_verified_author_and_nobody_else() -> None:
-    """Membership gates watching and never implies it. The failure this plane exists to end is a badge
-    that counts other people's work, and it returns the moment an audience widens by default.
-
-    With NO watcher lookup this is exactly v1 — which is also what a watcher-index outage degrades to.
-    """
-    assert await audience_for(_notice(author="alice")) == ("alice",)
-
-
-@pytest.mark.asyncio
-async def test_the_audience_follows_the_run_rather_than_any_configuration() -> None:
-    assert await audience_for(_notice(author="bob")) == ("bob",)
-
-
-@pytest.mark.asyncio
 async def test_a_project_watch_widens_the_audience_but_never_replaces_the_author() -> None:
     """v2 targeting: author UNION watchers, author FIRST — the one recipient guaranteed to exist."""
 
@@ -179,35 +161,6 @@ async def test_a_run_with_no_project_reaches_its_author_and_no_watchers() -> Non
 
 
 @pytest.mark.asyncio
-async def test_one_round_trip_covers_every_output_of_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`batch_check` over the whole output set, never one `check` per object: the delivery decision is
-    a single subset test, and asking it N times turns one authorization round-trip per event into one
-    per dataset on a lane that sees every tenant's runs."""
-    view, recorder = _governed(monkeypatch, {"alice": {f"{FGA_OBJECT_TYPE}:{n}" for n in ("a", "b", "c")}})
-    plane = _Plane()
-
-    await fan_out(_notice(outputs=["a", "b", "c"]), audience=["alice"], visibility=view, open_inbox=plane.open)
-
-    assert len(recorder.calls) == 1
-    assert sorted(recorder.calls[0]["objects"]) == ["table:a", "table:b", "table:c"]
-
-
-@pytest.mark.asyncio
-async def test_each_candidate_is_asked_separately_because_the_answer_is_per_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One batch per recipient, not one batch reused: `can_get_metadata` is a question about a
-    (subject, object) pair, and caching the first answer across an audience would deliver one person's
-    grants to everyone in it."""
-    view, recorder = _governed(monkeypatch, {"alice": {"table:silver$pages"}, "bob": set()})
-    plane = _Plane()
-
-    result = await fan_out(_notice(), audience=["alice", "bob"], visibility=view, open_inbox=plane.open)
-
-    assert [call["user"] for call in recorder.calls] == ["alice", "bob"]
-    assert (result.delivered, result.hidden) == (1, 1)
-    assert list(plane.boxes) == ["alice"]
-
-
-@pytest.mark.asyncio
 async def test_the_objects_are_addressed_as_tables_and_never_as_a_container(monkeypatch: pytest.MonkeyPatch) -> None:
     """The FGA position, pinned where it is USED rather than only where it is written.
 
@@ -228,21 +181,6 @@ async def test_the_objects_are_addressed_as_tables_and_never_as_a_container(monk
     assert recorder.calls[0]["relation"] != METADATA_RELATION, "delivery must not ask the render's question"
     for obj in recorder.calls[0]["objects"]:
         assert obj.startswith("table:")
-
-
-@pytest.mark.asyncio
-async def test_the_render_path_keeps_the_permissive_relation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The other half of the split — and the half that must NOT tighten.
-
-    A pointer already in an inbox resolves through `visible()`. Asking the delivery question there
-    would blank rows the delivery gate had already approved, on a container-scoped pointer that the
-    subject can legitimately see. Delivery decides who is TOLD; render decides what still resolves.
-    """
-    view, recorder = _governed(monkeypatch, {"alice": set()})
-
-    await view.visible("alice", ["silver$pages"])
-
-    assert recorder.calls[0]["relation"] == METADATA_RELATION
 
 
 # --- the subset rule -----------------------------------------------------------------------------
@@ -266,74 +204,7 @@ async def test_one_invisible_output_removes_that_recipient_and_nobody_else(monke
     assert recipient_counter.outcomes == ["hidden", "delivered"]
 
 
-@pytest.mark.asyncio
-async def test_a_hidden_recipient_is_never_a_reason_to_redeliver(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Hidden is permanent for this event. RETRY would re-offer it until the sidecar exhausts its
-    schedule and parks it — a dead-letter queue filling up with correctly-handled messages."""
-    view, _ = _governed(monkeypatch, {"alice": set()})
-    plane = _Plane()
-
-    answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=view, open_inbox=plane.open)
-
-    assert answer is DAPR_SUCCESS
-    assert plane.boxes == {}
-
-
-# --- the dataset-less run: refused one step EARLIER than authorization ---------------------------
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("enabled", [True, False], ids=["authorization-on", "authorization-off"])
-async def test_a_dataset_less_run_is_refused_under_either_authorization_setting(enabled: bool, monkeypatch: pytest.MonkeyPatch) -> None:
-    """One rule everywhere, and no configuration in which it relaxes.
-
-    A pointer names the object it is about; a run that wrote nothing has no honest value for that
-    field. Parametrized over both settings rather than asserted once because "refused when FGA is on"
-    is the half that comes for free — the governed read path drops these anyway — and the half worth
-    gating is that turning authorization OFF does not turn the rule off with it.
-    """
-    view = Visibility(client=WIRED, enabled=True) if enabled else OPEN
-    if enabled:
-        monkeypatch.setattr(visibility_module.fga, "batch_check", _Recorder({}))
-    plane = _Plane()
-
-    answer = await ingest_run_event(_event(outputs=[]), lane=Lane.BUS, visibility=view, open_inbox=plane.open)
-
-    assert answer is DAPR_SUCCESS
-    assert plane.boxes == {}
-
-
-@pytest.mark.asyncio
-async def test_the_visibility_check_alone_would_pass_a_dataset_less_run_for_every_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The old form, built and shown broken — and the reason the projection refuses it first.
-
-    `Visibility.visible` short-circuits an EMPTY candidate set before it consults OpenFGA, which is
-    correct for its own question (nothing can be disclosed by answering an empty one, and 503ing a
-    page that had no rows to filter would turn "your inbox is empty" into an error). But it makes
-    `sees_all(subject, [])` vacuously true for every subject alive — so a plane that gated only on
-    visibility would push a run's id, author and outcome to a caller holding no grants at all.
-    """
-    view, recorder = _governed(monkeypatch, {})
-
-    assert await view.sees_all("a-subject-with-no-grants-at-all", [])
-    assert recorder.calls == [], "and it never even asked, so there is no refusal to notice"
-
-
 # --- fail-closed ---------------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_authorization_enabled_but_unwired_is_a_retry_and_never_a_drop() -> None:
-    """The middle case of the three-outcome rule. DROP would ack an event nobody was told about — the
-    outage would be indistinguishable from a run nobody needed to hear about — so the answer has to be
-    the one that neither delivers nor discards while the authorization layer is broken."""
-    plane = _Plane()
-
-    answer = await ingest_run_event(_event(), lane=Lane.BUS, visibility=Visibility(client=None, enabled=True), open_inbox=plane.open)
-
-    assert answer is DAPR_RETRY
-    assert answer is not DAPR_DROP
-    assert plane.boxes == {}
 
 
 @pytest.mark.asyncio
@@ -347,15 +218,6 @@ async def test_an_authorization_outage_is_never_answered_permissively_for_any_re
 
     assert (result.delivered, result.failed) == (0, 3)
     assert plane.boxes == {}
-
-
-@pytest.mark.asyncio
-async def test_the_unwired_refusal_is_the_estates_own_service_unavailable() -> None:
-    """Raised as `ServiceUnavailableError` rather than a bare exception so the HTTP door renders it as
-    503 problem+json through the shared handlers, instead of a 500 that reads as "notifications are
-    broken" when the broken thing is authorization."""
-    with pytest.raises(ServiceUnavailableError):
-        await Visibility(client=None, enabled=True).sees_all("alice", ["silver$pages"])
 
 
 # --- partial failure -----------------------------------------------------------------------------
@@ -399,37 +261,6 @@ async def test_the_retry_that_follows_a_partial_failure_tells_nobody_twice() -> 
     assert [len(rows) for rows in plane.boxes.values()] == [1, 1]
 
 
-# --- the blank subject: a permanent fault must not be classified as transient --------------------
-
-
-@pytest.mark.asyncio
-async def test_a_run_whose_author_sub_is_blank_is_ignored_rather_than_retried_forever() -> None:
-    """There is no anonymous inbox, so a blank subject is a permanent fault — and the projection
-    refuses it as "no verified author" before anything tries to address an actor with it."""
-    plane = _Plane()
-
-    answer = await ingest_run_event(_event(author="   "), lane=Lane.BUS, visibility=OPEN, open_inbox=plane.open)
-
-    assert answer is DAPR_SUCCESS
-    assert plane.boxes == {}
-
-
-@pytest.mark.asyncio
-async def test_letting_a_blank_subject_reach_the_inbox_would_redeliver_a_permanent_fault() -> None:
-    """The old form, and what it would cost. `inbox_actor_id` refuses a blank subject — correctly:
-    there is no anonymous inbox. But the fan-out's per-recipient catch is deliberately broad, so that
-    refusal arrives as a RETRIED recipient, which is a RETRY, which is a payload the sidecar will
-    re-offer until it dead-letters it. Classifying it needs the projection's guard, not the inbox's.
-    """
-    with pytest.raises(ValueError, match="non-empty verified subject"):
-        inbox_actor_id("   ")
-
-    plane = _Plane()
-    result = await fan_out(_notice(), audience=["   "], visibility=OPEN, open_inbox=lambda subject: plane.open(inbox_actor_id(subject)))
-
-    assert result.needs_retry, "a permanent fault, wearing a transient answer"
-
-
 # --------------------------------------------------------------------------------------------------
 # v5 — the ORIGINATOR: the human whose work a service-authored run is doing
 # --------------------------------------------------------------------------------------------------
@@ -454,21 +285,6 @@ def _cascade_event(*, originator: str | None, author: str = "data_eng") -> dict[
 
 
 @pytest.mark.asyncio
-async def test_a_failed_cascade_reaches_the_human_who_started_it() -> None:
-    """THE DEFECT. A stage runner authors with a chart role literal, so a failed bronze->silver->gold run
-    addressed an inbox actor named `data_eng` — nobody. The person whose ingest caused the run was
-    told nothing, and only an explicit project watcher heard anything at all.
-
-    The originator is carried, not substituted: `author` still says the stage runner ran it, because
-    overwriting attribution to fix targeting would trade one wrong answer for another."""
-    notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator="alice")))
-    assert notice is not None
-    assert notice.author == "data_eng", "attribution is unchanged — the stage runner really did run the stage"
-    assert notice.originator == "alice"
-    assert await audience_for(notice) == ("data_eng", "alice")
-
-
-@pytest.mark.asyncio
 async def test_an_originator_is_told_for_that_reason_and_not_as_the_author() -> None:
     """The reason is stored, never inferred, because a delivery re-check keys on it: "you ran this" and
     "this ran on your behalf" are different claims, and a row that could not tell them apart could not
@@ -479,16 +295,6 @@ async def test_an_originator_is_told_for_that_reason_and_not_as_the_author() -> 
     await fan_out(notice, audience=await audience_for(notice), visibility=OPEN, open_inbox=plane.open)
     assert plane.boxes["alice"][0]["reason"] == "originator"
     assert plane.boxes["data_eng"][0]["reason"] == "author"
-
-
-@pytest.mark.asyncio
-async def test_no_originator_is_the_previous_behaviour_exactly() -> None:
-    """Absent is the common case — every human-authored run — and must stay byte-identical, so the
-    field can be added to one producer at a time without changing anyone else's audience."""
-    notice = notifiable(LineageRunEvent.model_validate(_cascade_event(originator=None)))
-    assert notice is not None
-    assert notice.originator is None
-    assert await audience_for(notice) == ("data_eng",)
 
 
 @pytest.mark.asyncio

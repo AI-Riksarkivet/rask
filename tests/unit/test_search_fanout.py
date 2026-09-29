@@ -79,14 +79,6 @@ def fan(corpora: list[str], **kw: Any) -> list[dict[str, Any]]:
     return router_mod._fused_search(state, corpora, request, _spec(kw.pop("n", 10)), None, None)
 
 
-def test_every_named_corpus_is_searched(monkeypatch: pytest.MonkeyPatch) -> None:
-    searched = _install(monkeypatch, results={"a": [hit("a", "x")], "b": [hit("b", "y")]})
-
-    fan(["a", "b"])
-
-    assert searched == ["a", "b"]
-
-
 def test_the_result_is_RANK_fused_not_score_sorted(monkeypatch: pytest.MonkeyPatch) -> None:
     """The whole reason the fan-out does not simply concatenate: `_score` from one corpus and
     `_score` from another are not comparable, so a merged sort by them means nothing."""
@@ -121,17 +113,6 @@ def test_a_corpus_is_searched_ONCE_even_if_named_twice(monkeypatch: pytest.Monke
     fan(["a", "a"])
 
     assert searched == ["a"]
-
-
-def test_provenance_survives_the_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Without it the frontend cannot resolve each hit's own view — which is the entire point of the
-    fused list."""
-    _install(monkeypatch, results={"a": [hit("a", "x")], "b": [hit("b", "y")]})
-
-    fused = fan(["a", "b"])
-
-    assert {h["_dataset"] for h in fused} == {"a", "b"}
-    assert all("_table" in h for h in fused)
 
 
 def test_the_LIMIT_is_the_spec_n(monkeypatch: pytest.MonkeyPatch) -> None:

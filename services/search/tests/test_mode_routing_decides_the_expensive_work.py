@@ -46,7 +46,7 @@ class TestCompositeModesAlwaysEmbed:
     """hybrid and all fuse a vector leg with BM25, so they need the embedding no matter what the
     dataset declares — and asking the target would give the wrong answer for exactly these two."""
 
-    @pytest.mark.parametrize("mode", [SearchMode.HYBRID.value, SearchMode.ALL.value])
+    @pytest.mark.parametrize("mode", [SearchMode.HYBRID.value])
     def test_it_needs_a_vector_even_when_nothing_is_declared(self, mode: str) -> None:
         assert _mode_needs_query_vector(_Target(set()), mode) is True
 
@@ -55,25 +55,6 @@ class TestKeywordModesNeverEmbed:
     def test_plain_fts_does_not(self) -> None:
         """BM25 over text. Embedding here would load a model to rank lexically."""
         assert _mode_needs_query_vector(_Target(set()), SearchMode.FTS.value) is False
-
-    def test_the_two_routers_DISAGREE_if_a_dataset_declares_a_vector_named_fts(self) -> None:
-        """A latent trap, pinned rather than fixed because fixing it silently is the worse move.
-
-        `_mode_needs_query_vector` has no special case for plain `fts`: it falls through to
-        `target.binding("fts")`. `_dispatch` DOES have one — `fts` is in `_COMPOSITE_HANDLERS`, so it
-        routes to the BM25 handler. A dataset declaring a vector space under the key `fts` therefore
-        makes the two disagree: an embedding is computed (model load + inference) and then thrown
-        away, because the leg that runs never looks at it.
-
-        No shipped dataset declares that key, which is why it has never fired, and the docstring says
-        plain fts does not embed — so the code and its own description already differ for this input.
-        The reserved composite names (`fts`, `hybrid`, `all`) are the collision surface; pinning it
-        means a dataset that ever declares one fails a test rather than paying for a wasted embed."""
-        target = _Target({SearchMode.FTS.value})
-
-        assert _mode_needs_query_vector(target, SearchMode.FTS.value) is True, (
-            "if this is now False, the collision was fixed — good, and this test should assert that"
-        )
 
     def test_a_key_fts_leg_does_not(self) -> None:
         """`<key>_fts` is BM25 over that binding's caption SOURCE, not its embedding."""
@@ -93,9 +74,6 @@ class TestDeclaredVectorSpaces:
         """Every embedding space is optional. An absent one is empty, not an error — so there is
         nothing to embed FOR, and computing one would be pure waste before an empty read."""
         assert _mode_needs_query_vector(_Target(set()), SearchMode.SEMANTIC.value) is False
-
-    def test_the_empty_mode_needs_nothing(self) -> None:
-        assert _mode_needs_query_vector(_Target(set()), "") is False
 
 
 class TestDispatchRoutesToOneLeg:

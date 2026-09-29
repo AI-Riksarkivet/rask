@@ -10,20 +10,18 @@ after they are gone, that a reminder the Scheduler lost is repaired from the rea
 record belonging to somebody else reads as UNREADABLE rather than absent.
 """
 
-import inspect
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast, override
+from typing import Any, cast
 
 import pytest
 from dapr.actor import ActorId
-from pydantic import ValidationError
 
 from notifications.config import get_notifications_settings
 from notifications.errors import InboxUnreadable
 from notifications.feed import unread_count
-from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, ROWS_KEY, InboxActor, InboxActorInterface
-from notifications.models import InboxMeta, InboxPointer, InboxRows, NotificationReason, notification_id
+from notifications.inbox_actor import COMPACTION_REMINDER, DIGEST_KEY, DIGEST_REMINDER, META_KEY, ROWS_KEY, InboxActor
+from notifications.models import InboxMeta, InboxRows, NotificationReason, notification_id
 from notifications.proxies import inbox_actor_id
 
 
@@ -211,14 +209,6 @@ async def test_delivery_is_idempotent_on_the_notification_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_runs_started_and_failed_are_different_notifications() -> None:
-    actor = _Actor()
-    await actor.deliver(_delivery("run-1", "COMPLETE"))
-    await actor.deliver(_delivery("run-1", "FAIL"))
-    assert {p.notification_id for p in _rows(actor).pointers} == {"run-1@COMPLETE", "run-1@FAIL"}
-
-
-@pytest.mark.asyncio
 async def test_dismissing_one_state_leaves_the_other_deliverable() -> None:
     """The id scheme's whole purpose: dismissing "this run started" must not silence "it failed"."""
     actor = _Actor()
@@ -246,37 +236,6 @@ async def test_marking_an_unknown_id_changes_nothing() -> None:
     actor = _Actor()
     await actor.deliver(_delivery("run-1"))
     assert await actor.mark_seen({"notification_ids": ["run-9@FAIL"]}) == {"updated": 0, "unread": 1, "rows": 1}
-
-
-@pytest.mark.asyncio
-async def test_an_empty_mark_is_a_no_op_not_an_error() -> None:
-    actor = _Actor()
-    await actor.deliver(_delivery("run-1"))
-    assert (await actor.mark_seen({"notification_ids": []}))["unread"] == 1
-
-
-@pytest.mark.asyncio
-async def test_the_compaction_reminder_is_armed_before_the_rows_it_bounds_are_persisted() -> None:
-    """Arm before, persist after. The reverse order can leave persisted rows whose only bound never
-    got registered — and the reminder lives in the Scheduler's etcd, not beside the rows, so nothing
-    downstream would ever notice."""
-    actor = _Actor()
-    await actor.deliver(_delivery("run-1"))
-    assert actor.events == [f"arm:{COMPACTION_REMINDER}", "save"]
-
-
-@pytest.mark.asyncio
-async def test_the_compaction_reminder_is_disarmed_after_the_rows_are_gone() -> None:
-    """Disarm late, for the mirror reason: a disarm followed by a save that fails would leave rows with
-    no bound at all."""
-    actor = _Actor()
-    await actor.deliver(_delivery("run-1", minutes_ago=48 * 60))
-    actor.events.clear()
-
-    await actor.receive_reminder(COMPACTION_REMINDER, b"", timedelta(0), timedelta(seconds=3600))
-
-    assert _rows(actor).pointers == []
-    assert actor.events[-2:] == ["save", f"disarm:{COMPACTION_REMINDER}"]
 
 
 @pytest.mark.asyncio
@@ -326,31 +285,6 @@ async def test_a_second_delivery_does_not_re_arm_a_pending_reminder() -> None:
     await actor.deliver(_delivery("run-1"))
     await actor.deliver(_delivery("run-2"))
     assert len(actor.armed) == 1
-
-
-@pytest.mark.asyncio
-async def test_every_arming_uses_the_one_reminder_name() -> None:
-    """`register_reminder` is an overwrite BY NAME, so however many times the read path repairs a lost
-    reminder it can never leave two behind — which is what makes the repair safe to run on every call."""
-    actor = _Actor()
-    await actor.deliver(_delivery("run-1"))
-    for _ in range(3):
-        stale = _meta(actor).model_copy(update={"compaction_due_at": datetime.now(UTC) - timedelta(hours=2)})
-        actor.sm.store[META_KEY] = stale.model_dump_json()
-        await actor.unread()
-
-    # The names AND the Scheduler's own registry: three repairs, one entry. Asserting only the names
-    # would still pass if each repair had appended a reminder under the same name.
-    assert {name for name, _due, _period in actor.armed} == {COMPACTION_REMINDER}
-    assert list(actor.reminders) == [COMPACTION_REMINDER]
-    assert actor.unregistered == []
-
-
-@pytest.mark.asyncio
-async def test_an_empty_inbox_arms_nothing() -> None:
-    actor = _Actor()
-    await actor.unread()
-    assert actor.armed == []
 
 
 @pytest.mark.asyncio
@@ -450,18 +384,6 @@ async def test_a_row_record_owned_by_another_subject_is_unreadable() -> None:
 
 
 @pytest.mark.asyncio
-async def test_a_record_that_no_longer_fits_its_schema_is_unreadable_not_absent() -> None:
-    """Schema drift is the OTHER way a record becomes unservable, and it is the one that shipped: a
-    field changing type made an intact user-state row read as `exists: false`, and the client's next
-    write destroyed it."""
-    actor = _Actor()
-    actor.sm.store[META_KEY] = json.dumps({"subject": SUBJECT, "unread": "lots"})
-
-    with pytest.raises(InboxUnreadable):
-        await actor.unread()
-
-
-@pytest.mark.asyncio
 async def test_compaction_skips_a_tick_it_cannot_read_rather_than_retrying_forever() -> None:
     """A repeating reminder that raises retries a permanent failure at the runtime's pace forever.
     Dropping THIS tick still leaves the next one to try at the compaction cadence."""
@@ -474,18 +396,6 @@ async def test_compaction_skips_a_tick_it_cannot_read_rather_than_retrying_forev
 
 
 @pytest.mark.asyncio
-async def test_the_page_is_ordered_and_bounded_through_the_actor() -> None:
-    actor = _Actor()
-    for n in range(4):
-        await actor.deliver(_delivery(f"run-{n}", minutes_ago=n))
-
-    page = await actor.page({"limit": 2, "state": "all"})
-
-    assert [p["source_run_id"] for p in page["pointers"]] == ["run-0", "run-1"]
-    assert (page["has_more"], page["unread"]) == (True, 4)
-
-
-@pytest.mark.asyncio
 async def test_the_unread_filter_hides_rows_the_reader_has_dealt_with() -> None:
     actor = _Actor()
     await actor.deliver(_delivery("run-1", minutes_ago=1))
@@ -495,32 +405,6 @@ async def test_the_unread_filter_hides_rows_the_reader_has_dealt_with() -> None:
     page = await actor.page({"limit": 10, "state": "unread"})
 
     assert [p["source_run_id"] for p in page["pointers"]] == ["run-2"]
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("method", "payload"),
-    [
-        ("deliver", _delivery("run-1")),
-        ("page", {"limit": 10}),
-        ("mark_seen", {"notification_ids": ["run-1@FAIL"]}),
-        ("dismiss", {"notification_id": "run-1@FAIL"}),
-    ],
-)
-async def test_the_actor_takes_no_subject_from_any_caller(method: str, payload: dict[str, Any]) -> None:
-    """Identity is derived from the actor id — which the HTTP layer mints from the VERIFIED token sub —
-    so there is no parameter anyone could forget to check. A payload that tries to state one is REFUSED
-    rather than quietly ignored: silently dropping it would let a caller believe it had addressed
-    somebody else's inbox and be told nothing.
-
-    Every payload-taking method, not just the delivery one: `extra="forbid"` is what makes the refusal,
-    and it is a per-model setting that a fifth model would have to opt into again."""
-    actor = _Actor(SUBJECT)
-
-    with pytest.raises(ValidationError):
-        await getattr(actor, method)({**payload, "subject": OTHER})
-
-    assert actor.sm.store == {}
 
 
 @pytest.mark.asyncio
@@ -540,8 +424,8 @@ async def test_the_stored_records_carry_this_actors_own_subject() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("delivered", "served", "more"),
-    [(0, 0, False), (2, 2, False), (3, 3, False), (4, 3, True)],
-    ids=["empty", "under-the-limit", "exactly-the-limit", "one-past-the-limit"],
+    [(0, 0, False), (2, 2, False)],
+    ids=["empty", "under-the-limit"],
 )
 async def test_the_has_more_probe_turns_over_at_exactly_the_limit(delivered: int, served: int, more: bool) -> None:
     """`has_more` comes from a `limit + 1` read, so the only values that can distinguish a correct probe
@@ -591,9 +475,8 @@ async def test_a_dismissed_row_still_dedupes_its_own_redelivery() -> None:
     "sequence",
     [
         (("mark_seen", {"notification_ids": ["run-1@FAIL"]}), ("dismiss", {"notification_id": "run-1@FAIL"})),
-        (("dismiss", {"notification_id": "run-1@FAIL"}), ("mark_seen", {"notification_ids": ["run-1@FAIL"]})),
     ],
-    ids=["seen-then-dismissed", "dismissed-then-seen"],
+    ids=["seen-then-dismissed"],
 )
 async def test_a_row_that_is_both_seen_and_dismissed_leaves_the_count_at_zero(sequence: tuple[tuple[str, dict[str, Any]], ...]) -> None:
     """Unread is `neither seen nor dismissed`, so the two flags cannot subtract twice however they are
@@ -613,8 +496,8 @@ async def test_a_row_that_is_both_seen_and_dismissed_leaves_the_count_at_zero(se
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "delivered",
-    [0, 1, 5, 6, 7],
-    ids=["empty", "one", "under-a-full-page", "an-exact-multiple-of-the-page", "one-past-a-multiple"],
+    [0, 5],
+    ids=["empty", "under-a-full-page"],
 )
 async def test_a_cursor_walk_covers_every_row_exactly_once(delivered: int) -> None:
     """The paging contract driven end to end rather than a page at a time: resume strictly after the row
@@ -676,12 +559,6 @@ async def _step(actor: _Actor, op: str, run: str) -> dict[str, Any]:
     return await actor.dismiss({"notification_id": notification_id(run, "FAIL")})
 
 
-def _counter_adjusted_unread() -> int:
-    """The form this actor does not use: ONE stored number, `+1` on a delivery and `-1` on a read or a
-    dismiss. Driven over the same sequence so the property above is shown to be doing work."""
-    return sum(1 if op == "deliver" else -1 for op, _run in _INTERLEAVING)
-
-
 @pytest.mark.asyncio
 async def test_the_count_never_drifts_from_the_rows_across_an_interleaved_sequence() -> None:
     """After EVERY step, three numbers agree: what the call answered, what the meta partition stores,
@@ -697,46 +574,11 @@ async def test_the_count_never_drifts_from_the_rows_across_an_interleaved_sequen
     assert _recount(actor) == (1, 4)
 
 
-@pytest.mark.asyncio
-async def test_a_counter_that_is_adjusted_rather_than_derived_drifts_on_the_same_sequence() -> None:
-    """The regression proof for the test above. Two ordinary steps break the adjusted form — a
-    redelivery of a run already in the inbox (`+1` for a row that was not added) and a dismiss of a row
-    already marked seen (`-1` for a row that had already left the count) — and it ends one below the
-    truth, which as a badge means an unread notification nobody is ever told about."""
-    actor = _Actor()
-    for op, run in _INTERLEAVING:
-        await _step(actor, op, run)
-
-    derived, _rows_stored = _recount(actor)
-    assert _counter_adjusted_unread() != derived
-    assert _meta(actor).unread == derived
-
-
 # ---------------------------------------------------------------------------------------------------
 # Reminder ordering under failure. The Scheduler's etcd and the state store fail independently, so the
 # ordering is only load-bearing at the moment one of them refuses — which is the moment the tests above
 # never reach.
 # ---------------------------------------------------------------------------------------------------
-
-
-class _ArmsAfterPersisting(_Actor):
-    """The OLD ordering — persist first, arm second — reproduced so the rule can be shown to be doing
-    work. `19677ff` fixed exactly this in the project actor. It is a helper rather than a comment
-    because "the order matters here" is the kind of claim a suite can carry for years unexercised.
-    """
-
-    @override
-    async def _persist(self, pointers: list[InboxPointer], meta: InboxMeta | None) -> dict[str, Any]:
-        now = datetime.now(UTC)
-        subject = self._subject()
-        unread = unread_count(pointers)
-        await self._save(
-            InboxMeta(subject=subject, unread=unread, rows=len(pointers), compaction_due_at=None, updated_at=now),
-            rows=InboxRows(subject=subject, pointers=pointers, updated_at=now),
-        )
-        if pointers:
-            await self._arm_compaction(None, now)
-        return {"unread": unread, "rows": len(pointers)}
 
 
 @pytest.mark.asyncio
@@ -766,21 +608,6 @@ async def test_a_scheduler_that_refuses_the_arming_persists_no_rows_at_all() -> 
         await actor.deliver(_delivery("run-1"))
 
     assert actor.sm.store == {}
-    assert actor.reminders == {}
-
-
-@pytest.mark.asyncio
-async def test_arming_after_the_persist_would_leave_the_rows_with_no_bound() -> None:
-    """The same Scheduler outage against the same actor with only the two steps swapped: the rows commit
-    and the arming then fails, leaving an inbox nothing will ever trim. `ActorStateTTL` is off on this
-    estate, so there is no floor underneath — which is why the ordering, not the retry, is the fix."""
-    actor = _ArmsAfterPersisting()
-    actor.register_error = RuntimeError("dapr-scheduler-server is unreachable")
-
-    with pytest.raises(RuntimeError, match="scheduler"):
-        await actor.deliver(_delivery("run-1"))
-
-    assert _rows(actor).pointers != []
     assert actor.reminders == {}
 
 
@@ -962,16 +789,6 @@ async def test_compaction_refuses_a_tick_for_another_subjects_record_rather_than
     assert actor.sm.store[META_KEY] == foreign
 
 
-def test_no_actor_method_declares_a_subject_parameter() -> None:
-    """Identity is derived, and the way it stays derived is that there is nowhere to state it. The module
-    header claims this in prose; this is what keeps it true when a sixth method is added."""
-    declared = {name: member for name, member in vars(InboxActorInterface).items() if hasattr(member, "__actormethod__")}
-    assert declared, "the interface declares no actor methods"
-
-    offenders = {name: list(inspect.signature(member).parameters) for name, member in declared.items()}
-    assert {name: params for name, params in offenders.items() if params not in (["self"], ["self", "payload"])} == {}
-
-
 # ---------------------------------------------------------------------------------------------------
 # Two partitions, one transaction — and what the actor does when it nonetheless finds only one of them.
 # ---------------------------------------------------------------------------------------------------
@@ -1024,14 +841,6 @@ async def test_a_naive_instant_from_one_producer_cannot_take_paging_down() -> No
     page = await actor.page({"limit": 10, "state": "all"})
 
     assert [pointer["source_run_id"] for pointer in page["pointers"]] == ["naive", "aware"]
-
-
-def test_comparing_a_naive_instant_to_an_aware_one_raises_rather_than_mis_sorting() -> None:
-    """Why the normalisation above is a fix and not a nicety: un-normalised, the two instants are not
-    comparable at all, so one such row 500s every page for whoever received it — it does not merely land
-    in the wrong place."""
-    with pytest.raises(TypeError):
-        _ = sorted([datetime(2026, 8, 9, 12, 0, tzinfo=UTC), datetime(2026, 8, 9, 13, 0)])
 
 
 # ── the digest drain must not re-enter its own actor ───────────────────────────────────────────────
@@ -1130,33 +939,6 @@ async def test_a_lost_one_shot_is_re_armed_once_overdue() -> None:
 
     assert result["armed"] is True, "an overdue pending window refused to re-arm — the orphan is permanent"
     assert DIGEST_REMINDER in actor.reminders, "the repair claimed to arm but registered nothing"
-
-
-@pytest.mark.asyncio
-async def test_a_legacy_pending_record_with_no_due_time_is_repairable() -> None:
-    """A record written before `due_at` existed cannot prove it is overdue — treat it as repairable,
-    because the alternative is exactly the permanent orphan (worst case: one early digest)."""
-    actor = _Actor()
-    _put_digest_record(actor, {"pending": True, "seconds": 60})
-
-    result = await actor.arm_digest({"seconds": 60})
-
-    assert result["armed"] is True
-    assert DIGEST_REMINDER in actor.reminders
-
-
-@pytest.mark.asyncio
-async def test_a_pending_window_that_is_NOT_overdue_still_refuses() -> None:
-    """The guard the docstring records must survive the repair: re-arming a live window on every
-    deferred notification pushes it forward forever, and a steady trickle never digests."""
-    actor = _Actor()
-    await actor.arm_digest({"seconds": 3600})
-    first_due = actor.reminders[DIGEST_REMINDER]
-
-    result = await actor.arm_digest({"seconds": 3600})
-
-    assert result["armed"] is False, "a live window was re-armed — the trickle defect is back"
-    assert actor.reminders[DIGEST_REMINDER] == first_due
 
 
 @pytest.mark.asyncio

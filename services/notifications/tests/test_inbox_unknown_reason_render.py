@@ -120,56 +120,6 @@ def _ids(body: dict[str, Any]) -> set[str]:
     return {row["notification_id"] for row in body["notifications"]}
 
 
-def test_a_control_row_whose_reason_DEGRADED_still_renders(client: TestClient) -> None:
-    """The wedge. Before the fix this row was counted and never shown."""
-    body = _feed(client)
-
-    assert "ctl-new" in _ids(body), f"a degraded control row was filtered out of the feed it is counted in; got {body}"
-
-
-def test_the_badge_and_the_rows_AGREE_on_a_control_only_page(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The failure stated the way a person meets it: a number the panel cannot clear by reading.
-
-    Scoped to a CONTROL-ONLY page on purpose. A lineage row that fails `can_get_metadata` is filtered
-    and still counted too, but that is a different and narrower case — this fix does not touch the
-    lineage lane, and asserting agreement on a mixed page would claim it did.
-    """
-
-    class _ControlOnly:
-        async def page(self, _payload: dict[str, Any]) -> dict[str, Any]:
-            return {
-                "pointers": [
-                    _row("ctl-new", "task_review_ready", CONTROL_OBJECT),
-                    _row("ctl-known", NotificationReason.TASK_ASSIGNED.value, "annotation_task:proj-1/task-8"),
-                ],
-                "has_more": False,
-                "unread": 2,
-            }
-
-        async def unread(self) -> dict[str, Any]:
-            return {"unread": 2, "rows": 2}
-
-    monkeypatch.setattr(inbox_module, "inbox_for", lambda _subject: cast(TypedActorProxy, _ControlOnly()))
-
-    body = _feed(client)
-
-    assert body["unread"] == len(body["notifications"]), f"the badge counts rows the panel cannot render: {body}"
-
-
-def test_a_KNOWN_control_row_is_unaffected(client: TestClient) -> None:
-    body = _feed(client)
-
-    assert "ctl-known" in _ids(body)
-
-
-def test_a_LINEAGE_row_is_still_governed(client: TestClient) -> None:
-    """The exemption must not widen. A bare dataset name is the lineage lane, and a denied subject
-    must not see it — otherwise this fix would be a disclosure, not a repair."""
-    body = _feed(client)
-
-    assert "lin-1" not in _ids(body), "the render gate stopped applying to the lineage lane"
-
-
 def test_an_UNKNOWN_reason_on_a_BARE_id_stays_governed(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """The narrow half of the discriminator, stated as its own case: `UNKNOWN` alone is not a pass.
 

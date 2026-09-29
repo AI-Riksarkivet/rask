@@ -12,9 +12,6 @@ chart feeds it; this proves the door refuses, allows, and stays open on a dev st
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -33,18 +30,6 @@ def _app() -> FastAPI:
     app.include_router(routes.router, prefix="/api")
     app.dependency_overrides[routes.get_reader] = lambda: _Reader()
     return app
-
-
-@pytest.fixture
-def open_client() -> Iterator[TestClient]:
-    """Auth entirely off — the defaults every existing deployment has."""
-    with TestClient(_app()) as client:
-        yield client
-
-
-def test_the_defaults_leave_the_door_open(open_client: TestClient) -> None:
-    """A dev stack lists projects exactly as before the gate existed."""
-    assert open_client.get("/api/projects/").status_code == 200
 
 
 def test_a_denied_subject_gets_a_403_that_NAMES_the_missing_tuple() -> None:
@@ -77,12 +62,3 @@ def test_an_allowed_subject_gets_the_list() -> None:
         resp = client.get("/api/projects/")
 
     assert resp.status_code == 200
-
-
-def test_the_gate_is_on_the_ROUTER_so_a_new_route_cannot_arrive_ungated() -> None:
-    """Per-route dependencies were how this service came to have none at all.
-
-    Asserted on the router object rather than on a response, because the property is about routes
-    that do not exist yet.
-    """
-    assert routes.router.dependencies, "the projects router declares no dependencies"

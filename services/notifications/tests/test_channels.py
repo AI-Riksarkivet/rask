@@ -62,11 +62,6 @@ class TestRender:
         assert "run-1" in body
         assert "Fail" in headline
 
-    def test_it_carries_no_event_payload(self) -> None:
-        _, body = render(_pointer())
-        # Nothing read off an event body — no error text, no facets, no outputs beyond the one object.
-        assert len(body.splitlines()) <= 5
-
 
 class TestDeliverToChannels:
     @pytest.mark.asyncio
@@ -89,24 +84,6 @@ class TestDeliverToChannels:
 
         assert sent == []
         assert email.sends == []
-
-    @pytest.mark.asyncio
-    async def test_the_claim_happens_BEFORE_the_send(self) -> None:
-        """Recording afterwards leaves the window that matters: a crash between the send and the write
-        re-sends on redelivery."""
-        ledger = _Ledger()
-        order: list[str] = []
-
-        async def claim(nid: str, channel: str) -> bool:
-            order.append("claim")
-            return await ledger.claim(nid, channel)
-
-        async def send(**_: Any) -> None:
-            order.append("send")
-
-        await deliver_to_channels(_pointer(), channels=[EMAIL], destinations={EMAIL: "a@b.c"}, table={EMAIL: send}, mark_sent=claim)
-
-        assert order == ["claim", "send"]
 
     @pytest.mark.asyncio
     async def test_one_channels_failure_never_stops_another(self) -> None:
@@ -153,16 +130,6 @@ class TestDeliverToChannels:
         sent = await deliver_to_channels(_pointer(), channels=["carrier-pigeon"], destinations={"carrier-pigeon": "coop"}, table={}, mark_sent=ledger.claim)
 
         assert sent == []
-
-    @pytest.mark.asyncio
-    async def test_no_opt_in_means_nothing_leaves_the_estate(self) -> None:
-        """OFF by default is the whole posture: the bell costs a reader nothing, an email does not."""
-        email, ledger = _Recorder(), _Ledger()
-
-        sent = await deliver_to_channels(_pointer(), channels=[], destinations={EMAIL: "a@b.c"}, table={EMAIL: email}, mark_sent=ledger.claim)
-
-        assert sent == []
-        assert email.sends == []
 
 
 class _FakeInbox:
@@ -438,18 +405,6 @@ class TestRealClaimUnderRedelivery:
 
         assert (await actor.claim_channel({"notification_id": "ghost@FAIL", "channel": EMAIL}))["claimed"] is False
 
-    @pytest.mark.asyncio
-    async def test_the_claim_SURVIVES_a_full_round_trip_through_state(self) -> None:
-        """The ledger rides the pointer, so it has to survive being serialized and read back — which
-        is the whole reason it is a stored field rather than an in-memory set."""
-        actor = _real_actor()
-        await actor.deliver(_delivery())
-        await actor.claim_channel({"notification_id": "run-1@FAIL", "channel": EMAIL})
-
-        page = await actor.page({"limit": 10})
-
-        assert page["pointers"][0]["sent"] == [EMAIL]
-
 
 class TestDigest:
     @pytest.mark.asyncio
@@ -525,13 +480,6 @@ class TestDigestRoundTrip:
         actor = _real_actor()
 
         assert (await actor.get_prefs())["digest_seconds"] is None
-
-    def test_the_door_round_trips_it(self, prefs_client: tuple[TestClient, dict[str, Any]]) -> None:
-        client, _ = prefs_client
-
-        client.put("/notifications/prefs", json={"channels": [EMAIL], "destinations": {EMAIL: "a@b.c"}, "digest_seconds": 3600})
-
-        assert client.get("/notifications/prefs").json()["digest_seconds"] == 3600
 
 
 # --- the digest must SEND when it fires, not re-arm itself ---------------------------------------

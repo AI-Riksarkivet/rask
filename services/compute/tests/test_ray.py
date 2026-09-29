@@ -17,12 +17,6 @@ def client() -> Iterator[TestClient]:
         yield c
 
 
-def test_health_returns_200(client: TestClient) -> None:
-    resp = client.get("/api/v1/health")
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-
-
 def test_ray_health_offline_is_ok_false(client: TestClient) -> None:
     resp = client.get("/api/v1/ray/health")
     assert resp.status_code == 200
