@@ -1,6 +1,6 @@
 # open_backlog_left_new2 — what is left
 
-Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-313, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
+Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_left_new.md`. Every carried row was re-audited against HEAD today by one auditor and one skeptic per chunk, and the new rows come from today's reconciliation, Lance, Lakekeeper and pylance-12 audits. Each row states only the defect, what is left, why it matters, how to fix it and what ends it. Ids are never renumbered and never reused: a gap in a sequence is a closed row, every id that left today is listed at the foot, and the next free ids are LH-317, XC-108, CP-053, CTL-028, FE-014, LOW-034 and LIN-005. The 2026-09-26 lakehouse map proposed LH-277 to LH-300, XC-090 to XC-103 and LOW-031 to LOW-033 (file:line citations at ea8c5ff8); by owner ruling only its HIGH rows entered, and the rest are listed under **Parked findings** at the foot, uncounted.
 
 **Phase 1 is finished first, and it is finished when these five criteria hold together on the estate** (owner's wording, confirmed 2026-09-26; XC-090 is the scenario that proves them): (1) provenance/lineage correct; (2) catalog correct for lance-ns and authz/governance; (3) not coupled to a workflow engine or Ray; (4) events correct; (5) resilient. A row is added only with the owner's say (owner, 2026-09-26: the goal is finishing Phase 1, not growing it); a found problem goes to the parking list by default. `blocked:` appears only when no part of a row can move without a decision; a partly blocked row names its decision in *What is left* and under **Decisions still open**.
 
@@ -9,14 +9,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 <!-- FOCUS:START -->
 ## FOCUS NOW
 
-1. **LH-183**, **LH-279**, **LH-280**, **LH-281** — maintenance, and the catalog's provenance and governance holes.
-   Why now: lakehouse components first (owner, 2026-09-28). LH-201 is live, so a model.fga change (LH-221, LH-222, LH-076) now reaches each service with its own image.
+1. **LH-265** widened to every test file (the prune, in waves), **LH-279**, then **LH-280**, **LH-281** — the test audit, and the catalog's provenance and governance holes.
+   Why now: lakehouse components first (owner, 2026-09-28). The suite reached 12,067 tests (231k test lines against 120k production lines; +3,500 since 2026-09-10), so every test file is audited for relevance and pruned now, in waves (owner, 2026-09-28: the prune is the priority); a row adds at most one test per closes-when clause.
 2. **LH-064**, **LH-220** (with **XC-076** as LH-220's enabler: one ServiceAccount per service) — signed provenance and per-pod service identity.
    Why now: provenance and governance; XC-076 is taken for what LH-220 needs, not as chart work in itself.
 3. **XC-090** (with **XC-096** as its enabler: the CI lanes it runs on) — the Phase 1 acceptance proof.
    Why now: without it, "Phase 1 done" means only that every row closed.
 4. **LH-265**; **XC-049** only when a lakehouse chart fix needs the release space (Kueue is decoupled and low).
-   Why now: test cleanup stage 2; the release object has 1,652 bytes of headroom (rev 252).
+   Why now: test cleanup stage 2; the release object has 784 bytes of headroom (rev 256).
 <!-- FOCUS:END -->
 
 ## Owner rulings in force
@@ -68,14 +68,14 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 | Section | Open | Workable now | High |
 | --- | --- | --- | --- |
-| **PHASE 1 · LAKEHOUSE** | 105 | 103 | 27 |
+| **PHASE 1 · LAKEHOUSE** | 104 | 102 | 26 |
 | **PHASE 1 · CROSS-CUTTING** | 55 | 49 | 20 |
 | **PHASE 2 · COMPUTE** | 35 | 35 | 7 |
 | **PHASE 3 · CONTROLPLANE** | 15 | 14 | 1 |
 | **FRONTEND** | 8 | 8 | 0 |
 | **LOW PRIORITY** | 25 | 24 | 0 |
 
-**243 open items**, of which **10 are blocked on a decision** and **233 can be picked up today**; 55 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
+**242 open items**, of which **10 are blocked on a decision** and **232 can be picked up today**; 54 are HIGH. 51 ids left the register on 2026-09-25, listed at the foot so nothing vanishes silently.
 
 ## PHASE 1 · LAKEHOUSE
 
@@ -103,14 +103,6 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 - *How:* The HMAC facet stays inside the payload, built through service_kit custom_facet so it carries `_schemaURL`; the resolver returns the current key plus the previous one during a rotation window. Do not import Lakekeeper's sequence numbers: the per-table Lance version already orders events (put-if-not-exists commit, lance_docs/file_format.md:4770,4791). Under D1 the bearer becomes a projected SA token; the per-identity HMAC key stays in the Dapr secret store. Lakekeeper signs no events (docs/audits/2026-09-25/lakekeeper-deep-read/events.md).
 - *Closes when:* An unsigned or non-verifying event is refused at `/lineage-events` and in the outbox drain; delegation is accepted only from the chart-derived signer set; an event signed with the previous key verifies inside the window; a lineage restart parks nothing in `dlq.lineage.events`; one forged unsigned event is observed refused live.
 - *Evidence:* services/lineage/src/lineage/api/fga_deps.py:290-333,372 · packages/lineage-kit/src/lineage_kit/signing.py:41-42,160-234 · packages/service-kit/src/service_kit/openlineage.py:30-34,70-77 · chart/templates/_ray-cluster-config.tpl:236-251
-
-**LH-183 · Maintenance workers grow ~17-19 MiB/h of native memory, and the recycle meant to bound it cannot exit the process**
-`maintenance, service-kit` · **HIGH**
-- *What is left:* (1) `draining._flip` must chain the handler it displaced: today it only marks draining, so a self-SIGTERM from the memory recycle leaves the worker up NotReady with its units parked (this affects all seven services using arm_drain_on_sigterm). (2) Observe one recycle exiting and being replaced with no lost units. (3) One native profiling session to name the holder, filed upstream if it is Lance's (through LH-048's go). Whether the recycle alone closes the row is D12. The fix for (1) exists unintegrated on wip/td-LH-183 (27aeed8c); draining.py:165-169 at ea8c5ff8 still does not chain. An implementer's measurement, not re-measured here, narrows the holder to the shared lance.Session: about 3.7 KB is retained per distinct storage_options set, against 5.3 B per open with a per-vend Session. Maintenance credentials._vend mints per unit with no cache (credentials.py:223-264). D12's options therefore now include a per-vend Session or a per-table vend cache. uvicorn's --timeout-graceful-shutdown is set nowhere (grep over chart, .docker, services/*/src, packages/*/src and scripts is empty).
-- *Why:* Criterion 5. An OOM on a days-long clock, with a mitigation that turns into a lane outage the first time it fires.
-- *How:* Call the captured previous handler after mark_draining; RED with a real uvicorn, not a patched os.kill (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 measured uvicorn 0.51.0 alive 12 s after SIGTERM). Test resilience.md §9's per-vend object-store client hypothesis: 10k opens of one S3 dataset with constant vs per-open-distinct credentials, heaptrack or a jemalloc A/B. Lakekeeper disables the AWS SDK identity cache for unbounded partition growth and runs jemalloc (crates/io/src/s3.rs:75-91). Set --timeout-graceful-shutdown from the lifecycle (docs/audits/2026-09-25/lakekeeper-deep-read/resilience.md §1 step 3).
-- *Closes when:* The holder is named by measurement (filed upstream if external), and a recycle is observed exiting and being replaced cleanly.
-- *Evidence:* packages/service-kit/src/service_kit/draining.py:137-188 · services/maintenance/src/maintenance/services/rewrite_slot.py:94-119,147-170 · services/maintenance/src/maintenance/api/work.py:117 · commit 854a0cf2 (34.5 h soak)
 
 **LH-202 · A write-tier vend grants Put/Delete over the whole table prefix, one rung wider than the FGA model**
 `catalog` · **HIGH**
@@ -634,7 +626,7 @@ Dated 2026-09-25. This file supersedes `open_backlog_left.md` and `open_backlog_
 
 **LH-265 · Delete 34 and merge 55 lakehouse test files that add nothing their neighbours do not**
 `tests` · **MEDIUM**
-- *What is left:* The test audit's stage 2: 34 files to delete and 55 to merge, each verdict upheld by a skeptic that read the claimed replacement coverage; move every named assertion into its keeper first (the report names each).
+- *What is left:* Widened by the owner (2026-09-28) to every test file: each of the 1,291 files (12,067 collected tests; 1,302 source-walk gates and 604 chart-render gates in tests/unit alone) is kept only if it fails under a mutation of the code it names, otherwise deleted or merged into its keeper. It includes the test audit's stage 2: 34 files to delete and 55 to merge, each verdict upheld by a skeptic that read the claimed replacement coverage; move every named assertion into its keeper first (the report names each).
 - *Why:* The suite should state what protects behaviour; source-text lints, tautologies and duplicates cost reading time and hide the tests that matter.
 - *How:* One commit, directory by directory, the suite green after each; any 'move assertion X first' done before the delete.
 - *Closes when:* The 89 files are gone or merged, their named assertions live in the keepers, and the suite is green.
@@ -2159,3 +2151,10 @@ Found by the LH-201 review round (2026-09-28) and parked under the same rule. Me
 - LH-310 · LOW · A non-fatal service whose resolve runs out its 120 s deadline (OpenFGA down at boot, or the carried model not yet written) builds no FGA client and answers 503 on its gated doors until the pod restarts; nothing retries the resolve · `service-kit`
 - LH-311 · LOW · Five scripts and two JS e2e drivers still write or check tuples against the store's newest model (they name no model, or, in auth_chain.sh, `authorization_models[0]`), and three of them pick `stores[0]` or the newest store of any name: e2e_stack.sh:288-299,371, verify_control_events.sh:79-91, verify_cross_zone_oidc.sh:66-70, verify_produce_door.sh:93-96, auth_chain.sh:49-52, tests/e2e/verify_notifications_two_users.mjs:268, tests/e2e/verify_originator_lane.mjs:80 (lines at 16c1025b). Right while the hook's body is the newest; wrong once another image writes a newer one · `scripts, tests`
 - LH-312 · LOW · fga_seed_demo.py's `_TUPLE_RE` strips double quotes but keeps single quotes, so 21 of the 92 model.fga.yaml fixture tuples (for example `'namespace:depth_1'`) go out quoted and are refused; identical before LH-201 · `scripts`
+
+Found by the LH-183 review rounds (2026-09-28) and parked under the same rule (owner, 2026-09-28: LOW findings are parked, not fixed in-row). Measurements: the LH-183 commit (661140a4) and the rev 256 deploy record.
+
+- LH-313 · LOW · Every uvicorn runs as PID 1: the chart's `command` replaces the images' tini ENTRYPOINT (rest-catalog, gateway and notifications dockerfiles), so the kernel drops uvicorn's closing re-raise of SIGTERM and thread-bound work (maintenance's execute_unit under run_in_threadpool) holds the process past `--timeout-graceful-shutdown` until it returns or the kubelet's SIGKILL; measured in a PID namespace: 25.07 s rc 0 as PID 1 vs 3.92 s rc -15 off it · `chart`
+- LH-314 · LOW · On pod termination the Dapr sidecar's `dapr.io/block-shutdown-duration` (20 s) ends before the app's drain (preStop 5 s + bound 25 s, or 105 s on maintenance), against the chart's own "the sidecar must outlive the app's drain" invariant; a response or publish after about t=20 s has no sidecar. A self-recycle is unaffected (the sidecar never stops) · `chart`
+- LH-315 · LOW · A refused second drain arm inside the notifications and both medallion lifespans (which bind `_disarm_drain` inside `try:`) surfaces as UnboundLocalError and skips the rest of their `finally` (Dapr client close, workflow runtime shutdown); reachable only through a wiring bug no estate process has · `service-kit, notifications, medallion`
+- LH-316 · LOW · `repo_tree.walked_files` lists a git worktree's `.git` file, so `test_the_walk_skips_what_a_repo_shape_gate_must_not_read` fails in every worktree and whenever agent worktrees sit under `.claude/worktrees/` · `tests`
